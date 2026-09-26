@@ -319,9 +319,9 @@ describe("a project's services", () => {
   test("one row per service, the main one first, with what reaches it", () => {
     const rows = serviceRows(lab)
     expect(rows.map((row) => [row.name, row.unit, row.reach, row.port])).toEqual([
-      ["web", "lab.service", "Every other path", "3050"],
-      ["api", "lab.api.service", "/v1/*", "3051"],
-      ["worker", "lab.worker.service", "Internal: the project's other services only", "3052"],
+      ["web", "lab.service", { kind: "rest" }, "3050"],
+      ["api", "lab.api.service", { kind: "paths", paths: ["/v1/*"] }, "3051"],
+      ["worker", "lab.worker.service", { kind: "internal" }, "3052"],
     ])
   })
 
@@ -329,10 +329,13 @@ describe("a project's services", () => {
     const [web, api, worker] = serviceRows(lab)
     expect(web!.state).toEqual({ tone: "ok", label: "Running" })
     expect(web!.memory).toBe("47 of 256 MB")
+    expect(web!.memoryPercent).toBe(18)
+    expect(web!.memoryLevel).toBe("normal")
     expect(api!.listening).toBe(false)
     expect(api!.restarts).toBe("2 restarts")
     expect(worker!.state).toEqual({ tone: "error", label: "Not loaded" })
     expect(worker!.memory).toBeNull()
+    expect(worker!.memoryPercent).toBeNull()
   })
 
   test("a single service has no rows: the Service panel already says it all", () => {

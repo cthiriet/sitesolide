@@ -8,7 +8,7 @@
  * takes its own from there; the card only arranges and names.
  */
 import { ABSENT, dateTime, duration, ago, size, sizeOutOf } from "./format"
-import { serviceLevel, MEMORY_CRITICAL_SHARE, PEAK_WARNING_SHARE, type Tile } from "./gauges"
+import { serviceLevel, MEMORY_CRITICAL_SHARE, PEAK_WARNING_SHARE, type Level, type Tile } from "./gauges"
 import {
   siteAccess,
   serviceState,
@@ -119,19 +119,27 @@ function serviceGaugeOf(memory: number | null, peak: number | null, limit: numbe
   }
 }
 
+/**
+ * What reaches a service: the paths it claims, every path no other service
+ * claims, or nobody from outside, only the project's other services.
+ */
+export type Reach = { kind: "paths"; paths: string[] } | { kind: "rest" } | { kind: "internal" }
+
 /** One line of the Services panel: a process of a project that runs several. */
 export type ServiceRow = {
   name: string
   /** The unit as systemctl takes it. */
   unit: string
-  /** What reaches it: its paths, every other path, or the project alone. */
-  reach: string
+  reach: Reach
   port: string | null
   /** False when the port is declared and nothing listens on it. */
   listening: boolean | null
   state: ServiceState
   /** "47 of 256 MB" while it runs, null otherwise. */
   memory: string | null
+  /** Memory over its ceiling, for the bar; null without a known ceiling. */
+  memoryPercent: number | null
+  memoryLevel: Level
   restarts: string | null
 }
 
@@ -144,18 +152,21 @@ export function serviceRows(site: Pick<Site, "services">): ServiceRow[] {
   return site.services.map((entry) => {
     const service = entry.service
     const running = service !== null && service.active === "active"
+    const reach: Reach = entry.internal
+      ? { kind: "internal" }
+      : entry.routes === null
+        ? { kind: "rest" }
+        : { kind: "paths", paths: entry.routes }
     return {
       name: entry.name ?? entry.unit,
       unit: `${entry.unit}.service`,
-      reach: entry.internal
-        ? "Internal: the project's other services only"
-        : entry.routes === null
-          ? "Every other path"
-          : entry.routes.join(" "),
+      reach,
       port: entry.port === null ? null : String(entry.port),
       listening: entry.listening,
       state: service === null ? { tone: "error", label: "Not loaded" } : serviceWord(service.active, service.subState),
       memory: !running ? null : service.limit === null ? size(service.memory) : sizeOutOf(service.memory, service.limit),
+      memoryPercent: running ? memoryShare(service.memory, service.limit) : null,
+      memoryLevel: running ? serviceLevel(service.memory, service.peak, service.limit) : "normal",
       restarts: restartsLabel(service?.restarts ?? null),
     }
   })

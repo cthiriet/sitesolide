@@ -1,8 +1,13 @@
 import { useId, type ReactNode } from "react"
-import { FileCode2, KeyRound, ShieldCheck, ShieldOff, ShieldX, type LucideIcon } from "lucide-react"
+import { FileCode2, Globe, KeyRound, Lock, ShieldCheck, ShieldOff, ShieldX, type LucideIcon } from "lucide-react"
 import { Track } from "@/components/gauge"
 import { ExternalLink } from "@/components/link"
 import { Banner, Panel, Status } from "@/components/page"
+import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { ABSENT } from "@/lib/format"
+import { BAR_CLASSES } from "@/lib/gauges"
 import { CodeChip } from "@/components/site-access"
 import { type Level } from "@/lib/gauges"
 import {
@@ -15,7 +20,9 @@ import {
   readAccess,
   siteStorage,
   type Fact,
+  type Reach,
   type ServiceGauge,
+  type ServiceRow,
 } from "@/lib/site-card"
 import { TONE_TEXT, severityTone } from "@/lib/tones"
 import type { Discrepancy, Site } from "@/lib/types"
@@ -171,40 +178,153 @@ export function ServicePanel({ site, now }: { site: Site; now: number }) {
   )
 }
 
+/** What reaches a service, as a badge: its paths, the rest of the site, or the project alone. */
+function ReachBadges({ reach }: { reach: Reach }) {
+  if (reach.kind === "internal") {
+    return (
+      <Badge variant="secondary" title="Called by the project's other services, never by visitors">
+        <Lock aria-hidden="true" />
+        Internal
+      </Badge>
+    )
+  }
+  if (reach.kind === "rest") {
+    return (
+      <Badge variant="outline" title="Every request no other service claims">
+        <Globe aria-hidden="true" />
+        All other paths
+      </Badge>
+    )
+  }
+  return (
+    <span className="flex flex-wrap gap-1">
+      {reach.paths.map((path) => (
+        <Badge key={path} variant="outline" className="font-mono" title="Requests on this path">
+          <Globe aria-hidden="true" />
+          {path}
+        </Badge>
+      ))}
+    </span>
+  )
+}
+
+/** The port under the badge: where Caddy, or the siblings, reach the service. */
+function PortLine({ row }: { row: ServiceRow }) {
+  if (row.port === null) return null
+  return row.listening === false ? (
+    <span className="text-xs font-medium text-destructive tabular-nums">port {row.port}, nothing listens</span>
+  ) : (
+    <span className="text-xs text-muted-foreground tabular-nums">port {row.port}</span>
+  )
+}
+
+/** Memory against the ceiling, a short bar and the figure; a dash when the service isn't running. */
+function MemoryLine({ row }: { row: ServiceRow }) {
+  if (row.memory === null) return <span className="text-muted-foreground">{ABSENT}</span>
+  return (
+    <span className="flex items-center gap-2 whitespace-nowrap tabular-nums">
+      {row.memoryPercent !== null && (
+        <Progress
+          value={row.memoryPercent}
+          aria-hidden="true"
+          className={cn("w-12 shrink-0 [&_[data-slot=progress-track]]:h-1", BAR_CLASSES[row.memoryLevel])}
+        />
+      )}
+      {row.memory}
+    </span>
+  )
+}
+
+function StateLine({ row, className }: { row: ServiceRow; className?: string }) {
+  return (
+    <span className={cn("grid justify-items-start gap-0.5", className)}>
+      <Status tone={row.state.tone} className={row.state.tone === "ok" ? undefined : "font-medium"}>
+        {row.state.label}
+      </Status>
+      {row.restarts !== null && <span className="text-xs text-attention-text tabular-nums">{row.restarts}</span>}
+    </span>
+  )
+}
+
+const SERVICES_HEAD = "h-9 px-3 text-xs font-medium text-muted-foreground"
+const SERVICES_CELL = "px-3 py-2.5 align-top whitespace-normal"
+
 /**
- * The processes of a project that runs several, one line each: its state, its
- * unit, what reaches it and what it weighs. Nothing for a single service.
+ * The processes of a project that runs several: what each one is, what
+ * reaches it, what it weighs and how it runs. A table where there is room, a
+ * card per service below that. Nothing for a single service, which the
+ * Service panel already describes whole.
  */
 export function ServicesPanel({ site }: { site: Site }) {
   const rows = serviceRows(site)
   if (rows.length === 0) return null
   return (
-    <Panel title="Services" count={rows.length} full>
-      <ul className="divide-y">
-        {rows.map((row) => (
-          <li key={row.unit} className="grid gap-1 px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-              <span className="font-medium">{row.name}</span>
-              <Status tone={row.state.tone} className={row.state.tone === "ok" ? undefined : "font-medium"}>
-                {row.state.label}
-              </Status>
-            </div>
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-              <Terminal>{row.unit}</Terminal>
-              {row.port !== null && (
-                <span className={cn("tabular-nums", row.listening === false && "font-medium text-destructive")}>
-                  {row.listening === false ? `port ${row.port}, nothing listens` : `port ${row.port}`}
+    <Panel
+      title="Services"
+      count={rows.length}
+      full
+      description="Caddy sends each request to the service that claims its path. An internal service is only called by the others."
+    >
+      <div className="@container">
+        <div className="hidden @xl:block">
+          <Table>
+            <caption className="sr-only">The services of {site.slug}, the main one first.</caption>
+            <TableHeader className="bg-muted/50">
+              <TableRow className="hover:bg-transparent">
+                <TableHead className={cn(SERVICES_HEAD, "pl-4")}>Service</TableHead>
+                <TableHead className={SERVICES_HEAD}>Receives</TableHead>
+                <TableHead className={SERVICES_HEAD}>Memory</TableHead>
+                <TableHead className={cn(SERVICES_HEAD, "pr-4")}>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow key={row.unit} className="hover:bg-transparent">
+                  <TableCell className={cn(SERVICES_CELL, "pl-4")}>
+                    <span className="grid gap-0.5">
+                      <span className="font-medium">{row.name}</span>
+                      <Terminal>{row.unit}</Terminal>
+                    </span>
+                  </TableCell>
+                  <TableCell className={SERVICES_CELL}>
+                    <span className="grid justify-items-start gap-1">
+                      <ReachBadges reach={row.reach} />
+                      <PortLine row={row} />
+                    </span>
+                  </TableCell>
+                  <TableCell className={SERVICES_CELL}>
+                    <MemoryLine row={row} />
+                  </TableCell>
+                  <TableCell className={cn(SERVICES_CELL, "pr-4")}>
+                    <StateLine row={row} />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+
+        <ul className="divide-y @xl:hidden">
+          {rows.map((row) => (
+            <li key={row.unit} className="grid gap-2 px-4 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+                <span className="grid gap-0.5">
+                  <span className="font-medium">{row.name}</span>
+                  <Terminal>{row.unit}</Terminal>
                 </span>
-              )}
-              <span className={cn(!row.reach.startsWith("Internal") && !row.reach.startsWith("Every") && "font-mono")}>
-                {row.reach}
-              </span>
-              {row.memory !== null && <span className="tabular-nums">{row.memory}</span>}
-              {row.restarts !== null && <span className="text-attention-text tabular-nums">{row.restarts}</span>}
-            </div>
-          </li>
-        ))}
-      </ul>
+                <StateLine row={row} className="justify-items-end" />
+              </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <ReachBadges reach={row.reach} />
+                <PortLine row={row} />
+                <span className="ml-auto text-xs">
+                  <MemoryLine row={row} />
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
     </Panel>
   )
 }
