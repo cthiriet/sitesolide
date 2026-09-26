@@ -90,7 +90,8 @@ declared, between 3000 and 3099. Caddy reverse-proxies to it.
 
 That range is not arbitrary: a nftables rule reserves it to Caddy and root, so
 no service can reach another one. Outside it, a service would be reachable by
-every other project on the machine.
+every other project on the machine. A project of several processes declares a
+port per service, see [`services`](#services).
 
 ### `routes`
 
@@ -104,6 +105,52 @@ without waking it.
 Without this key, everything that is not a file on disk goes to the service.
 With it, only these paths do. Use it when most of the site is static and only a
 form or a webhook is dynamic.
+
+### `services`
+
+Several processes instead of one `start`: a web front, the API it calls, a
+worker behind it. Each entry names a service and takes `start` and `port`, like
+a single service, and optionally `routes`, `internal`, `memory` and `env`.
+
+```json
+"services": {
+  "web":    { "start": "/srv/sites/lab/app/.venv/bin/python -m lab.web --port 3050", "port": 3050 },
+  "api":    { "start": "/srv/sites/lab/app/.venv/bin/python -m lab.api --port 3051", "port": 3051, "routes": ["/v1/*"] },
+  "worker": { "start": "/srv/sites/lab/app/.venv/bin/python -m lab.worker --port 3052", "port": 3052, "internal": true, "memory": "1G" }
+}
+```
+
+- **Units.** The first service keeps the project's unit, `<slug>.service`; the
+  others are `<slug>.<name>.service`, so a name starts with a letter and is
+  never a systemd unit type such as `socket` or `timer`. They start with the first one and follow
+  it when it stops or restarts, so restarting the project from the dashboard
+  restarts all of them.
+- **Routes.** A service with `routes` gets those paths. The one without takes
+  every other path, or, next to a `publicDir`, every path that is not a file
+  there. Two services whose routes could match the same request are refused,
+  and without a `publicDir` exactly one public service must take the rest.
+- **`internal`.** Caddy never reaches the service; only the project's other
+  services do.
+- **Ports.** Between 3000 and 3099, one per service. The loopback rule lets each
+  project reach its own ports and nobody else's, so a service calls its
+  siblings on `127.0.0.1:<port>`, and a neighbour cannot. A rule laid before
+  this existed has no room for that: `deploy` refuses before pushing anything,
+  and says to lay the current one with `bin/deploy-loopback.sh close`.
+- **`memory` and `env`.** A service's own, added to the project's; its `env`
+  wins over the project's on a shared name. `PORT` is each service's own.
+
+`start`, `port` and `routes` are then refused at the top level. `install`,
+`secrets`, `network`, `exclude` and the directories stay the project's, shared
+by every service.
+
+A Python project installs its virtualenv on the machine with `install`. Tell
+`uv` to use the system's Python: one it downloads lives under the deployment
+account's home, which `ProtectHome` hides from the service, and the virtualenv
+would point at nothing.
+
+```json
+"install": "/usr/local/bin/uv sync --frozen --no-dev --compile-bytecode --python-preference only-system"
+```
 
 ### `env`
 

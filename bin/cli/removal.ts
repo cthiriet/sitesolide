@@ -11,7 +11,7 @@
  * action without ever touching production, where a mistake here erases a site.
  */
 
-import { secretPath, projectPaths, systemUser } from "./unit";
+import { secretPath, projectPaths, systemUser, unitArgument } from "./unit";
 
 /**
  * The order is the deployment's in reverse, and it is no more negotiable than
@@ -50,6 +50,11 @@ export type ProjectToRemove = {
   isApplication: boolean;
   /** The manifest's `secrets` files, each at /etc/sitesolide/<name>. */
   secrets: readonly string[];
+  /**
+   * The project's units without `.service`, the main one first: the slug
+   * alone for a single service, see servicesOf in manifest.ts.
+   */
+  units?: readonly string[];
 };
 
 const UNIT_TITLE = "stop and remove the systemd unit";
@@ -72,12 +77,14 @@ export function removalActions(project: ProjectToRemove): Action[] {
   if (isApplication) {
     // `disable --now` stops and removes the startup link in one action. A
     // service already stopped is not an error, hence the `|| true`: without it,
-    // a removal resumed after the fact would fail on its first step.
+    // a removal resumed after the fact would fail on its first step. Every
+    // unit of the project goes in the same action, the main one first.
+    const units = project.units !== undefined && project.units.length > 0 ? project.units : [slug];
     actions.push({
       title: UNIT_TITLE,
       command: [
-        `sudo systemctl disable --now ${slug} 2>/dev/null || true`,
-        `sudo rm -f /etc/systemd/system/${slug}.service`,
+        `sudo systemctl disable --now ${units.map(unitArgument).join(" ")} 2>/dev/null || true`,
+        `sudo rm -f ${units.map((unit) => `/etc/systemd/system/${unit}.service`).join(" ")}`,
         "sudo systemctl daemon-reload",
       ].join(" && "),
     });

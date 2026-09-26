@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { readManifest } from "../../cli/manifest";
 import { generateUnit } from "../../cli/unit";
+import { SWITCHES } from "./fake-ssh";
+import { createFakeVm } from "./fake-vm";
 import { REPO, run, TESTS_ROOT } from "./run";
 
 /**
@@ -254,6 +256,65 @@ describe("the order between the code and Caddy", () => {
   test("a showcase never has a fragment to install", async () => {
     const r = await run("projects/simple-site", ["deploy", "--dry-run"]);
     expect(r.all).not.toContain("deploy-caddy.sh");
+  });
+});
+
+describe("a project with several services", () => {
+  test("the dry run shows one unit per service, the others hanging on the main one", async () => {
+    const r = await run("projects/multi-service", ["deploy", "--dry-run"]);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("project sample-lab, 3 services");
+    for (const unit of ["sample-lab", "sample-lab.api", "sample-lab.worker"]) {
+      expect(r.output).toContain(`--- ${unit}.service ---`);
+      expect(r.output).toContain(`[dry-run] read /etc/systemd/system/${unit}.service, install it if missing`);
+    }
+    expect(r.output).toContain("Wants=sample-lab.api.service sample-lab.worker.service");
+    expect(r.output).toContain("PartOf=sample-lab.service");
+    expect(r.output).toContain("MemoryMax=512M");
+  });
+
+  test("one block: the API gets /v1, the front the rest, the worker nothing", async () => {
+    const r = await run("projects/multi-service", ["deploy", "--dry-run"]);
+    expect(r.output).toContain("@service-api path /v1/*");
+    expect(r.output).toContain("reverse_proxy @service-api 127.0.0.1:3061");
+    expect(r.output).toContain("reverse_proxy 127.0.0.1:3060");
+    expect(r.output).not.toContain("reverse_proxy 127.0.0.1:3062");
+  });
+
+  test("the project set is rebuilt before every service restarts together", async () => {
+    const r = await run("projects/multi-service", ["deploy", "--dry-run"]);
+    const set = r.output.indexOf("rebuild /etc/sitesolide-loopback-projects.nft");
+    const restart = r.output.indexOf("systemctl restart sample-lab sample-lab.api.service sample-lab.worker.service");
+    expect(set).toBeGreaterThan(-1);
+    expect(restart).toBeGreaterThan(set);
+    expect(r.output).toContain("systemctl is-active sample-lab sample-lab.api.service sample-lab.worker.service");
+  });
+
+  test("a loopback rule laid before the project set stops everything, in a dry run too", async () => {
+    const vm = createFakeVm();
+    try {
+      writeFileSync(join(vm.root, SWITCHES.loopbackState), "table\n");
+      const r = await run("projects/multi-service", ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(1);
+      expect(r.error).toContain("the loopback rule in service predates the project set");
+      expect(r.error).toContain("deploy-loopback.sh close");
+      expect(r.output).not.toContain("system user and directories");
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("a port another project declares on the machine stops everything before the build", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.writeManifest("taken", JSON.stringify({ slug: "taken", port: 3061, start: "/x" }));
+      const r = await run("projects/multi-service", ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(1);
+      expect(r.error).toContain("port already taken on the server");
+      expect(r.error).toContain("port 3061 (service api) is already declared by project taken");
+    } finally {
+      vm.cleanup();
+    }
   });
 });
 

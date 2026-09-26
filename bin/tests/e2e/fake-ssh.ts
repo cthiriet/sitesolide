@@ -44,6 +44,7 @@ import {
   type Who,
 } from "../../cli/caddy-lock";
 import { MARKER_ABSENT, MARKER_PRESENT } from "../../cli/unit";
+import { loopbackStateCommand, MARKER_DONE } from "../../cli/services";
 
 export const TEST_HOST = "sample@invalid.local";
 
@@ -56,6 +57,7 @@ export const SWITCHES = {
   onFirstAccepted: "on-first-accepted.json",
   answers: "answers.json",
   unitWithoutZone: "unit-without-zone",
+  loopbackState: "loopback-state",
 } as const;
 
 /**
@@ -166,6 +168,16 @@ if (import.meta.main) {
 
   if (command === "true") {
     record("CONNECT");
+    process.exit(0);
+  }
+  // Where the loopback rule stands, read before a project with several
+  // services pushes anything. A reading, hence always answered: the rule this
+  // repository lays, unless the test lays the state it wants.
+  if (command === loopbackStateCommand()) {
+    record("LOOPBACK");
+    const laid = join(vm, SWITCHES.loopbackState);
+    const state = existsSync(laid) ? readFileSync(laid, "utf8").trim() : "set";
+    process.stdout.write(`${state}\n${MARKER_DONE}\n`);
     process.exit(0);
   }
   const fingerprint = FINGERPRINT.exec(command);

@@ -21,7 +21,7 @@
  * bin/deploy-caddy.sh, which backs up, validates and restores.
  */
 import { sameDirectives } from "./comparison";
-import { isApp, isProtected, type Manifest } from "./manifest";
+import { hasServices, isApp, isProtected, servicesOf, type Manifest } from "./manifest";
 import { portalStanza } from "./portal";
 import { projectPaths } from "./unit";
 
@@ -63,7 +63,9 @@ export function generateRoutes(manifest: Manifest): string {
     lines.push("");
   }
 
-  if (manifest.publicDir === undefined) {
+  if (hasServices(manifest)) {
+    lines.push(...servicesRoutes(manifest));
+  } else if (manifest.publicDir === undefined) {
     lines.push(
       "\t# No static file at all: the whole site is rendered by the service.",
       `\treverse_proxy 127.0.0.1:${manifest.port}`,
@@ -88,6 +90,63 @@ export function generateRoutes(manifest: Manifest): string {
 
   lines.push("}");
   return lines.join("\n");
+}
+
+/**
+ * The routes of a project declaring `services`: each public service receives
+ * its own paths, and the one without routes everything else.
+ *
+ * **No line depends on the written order**, which the comparison of blocks
+ * does not see (bin/cli/comparison.ts). Two services never claim the same path,
+ * validate() refuses routes that could overlap. The service taking the rest
+ * carries either no matcher, which Caddy sorts after every matched
+ * `reverse_proxy`, or, next to a `publicDir`, a matcher that excludes the
+ * other services' paths by itself. Still no `handle`: see the header.
+ *
+ * An internal service has no line here: Caddy never reaches it, only the
+ * project's other services do, over the loopback.
+ */
+function servicesRoutes(manifest: Manifest): string[] {
+  const paths = projectPaths(manifest.slug);
+  const exposed = servicesOf(manifest).filter((service) => !service.internal);
+  const routed = exposed.filter((service) => service.routes !== undefined);
+  const rest = exposed.find((service) => service.routes === undefined);
+  const lines: string[] = [];
+
+  if (manifest.publicDir !== undefined) lines.push(`\troot * ${paths.publicDir}`, "");
+
+  for (const service of routed) {
+    lines.push(
+      `\t# Service ${service.name}: the paths sitesolide.json declares for it.`,
+      `\t@service-${service.name} path ${service.routes!.join(" ")}`,
+      `\treverse_proxy @service-${service.name} 127.0.0.1:${service.port}`,
+      "",
+    );
+  }
+
+  if (rest !== undefined && manifest.publicDir === undefined) {
+    lines.push(
+      `\t# Service ${rest.name}: every other path. Without a matcher, Caddy sorts`,
+      "\t# it after the routed services.",
+      `\treverse_proxy 127.0.0.1:${rest.port}`,
+    );
+  } else if (rest !== undefined) {
+    const claimed = routed.flatMap((service) => service.routes!);
+    lines.push(
+      `\t# Service ${rest.name}: whatever is neither a file of public/ nor a path`,
+      "\t# of another service.",
+      `\t@service-${rest.name} {`,
+      "\t\tnot file",
+      ...(claimed.length > 0 ? [`\t\tnot path ${claimed.join(" ")}`] : []),
+      "\t}",
+      `\treverse_proxy @service-${rest.name} 127.0.0.1:${rest.port}`,
+    );
+  }
+
+  if (manifest.publicDir !== undefined) {
+    lines.push("", "\t# The rest is served straight by Caddy, without waking a service.", "\tfile_server");
+  }
+  return lines;
 }
 
 /**

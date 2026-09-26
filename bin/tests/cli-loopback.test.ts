@@ -2,16 +2,43 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { knownManifests } from "./manifests";
-import { type LoopbackMode, adminPatterns, CADDY_ADMIN_PORT, SERVICE_PORTS, loopbackRule, LOOPBACK_TABLE } from "../cli/loopback";
+import {
+  type LoopbackMode,
+  adminPatterns,
+  CADDY_ADMIN_PORT,
+  SERVICE_PORTS,
+  loopbackRule,
+  LOOPBACK_TABLE,
+  PROJECT_PORTS_SET,
+  projectPortsFile,
+} from "../cli/loopback";
+import { servicesOf, type Manifest } from "../cli/manifest";
 import { PORTAL_PORT } from "../cli/portal";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 
-/** uid 997 for caddy, as on a Debian; 1022 for the dashboard; 1500 any other. */
+/** uid 997 for caddy, as on a Debian; 1022 for the dashboard; 1500 any other; 1600 a project with several services. */
 const CADDY = 997;
 const DASHBOARD = 1022;
 const OTHER = 1500;
+const PROJECT = 1600;
 const NOBODY = 65534;
+
+/** A project with a front, an API and an internal worker. */
+const SEVERAL: Manifest = {
+  slug: "lab",
+  services: {
+    web: { start: "/srv/sites/lab/app/web", port: 3050 },
+    api: { start: "/srv/sites/lab/app/api", port: 3051, routes: ["/v1/*"] },
+    worker: { start: "/srv/sites/lab/app/worker", port: 3052, internal: true },
+  },
+};
+/** The set PROJECT_PORTS_FILE fills for SEVERAL, as `port . uid` pairs. */
+const PROJECT_PAIRS: [port: number, uid: number][] = [
+  [3050, PROJECT],
+  [3051, PROJECT],
+  [3052, PROJECT],
+];
 
 interface Issue {
   verdict: "accepted" | "refused";
@@ -26,9 +53,13 @@ interface Issue {
  * writes, and throws on any other line: a rule it skipped would make the test
  * green without checking anything.
  */
-function walk(rule: string, uid: number, port: number): Issue {
+function walk(rule: string, uid: number, port: number, pairs: [number, number][] = PROJECT_PAIRS): Issue {
   let logged = false;
   for (const line of rulesOf(rule)) {
+    if (line === `oifname "lo" tcp dport . meta skuid @${PROJECT_PORTS_SET} accept`) {
+      if (pairs.some(([p, u]) => p === port && u === uid)) return { verdict: "accepted", logged };
+      continue;
+    }
     const m = line.match(/^oifname "lo" tcp dport (\d+)(?:-(\d+))?(?: meta skuid (?:\{ ([\d, ]+) \}|(\d+)))?(?: ct state new)? (.+)$/);
     if (m === null) throw new Error(`unreadable rule: ${line}`);
     const [, first, last, set, single, action] = m;
@@ -96,7 +127,7 @@ describe("the loopback rule", () => {
 
   test.each(["close", "observe"] as const)("%s: walked in order, the chain decides what is expected of each account", (mode: LoopbackMode) => {
     const rule = loopbackRule(CADDY, mode, DASHBOARD);
-    expect(rulesOf(rule)).toHaveLength(5);
+    expect(rulesOf(rule)).toHaveLength(6);
 
     const allowed: Issue = { verdict: "accepted", logged: false };
     const other: Issue = mode === "close" ? { verdict: "refused", logged: false } : { verdict: "accepted", logged: true };
@@ -118,6 +149,16 @@ describe("the loopback rule", () => {
       [DASHBOARD, PORTAL_PORT, allowed],
       [CADDY, PORTAL_PORT, allowed],
       [OTHER, PORTAL_PORT, other],
+      // A project with several services reaches its own ports, and nothing
+      // else; nobody else reaches them.
+      [PROJECT, 3050, allowed],
+      [PROJECT, 3052, allowed],
+      [PROJECT, 3022, other],
+      [PROJECT, PORTAL_PORT, other],
+      [PROJECT, CADDY_ADMIN_PORT, other],
+      [OTHER, 3052, other],
+      [DASHBOARD, 3051, other],
+      [CADDY, 3052, allowed],
       // Outside the rule, nothing changes for anyone.
       [OTHER, CADDY_ADMIN_PORT - 1, allowed],
       [OTHER, CADDY_ADMIN_PORT + 1, allowed],
@@ -195,6 +236,14 @@ describe("the loopback rule", () => {
     }
   });
 
+  test("the project set is declared in the table, and consulted before the refusal", () => {
+    const rule = loopbackRule(CADDY, "close", DASHBOARD);
+    expect(rule).toInclude(`\tset ${PROJECT_PORTS_SET} {\n\t\ttypeof tcp dport . meta skuid\n\t}`);
+    expect(rule.indexOf(`@${PROJECT_PORTS_SET} accept`)).toBeLessThan(rule.indexOf("tcp dport 3000-3099 ct state new"));
+    // Emptied, the set lets nothing through: the rule is the one of before.
+    expect(walk(rule, PROJECT, 3050, [])).toEqual({ verdict: "refused", logged: false });
+  });
+
   test("the file replays itself, whether the table is laid down or not", () => {
     const rule = loopbackRule(CADDY, "close", DASHBOARD);
     expect(rule.indexOf(`table inet ${LOOPBACK_TABLE}\n`)).toBeLessThan(rule.indexOf(`delete table inet ${LOOPBACK_TABLE}`));
@@ -209,7 +258,7 @@ describe("the loopback rule", () => {
     const api = readFileSync(join(REPO_ROOT, "api", "deploy", "sitesolide-api.service"), "utf8");
     const apiPort = api.match(/^Environment=PORT=(\d+)$/m)?.[1];
     if (apiPort !== undefined) ports.push(Number(apiPort));
-    for (const manifest of knownManifests()) if (manifest.port !== undefined) ports.push(manifest.port);
+    for (const manifest of knownManifests()) ports.push(...servicesOf(manifest).map((service) => service.port));
     for (const port of ports) {
       expect(port).toBeGreaterThanOrEqual(SERVICE_PORTS.first);
       expect(port).toBeLessThanOrEqual(SERVICE_PORTS.last);
@@ -260,12 +309,15 @@ apk add --quiet --no-progress nftables curl busybox-extras >/dev/null
 adduser -D -u ${CADDY} caddy
 adduser -D -u ${DASHBOARD} dashboard
 adduser -D -u ${OTHER} other
+adduser -D -u ${PROJECT} project
 mkdir -p /srv/www && echo ok > /srv/www/index.html
 IP=$(ip -4 addr show dev eth0 | awk '/inet /{print $2; exit}' | cut -d/ -f1)
 [ -n "$IP" ]
 httpd -p 127.0.0.1:3022 -h /srv/www
 httpd -p 127.0.0.1:${PORTAL_PORT} -h /srv/www
 httpd -p 127.0.0.1:8080 -h /srv/www
+httpd -p 127.0.0.1:3050 -h /srv/www
+httpd -p 127.0.0.1:3052 -h /srv/www
 httpd -p [::1]:3043 -h /srv/www
 httpd -p 127.0.0.1:${CADDY_ADMIN_PORT} -h /srv/www
 httpd -p [::1]:${CADDY_ADMIN_PORT} -h /srv/www
@@ -296,6 +348,24 @@ done
 echo "--- list"
 nft list table inet ${LOOPBACK_TABLE}
 echo "--- end"
+# After the listing: replaying the table below resets its counters.
+cat > /projects.nft <<'RULE'
+${projectPortsFile([{ manifest: SEVERAL, uid: PROJECT }])}
+RULE
+echo "project:3052:empty=$(code project http://127.0.0.1:3052/)"
+nft -c -f /projects.nft
+nft -f /projects.nft
+nft -f /projects.nft
+echo "project:3050=$(code project http://127.0.0.1:3050/)"
+echo "project:3052=$(code project http://127.0.0.1:3052/)"
+echo "project:3022=$(code project http://127.0.0.1:3022/)"
+echo "project:admin=$(code project http://127.0.0.1:${CADDY_ADMIN_PORT}/)"
+echo "other:3052=$(code other http://127.0.0.1:3052/)"
+echo "caddy:3052=$(code caddy http://127.0.0.1:3052/)"
+nft -f /rule.nft
+echo "project:3052:replayed=$(code project http://127.0.0.1:3052/)"
+nft -f /projects.nft
+echo "project:3052:refilled=$(code project http://127.0.0.1:3052/)"
 `;
     const r = Bun.spawnSync([DOCKER!, "run", "--rm", "--cap-add", "NET_ADMIN", "alpine:3.20", "sh", "-c", script]);
     return { code: r.exitCode, output: r.stdout.toString() + r.stderr.toString() };
@@ -320,6 +390,19 @@ echo "--- end"
     expect(output).toInclude("dashboard:portal=200");
     expect(output).toInclude("dashboard:3022=000");
     expect(output).toInclude("other:portal=000");
+    // A project with several services: its own ports, and nothing else. The
+    // set is empty until its file is loaded, emptied again when the table is
+    // replayed, and filled again by replaying the file, as the boot unit and
+    // bin/deploy-loopback.sh do.
+    expect(output).toInclude("project:3052:empty=000");
+    expect(output).toInclude("project:3050=200");
+    expect(output).toInclude("project:3052=200");
+    expect(output).toInclude("project:3022=000");
+    expect(output).toInclude("project:admin=000");
+    expect(output).toInclude("other:3052=000");
+    expect(output).toInclude("caddy:3052=200");
+    expect(output).toInclude("project:3052:replayed=000");
+    expect(output).toInclude("project:3052:refilled=200");
     // The admin API, through 127.0.0.1, ::1 and the machine's address.
     for (const family of ["v4", "v6", "ip"]) {
       expect(output).toInclude(`caddy:admin:${family}=200`);
@@ -338,6 +421,7 @@ echo "--- end"
     expect(code).toBe(0);
     expect(output).toInclude("other:3022=200");
     expect(output).toInclude("other:v6:3043=200");
+    expect(output).toInclude("project:3022=200");
     for (const family of ["v4", "v6", "ip"]) {
       expect(output).toInclude(`other:admin:${family}=200`);
       expect(output).toInclude(`dashboard:admin:${family}=200`);
@@ -369,4 +453,30 @@ echo "--- end"
     expect(found[0]!).toBeLessThan(found[1]!);
     expect(lines[found[1]!]).toMatch(/counter packets [1-9]/);
   }, 120_000);
+});
+
+describe("the project set", () => {
+  test("replaces every element at once, the projects with several services alone", () => {
+    const single: Manifest = { slug: "budget", port: 3022, start: "/usr/local/bin/bun run server.ts" };
+    const file = projectPortsFile([
+      { manifest: SEVERAL, uid: PROJECT },
+      { manifest: single, uid: 1700 },
+    ]);
+    const lines = file.split("\n").filter((line) => line !== "" && !line.startsWith("#"));
+    expect(lines).toEqual([
+      `flush set inet ${LOOPBACK_TABLE} ${PROJECT_PORTS_SET}`,
+      `add element inet ${LOOPBACK_TABLE} ${PROJECT_PORTS_SET} { 3050 . ${PROJECT}, 3051 . ${PROJECT}, 3052 . ${PROJECT} }`,
+    ]);
+  });
+
+  test("with no such project, the set is emptied", () => {
+    const lines = projectPortsFile([]).split("\n").filter((line) => line !== "" && !line.startsWith("#"));
+    expect(lines).toEqual([`flush set inet ${LOOPBACK_TABLE} ${PROJECT_PORTS_SET}`]);
+  });
+
+  test("a uid read wrong is refused: the ports would open to root or to nobody", () => {
+    for (const uid of [0, -1, Number.NaN, 1.5, 65534]) {
+      expect(() => projectPortsFile([{ manifest: SEVERAL, uid }])).toThrow(/uid/);
+    }
+  });
 });

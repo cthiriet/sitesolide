@@ -1,0 +1,29 @@
+{
+  "slug": "sample-lab",
+  "description": "A front, an API under /v1 and an internal worker",
+  "install": "uv sync --frozen --no-dev",
+  "env": {
+    "LAB_API_URL": "http://127.0.0.1:3061",
+    "LAB_WORKER_URL": "http://127.0.0.1:3062",
+    "LAB_PUBLIC_URL": "https://{slug}.{zone}"
+  },
+  "secrets": ["sample-lab.env"],
+  "exclude": [".venv", "__pycache__"],
+  "services": {
+    "web": {
+      "start": "/srv/sites/sample-lab/app/.venv/bin/python -m app.web --port 3060",
+      "port": 3060
+    },
+    "api": {
+      "start": "/srv/sites/sample-lab/app/.venv/bin/python -m app.api --port 3061",
+      "port": 3061,
+      "routes": ["/v1/*"]
+    },
+    "worker": {
+      "start": "/srv/sites/sample-lab/app/.venv/bin/python -m app.worker --port 3062",
+      "port": 3062,
+      "internal": true,
+      "memory": "512M"
+    }
+  }
+}

@@ -68,6 +68,7 @@ then points at a `.invalid` name, so that the final verification reaches nobody.
 | `projects/fastapi-app` | Python, no static page, everything goes to the service |
 | `projects/api-with-secret` | a declared secret, checked on the machine and never pushed, and outbound network |
 | `projects/portal-mixed` | a project behind the portal, with an exempted path |
+| `projects/multi-service` | several services: a front, an API under `/v1`, an internal worker |
 
 ## The rejections
 

@@ -16,6 +16,11 @@ Wants=network-pre.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=@NFT@ -f /etc/sitesolide-loopback.nft
+# The ports each project with several services may open towards its own,
+# written by sitesolide deploy. Loading the table above empties that set, so
+# the file is replayed after it; missing, or refused, it leaves the rule as it
+# is and those projects' services unable to reach each other, nothing worse.
+ExecStart=-@NFT@ -f /etc/sitesolide-loopback-projects.nft
 ExecStop=@NFT@ delete table inet sitesolide_boucle
 
 [Install]

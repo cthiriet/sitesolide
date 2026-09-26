@@ -11,7 +11,7 @@ sitesolide deploy               prepare, build, push, install, restart, verify
    --dry-run                    show the unit and the fragment, install nothing
    --force                      switch a hand-written unit to the generated one
 sitesolide status               what the server actually runs
-sitesolide logs [--follow]      journalctl for this project
+sitesolide logs [--follow]      journalctl for this project, every service of it
 sitesolide lock   [--dry-run]   close the preview behind a code, or show it
    --status                     wanted / installed / measured, without touching
    --new-code                   replace the code in force by a fresh one

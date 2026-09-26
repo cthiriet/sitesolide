@@ -19,7 +19,7 @@
  * `dashboard/`, and an import climbing higher makes the service fail on the VM
  * after a deployment that otherwise succeeded.
  */
-import { isApp, isProtected, PORTAL_SLUG, type Manifest } from "../borrowed/manifest";
+import { isApp, isProtected, mainPort, PORTAL_SLUG, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected } from "../borrowed/portal";
 import { isValidCode, previewHost } from "../borrowed/locks";
 
@@ -432,7 +432,9 @@ export function buildSnapshot(raw: Raw): Snapshot {
           ? "app"
           : "no-manifest";
 
-    const port = typeof manifest?.port === "number" ? manifest.port : null;
+    // The main service's: the only one of a single `start`, the first of
+    // `services`, whose unit carries the project's name.
+    const port = manifest === null ? null : mainPort(manifest);
     const domain = readDomain(manifest, table);
 
     sites.push({

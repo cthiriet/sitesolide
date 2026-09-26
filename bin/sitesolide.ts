@@ -87,10 +87,12 @@ import {
 } from "./cli/config";
 import { decideBlock, generateFragment } from "./cli/fragment";
 import {
+  hasServices,
   isApp,
   isProtected,
   missingExclusions,
   readManifest,
+  servicesOf,
   setDomainActive,
   setPortal,
   PORTAL_SLUG,
@@ -100,6 +102,7 @@ import {
   switchAnnouncement,
   depositedManifestPath,
   readManifestsCommand,
+  readDepositedManifests,
   confirmDoorUnderLock,
   decidePortal,
   guardDepositedManifest,
@@ -123,12 +126,13 @@ import {
   secretPath,
   projectPaths,
   decideUnit,
-  generateUnit,
+  generateUnits,
   readUnitAnswer,
   type UnitRead,
   MARKER_ABSENT,
   MARKER_PRESENT,
   systemUser,
+  unitArgument,
 } from "./cli/unit";
 import {
   lockCommand,
@@ -138,6 +142,22 @@ import {
   HELD_VARIABLE,
   type Execution,
 } from "./cli/caddy-lock";
+import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, type ProjectAccount } from "./cli/loopback";
+import {
+  listUnitsCommand,
+  loopbackStateCommand,
+  portConflicts,
+  projectPortsCommand,
+  readCurrentPairs,
+  currentPairsCommand,
+  readLoopbackState,
+  readUidsAnswer,
+  readUnitsAnswer,
+  removeUnitsCommand,
+  staleUnits,
+  uidsCommand,
+  unitPath,
+} from "./cli/services";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const MANIFEST_NAME = "sitesolide.json";
@@ -572,7 +592,8 @@ async function deploy(
   const paths = projectPaths(slug);
   const isApplication = isApp(rawProject.manifest);
 
-  say(`-> project ${slug}, ${isApplication ? "service" : "static"}`);
+  const serviceCount = servicesOf(rawProject.manifest).length;
+  say(`-> project ${slug}, ${isApplication ? (serviceCount > 1 ? `${serviceCount} services` : "service") : "static"}`);
 
   // The door before everything else, in a dry run as for real: the block shown,
   // the block checked, the order of the steps and the deposited manifest all
@@ -587,6 +608,8 @@ async function deploy(
   // blocks of the other sites are not this deployment's business: it deposits
   // its own, and leaves theirs as the machine carries them.
   if (isApplication) await checkRemoteBlock(manifest, config, executor, replace, doorConfirmed);
+  if (isApplication) await checkPorts(manifest, config, executor);
+  if (hasServices(manifest)) await requireProjectSet(config, executor);
   const behindPortal = isProtected(manifest);
   if (behindPortal) await requirePortal(config, executor);
 
@@ -667,6 +690,13 @@ async function deploy(
 
   await enterUnderLock();
   await depositManifest(project, config, executor);
+  // Under the lock, like the manifest it reads back from the machine: two
+  // deployments rebuilding the set side by side would each drop the other's
+  // project. Before the restart, which is when the services start calling
+  // each other. A single service follows along too: a project that no longer
+  // declares several must drop out of the set, before another project takes
+  // its former ports.
+  if (isApplication) await rebuildProjectPorts(config, executor, hasServices(manifest) ? "services" : "follow");
   // With no Caddy step to follow, the lock has nothing left to protect: a
   // static site has none, a protected site has already put its door in place.
   if (!isApplication || behindPortal) releaseCaddyLock();
@@ -686,8 +716,12 @@ async function deploy(
       await executor.ssh(config, `cd ${paths.app} && ${manifest.install}`);
     }
 
-    step("service restart");
-    await executor.ssh(config, `sudo systemctl restart ${slug} && systemctl is-active ${slug}`);
+    // Every unit named, rather than the main one alone and its PartOf: a
+    // service that was never started would not be restarted by it, and
+    // is-active must answer for each of them.
+    const units = servicesOf(manifest).map((service) => unitArgument(service.unit)).join(" ");
+    step(serviceCount > 1 ? "services restart" : "service restart");
+    await executor.ssh(config, `sudo systemctl restart ${units} && systemctl is-active ${units}`);
 
     if (!behindPortal) await installFragment(manifest, config, executor);
   }
@@ -1072,7 +1106,7 @@ async function prepareService(
   const { manifest } = project;
   const slug = manifest.slug;
   const account = systemUser(slug);
-  const unit = generateUnit(manifest);
+  const units = generateUnits(manifest);
 
   step("system user and directories");
   await executor.ssh(
@@ -1083,47 +1117,219 @@ async function prepareService(
     ].join(" && "),
   );
 
-  step("systemd unit");
+  step(units.length > 1 ? "systemd units" : "systemd unit");
   if (executor.simulated) {
-    say(`   [dry-run] read /etc/systemd/system/${slug}.service, install it if missing`);
+    for (const { unit } of units) say(`   [dry-run] read ${unitPath(unit)}, install it if missing`);
+    say(`   [dry-run] remove the generated units of ${slug} the manifest no longer declares`);
     return;
   }
 
-  const path = `/etc/systemd/system/${slug}.service`;
-  const reading = await readRemoteFile(config, executor, path);
+  // Every unit is read and decided before any is laid: a refusal must not fall
+  // half way through. Each is decided on its own, one edited by hand on the
+  // machine stays as it is, and the others of the project still get theirs.
+  const decisions = [];
+  for (const { unit, text } of units) {
+    const path = unitPath(unit);
+    const reading = await readRemoteFile(config, executor, path);
+    if (reading.kind === "unreadable") {
+      die(`cannot tell whether ${path} is there`, [
+        "the server answered neither an absence nor a unit file",
+        "nothing was installed: a unit is never replaced on a reading that failed",
+      ]);
+    }
+    const installed = reading.kind === "present" ? reading.content : "";
+    decisions.push({ unit, text, path, installed, action: decideUnit({ installed, generated: text, replace }) });
+  }
+
+  // The main unit is what starts the others, at boot as after a deployment. A
+  // main unit left as it is would not want them, and they would be missing
+  // from the next reboot on, with nothing to say so.
+  const [main] = decisions;
+  if (main !== undefined && main.action === "diverged" && units.length > 1) {
+    say(`   ${main.path} must want the project's other services, or they do not start at boot`);
+    refuseDivergence(main.path, main.installed, main.text);
+  }
+
+  let installed = false;
+  for (const { unit, text, path, action } of decisions) {
+    switch (action) {
+      case "present":
+        say(`   unchanged  ${path}`);
+        continue;
+      case "diverged":
+        say(`   differs    ${path}, left as it is`);
+        say("   it may carry a directive the manifest cannot express, such as one");
+        say("   deliberately left out. Read it, then re-run with --force to switch");
+        say("   to the generated one. Until then the service keeps this unit, so a");
+        say("   changed port, memory or env in the manifest has no effect yet.");
+        continue;
+    }
+
+    say("");
+    say(`--- ${unit}.service ---`);
+    say(text);
+
+    step(units.length > 1 ? `install ${unit}.service` : "install the unit");
+    await depositText(executor, config, text, path, "root:root", "644");
+    installed = true;
+  }
+
+  await removeStaleUnits(manifest, config, executor);
+  // The main unit alone is enabled: it wants the others, at boot as here.
+  if (installed) await executor.ssh(config, `sudo systemctl daemon-reload && sudo systemctl enable ${slug}`);
+}
+
+/**
+ * The secondary units still on the machine that the manifest no longer
+ * declares: a service renamed or dropped from `services`. Left there, it would
+ * keep running the previous code, reachable on its port, with nothing in the
+ * repository saying it exists.
+ *
+ * A listing that fails removes nothing: better a unit left behind, and said
+ * so, than one removed on the strength of an empty answer.
+ */
+async function removeStaleUnits(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
+  const reading = readUnitsAnswer(await executor.read(config, listUnitsCommand(manifest.slug)), manifest.slug);
   if (reading.kind === "unreadable") {
-    die(`cannot tell whether ${path} is there`, [
-      "the server answered neither an absence nor a unit file",
-      "nothing was installed: a unit is never replaced on a reading that failed",
+    say(`   could not list the other units of ${manifest.slug}: none removed`);
+    return;
+  }
+  const stale = staleUnits(manifest, reading.units);
+  if (stale.length === 0) return;
+  step("units the manifest no longer declares");
+  for (const unit of stale) say(`   remove ${unitPath(unit)}`);
+  await executor.ssh(config, removeUnitsCommand(stale));
+}
+
+/**
+ * Refuses a port another project already declares on the machine, before
+ * anything is pushed. See portConflicts in bin/cli/services.ts.
+ *
+ * A read, hence done in a dry run too: it is exactly what a dry run is for.
+ */
+async function checkPorts(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
+  const reading = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
+  if (reading.kind === "unreadable") {
+    die("cannot read the manifests on the server to check the ports", [
+      reading.reason,
+      "nothing was pushed: a port another project declares would take its visitors",
+    ]);
+  }
+  const conflicts = portConflicts(manifest, reading.manifests);
+  if (conflicts.length > 0) {
+    die("port already taken on the server", [...conflicts, "pick a free port between 3000 and 3099 in sitesolide.json"]);
+  }
+}
+
+/**
+ * Refuses, before anything is pushed, a machine whose loopback rule would cut
+ * this project's services off from each other: one laid before the project set
+ * existed. A read, hence done in a dry run too; the dry run is where this is
+ * worth learning. A machine with no rule at all passes: nothing stands between
+ * the services there.
+ */
+async function requireProjectSet(config: Config, executor: Executor): Promise<void> {
+  switch (readLoopbackState(await executor.read(config, loopbackStateCommand()))) {
+    case "unreadable":
+      die("cannot tell whether the loopback rule is in place", [
+        "nothing was pushed: this project's services could fail to reach each other",
+      ]);
+    case "table":
+      die("the loopback rule in service predates the project set", [
+        "this project's services could not reach each other; lay the current rule first:",
+        `  ${join(REPO_ROOT, "bin", "deploy-loopback.sh")} close`,
+        "then run sitesolide deploy again. Nothing was pushed.",
+      ]);
+  }
+}
+
+/**
+ * Rebuilds the loopback's project set from the manifests on the machine, so
+ * that each project with several services reaches its own ports, and only
+ * those. See PROJECT_PORTS_SET in bin/cli/loopback.ts.
+ *
+ * `services` is the deployment of a project with several: a failure stops it,
+ * its services depending on the set. `follow` is every other deployment and
+ * every removal: the set is rewritten only when it differs from what the
+ * manifests say, so that a project that dropped its services or left the
+ * machine drops out of it, and a failure is reported without stopping
+ * anything.
+ *
+ * The file is checked by `nft -c`, applied, and only then replaces the one in
+ * service: a refused file leaves both the set and the file as they were. On a
+ * machine without the set, it is written without being applied, for the next
+ * bin/deploy-loopback.sh to replay.
+ */
+async function rebuildProjectPorts(config: Config, executor: Executor, mode: "services" | "follow"): Promise<void> {
+  const strict = mode === "services";
+  if (executor.simulated) {
+    if (strict) {
+      step("loopback: each project's own ports");
+      say(`   [dry-run] rebuild ${PROJECT_PORTS_FILE} from the manifests on the server`);
+    }
+    return;
+  }
+  const fail = (message: string, details: string[] = []): void => {
+    if (strict) die(message, details);
+    say(`   !! ${message}: the loopback's project set was left as it is`);
+  };
+
+  const state = readLoopbackState(await executor.read(config, loopbackStateCommand()));
+  if (state === "unreadable") return fail("cannot tell whether the loopback rule is in place");
+  if (state === "table" && strict) {
+    return fail("the loopback rule in service predates the project set", [
+      `lay the current rule first: ${join(REPO_ROOT, "bin", "deploy-loopback.sh")} close`,
     ]);
   }
 
-  switch (
-    decideUnit({
-      installed: reading.kind === "present" ? reading.content : "",
-      generated: unit,
-      replace,
-    })
-  ) {
-    case "present":
-      say(`   unchanged  ${path}`);
-      return;
-    case "diverged":
-      say(`   differs    ${path}, left as it is`);
-      say("   it may carry a directive the manifest cannot express, such as one");
-      say("   deliberately left out. Read it, then re-run with --force to switch");
-      say("   to the generated one. Until then the service keeps this unit, so a");
-      say("   changed port, memory or env in the manifest has no effect yet.");
-      return;
+  const reading = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
+  if (reading.kind === "unreadable") return fail("cannot read the manifests on the server", [reading.reason]);
+  const projects: Manifest[] = [];
+  for (const [folder, raw] of reading.manifests) {
+    const { manifest } = readManifest(raw);
+    if (manifest === undefined || !hasServices(manifest)) continue;
+    // The shape the set needs, and nothing more: a manifest deposited by an
+    // older or newer checkout may fail today's validation on a key that has
+    // nothing to do with its ports, and dropping it would cut its services
+    // off from each other.
+    const ports = servicesOf(manifest).map((service) => service.port);
+    if (manifest.slug !== folder || !ports.every((port) => Number.isInteger(port) && port >= 3000 && port <= 3099)) {
+      say(`   skipped ${folder}: its services on the server do not read, they lose their access`);
+      continue;
+    }
+    projects.push(manifest);
   }
 
-  say("");
-  say(`--- ${slug}.service ---`);
-  say(unit);
+  const slugs = projects.map((manifest) => manifest.slug);
+  let uids = new Map<string, number>();
+  if (slugs.length > 0) {
+    const read = readUidsAnswer(await executor.read(config, uidsCommand(slugs)), slugs);
+    if (read.kind === "unreadable") return fail("cannot read the system users of the projects with several services");
+    uids = read.uids;
+  }
+  const accounts: ProjectAccount[] = projects.map((manifest) => ({ manifest, uid: uids.get(manifest.slug)! }));
 
-  step("install the unit");
-  await depositText(executor, config, unit, path, "root:root", "644");
-  await executor.ssh(config, `sudo systemctl daemon-reload && sudo systemctl enable ${slug}`);
+  if (state === "set" && !strict) {
+    // Nothing to write while the kernel already carries what the manifests say.
+    const current = readCurrentPairs(await executor.read(config, currentPairsCommand()));
+    if (current === null) return fail("cannot read the loopback's project set");
+    const wanted = projectPortPairs(accounts);
+    if (current.length === wanted.length && current.every((pair) => wanted.includes(pair))) return;
+  }
+  if (state !== "set" && !strict) {
+    // Without the set, only a file already there is kept in step: a machine
+    // that never had a project with several services gets nothing written.
+    const presence = await remotePresence(config, executor, PROJECT_PORTS_FILE);
+    if (presence.kind !== "present") return;
+  }
+
+  step("loopback: each project's own ports");
+  const result = await executor.execute(config, projectPortsCommand(projectPortsFile(accounts), state === "set"));
+  if (result.code !== 0) {
+    return fail(`${PROJECT_PORTS_FILE} refused`, [result.error.trim() || "no message"]);
+  }
+  say(`   ${slugs.length === 0 ? "no project" : slugs.join(", ")} with several services`);
+  if (state !== "set") say("   written, to be applied by the next bin/deploy-loopback.sh");
 }
 
 /**
@@ -1144,9 +1350,11 @@ async function prepareService(
 function showGeneratedFiles(manifest: Manifest): void {
   const slug = manifest.slug;
   const fragment = generateFragment(manifest);
-  say("");
-  say(`--- ${slug}.service ---`);
-  say(generateUnit(manifest));
+  for (const { unit, text } of generateUnits(manifest)) {
+    say("");
+    say(`--- ${unit}.service ---`);
+    say(text);
+  }
   if (fragment !== null) {
     say(`--- ${slug}.caddy ---`);
     say(fragment);
@@ -1165,41 +1373,45 @@ async function showStatus(config: Config, executor: Executor): Promise<void> {
   const script = `
 echo "=== projects served ==="
 printf "%-22s %-8s %-10s %-8s %-8s %s\n" PROJECT SIZE SERVICE MEMORY PEAK LIMIT
-for folder in /srv/sites/*/; do
-  slug=$(basename "$folder")
-  size=$(du -sh "$folder" 2>/dev/null | cut -f1)
+megabytes() {
+  case "$1" in
+    ""|"[not set]"|infinity) echo "-" ;;
+    *) echo "$(($1 / 1048576))MB" ;;
+  esac
+}
+# One line per unit: the project's main one, named after its folder, then the
+# others of a project with several services, <slug>.<name>, indented under it.
+row() {
+  name=$1 size=$2 unit=$3
   # A static site has no unit, and the landing's one does not carry the name of
   # its folder: showing "inactive" in those two cases would suggest a service
   # that is down. LoadState tells a missing unit from a stopped one.
-  if [ "$(systemctl show "$slug" -p LoadState --value 2>/dev/null)" = loaded ]; then
-    service=$(systemctl is-active "$slug" 2>/dev/null || true)
+  if [ "$(systemctl show "$unit" -p LoadState --value 2>/dev/null)" = loaded ]; then
+    service=$(systemctl is-active "$unit" 2>/dev/null || true)
   else
     service="-"
   fi
-  current_bytes=$(systemctl show "$slug" -p MemoryCurrent --value 2>/dev/null)
-  case "$current_bytes" in
-    ""|"[not set]") memory="-" ;;
-    *) memory="$((current_bytes / 1048576))MB" ;;
-  esac
+  memory=$(megabytes "$(systemctl show "$unit" -p MemoryCurrent --value 2>/dev/null)")
   # The peak since the last start, which systemd keeps itself. It is the only way
   # to read a MemoryMax decision back: the current value says nothing of the
   # moment when the service consumed the most, and sampling from the outside
   # misses the short spikes. It resets to zero on every restart, so a figure
   # taken just after a deployment measures nothing.
-  peak_bytes=$(systemctl show "$slug" -p MemoryPeak --value 2>/dev/null)
-  case "$peak_bytes" in
-    ""|"[not set]") peak="-" ;;
-    *) peak="$((peak_bytes / 1048576))MB" ;;
-  esac
+  peak=$(megabytes "$(systemctl show "$unit" -p MemoryPeak --value 2>/dev/null)")
   # The ceiling in service, and not the manifest's one: it is the unit set on the
   # machine that decides, and a manifest changed without deploy --force does not change it.
   # The three columns together are what makes the decision readable again.
-  cap_bytes=$(systemctl show "$slug" -p MemoryMax --value 2>/dev/null)
-  case "$cap_bytes" in
-    ""|"[not set]"|infinity) cap="-" ;;
-    *) cap="$((cap_bytes / 1048576))MB" ;;
-  esac
-  printf "%-22s %-8s %-10s %-8s %-8s %s\n" "$slug" "$size" "$service" "$memory" "$peak" "$cap"
+  cap=$(megabytes "$(systemctl show "$unit" -p MemoryMax --value 2>/dev/null)")
+  printf "%-22s %-8s %-10s %-8s %-8s %s\n" "$name" "$size" "$service" "$memory" "$peak" "$cap"
+}
+for folder in /srv/sites/*/; do
+  slug=$(basename "$folder")
+  row "$slug" "$(du -sh "$folder" 2>/dev/null | cut -f1)" "$slug"
+  for file in /etc/systemd/system/"$slug".*.service; do
+    [ -e "$file" ] || continue
+    unit=$(basename "$file" .service)
+    row "  .\${unit#"$slug".}" "" "$unit"
+  done
 done
 
 echo
@@ -1220,12 +1432,15 @@ async function logs(
   follow: boolean,
   executor: Executor,
 ): Promise<void> {
-  const slug = project.manifest.slug;
+  // Every unit of the project, interleaved by time: a request that fails in
+  // the front often says why only in the log of the service it called.
+  const units = servicesOf(project.manifest).map((service) => `-u ${unitArgument(service.unit)}`);
+  const selection = units.length > 0 ? units.join(" ") : `-u ${project.manifest.slug}`;
   await executor.run([
     "ssh",
     ...(follow ? ["-t"] : []),
     config.server,
-    `journalctl -u ${slug} -n 50 --no-pager${follow ? " -f" : ""}`,
+    `journalctl ${selection} -n 50 --no-pager${follow ? " -f" : ""}`,
   ]);
 }
 
@@ -1626,7 +1841,7 @@ async function remove(
   const hasBlock = isApplication || behindPortal;
 
   for (const removalStep of removalSteps(
-    { slug, isApplication, secrets: manifest.secrets ?? [] },
+    { slug, isApplication, secrets: manifest.secrets ?? [], units: servicesOf(manifest).map((service) => service.unit) },
     { block: hasBlock, isProtected: behindPortal },
   )) {
     if (removalStep.kind === "action") {
@@ -1656,6 +1871,10 @@ async function remove(
       env: envUnderLock(config),
     });
   }
+
+  // Its manifest gone with its folder, the project drops out of the set: its
+  // ports go back to being Caddy's alone, before another project takes them.
+  await rebuildProjectPorts(config, executor, "follow");
 
   releaseCaddyLock();
   if (executor.simulated) {

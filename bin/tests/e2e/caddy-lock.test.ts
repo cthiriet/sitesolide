@@ -629,7 +629,7 @@ describe("bin/deploy-gatekeeper.sh does not install under a transaction", () => 
 describe("sitesolide deploy leaves the other sites' blocks alone", () => {
   const APP: Manifest = { slug: "sample-door", port: 3035, publicDir: "public", start: "bun run server.ts" };
 
-  test("another site changed from the dashboard stops nothing, and is not even read", async () => {
+  test("another site changed from the dashboard stops nothing, and its block is not even read", async () => {
     vm = createFakeVm();
     vm.writeManifest("tool", text({ ...TOOL, portal: true }));
     const repo = testRepo([TOOL]);
@@ -638,7 +638,9 @@ describe("sitesolide deploy leaves the other sites' blocks alone", () => {
     expect(r.code).toBe(0);
     expect(r.all).not.toContain("portal of tool");
     expect(existsSync(join(folder, "built"))).toBe(true);
-    expect(vm.logs()).toEqual(["READ sample-door"]);
+    // Its manifest is read with every other one, for the ports it declares;
+    // its block is not.
+    expect(vm.logs()).toEqual(["READ sample-door", "READ *"]);
   });
 
   test("the site in progress, whose door the dashboard changed, follows it", async () => {

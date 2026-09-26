@@ -21,6 +21,9 @@
 # What the gesture touches, and nothing else: the nftables table inet
 # sitesolide_boucle, which neither ufw nor Caddy touch; /etc/sitesolide-loopback.nft;
 # and the sitesolide-loopback.service unit, which reloads it at boot.
+# /etc/sitesolide-loopback-projects.nft, the ports each project with several
+# services may open towards its own, is written by sitesolide deploy and only
+# replayed here: laying the table empties that set.
 #
 # THE SAFETY NET. Before closing, a systemd timer is armed to remove the table
 # two minutes later. It is only disarmed once these are verified: Caddy towards
@@ -38,6 +41,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$REPO_ROOT/bin/config.sh"
 sitesolide_require_config
 FILE=/etc/sitesolide-loopback.nft
+PROJECTS=/etc/sitesolide-loopback-projects.nft
 UNIT=/etc/systemd/system/sitesolide-loopback.service
 TABLE=sitesolide_boucle
 # The transient unit of the safety net keeps the name the machine knows: a run
@@ -146,6 +150,7 @@ restore() {
   ssh "$SITESOLIDE_SERVER" "
     if sudo test -f $WORK_VM/before.nft; then
       sudo install -m 644 -o root -g root $WORK_VM/before.nft $FILE && sudo $NFT -f $FILE
+      ! sudo test -f $PROJECTS || sudo $NFT -f $PROJECTS 2>/dev/null || true
     else
       sudo $NFT delete table inet $TABLE 2>/dev/null || true
       sudo rm -f $FILE
@@ -160,24 +165,66 @@ if [ "$MODE" = close ] || [ "$ADMIN_MODE" = close ]; then
 fi
 
 ssh "$SITESOLIDE_SERVER" "sudo install -m 644 -o root -g root $WORK_VM/loopback.nft $FILE && sudo $NFT -f $FILE"
+# The projects' set, emptied by the line above. A refusal here counts as a
+# discrepancy: the verification below would otherwise pass while every project
+# with several services had lost its calls.
+if ssh "$SITESOLIDE_SERVER" "! sudo test -f $PROJECTS || sudo $NFT -f $PROJECTS"; then
+  PROJECTS_LOADED=1
+else
+  PROJECTS_LOADED=0
+fi
 echo "-> rule applied"
 
 # --- verification ------------------------------------------------------------
 
 FAILURES=0
+if [ "$PROJECTS_LOADED" = 0 ]; then
+  echo "   FAILED: $PROJECTS refused, the projects with several services lose their calls" >&2
+  FAILURES=1
+fi
+
+# A TCP connection, and not an HTTP request: the rule is about connections, and
+# an internal service of a project may speak something other than HTTP, which
+# curl would report as 000, the very code of a refusal. $1 is an account, or
+# '#<uid>'. ssh -n: called inside a while loop reading a here-string, ssh would
+# otherwise swallow the rest of it, and every pair after the first would go
+# untested without a word.
+connects() {
+  ssh -n "$SITESOLIDE_SERVER" "sudo -u '$1' timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/$2' >/dev/null 2>&1 && echo open || echo closed"
+}
+
 echo "-> Caddy towards each listening port, then any account"
 PORTS="$(ssh "$SITESOLIDE_SERVER" "ss -ltnH '( sport >= :3000 and sport <= :3099 )' | awk '{print \$4}' | sed -E 's/.*:([0-9]+)$/\1/' | sort -un")"
 [ -n "$PORTS" ] || { echo "   no port listening in the range: failed read?" >&2; FAILURES=1; }
 for port in $PORTS; do
-  caddy="$(ssh "$SITESOLIDE_SERVER" "sudo -u caddy curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:$port/ || true")"
-  other="$(ssh "$SITESOLIDE_SERVER" "sudo -u nobody curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:$port/ || true")"
-  expected_other="000"
+  caddy="$(connects caddy "$port")"
+  other="$(connects nobody "$port")"
+  expected_other="closed"
   [ "$MODE" = close ] || expected_other="(free)"
   verdict="ok"
-  if [ "$caddy" = "000" ]; then verdict="FAILED: Caddy refused"; FAILURES=$((FAILURES + 1)); fi
-  if [ "$MODE" = close ] && [ "$other" != "000" ]; then verdict="FAILED: another account gets through"; FAILURES=$((FAILURES + 1)); fi
+  if [ "$caddy" != open ]; then verdict="FAILED: Caddy refused"; FAILURES=$((FAILURES + 1)); fi
+  if [ "$MODE" = close ] && [ "$other" != closed ]; then verdict="FAILED: another account gets through"; FAILURES=$((FAILURES + 1)); fi
   printf "   %-6s caddy %s, other %s (expected %s)  %s\n" "$port" "$caddy" "$other" "$expected_other" "$verdict"
 done
+
+echo "-> each project with several services towards its own ports"
+# Read in what the kernel has loaded, as for the admin API below: the pairs
+# port . uid, on one line or several.
+PAIRS="$(ssh "$SITESOLIDE_SERVER" "sudo $NFT list set inet $TABLE project_ports 2>/dev/null" | grep -oE '[0-9]+ \. [0-9]+' || true)"
+[ -n "$PAIRS" ] || echo "   none"
+while read -r port _ uid; do
+  [ -n "$port" ] || continue
+  # A port declared by a project whose service is not listening cannot answer
+  # either way: only the ports in use are tried.
+  if ! printf '%s\n' "$PORTS" | grep -qx "$port"; then
+    printf "   %-6s uid %s, nothing listening\n" "$port" "$uid"
+    continue
+  fi
+  own="$(connects "#$uid" "$port")"
+  verdict="ok"
+  if [ "$own" != open ]; then verdict="FAILED: the project no longer reaches its own port"; FAILURES=$((FAILURES + 1)); fi
+  printf "   %-6s uid %s %s  %s\n" "$port" "$uid" "$own" "$verdict"
+done <<< "$PAIRS"
 
 echo "-> the dashboard towards the portal, and towards it alone"
 to_portal="$(ssh "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:$PORTAL_PORT/sante || true")"

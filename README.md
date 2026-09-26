@@ -51,7 +51,9 @@ would break a site is rolled back on the spot. A project is a folder with a
 ```
 
 Anything that listens on a port deploys the same way: Node, Python, Go, Ruby, a
-compiled binary. `start` is simply the command systemd runs.
+compiled binary. `start` is simply the command systemd runs. A project made of
+several processes, a front, an API, a worker, declares them under `services`,
+and each one gets its unit, its port and its paths.
 
 ## Everything a small fleet needs
 

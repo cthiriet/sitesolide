@@ -15,6 +15,24 @@
  * that every refusal from `validate()` is checkable without a server.
  */
 
+/**
+ * One process of a project that runs several, declared under `services`: a web
+ * front, the API it calls, a worker behind it. Each one becomes a systemd unit
+ * of its own, under the project's system user, with the project's directories
+ * and secrets.
+ */
+export type Service = {
+  start: string;
+  port: number;
+  /** The paths Caddy sends to this service. Absent: every path no other service claims. */
+  routes?: string[];
+  /** Reached by the project's other services only, never by Caddy. */
+  internal?: boolean;
+  memory?: string;
+  /** Added to the project's `env`, and winning over it on a shared name. */
+  env?: Record<string, string>;
+};
+
 /** What a repository declares in order to be deployable. */
 export type Manifest = {
   slug: string;
@@ -25,6 +43,8 @@ export type Manifest = {
   start?: string;
   port?: number;
   routes?: string[];
+  /** Several processes instead of one `start`, see Service. */
+  services?: Record<string, Service>;
   env?: Record<string, string>;
   headers?: Record<string, string>;
   exclude?: string[];
@@ -53,6 +73,7 @@ export const KNOWN_KEYS = [
   "start",
   "port",
   "routes",
+  "services",
   "env",
   "headers",
   "exclude",
@@ -64,6 +85,17 @@ export const KNOWN_KEYS = [
   "portal",
   "portalExempt",
 ];
+
+/** The keys of one entry of `services`, refused beyond these for the same reason. */
+export const SERVICE_KEYS = ["start", "port", "routes", "internal", "memory", "env"];
+
+/**
+ * The services' ports: 3000 the landing, 3001 the shared service, then the
+ * sites and the projects. The loopback rule reserves them to Caddy and root,
+ * see bin/cli/loopback.ts; it lives here because the manifest's validation
+ * needs it too, and this file is the one the dashboard borrows.
+ */
+export const SERVICE_PORTS = { first: 3000, last: 3099 };
 
 /** The slug of the portal itself, which cannot put itself behind its own door. */
 export const PORTAL_SLUG = "portal";
@@ -124,7 +156,126 @@ export const RESERVED_ENV = ["PORT", "DATA_DIR", "PUBLIC_DIR"];
 export const SUSPICIOUS_ENV = /(_KEY|_SECRET|_TOKEN|_PASSWORD|_PASSWD|_CREDENTIALS)$/;
 
 export function isApp(manifest: Manifest): boolean {
-  return typeof manifest.start === "string" && manifest.start.length > 0;
+  return (typeof manifest.start === "string" && manifest.start.length > 0) || hasServices(manifest);
+}
+
+/** Does the project declare its processes under `services`, rather than one `start`? */
+export function hasServices(manifest: Manifest): boolean {
+  const services = manifest.services;
+  return typeof services === "object" && services !== null && !Array.isArray(services) && Object.keys(services).length > 0;
+}
+
+/**
+ * A service name becomes the second half of a unit name, `<slug>.<name>`, and a
+ * Caddy matcher name. The dot between the two is what keeps units apart: a
+ * slug never carries one, so `shop.api` can only belong to `shop`, where
+ * `shop-api` could be another project's slug.
+ */
+export function isValidServiceName(name: string): boolean {
+  return name.length <= 32 && /^[a-z]([a-z0-9-]*[a-z0-9])?$/.test(name) && !UNIT_TYPES.includes(name);
+}
+
+/**
+ * The unit types of systemd. A name ending in one of them is read as that
+ * type: `lab.socket` addresses a socket unit, not `lab.socket.service`, and
+ * a restart or a removal would reach the wrong unit. The leading letter keeps
+ * integer-like names out, which JavaScript would sort before the others and
+ * silently make the main service.
+ */
+const UNIT_TYPES = ["service", "socket", "device", "mount", "automount", "swap", "target", "path", "timer", "slice", "scope"];
+
+/** One process as the deployment sees it, whichever way the manifest declared it. */
+export type ServiceView = {
+  /** Its name under `services`, null for a project with a single `start`. */
+  name: string | null;
+  /**
+   * The systemd unit, without `.service`. The first service keeps the slug, so
+   * that every tool naming a project's unit after its folder, the dashboard,
+   * the steward and the collector, still finds the one that stands for the
+   * whole project. The others are `<slug>.<name>`.
+   */
+  unit: string;
+  start: string;
+  port: number;
+  routes?: string[];
+  internal: boolean;
+  memory: string;
+  env: Record<string, string>;
+};
+
+/**
+ * Every process of the project, the main one first. Empty for a static site.
+ *
+ * A project with a single `start` gives one entry built from its top-level
+ * keys, exactly those the generators read before `services` existed: its unit
+ * and its block come out unchanged.
+ */
+export function servicesOf(manifest: Manifest): ServiceView[] {
+  if (hasServices(manifest)) {
+    // Tolerant of a broken entry, which validate() reports: the dashboard reads
+    // the manifests on the machine as they are, and one bad line must not take
+    // the whole page down.
+    const entries = Object.entries(manifest.services!).filter(
+      ([, service]) => typeof service === "object" && service !== null && !Array.isArray(service),
+    );
+    return entries.map(([name, service], rank) => ({
+      name,
+      unit: rank === 0 ? manifest.slug : `${manifest.slug}.${name}`,
+      start: service.start,
+      port: service.port,
+      routes: service.routes,
+      internal: service.internal === true,
+      memory: service.memory ?? manifest.memory ?? DEFAULT_MEMORY,
+      env: { ...manifest.env, ...service.env },
+    }));
+  }
+  if (!isApp(manifest)) return [];
+  return [
+    {
+      name: null,
+      unit: manifest.slug,
+      start: manifest.start!,
+      port: manifest.port!,
+      routes: manifest.routes,
+      internal: false,
+      memory: manifest.memory ?? DEFAULT_MEMORY,
+      env: manifest.env ?? {},
+    },
+  ];
+}
+
+/** The port of the project's main service, the one a single-service project declares. */
+export function mainPort(manifest: Manifest): number | null {
+  const port = servicesOf(manifest)[0]?.port;
+  return typeof port === "number" ? port : null;
+}
+
+/**
+ * A route goes as is into a Caddy `path` matcher: a path, with no space, quote
+ * or brace that would cut the line. `/_portal` belongs to the portal, which
+ * Caddy routes before the site.
+ */
+export function isValidRoute(route: unknown): route is string {
+  return typeof route === "string" && /^\/[A-Za-z0-9._~\/*%-]*$/.test(route) && !route.startsWith("/_portal");
+}
+
+/**
+ * Could one request match both routes? Caddy compares paths without regard to
+ * case, and a `*` matches anything, so the answer errs on the side of yes: two
+ * services that could both claim a path are refused, rather than having the
+ * written order of the block decide, which the comparison of blocks does not
+ * see (bin/cli/comparison.ts).
+ */
+export function routesOverlap(a: string, b: string): boolean {
+  const prefix = (route: string): string => {
+    const star = route.indexOf("*");
+    return (star === -1 ? route : route.slice(0, star)).toLowerCase();
+  };
+  const [wildA, wildB] = [a.includes("*"), b.includes("*")];
+  const [prefixA, prefixB] = [prefix(a), prefix(b)];
+  if (!wildA && !wildB) return prefixA === prefixB;
+  if (wildA && wildB) return prefixA.startsWith(prefixB) || prefixB.startsWith(prefixA);
+  return wildA ? prefixB.startsWith(prefixA) : prefixA.startsWith(prefixB);
 }
 
 /** Does the site go behind the portal? */
@@ -228,7 +379,15 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     errors.push("a project without `start` must declare `publicDir`");
   }
 
-  if (isApplication) {
+  // A line break in a value written into the unit would add a directive of its
+  // own choosing to it, a `User=root` after the generated one.
+  if (typeof manifest.start === "string" && /[\r\n]/.test(manifest.start)) {
+    errors.push("start: a single line, no line break");
+  }
+
+  if (manifest.services !== undefined) {
+    errors.push(...serviceErrors(manifest));
+  } else if (isApplication) {
     if (typeof manifest.port !== "number" || !Number.isInteger(manifest.port)) {
       errors.push("port: required as soon as `start` is declared");
     } else if (manifest.port < 1024 || manifest.port > 65535) {
@@ -255,20 +414,7 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     errors.push("routes: without `start`, no request reaches a service");
   }
 
-  for (const [key, value] of Object.entries(manifest.env ?? {})) {
-    if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
-      errors.push(`env: "${key}" is not an environment variable name`);
-    } else if (RESERVED_ENV.includes(key)) {
-      errors.push(`env: ${key} is set by the deployment and cannot be redefined`);
-    } else if (SUSPICIOUS_ENV.test(key)) {
-      errors.push(
-        `env: ${key} looks like a secret; secrets live on the server, managed from the dashboard, not here`,
-      );
-    }
-    if (typeof value !== "string") {
-      errors.push(`env: the value of ${key} must be a string`);
-    }
-  }
+  errors.push(...envErrors(manifest.env, "env"));
   if (manifest.env !== undefined && !isApplication) {
     errors.push("env: without `start`, no service would read these variables");
   }
@@ -350,6 +496,135 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     }
   }
 
+  return errors;
+}
+
+/** The refusals of an `env`, the project's or a service's, `label` naming which. */
+function envErrors(env: Record<string, string> | undefined, label: string): string[] {
+  const errors: string[] = [];
+  for (const [key, value] of Object.entries(env ?? {})) {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
+      errors.push(`${label}: "${key}" is not an environment variable name`);
+    } else if (RESERVED_ENV.includes(key)) {
+      errors.push(`${label}: ${key} is set by the deployment and cannot be redefined`);
+    } else if (SUSPICIOUS_ENV.test(key)) {
+      errors.push(
+        `${label}: ${key} looks like a secret; secrets live on the server, managed from the dashboard, not here`,
+      );
+    }
+    if (typeof value !== "string") {
+      errors.push(`${label}: the value of ${key} must be a string`);
+    } else if (/[\r\n]/.test(value)) {
+      errors.push(`${label}: the value of ${key} must hold on one line`);
+    }
+  }
+  return errors;
+}
+
+/**
+ * The refusals of `services`.
+ *
+ * Every port sits in the range the loopback rule closes. Outside it, the
+ * project's internal service would be reachable by every other project on the
+ * machine, which is exactly what declaring it internal was meant to prevent.
+ *
+ * Exactly one public service takes the paths nobody claims, unless a
+ * `publicDir` serves them: without it, a path matched by no route would get an
+ * empty 200 from Caddy, a page that looks served and is not.
+ */
+function serviceErrors(manifest: Manifest): string[] {
+  const errors: string[] = [];
+  const services = manifest.services as unknown;
+  if (typeof services !== "object" || services === null || Array.isArray(services) || Object.keys(services).length === 0) {
+    return ['services: an object naming each service, such as { "web": { "start": "...", "port": 3040 } }'];
+  }
+  for (const key of ["start", "port", "routes"] as const) {
+    if (manifest[key] !== undefined) {
+      errors.push(`${key}: declared per service once \`services\` is present`);
+    }
+  }
+
+  const ports = new Map<number, string>();
+  const defaults: string[] = [];
+  const claimed: { name: string; route: string }[] = [];
+  for (const [name, raw] of Object.entries(services as Record<string, unknown>)) {
+    const label = `services.${name}`;
+    if (!isValidServiceName(name)) {
+      errors.push(
+        `services: "${name}" should start with a letter, then lowercase letters, digits and dashes, 32 characters at most, and not be a systemd unit type`,
+      );
+    }
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      errors.push(`${label}: an object with at least \`start\` and \`port\``);
+      continue;
+    }
+    const service = raw as Service;
+    for (const key of Object.keys(service)) {
+      if (!SERVICE_KEYS.includes(key)) {
+        errors.push(`${label}.${key}: unknown key, a typo here could deploy something unintended`);
+      }
+    }
+
+    if (typeof service.start !== "string" || service.start.length === 0) {
+      errors.push(`${label}.start: required, the command systemd runs`);
+    } else if (/[\r\n]/.test(service.start)) {
+      errors.push(`${label}.start: a single line, no line break`);
+    }
+
+    const port = service.port;
+    if (typeof port !== "number" || !Number.isInteger(port)) {
+      errors.push(`${label}.port: required, the loopback port the service listens on`);
+    } else if (port < SERVICE_PORTS.first || port > SERVICE_PORTS.last) {
+      errors.push(
+        `${label}.port: between ${SERVICE_PORTS.first} and ${SERVICE_PORTS.last}, the range only Caddy and the project itself can reach`,
+      );
+    } else if (ports.has(port)) {
+      errors.push(`${label}.port: ${port} is already the port of ${ports.get(port)}`);
+    } else {
+      ports.set(port, name);
+    }
+
+    if (service.internal !== undefined && service.internal !== true) {
+      errors.push(`${label}.internal: true, or absent`);
+    }
+    const internal = service.internal === true;
+
+    if (service.routes !== undefined) {
+      if (!Array.isArray(service.routes) || service.routes.length === 0) {
+        errors.push(`${label}.routes: a non-empty list of paths, or absent to take every path left`);
+      } else {
+        for (const route of service.routes) {
+          if (!isValidRoute(route)) {
+            errors.push(`${label}.routes: "${String(route)}" must be a path such as /api/*, not under /_portal`);
+          } else {
+            claimed.push({ name, route });
+          }
+        }
+      }
+      if (internal) errors.push(`${label}.routes: an internal service receives no request from Caddy`);
+    } else if (!internal) {
+      defaults.push(name);
+    }
+
+    if (service.memory !== undefined && !isValidMemory(service.memory)) {
+      errors.push(`${label}.memory: a number followed by K, M or G, such as 256M`);
+    }
+    errors.push(...envErrors(service.env, `${label}.env`));
+  }
+
+  if (defaults.length > 1) {
+    errors.push(`services: ${defaults.join(", ")} would all take every path left; give routes to all but one`);
+  }
+  if (defaults.length === 0 && manifest.publicDir === undefined) {
+    errors.push("services: without publicDir, one public service must take every path left: leave its routes out");
+  }
+  for (const [i, a] of claimed.entries()) {
+    for (const b of claimed.slice(i + 1)) {
+      if (a.name !== b.name && routesOverlap(a.route, b.route)) {
+        errors.push(`services: ${a.route} (${a.name}) and ${b.route} (${b.name}) could match the same request`);
+      }
+    }
+  }
   return errors;
 }
 

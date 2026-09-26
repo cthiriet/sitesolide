@@ -32,6 +32,14 @@ A static project stops there: Caddy serves the files and nothing runs. An app
 gets two more files, both generated from its manifest, a systemd unit and a
 Caddy block, and costs 8 to 40 MB of memory.
 
+A project that runs several processes, a front, the API it calls, a worker
+behind it, declares them under `services` and gets one unit per service. The
+first keeps the project's name, `<slug>.service`, and the others are
+`<slug>.<name>.service`, hanging on it: starting, stopping or restarting the
+main unit does the same to them, which is why the dashboard, the steward and
+the collector, which know a project by its main unit, need nothing more. The
+block sends each service its own paths.
+
 Those two generated files live nowhere but on the machine. `deploy` generates
 them from the manifest each time, installs the unit, and hands the block to
 `bin/deploy-caddy.sh`, which validates it on the machine with the blocks already
@@ -48,8 +56,8 @@ cannot read another one's files even if Unix permissions would have allowed it.
 An app that declares no secret has `/etc/sitesolide` made inaccessible, which
 hides even the names of the files.
 
-Services cannot reach each other over the loopback either, see
-[the loopback rule](#the-loopback-rule).
+Services cannot reach each other over the loopback either, except those of one
+project, see [the loopback rule](#the-loopback-rule).
 
 ## Who may touch what
 
@@ -95,6 +103,14 @@ is only founded because nothing else on the machine can forge it.
 One exception, deliberate: the dashboard may reach the portal, where it creates
 and revokes guest access. Those routes have no other guard than this rule, and a
 test refuses any fragment that would expose them.
+
+And one set: a project that declares several `services` reaches its own ports,
+and nobody else's. Its front calls its API, its API its worker, and a neighbour
+still reaches none of them. The set holds `port . uid` pairs, rebuilt by
+`deploy` from the manifests on the machine into
+`/etc/sitesolide-loopback-projects.nft`, and replayed after the table at boot.
+A project with a single service does not appear in it: it has nothing of its
+own to call.
 
 ## Certificates
 
@@ -161,14 +177,18 @@ In order, and the order is the point:
 1. Read the manifest, refuse it if anything is wrong. Nothing has been sent yet.
 2. Read the machine: does the dashboard say this project is behind the portal?
    Is the block in service one the generator would write, or one edited by hand
-   there, which stops everything without `--force`?
+   there, which stops everything without `--force`? Does another project already
+   declare one of its ports? For a project with several services, does the
+   loopback rule have room for its own ports?
 3. Build locally.
 4. Create the system account and the directories.
-5. Install the systemd unit if it is missing.
+5. Install the systemd units that are missing, remove those of services the
+   manifest no longer declares.
 6. Take the Caddy lock, read the door again under it, write the block.
 7. Upload the code, then the public files.
-8. Put down the manifest.
-9. Restart the service, check it is active.
+8. Put down the manifest, and rebuild the loopback's project set when the
+   manifests say something other than what it carries.
+9. Restart every service, check each one is active.
 10. Verify over HTTPS that the site answers.
 
 For a project behind the portal, the door goes down **before** its files, and
