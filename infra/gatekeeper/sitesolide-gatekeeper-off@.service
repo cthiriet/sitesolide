@@ -1,0 +1,159 @@
+# The gatekeeper, `off` action: removes the portal from a site, one
+# transaction per start. See dashboard/gatekeeper.ts and
+# dashboard/src/gatekeeper/.
+#
+#   systemctl start sitesolide-gatekeeper-off@cms.service
+#   cat /run/sitesolide-gatekeeper/cms.json
+#
+# Two templates, one per action, and the slug alone as the instance: each unit
+# writes only into the directory of the site it is named. This file and
+# sitesolide-gatekeeper-on@.service differ only by the action, and
+# dashboard/tests/gatekeeper-units.test.ts checks it line by line.
+#
+# The riskiest action of the platform: it rewrites /etc/caddy/sites/<slug>.caddy
+# and reloads Caddy, which serves every site of the machine. All the judgement
+# (plan, Caddy lock, refusal, restoration) lives in dashboard/src/gatekeeper/,
+# tried out without a VM, right up to facing a real test Caddy; what follows
+# bounds what a compromised gatekeeper would obtain all the same.
+#
+# Only the steward launches it. It never activates by itself: no [Install], no
+# timer.
+#
+# NEVER `caddy stop` nor `caddy start` in what it launches: only
+# `systemctl reload caddy` applies a configuration (CLAUDE.md, Production).
+#
+# Measured on the bench on 17 September 2026 (measurement 5, on these two
+# templates): capabilities, per-site mounts and
+# InaccessiblePaths, caddy validate, shared lock, gatekeeper killed midway,
+# hostile bodies, memory and duration.
+#
+# Placed by bin/deploy-gatekeeper.sh, never by `sitesolide deploy`.
+
+[Unit]
+Description=Gatekeeper, portal off %i
+# It reads and writes under /srv/sites and /etc/caddy: nothing to do before
+# they are mounted.
+RequiresMountsFor=/srv/sites /etc/caddy
+
+[Service]
+Type=oneshot
+# The action of this file. The gatekeeper also receives `%n`, the name systemd
+# resolved, and refuses to start if the two do not say the same action: a file
+# copied without changing this line does nothing rather than the opposite.
+Environment=GATEKEEPER_ACTION=off
+# The served zone, which the gatekeeper probes as `<slug>.<zone>` once Caddy is
+# reloaded. It has no default, an invented zone would fail the probe on every
+# site and roll back a sound transaction. The same file Caddy is given, so the
+# two can never disagree on what zone is served.
+EnvironmentFile=/etc/caddy/sitesolide.env
+# `%n`: the full name, from which the gatekeeper draws the slug and the action.
+# `%i` and not `%I` in the paths: the unescaped form would change the dashes of
+# the slug into slashes, and sample-api would become sample/api.
+ExecStart=/usr/local/bin/bun /usr/local/lib/sitesolide/gatekeeper.js %n
+
+# Oneshot without RemainAfterExit: the unit becomes inactive again at the end,
+# and the next `systemctl start` does relaunch a transaction.
+#
+# 80 seconds, under the 90 that the steward and the dashboard wait
+# (MAX_PORTAL_MS). The worst transaction, restoration included, takes 73
+# of them, plus 5 of margin: every step is bounded in
+# dashboard/src/gatekeeper/transaction.ts, and tests/gatekeeper-transaction.test.ts
+# checks the sum against this line. Killed by systemd in the middle of a
+# transaction, the gatekeeper would restore nothing; its backup would remain,
+# and would refuse any following action until a human has looked at it.
+TimeoutStartSec=80s
+TimeoutStopSec=5s
+
+# /run/sitesolide-gatekeeper, 0755: the <slug>.json result is read there by the
+# steward. Kept at the end of the unit, without which the result would disappear
+# before being read; tmpfs, it goes away when the machine reboots. The Caddy lock
+# (caddy.lock/, shared with the tools of the workstation) and the backups (0700)
+# live there too. Common to both templates and to all their instances.
+RuntimeDirectory=sitesolide-gatekeeper
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+# Everything it creates receives its mode explicitly: the manifest keeps its
+# own, the block is 0644, the result 0644, the backups 0600.
+UMask=0077
+
+# Two capabilities, for its sole job:
+#
+# CAP_DAC_OVERRIDE: /srv/sites/<slug> belongs to the deployment account in 0755.
+# Root is only another account there, and rewriting sitesolide.json by renaming
+# requires writing in it. The steward does without it because it owns its
+# directories; here that is not the case.
+#
+# CAP_CHOWN: the rewritten manifest is given back to its owner, the deployment
+# account. The mode is set before, while the temporary still belongs to root: no
+# CAP_FOWNER.
+#
+# No CAP_NET_BIND_SERVICE: /usr/bin/caddy carries no file capability on the VM
+# (`security.capability` absent, reading of 17 September 2026), and
+# `caddy validate` passes without it on the bench. If the package were to set
+# one some day, `caddy validate` would fail with EPERM before any action,
+# without touching anything: the gatekeeper would refuse, it would break
+# nothing.
+#
+# systemctl asks for none: PID 1 judges the uid of the caller on its socket
+# (measured for the steward, restart and show pass with two capabilities).
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_CHOWN
+
+# Writing: the directory of the site named, the blocks, its own directory.
+# Nothing else.
+#
+# The directory of the site and not the manifest alone: writing is done by
+# temporary and renaming, and a mount of the file alone would refuse the rename
+# (EBUSY). In that directory, the code and the pages stay readable and the data
+# out of reach: CAP_DAC_OVERRIDE opens only the manifest there.
+# A slug that was not a directory makes the unit fail with 226/NAMESPACE before
+# the gatekeeper, with no result: the steward launches only sites it has read
+# under /srv/sites.
+#
+# /etc/caddy stays readable: the Caddyfile, domaines.map, verrous/ and
+# cloudflare.env, which `caddy validate` reads without writing anything there.
+# /etc/caddy/sites stays fully writable, the price of this action: a compromised
+# gatekeeper can rewrite the block of any site, but no longer its files.
+ProtectSystem=strict
+ReadWritePaths=/srv/sites/%i /etc/caddy/sites /run/sitesolide-gatekeeper
+ReadOnlyPaths=-/srv/sites/%i/app -/srv/sites/%i/public
+InaccessiblePaths=-/srv/sites/%i/data
+# The secrets of the sites and the state of the steward: nothing here needs
+# them, and CAP_DAC_OVERRIDE would make them readable.
+InaccessiblePaths=-/etc/sitesolide -/var/lib/sitesolide-steward
+ProtectHome=true
+# `caddy validate` receives a HOME and disposable XDG directories in /tmp:
+# nothing reaches the certificate storage of Caddy, and everything disappears
+# with the unit.
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+
+# Network: the loopback alone, for the probe towards 127.0.0.1:443. No
+# PrivateNetwork, which would give it a loopback of its own where Caddy does not
+# listen. AF_UNIX to talk to systemd.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+# Like the steward: @system-service, nothing stricter (Bun dies with
+# status=31/SYS under `~@privileged @resources`).
+SystemCallFilter=@system-service
+
+# Bun and a `caddy validate` that loads the whole configuration: 38 MiB at peak
+# for a setting on the bench, 19 MiB for `caddy validate` alone. The probe reads
+# only 4 KiB of each body: a compromised site no longer fills up the memory.
+MemoryMax=256M

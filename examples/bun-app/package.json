@@ -1,0 +1,8 @@
+{
+  "name": "bun-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot server.ts"
+  }
+}

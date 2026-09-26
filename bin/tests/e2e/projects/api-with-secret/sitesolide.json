@@ -1,0 +1,9 @@
+{
+  "slug": "sample-secret",
+  "port": 3033,
+  "install": "bun install --production",
+  "start": "/usr/local/bin/bun run server.ts",
+  "exclude": ["node_modules"],
+  "secrets": ["sample-secret.env"],
+  "network": "outbound"
+}

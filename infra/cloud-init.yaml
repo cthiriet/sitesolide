@@ -1,0 +1,61 @@
+#cloud-config
+# Hardening applied at the very first boot, summarised in infra/README.md.
+#
+# This file is read only once, at the creation of the machine. Modifying it
+# afterwards changes nothing on the server in place: Terraform deliberately
+# ignores its evolutions so as not to destroy the machine (see lifecycle in
+# main.tf).
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ufw
+  - fail2ban
+  - unattended-upgrades
+  - rsync
+  - git
+  - curl
+
+users:
+  - name: ${user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ${public_key}
+
+# No password authentication, by key only.
+ssh_pwauth: false
+
+# Root access by key stays open as a safety net as long as the non-root account
+# has not been validated. To be switched to "no" afterwards, in sshd_config.
+disable_root: false
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-hardening.conf
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      PermitRootLogin prohibit-password
+      KbdInteractiveAuthentication no
+
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+runcmd:
+  # The rules are set before activation, so as not to cut the SSH session.
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+  - systemctl enable --now fail2ban
+  - systemctl restart ssh
+  - mkdir -p /srv/sites /srv/api /srv/data
+
+  - touch /var/log/cloud-init-termine

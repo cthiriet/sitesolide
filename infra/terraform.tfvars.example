@@ -1,0 +1,29 @@
+# Copy to ~/.config/sitesolide/terraform/terraform.tfvars, outside every
+# repository, and fill in the values. bin/terraform.sh reads it from there.
+#
+# The tokens: Hetzner console (project, Security, API tokens, Read & Write) and
+# Cloudflare console (My Profile, API Tokens, permissions Zone:Read and
+# DNS:Edit on that one zone). The Cloudflare one is distinct from the token
+# Caddy reads on the machine for its certificates.
+
+hcloud_token     = "paste-the-hetzner-project-token-here"
+cloudflare_token = "paste-the-cloudflare-token-here"
+
+# What names your installation, and has no default: a ready-made value would
+# aim at someone else's zone, key and account.
+zone         = "example.com"
+ssh_key_name = "the-name-of-your-key-in-the-hetzner-console"
+user         = "your-account-on-the-machine"
+
+# Mail records, off unless set: this configuration does not know who sends mail
+# for your zone, and a wrong SPF gets your own mail refused.
+# spf_include         = "_spf.google.com"
+# dmarc_reports_email = "you@example.com"
+
+# Defaults, changed only if you need to:
+# server_name      = "sitesolide"
+# server_type      = "cx33"
+# location         = "fsn1"
+# image            = "debian-13"
+# backups          = true
+# ssh_allowed_from = ["203.0.113.10/32"]

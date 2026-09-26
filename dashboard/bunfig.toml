@@ -1,0 +1,10 @@
+[test]
+# Diverts DATA_DIR before src/config.ts freezes it on first import. See
+# tests/setup.ts: without this preload, the tests write into the production
+# service's database.
+preload = ["./tests/setup.ts"]
+
+# This project's tests, and not those of web/, which have their own and their own
+# runner. A `bun test tests/` is not enough: the argument is a filter on the
+# path, and "web/tests/..." contains it.
+root = "./tests"

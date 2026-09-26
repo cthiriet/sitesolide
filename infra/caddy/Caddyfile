@@ -1,0 +1,215 @@
+# Caddy configuration of the machine, deployed to /etc/caddy/Caddyfile.
+#
+# THREE VARIABLES COME FROM THE ENVIRONMENT, placed by bin/deploy-caddy.sh
+# in /etc/caddy/sitesolide.env and read by systemd like the Cloudflare token:
+#
+#   SITESOLIDE_ZONE        the zone served, of which each project gets a subdomain
+#   SITESOLIDE_ACME_EMAIL  the address the certificate authority notifies
+#   SITESOLIDE_SLUG        the label that carries the slug, {labels.2} for a zone
+#                          with two labels, {labels.3} for a zone with three
+#
+# Caddy substitutes them BEFORE reading the file: a `caddy validate` run without
+# them rejects the configuration, and that rejection is not a flaw of the
+# Caddyfile.
+#
+# Placed by bin/deploy-caddy.sh, never by hand: that script backs up, validates
+# with the Cloudflare token the way systemd supplies it, reloads, queries the
+# sites, and restores the previous version at the slightest misstep.
+#
+# Principle: a client site is a directory, not a process. The subdomain is
+# resolved to /srv/sites/<slug>/public by naming convention, so adding a client
+# calls for no modification of this file.
+
+{
+	email {$SITESOLIDE_ACME_EMAIL}
+
+	# Certificates for the clients' own domains, obtained on the first
+	# request. The "ask" endpoint is not optional: without it, anyone pointing
+	# their DNS at this machine would trigger issuances in our name. It answers
+	# 200 for the domains present in domaines.map and for those alone; if it is
+	# stopped, no issuance takes place.
+	on_demand_tls {
+		ask http://127.0.0.1:3001/interne/domaine-autorise
+	}
+}
+
+# TLS policy of the zone served, and of it alone.
+#
+# The DNS-01 challenge obtains the certificate without exposing a port, and it
+# is the only way to obtain a wildcard. It does require, however, a token able
+# to modify the zone: the server's one covers only the zone served, so this
+# snippet must never be imported by a block serving a client's own domain. Those
+# domains go through HTTP-01, see the on-demand block at the end of the file.
+#
+# Importing this snippet rather than copying the tls block is not only a matter
+# of concision: Caddy reuses the wildcard certificate for a subdomain only if
+# the block's automation policy is identical to that of the wildcard block. A
+# client block that diverged here would obtain its own certificate without
+# anything signalling it.
+(tls-zone) {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+}
+
+# Settings shared by every site.
+(commun) {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	# Cache policy of the repository: HTML stays fresh, media are frozen.
+	# These three rules are the reference: a site that serves the same files
+	# locally may copy them, and test that the two do not diverge.
+	#
+	# The ? prefix sets a default value instead of overwriting: a response coming
+	# from a Bun service keeps its own. Without it, a visitor photo served by
+	# /photos/<uuid>.jpg went back out with the "public, max-age=31536000,
+	# immutable" of @immutable on top of the intended "private, max-age=3600".
+	@immutable path *.jpg *.jpeg *.png *.webp *.avif *.svg *.ico *.woff2 *.woff
+	header @immutable ?Cache-Control "public, max-age=31536000, immutable"
+
+	@html path *.html /
+	header @html ?Cache-Control "public, max-age=0, must-revalidate"
+
+	# A name that carries a content fingerprint, styles.4f3a9c2b.css, designates
+	# one single content forever: freezing it for a year cannot go stale, and a
+	# modified file arrives all the same since it changes name.
+	# A site's own build may fingerprint its assets this way, at deploy time.
+	#
+	# The rule targets the PATTERN and not the extension, because this block is
+	# imported by every site: one that does not fingerprint its files keeps the
+	# one-hour rule below, without having anything to declare. It comes before
+	# that one for the same reason, the ? setting a default value that the next
+	# one will not replace.
+	@fingerprinted path_regexp \.[0-9a-f]{8}\.(css|js|mjs)$
+	header @fingerprinted ?Cache-Control "public, max-age=31536000, immutable"
+
+	# The stylesheet and the script of a site that does not fingerprint. no-cache
+	# does not mean no cache: the browser keeps the file and only asks whether it
+	# has changed, to which Caddy answers 304 in a few hundred bytes when nothing
+	# has moved. One round trip per file, for two files.
+	#
+	# That is the price to pay for a stale style to become impossible. The
+	# one-hour rule that stood here let a visitor coming back after a release
+	# load fresh HTML on top of an old stylesheet, hence a half-drawn page, and
+	# nobody saw it from the workstation.
+	#
+	# The not excludes what @fingerprinted already covers, and it is not decorative:
+	# writing the two rules side by side without it let the second win over the
+	# first, whatever their order in this file. Two header ? set on the same
+	# response are not arbitrated the way one expects; two disjoint matchers
+	# are.
+	@revalidated {
+		path *.css *.js
+		not path_regexp \.[0-9a-f]{8}\.(css|js|mjs)$
+	}
+	header @revalidated ?Cache-Control "no-cache"
+}
+
+# The landing. The wildcard does not cover the bare domain: this block therefore
+# has its own certificate, for the name of the zone alone. www, for its part, is
+# a subdomain like any other and rests on the wildcard.
+{$SITESOLIDE_ZONE}, www.{$SITESOLIDE_ZONE} {
+	import tls-zone
+	import commun
+
+	# The contact form, the landing's only dynamic route. It is served by the
+	# service of the landing itself, sitesolide-landing on port 3000, and not by
+	# the shared service on port 3001: every site carries its own code, the
+	# landing like a client. All the rest of the page is served by the
+	# file_server below, without waking Bun.
+	#
+	# A matcher set on reverse_proxy rather than a handle: the handles of a same
+	# block form an exclusive group, which reverse_proxy and file_server do not.
+	# See the header of strophe() in api/src/locks.ts.
+	@form path /api/*
+	reverse_proxy @form 127.0.0.1:3000
+
+	root * /srv/sites/{$SITESOLIDE_ZONE}/public
+	file_server
+
+	header Strict-Transport-Security "max-age=31536000"
+}
+
+# All client sites on a subdomain, covered by a single wildcard certificate. No
+# per-client configuration.
+*.{$SITESOLIDE_ZONE} {
+	import tls-zone
+	import commun
+	root * /srv/sites/{$SITESOLIDE_SLUG}/public
+	file_server
+
+	# These URLs are previews: the final site will live on the client's domain.
+	# Without noindex, the two would compete with each other in Google.
+	header X-Robots-Tag "noindex, nofollow"
+
+	# Preview locks, generated by bin/lock.sh from the sitesolide.json files.
+	# Each stanza closes a subdomain behind a code, and the header above covers
+	# its door page too: it is set before the imported handles, hence on every
+	# branch.
+	#
+	# It is a glob and not a named import because this directory is empty most
+	# of the time. A named import of a missing file makes the whole adaptation
+	# fail, hence ALL the sites of the machine; a glob with no match is only a
+	# warning, just like an imported file that is empty. The directory can thus
+	# be created, filled and emptied without risk.
+	#
+	# The imported file does not need to be read after file_server: in the
+	# standard order of directives, handle comes before file_server. The lock is
+	# therefore evaluated first, and the file_server above serves only what the
+	# handle lets through, that is to say visitors holding the right cookie and
+	# the hosts that are not locked.
+	import /etc/caddy/locks/*.caddy
+}
+
+# Client sites having their own code and their own Bun service.
+# Each one places a file here from the projects directory of the workstation.
+# These blocks are more specific than the zone wildcard and therefore come first.
+import /etc/caddy/sites/*.caddy
+
+# Clients' own domains, which the wildcard does not cover.
+#
+# This block has no name: it collects everything that no preceding block claims,
+# and it is the domaines.map table that decides which directory is served.
+# Adding a client is therefore done without touching this file, as for previews.
+#
+# The certificate goes through HTTP-01, not through the DNS challenge of the
+# zone: the Cloudflare token can only modify the zone served, and the client
+# often keeps their DNS elsewhere. That is why this block does not import
+# tls-zone.
+#
+# An application client site must not land here: its domain belongs to its own
+# file in /etc/caddy/sites/, otherwise Caddy would serve its static files
+# without ever waking its service. See docs/concepts.md.
+https:// {
+	tls {
+		on_demand
+	}
+
+	import commun
+
+	map {host} {folder} {
+		# A domain still certified but removed from the table falls here, and
+		# receives a 404 rather than the content of another client.
+		default "__unknown"
+		import /etc/caddy/domaines.map
+	}
+
+	root * /srv/sites/{folder}/public
+	file_server
+}
+
+# Redirection of client domains arriving in the clear. The names Caddy knows
+# already have their automatic redirection; this block covers the domains served
+# on demand, which it does not know in advance.
+#
+# This block occupies the whole of port 80, which might raise fears for the ACME
+# challenge. Checked on a client domain: on-demand issuance goes through
+# TLS-ALPN-01, on port 443, without ever attempting HTTP-01.
+http:// {
+	redir https://{host}{uri} permanent
+}

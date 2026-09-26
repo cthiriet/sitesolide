@@ -1,0 +1,86 @@
+# Shared service of the machine, deployed to
+# /etc/systemd/system/sitesolide-api.service
+#
+# It carries today the sole "ask" endpoint of on_demand_tls. Caddy queries it
+# during the TLS handshake: if it does not answer, no certificate for a client
+# domain is issued. Hence Restart=always and a start before Caddy.
+
+[Unit]
+Description=Shared service (ask endpoint, preview locks)
+After=network-online.target
+Wants=network-online.target
+Before=caddy.service
+
+[Service]
+Type=simple
+User=sitesolide-api
+Group=sitesolide-api
+WorkingDirectory=/srv/api/current
+
+Environment=NODE_ENV=production
+Environment=PORT=3001
+Environment=DOMAINS_FILE=/etc/caddy/domaines.map
+
+# The zone served, which the `ask` endpoint refuses on demand: the wildcard and
+# the apex already cover it, and a second certificate for a name already covered
+# would count towards the limits of the authority. Set by bin/deploy-api.sh from
+# the configuration of the workstation, never written here: this file is
+# versioned.
+EnvironmentFile=/etc/caddy/sitesolide.env
+
+ExecStart=/usr/local/bin/bun run server.ts
+Restart=always
+RestartSec=2
+
+# Confinement
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+
+# No writable directory: this service does nothing but read a table of domains.
+# The following line will be the one to uncomment the day it records the forms
+# in /srv/data.
+# ReadWritePaths=/srv/data
+
+# /srv is replaced by an empty mount, then only the code of the service is
+# re-exposed there: it can read neither the landing nor the slightest client
+# directory.
+TemporaryFileSystem=/srv:ro
+BindReadOnlyPaths=/srv/api
+
+# The table of domains is read in /etc/caddy, which ProtectSystem leaves
+# read-only. The Cloudflare token lives in the same directory: its permissions
+# 0640 root:caddy already exclude it from this user, this line makes it
+# unreachable even in case of a permissions mistake.
+InaccessiblePaths=/etc/caddy/cloudflare.env
+
+# The sending credentials of the sites live in /etc/sitesolide, one file per
+# site in 0600. This service sends no email and therefore has nothing to read
+# there: the whole directory is closed to it, which hides from it even the names
+# of the files.
+#
+# The dash is not decorative: without it, systemd refuses to mount the namespace
+# when the path does not exist, the service fails with 226/NAMESPACE, and
+# Restart=always makes it loop. That happened on 12 August 2026, on this very
+# service, before the first secret was placed: 80 seconds without the ask
+# endpoint, hence without any certificate issuance possible.
+InaccessiblePaths=-/etc/sitesolide
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryMax=256M
+
+# The only client of this service is Caddy, on the loopback. To be widened the
+# day it sends transactional emails.
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+---
+import Layout from "@/layouts/main.astro"
+import { Application } from "@/components/application"
+---
+
+<Layout title="sitesolide">
+  <!--
+    The same island on every page, with the path of the served file. This page
+    is served by Caddy from public/, without ever waking Bun, and carries no
+    data: all the state arrives through /api/*, behind the session. Between two
+    pages, the island navigates by itself, with no reload.
+  -->
+  <Application client:load path="/" />
+</Layout>

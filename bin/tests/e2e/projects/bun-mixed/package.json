@@ -1,0 +1,8 @@
+{
+  "name": "sample-bun",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run build.ts && bun --hot server.ts"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "slug": "sample-portal",
+  "port": 3034,
+  "publicDir": "public",
+  "start": "/usr/local/bin/bun run server.ts",
+  "portal": true,
+  "portalExempt": ["/webhook/*"]
+}

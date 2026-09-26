@@ -1,0 +1,5 @@
+{
+  "slug": "sample-docs",
+  "publicDir": "dist",
+  "build": "bun run build.ts"
+}

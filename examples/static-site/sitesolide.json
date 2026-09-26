@@ -1,0 +1,5 @@
+{
+  "slug": "static-site",
+  "description": "A folder of files, served directly by Caddy",
+  "publicDir": "public"
+}

@@ -1,0 +1,22 @@
+# The rule of the loopback, reloaded at every boot: on the VM, only Caddy and
+# root open a connection towards the ports of the services. See
+# bin/cli/loopback.ts for the reason, bin/deploy-loopback.sh for the placing.
+#
+# Set before the network, like nftables.service, so that no service starts
+# before it. It lives only in its own table: neither ufw nor a reload of Caddy
+# touches it, and removing it touches it alone.
+
+[Unit]
+Description=Loopback: only Caddy and root reach the service ports and the Caddy admin API
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=@NFT@ -f /etc/sitesolide-loopback.nft
+ExecStop=@NFT@ delete table inet sitesolide_boucle
+
+[Install]
+WantedBy=multi-user.target

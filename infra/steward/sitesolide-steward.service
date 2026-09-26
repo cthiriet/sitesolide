@@ -1,0 +1,143 @@
+# The steward: holds the files of every deployed site in /etc/sitesolide for the
+# dashboard, which does nothing but relay it, and commands the gatekeeper that
+# sets or removes the portal of a site. See dashboard/README.md.
+#
+# It runs as root because it writes files that each belong to another account,
+# site-<slug> or root, and restarts their services. All the judgement lives in
+# dashboard/src/secrets/, tried out without a VM; what follows bounds what a
+# compromised steward would obtain all the same.
+#
+# The bench itself is not in this repository: it was a container that ran the
+# steward under each candidate set of directives, and it left with the rest of
+# what named this machine, at commit d9b956a. Its numbers stay here.
+#
+# This is the unit the bench proposed, having measured
+# each directive on Debian 13 and systemd 257 (measurement 3): all the actions
+# of the plan pass, `systemd-analyze security` scores it 1.3. The bench was
+# arm64 in a container, the VM is x86_64: to be revalidated on it before
+# believing in it.
+#
+# Placed by bin/deploy-steward.sh, never by `sitesolide deploy`: a root daemon
+# that writes secrets changes only by a deliberate action.
+
+[Unit]
+Description=Steward of /etc/sitesolide for the dashboard
+# It reads the manifests of /srv/sites and writes into /etc/sitesolide: there is
+# no point starting before these paths are mounted.
+RequiresMountsFor=/srv/sites /etc/sitesolide
+# The dashboard finds the socket ready at its own start. Without the steward,
+# it starts all the same and says the section is unreachable.
+Before=dashboard.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bun /usr/local/lib/sitesolide/steward.js
+# The zone, which names the landing's directory in /srv/sites: without it the
+# steward does not recognise that directory as a site, and the landing's files,
+# landing-mail.env among them, never show in the dashboard. Read by PID 1 before
+# the sandbox applies, like every EnvironmentFile.
+EnvironmentFile=/etc/caddy/sitesolide.env
+Restart=always
+RestartSec=2
+
+# /run/sitesolide-steward, recreated 0750 root:root at every start and removed
+# at stop. The steward sets the site-dashboard group on it, binds its socket
+# under a provisional name, gives it 0660 then renames it: the known name never
+# exists with wrong permissions (bench, measurement 2).
+#
+# /var/lib/sitesolide-steward: previous versions, log, rate limiting of password
+# attempts. Outside /etc/sitesolide so that no service listing that directory
+# learns one more name there. StateDirectory makes it writable despite
+# ProtectSystem=strict, without ReadWritePaths (measured).
+#
+# UMask=0077: what it creates belongs to it alone, the socket receives its
+# permissions separately.
+UMask=0077
+RuntimeDirectory=sitesolide-steward
+RuntimeDirectoryMode=0750
+StateDirectory=sitesolide-steward
+StateDirectoryMode=0700
+
+# Two capabilities, the only ones the actions require (variant c2 of the bench):
+# CAP_CHOWN for the group of the socket and the owner of the files written,
+# CAP_DAC_READ_SEARCH to read the 0600 files of the sites. CAP_CHOWN alone
+# returns EACCES on these reads (c3).
+#
+# Neither CAP_DAC_OVERRIDE nor CAP_FOWNER: root owns /etc/sitesolide and its own
+# directories, which is enough to create, rename and delete.
+# The code takes account of it (dashboard/src/secrets/system.ts): the mode of a
+# file is set before its fchown, and a file is created by O_EXCL on its final
+# name rather than by link(), which protected_hardlinks would refuse without
+# CAP_FOWNER on a temporary already handed over to site-<slug>.
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH
+
+# The whole system read-only, except /etc/sitesolide, subdirectories included
+# (<slug>-secrets/, owned by root: the steward creates and renames there by the
+# rights of the owner, without one capability more), and its own directories.
+#
+# Two reads are added without any directive, and that is intended:
+#   - /etc/caddy/sites, to tell whether the block in service of a site carries
+#     the portal; read, never written, and ProtectSystem=strict leaves it
+#     readable;
+#   - /run/sitesolide-gatekeeper, where the gatekeeper leaves its result, and of
+#     which the steward also looks at sauvegardes/<slug>: a backup that remains
+#     tells of an interrupted gatekeeper, and the portal of the site is no
+#     longer modifiable from the page. The directory is 0700 root, which root
+#     traverses without any capability. /run stays visible read-only under
+#     strict, and a directory created by the gatekeeper after the start of the
+#     steward appears there: there is no mount to freeze. A ReadOnlyPaths= would
+#     add nothing, and without a dash, on a path absent at start, it would make
+#     the unit fail with 226/NAMESPACE.
+# No InaccessiblePaths nor TemporaryFileSystem must come and hide one or the
+# other. Measured on the bench on 17 September 2026 (measurement 5): both are
+# read under this exact unit.
+ProtectSystem=strict
+ReadWritePaths=/etc/sitesolide
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+
+# No network: systemctl and the socket are AF_UNIX, which cross PrivateNetwork
+# (measured: restart, show, reset-failed pass).
+#
+# The gatekeeper is launched by `systemctl start sitesolide-gatekeeper-on@<slug>`
+# or `sitesolide-gatekeeper-off@<slug>`, the same path as restart: systemctl, as
+# root, talks to PID 1 through the /run/systemd/private socket, AF_UNIX, or
+# through D-Bus if it finds it closed, AF_UNIX too. PID 1 launches the gatekeeper
+# in its own unit, with its own rights: nothing of this hardening is passed on to
+# it, and nothing is taken away from it for all that. NoNewPrivileges only plays
+# in this very process. Measured on the bench on 17 September 2026
+# (measurement 5): the start of the gatekeeper passes under this unit.
+PrivateNetwork=true
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+# @system-service and nothing stricter: `~@privileged @resources` kills Bun at
+# start, status=31/SYS (variant v6). MemoryDenyWriteExecute stays out as long as
+# it is not measured on x86_64, where the JIT may behave otherwise.
+SystemCallFilter=@system-service
+
+# An argon2id verification costs about 65 MiB, and two simultaneous ones get the
+# service killed at 128M (m2) just as three do at 192M: raising the ceiling only
+# moves the threshold. The code conducts only one at a time, bounds the requests
+# in flight and keeps the rate limiting on disk, so that a stop for lack of memory
+# does not reset the attempt counter to zero.
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

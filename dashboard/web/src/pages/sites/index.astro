@@ -1,0 +1,13 @@
+---
+import Layout from "@/layouts/main.astro"
+import { Application } from "@/components/application"
+---
+
+<Layout title="sitesolide">
+  <!--
+    An address from before the per-site page, kept so that bookmarks keep
+    working: the island reads it as its equivalent, then replaces the address
+    with the new one (lib/pages.ts, redirect).
+  -->
+  <Application client:load path="/sites/" />
+</Layout>

@@ -1,0 +1,19 @@
+# Cadence of the snapshot. One minute: it is the delay after which the dashboard
+# announces a stale snapshot rather than presenting it as the current state, and
+# src/state.ts#STALE_AFTER_MS depends on it.
+
+[Unit]
+Description=Machine state snapshot, every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+# Fifteen seconds of slack let systemd group the wake-ups. A dashboard does not
+# need to be accurate to the second.
+AccuracySec=15s
+# A snapshot missed during a shutdown is not caught up: the next one arrives in
+# one minute, and catching up would only write a state that is already stale.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

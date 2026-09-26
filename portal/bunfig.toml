@@ -1,0 +1,5 @@
+[test]
+# Diverts DATA_DIR before src/config.ts freezes it at the first import. See
+# tests/setup.ts: without this preload, the tests would write the portal's key
+# in production.
+preload = ["./tests/setup.ts"]

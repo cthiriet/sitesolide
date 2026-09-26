@@ -1,0 +1,3 @@
+[test]
+# Isolates the tests from the real database of visits. See tests/setup.ts.
+preload = ["./tests/setup.ts"]

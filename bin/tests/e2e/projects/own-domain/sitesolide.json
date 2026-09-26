@@ -1,0 +1,8 @@
+{
+  "slug": "sample-domain",
+  "publicDir": "public",
+  "domain": {
+    "name": "sample-domain.test",
+    "active": false
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./secrets/coffre/**)",
+      "Edit(./secrets/coffre/**)",
+      "Read(./**/.env)",
+      "Read(./**/.env.*)",
+      "Read(./**/*.env)",
+      "Edit(./**/.env)",
+      "Edit(./**/.env.*)",
+      "Edit(./**/*.env)",
+      "Read(~/.config/sitesolide/secrets/**)",
+      "Edit(~/.config/sitesolide/secrets/**)",
+      "Read(~/.config/sitesolide/terraform/**)",
+      "Edit(~/.config/sitesolide/terraform/**)",
+      "Read(./**/*.tfvars)",
+      "Edit(./**/*.tfvars)"
+    ]
+  },
+  "sandbox": {
+    "filesystem": {
+      "denyRead": [
+        "./secrets/coffre/**",
+        "./**/.env",
+        "./**/.env.*",
+        "./**/*.env",
+        "~/.config/sitesolide/secrets/**",
+        "~/.config/sitesolide/terraform/**",
+        "./**/*.tfvars"
+      ],
+      "denyWrite": [
+        "./secrets/coffre/**",
+        "./**/.env",
+        "./**/.env.*",
+        "./**/*.env",
+        "~/.config/sitesolide/secrets/**",
+        "~/.config/sitesolide/terraform/**",
+        "./**/*.tfvars"
+      ]
+    },
+    "credentials": {
+      "files": [
+        {
+          "path": "./secrets/coffre",
+          "mode": "deny"
+        }
+      ]
+    }
+  }
+}

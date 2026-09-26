@@ -1,0 +1,205 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/archivo/wdth.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-sans: 'Archivo Variable', 'Helvetica Neue', Arial, sans-serif;
+    --font-heading: var(--font-sans);
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --color-ok: var(--ok);
+    --color-ok-text: var(--ok-text);
+    --color-attention: var(--attention);
+    --color-attention-text: var(--attention-text);
+    --color-plaque: var(--plaque);
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/*
+  The landing page's palette, taken as it is: midnight-blue ink (ink #0e1726)
+  on cold glass (glass #e8ecf1), rules (line #d2d9e3), deep background (deep
+  #131f35), and one single red, the seal (#b3253f), reserved for errors. See
+  web/DESIGN.md, which also gives each token's role.
+
+  In light, the page background and the sidebar are glass, the content surfaces
+  white: the structure reads through colour, with no shadow. In dark, the page
+  is ink and the surfaces the deep background.
+
+  Measured contrasts (WCAG), to check again after any change: muted-foreground
+  6.1:1 on card and 5.1:1 on background; destructive 6.5:1 on card and 5.3:1 on
+  its 12 % fill; ok-text 5.6:1 and attention-text 5.9:1 on their tinted fill.
+  In dark, muted-foreground 6.9:1 on card, destructive 5.8:1 on card and 4.9:1
+  on its tinted fill, ok-text and attention-text beyond 7.6:1 on their tinted
+  fill.
+*/
+:root {
+    --background: #e8ecf1;
+    --foreground: #0e1726;
+    --card: #ffffff;
+    --card-foreground: #0e1726;
+    --popover: #ffffff;
+    --popover-foreground: #0e1726;
+    --primary: #0e1726;
+    --primary-foreground: #e8ecf1;
+    --secondary: #dfe4eb;
+    --secondary-foreground: #0e1726;
+    --muted: #dfe4eb;
+    --muted-foreground: #56637a;
+    --accent: #dfe4eb;
+    --accent-foreground: #0e1726;
+    --destructive: #b3253f;
+    --border: #d2d9e3;
+    --input: #c5cedb;
+    --ring: #5b6c92;
+    --ok: #16935f;
+    --ok-text: #0f6e46;
+    --attention: #e29a14;
+    --attention-text: #8a5100;
+    /* The machine plate: the deep background, in both themes. */
+    --plaque: #131f35;
+    --chart-1: #9aa8c4;
+    --chart-2: #5b6c92;
+    --chart-3: #33456b;
+    --chart-4: #1d2b47;
+    --chart-5: #0e1726;
+    --radius: 0.5rem;
+    --sidebar: #e8ecf1;
+    --sidebar-foreground: #0e1726;
+    --sidebar-primary: #0e1726;
+    --sidebar-primary-foreground: #e8ecf1;
+    --sidebar-accent: #ffffff;
+    --sidebar-accent-foreground: #0e1726;
+    --sidebar-border: #d2d9e3;
+    --sidebar-ring: #5b6c92;
+    /* The sidebar's width before React mounts it, set by main.astro. */
+    --pending-sidebar-width: 16rem;
+}
+
+.dark {
+    --background: #0e1726;
+    --foreground: #e6eaf1;
+    --card: #131f35;
+    --card-foreground: #e6eaf1;
+    --popover: #172440;
+    --popover-foreground: #e6eaf1;
+    --primary: #e6eaf1;
+    --primary-foreground: #0e1726;
+    --secondary: #1a2842;
+    --secondary-foreground: #e6eaf1;
+    --muted: #1a2842;
+    --muted-foreground: #9aa8c4;
+    --accent: #1a2842;
+    --accent-foreground: #e6eaf1;
+    --destructive: #f36f84;
+    --border: #25324b;
+    --input: #2e3c57;
+    --ring: #9aa8c4;
+    --ok: #3fbf87;
+    --ok-text: #6fdcaa;
+    --attention: #f0b43c;
+    --attention-text: #f5c56a;
+    --plaque: #131f35;
+    --chart-1: #9aa8c4;
+    --chart-2: #5b6c92;
+    --chart-3: #33456b;
+    --chart-4: #1d2b47;
+    --chart-5: #0e1726;
+    --sidebar: #0e1726;
+    --sidebar-foreground: #e6eaf1;
+    --sidebar-primary: #e6eaf1;
+    --sidebar-primary-foreground: #0e1726;
+    --sidebar-accent: #131f35;
+    --sidebar-accent-foreground: #e6eaf1;
+    --sidebar-border: #25324b;
+    --sidebar-ring: #9aa8c4;
+}
+
+/* The collapsed sidebar's width, read before the first render: see main.astro. */
+:root[data-sidebar-collapsed="1"] {
+    --pending-sidebar-width: 3rem;
+}
+
+/*
+  Widened Archivo, the one used for the landing page's titles. A utility rather
+  than a second family: the same typeface, at another width.
+*/
+@utility font-display {
+    font-family: var(--font-sans);
+    font-stretch: 118%;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    font-synthesis: none;
+    }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+    }
+  html {
+    @apply font-sans;
+    }
+  /* Native controls, a select's menu and the scrollbars follow the theme. */
+  :root {
+    color-scheme: light;
+    }
+  .dark {
+    color-scheme: dark;
+    }
+  /*
+    Nothing moves for whoever has asked for that: neither the sidebar's
+    collapse, nor the dialogs, nor the spinning icons.
+  */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

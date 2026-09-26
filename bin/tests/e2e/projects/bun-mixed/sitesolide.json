@@ -1,0 +1,9 @@
+{
+  "slug": "sample-bun",
+  "port": 3031,
+  "publicDir": "public",
+  "build": "bun run build.ts",
+  "install": "bun install --production",
+  "start": "/usr/local/bin/bun run server.ts",
+  "exclude": ["node_modules", "data", "dist"]
+}

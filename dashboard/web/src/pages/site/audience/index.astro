@@ -1,0 +1,14 @@
+---
+import Layout from "@/layouts/main.astro"
+import { Application } from "@/components/application"
+---
+
+<Layout title="Audience · sitesolide">
+  <!--
+    A section of a site, which lives under ?s=<slug>: the build does not know
+    the site, which the island reads from the address. Served by Caddy from
+    public/, with no data: all the state arrives through /api/*, behind the
+    session.
+  -->
+  <Application client:load path="/site/audience/" />
+</Layout>

@@ -1,0 +1,32 @@
+{
+  "slug": "dashboard",
+  "description": "The machine's dashboard",
+  "port": 3022,
+  "publicDir": "public",
+  "build": "bun run build",
+  "install": "bun install --production",
+  "start": "/usr/local/bin/bun run server.ts",
+  "routes": [
+    "/api/*"
+  ],
+  "env": {
+    "NODE_ENV": "production",
+    "PUBLIC_URL": "https://{slug}.{zone}",
+    "SITESOLIDE_ZONE": "{zone}"
+  },
+  "exclude": [
+    "node_modules",
+    "data",
+    "tests",
+    "scripts",
+    ".test-data",
+    "web"
+  ],
+  "memory": "128M",
+  "headers": {
+    "X-Robots-Tag": "noindex, nofollow, noarchive"
+  },
+  "secrets": [
+    "dashboard.env"
+  ]
+}

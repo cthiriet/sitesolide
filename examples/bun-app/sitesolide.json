@@ -1,0 +1,15 @@
+{
+  "slug": "bun-app",
+  "description": "A Bun service behind Caddy, with static files in front",
+  "port": 3040,
+  "publicDir": "public",
+  "start": "/usr/local/bin/bun run server.ts",
+  "routes": ["/api/*"],
+  "env": {
+    "NODE_ENV": "production",
+    "PUBLIC_URL": "https://{slug}.{zone}"
+  },
+  "exclude": ["node_modules"],
+  "memory": "128M",
+  "network": "localhost"
+}

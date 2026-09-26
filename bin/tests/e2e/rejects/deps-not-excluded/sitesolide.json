@@ -1,0 +1,6 @@
+{
+  "slug": "sample-node-modules",
+  "port": 3039,
+  "start": "bun run server.ts",
+  "publicDir": "public"
+}

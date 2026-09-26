@@ -1,0 +1,23 @@
+{
+  "name": "sitesolide-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot server.ts",
+    "start": "NODE_ENV=production bun server.ts",
+    "borrow": "bun scripts/borrow.ts",
+    "web:install": "cd web && bun install --silent",
+    "web:build": "cd web && bunx --bun astro build",
+    "web:check": "cd web && bunx --bun astro check && bun test",
+    "web:dev": "cd web && bunx --bun astro dev",
+    "build": "bun run borrow && bun run web:install && bun run web:build",
+    "test": "bun test",
+    "check": "bun run borrow && bun test && tsc --noEmit && bun run web:install && bun run web:check",
+    "fingerprint": "bun scripts/fingerprint.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}

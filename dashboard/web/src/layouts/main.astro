@@ -1,0 +1,105 @@
+---
+import "@/styles/global.css"
+
+/**
+ * The title from before JavaScript: the island replaces it as soon as it knows
+ * the verdict, through `documentTitle` in lib/pages.ts, which follows the same
+ * format.
+ */
+interface Props {
+  title?: string
+}
+
+const { title = "sitesolide" } = Astro.props
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="robots" content="noindex, nofollow" />
+    <!--
+      The logo's strata, as a data URI rather than a file: the Caddyfile's
+      shared snippet serves .svg files as immutable for a year, and a favicon
+      frozen for a year can no longer be corrected. Carried by the HTML, it
+      revalidates with it. The same image as the landing page, flattened on a
+      dark background: at sixteen pixels, the gradients of the version at the
+      top of the page can no longer be told apart.
+    -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='f' x1='0' y1='0' x2='32' y2='32' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' stop-color='%231b2b47'/%3E%3Cstop offset='1' stop-color='%230b1220'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='7' fill='url(%23f)'/%3E%3Cpath d='M16 16L27 21.5L16 27L5 21.5Z' fill='%235b6c92'/%3E%3Cpath d='M16 10.5L27 16L16 21.5L5 16Z' fill='%239aa8c4'/%3E%3Cpath d='M16 5L27 10.5L16 16L5 10.5Z' fill='%23d93a55'/%3E%3C/svg%3E"
+    />
+    <title>{title}</title>
+    <!--
+      The theme is set before the first render, rather than in a React effect:
+      a switch after the fact would show as a white flash on every opening.
+
+      A choice made through the theme button is remembered under the key
+      `theme`, `light` or `dark`, and wins over the system. Without it, the page
+      follows the system for as long as it stays open, a dashboard being able to
+      sit for hours in a tab while the workstation goes dark at nightfall.
+      Clearing the key brings back the system, and a choice made in another tab
+      is picked up here through the `storage` event. `localStorage` can throw on
+      mere access: the page then follows the system.
+
+      `color-scheme` is set inline so that native controls follow from the first
+      render; the rule in styles/global.css is now only the fallback.
+
+      This script cannot import src/lib/theme.ts. It repeats its key, its
+      validation and its resolution, and tests/theme.test.ts runs it against
+      them.
+
+      The script is inline, which assumes that this project's Caddy block sets
+      no Content-Security-Policy; the day it sets one, this script will need a
+      hash.
+    -->
+    <script is:inline>
+      ;(() => {
+        const root = document.documentElement
+        const dark = window.matchMedia("(prefers-color-scheme: dark)")
+        const choice = () => {
+          try {
+            const value = window.localStorage.getItem("theme")
+            return value === "light" || value === "dark" ? value : null
+          } catch {
+            return null
+          }
+        }
+        const apply = () => {
+          const theme = choice() ?? (dark.matches ? "dark" : "light")
+          root.classList.toggle("dark", theme === "dark")
+          root.style.colorScheme = theme
+        }
+        apply()
+        dark.addEventListener("change", apply)
+        window.addEventListener("storage", (event) => {
+          if (event.key === "theme" || event.key === null) apply()
+        })
+      })()
+    </script>
+    <!--
+      The sidebar's collapsed state is read before the first render too: the
+      page served by Caddy shows a skeleton of the shell while the session is
+      being checked, and its column must already have the right width, otherwise
+      it would jump from 16 to 3 rem when React arrives.
+
+      A second script rather than an addition to the first, which
+      tests/theme.test.ts runs on its own. It repeats the key and the value from
+      src/lib/sidebar.ts, and tests/sidebar.test.ts runs it against them. A storage
+      that throws leaves the sidebar expanded.
+    -->
+    <script is:inline>
+      ;(() => {
+        try {
+          if (window.localStorage.getItem("sidebar-collapsed") === "1") {
+            document.documentElement.setAttribute("data-sidebar-collapsed", "1")
+          }
+        } catch {}
+      })()
+    </script>
+  </head>
+  <body class="bg-background text-foreground min-h-svh antialiased">
+    <slot />
+  </body>
+</html>

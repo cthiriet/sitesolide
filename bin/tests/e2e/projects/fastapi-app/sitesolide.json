@@ -1,0 +1,8 @@
+{
+  "slug": "sample-api",
+  "port": 3032,
+  "install": "uv sync --frozen --no-dev",
+  "start": "/srv/sites/sample-api/app/.venv/bin/python -m uvicorn app.main:api --host 127.0.0.1 --port 3032",
+  "exclude": [".venv", "__pycache__", ".pytest_cache"],
+  "memory": "384M"
+}

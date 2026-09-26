@@ -1,0 +1,30 @@
+{
+  "slug": "analytics",
+  "description": "Audience measurement of the projects, ingestion only",
+  "port": 3029,
+  "publicDir": "public",
+  "install": "bun install --production",
+  "start": "/usr/local/bin/bun run server.ts",
+  "routes": [
+    "/e"
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  },
+  "exclude": [
+    "node_modules",
+    "data",
+    ".test-data",
+    "tests"
+  ],
+  "memory": "256M",
+  "network": "localhost",
+  "headers": {
+    "X-Robots-Tag": "noindex, nofollow, noarchive"
+  },
+  "portal": true,
+  "portalExempt": [
+    "/e",
+    "/a.js"
+  ]
+}

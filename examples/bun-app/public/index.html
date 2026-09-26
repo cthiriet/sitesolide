@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bun app</title>
+    <style>
+      body { font: 16px/1.6 system-ui, sans-serif; max-width: 34rem; margin: 4rem auto; padding: 0 1rem; }
+      button { font: inherit; padding: 0.5em 1em; }
+      output { margin-left: 0.75em; }
+    </style>
+  </head>
+  <body>
+    <h1>A service, and files in front of it.</h1>
+    <p>
+      This page is static: Caddy served it without waking the process. The button
+      calls <code>/api/counter</code>, which the manifest routes to Bun.
+    </p>
+    <p>
+      <button id="go">Increment</button><output id="out"></output>
+    </p>
+    <script>
+      document.getElementById("go").addEventListener("click", async () => {
+        const r = await fetch("/api/counter", { method: "POST" });
+        document.getElementById("out").textContent = (await r.json()).count;
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "slug": "portal",
+  "description": "Sign-in portal in front of the protected sites",
+  "port": 3026,
+  "publicDir": "public",
+  "build": "bun scripts/borrow.ts",
+  "start": "/usr/local/bin/bun run server.ts",
+  "routes": [
+    "/sante"
+  ],
+  "env": {
+    "NODE_ENV": "production",
+    "SITESOLIDE_CONTACT": "{contact}"
+  },
+  "exclude": [
+    "node_modules",
+    "data",
+    "tests",
+    "scripts",
+    ".attempts"
+  ],
+  "memory": "128M",
+  "headers": {
+    "X-Robots-Tag": "noindex, nofollow, noarchive"
+  },
+  "secrets": [
+    "portal.env"
+  ]
+}
