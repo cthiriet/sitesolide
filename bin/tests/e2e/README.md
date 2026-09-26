@@ -69,6 +69,7 @@ then points at a `.invalid` name, so that the final verification reaches nobody.
 | `projects/api-with-secret` | a declared secret, checked on the machine and never pushed, and outbound network |
 | `projects/portal-mixed` | a project behind the portal, with an exempted path |
 | `projects/multi-service` | several services: a front, an API under `/v1`, an internal worker |
+| `projects/sourced` | a manifest alone, whose code lives in another folder, named by `source` |
 
 ## The rejections
 
@@ -83,6 +84,7 @@ that refuses wrongly costs a minute.
 | `path-escapes` | a `publicDir` of `../..`, which would send anything at all |
 | `public-empty` | an empty directory, whose `rsync --delete` would erase the site |
 | `deps-not-excluded` | a `node_modules` from the workstation, poured onto a Linux machine |
+| `source-missing` | a `source` pointing nowhere, which would send an empty folder over the site |
 
 Two of these directories are produced by the test itself, the empty `public/`
 and the fake `node_modules`: committed, the repository's `.gitignore` would

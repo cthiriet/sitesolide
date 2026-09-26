@@ -37,6 +37,8 @@ export type Service = {
 export type Manifest = {
   slug: string;
   description?: string;
+  /** Where the code lives, when not beside the manifest, see isSourcePath. */
+  source?: string;
   publicDir?: string;
   build?: string;
   install?: string;
@@ -67,6 +69,7 @@ export type Manifest = {
 export const KNOWN_KEYS = [
   "slug",
   "description",
+  "source",
   "publicDir",
   "build",
   "install",
@@ -131,6 +134,20 @@ export function isInternalPath(path: string): boolean {
   if (path.length === 0) return false;
   if (path.startsWith("/") || /^[a-zA-Z]:/.test(path)) return false;
   return !path.split(/[/\\]/).some((part) => part === "..");
+}
+
+/**
+ * `source` names the folder whose content leaves, when the code lives in a
+ * repository of its own that should carry nothing about its deployment: the
+ * manifest then stays in the sites repository, and points at it.
+ *
+ * Relative to the manifest's folder, `..` included, since the code is
+ * elsewhere by definition. Never absolute: `/Users/<name>/...` would name the
+ * workstation that wrote it, and fail on every other one.
+ */
+export function isSourcePath(path: string): boolean {
+  if (path.length === 0 || /[\r\n]/.test(path)) return false;
+  return !path.startsWith("/") && !path.startsWith("~") && !/^[a-zA-Z]:/.test(path);
 }
 
 /** `256M`, `1G`, `524288K`. A bare number would be accepted by systemd as bytes. */
@@ -366,6 +383,12 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
   if (manifest.description !== undefined) {
     if (typeof manifest.description !== "string" || /[\r\n]/.test(manifest.description)) {
       errors.push("description: a single line of text, no line break");
+    }
+  }
+
+  if (manifest.source !== undefined) {
+    if (typeof manifest.source !== "string" || !isSourcePath(manifest.source)) {
+      errors.push("source: a path relative to this manifest's folder, such as ../../my-app, never absolute");
     }
   }
 

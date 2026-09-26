@@ -52,6 +52,22 @@ serves the bare domain.
 One line, shown by `systemctl status` and in the dashboard. Without it, the unit
 says `Project <slug>`.
 
+### `source`
+
+Where the code lives, when it is not beside the manifest: a path relative to the
+folder holding `sitesolide.json`.
+
+```json
+{ "slug": "mini-lab", "source": "../../mini-lab", "services": { ... } }
+```
+
+For a repository that should carry nothing about its deployment, an open-source
+project for instance: the manifest stays in your sites repository, and
+`sitesolide deploy` runs from there. The build, the exclusions, `publicDir` and
+the upload all start from `source`; a door changed from the dashboard is still
+written back into the manifest, where it lives. Never absolute, which would name
+the workstation that wrote it.
+
 ### `publicDir`
 
 The directory whose contents Caddy serves directly, relative to the project.

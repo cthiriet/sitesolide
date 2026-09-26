@@ -206,6 +206,19 @@ describe("the services key", () => {
   });
 });
 
+describe("source", () => {
+  test("a path relative to the manifest, climbing out of it included", () => {
+    expect(validate({ ...APP, source: "../../mini-lab" })).toEqual([]);
+    expect(validate({ ...APP, source: "app" })).toEqual([]);
+  });
+
+  test("never absolute, which would name the workstation that wrote it", () => {
+    for (const source of ["/Users/me/Code/app", "~/Code/app", "C:/app", "", "../a\nb"]) {
+      expect(validate({ ...APP, source })).toContainEqual(expect.stringContaining("source:"));
+    }
+  });
+});
+
 describe("routes that could overlap", () => {
   test.each([
     ["/v1/*", "/v1/chat", true],

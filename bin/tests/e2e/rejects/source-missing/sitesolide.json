@@ -1,0 +1,6 @@
+{
+  "slug": "sample-source-missing",
+  "source": "../../nowhere-to-be-found",
+  "port": 3034,
+  "start": "/srv/sites/sample-source-missing/app/server"
+}

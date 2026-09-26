@@ -318,6 +318,17 @@ describe("a project with several services", () => {
   });
 });
 
+describe("a manifest whose code lives elsewhere", () => {
+  test("the code leaves from the folder source names, the manifest from its own", async () => {
+    const r = await run("projects/sourced", ["deploy", "--dry-run"]);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain(`code from ${join(TESTS_ROOT, "projects/fastapi-app")}`);
+    expect(r.output).toContain(`${join(TESTS_ROOT, "projects/fastapi-app")}/ sample@invalid.local:/srv/sites/sample-sourced/app/`);
+    expect(r.output).toContain("write /srv/sites/sample-sourced/sitesolide.json");
+    expect(r.output).toContain("--exclude .venv");
+  });
+});
+
 describe("Python API", () => {
   test("the whole subdomain goes to the service, without file_server", async () => {
     const r = await run("projects/fastapi-app", ["deploy", "--dry-run"]);
@@ -359,6 +370,12 @@ describe("rejects", () => {
     const r = await run("rejects/landing-slug", ["deploy", "--dry-run"]);
     expect(r.code).toBe(1);
     expect(r.error).toContain("reserved for the site on the bare domain");
+  });
+
+  test("a source that points nowhere is refused before anything leaves", async () => {
+    const r = await run("rejects/source-missing", ["deploy", "--dry-run"]);
+    expect(r.code).toBe(1);
+    expect(r.error).toContain("source not found");
   });
 
   test("a service without a port is refused", async () => {

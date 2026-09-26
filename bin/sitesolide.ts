@@ -72,7 +72,7 @@
  * depend on the punctuation it contains.
  */
 import { resolve4, resolve6 } from "node:dns/promises";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { compareDirectives, sameDirectives, summariseDivergence } from "./cli/comparison";
@@ -163,7 +163,14 @@ const REPO_ROOT = resolve(import.meta.dir, "..");
 const MANIFEST_NAME = "sitesolide.json";
 
 type Project = {
+  /** Where sitesolide.json lives, and where a door changed from the dashboard is written back. */
   folder: string;
+  /**
+   * The folder whose content leaves: the manifest's own, or the one its
+   * `source` names. The build, the exclusions, the public files and the upload
+   * all start from here.
+   */
+  code: string;
   manifest: Manifest;
   /**
    * The manifest's text as it will leave for the VM. It follows `manifest`:
@@ -423,8 +430,17 @@ function readProject(folder: string): Project {
   // asking it to declare an exclusion with no effect refused the deployment of
   // three sites of the repository, whose node_modules carries only a Tailwind
   // compiler.
+  // The code beside the manifest, or in the repository `source` names, which
+  // then carries nothing about its deployment.
+  const code = manifest.source === undefined ? folder : resolve(folder, manifest.source);
+  if (!existsSync(code) || !statSync(code).isDirectory()) {
+    die(`source not found: ${manifest.source} (${code})`, [
+      "the path is relative to the folder holding sitesolide.json",
+    ]);
+  }
+
   const missing = isApp(manifest)
-    ? missingExclusions(manifest, readdirSync(folder))
+    ? missingExclusions(manifest, readdirSync(code))
     : [];
   if (missing.length > 0) {
     die(`exclude: ${missing.join(", ")} present on disk and not excluded`, [
@@ -432,7 +448,7 @@ function readProject(folder: string): Project {
     ]);
   }
 
-  return { folder, manifest, raw };
+  return { folder, code, manifest, raw };
 }
 
 /**
@@ -532,7 +548,7 @@ async function runBuild(project: Project, executor: Executor): Promise<void> {
   // The build runs on the workstation, even in a dry run: it is what produces
   // what would leave, and a test that skips it verifies nothing.
   const proc = Bun.spawn(["sh", "-c", build], {
-    cwd: project.folder,
+    cwd: project.code,
     stdout: "inherit",
     stderr: "inherit",
   });
@@ -541,7 +557,7 @@ async function runBuild(project: Project, executor: Executor): Promise<void> {
 
 function publicFolder(project: Project): string | null {
   const { publicDir } = project.manifest;
-  return publicDir === undefined ? null : join(project.folder, publicDir);
+  return publicDir === undefined ? null : join(project.code, publicDir);
 }
 
 function checkPublicFolder(project: Project): void {
@@ -594,6 +610,7 @@ async function deploy(
 
   const serviceCount = servicesOf(rawProject.manifest).length;
   say(`-> project ${slug}, ${isApplication ? (serviceCount > 1 ? `${serviceCount} services` : "service") : "static"}`);
+  if (rawProject.code !== rawProject.folder) say(`   code from ${rawProject.code}`);
 
   // The door before everything else, in a dry run as for real: the block shown,
   // the block checked, the order of the steps and the deposited manifest all
@@ -671,7 +688,7 @@ async function deploy(
       // and nothing would say which one is authoritative.
       "--exclude",
       MANIFEST_NAME,
-      `${project.folder}/`,
+      `${project.code}/`,
       `${config.server}:${paths.app}/`,
     ]);
   }
@@ -850,7 +867,7 @@ async function reconcilePortal(
   } else {
     writeFileSync(path, raw);
   }
-  return { project: { folder: project.folder, manifest: followed, raw }, switched: true, doorConfirmed };
+  return { project: { ...project, manifest: followed, raw }, switched: true, doorConfirmed };
 }
 
 /**
@@ -1511,7 +1528,7 @@ async function runWithSecret(
       "bash",
       ...command,
     ],
-    { cwd: project.folder, stdout: "inherit", stderr: "inherit", stdin: "inherit" },
+    { cwd: project.code, stdout: "inherit", stderr: "inherit", stdin: "inherit" },
   );
   process.exit(await proc.exited);
 }
