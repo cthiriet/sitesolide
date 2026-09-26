@@ -19,6 +19,7 @@ export type SearchableSite = Pick<
   Site,
   "slug" | "description" | "type" | "port" | "address" | "domain" | "portal" | "lock" | "service"
 > &
+  Partial<Pick<Site, "services">> &
   Partial<SiteSecretsPanel>
 
 /**
@@ -80,6 +81,8 @@ export function siteTexts(site: SearchableSite): string[] {
     site.description ?? "",
     TYPE_LABELS[site.type],
     site.port === null ? "" : `:${site.port}`,
+    // The other services of a project, by name and port.
+    ...(site.services ?? []).slice(1).flatMap((entry) => [entry.name ?? "", entry.port === null ? "" : `:${entry.port}`]),
     address.text,
     address.note?.text ?? "",
     site.address,

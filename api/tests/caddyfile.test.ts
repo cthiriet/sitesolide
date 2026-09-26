@@ -79,9 +79,9 @@ describe("infra/caddy/Caddyfile", () => {
  * sites' repository. No copy of a deployed block is kept anywhere to re-read,
  * and a fresh install still has the platform's own manifests to check.
  */
-const APPS: [string, string][] = knownManifests()
-  .map((manifest): [string, string | null] => [manifest.slug, generateFragment(manifest)])
-  .filter((pair): pair is [string, string] => pair[1] !== null);
+const APPS: [string, string, boolean][] = knownManifests()
+  .map((manifest): [string, string | null, boolean] => [manifest.slug, generateFragment(manifest), manifest.publicDir !== undefined])
+  .filter((entry): entry is [string, string, boolean] => entry[1] !== null);
 
 test("no generated block escapes the tests below", () => {
   // Failing which a path mistake would make the loop empty, therefore always
@@ -102,7 +102,7 @@ function previewHeader(file: string, slug: string): string {
   return header.trimEnd();
 }
 
-describe.each(APPS)("generated block: %s", (slug, file) => {
+describe.each(APPS)("generated block: %s", (slug, file, servesFiles) => {
   const PREVIEW = previewHeader(file, slug);
 
   test("imports the locks in the preview block", () => {
@@ -132,6 +132,9 @@ describe.each(APPS)("generated block: %s", (slug, file) => {
       if (line.trimStart().startsWith("#")) continue;
       expect(line).not.toInclude("handle");
     }
-    expect(routes).toInclude("file_server");
+    // A project that serves files does it without a handle either; one with no
+    // publicDir, an API or a project of several services, has none to serve.
+    if (servesFiles) expect(routes).toInclude("file_server");
+    else expect(routes).not.toInclude("file_server");
   });
 });

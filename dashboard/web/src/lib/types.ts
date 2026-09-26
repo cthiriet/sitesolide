@@ -11,6 +11,7 @@ export type {
   RawMachine,
   Service,
   Site,
+  SiteService,
 } from "../../../src/state"
 
 /**

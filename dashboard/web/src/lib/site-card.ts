@@ -7,9 +7,19 @@
  * which decides what is wrong; the memory thresholds from lib/gauges.ts, which
  * takes its own from there; the card only arranges and names.
  */
-import { ABSENT, dateTime, duration, ago, size } from "./format"
+import { ABSENT, dateTime, duration, ago, size, sizeOutOf } from "./format"
 import { serviceLevel, MEMORY_CRITICAL_SHARE, PEAK_WARNING_SHARE, type Tile } from "./gauges"
-import { siteAccess, serviceState, computeCpuShare, memoryShare, type Access, type Mismatch, type ServiceState } from "./sites"
+import {
+  siteAccess,
+  serviceState,
+  serviceWord,
+  computeCpuShare,
+  memoryShare,
+  restartsLabel,
+  type Access,
+  type Mismatch,
+  type ServiceState,
+} from "./sites"
 import type { Tone } from "./tones"
 import type { Discrepancy, Site } from "./types"
 import { countBySeverity, sortDiscrepancies } from "./verdict"
@@ -107,6 +117,48 @@ function serviceGaugeOf(memory: number | null, peak: number | null, limit: numbe
     peakDetail:
       peak === null ? "No peak recorded" : partPic === null ? `Peak ${size(peak)}` : `Peak ${size(peak)}, ${partPic}% of the limit`,
   }
+}
+
+/** One line of the Services panel: a process of a project that runs several. */
+export type ServiceRow = {
+  name: string
+  /** The unit as systemctl takes it. */
+  unit: string
+  /** What reaches it: its paths, every other path, or the project alone. */
+  reach: string
+  port: string | null
+  /** False when the port is declared and nothing listens on it. */
+  listening: boolean | null
+  state: ServiceState
+  /** "47 of 256 MB" while it runs, null otherwise. */
+  memory: string | null
+  restarts: string | null
+}
+
+/**
+ * The rows of the Services panel, the main service first. Empty for a project
+ * with a single service, which the Service panel already describes whole.
+ */
+export function serviceRows(site: Pick<Site, "services">): ServiceRow[] {
+  if (site.services.length < 2) return []
+  return site.services.map((entry) => {
+    const service = entry.service
+    const running = service !== null && service.active === "active"
+    return {
+      name: entry.name ?? entry.unit,
+      unit: `${entry.unit}.service`,
+      reach: entry.internal
+        ? "Internal: the project's other services only"
+        : entry.routes === null
+          ? "Every other path"
+          : entry.routes.join(" "),
+      port: entry.port === null ? null : String(entry.port),
+      listening: entry.listening,
+      state: service === null ? { tone: "error", label: "Not loaded" } : serviceWord(service.active, service.subState),
+      memory: !running ? null : service.limit === null ? size(service.memory) : sizeOutOf(service.memory, service.limit),
+      restarts: restartsLabel(service?.restarts ?? null),
+    }
+  })
 }
 
 /**

@@ -4,7 +4,7 @@ import { ExternalLink } from "@/components/link"
 import { PanelSkeleton } from "@/components/page"
 import { SiteSecretsPanel } from "@/components/secrets-site"
 import { SiteState, SectionLink, SitePage, useSite } from "@/components/site"
-import { SiteDiscrepancies, AccessPanel, AddressesPanel, ServicePanel, StoragePanel } from "@/components/site-card"
+import { SiteDiscrepancies, AccessPanel, AddressesPanel, ServicePanel, ServicesPanel, StoragePanel } from "@/components/site-card"
 import { siteAddress } from "@/lib/sites"
 import type { Discrepancy, Site } from "@/lib/types"
 
@@ -61,6 +61,7 @@ export function OverviewSection({ slug }: { slug: string }) {
           <div className="grid items-start gap-6 @4xl/body:grid-cols-2">
             <div className="grid min-w-0 gap-6">
               <ServicePanel site={snapshot} now={now} />
+              <ServicesPanel site={snapshot} />
               <AddressesPanel site={snapshot} />
               <StoragePanel site={snapshot} now={now} />
             </div>

@@ -28,6 +28,7 @@ import { dirname, join } from "node:path";
 import { $ } from "bun";
 import { hostTable } from "./src/audience";
 import { unitOf, type Raw, type RawFolder, type RawMachine, type RawUnit } from "./src/state";
+import { readManifest, servicesOf } from "./borrowed/manifest";
 
 const SITES_DIR = process.env.SITES_DIR ?? "/srv/sites";
 const CODES_FILE = process.env.CODES_FILE ?? "/etc/caddy/locks-codes.json";
@@ -270,16 +271,37 @@ async function previousReading(): Promise<Raw["previous"]> {
     if (typeof previousRaw.generated !== "number" || !Array.isArray(previousRaw.folders)) return null;
 
     const cpu: Record<string, number> = {};
+    const keep = (key: string, unit: RawUnit | null | undefined): void => {
+      const value = Number(unit?.CPUUsageNSec);
+      if (unit?.CPUUsageNSec !== undefined && Number.isFinite(value)) cpu[key] = value;
+    };
     for (const folder of previousRaw.folders) {
-      const raw = folder.unit?.CPUUsageNSec;
-      if (raw === undefined) continue;
-      const value = Number(raw);
-      if (Number.isFinite(value)) cpu[folder.slug] = value;
+      keep(folder.slug, folder.unit);
+      // The other units of a project with several services, by unit name: a
+      // slug carries no dot, so the two never collide.
+      for (const [unit, properties] of Object.entries(folder.units ?? {})) keep(unit, properties);
     }
     return { generated: previousRaw.generated, cpu };
   } catch {
     return null;
   }
+}
+
+/**
+ * The other units of a project declaring several `services`, `<slug>.<name>`,
+ * read like the main one. Named from the manifest rather than listed from
+ * /etc/systemd/system: a unit the manifest declares and that is missing must
+ * show as missing. The suffix is written out, systemd reading what follows
+ * the last dot as a unit type.
+ */
+async function otherUnits(manifest: string | null): Promise<Record<string, RawUnit | null> | undefined> {
+  if (manifest === null) return undefined;
+  const { manifest: parsed } = readManifest(manifest);
+  const others = parsed === undefined ? [] : servicesOf(parsed).slice(1);
+  if (others.length === 0) return undefined;
+  const units: Record<string, RawUnit | null> = {};
+  for (const { unit } of others) units[unit] = await readUnit(`${unit}.service`);
+  return units;
 }
 
 async function collect(): Promise<Raw> {
@@ -297,10 +319,12 @@ async function collect(): Promise<Raw> {
       deployed = null;
     }
 
+    const content = await text(manifest);
     folders.push({
       slug: entry.name,
-      manifest: await text(manifest),
+      manifest: content,
       unit: await readUnit(unitOf(entry.name)),
+      units: await otherUnits(content),
       bytes: await folderBytes(root),
       deployed,
     });

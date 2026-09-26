@@ -129,6 +129,9 @@ function ServiceCell({ site, now }: { site: Site; now: number }) {
           {summary.memory}
         </span>
       )}
+      {summary.kind === "active" && summary.services !== null && (
+        <span className="text-xs whitespace-nowrap text-muted-foreground">{summary.services}</span>
+      )}
       {summary.kind === "stopped" && summary.restarts !== null && (
         <span className="text-xs text-attention-text tabular-nums">{summary.restarts}</span>
       )}
@@ -240,6 +243,9 @@ function SiteEntry({ site, severity, guests, now }: RowProps) {
               <MemoryBar summary={summary} className="w-8" />
               {summary.memory}
             </span>
+          )}
+          {summary.kind === "active" && summary.services !== null && (
+            <span className="whitespace-nowrap">{summary.services}</span>
           )}
           {summary.kind === "stopped" && summary.restarts !== null && (
             <span className="text-attention-text">{summary.restarts}</span>

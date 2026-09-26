@@ -43,6 +43,7 @@ export function site(partial: Partial<Site> = {}): Site {
     port: 3040,
     listening: true,
     service: service(),
+    services: [],
     bytes: 22 * 1024 * 1024,
     deployed: null,
     secrets: [],

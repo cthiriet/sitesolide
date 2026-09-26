@@ -225,6 +225,82 @@ describe("service", () => {
   });
 });
 
+describe("a project with several services", () => {
+  const LAB = {
+    slug: "lab",
+    services: {
+      web: { start: "/srv/sites/lab/app/web", port: 3050 },
+      api: { start: "/srv/sites/lab/app/api", port: 3051, routes: ["/v1/*"] },
+      worker: { start: "/srv/sites/lab/app/worker", port: 3052, internal: true },
+    },
+  };
+
+  test("every service is listed, the main one first, with its unit, port and routes", () => {
+    const { sites } = buildSnapshot(
+      raw([folder("lab", LAB, { unit: unit(), units: { "lab.api": unit(), "lab.worker": unit({ MemoryCurrent: "104857600" }) } })], {
+        ports: [3050, 3051, 3052],
+      }),
+    );
+    const services = sites[0]!.services;
+    expect(services.map((service) => [service.name, service.unit, service.port, service.routes, service.internal])).toEqual([
+      ["web", "lab", 3050, null, false],
+      ["api", "lab.api", 3051, ["/v1/*"], false],
+      ["worker", "lab.worker", 3052, null, true],
+    ]);
+    expect(services.every((service) => service.listening === true && service.service?.active === "active")).toBe(true);
+    expect(services[2]!.service?.memory).toBe(104857600);
+    // The main service stays where the rest of the page reads it.
+    expect(sites[0]!.service?.unit).toBe("lab");
+    expect(sites[0]!.port).toBe(3050);
+  });
+
+  test("a secondary service that is down, missing or silent is named in the discrepancies", () => {
+    const snapshot = buildSnapshot(
+      raw([folder("lab", LAB, { unit: unit(), units: { "lab.api": unit({ ActiveState: "failed", SubState: "failed" }), "lab.worker": null } })], {
+        ports: [3050],
+      }),
+    );
+    const found = messages(snapshot, "lab");
+    expect(found).toContainEqual("Service api failed (failed)");
+    expect(found).toContainEqual(expect.stringContaining("Service worker: no loaded unit"));
+    expect(found).toContainEqual(expect.stringContaining("Service api: port 3051 declared, but nothing listens"));
+  });
+
+  test("a secondary service's memory peak is its own warning", () => {
+    const snapshot = buildSnapshot(
+      raw([folder("lab", LAB, { unit: unit(), units: { "lab.api": unit(), "lab.worker": unit({ MemoryPeak: "260000000" }) } })], {
+        ports: [3050, 3051, 3052],
+      }),
+    );
+    expect(messages(snapshot, "lab")).toEqual([expect.stringContaining("Service worker: memory peak at")]);
+  });
+
+  test("a reading from a collector older than services still opens", () => {
+    const { sites } = buildSnapshot(raw([folder("lab", LAB, { unit: unit() })], { ports: [3050, 3051, 3052] }));
+    expect(sites[0]!.services[1]!.service).toBeNull();
+  });
+
+  test("the rates of the other units are computed from their own counters", () => {
+    const { sites } = buildSnapshot(
+      raw(
+        [folder("lab", LAB, { unit: unit(), units: { "lab.api": unit({ CPUUsageNSec: "66000000000" }), "lab.worker": unit() } })],
+        { ports: [3050, 3051, 3052], previous: { generated: 1_756_400_000_000 - 60_000, cpu: { "lab.api": 6_000_000_000 } } },
+      ),
+    );
+    expect(sites[0]!.services[1]!.service?.cpuShare).toBe(100);
+  });
+
+  test("a single start is one service, and a static site none", () => {
+    const tool = { slug: "tool", port: 3030, start: "bun run server.ts" };
+    const { sites } = buildSnapshot(
+      raw([folder("tool", tool, { unit: unit() }), folder("notes", { slug: "notes", publicDir: "public" })], { ports: [3030] }),
+    );
+    const bySlug = new Map(sites.map((site) => [site.slug, site]));
+    expect(bySlug.get("tool")!.services.map((service) => [service.name, service.unit, service.port])).toEqual([[null, "tool", 3030]]);
+    expect(bySlug.get("notes")!.services).toEqual([]);
+  });
+});
+
 describe("processor", () => {
   const manifest = { slug: "tool", port: 3030, publicDir: "public", start: "bun run server.ts" };
 

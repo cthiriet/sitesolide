@@ -128,6 +128,8 @@ export type ServiceSummary =
       /** "up 20h", or null with no start date. */
       since: string | null
       restarts: string | null
+      /** "3 services" for a project running several, whose figures above are then their sum. */
+      services: string | null
     }
 
 /** A share of a core: "3%", and "<1%" rather than a zero that would read as a sleeping service. */
@@ -152,7 +154,7 @@ export function memoryShare(memory: number | null, limit: number | null): number
  * the CPU share of the last minute, the restarts. The site card shows more, see
  * lib/site-card.ts.
  */
-export function serviceSummaryOf(site: Pick<Site, "type" | "service">, now: number): ServiceSummary {
+export function serviceSummaryOf(site: Pick<Site, "type" | "service"> & Partial<Pick<Site, "services">>, now: number): ServiceSummary {
   const service = site.service
   if (service === null) {
     if (site.type === "static") return { kind: "static" }
@@ -162,15 +164,32 @@ export function serviceSummaryOf(site: Pick<Site, "type" | "service">, now: numb
   const restarts = restartsLabel(service.restarts)
   if (service.active !== "active") return { kind: "stopped", state: service.active, restarts }
 
-  const { memory, peak, limit } = service
+  // A project of several services weighs what all of them weigh: the main
+  // one's figures alone would show a fraction of it. A figure one of them
+  // lacks makes the sum unknown rather than wrong.
+  const all = (site.services ?? []).length > 1 ? site.services!.map((entry) => entry.service) : [service]
+  const sum = (pick: (entry: NonNullable<Site["service"]>) => number | null): number | null => {
+    let total = 0
+    for (const entry of all) {
+      const value = entry === null ? null : pick(entry)
+      if (value === null) return null
+      total += value
+    }
+    return total
+  }
+  const memory = sum((entry) => entry.memory)
+  const peak = sum((entry) => entry.peak)
+  const limit = sum((entry) => entry.limit)
+  const cpuShare = sum((entry) => entry.cpuShare)
   return {
     kind: "active",
     memory: limit === null ? size(memory) : sizeOutOf(memory, limit),
     percent: memoryShare(memory, limit),
     level: serviceLevel(memory, peak, limit),
-    cpu: service.cpuShare === null ? null : `${computeCpuShare(service.cpuShare)} CPU`,
+    cpu: cpuShare === null ? null : `${computeCpuShare(cpuShare)} CPU`,
     since: service.since === null ? null : `up ${duration(now - service.since)}`,
     restarts,
+    services: all.length > 1 ? `${all.length} services` : null,
   }
 }
 

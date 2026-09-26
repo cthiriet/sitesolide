@@ -11,6 +11,7 @@ import {
   siteAddresses,
   siteFolder,
   serviceCard,
+  serviceRows,
   readAccess,
   siteStorage,
   type Fact,
@@ -145,7 +146,11 @@ export function ServicePanel({ site, now }: { site: Site; now: number }) {
   }
 
   return (
-    <Panel title="Service" full actions={card.unit === null ? undefined : <Terminal>{card.unit}</Terminal>}>
+    <Panel
+      title={site.services.length > 1 ? "Main service" : "Service"}
+      full
+      actions={card.unit === null ? undefined : <Terminal>{card.unit}</Terminal>}
+    >
       <div className="grid gap-4 p-4">
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <Status tone={card.state.tone} className="font-medium">
@@ -162,6 +167,44 @@ export function ServicePanel({ site, now }: { site: Site; now: number }) {
         )}
       </div>
       <FactList facts={card.facts} className="border-t" />
+    </Panel>
+  )
+}
+
+/**
+ * The processes of a project that runs several, one line each: its state, its
+ * unit, what reaches it and what it weighs. Nothing for a single service.
+ */
+export function ServicesPanel({ site }: { site: Site }) {
+  const rows = serviceRows(site)
+  if (rows.length === 0) return null
+  return (
+    <Panel title="Services" count={rows.length} full>
+      <ul className="divide-y">
+        {rows.map((row) => (
+          <li key={row.unit} className="grid gap-1 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+              <span className="font-medium">{row.name}</span>
+              <Status tone={row.state.tone} className={row.state.tone === "ok" ? undefined : "font-medium"}>
+                {row.state.label}
+              </Status>
+            </div>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+              <Terminal>{row.unit}</Terminal>
+              {row.port !== null && (
+                <span className={cn("tabular-nums", row.listening === false && "font-medium text-destructive")}>
+                  {row.listening === false ? `port ${row.port}, nothing listens` : `port ${row.port}`}
+                </span>
+              )}
+              <span className={cn(!row.reach.startsWith("Internal") && !row.reach.startsWith("Every") && "font-mono")}>
+                {row.reach}
+              </span>
+              {row.memory !== null && <span className="tabular-nums">{row.memory}</span>}
+              {row.restarts !== null && <span className="text-attention-text tabular-nums">{row.restarts}</span>}
+            </div>
+          </li>
+        ))}
+      </ul>
     </Panel>
   )
 }

@@ -110,6 +110,8 @@ type FakeFolder = {
   slug: string;
   manifest: Record<string, unknown> | null;
   unit: FakeUnit | null;
+  /** The other units of a project declaring several services, by unit name. */
+  units?: Record<string, FakeUnit>;
   bytes: number;
   deployedMs: number;
   portal?: boolean;
@@ -251,6 +253,30 @@ const FOLDERS: FakeFolder[] = [
     unit: { memory: 29 * MB, peak: 64 * MB, limit: 128 * MB, sinceMs: 4 * DAY, cpu: 0.2 },
     bytes: 4 * MB,
     deployedMs: 4 * DAY,
+  },
+  {
+    slug: "lab",
+    manifest: {
+      slug: "lab",
+      description: "A small AI lab: platform, API and model",
+      services: {
+        platform: { start: "/srv/sites/lab/app/.venv/bin/python -m lab.platform --port 3047", port: 3047 },
+        api: { start: "/srv/sites/lab/app/.venv/bin/python -m lab.api --port 3048", port: 3048, routes: ["/v1/*"] },
+        inference: {
+          start: "/srv/sites/lab/app/.venv/bin/python -m lab.inference --port 3049",
+          port: 3049,
+          internal: true,
+          memory: "768M",
+        },
+      },
+    },
+    unit: { memory: 47 * MB, peak: 49 * MB, limit: 256 * MB, sinceMs: 2 * HOUR, cpu: 0.3 },
+    units: {
+      "lab.api": { memory: 38 * MB, peak: 40 * MB, limit: 256 * MB, sinceMs: 2 * HOUR, cpu: 0.2 },
+      "lab.inference": { memory: 237 * MB, peak: 239 * MB, limit: 768 * MB, sinceMs: 2 * HOUR, cpu: 1.4 },
+    },
+    bytes: 1.1 * GB,
+    deployedMs: 2 * HOUR,
   },
   {
     slug: "roster",
@@ -412,29 +438,37 @@ function reading(now: number) {
   const kept = "\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\turi /verifier\n\t}\n";
   const blocks: Record<string, string> = SHOWCASE ? {} : { "old-kiosk": "# forgotten block\n" };
 
+  // What systemctl show would return for a fake unit, its CPU counter kept
+  // under `key` for the next reading's rate.
+  const raw = (key: string, fake: FakeUnit): Record<string, string> => {
+    const { before, now: nsec } = counters(fake);
+    cpu[key] = before;
+    const active = fake.active ?? "active";
+    return {
+      LoadState: "loaded",
+      ActiveState: active,
+      SubState: fake.subState ?? "running",
+      MemoryCurrent: active === "active" ? String(fake.memory) : "[not set]",
+      MemoryPeak: String(fake.peak),
+      MemoryMax: String(fake.limit),
+      NRestarts: String(fake.restarts ?? 0),
+      ActiveEnterTimestamp: active === "active" ? `@${Math.floor((generatedAt - fake.sinceMs) / 1000)}` : "@0",
+      CPUUsageNSec: active === "active" ? String(nsec) : "[not set]",
+    };
+  };
+
   const folders = FOLDERS.map((d) => {
     blocks[d.slug] = `# ${d.slug}\n${d.portal === true ? kept : ""}`;
-    let unit: Record<string, string> | null = null;
-    if (d.unit !== null) {
-      const { before, now: nsec } = counters(d.unit);
-      cpu[d.slug] = before;
-      const active = d.unit.active ?? "active";
-      unit = {
-        LoadState: "loaded",
-        ActiveState: active,
-        SubState: d.unit.subState ?? "running",
-        MemoryCurrent: active === "active" ? String(d.unit.memory) : "[not set]",
-        MemoryPeak: String(d.unit.peak),
-        MemoryMax: String(d.unit.limit),
-        NRestarts: String(d.unit.restarts ?? 0),
-        ActiveEnterTimestamp: active === "active" ? `@${Math.floor((generatedAt - d.unit.sinceMs) / 1000)}` : "@0",
-        CPUUsageNSec: active === "active" ? String(nsec) : "[not set]",
-      };
-    }
+    const unit = d.unit === null ? null : raw(d.slug, d.unit);
+    const units =
+      d.units === undefined
+        ? undefined
+        : Object.fromEntries(Object.entries(d.units).map(([name, fake]) => [name, raw(name, fake)]));
     return {
       slug: d.slug,
       manifest: d.manifest === null ? null : JSON.stringify(d.manifest),
       unit,
+      units,
       bytes: Math.round(d.bytes),
       deployed: generatedAt - d.deployedMs,
     };
@@ -450,7 +484,9 @@ function reading(now: number) {
       (SHOWCASE ? "\tcorner-bookshop.example bookshop\n" : ""),
     audience: audience(generatedAt),
     // roster (3045) does not listen: it is looping.
-    ports: SHOWCASE ? [3040, 3041, 3022, 3043, 3044, 3045, 3026] : [3040, 3041, 3022, 3043, 3044, 3026],
+    ports: SHOWCASE
+      ? [3040, 3041, 3022, 3043, 3044, 3045, 3026, 3047, 3048, 3049]
+      : [3040, 3041, 3022, 3043, 3044, 3026, 3047, 3048, 3049],
     blocks,
     machine: {
       memoryTotal: 11.6 * GB,

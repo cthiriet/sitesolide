@@ -182,6 +182,7 @@ describe("a service's summary", () => {
       cpu: "3% CPU",
       since: "up 13d",
       restarts: null,
+      services: null,
     })
   })
 
@@ -337,5 +338,29 @@ describe("the table's caption", () => {
     expect(sitesCaption("all", null)).toBe("Sites served by the server, issues first, then by name")
     expect(sitesCaption("portal", null)).toBe("Sites served by the server, issues first, then by name, filtered by Portal")
     expect(sitesCaption("all", "cms")).toBe('Sites served by the server, issues first, then by name, matching "cms"')
+  })
+})
+
+describe("a project of several services in the inventory", () => {
+  test("its figures are the sum of its services, and their count is said", () => {
+    const MB = 1024 ** 2
+    const running = (memory: number, limit: number, cpuShare: number) =>
+      service({ memory: memory * MB, peak: memory * MB, limit: limit * MB, cpuShare })
+    const summary = serviceSummaryOf(
+      site({
+        service: running(47, 256, 1),
+        services: [
+          { name: "web", unit: "lab", port: 3050, listening: true, routes: null, internal: false, service: running(47, 256, 1) },
+          { name: "api", unit: "lab.api", port: 3051, listening: true, routes: ["/v1/*"], internal: false, service: running(38, 256, 1) },
+          { name: "worker", unit: "lab.worker", port: 3052, listening: true, routes: null, internal: true, service: running(237, 768, 2) },
+        ],
+      }),
+      NOW,
+    )
+    expect(summary).toMatchObject({ kind: "active", memory: "322 MB of 1.3 GB", cpu: "4% CPU", services: "3 services" })
+  })
+
+  test("a single service keeps its own figures, with no count", () => {
+    expect(serviceSummaryOf(site(), NOW)).toMatchObject({ kind: "active", services: null })
   })
 })

@@ -19,7 +19,7 @@
  * `dashboard/`, and an import climbing higher makes the service fail on the VM
  * after a deployment that otherwise succeeded.
  */
-import { isApp, isProtected, mainPort, PORTAL_SLUG, type Manifest } from "../borrowed/manifest";
+import { isApp, isProtected, mainPort, PORTAL_SLUG, servicesOf, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected } from "../borrowed/portal";
 import { isValidCode, previewHost } from "../borrowed/locks";
 
@@ -71,6 +71,14 @@ export type RawFolder = {
   /** Content of the `sitesolide.json` dropped at the project root, or null. */
   manifest: string | null;
   unit: RawUnit | null;
+  /**
+   * The project's other units, `<slug>.<name>`, for a project declaring
+   * several `services`: the main one is `unit`. Optional, and it stays so: a
+   * reading dropped by a collector older than services does not carry it, and
+   * the dashboard must open all the same in the minute that follows a
+   * deployment.
+   */
+  units?: Record<string, RawUnit | null>;
   /** Size of the directory in bytes. */
   bytes: number | null;
   /** Date of the manifest, which dates the last drop. */
@@ -203,10 +211,30 @@ export type Site = {
   /** A port declared and actually listening on the loopback interface. */
   listening: boolean | null;
   service: Service | null;
+  /**
+   * Every process of an app, the main one first: the one above for a single
+   * `start`, one per entry of `services` otherwise. Empty for a static site.
+   */
+  services: SiteService[];
   bytes: number | null;
   deployed: number | null;
   /** Names of the declared secrets. Never their content, which does not come in here. */
   secrets: string[];
+};
+
+/** One process of an app, as its manifest declares it and the machine runs it. */
+export type SiteService = {
+  /** Its name under `services`, null for a project with a single `start`. */
+  name: string | null;
+  /** The systemd unit, without `.service`. */
+  unit: string;
+  port: number | null;
+  listening: boolean | null;
+  /** The paths Caddy sends it, null when it takes every path no other service claims. */
+  routes: string[] | null;
+  /** Reached by the project's other services alone, never by Caddy. */
+  internal: boolean;
+  service: Service | null;
 };
 
 export type Discrepancy = {
@@ -275,7 +303,7 @@ export function computeCpuShare(
 }
 
 function readService(
-  slug: string,
+  name: string,
   unit: RawUnit | null,
   cpuBefore: number | undefined,
   windowMs: number,
@@ -288,7 +316,7 @@ function readService(
   const cpu = readNumber(unit, "CPUUsageNSec");
 
   return {
-    unit: unitOf(slug),
+    unit: name,
     loaded: true,
     active: unit.ActiveState ?? "unknown",
     subState: unit.SubState ?? "unknown",
@@ -414,7 +442,7 @@ export function buildSnapshot(raw: Raw): Snapshot {
   for (const folder of folders) {
     const { slug } = folder;
     const { manifest, error } = readManifest(folder.manifest);
-    const service = readService(slug, folder.unit, raw.previous?.cpu[slug], windowMs);
+    const service = readService(unitOf(slug), folder.unit, raw.previous?.cpu[slug], windowMs);
 
     if (error !== null) {
       // This manifest is the one the domain table and the lock generator read:
@@ -437,6 +465,25 @@ export function buildSnapshot(raw: Raw): Snapshot {
     const port = manifest === null ? null : mainPort(manifest);
     const domain = readDomain(manifest, table);
 
+    // The main service is the one read above; the others come from the units
+    // the collector read beside it, their CPU counters keyed by unit name, which
+    // a slug never matches since it carries no dot.
+    const services: SiteService[] = (manifest === null || !app ? [] : servicesOf(manifest)).map((view, rank) => {
+      const servicePort = typeof view.port === "number" ? view.port : null;
+      return {
+        name: view.name,
+        unit: rank === 0 ? unitOf(slug) : view.unit,
+        port: servicePort,
+        listening: servicePort === null ? null : raw.ports.includes(servicePort),
+        routes: Array.isArray(view.routes) ? view.routes : null,
+        internal: view.internal,
+        service:
+          rank === 0
+            ? service
+            : readService(view.unit, folder.units?.[view.unit] ?? null, raw.previous?.cpu[view.unit], windowMs),
+      };
+    });
+
     sites.push({
       slug,
       description: typeof manifest?.description === "string" ? manifest.description : null,
@@ -448,6 +495,7 @@ export function buildSnapshot(raw: Raw): Snapshot {
       port,
       listening: port === null ? null : raw.ports.includes(port),
       service,
+      services,
       bytes: folder.bytes,
       deployed: folder.deployed,
       secrets: (manifest?.secrets ?? []).filter((name): name is string => typeof name === "string"),
@@ -563,14 +611,42 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       }
     }
 
-    const peak = site.service?.peak ?? null;
-    const limit = site.service?.limit ?? null;
-    if (peak !== null && limit !== null && limit > 0 && peak >= limit * WORRYING_PEAK_SHARE) {
-      discrepancies.push({
-        slug,
-        severity: "warning",
-        message: `Memory peak at ${Math.round((peak / limit) * 100)}% of the limit`,
-      });
+    // The project's other services, each judged like the main one and named,
+    // since the main one's word says nothing of the process it calls.
+    for (const other of site.services.slice(1)) {
+      if (other.service === null) {
+        discrepancies.push({
+          slug,
+          severity: "error",
+          message: `Service ${other.name}: no loaded unit (${other.unit}.service)`,
+        });
+      } else if (other.service.active !== "active") {
+        discrepancies.push({
+          slug,
+          severity: "error",
+          message: `Service ${other.name} ${other.service.active} (${other.service.subState})`,
+        });
+      }
+      if (other.listening === false) {
+        discrepancies.push({
+          slug,
+          severity: "error",
+          message: `Service ${other.name}: port ${other.port} declared, but nothing listens on it on the loopback interface`,
+        });
+      }
+    }
+
+    const measured = site.services.length > 0 ? site.services : [{ name: null, service: site.service }];
+    for (const { name, service: measuredService } of measured) {
+      const peak = measuredService?.peak ?? null;
+      const limit = measuredService?.limit ?? null;
+      if (peak !== null && limit !== null && limit > 0 && peak >= limit * WORRYING_PEAK_SHARE) {
+        discrepancies.push({
+          slug,
+          severity: "warning",
+          message: `${name === null || site.services.length === 1 ? "Memory" : `Service ${name}: memory`} peak at ${Math.round((peak / limit) * 100)}% of the limit`,
+        });
+      }
     }
 
     if (site.type === "no-manifest" && slug !== LANDING_FOLDER) {

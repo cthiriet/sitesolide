@@ -7,6 +7,7 @@ import {
   siteDiscrepancies,
   siteState,
   serviceCard,
+  serviceRows,
   readAccess,
   siteStorage,
 } from "../src/lib/site-card"
@@ -302,5 +303,40 @@ describe("a site's storage", () => {
   test("the folder carries the slug, the landing included", () => {
     expect(siteFolder("cms")).toBe("/srv/sites/cms")
     expect(siteFolder("test-zone.invalid")).toBe("/srv/sites/test-zone.invalid")
+  })
+})
+
+describe("a project's services", () => {
+  const lab = site({
+    slug: "lab",
+    services: [
+      { name: "web", unit: "lab", port: 3050, listening: true, routes: null, internal: false, service: service({ unit: "lab", memory: 47 * MO, limit: 256 * MO }) },
+      { name: "api", unit: "lab.api", port: 3051, listening: false, routes: ["/v1/*"], internal: false, service: service({ unit: "lab.api", restarts: 2 }) },
+      { name: "worker", unit: "lab.worker", port: 3052, listening: true, routes: null, internal: true, service: null },
+    ],
+  })
+
+  test("one row per service, the main one first, with what reaches it", () => {
+    const rows = serviceRows(lab)
+    expect(rows.map((row) => [row.name, row.unit, row.reach, row.port])).toEqual([
+      ["web", "lab.service", "Every other path", "3050"],
+      ["api", "lab.api.service", "/v1/*", "3051"],
+      ["worker", "lab.worker.service", "Internal: the project's other services only", "3052"],
+    ])
+  })
+
+  test("its state, its memory, its restarts and a silent port", () => {
+    const [web, api, worker] = serviceRows(lab)
+    expect(web!.state).toEqual({ tone: "ok", label: "Running" })
+    expect(web!.memory).toBe("47 of 256 MB")
+    expect(api!.listening).toBe(false)
+    expect(api!.restarts).toBe("2 restarts")
+    expect(worker!.state).toEqual({ tone: "error", label: "Not loaded" })
+    expect(worker!.memory).toBeNull()
+  })
+
+  test("a single service has no rows: the Service panel already says it all", () => {
+    expect(serviceRows(site())).toEqual([])
+    expect(serviceRows(site({ services: [lab.services[0]!] }))).toEqual([])
   })
 })
