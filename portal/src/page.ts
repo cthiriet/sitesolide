@@ -22,32 +22,22 @@ import { CONTACT } from "./config";
 
 /** The portal's icon, in `data:` so as to ask nothing of the server. */
 const ICON =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='f' x1='0' y1='0' x2='32' y2='32' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' stop-color='%231b2b47'/%3E%3Cstop offset='1' stop-color='%230b1220'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='7' fill='url(%23f)'/%3E%3Cpath d='M16 16L27 21.5L16 27L5 21.5Z' fill='%235b6c92'/%3E%3Cpath d='M16 10.5L27 16L16 21.5L5 16Z' fill='%239aa8c4'/%3E%3Cpath d='M16 5L27 10.5L16 16L5 10.5Z' fill='%23d93a55'/%3E%3C/svg%3E";
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='f' x1='1' y1='1' x2='31' y2='31' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' stop-color='%23b3253f'/%3E%3Cstop offset='1' stop-color='%237d1730'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M7.32 1H24.68A6.32 6.32 0 0 1 31 7.32V9.92H11.11A1.42 1.42 0 0 0 11.11 12.76H31V24.68A6.32 6.32 0 0 1 24.68 31H7.32A6.32 6.32 0 0 1 1 24.68V22.08H20.89A1.42 1.42 0 0 0 20.89 19.24H1V7.32A6.32 6.32 0 0 1 7.32 1Z' fill='url(%23f)'/%3E%3C/svg%3E";
 
 /**
- * The logo of the portal and of the dashboard: three layers, the topmost one
- * carrying the accent. Inline rather than as a file, for the same reason as
- * the rest of the page. The gradient identifiers are global to the document,
- * and there is only one logo per page.
+ * The logo of the portal and of the dashboard: a solid block with two slits
+ * cut in from opposite sides, the S of sitesolide. Inline rather than as a
+ * file, for the same reason as the rest of the page. The gradient identifier is
+ * global to the document, and there is only one logo per page.
  */
 const LOGO = `<svg viewBox="0 0 32 32" aria-hidden="true">
         <defs>
-          <linearGradient id="layer-bottom" x1="3" y1="17" x2="29" y2="24" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stop-color="#33456b" />
-            <stop offset="1" stop-color="#1d2b47" />
-          </linearGradient>
-          <linearGradient id="layer-middle" x1="3" y1="11" x2="29" y2="18" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stop-color="#5b6c92" />
-            <stop offset="1" stop-color="#35446a" />
-          </linearGradient>
-          <linearGradient id="layer-top" x1="3" y1="4" x2="29" y2="12" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stop-color="#e8556b" />
-            <stop offset="1" stop-color="#a51f3a" />
+          <linearGradient id="mark-fill" x1="3" y1="3" x2="29" y2="29" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#b3253f" />
+            <stop offset="1" stop-color="#7d1730" />
           </linearGradient>
         </defs>
-        <path d="M16 16L29 22.5L16 29L3 22.5Z" fill="url(#layer-bottom)" />
-        <path d="M16 9.5L29 16L16 22.5L3 16Z" fill="url(#layer-middle)" />
-        <path d="M16 3L29 9.5L16 16L3 9.5Z" fill="url(#layer-top)" />
+        <path d="M8.47 3H23.53A5.47 5.47 0 0 1 29 8.47V10.73H11.76A1.23 1.23 0 0 0 11.76 13.19H29V23.53A5.47 5.47 0 0 1 23.53 29H8.47A5.47 5.47 0 0 1 3 23.53V21.27H20.24A1.23 1.23 0 0 0 20.24 18.81H3V8.47A5.47 5.47 0 0 1 8.47 3Z" fill="url(#mark-fill)" />
       </svg>`;
 
 const STYLE = `

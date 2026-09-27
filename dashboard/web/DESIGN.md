@@ -56,7 +56,7 @@ All in `src/styles/global.css`, under `:root` (light) and `.dark`. A component
 | `primary` | `#0e1726` | `#e6eaf1` | the primary button, in ink |
 | `border` | `#d2d9e3` | `#25324b` | rules and borders |
 | `input` | `#c5cedb` | `#2e3c57` | field edges |
-| `ring` | `#5b6c92` | `#9aa8c4` | focus ring, stratum blue |
+| `ring` | `#5b6c92` | `#9aa8c4` | focus ring, the brand's steel blue |
 | `destructive` | `#b3253f` | `#f36f84` | errors, and only errors |
 | `plaque` | `#131f35` | `#131f35` | the machine plate, dark in both themes |
 | `sidebar-accent` | `#ffffff` | `#131f35` | the current page in the sidebar |

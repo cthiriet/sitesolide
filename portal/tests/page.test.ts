@@ -65,12 +65,10 @@ describe("a single template for both", () => {
     }
   });
 
-  test("the brand is the one of test-zone.invalid: the three layer logo, then the name", () => {
+  test("the brand is the one of test-zone.invalid: the slotted block, then the name", () => {
     for (const page of [doorPage(), signInPage("/")]) {
       const brand = between(page, '<p class="brand">', "</p>");
-      for (const layer of ["layer-bottom", "layer-middle", "layer-top"]) {
-        expect(brand).toInclude(`fill="url(#${layer})"`);
-      }
+      expect(brand).toInclude('fill="url(#mark-fill)"');
       expect(brand).toInclude('<svg viewBox="0 0 32 32" aria-hidden="true">');
       expect(brand).toInclude('<span><span class="site">site</span>solide</span>');
     }

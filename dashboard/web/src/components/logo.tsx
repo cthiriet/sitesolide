@@ -1,40 +1,31 @@
 import { useId } from "react"
 
 /**
- * The landing page's three strata, taken as they are: the dashboard carries the
- * same mark as the landing, the topmost stratum carrying the accent and the
- * other two sinking towards the deep blue.
+ * The mark: a solid block with two slits cut in from opposite sides, the S of
+ * sitesolide left standing in the material. The landing page and the portal
+ * carry the same outline, and docs/assets holds it as files.
  *
- * The gradients are declared in the component rather than in the stylesheet, a
- * <defs> not being expressible in Tailwind utilities. Their ids go through
- * useId: they are global to the document, and two logos rendered together would
- * steal each other's colours.
+ * One path rather than a block under two lighter bars: the slits are holes, so
+ * the page shows through them in both themes. The gradient runs from the seal
+ * red to bordeaux, lifted in the dark theme where bordeaux would sink into the
+ * midnight blue. Its id goes through useId: ids are global to the document, and
+ * two logos rendered together would steal each other's gradient.
  */
 export function Logo({ className }: { className?: string }) {
-  const prefix = useId()
-  const low = `${prefix}-low`
-  const middle = `${prefix}-middle`
-  const high = `${prefix}-high`
+  const fill = `${useId()}-fill`
 
   return (
     <svg className={className} viewBox="0 0 32 32" aria-hidden="true">
       <defs>
-        <linearGradient id={low} x1="3" y1="17" x2="29" y2="24" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#33456b" />
-          <stop offset="1" stopColor="#1d2b47" />
-        </linearGradient>
-        <linearGradient id={middle} x1="3" y1="11" x2="29" y2="18" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#5b6c92" />
-          <stop offset="1" stopColor="#35446a" />
-        </linearGradient>
-        <linearGradient id={high} x1="3" y1="4" x2="29" y2="12" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#e8556b" />
-          <stop offset="1" stopColor="#a51f3a" />
+        <linearGradient id={fill} x1="3" y1="3" x2="29" y2="29" gradientUnits="userSpaceOnUse">
+          <stop offset="0" className="[stop-color:#b3253f] dark:[stop-color:#d8425d]" />
+          <stop offset="1" className="[stop-color:#7d1730] dark:[stop-color:#a0203c]" />
         </linearGradient>
       </defs>
-      <path d="M16 16L29 22.5L16 29L3 22.5Z" fill={`url(#${low})`} />
-      <path d="M16 9.5L29 16L16 22.5L3 16Z" fill={`url(#${middle})`} />
-      <path d="M16 3L29 9.5L16 16L3 9.5Z" fill={`url(#${high})`} />
+      <path
+        d="M8.47 3H23.53A5.47 5.47 0 0 1 29 8.47V10.73H11.76A1.23 1.23 0 0 0 11.76 13.19H29V23.53A5.47 5.47 0 0 1 23.53 29H8.47A5.47 5.47 0 0 1 3 23.53V21.27H20.24A1.23 1.23 0 0 0 20.24 18.81H3V8.47A5.47 5.47 0 0 1 8.47 3Z"
+        fill={`url(#${fill})`}
+      />
     </svg>
   )
 }

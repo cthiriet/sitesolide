@@ -19,16 +19,15 @@ const { title = "sitesolide" } = Astro.props
     <meta name="viewport" content="width=device-width" />
     <meta name="robots" content="noindex, nofollow" />
     <!--
-      The logo's strata, as a data URI rather than a file: the Caddyfile's
-      shared snippet serves .svg files as immutable for a year, and a favicon
-      frozen for a year can no longer be corrected. Carried by the HTML, it
-      revalidates with it. The same image as the landing page, flattened on a
-      dark background: at sixteen pixels, the gradients of the version at the
-      top of the page can no longer be told apart.
+      The logo's mark, as a data URI rather than a file: the Caddyfile's shared
+      snippet serves .svg files as immutable for a year, and a favicon frozen
+      for a year can no longer be corrected. Carried by the HTML, it revalidates
+      with it. The block fills the whole square here, without margin, so the
+      slits stay visible at sixteen pixels.
     -->
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='f' x1='0' y1='0' x2='32' y2='32' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' stop-color='%231b2b47'/%3E%3Cstop offset='1' stop-color='%230b1220'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='7' fill='url(%23f)'/%3E%3Cpath d='M16 16L27 21.5L16 27L5 21.5Z' fill='%235b6c92'/%3E%3Cpath d='M16 10.5L27 16L16 21.5L5 16Z' fill='%239aa8c4'/%3E%3Cpath d='M16 5L27 10.5L16 16L5 10.5Z' fill='%23d93a55'/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='f' x1='1' y1='1' x2='31' y2='31' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' stop-color='%23b3253f'/%3E%3Cstop offset='1' stop-color='%237d1730'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M7.32 1H24.68A6.32 6.32 0 0 1 31 7.32V9.92H11.11A1.42 1.42 0 0 0 11.11 12.76H31V24.68A6.32 6.32 0 0 1 24.68 31H7.32A6.32 6.32 0 0 1 1 24.68V22.08H20.89A1.42 1.42 0 0 0 20.89 19.24H1V7.32A6.32 6.32 0 0 1 7.32 1Z' fill='url(%23f)'/%3E%3C/svg%3E"
     />
     <title>{title}</title>
     <!--
