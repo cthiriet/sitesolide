@@ -63,6 +63,12 @@ describe("the monitor's unit", () => {
     expect(unit.get("Unit")).toContain("ConditionPathExists=/usr/local/lib/sitesolide/monitor.js");
   });
 
+  test("never --test-tree: on the machine, no variable of the alerting file can move what the monitor reads", () => {
+    const starts = service.filter((line) => line.startsWith("ExecStart"));
+    expect(starts).toEqual(["ExecStart=/usr/local/bin/bun /usr/local/lib/sitesolide/monitor.js"]);
+    expect(starts.join("\n")).not.toContain("--test-tree");
+  });
+
   test("no privilege: a dynamic account, no capability, never root", () => {
     expect(service).toContain("DynamicUser=yes");
     expect(service).toContain("CapabilityBoundingSet=");

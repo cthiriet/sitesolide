@@ -11,17 +11,18 @@
  * monitor/README.md.
  *
  * Built into a single file by bin/deploy-monitor.sh and installed as
- * /usr/local/lib/sitesolide/monitor.js. Every path comes from the environment,
- * so that it runs the same way on a test tree:
+ * /usr/local/lib/sitesolide/monitor.js. On a test tree, the paths come from
+ * the environment, read only with --test-tree, which the unit never passes
+ * (src/config.ts says why):
  *
- *   SITESOLIDE_ZONE=test-zone.invalid SITES_DIR=/tmp/attempt/srv STATE_DIRECTORY=/tmp/attempt/state bun monitor.ts
+ *   SITESOLIDE_ZONE=test-zone.invalid SITES_DIR=/tmp/attempt/srv STATE_DIRECTORY=/tmp/attempt/state bun monitor.ts --test-tree
  */
-import { readConfig } from "./src/config";
+import { TEST_TREE_FLAG, readConfig } from "./src/config";
 import { createMachine } from "./src/machine";
 import { crashRequest } from "./src/notify";
 import { run, SEND_TIMEOUT_MS } from "./src/run";
 
-const read = readConfig(process.env);
+const read = readConfig(process.env, { testTree: Bun.argv.slice(2).includes(TEST_TREE_FLAG) });
 if ("error" in read) {
   console.error(`monitor: ${read.error}`);
   process.exit(1);

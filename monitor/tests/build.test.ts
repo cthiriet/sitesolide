@@ -21,7 +21,9 @@ afterAll(() => rmSync(D, { recursive: true, force: true }));
 
 async function launch(env: Record<string, string>): Promise<{ code: number; output: string; error: string }> {
   // The Bun running the tests, by its path: the PATH given is the unit's, which has none.
-  const child = Bun.spawn([process.execPath, BUNDLE], { env: { PATH: "/usr/bin:/bin", ...env }, stdout: "pipe", stderr: "pipe" });
+  // --test-tree, which the unit never passes: without it, the paths below
+  // would be ignored for the machine's own.
+  const child = Bun.spawn([process.execPath, BUNDLE, "--test-tree"], { env: { PATH: "/usr/bin:/bin", ...env }, stdout: "pipe", stderr: "pipe" });
   const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { code, output, error };
 }

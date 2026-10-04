@@ -37,12 +37,19 @@ describe("the alerting addresses", () => {
     expect(notUrl.url).toBeNull();
     expect(notUrl.problem).toBe("HEARTBEAT_URL is not a URL");
     const wrong = alertUrl("ALERT_WEBHOOK_URL", `ftp://${secret}.example/`);
-    expect(wrong.problem).toBe("ALERT_WEBHOOK_URL must be an http or https URL");
-    expect(JSON.stringify([notUrl, wrong])).not.toContain(secret);
+    expect(wrong.problem).toBe("ALERT_WEBHOOK_URL must be an https URL");
+    const plain = alertUrl("ALERT_WEBHOOK_URL", `http://hooks.test-zone.invalid/${secret}`);
+    expect(plain).toEqual({ url: null, problem: "ALERT_WEBHOOK_URL must be an https URL" });
+    expect(JSON.stringify([notUrl, wrong, plain])).not.toContain(secret);
   });
 
-  test("an https address passes", () => {
+  test("an https address passes; plain http only on the loopback, and only when allowed", () => {
     expect(alertUrl("HEARTBEAT_URL", " https://hc-ping.test-zone.invalid/0b1c ").url).toBe("https://hc-ping.test-zone.invalid/0b1c");
+    for (const loopback of ["http://127.0.0.1:8080/ping", "http://[::1]:8080/ping", "http://localhost:8080/ping"]) {
+      expect(alertUrl("HEARTBEAT_URL", loopback, true).url).toBe(loopback);
+      expect(alertUrl("HEARTBEAT_URL", loopback).url).toBeNull();
+    }
+    expect(alertUrl("HEARTBEAT_URL", "http://hc.test-zone.invalid/ping", true).url).toBeNull();
   });
 
   test("the webhook's format: recognized by the address, json for any other, or as told", () => {

@@ -118,6 +118,18 @@ when they recover, and travel in the body of every successful ping.
 **A webhook that refuses keeps its notices** for the next pass, a day and fifty
 notices at most, and the dashboard says how many wait. Neither address is ever
 written anywhere: not in the journal, not in the status, not in an error.
+**Both must be `https`**: an address in plain http is refused as a problem of
+the monitor, since it would hand the secret, and every message, to each
+network on the way.
+
+**That file sets the alerting and nothing else.** It is edited from a web
+page, and systemd hands the monitor every variable in it, so the monitor reads
+only `HEARTBEAT_URL`, `ALERT_WEBHOOK_URL` and `ALERT_WEBHOOK_FORMAT` from its
+environment, beside the zone. The paths a test tree moves, `SITES_DIR`,
+`DOMAINS_FILE`, `PROBE_ADDRESS`, `PROBE_PORT`, `DISK_PATHS`,
+`BACKUP_STATUS_FILE` and `STATE_DIRECTORY`, are read only when the run is given
+`--test-tree` on its command line, which the unit never does: a `DISK_PATHS=`
+slipped into that file would otherwise leave no disk checked, without a word.
 
 ## What an alert looks like
 

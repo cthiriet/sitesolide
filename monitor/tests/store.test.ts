@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Notice, Tracked } from "../src/alerts";
-import { readConfig } from "../src/config";
+import { TEST_TREE_FLAG, readConfig } from "../src/config";
 import { MAX_OUTBOX, OUTBOX_MAX_AGE_MS, STATE_VERSION, emptyState, parseState, trimOutbox, type State } from "../src/store";
 
 const T0 = Date.UTC(2026, 9, 4, 12, 0, 0);
@@ -65,26 +65,64 @@ describe("the configuration", () => {
     expect("error" in read && read.error).toContain("SITESOLIDE_ZONE is missing");
   });
 
-  test("the machine's paths by default, every one overridable", () => {
-    const read = readConfig({ SITESOLIDE_ZONE: "test-zone.invalid" });
+  const MACHINE = {
+    zone: "test-zone.invalid",
+    sitesDir: "/srv/sites",
+    domainsFile: "/etc/caddy/domaines.map",
+    stateDir: "/var/lib/sitesolide-monitor",
+    backupFile: "/var/lib/sitesolide-backup/last-run.json",
+    diskPaths: ["/", "/srv", "/var"],
+    probe: { address: "127.0.0.1", port: 443, ca: null },
+    heartbeatUrl: null,
+    webhookUrl: null,
+    webhookFormat: "json",
+    problems: [],
+  };
+
+  /**
+   * What dashboard-monitor.env, edited from the dashboard, could add to the
+   * alerting it is meant for: each one blinds the monitor without a word, no
+   * disk checked, every probe answered by somebody else, no backup read.
+   */
+  const BLINDING = {
+    SITES_DIR: "/nonexistent",
+    DOMAINS_FILE: "/dev/null",
+    PROBE_ADDRESS: "192.0.2.1",
+    PROBE_PORT: "8443",
+    DISK_PATHS: "",
+    BACKUP_STATUS_FILE: "/nonexistent.json",
+    STATE_DIRECTORY: "/tmp/elsewhere",
+  };
+
+  test("in production, the machine's paths whatever the environment says: only the zone and the alerting are read", () => {
+    const read = readConfig({ SITESOLIDE_ZONE: "test-zone.invalid", ...BLINDING });
     if (!("config" in read)) throw new Error("expected a configuration");
-    expect(read.config).toMatchObject({
-      zone: "test-zone.invalid",
-      sitesDir: "/srv/sites",
-      domainsFile: "/etc/caddy/domaines.map",
-      stateDir: "/var/lib/sitesolide-monitor",
-      backupFile: "/var/lib/sitesolide-backup/last-run.json",
-      diskPaths: ["/", "/srv", "/var"],
-      probe: { address: "127.0.0.1", port: 443, ca: null },
-      heartbeatUrl: null,
-      webhookUrl: null,
-      webhookFormat: "json",
-      problems: [],
-    });
-    const custom = readConfig({ SITESOLIDE_ZONE: "test-zone.invalid", STATE_DIRECTORY: "/tmp/x", PROBE_PORT: "8443", DISK_PATHS: "/, /data" });
+    expect(read.config).toMatchObject(MACHINE);
+    expect(readConfig({ SITESOLIDE_ZONE: "test-zone.invalid", PROBE_PORT: "https" })).toHaveProperty("config");
+  });
+
+  test("on a test tree, given by an argument the unit never passes, every path is overridable", () => {
+    expect(TEST_TREE_FLAG).toBe("--test-tree");
+    const plain = readConfig({ SITESOLIDE_ZONE: "test-zone.invalid" }, { testTree: true });
+    if (!("config" in plain)) throw new Error("expected a configuration");
+    expect(plain.config).toMatchObject(MACHINE);
+    const custom = readConfig({ SITESOLIDE_ZONE: "test-zone.invalid", STATE_DIRECTORY: "/tmp/x", PROBE_PORT: "8443", DISK_PATHS: "/, /data" }, { testTree: true });
     if (!("config" in custom)) throw new Error("expected a configuration");
     expect(custom.config).toMatchObject({ stateDir: "/tmp/x", probe: { port: 8443 }, diskPaths: ["/", "/data"] });
-    expect(readConfig({ SITESOLIDE_ZONE: "test-zone.invalid", PROBE_PORT: "https" })).toEqual({ error: "PROBE_PORT is not a port" });
+    expect(readConfig({ SITESOLIDE_ZONE: "test-zone.invalid", PROBE_PORT: "https" }, { testTree: true })).toEqual({ error: "PROBE_PORT is not a port" });
+  });
+
+  test("an alerting address in plain http is refused, the loopback of a test tree aside", () => {
+    const env = { SITESOLIDE_ZONE: "test-zone.invalid", HEARTBEAT_URL: "http://hc.test-zone.invalid/ping/secret", ALERT_WEBHOOK_URL: "http://127.0.0.1:8080/hook" };
+    const production = readConfig(env);
+    if (!("config" in production)) throw new Error("expected a configuration");
+    expect(production.config).toMatchObject({ heartbeatUrl: null, webhookUrl: null });
+    expect(production.config.problems).toEqual(["HEARTBEAT_URL must be an https URL", "ALERT_WEBHOOK_URL must be an https URL"]);
+
+    const tree = readConfig(env, { testTree: true });
+    if (!("config" in tree)) throw new Error("expected a configuration");
+    expect(tree.config).toMatchObject({ heartbeatUrl: null, webhookUrl: "http://127.0.0.1:8080/hook" });
+    expect(tree.config.problems).toEqual(["HEARTBEAT_URL must be an https URL"]);
   });
 
   test("a wrong alerting address is a problem of the monitor, the channel stays silent", () => {

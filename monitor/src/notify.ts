@@ -57,12 +57,17 @@ const FORMATS: readonly WebhookFormat[] = ["slack", "discord", "googlechat", "te
 
 export type Delivery = { ok: true } | { ok: false; reason: string };
 
+/** The hosts plain http may reach on a test tree: the loopback, nothing else. */
+const LOOPBACK = new Set(["127.0.0.1", "[::1]", "localhost"]);
+
 /**
- * An alerting address, or why it is refused. http and https only: anything
- * else is a typo or a trap, and the reason never quotes the value, which is a
- * secret.
+ * An alerting address, or why it is refused. https only: the address is a
+ * secret, whoever reads it can silence the heartbeat or post in the channel,
+ * and plain http hands it, and every message, to each network on the way.
+ * `loopback` lets plain http through to the loopback, for the tests' local
+ * receivers and only on a test tree. The reason never quotes the value.
  */
-export function alertUrl(name: string, raw: string | null | undefined): { url: string | null; problem: string | null } {
+export function alertUrl(name: string, raw: string | null | undefined, loopback = false): { url: string | null; problem: string | null } {
   const value = (raw ?? "").trim();
   if (value === "") return { url: null, problem: null };
   let url: URL;
@@ -71,8 +76,9 @@ export function alertUrl(name: string, raw: string | null | undefined): { url: s
   } catch {
     return { url: null, problem: `${name} is not a URL` };
   }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    return { url: null, problem: `${name} must be an http or https URL` };
+  const local = loopback && url.protocol === "http:" && LOOPBACK.has(url.hostname);
+  if (url.protocol !== "https:" && !local) {
+    return { url: null, problem: `${name} must be an https URL` };
   }
   return { url: url.toString(), problem: null };
 }
