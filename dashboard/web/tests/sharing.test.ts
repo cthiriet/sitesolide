@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test"
 import {
   DEFAULT_POLICY,
   PEOPLE_MAX,
+  PORTAL_TOO_OLD,
   addEntries,
   canShare,
   identityPassed,
   listsInEffect,
   policySummary,
   shareMessage,
+  sharingLoadFailure,
   sharingRefusal,
   sitePolicy,
   type SharingList,
@@ -96,6 +98,21 @@ describe("what a refusal says", () => {
     expect(sharingRefusal(400, { error: "invalid-people" })).toBe("One of the email addresses is not accepted.")
     expect(sharingRefusal(403, { error: "origin-refused" })).toBe("Origin not allowed.")
     expect(sharingRefusal(418, { error: "teapot" })).toBe("Refused (418: teapot).")
+  })
+})
+
+describe("when the policies can't be read", () => {
+  test("a portal from before sharing says so, rather than unreachable while it answers", () => {
+    expect(sharingLoadFailure(404).title).toBe(PORTAL_TOO_OLD)
+    expect(sharingLoadFailure(404).advice).toContain("sitesolide deploy --force")
+    expect(sharingRefusal(404, null)).toBe(PORTAL_TOO_OLD)
+    expect(sharingRefusal(404, { error: "unknown-access" })).toBe("Refused (404: unknown-access).")
+  })
+
+  test("the dashboard silent, or the portal down", () => {
+    expect(sharingLoadFailure(0).title).toBe("Can't reach the dashboard.")
+    expect(sharingLoadFailure(502).title).toBe("Can't reach the portal.")
+    expect(sharingLoadFailure(502).advice).toContain("systemctl status portal")
   })
 })
 

@@ -114,10 +114,30 @@ export function addEntries(current: readonly string[], typed: string, kind: "peo
 
 // --- The refusals ----------------------------------------------------------------
 
+/** What the page says when the portal answers but has no sharing to give: a portal from before it. */
+export const PORTAL_TOO_OLD = "The portal doesn't know sharing yet."
+
+/**
+ * Why the policies could not load. A 404 relayed from the portal is a portal
+ * deployed before sharing, which this dashboard outran: it says so, rather
+ * than calling the portal unreachable while it answers.
+ */
+export function sharingLoadFailure(status: number): { title: string; advice: string } {
+  if (status === 0) return { title: "Can't reach the dashboard.", advice: "The server didn't answer. Check your connection, then try again." }
+  if (status === 404) {
+    return { title: PORTAL_TOO_OLD, advice: "Deploy the portal from this release: cd portal && sitesolide deploy --force, see portal/README.md." }
+  }
+  return {
+    title: "Can't reach the portal.",
+    advice: "The portal, which keeps who may sign in, didn't answer. Sites behind it may be closed too. Check systemctl status portal on the server.",
+  }
+}
+
 /** What a refusal means. The codes stay the API's; an unknown one is shown as is rather than vanishing. */
 export function sharingRefusal(status: number, body: { error?: string } | null): string {
   if (status === 0) return "Can't reach the dashboard."
   if (status === 502) return "Can't reach the portal."
+  if (status === 404 && body?.error === undefined) return PORTAL_TOO_OLD
   switch (body?.error) {
     case "no-portal":
       return "This site is not behind the portal."

@@ -87,6 +87,17 @@ describe("reading the policies", () => {
     expect(await response.json()).toEqual({ sso: { configured: true }, sites: [] });
   });
 
+  test("a portal from before sharing answers 404, relayed as such for the page to say so", async () => {
+    const old: SharingPortal = {
+      list: async () => new Response("404: unknown route", { status: 404 }),
+      replace: async () => new Response("404: unknown route", { status: 404 }),
+      audit: async () => new Response("404: unknown route", { status: 404 }),
+    };
+    const r = createSharingRoutes({ session, publicUrl: PUBLIC_URL, stateFile: STATE_FILE, portal: old }, () => NOW);
+    const response = await r.list(new Request(`${PUBLIC_URL}/api/sharing`, { headers: { Cookie: "session=open" } }));
+    expect(response.status).toBe(404);
+  });
+
   test("an unreachable portal is said unreachable, not a mute 500", async () => {
     const { routes: r } = routes(true);
     const response = await r.list(new Request(`${PUBLIC_URL}/api/sharing`, { headers: { Cookie: "session=open" } }));

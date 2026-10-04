@@ -9,7 +9,6 @@ import { InternalLink } from "@/components/navigation"
 import { Banner, Count, EmptyState, ErrorState, Panel, PanelSkeleton } from "@/components/page"
 import { SitePage } from "@/components/site"
 import { readSharing, replaceSharing } from "@/lib/api"
-import { loadAdvice, loadFailureReason } from "@/lib/invitations"
 import { siteUrl } from "@/lib/pages"
 import {
   MODE_TEXTS,
@@ -20,6 +19,7 @@ import {
   listsInEffect,
   policySummary,
   shareMessage,
+  sharingLoadFailure,
   sharingRefusal,
   sitePolicy,
   type Policy,
@@ -31,7 +31,10 @@ import { cn } from "@/lib/utils"
 /** The portal's own project, whose Secrets hold portal.env. */
 const PORTAL_SLUG = "portal"
 
-type SharingRead = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; list: SharingList }
+type SharingRead =
+  | { state: "loading" }
+  | { state: "error"; failure: { title: string; advice: string } }
+  | { state: "ready"; list: SharingList }
 
 /**
  * The policies, read when the section opens and again with every snapshot,
@@ -51,7 +54,7 @@ function useSharing() {
       if (status === 200 && body !== null && Array.isArray(body.sites) && body.sso !== undefined) {
         return setRead({ state: "ready", list: { sso: body.sso, sites: body.sites } })
       }
-      setRead({ state: "error", message: loadFailureReason(status) })
+      setRead({ state: "error", failure: sharingLoadFailure(status) })
     },
     [sessionExpired],
   )
@@ -283,17 +286,10 @@ function Content({
   if (read.state === "loading") return <PanelSkeleton lines={3} />
 
   if (read.state === "error") {
-    const advice = loadAdvice(read.message)
     return (
       <Panel>
-        <ErrorState title={read.message} onRetry={onRetry}>
-          {advice.text}
-          {advice.command !== null && (
-            <>
-              {" "}
-              <code className="font-mono text-xs whitespace-nowrap">{advice.command}</code> on the server.
-            </>
-          )}
+        <ErrorState title={read.failure.title} onRetry={onRetry}>
+          {read.failure.advice}
         </ErrorState>
       </Panel>
     )
