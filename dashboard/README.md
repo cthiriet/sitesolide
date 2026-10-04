@@ -463,28 +463,45 @@ of the others, and forgets nothing of its own.
 | `dashboard` | `audit` in `dashboard.db` | everything, never pruned: a few rows per token and per team deployment | all of it, by pages |
 | `portal` | `audit` in `portal.db` | 180 days; past 100,000 rows the oldest go, those of the last 30 days excepted; sign-ins and sign-outs repeated within a minute make one row | all of it, by pages |
 | `egress` | `audit` in `/var/lib/sitesolide-egress/` | 90 days, pruned every hour; refusals and connector calls counted by the minute | all of it, by pages |
-| `backups` | `audit` in `/var/lib/sitesolide-backup/backup.db` | everything, never pruned: one row per hourly run, some 8,800 a year, and one per restore | the latest 50, which is what `GET /backups/audit` hands over |
-| `steward` | `/var/lib/sitesolide-steward/journal.jsonl` | the last 500 to 1,000 operations: past 1,000 lines, the file keeps its last 500 | the latest 50, which is what `GET /log` hands over |
+| `backups` | `audit` in `/var/lib/sitesolide-backup/backup.db` | everything, never pruned: one row per hourly run, some 8,800 a year, and one per restore | all of it, by pages, from a steward that knows pages; the latest 50 from an older one |
+| `steward` | `/var/lib/sitesolide-steward/journal.jsonl` | the last 500 to 1,000 operations: past 1,000 lines, the file keeps its last 500 | all of it, by pages, from a steward that knows pages; the latest 50 from an older one |
 
-Once the log reaches the end of the latest 50 of the backups or of the
-steward, the page says so, rather than let that end pass for the beginning of
-time.
+The steward's two routes, `GET /backups/audit` and `GET /log`, hand over their
+latest 50, which is all the Backups and Secrets sections read. Asked for a
+page, `?limit=<n>&before=<id or ms>`, a steward updated since answers it and
+says `paged`; an older one ignores the question and answers its latest 50, and
+once the log reaches their end the page says so, rather than let that end pass
+for the beginning of time. The journal pages by date, the last appended first
+within one millisecond, so that a clock set back between two lines neither
+repeats one nor skips one.
 
 ### Deployment of the audit
 
-A dashboard deployment, and nothing else: the route reads what every
-component already exposes, and the page replaces the former *Activity*.
+A dashboard deployment is all the log needs: the route reads what every
+component already exposes, and the page replaces the former *Activity*. The
+steward's pages are a second step, which only reaches further back, and
+which either order of the two survives.
 
 ```bash
-cd dashboard && sitesolide deploy
+cd dashboard && sitesolide deploy   # 1. the route and the page
+bin/deploy-steward.sh               # 2. optional: the backups' audit and the journal read whole
 ```
 
-Check: *Activity* lists the sources once at the top, each `Read`, or `Not
-installed` for a component the server does not have; the rows of every source
-come merged, newest first, and *Site or host* set to a site's slug finds its
-portal sign-ins on its hosts. A component that does not answer shows its
-banner and leaves the others readable. Roll back: deploy the previous commit
-of `dashboard/`; no table, file or route outside the dashboard changed.
+1. **The dashboard.** Check: *Activity* lists the sources once at the top,
+   each `Read`, `Latest 50` once the log reaches the end of what the steward
+   hands over, or `Not installed` for a component the server does not have;
+   the rows of every source come merged, newest first; *Site or host* set to a
+   site's slug finds its portal sign-ins on its hosts. A component that does
+   not answer shows its banner and leaves the others readable. The Backups and
+   Secrets sections are unchanged. Roll back: deploy the previous commit of
+   `dashboard/`; no table, file or route outside the dashboard changed.
+2. **The steward.** Its two audit routes learn `limit` and `before`; without
+   them they answer exactly as before, so a dashboard deployed earlier, or
+   rolled back, reads what it always read. Check, on the machine:
+   `sudo -u site-dashboard curl -s --unix-socket /run/sitesolide-steward/secretaire.sock 'http://steward/log?limit=1'`
+   answers one entry and `"paged":true`; on the page, `Latest 50` no longer
+   shows for the backups nor the steward. Roll back: `bin/deploy-steward.sh`
+   from the previous commit; the page then reads their latest 50 again.
 
 ## The portal, from the dashboard
 
@@ -846,6 +863,7 @@ ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
 | `installer.ts`, `src/installer/`, `src/control/policy.ts`, `infra/installer/`, `bin/cli/` generators | `bin/deploy-installer.sh` |
 | `backup.ts`, `src/backup/` (but its steward routes), `infra/backup/` | `bin/deploy-backup.sh install` |
 | `src/backup/routes.ts`, `src/backup/reader.ts` | `bin/deploy-steward.sh` |
+| `src/backup/database.ts`, which both embed | `bin/deploy-backup.sh install` and `bin/deploy-steward.sh` |
 | anything else | `sitesolide deploy` |
 
 When the CLI's block generator changes the blocks it writes, as it did when its
@@ -900,6 +918,7 @@ left out (tests/audit-merge.test.ts); the merge, the filters and a cursor
 followed to the end against simulated sources, every row once and in order
 whatever the page size, a source down, too old, not installed, stalled past
 the deadline or throwing, and a budget that runs out (tests/audit-aggregate.test.ts);
-each reader against the answers its component really gives, and the whole
-route against a portal and an egress proxy on real ports and a steward on a
-real socket (tests/audit-sources.test.ts).
+each reader against the answers its component really gives, a steward that
+pages and one that does not, and the whole route against a portal and an
+egress proxy on real ports and a steward on a real socket
+(tests/audit-sources.test.ts).

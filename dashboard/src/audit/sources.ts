@@ -34,8 +34,9 @@ import type { AuditSource } from "./protocol";
 export const PAGE_MAX = 500;
 
 /**
- * What the steward's two routes hand over: the latest fifty, with no way to
- * ask for older ones. RETURNED_ENTRIES in src/secrets/log.ts, AUDIT_ENTRIES in
+ * What the steward's two routes hand over when asked for no page, which is all
+ * a steward that predates pages ever answers: the latest fifty.
+ * RETURNED_ENTRIES in src/secrets/log.ts, AUDIT_ENTRIES in
  * src/backup/routes.ts; tests/audit-sources.test.ts checks they still agree.
  */
 export const STEWARD_WINDOW = RETURNED_ENTRIES;
@@ -226,30 +227,49 @@ export function createReaders(dependencies: AuditDependencies): Readers {
     return isObject(view) && view.installed === false;
   }
 
+  /**
+   * A steward updated since the Activity page pages through the whole audit,
+   * `paged` in its answer; an older one ignores the page asked for and hands
+   * over its latest fifty, which are read as a window.
+   */
   const backupsReader: AuditReader = {
     async read(after, size) {
-      const answer = await receive(() => backups.readBackupAudit(null));
+      const asked = Math.min(size, PAGE_MAX);
+      const answer = await receive(() => backups.readBackupAudit(null, { limit: asked, before: after?.[0] ?? null }));
       if (answer.kind === "unreachable") return failed("unavailable", "Can't reach the steward.");
       if (answer.status !== 200) return stewardRefusal(answer, "The steward on this server predates backups. Run bin/deploy-steward.sh.");
       const entries = answer.body?.entries;
       const rows = readRows("backups", entries, "The steward");
       if (!Array.isArray(rows)) return rows;
-      if (rows.length === 0 && (await backupsNotInstalled())) {
+      if (after === null && rows.length === 0 && (await backupsNotInstalled())) {
         return failed("not-installed", "Backups aren't set up on this server. Run bin/deploy-backup.sh install, then enable.");
       }
-      return windowed(rows, (entries as unknown[]).length, after, size);
+      const listed = (entries as unknown[]).length;
+      if (answer.body?.paged === true) return { kind: "rows", rows, end: listed < asked, window: null };
+      return windowed(rows, listed, after, size);
     },
   };
 
+  /**
+   * The journal pages by date, and a millisecond can hold several lines: the
+   * page is asked from the millisecond of the last line read, that one
+   * included, and what was already read in it is set aside by its rank.
+   */
   const stewardReader: AuditReader = {
     async read(after, size) {
-      const answer = await receive(() => steward.readLog(null));
+      const asked = Math.min(size, PAGE_MAX);
+      const answer = await receive(() => steward.readLog(null, { limit: asked, before: after === null ? null : after[0] + 1 }));
       if (answer.kind === "unreachable") return failed("unavailable", "Can't reach the steward.");
       if (answer.status !== 200) return stewardRefusal(answer, "The steward on this server predates its log. Run bin/deploy-steward.sh.");
       const entries = answer.body?.entries;
       const rows = readRows("steward", entries, "The steward");
       if (!Array.isArray(rows)) return rows;
-      return windowed(rows, (entries as unknown[]).length, after, size);
+      const listed = (entries as unknown[]).length;
+      if (answer.body?.paged === true) {
+        const ordered = windowed(rows, 0, after, asked);
+        return ordered.kind === "rows" ? { ...ordered, end: listed < asked, window: null } : ordered;
+      }
+      return windowed(rows, listed, after, size);
     },
   };
 

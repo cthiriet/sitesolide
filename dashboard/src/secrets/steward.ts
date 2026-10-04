@@ -58,7 +58,7 @@ import {
   checkValue,
   type EnvDocument,
 } from "./envfile";
-import { latest, RETURNED_ENTRIES, encodeEntry, reread } from "./log";
+import { latest, page, readPageQuery, RETURNED_ENTRIES, encodeEntry, reread } from "./log";
 import {
   MAX_FILE_BYTES,
   expectedText,
@@ -816,11 +816,15 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   async function readLog(req: Request): Promise<Response> {
-    const wanted = new URL(req.url).searchParams.getAll("slug");
+    const params = new URL(req.url).searchParams;
+    const wanted = params.getAll("slug");
     if (wanted.length > 1) return error("invalid", "name one site at most");
     const slug = wanted[0] ?? null;
     if (slug !== null && !isSiteFolder(slug)) return error("invalid", "not a site name");
-    const body: LogResponse = { entries: latest(reread(await system.readLog()), RETURNED_ENTRIES, slug) };
+    const asked = readPageQuery(params);
+    if (asked !== null && "error" in asked) return error("invalid", asked.error);
+    const entries = reread(await system.readLog());
+    const body: LogResponse = asked === null ? { entries: latest(entries, RETURNED_ENTRIES, slug) } : { entries: page(entries, asked, slug), paged: true };
     return Response.json(body);
   }
 

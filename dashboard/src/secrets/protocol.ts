@@ -223,6 +223,7 @@ export type Failure = { error: ErrorCode; message: string; wait?: number };
 //
 //   GET    /projects              -> ProjectsResponse
 //   GET    /log[?slug=<s>]   -> LogResponse, the last 50, of the site if named
+//          [&limit=<n>[&before=<ms>]] -> LogResponse with `paged`, a page of `n`, dated before `ms`
 //   POST   /unlock  UnlockRequest -> UnlockResponse
 //   POST   /lock    WithToken             -> 204
 //   POST   /value         VariableRequest       -> ValueResponse
@@ -260,7 +261,12 @@ export type PasswordRequest = VariableRequest & { dashboardPassword: string; new
 export type PortalRequest = ProjectRequest & { active: boolean; confirmation: string };
 
 export type ProjectsResponse = { projects: ProjectView[] };
-export type LogResponse = { entries: LogEntry[] };
+/**
+ * `paged`: the answer to `limit`, which a steward that predates pages ignores,
+ * answering its latest fifty without this flag. The reader tells the two apart
+ * by it.
+ */
+export type LogResponse = { entries: LogEntry[]; paged?: true };
 export type UnlockResponse = { token: string; expiresAt: number };
 export type ValueResponse = { value: string };
 export type FileResponse = { file: FileView };

@@ -880,6 +880,34 @@ describe("POST /content: reading back, and only what is readable", () => {
   });
 });
 
+describe("GET /log by pages, for the Activity page", () => {
+  test("without a page asked, the latest fifty as always; with one, paged and dated", async () => {
+    const bench = await mount();
+    const token = await unlock(bench);
+    for (let i = 0; i < 3; i++) await bench.call("POST", "/value", { token, slug: "cms", file: "cms.env", variable: "TOKEN" });
+    const plain = (await (await bench.call("GET", "/log")).json()) as LogResponse;
+    expect(plain.paged).toBeUndefined();
+    expect(plain.entries.length).toBe(4);
+
+    const first = (await (await bench.call("GET", "/log?limit=2")).json()) as LogResponse;
+    expect(first.paged).toBe(true);
+    expect(first.entries).toEqual(plain.entries.slice(0, 2));
+    const oldest = plain.entries.at(-1)!.a;
+    const older = (await (await bench.call("GET", `/log?limit=50&before=${oldest + 1}`)).json()) as LogResponse;
+    expect(older.entries.every((entry) => entry.a <= oldest)).toBe(true);
+    expect(older.entries.at(-1)).toEqual(plain.entries.at(-1));
+    const site = (await (await bench.call("GET", "/log?slug=cms&limit=10")).json()) as LogResponse;
+    expect(site.entries.map((entry) => entry.operation)).toEqual(["read", "read", "read"]);
+  });
+
+  test("a page that does not read is refused", async () => {
+    const bench = await mount();
+    for (const query of ["limit=0", "limit=501", "limit=1&before=yesterday", "before=12"]) {
+      expect((await bench.call("GET", `/log?${query}`)).status).toBe(400);
+    }
+  });
+});
+
 describe("PUT /content: replacing as one block", () => {
   test("byte for byte, Windows line ending, byte order mark and final newline included, previous version kept", async () => {
     const bench = await mount();

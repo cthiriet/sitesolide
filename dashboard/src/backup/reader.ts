@@ -33,7 +33,8 @@ export type BackupReader = {
   status: () => RunStatus | null;
   offsite: (folder: string) => OffsiteRow[];
   settings: () => Settings;
-  audit: (folder: string | null, limit: number) => AuditEntry[];
+  /** Newest first; `before`, an id, for the entries older than it. */
+  audit: (folder: string | null, limit: number, before?: number | null) => AuditEntry[];
   result: (folder: string) => ResultFile;
   present: (folder: string) => Present;
   hasData: (folder: string) => boolean;
@@ -121,7 +122,7 @@ export function createBackupReader(config: BackupReaderConfig): BackupReader {
           },
         };
       }),
-    audit: (folder, limit) => withDatabase([], (db) => readAudit(db, folder, limit)),
+    audit: (folder, limit, before = null) => withDatabase([], (db) => readAudit(db, folder, limit, before)),
     result: (folder) => readPlain(join(config.runFolder, RESULTS_NAME, `${folder}.json`), MAX_RESULT_BYTES),
     present: (folder) => {
       const root = join(config.sitesDir, folder);

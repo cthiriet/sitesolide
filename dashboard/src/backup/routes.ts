@@ -17,6 +17,7 @@
 import { isBackedUp } from "../../borrowed/manifest";
 import { readSnapshotName } from "../../borrowed/backups";
 import type { ErrorCode } from "../secrets/protocol";
+import { readPageQuery } from "../secrets/log";
 import { checkSite, isSiteFolder, type Site } from "../secrets/scope";
 import type { BackupReader } from "./reader";
 import { recoveryPlan } from "./recovery";
@@ -175,11 +176,17 @@ export function createBackupRoutes(dependencies: BackupRouteDependencies): Backu
     },
 
     async audit(req) {
-      const wanted = new URL(req.url).searchParams.getAll("slug");
+      const params = new URL(req.url).searchParams;
+      const wanted = params.getAll("slug");
       if (wanted.length > 1) return fail("invalid", "name one site at most");
       const slug = wanted[0] ?? null;
       if (slug !== null && !isSiteFolder(slug)) return fail("invalid", "not a site name");
-      const body: BackupAuditResponse = { entries: reader?.audit(slug, AUDIT_ENTRIES) ?? [] };
+      // The Activity page pages through the whole audit; the Backups section
+      // asks for no page and reads the latest fifty, as it always did.
+      const asked = readPageQuery(params);
+      if (asked !== null && "error" in asked) return fail("invalid", asked.error);
+      const body: BackupAuditResponse =
+        asked === null ? { entries: reader?.audit(slug, AUDIT_ENTRIES) ?? [] } : { entries: reader?.audit(slug, asked.limit, asked.before) ?? [], paged: true };
       return Response.json(body);
     },
 

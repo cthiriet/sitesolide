@@ -12,8 +12,11 @@ export type BackupSteward = {
   readBackups: (slug: string) => Promise<Response>;
   /** Answers once the restore is started: it goes on in its own unit. */
   restoreBackup: (requested: RestoreRequest) => Promise<Response>;
-  /** `slug` null: the audit of every site. */
-  readBackupAudit: (slug: string | null) => Promise<Response>;
+  /**
+   * `slug` null: the audit of every site. `page`: `limit` entries older than
+   * the id `before`, which a steward that predates pages ignores.
+   */
+  readBackupAudit: (slug: string | null, page?: { limit: number; before: number | null }) => Promise<Response>;
 };
 
 /** `redirect: "error"`: a redirect is not in the protocol, and would carry the token elsewhere. */
@@ -31,6 +34,11 @@ export function localBackupSteward(socket: string, timeouts: Timeouts = DEFAULT_
     readBackups: (slug) => call("GET", `/backups?${new URLSearchParams({ slug })}`),
     // Under the steward's lock: it may wait behind a secret's write or a restart.
     restoreBackup: (requested) => call("POST", "/backups/restore", requested, timeouts.longMs),
-    readBackupAudit: (slug) => call("GET", slug === null ? "/backups/audit" : `/backups/audit?${new URLSearchParams({ slug })}`),
+    readBackupAudit: (slug, page) => {
+      const query = new URLSearchParams(slug === null ? {} : { slug });
+      if (page !== undefined) query.set("limit", String(page.limit));
+      if (page?.before !== undefined && page.before !== null) query.set("before", String(page.before));
+      return call("GET", query.size === 0 ? "/backups/audit" : `/backups/audit?${query}`);
+    },
   };
 }

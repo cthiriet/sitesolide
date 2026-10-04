@@ -6,8 +6,9 @@
  * ## Why the cursor carries one position per source
  *
  * No two components share an id, a clock or a page size, and none of them can
- * be asked for "the rows older than this date": the portal and the egress
- * proxy page by their own ids, the steward hands over its latest entries.
+ * be asked for "the rows older than this date": the portal, the egress proxy
+ * and the backups page by their own ids, the steward's journal by date, and an
+ * older steward hands over its latest entries and nothing more.
  * What each one does guarantee is an order of its own, newest first. So the
  * merge reads each source as a stream, takes the newest head among them, and
  * remembers, per source, the last row it handed over. The next page asks each

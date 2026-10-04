@@ -8,7 +8,10 @@ import {
   RETURNED_ENTRIES,
   KEPT_LINES,
   MAX_LINES,
+  MAX_PAGE_ENTRIES,
   latest,
+  page,
+  readPageQuery,
   encodeEntry,
   isValidEntry,
   reread,
@@ -241,5 +244,33 @@ describe("truncation", () => {
     expect(kept[0]).toBe(`line ${MAX_LINES + 1 - KEPT_LINES}`);
     expect(kept[kept.length - 1]).toBe(`line ${MAX_LINES}`);
     expect(truncated!.endsWith("\n")).toBe(true);
+  });
+});
+
+describe("pages, for the Activity page", () => {
+  test("asked for nothing, the route answers as it always did", () => {
+    expect(readPageQuery(new URLSearchParams("slug=cms"))).toBeNull();
+  });
+
+  test("a limit, and a date to read before, bounded", () => {
+    expect(readPageQuery(new URLSearchParams("limit=200&before=1700000000000"))).toEqual({ limit: 200, before: 1_700_000_000_000 });
+    expect(readPageQuery(new URLSearchParams("limit=1"))).toEqual({ limit: 1, before: null });
+    for (const query of ["before=5", "limit=0", `limit=${MAX_PAGE_ENTRIES + 1}`, "limit=2.5", "limit=x", "limit=1&limit=2", "limit=1&before=-1", "limit=1&before=soon"]) {
+      expect(readPageQuery(new URLSearchParams(query))).toHaveProperty("error");
+    }
+  });
+
+  test("by date, newest first, the last appended first within one millisecond", () => {
+    // Appended in this order; the clock went back between the second and the third.
+    const entries = [entry(10, { variable: "A" }), entry(30, { variable: "B" }), entry(20, { variable: "C" }), entry(30, { variable: "D" })];
+    expect(page(entries, { limit: 10, before: null }).map((one) => one.variable)).toEqual(["D", "B", "C", "A"]);
+    expect(page(entries, { limit: 2, before: null }).map((one) => one.variable)).toEqual(["D", "B"]);
+    expect(page(entries, { limit: 10, before: 30 }).map((one) => one.variable)).toEqual(["C", "A"]);
+    expect(page(entries, { limit: 10, before: 31 }).map((one) => one.variable)).toEqual(["D", "B", "C", "A"]);
+  });
+
+  test("of one site when it is named", () => {
+    const entries = [entry(1, { slug: "cms" }), entry(2, { slug: "shop" }), entry(3, { slug: "cms" })];
+    expect(page(entries, { limit: 10, before: null }, "cms").map((one) => one.a)).toEqual([3, 1]);
   });
 });

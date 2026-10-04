@@ -23,8 +23,11 @@ import { MAX_PORTAL_MS, MAX_RESTART_MS } from "./protocol";
 
 export type Steward = {
   readProjects: () => Promise<Response>;
-  /** `slug` null: the log of every site. */
-  readLog: (slug: string | null) => Promise<Response>;
+  /**
+   * `slug` null: the log of every site. `page`: `limit` entries dated before
+   * `before`, which a steward that predates pages ignores.
+   */
+  readLog: (slug: string | null, page?: { limit: number; before: number | null }) => Promise<Response>;
   unlock: (requested: UnlockRequest) => Promise<Response>;
   lock: (requested: WithToken) => Promise<Response>;
   readValue: (requested: VariableRequest) => Promise<Response>;
@@ -87,7 +90,12 @@ export function localSteward(socket: string, timeouts: Timeouts = DEFAULT_TIMEOU
     readProjects: () => call("GET", "/projects"),
     // The slug goes out encoded in the request: the steward judges it, the
     // relay only keeps it from changing the path.
-    readLog: (slug) => call("GET", slug === null ? "/log" : `/log?${new URLSearchParams({ slug })}`),
+    readLog: (slug, page) => {
+      const query = new URLSearchParams(slug === null ? {} : { slug });
+      if (page !== undefined) query.set("limit", String(page.limit));
+      if (page?.before !== undefined && page.before !== null) query.set("before", String(page.before));
+      return call("GET", query.size === 0 ? "/log" : `/log?${query}`);
+    },
     unlock: (requested) => call("POST", "/unlock", requested, timeouts.longMs),
     lock: (requested) => call("POST", "/lock", requested),
     readValue: (requested) => call("POST", "/value", requested, timeouts.longMs),

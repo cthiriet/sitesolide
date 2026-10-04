@@ -13,7 +13,10 @@ import { createControlStore } from "../src/control/store";
 import { openDatabase } from "../src/database";
 import type { SessionReader } from "../src/routes";
 import { localSteward } from "../src/secrets/client";
-import { RETURNED_ENTRIES } from "../src/secrets/log";
+import { latest, page, RETURNED_ENTRIES } from "../src/secrets/log";
+import type { LogEntry } from "../src/secrets/protocol";
+import { aggregate } from "../src/audit/aggregate";
+import { readQuery, siteResolver } from "../src/audit/merge";
 import { localSharing } from "../src/sharing";
 import type { Raw } from "../src/state";
 
@@ -232,6 +235,67 @@ describe("the steward's journal", () => {
   test("the window is the steward's: its two routes still hand over fifty", () => {
     expect(STEWARD_WINDOW).toBe(RETURNED_ENTRIES);
     expect(STEWARD_WINDOW).toBe(AUDIT_ENTRIES);
+  });
+});
+
+// --- A steward that pages --------------------------------------------------------
+
+describe("a steward updated since the Activity page: both its audits read whole", () => {
+  /** Every page of one source, through the aggregation, as the page would follow them. */
+  async function everything(readers: ReturnType<typeof createReaders>, source: "steward" | "backups") {
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let pages = 0; pages < 200; pages++) {
+      const query = readQuery(new URLSearchParams(`source=${source}&limit=7`));
+      if ("error" in query) throw new Error(query.error);
+      const answer = await aggregate({ ...query, cursor }, readers, siteResolver(null, "test-zone.invalid"), { fetchSize: 10, maxFetches: 2, deadlineMs: 5_000 });
+      if ("error" in answer) throw new Error(answer.error);
+      expect(answer.sources.every((status) => status.window === null)).toBe(true);
+      seen.push(...answer.rows.map((row) => row.id));
+      cursor = answer.cursor;
+      if (cursor === null) return seen;
+    }
+    throw new Error("the cursor does not end");
+  }
+
+  test("the journal, past its latest fifty, every line once, lines of one millisecond included", async () => {
+    // 120 lines, three to a millisecond every fourth one: page boundaries fall inside them.
+    const log: LogEntry[] = [];
+    for (let index = 0; index < 120; index++) {
+      const a = T - Math.floor(index / 3) * 1000;
+      log.unshift({ a, operation: "read", result: "ok", slug: "cms", file: "cms.env", variable: `V${index}`, detail: null });
+    }
+    const asked: (string | null)[] = [];
+    const steward = {
+      readLog: (_slug: string | null, wanted?: { limit: number; before: number | null }) => {
+        asked.push(wanted === undefined ? null : `${wanted.limit}/${wanted.before}`);
+        return wanted === undefined ? json({ entries: latest(log) }) : json({ entries: page(log, wanted), paged: true });
+      },
+    };
+    const seen = await everything(createReaders(dependencies({ steward })), "steward");
+    expect(seen.length).toBe(120);
+    expect(new Set(seen).size).toBe(120);
+    expect(asked[0]).toBe("10/null");
+  });
+
+  test("the backups' audit, past its latest fifty", async () => {
+    const entries = Array.from({ length: 130 }, (_, index) => ({ id: 130 - index, at: iso(T - index * 3_600_000), actor: "system", action: "backup.run", target: null, detail: { ok: true } }));
+    const backups = {
+      readBackupAudit: (_slug: string | null, wanted?: { limit: number; before: number | null }) =>
+        wanted === undefined
+          ? json({ entries: entries.slice(0, 50) })
+          : json({ entries: entries.filter((entry) => entry.id < (wanted.before ?? Infinity)).slice(0, wanted.limit), paged: true }),
+      readBackups: () => json({ backups: { installed: true } }),
+    };
+    const seen = await everything(createReaders(dependencies({ backups })), "backups");
+    expect(seen).toEqual(entries.map((entry) => `backups:${entry.id}`));
+  });
+
+  test("an older steward, which ignores the page asked for, is read as its latest fifty", async () => {
+    const entries = Array.from({ length: 60 }, (_, index) => ({ id: 60 - index, at: iso(T - index * 1000), actor: "system", action: "backup.run", target: null, detail: null }));
+    const backups = { readBackupAudit: () => json({ entries: entries.slice(0, 50) }), readBackups: () => json({ backups: { installed: true } }) };
+    const result = await createReaders(dependencies({ backups })).backups.read(null, 500);
+    expect(result).toMatchObject({ kind: "rows", end: true, window: 50 });
   });
 });
 

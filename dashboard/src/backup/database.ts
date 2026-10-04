@@ -117,16 +117,18 @@ function readDetail(text: string | null): Record<string, unknown> | null {
 /**
  * The latest entries, newest first: those naming this folder, plus the runs,
  * which name none and concern it all the same. Null for the whole machine.
+ * `before`, an id: those older than it, for a reader that pages.
  */
-export function readAudit(db: Database, folder: string | null, limit: number): AuditEntry[] {
+export function readAudit(db: Database, folder: string | null, limit: number, before: number | null = null): AuditEntry[] {
+  const below = before ?? Number.MAX_SAFE_INTEGER;
   const rows =
     folder === null
-      ? db.query<AuditRow, { limit: number }>("SELECT * FROM audit ORDER BY id DESC LIMIT $limit").all({ limit })
+      ? db.query<AuditRow, { limit: number; below: number }>("SELECT * FROM audit WHERE id < $below ORDER BY id DESC LIMIT $limit").all({ limit, below })
       : db
-          .query<AuditRow, { folder: string; limit: number }>(
-            "SELECT * FROM audit WHERE target = $folder OR target IS NULL ORDER BY id DESC LIMIT $limit",
+          .query<AuditRow, { folder: string; limit: number; below: number }>(
+            "SELECT * FROM audit WHERE (target = $folder OR target IS NULL) AND id < $below ORDER BY id DESC LIMIT $limit",
           )
-          .all({ folder, limit });
+          .all({ folder, limit, below });
   return rows.map((row) => ({ ...row, detail: readDetail(row.detail) }));
 }
 

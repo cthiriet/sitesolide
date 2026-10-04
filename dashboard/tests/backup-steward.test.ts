@@ -176,6 +176,18 @@ describe("what the steward says of a site's backups", () => {
     expect(entries.map((entry) => entry.action)).toEqual(["backup.restore", "backup.run"]);
     expect((await call("GET", "/backups/audit?slug=a/b")).status).toBe(400);
   });
+
+  test("by pages, for the Activity page; without one asked, as it always answered", async () => {
+    const whole = (await (await call("GET", "/backups/audit")).json()) as { entries: { id: number }[]; paged?: true };
+    expect(whole.paged).toBeUndefined();
+    const first = (await (await call("GET", "/backups/audit?limit=1")).json()) as { entries: { id: number }[]; paged?: true };
+    expect(first.paged).toBe(true);
+    expect(first.entries.map((entry) => entry.id)).toEqual([whole.entries[0]!.id]);
+    const next = (await (await call("GET", `/backups/audit?limit=10&before=${first.entries[0]!.id}`)).json()) as { entries: { id: number }[] };
+    expect(next.entries.map((entry) => entry.id)).toEqual(whole.entries.slice(1).map((entry) => entry.id));
+    expect((await call("GET", "/backups/audit?limit=0")).status).toBe(400);
+    expect((await call("GET", "/backups/audit?limit=5&before=x")).status).toBe(400);
+  });
 });
 
 describe("a restore asked of the steward", () => {

@@ -203,6 +203,46 @@ export function latest(entries: LogEntry[], n: number = RETURNED_ENTRIES, slug: 
   return kept.slice(-n).reverse();
 }
 
+/** The most `GET /log` hands over at once when asked for a page: half the file at its fullest. */
+export const MAX_PAGE_ENTRIES = 500;
+
+export type PageQuery = { limit: number; before: number | null };
+
+/**
+ * `?limit=<n>[&before=<n>]`, which the dashboard's Activity page sends to
+ * read a whole history rather than its latest fifty. Null when the request
+ * names neither: the route then answers as it always did, so a dashboard that
+ * predates pages reads what it read before. The backups' audit route takes
+ * the same two, `before` an id there rather than a date.
+ */
+export function readPageQuery(params: URLSearchParams, max: number = MAX_PAGE_ENTRIES): PageQuery | null | { error: string } {
+  const limits = params.getAll("limit");
+  const befores = params.getAll("before");
+  if (limits.length === 0 && befores.length === 0) return null;
+  if (limits.length !== 1 || befores.length > 1) return { error: "give limit once, and before once at most" };
+  const limit = Number(limits[0]);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) return { error: `limit: a whole number from 1 to ${max}` };
+  const before = befores.length === 0 ? null : Number(befores[0]);
+  if (before !== null && (!Number.isSafeInteger(before) || before < 0)) return { error: "before: a whole number" };
+  return { limit, before };
+}
+
+/**
+ * A page of the journal: the entries dated before `before`, in milliseconds,
+ * newest first, the last appended first within one same millisecond, `limit`
+ * at most; those of one site when it is named. By date and not by place in
+ * the file: a clock set back between two lines would otherwise have two pages
+ * overlap, or leave a line between them.
+ */
+export function page(entries: LogEntry[], query: PageQuery, slug: string | null = null): LogEntry[] {
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => (slug === null || entry.slug === slug) && (query.before === null || entry.a < query.before))
+    .sort((x, y) => y.entry.a - x.entry.a || y.index - x.index)
+    .slice(0, query.limit)
+    .map(({ entry }) => entry);
+}
+
 /** The text to rewrite if the log has grown too much, null otherwise. */
 export function truncate(text: string, max: number = MAX_LINES, kept: number = KEPT_LINES): string | null {
   const lines = text.split("\n");

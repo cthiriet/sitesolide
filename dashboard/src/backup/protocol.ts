@@ -9,6 +9,7 @@
  *   GET  /backups?slug=<s>        -> BackupsResponse
  *   POST /backups/restore         RestoreRequest -> 202 RestoreResponse
  *   GET  /backups/audit[?slug=<s>] -> BackupAuditResponse, the last 50
+ *        [&limit=<n>[&before=<id>]] -> BackupAuditResponse with `paged`, a page of `n` older than `id`
  *
  * The dashboard's, without the token, which it keeps:
  *
@@ -91,4 +92,5 @@ export type RestoreRequest = WithToken & { slug: string; snapshot: string; confi
 
 export type RestoreResponse = { restore: RestoreView };
 
-export type BackupAuditResponse = { entries: AuditEntry[] };
+/** `paged`: the answer to `limit`, which a steward that predates pages ignores, as for its log. */
+export type BackupAuditResponse = { entries: AuditEntry[]; paged?: true };
