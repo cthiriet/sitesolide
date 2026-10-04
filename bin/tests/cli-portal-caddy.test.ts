@@ -13,8 +13,9 @@ import { deriveKey, issueToken } from "../../portal/src/gate";
  * The tests of cli-fragment.test.ts read the text; this one runs it. What the
  * door promises hangs only on the order in which Caddy sorts the directives,
  * and an order is measured, not read back: one `handle` slipped into the
- * stanza, or one `route`, and the site would be served without the portal
- * having been consulted.
+ * stanza, or a directive slipped into its one `route` before `forward_auth`,
+ * and the site would be served without the portal having been consulted.
+ * cli-portal-identity-caddy.test.ts measures what that `route` is for.
  *
  * Caddy runs on the workstation with `admin off`, on a free port, and is
  * stopped by its PID. Never `caddy stop`: see the Production section of

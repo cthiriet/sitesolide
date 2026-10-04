@@ -224,6 +224,27 @@ describe("the block in service follows the dashboard's door", () => {
     expect(r.output).toContain("will follow the portal set from the dashboard");
   });
 
+  test("a protected block deployed before the identity headers is upgraded without --force", async () => {
+    vm = createFakeVm();
+    vm.writeManifest("sample-door", text(PROTECTED));
+    vm.writeBlock("sample-door", generateFragment(PROTECTED, "cookie")!);
+    const r = await run(project(PROTECTED), ["deploy"], { vm });
+    expect(r.output).toContain("/etc/caddy/sites/sample-door.caddy was written by an earlier release, the current one replaces it");
+    expect(r.all).not.toContain("no longer matches");
+  });
+
+  test("a door set by a dashboard not yet upgraded is taken, and its block upgraded", async () => {
+    // The older gatekeeper wrote the earlier stanza; the repository has not
+    // caught up with the door yet.
+    vm = createFakeVm();
+    vm.writeManifest("sample-door", text(PROTECTED));
+    vm.writeBlock("sample-door", generateFragment(PROTECTED, "cookie")!);
+    const r = await run(project(APP), ["deploy"], { vm });
+    expect(r.output).toContain("portal was turned on from the dashboard");
+    expect(r.output).toContain("was written by an earlier release, the current one replaces it");
+    expect(r.all).not.toContain("no longer matches");
+  });
+
   test("without a manifest on the VM, the local door does not silently win over the block in service", async () => {
     // Nothing then confirms which door holds: the block is refused.
     vm = createFakeVm();
@@ -241,6 +262,39 @@ describe("the block in service follows the dashboard's door", () => {
     expect(r.code).toBe(1);
     expect(r.error).toContain("no longer matches the manifest");
     expect(vm.logs().some((line) => line.startsWith("REFUSED") || line.startsWith("ACCEPTED"))).toBe(false);
+  });
+});
+
+/**
+ * The portal's own upgrade to the provider's two steps, as portal/README.md
+ * tells the author to run it: its block in service only routes /sante, the new
+ * manifest routes the two steps too, and that is a change of the manifest, not
+ * an earlier generation of the same one. `deploy` stops and says so; `--force`
+ * is the deliberate act the README asks for.
+ */
+describe("the portal's own block, upgraded to the provider's steps", () => {
+  const current = JSON.parse(readFileSync(join(REPO, "portal", "sitesolide.json"), "utf8")) as Manifest;
+  // No build: the copy lives outside the repository, where borrow.ts has nothing to copy.
+  const { build: _, ...PORTAL } = current;
+  const BEFORE: Manifest = { ...PORTAL, routes: ["/sante"] };
+
+  test("is refused without --force, naming the two routes, before anything is written", async () => {
+    vm = createFakeVm();
+    vm.writeManifest("portal", text(BEFORE));
+    vm.writeBlock("portal", generateFragment(BEFORE)!);
+    const r = await run(project(PORTAL), ["deploy"], { vm });
+    expect(r.code).toBe(1);
+    expect(r.error).toContain("no longer matches the manifest");
+    expect(r.error).toContain("@dynamic path /sante /oidc/start /oidc/callback");
+    expect(vm.logs().some((line) => line.startsWith("ACCEPTED"))).toBe(false);
+  });
+
+  test("goes ahead with --force", async () => {
+    vm = createFakeVm();
+    vm.writeManifest("portal", text(BEFORE));
+    vm.writeBlock("portal", generateFragment(BEFORE)!);
+    const r = await run(project(PORTAL), ["deploy", "--force"], { vm });
+    expect(r.output).toContain("--force: /etc/caddy/sites/portal.caddy will be replaced by the generated one");
   });
 });
 
