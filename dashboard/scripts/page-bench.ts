@@ -1382,6 +1382,12 @@ function portalEvent(actor: string, action: string, target: string | null, detai
 }
 const portalEvents = [
   portalEvent("owner", "sharing.update", "calendar.example.com", { mode: "domain", previousMode: "admins", peopleAdded: [], peopleRemoved: [], domainsAdded: ["example.com"], domainsRemoved: [] }, start - 9 * DAY),
+  // A colleague opening the calendar through the day, for a week: enough rows
+  // for the Activity page to need more than one page.
+  ...Array.from({ length: 7 * 14 }, (_, index) => {
+    const day = 7 - Math.floor(index / 14);
+    return portalEvent("bob@example.com", "portal.signin", "calendar.example.com", { method: "oidc", role: "member" }, start - day * DAY + (8 + (index % 14)) * HOUR);
+  }),
   portalEvent("owner", "sharing.update", "cms.example.com", { mode: "people", previousMode: "people", peopleAdded: ["editor@example.org"], peopleRemoved: [], domainsAdded: [], domainsRemoved: [] }, start - 2 * DAY),
   portalEvent("guest:benchGuest000001", "portal.signin", "cms.example.com", { method: "guest" }, start - 2 * HOUR),
   portalEvent("owner", "portal.signin", "photos.example.com", { method: "password", count: 3 }, start - 90 * MINUTE),
