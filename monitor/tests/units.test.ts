@@ -69,17 +69,32 @@ describe("the monitor's unit", () => {
     expect(starts.join("\n")).not.toContain("--test-tree");
   });
 
-  test("no privilege: a dynamic account, no capability, never root", () => {
-    expect(service).toContain("DynamicUser=yes");
+  test("no privilege: its own static account, no capability, never root", () => {
+    expect(service).toContain("User=sitesolide-monitor");
+    expect(service).toContain("Group=sitesolide-monitor");
     expect(service).toContain("CapabilityBoundingSet=");
     expect(service).toContain("AmbientCapabilities=");
     expect(service).toContain("NoNewPrivileges=yes");
-    expect(service.some((line) => line.startsWith("User="))).toBe(false);
     expect(service.some((line) => line.startsWith("ReadWritePaths="))).toBe(false);
   });
 
-  test("its state where the collector looks for it", () => {
+  test("never a dynamic account, whose uid dbus-daemon cannot resolve: systemctl would read no unit", () => {
+    expect(service.some((line) => line.startsWith("DynamicUser="))).toBe(false);
+    expect(service.filter((line) => line.startsWith("User="))).toEqual(["User=sitesolide-monitor"]);
+  });
+
+  test("what DynamicUser implied, laid by hand now that it is gone", () => {
+    expect(service).toContain("ProtectSystem=strict");
+    expect(service).toContain("ProtectHome=yes");
+    expect(service).toContain("PrivateTmp=yes");
+    expect(service).toContain("RemoveIPC=yes");
+    expect(service).toContain("NoNewPrivileges=yes");
+    expect(service).toContain("RestrictSUIDSGID=yes");
+  });
+
+  test("its state where the collector looks for it, the account's alone", () => {
     expect(service).toContain("StateDirectory=sitesolide-monitor");
+    expect(service).toContain("StateDirectoryMode=0700");
     expect(service).toContain("UMask=0077");
   });
 

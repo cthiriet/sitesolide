@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 /**
  * The monitor: one pass over the machine, started every minute by
- * sitesolide-monitor.timer, under a dynamic account with no privilege at all.
+ * sitesolide-monitor.timer, under its own system account with no privilege at
+ * all.
  *
  * It checks that Caddy runs, that every served site answers over HTTPS, that
  * no project's unit failed, that disk and memory have room, that no

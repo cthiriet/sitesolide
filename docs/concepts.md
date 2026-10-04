@@ -74,7 +74,7 @@ more.
 | The gatekeeper | root, one-shot | rewrite one project's block, reload Caddy, probe, roll back |
 | The installer | root, one-shot | deploy one project for a team token, the archive read by the project's own account |
 | The collector | root, on a timer | read the machine, drop a snapshot where the dashboard can read it |
-| The monitor | a dynamic account, on a timer | read what any account reads, ask Caddy for every site over HTTPS, alert |
+| The monitor | `sitesolide-monitor`, on a timer | read what any account reads, ask Caddy for every site over HTTPS, alert |
 | The egress proxy | `sitesolide-egress` | let each project reach the hosts its manifest lists, lend it the connectors granted to it |
 | The backup run | root, on a timer | list the projects, store the archives their own accounts hand it, prune, upload |
 | A backup copy or extraction | `site-<slug>`, one-shot | read or write that project's data, nothing else, no network |

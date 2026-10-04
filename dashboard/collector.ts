@@ -54,11 +54,12 @@ const HOSTS_FILE = process.env.HOSTS_FILE ?? "/srv/sites/analytics/data/hotes.js
 const HOSTS_OWNER = process.env.HOSTS_OWNER ?? "site-analytics:site-analytics";
 
 /**
- * The status the monitor leaves after each pass (monitor/README.md). Under its
- * DynamicUser it lives behind a link into /var/lib/private, which only root
- * traverses: the collector, already root and already passing every minute, is
- * the one path to the dashboard. Missing as long as bin/deploy-monitor.sh has
- * not run, which is a normal state; src/monitor.ts interprets it.
+ * The status the monitor leaves after each pass (monitor/README.md), in the
+ * state directory of its account, sitesolide-monitor, 0700: only that account
+ * and root may open it, and the collector, already root and already passing
+ * every minute, is the one path to the dashboard. Missing as long as
+ * bin/deploy-monitor.sh has not run, which is a normal state; src/monitor.ts
+ * interprets it.
  *
  * Unlike every other file read here, it is NOT copied as it stands: the
  * directory belongs to the monitor's account, see readMonitorStatus.
@@ -175,15 +176,26 @@ function readAudience(): string | null {
  * The monitor's status, as the dashboard may see it, or null when there is
  * none.
  *
- * Read as root from a directory the monitor's dynamic account owns, which
- * makes it a door: whatever that account puts at status.json, root opens. A
- * symbolic link to /etc/sitesolide/dashboard-*.env would have the secret
- * copied into a reading site-dashboard reads. So the file is looked at without
- * following a link, opened only if src/monitor.ts finds nothing to refuse in
- * it, its owner compared to its directory's, and parsed then written anew
- * rather than copied. The directory itself is reached through
- * /var/lib/sitesolide-monitor, a link systemd keeps and root owns, which the
- * monitor cannot move.
+ * Read as root from a directory the monitor's account owns, which makes it a
+ * door: whatever that account puts at status.json, root opens. A symbolic
+ * link to /etc/sitesolide/dashboard-*.env would have the secret copied into a
+ * reading site-dashboard reads. So the file is looked at without following a
+ * link, opened only if src/monitor.ts finds nothing to refuse in it, its owner
+ * compared to its directory's, and parsed then written anew rather than
+ * copied.
+ *
+ * The directory itself sits in /var/lib, which root owns, so the monitor can
+ * change what is inside it but can neither move it nor put a link in its
+ * place. The comparison holds whatever the account: the directory is the
+ * account's, and so is every file the monitor writes there, each pass writing
+ * status.json anew; even ID-mapped by systemd, both stay the nobody user's on
+ * the host, bin/deploy-monitor.sh says when.
+ *
+ * On a machine that ran the monitor under DynamicUser,
+ * /var/lib/sitesolide-monitor stays a link systemd made into /var/lib/private
+ * until the first run of the static account's unit moves the directory back:
+ * statSync follows that link, root's, and compares with the directory it
+ * reaches, as before.
  *
  * A refusal takes the place of the status and says why, so that the page shows
  * it rather than "no monitor".

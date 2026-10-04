@@ -86,8 +86,8 @@ export type StatusFileInfo = { link: boolean; regular: boolean; links: number; u
 /**
  * Why the collector, root, must not copy this file, or null.
  *
- * The monitor's directory belongs to its dynamic account, so whatever stands
- * at status.json was put there by that account. A symbolic link would have
+ * The monitor's directory belongs to its own account, so whatever stands at
+ * status.json was put there by that account. A symbolic link would have
  * root read any file it can, /etc/sitesolide/*.env among them, into a reading
  * site-dashboard reads; a hard link to a file of root's keeps root as its
  * owner, and two names are refused anyway; a named pipe would hang the

@@ -20,10 +20,10 @@ import type { Raw } from "../src/state";
  * The collector, run as its timer runs it, on a test tree, when the account
  * that owns a directory it reads or writes as root lays a trap there.
  *
- * Three such directories: the monitor's state directory, which its dynamic
- * account owns; analytics' data directory, which site-analytics owns; and the
- * dashboard's own, which site-dashboard owns. A link put in the right place
- * would have root copy a file only root may read into a snapshot
+ * Three such directories: the monitor's state directory, which its account,
+ * sitesolide-monitor, owns; analytics' data directory, which site-analytics
+ * owns; and the dashboard's own, which site-dashboard owns. A link put in the
+ * right place would have root copy a file only root may read into a snapshot
  * site-dashboard reads, or overwrite a file of somebody else's, and chown it
  * to the account that laid the link.
  *
@@ -101,6 +101,23 @@ describe("the monitor's status, copied as root from the monitor's directory", ()
     const raw = await collect();
     expect(JSON.parse(raw.monitor!)).toEqual(JSON.parse(written));
     expect(JSON.stringify(raw)).not.toContain(SECRET);
+  });
+
+  test("on a machine that ran the DynamicUser unit, still read through the link systemd made, until the directory moves back", async () => {
+    // /var/lib/sitesolide-monitor -> private/sitesolide-monitor, relative as
+    // systemd writes it, until the static account's unit first starts.
+    const hidden = join(D, "var", "lib", "private", "sitesolide-monitor");
+    rmSync(MONITOR, { recursive: true, force: true });
+    mkdirSync(hidden, { recursive: true });
+    symlinkSync(join("private", "sitesolide-monitor"), MONITOR);
+    const written = monitorStatus();
+    writeFileSync(join(hidden, "status.json"), written);
+    expect(JSON.parse((await collect()).monitor!)).toEqual(JSON.parse(written));
+
+    // The link systemd made is followed; one at status.json still is not.
+    rmSync(join(hidden, "status.json"));
+    symlinkSync(SECRET_FILE, join(hidden, "status.json"));
+    expect((await collect()).monitor).toBe(monitorRefusal("status.json is a symbolic link"));
   });
 
   test("a symbolic link in its place is refused, and what it points to never reaches the snapshot", async () => {

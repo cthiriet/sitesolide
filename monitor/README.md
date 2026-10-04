@@ -235,9 +235,14 @@ ssh you@your-machine 'sudo systemctl start sitesolide-monitor.timer'
 
 ## What it may read, and what it holds
 
-It runs under `DynamicUser=yes`, an account made at each start, with no
-capability and a read-only system (`infra/monitor/sitesolide-monitor.service`).
-Everything it reads is open to any account:
+It runs as `sitesolide-monitor`, a system account of its own with its own
+group, no home and no login shell, which `bin/deploy-monitor.sh` makes when it
+is missing, with no capability and a read-only system
+(`infra/monitor/sitesolide-monitor.service`). Not `DynamicUser=yes`, which the
+unit was at first: dbus-daemon runs with `SYSTEMD_NSS_DYNAMIC_BYPASS=1` and
+cannot resolve a dynamic uid, so on a Debian 13 test VM every `systemctl show`
+failed with `Transport endpoint is not connected`, and the monitor checked no
+unit, Caddy included, on any pass. Everything it reads is open to any account:
 
 | What | Why |
 |---|---|
@@ -248,12 +253,12 @@ Everything it reads is open to any account:
 | `127.0.0.1:443` | Caddy, over HTTPS, like a visitor; never the admin API on 2019, which the loopback rule closes to it anyway |
 | `/var/lib/sitesolide-backup/last-run.json` | the backup status, if the backup job leaves it readable by every account (it carries no secret) |
 
-It holds its state in `/var/lib/sitesolide-monitor/` (under DynamicUser, in
-`/var/lib/private/sitesolide-monitor/` behind a link): `state.json`, its memory
-between passes, and `status.json`, what the dashboard is handed. The alerting
-file is root's, `0600`: PID 1 reads it before the account exists, the
-dashboard's service cannot read it, and the dashboard manages it only from an
-unlocked session, like every secret.
+It holds its state in `/var/lib/sitesolide-monitor/`, a directory of the
+account's, `0700`, which only that account and root may open: `state.json`,
+its memory between passes, and `status.json`, what the dashboard is handed. The
+alerting file is root's, `0600`: PID 1 reads it before it drops to the account,
+the dashboard's service cannot read it, and the dashboard manages it only from
+an unlocked session, like every secret.
 
 ## The status the dashboard reads
 
@@ -371,30 +376,36 @@ Roll back: deploy the previous commit.
 bin/deploy-monitor.sh
 ```
 
-It builds, checks the machine and the alerting file's owner and mode, installs
-the bundle and both units, verifies the fingerprint and `systemd-analyze
-verify`, runs one pass by hand, and enables the timer only if that pass
-succeeded. Check:
+It builds, checks the machine and the alerting file's owner and mode, makes
+the `sitesolide-monitor` account if it is missing and hands it any state an
+earlier unit left, installs the bundle and both units, verifies the
+fingerprint and `systemd-analyze verify`, runs one pass by hand, checks that
+the state directory is a plain directory of the account's, and enables the
+timer only if all of that passed. Check:
 
 ```bash
 ssh you@your-machine 'systemctl list-timers sitesolide-monitor.timer'
 ssh you@your-machine 'sudo journalctl -u sitesolide-monitor -n 5 -o cat'
+ssh you@your-machine 'getent passwd sitesolide-monitor && sudo stat -c "%F %U:%G %a" /var/lib/sitesolide-monitor'
 ```
 
-The last line reads `N checks, 0 down, ...`. A first pass with problems shows
-them as `failing`; they are confirmed, and alerted, at the second pass, a minute
-later. With a heartbeat set, healthchecks.io turns green.
+The last journal line reads `N checks, 0 down, ...`. A first pass with problems
+shows them as `failing`; they are confirmed, and alerted, at the second pass, a
+minute later. With a heartbeat set, healthchecks.io turns green. The account
+reads `sitesolide-monitor:x:<uid>:<gid>::/nonexistent:/usr/sbin/nologin`, a uid
+below 1000, and its directory `directory sitesolide-monitor:sitesolide-monitor 700`.
 
 Roll back, which leaves nothing behind:
 
 ```bash
 ssh you@your-machine 'sudo systemctl disable --now sitesolide-monitor.timer'
 ssh you@your-machine 'sudo rm -f /etc/systemd/system/sitesolide-monitor.service /etc/systemd/system/sitesolide-monitor.timer /usr/local/lib/sitesolide/monitor.js && sudo systemctl daemon-reload'
-ssh you@your-machine 'sudo rm -rf /var/lib/private/sitesolide-monitor /var/lib/sitesolide-monitor'
+ssh you@your-machine 'sudo rm -rf /var/lib/sitesolide-monitor /var/lib/private/sitesolide-monitor && sudo userdel sitesolide-monitor'
 ```
 
 The status must go too: left in place, the dashboard would report "Monitor
-silent" for ever. Pause the healthchecks.io check, or it will report the
+silent" for ever. `userdel` takes the account's group with it, no other
+account being in it. Pause the healthchecks.io check, or it will report the
 machine down.
 
 **Updating**: `bin/deploy-monitor.sh` again, for any change to `monitor/` or
@@ -425,21 +436,128 @@ Roll back: `bin/deploy-monitor.sh` and `sitesolide deploy` from the previous
 commit; the older monitor reads the newer `state.json`, the fields it does not
 know ignored.
 
+**Upgrading from the dynamic account.** Until this change the unit ran with
+`DynamicUser=yes`, and on a machine where dbus-daemon cannot resolve a dynamic
+uid, every pass reported `DOWN monitor: The monitor could not run fully:
+systemctl show: ... Transport endpoint is not connected`, checked no unit, and,
+the monitor's own blindness being platform-wide, held the heartbeat on
+`/fail`. Only the monitor changes; the collector reads the status the same way
+in both layouts, and `state.json` is kept:
+
+```bash
+bin/deploy-monitor.sh
+```
+
+What it changes on that machine, in its order:
+
+1. **`-> account`**: `sitesolide-monitor` is made, `useradd --system
+   --user-group`, a uid below 1000 and a group of the same name. Both the
+   reading and `useradd` run with `SYSTEMD_NSS_DYNAMIC_BYPASS=1`: while a pass
+   of the old unit runs, its dynamic account bears the same name, and would
+   otherwise pass for the static one, or make `useradd` refuse.
+2. **`-> state`**: the state is in `/var/lib/private/sitesolide-monitor`,
+   behind the link `/var/lib/sitesolide-monitor`. Under systemd 257 it belongs
+   to `nobody:nogroup`, since that release ID-maps a DynamicUser unit's state
+   directory from the nobody user rather than chowning it to the dynamic uid;
+   under an older one, to a dynamic uid that `stat` prints `UNKNOWN`. The
+   script hands it to the account through the link, `chown -R
+   sitesolide-monitor:sitesolide-monitor /var/lib/sitesolide-monitor/`, and
+   says `was nobody:nogroup, handed to sitesolide-monitor`. Left to nobody,
+   systemd 257 would not chown it under the new unit either but ID-map it
+   again: it works, but on the host the directory would stay nobody's, open to
+   whatever else runs as nobody once no `0700` directory of root's stands in
+   front of it.
+3. **Installation**, then `daemon-reload`: from then on every start, the
+   timer's included, is the new unit's. Until then the old unit, if its timer
+   fires, already runs as the static account, systemd.exec saying that a
+   DynamicUser unit uses an existing account of the name it would have given
+   its dynamic one.
+4. **First run**: systemd finds the link into `/var/lib/private`, removes it
+   and moves the directory back up to `/var/lib/sitesolide-monitor`, its files
+   with it, and logs `Found pre-existing private StateDirectory= directory
+   /var/lib/private/sitesolide-monitor, migrating to
+   /var/lib/sitesolide-monitor`. Already the account's, it is left as it is.
+   The script then checks it is a plain directory of `sitesolide-monitor`'s.
+
+Where this comes from: systemd.exec(5) documents the `private` directory and
+the link under `DynamicUser=`, and that a state directory whose owner differs
+from `User=` and `Group=` is chowned recursively, its files with it, while one
+that already belongs to them is left as it is; it says nothing of the move
+back. That is in the code, systemd 257's
+`setup_exec_directory()` in `src/core/exec-invoke.c`, both ways: a unit
+turning DynamicUser off has its directory moved up out of `private`, and one
+turning it on, moved down into it. The same function holds the ID-mapping of
+a directory that belongs to the nobody user, for any account, which step 2
+exists for.
+
+`/var/lib/private` itself stays, root's, `0700`, empty unless another unit of
+the machine uses DynamicUser with a state directory: it is systemd's, and left
+alone.
+
+Check:
+
+```bash
+ssh you@your-machine 'sudo journalctl -u sitesolide-monitor -n 3 -o cat'
+ssh you@your-machine 'sudo stat -c "%F %U:%G %a" /var/lib/sitesolide-monitor; sudo ls -la /var/lib/private'
+```
+
+The last line reads `N checks, ...` and no line carries `could not run
+fully`; the directory is `directory sitesolide-monitor:sitesolide-monitor 700`,
+and `/var/lib/private` no longer holds `sitesolide-monitor`. Within two passes
+the monitor's own warning is `RECOVERED`, healthchecks.io turns green, and any
+unit that was already down, which the blind monitor could not see, is alerted
+for the first time. Roll back: `bin/deploy-monitor.sh` from the previous
+commit, which reinstalls the DynamicUser unit; its first start moves the
+directory back into `/var/lib/private`, state kept. As long as the account
+exists, that unit runs as it and keeps reading systemd; `sudo userdel
+sitesolide-monitor` afterwards returns exactly to the blind monitor.
+
 ## Verification on a test VM
 
 What the tests here cannot prove, systemd's behaviour and the sandbox on a
 real Debian 13, is to be checked on a **test VM, never on the machine that
 serves the sites**. With the platform installed on it as in
 [docs/install.md](../docs/install.md), the drop-in applied and
-`bin/deploy-monitor.sh` aimed at it:
+`bin/deploy-monitor.sh` aimed at it.
+
+On a VM that ran the DynamicUser unit, as the first test VM did, look first at
+what it left, then run the script and look again:
 
 ```bash
-# The pass runs under its sandbox: systemctl over D-Bus as a dynamic account,
+# Before: the reason for the change, and the state behind systemd's link.
+sudo systemd-run --wait --pipe -p DynamicUser=yes /usr/bin/systemctl show caddy -p ActiveState   # fails: Transport endpoint is not connected
+sudo systemd-run --wait --pipe -p User=nobody /usr/bin/systemctl show caddy -p ActiveState       # ActiveState=active
+sudo journalctl -u sitesolide-monitor -n 1 -o cat               # ... could not run fully: systemctl show: ...
+sudo stat -c '%N' /var/lib/sitesolide-monitor                   # '/var/lib/sitesolide-monitor' -> 'private/sitesolide-monitor'
+sudo stat -c '%U:%G %u:%g' /var/lib/private/sitesolide-monitor /var/lib/private/sitesolide-monitor/state.json
+# nobody:nogroup 65534:65534 twice, systemd 257's ID-mapping
+
+# bin/deploy-monitor.sh, from the workstation: "-> account" says
+# "sitesolide-monitor created", "-> state" says "was nobody:nogroup, handed to
+# sitesolide-monitor", and the script ends with the timer active.
+
+# After: the account, the directory moved back up and the account's, no link,
+# the state kept.
+getent passwd sitesolide-monitor                                # sitesolide-monitor:x:<uid below 1000>:<gid>::/nonexistent:/usr/sbin/nologin
+getent group sitesolide-monitor                                 # sitesolide-monitor:x:<gid>:
+sudo stat -c '%F %U:%G %a' /var/lib/sitesolide-monitor          # directory sitesolide-monitor:sitesolide-monitor 700
+sudo stat -c '%U:%G %n' /var/lib/sitesolide-monitor/*           # sitesolide-monitor:sitesolide-monitor, state.json and status.json
+sudo test -e /var/lib/private/sitesolide-monitor || echo moved  # moved
+sudo journalctl -u sitesolide-monitor -o cat | grep 'pre-existing private StateDirectory='   # systemd's move, at the first run
+sudo journalctl -u sitesolide-monitor -o cat | grep -c 'RECOVERED monitor'                    # 1, within two passes
+```
+
+Then, on any test VM:
+
+```bash
+# The pass runs under its sandbox: systemctl over D-Bus as its own account,
 # /proc/meminfo readable, the state directory writable.
 sudo systemctl start sitesolide-monitor.service
-systemctl show sitesolide-monitor.service -p Result            # Result=success
-sudo journalctl -u sitesolide-monitor -n 20 -o cat              # no "could not run fully"
-sudo cat /var/lib/sitesolide-monitor/status.json
+systemctl show sitesolide-monitor.service -p Result -p User -p DynamicUser   # Result=success, User=sitesolide-monitor, DynamicUser=no
+sudo systemd-run --wait --pipe -p User=sitesolide-monitor /usr/bin/systemctl show caddy -p ActiveState   # ActiveState=active
+sudo journalctl -u sitesolide-monitor -n 20 -o cat              # no "could not run fully"; the last line "N checks, ..."
+sudo grep -c '"id":"monitor"' /var/lib/sitesolide-monitor/status.json        # 0: the monitor is not among what is down
+sudo grep -o '"unit:[^"]*"' /var/lib/sitesolide-monitor/state.json | head    # the units it now checks
 systemd-analyze security sitesolide-monitor.service             # the exposure score
 
 # The alerting file reaches it although its account cannot read it.
@@ -462,16 +580,16 @@ systemctl show caddy -p NRestarts -p ActiveState               # NRestarts=1, Ac
 sudo systemctl stop caddy                     # within 3 minutes: DOWN Caddy, heartbeat on /fail
 sudo systemctl start caddy
 
-# The collector hands the status to the dashboard: through the link systemd
-# keeps, owned by the dynamic account, so copied rather than refused.
+# The collector hands the status to the dashboard: a file of the account's in
+# a directory of the account's, so copied rather than refused.
 sudo systemctl start sitesolide-collector.service
 sudo grep -o '"monitor":"{\\"[a-z]*' /srv/sites/dashboard/data/state.json  # "monitor":"{\"version
 sudo stat -c '%U:%G %a' /srv/sites/dashboard/data/state.json /srv/sites/analytics/data/hotes.json
 # site-dashboard:site-dashboard 600, site-analytics:site-analytics 640: the fchown on the descriptor
 
 # A link at status.json is refused, and its target never reaches the snapshot.
-sudo ln -sf /etc/sitesolide/dashboard-monitor.env /var/lib/private/sitesolide-monitor/status.json
+sudo ln -sf /etc/sitesolide/dashboard-monitor.env /var/lib/sitesolide-monitor/status.json
 sudo systemctl start sitesolide-collector.service
 sudo grep -o '"monitor":"{\\"[a-z]*' /srv/sites/dashboard/data/state.json  # "monitor":"{\"refused
-sudo rm /var/lib/private/sitesolide-monitor/status.json && sudo systemctl start sitesolide-monitor.service
+sudo rm /var/lib/sitesolide-monitor/status.json && sudo systemctl start sitesolide-monitor.service
 ```

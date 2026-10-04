@@ -137,19 +137,30 @@ describe("the monitor among the Issues", () => {
  * collector.ts, whose own test lays the traps on a real tree.
  */
 describe("the monitor's status as the collector copies it", () => {
-  const file = { link: false, regular: true, links: 1, uid: 61234, size: 400 };
+  /** The monitor's static account, a system uid like the one useradd --system draws. */
+  const ACCOUNT_UID = 996;
+  const NOBODY_UID = 65534;
+  const file = { link: false, regular: true, links: 1, uid: ACCOUNT_UID, size: 400 };
 
   test("a small regular file of the directory's owner, with a single name, passes", () => {
-    expect(statusFileRefusal(file, 61234, 1024)).toBeNull();
+    expect(statusFileRefusal(file, ACCOUNT_UID, 1024)).toBeNull();
+  });
+
+  test("the owner compared is the directory's, whatever kind of account it is", () => {
+    // A state directory systemd 257 ID-maps, left to the nobody user on the
+    // host, with the files the monitor wrote through the mapping.
+    expect(statusFileRefusal({ ...file, uid: NOBODY_UID }, NOBODY_UID, 1024)).toBeNull();
+    // A file of nobody's in the account's directory: not the monitor's.
+    expect(statusFileRefusal({ ...file, uid: NOBODY_UID }, ACCOUNT_UID, 1024)).toBe("status.json does not belong to the owner of its directory");
   });
 
   test("a link, anything but a regular file, a second name, another owner or too many bytes is refused", () => {
-    expect(statusFileRefusal({ ...file, link: true, regular: false }, 61234, 1024)).toBe("status.json is a symbolic link");
-    expect(statusFileRefusal({ ...file, regular: false }, 61234, 1024)).toBe("status.json is not a regular file");
-    expect(statusFileRefusal({ ...file, links: 2 }, 61234, 1024)).toBe("status.json has more than one name");
+    expect(statusFileRefusal({ ...file, link: true, regular: false }, ACCOUNT_UID, 1024)).toBe("status.json is a symbolic link");
+    expect(statusFileRefusal({ ...file, regular: false }, ACCOUNT_UID, 1024)).toBe("status.json is not a regular file");
+    expect(statusFileRefusal({ ...file, links: 2 }, ACCOUNT_UID, 1024)).toBe("status.json has more than one name");
     // A hard link to a file of root's keeps root as its owner.
-    expect(statusFileRefusal({ ...file, uid: 0 }, 61234, 1024)).toBe("status.json does not belong to the owner of its directory");
-    expect(statusFileRefusal({ ...file, size: 1025 }, 61234, 1024)).toBe("status.json is larger than 1024 bytes");
+    expect(statusFileRefusal({ ...file, uid: 0 }, ACCOUNT_UID, 1024)).toBe("status.json does not belong to the owner of its directory");
+    expect(statusFileRefusal({ ...file, size: 1025 }, ACCOUNT_UID, 1024)).toBe("status.json is larger than 1024 bytes");
   });
 
   test("written anew from the fields the dashboard knows, never byte for byte", () => {

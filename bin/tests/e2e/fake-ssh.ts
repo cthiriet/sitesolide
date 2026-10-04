@@ -34,7 +34,10 @@
  *   elsewhere than /etc/systemd/system, as a package's own;
  * - `portal.json`: the portal's sharing, which `share` asks on the loopback,
  *   see `PortalState`: answered from there, and changed there by an accepted
- *   write.
+ *   write;
+ * - `accounts`: the static accounts the machine carries, one passwd line each,
+ *   which the reading of an account answers from; an accepted `useradd` adds
+ *   its account there, so that the next reading finds it.
  */
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -69,7 +72,29 @@ export const SWITCHES = {
   firstInstall: "first-install",
   systemUnits: "system-units.json",
   portal: "portal.json",
+  accounts: "accounts",
 } as const;
+
+/**
+ * An account as /etc/passwd carries it, made the way the deploy scripts make
+ * theirs: a system uid, its own group, no home, no login shell.
+ */
+export function passwdLine(name: string, uid: number): string {
+  return `${name}:x:${uid}:${uid}::/nonexistent:/usr/sbin/nologin`;
+}
+
+/** The accounts laid in the VM's folder, one passwd line each. */
+export function readAccounts(vm: string): string[] {
+  const file = join(vm, SWITCHES.accounts);
+  return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter((line) => line !== "") : [];
+}
+
+/** Adds an account to the VM, with the next system uid down from 999 unless one is given. */
+export function addAccount(vm: string, name: string, uid?: number): void {
+  const accounts = readAccounts(vm);
+  if (accounts.some((line) => line.startsWith(`${name}:`))) return;
+  appendFileSync(join(vm, SWITCHES.accounts), `${passwdLine(name, uid ?? 999 - accounts.length)}\n`);
+}
 
 /**
  * The portal as `share` finds it on the loopback: answering with this
@@ -107,6 +132,13 @@ const FINGERPRINT = /^sudo shasum -a 256 (\/etc\/caddy\/[A-Za-z0-9._\/-]+) 2>\/d
 // `caddy-lock` and its four verbs are what bin/cli/caddy-lock.ts writes into
 // the remote script: they are read here, never chosen here.
 const LOCK = /^sudo sh -c ': caddy-lock (take|retake|release|verify) ([^;']*);/;
+/**
+ * Whether a static account exists, word for word as bin/deploy-monitor.sh asks
+ * it: dynamic accounts left out, the passwd line or `missing`.
+ */
+const ACCOUNT_READING = /^SYSTEMD_NSS_DYNAMIC_BYPASS=1 getent passwd ([a-z][a-z0-9-]*) \|\| echo missing$/;
+/** An account made, its name last on the line, as every deploy script writes useradd. */
+const USERADD = /\buseradd .* ([a-z][a-z0-9-]*)$/;
 
 if (import.meta.main) {
   const vm = process.env.FAKE_VM ?? "";
@@ -198,6 +230,16 @@ if (import.meta.main) {
 
   if (command === "true") {
     record("CONNECT");
+    process.exit(0);
+  }
+  // Whether the account a unit names exists, read before a deploy script
+  // makes it. A reading, hence always answered: from the accounts the test
+  // lays and those an accepted useradd made, none otherwise.
+  const accountName = ACCOUNT_READING.exec(command)?.[1];
+  if (accountName !== undefined) {
+    record(`ACCOUNT ${accountName}`);
+    const line = readAccounts(vm).find((entry) => entry.startsWith(`${accountName}:`));
+    process.stdout.write(`${line ?? "missing"}\n`);
     process.exit(0);
   }
   // Where the loopback rule stands, read before a project with several
@@ -346,6 +388,9 @@ if (import.meta.main) {
       : [];
     if (!refused.some((refusedPattern) => command.includes(refusedPattern))) {
       await receive(`ACCEPTED ${command}`);
+      // An account made is there for the next reading, as on a machine.
+      const made = USERADD.exec(command)?.[1];
+      if (made !== undefined) addAccount(vm, made);
       if (command.includes("/dev/stdin")) await Bun.stdin.text();
       // A script handed to `sh -s` on standard input, an install's: recorded,
       // so that a test sees it travelled there and not in the arguments.

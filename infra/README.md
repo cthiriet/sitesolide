@@ -184,9 +184,11 @@ with test values, or Caddy will not start under it at all.
 recovers, with a heartbeat that notices the machine itself dying: see
 [monitor/README.md](../monitor/README.md). Its unit and timer are in
 `infra/monitor/`, `sitesolide-monitor.service` and `.timer`, placed by
-`bin/deploy-monitor.sh`. It runs as a dynamic account with no privilege and
-keeps its state in `/var/lib/sitesolide-monitor/`; nothing runs until that
-script has.
+`bin/deploy-monitor.sh`. It runs as `sitesolide-monitor`, a system account
+of its own that the script makes, with no privilege, and keeps its state in
+`/var/lib/sitesolide-monitor/`, that account's; nothing runs until that script
+has. Not as a dynamic account: dbus-daemon cannot resolve one, and `systemctl`
+then reads no unit.
 
 ## Hardening to do once it works
 

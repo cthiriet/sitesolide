@@ -57,6 +57,12 @@ anything), suspend a chosen command long enough to send a signal (`pause`), or
 make the gatekeeper act on the first write (`onFirstAccepted`). The CLI's zone
 then points at a `.invalid` name, so that the final verification reaches nobody.
 
+The fake machine also carries static accounts. `bin/deploy-monitor.sh` reads
+whether the account its unit runs as exists before making it, and the fake ssh
+answers from the accounts the test lays (`addAccount`) and from those an
+accepted `useradd` made, so that `deploy-monitor.test.ts` sees the account made
+once, and a second run make nothing.
+
 ## Agents
 
 `agents.test.ts` drives the CLI as an agent does: `--json`, whose standard

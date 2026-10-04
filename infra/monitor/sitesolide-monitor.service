@@ -21,19 +21,40 @@ ConditionPathExists=/usr/local/lib/sitesolide/monitor.js
 Type=oneshot
 ExecStart=/usr/local/bin/bun /usr/local/lib/sitesolide/monitor.js
 
-# A dynamic account, made at each start and gone after: no account to create
-# on the machine, no file of its own outside its state directory, and no uid
-# any other unit shares. DynamicUser also implies ProtectSystem=strict,
-# ProtectHome=read-only, PrivateTmp, RemoveIPC, NoNewPrivileges and
-# RestrictSUIDSGID.
-DynamicUser=yes
+# A static system account of its own, sitesolide-monitor, with its own group,
+# no home and no login shell, made by bin/deploy-monitor.sh before this file
+# is installed. No other unit runs as it, and it owns nothing outside its state
+# directory.
+#
+# NOT DynamicUser=yes, which this unit used to be: systemctl reads the units
+# over the D-Bus system bus, and dbus-daemon runs with
+# SYSTEMD_NSS_DYNAMIC_BYPASS=1, so it cannot resolve a dynamic uid. Every
+# reading failed with "Transport endpoint is not connected", and the monitor
+# checked no unit, Caddy included, on any pass. Measured on Debian 13, systemd
+# 257 and dbus-daemon 1.16.2: `systemd-run --wait --pipe -p DynamicUser=yes
+# /usr/bin/systemctl show caddy` fails where `-p User=nobody` answers, although
+# systemd.exec says DynamicUser does not affect calling into other services.
+User=sitesolide-monitor
+Group=sitesolide-monitor
+# DynamicUser implied it, and no other line lays it: no IPC object of the
+# account's outlives a run. What else it implied, ProtectSystem=strict,
+# ProtectHome, PrivateTmp, NoNewPrivileges and RestrictSUIDSGID, is laid
+# below already.
+RemoveIPC=yes
 
 # /var/lib/sitesolide-monitor: the memory of the previous runs and the status
-# the dashboard's collector copies. Under DynamicUser it really lives in
-# /var/lib/private/sitesolide-monitor, behind a link systemd keeps; the
-# collector runs as root and follows that link, never one at status.json, and
-# copies the file only if it belongs to this directory's owner. UMask=0077:
-# what it writes belongs to it alone, the collector reading as root regardless.
+# the dashboard's collector copies, a directory of the account's, 0700. The
+# collector runs as root, opens status.json without following a link, and
+# copies it only if it belongs to this directory's owner. UMask=0077: what it
+# writes belongs to it alone, the collector reading as root regardless.
+#
+# A machine that ran the DynamicUser unit keeps it in
+# /var/lib/private/sitesolide-monitor, behind a link: systemd moves it back up
+# at this unit's first start, state.json with it. bin/deploy-monitor.sh hands
+# it to the account beforehand: systemd 257 does not chown a directory that
+# belongs to the nobody user, which is how the DynamicUser unit left it, but
+# ID-maps it, and on the host it would stay nobody's (monitor/README.md,
+# "Upgrading from the dynamic account").
 StateDirectory=sitesolide-monitor
 StateDirectoryMode=0700
 UMask=0077
@@ -46,15 +67,15 @@ EnvironmentFile=/etc/caddy/sitesolide.env
 # The alerting addresses, HEARTBEAT_URL, ALERT_WEBHOOK_URL and
 # ALERT_WEBHOOK_FORMAT, set from the dashboard's Secrets, file
 # dashboard-monitor.env of the dashboard site, root:root 0600. PID 1 reads it
-# as root before the account is made, so the account never can. The dash: with
-# no file, the monitor runs all the same and writes to the journal only.
+# as root before it drops to the account, so the account never can. The dash:
+# with no file, the monitor runs all the same and writes to the journal only.
 #
 # InaccessiblePaths=/etc/sitesolide is NOT laid, although the monitor never
 # opens that directory: whether systemd still hands over an EnvironmentFile
 # from a directory the namespace hides is measured on arm64 only, and the units
 # generated for projects follow the same rule until it is on x86_64
-# (bin/cli/unit.ts). The dynamic account cannot read the 0600 files there
-# anyway; it can list their names, which the monitor does not do.
+# (bin/cli/unit.ts). The account cannot read the 0600 files there anyway; it
+# can list their names, which the monitor does not do.
 EnvironmentFile=-/etc/sitesolide/dashboard-monitor.env
 
 # A run takes a few seconds; the probes stop at 25 whatever happens, and the

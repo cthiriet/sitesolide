@@ -26,7 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HOLDER_NAME, LOCK_NAME } from "../../cli/caddy-lock";
-import { DEFAULT_PORTAL, SWITCHES, TEST_HOST, type PortalState } from "./fake-ssh";
+import { addAccount, DEFAULT_PORTAL, readAccounts, SWITCHES, TEST_HOST, type PortalState } from "./fake-ssh";
 
 export type FakeVm = {
   /** The folder that stands in for the machine. */
@@ -63,6 +63,10 @@ export type FakeVm = {
   setPortal(state: Partial<PortalState>): void;
   /** The portal's sharing as it stands, after the writes accepted. */
   portal(): PortalState;
+  /** Lays a static account the machine already carries, with a system uid unless one is given. */
+  addAccount(name: string, uid?: number): void;
+  /** The static accounts as /etc/passwd lines: those laid, and those an accepted useradd made. */
+  accounts(): string[];
   /** The commands received, one per line: CONNECT, READ <pattern>, REFUSED <command>... */
   logs(): string[];
   cleanup(): void;
@@ -158,6 +162,12 @@ export function createFakeVm(): FakeVm {
     portal() {
       const file = join(root, SWITCHES.portal);
       return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as PortalState) : DEFAULT_PORTAL;
+    },
+    addAccount(name, uid) {
+      addAccount(root, name, uid);
+    },
+    accounts() {
+      return readAccounts(root);
     },
     logs() {
       return existsSync(logs) ? readFileSync(logs, "utf8").split("\n").filter((line) => line !== "") : [];

@@ -114,8 +114,9 @@ on its side.
 ## The monitor's status, by the same road
 
 The monitor ([../monitor/README.md](../monitor/README.md)) runs every minute
-under a dynamic account and leaves `/var/lib/sitesolide-monitor/status.json`,
-which only root reaches. The collector carries it into the reading, the
+as its own system account, `sitesolide-monitor`, and leaves
+`/var/lib/sitesolide-monitor/status.json`, in a `0700` directory only that
+account and root reach. The collector carries it into the reading, the
 `monitor` field, but not as it stands: the directory belongs to the monitor's
 account, so the file is opened without following a link, only if it is a small
 regular file with a single name owned by the directory's owner, then parsed and

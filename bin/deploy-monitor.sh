@@ -14,9 +14,10 @@
 # the account that runs it cannot rewrite what it runs. A change to monitor/ or
 # infra/monitor/ only counts on the machine after this script.
 #
-# In order: build, check the machine, install, verify the files, ONE run by
-# hand, and only then enable the timer. A first run that fails stops here with
-# its journal, and no timer repeats it every minute.
+# In order: build, check the machine, make the account and hand it its state,
+# install, verify the files, ONE run by hand, and only then enable the timer. A
+# first run that fails stops here with its journal, and no timer repeats it
+# every minute.
 #
 # The alerting is not set here. It lives in /etc/sitesolide/dashboard-monitor.env,
 # root:root 0600, filled from the dashboard: see monitor/README.md, "Alerting".
@@ -26,10 +27,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$REPO_ROOT/bin/config.sh"
 sitesolide_require_config
 UNIT="sitesolide-monitor"
+# The account the unit names in User= and Group=, and its group.
+ACCOUNT="sitesolide-monitor"
 SOURCE="$REPO_ROOT/infra/monitor"
 TARGET_JS="/usr/local/lib/sitesolide/monitor.js"
 ALERTING="/etc/sitesolide/dashboard-monitor.env"
-STATUS="/var/lib/sitesolide-monitor/status.json"
+STATE_DIR="/var/lib/sitesolide-monitor"
+STATUS="$STATE_DIR/status.json"
 
 fail() {
   echo "!! $1" >&2
@@ -61,7 +65,7 @@ if ! ssh -n "$SITESOLIDE_SERVER" "test -x /usr/local/bin/bun && test -x /usr/bin
 fi
 
 # The alerting file, when there is one, is root's alone: PID 1 reads it before
-# the monitor's account exists, and the steward manages it under that rule.
+# it drops to the monitor's account, and the steward manages it under that rule.
 # Anything else is corrected by hand, knowing why it differed.
 alerting="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%u %a %F' $ALERTING 2>/dev/null || echo missing")"
 case "$alerting" in
@@ -76,6 +80,52 @@ case "$alerting" in
     echo "!! $ALERTING is '$alerting', expected 0 600 regular file (root:root 0600)" >&2
     echo "   to run yourself, after checking: ssh $SITESOLIDE_SERVER 'sudo chown root:root $ALERTING && sudo chmod 600 $ALERTING'" >&2
     exit 1
+    ;;
+esac
+
+echo "-> account"
+# The unit runs as a static system account rather than DynamicUser=yes, whose
+# dynamic uid dbus-daemon cannot resolve (the unit says why). Nothing makes it
+# on a fresh machine, and systemd would fail every start with 217/USER: it is
+# made here when missing, before the unit that names it is installed, and
+# nothing changes on a machine that has it. Its own group, which the unit
+# names, no home and no login shell.
+#
+# SYSTEMD_NSS_DYNAMIC_BYPASS=1, the very setting that blinds dbus-daemon, keeps
+# both the reading and useradd to the static accounts: while the DynamicUser
+# unit runs a pass, its dynamic account bears this same name, and without it
+# getent would report that account as existing and useradd would refuse to
+# make it.
+account="$(ssh -n "$SITESOLIDE_SERVER" "SYSTEMD_NSS_DYNAMIC_BYPASS=1 getent passwd $ACCOUNT || echo missing")"
+if [ "$account" = "missing" ]; then
+  ssh -n "$SITESOLIDE_SERVER" "sudo env SYSTEMD_NSS_DYNAMIC_BYPASS=1 useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin $ACCOUNT"
+  echo "   $ACCOUNT created"
+else
+  echo "   $ACCOUNT exists, uid $(echo "$account" | cut -d: -f3)"
+fi
+
+echo "-> state"
+# A machine that ran the DynamicUser unit keeps the state in
+# /var/lib/private/sitesolide-monitor, behind a link. systemd moves it back up
+# at the new unit's first start, but under systemd 257 the DynamicUser unit
+# left it to the nobody user, and systemd does not chown such a directory: it
+# ID-maps it into the namespace, and on the host it stays nobody's, open to
+# whatever else runs as nobody once no 0700 directory of root's stands in
+# front of it. So it is handed to the account here, through the link, before
+# the new unit is in place, and systemd finds it already the account's. Owned
+# by anyone else, an older systemd's dynamic uid included, it is handed over
+# the same way. chown -R follows no link below the directory it is given.
+state="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -L -c '%U:%G' $STATE_DIR 2>/dev/null || echo missing")"
+case "$state" in
+  missing)
+    echo "   no state yet: the first run makes $STATE_DIR, the account's"
+    ;;
+  "$ACCOUNT:$ACCOUNT")
+    echo "   $STATE_DIR is the account's"
+    ;;
+  *)
+    ssh -n "$SITESOLIDE_SERVER" "sudo chown -R $ACCOUNT:$ACCOUNT $STATE_DIR/"
+    echo "   $STATE_DIR was $state, handed to $ACCOUNT with the state it holds"
     ;;
 esac
 
@@ -109,6 +159,11 @@ ssh -n "$SITESOLIDE_SERVER" "sudo systemctl start $UNIT.service" || fail "the fi
 result="$(ssh -n "$SITESOLIDE_SERVER" "systemctl show $UNIT.service -p Result --value")"
 [ "$result" = "success" ] || fail "the first run ended with Result=${result:-nothing}"
 ssh -n "$SITESOLIDE_SERVER" "sudo test -s $STATUS" || fail "the first run left no $STATUS"
+# A plain directory of the account's, no longer a link into /var/lib/private:
+# what the collector compares status.json's owner to, and what nothing else
+# on the machine can write.
+layout="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%F %U:%G' $STATE_DIR" || true)"
+[ "$layout" = "directory $ACCOUNT:$ACCOUNT" ] || fail "$STATE_DIR is '${layout:-nothing}', expected a directory of $ACCOUNT:$ACCOUNT"
 echo "   $(ssh -n "$SITESOLIDE_SERVER" "sudo journalctl -u $UNIT.service -n 1 -o cat --no-pager" || true)"
 
 echo "-> timer"
