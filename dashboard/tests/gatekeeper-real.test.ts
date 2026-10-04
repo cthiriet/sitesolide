@@ -401,3 +401,67 @@ describe.skipIf(OPENSSL === null)("the probe reads at most MAX_BODY bytes", () =
     expect(performance.now() - start).toBeLessThan(3000);
   });
 });
+
+/**
+ * The probe names the site in the TLS handshake, the way Caddy needs it: Caddy
+ * picks a certificate by the SNI, and a handshake without one fails before any
+ * certificate is sent. Bun 1.3.11 took the SNI from the Host header; Bun 1.4.2
+ * no longer does, and every probe of the gatekeeper failed on the test machine
+ * with UNKNOWN_CERTIFICATE_VERIFICATION_ERROR, which made it restore every
+ * door change. Here a server holds two certificates, each for one name: the
+ * second is only ever sent to a client that names it, and the third name,
+ * covered by neither, must still be refused.
+ */
+describe.skipIf(OPENSSL === null)("the probe names the site in the TLS handshake", () => {
+  const T = mkdtempSync(join(tmpdir(), "gatekeeper-sni-"));
+  const FIRST = "first.test-zone.invalid";
+  const SECOND = "second.other-zone.invalid";
+  let server: ReturnType<typeof Bun.serve>;
+  let ca = "";
+
+  function openssl(...arguments_: string[]): void {
+    const output = Bun.spawnSync([OPENSSL!, ...arguments_], { cwd: T, stdout: "ignore", stderr: "pipe" });
+    if (output.exitCode !== 0) throw new Error(`openssl ${arguments_[0]}: ${output.stderr.toString()}`);
+  }
+
+  function certificate(name: string, file: string): { cert: string; key: string; serverName: string } {
+    openssl("req", "-newkey", "rsa:2048", "-nodes", "-keyout", `${file}.key`, "-out", `${file}.csr`, "-subj", `/CN=${name}`);
+    writeFileSync(join(T, `${file}.ext`), `subjectAltName=DNS:${name}\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n`);
+    openssl("x509", "-req", "-in", `${file}.csr`, "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", `${file}.pem`,
+      "-days", "2", "-extfile", `${file}.ext`);
+    return { cert: readFileSync(join(T, `${file}.pem`), "utf8"), key: readFileSync(join(T, `${file}.key`), "utf8"), serverName: name };
+  }
+
+  function probeMachine() {
+    const { config } = mount();
+    return createMachine({ ...config, probeConfig: { address: "127.0.0.1", port: server.port!, ca } });
+  }
+
+  beforeAll(() => {
+    openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
+      "-subj", "/CN=Probe SNI", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign");
+    ca = readFileSync(join(T, "ca.pem"), "utf8");
+    server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      // The first is what a client that names nobody receives.
+      tls: [certificate(FIRST, "first"), certificate(SECOND, "second")],
+      fetch: (req) => new Response(`site ${req.headers.get("host")}`),
+    });
+  });
+
+  afterAll(() => {
+    server?.stop(true);
+    rmSync(T, { recursive: true, force: true });
+  });
+
+  test("each site answers over verified HTTPS, the second included", async () => {
+    expect(await probeMachine().probe(FIRST, "/", 4000)).toEqual({ code: 200, door: false, body: `site ${FIRST}` });
+    expect(await probeMachine().probe(SECOND, "/", 4000)).toEqual({ code: 200, door: false, body: `site ${SECOND}` });
+  });
+
+  test("a name neither certificate covers is still refused", async () => {
+    const response = await probeMachine().probe("third.test-zone.invalid", "/", 4000);
+    expect("error" in response).toBe(true);
+  });
+});

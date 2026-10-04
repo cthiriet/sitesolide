@@ -622,12 +622,18 @@ export function createMachine(config: MachineConfig): Machine {
     },
 
     async probe(host: string, path: string, timeoutMs: number): Promise<ProbeResponse> {
-      // Measured on 17 September 2026 on Bun 1.3.11, against a local Caddy with
-      // two certificates: the Host header sets the SNI AND the name the
-      // certificate must carry. A certificate with another name fails with
-      // ERR_TLS_CERT_ALTNAME_INVALID. It is the equivalent of `curl --resolve`,
-      // verification included. `keepalive: false` so that a connection opened
-      // for one host never serves to question another.
+      // The Host header and `tls.serverName` both name the site. Measured on
+      // 17 September 2026 on Bun 1.3.11, the Host header alone set the SNI
+      // AND the name the certificate must carry. Bun 1.4.2 takes neither from
+      // it any more: measured on 4 October 2026 on the test machine, a probe
+      // with the header alone sent no SNI, Caddy answered the handshake with
+      // no certificate, and every probe failed with
+      // UNKNOWN_CERTIFICATE_VERIFICATION_ERROR, so that every door change was
+      // restored. `serverName` sets both, as Bun's documentation says. A
+      // certificate with another name fails with ERR_TLS_CERT_ALTNAME_INVALID
+      // either way. It is the equivalent of `curl --resolve`, verification
+      // included. `keepalive: false` so that a connection opened for one host
+      // never serves to question another.
       //
       // The body comes from a site that may be compromised: see `readStart`.
       // `Accept-Encoding: identity` so that an honest site sends nothing
@@ -645,7 +651,7 @@ export function createMachine(config: MachineConfig): Machine {
         keepalive: false,
         decompress: false,
         signal: AbortSignal.any([timeout, closing.signal]),
-        ...(config.probeConfig.ca === null ? {} : { tls: { ca: config.probeConfig.ca } }),
+        tls: { serverName: host, ...(config.probeConfig.ca === null ? {} : { ca: config.probeConfig.ca }) },
       };
       try {
         const response = await fetch(url, options);
