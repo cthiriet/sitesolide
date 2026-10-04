@@ -15,10 +15,15 @@
  * requests for the same reason: the manifest first, judged, then the archive,
  * streamed to the spool and handed to the installer.
  *
+ * **Sharing goes to the portal the way the Sharing section does**, through the
+ * same client and the same admin route, with the token as the actor: see
+ * sharing.ts for what a token may share.
+ *
  * Nothing here logs a bearer, and no response carries one.
  */
 import type { RandomSource } from "../sessions";
 import { read } from "../read";
+import type { SharingPortal } from "../sharing";
 import type { Site } from "../state";
 import { readManifest } from "../../borrowed/manifest";
 import { reach, type ControlSteward, type Reached } from "./client";
@@ -39,6 +44,17 @@ import {
   type InstallerResult,
   type ProjectStatus,
 } from "./protocol";
+import {
+  domainMessage,
+  domainRefusals,
+  MAX_SHARING_BYTES,
+  policyOf,
+  projectSharing,
+  readPortalSharing,
+  readSavedPolicy,
+  readTokenPolicy,
+  type PortalSharing,
+} from "./sharing";
 import type { Spool } from "./spool";
 import type { ControlStore, DeploymentRow } from "./store";
 import { bearerOf, isTokenShape } from "./tokens";
@@ -53,6 +69,12 @@ export type ApiDependencies = {
   stateFile: string;
   publicUrl: string;
   zone: string;
+  /**
+   * The portal's admin API, as the Sharing section reaches it. Absent, the
+   * sharing routes answer `not-available`, as they would for a portal from
+   * before sharing.
+   */
+  portal?: SharingPortal;
   clock?: () => number;
   random?: RandomSource;
 };
@@ -67,6 +89,8 @@ export type ApiRoutes = {
   projects: Handler;
   project: (req: Request, slug: string) => Promise<Response>;
   projectLogs: (req: Request, slug: string) => Promise<Response>;
+  projectSharing: (req: Request, slug: string) => Promise<Response>;
+  replaceProjectSharing: (req: Request, slug: string) => Promise<Response>;
 };
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -90,6 +114,31 @@ const unreachable = () => failure("failure", "the dashboard cannot reach the ste
 const unavailable = () =>
   failure("not-available", "this machine does not carry the control API yet: the owner must update the steward (bin/deploy-steward.sh) and install the installer (bin/deploy-installer.sh)");
 const unreadable = () => failure("failure", "the steward sent an unreadable answer: tell the owner of the machine", { status: 502 });
+const portalUnreachable = () =>
+  failure("failure", "the dashboard cannot reach the portal, which keeps who may sign in: try again in a minute, then tell the owner of the machine (systemctl status portal)", { status: 502 });
+const portalTooOld = () =>
+  failure("not-available", "the portal on this machine does not know sharing yet: the owner must deploy it from this release (cd portal && sitesolide deploy --force, see portal/README.md)");
+const portalUnreadable = () => failure("failure", "the portal sent an answer this dashboard cannot read: tell the owner of the machine", { status: 502 });
+
+type PortalAnswer = { kind: "received"; status: number; body: unknown } | { kind: "unreachable" } | { kind: "unreadable" };
+
+/** One call to the portal, read whole, without ever throwing. A 404 is a portal from before sharing. */
+async function askPortal(call: () => Promise<Response>): Promise<PortalAnswer> {
+  let response: Response;
+  let text: string;
+  try {
+    response = await call();
+    text = await response.text();
+  } catch {
+    return { kind: "unreachable" };
+  }
+  if (response.status === 404) return { kind: "received", status: 404, body: null };
+  try {
+    return { kind: "received", status: response.status, body: JSON.parse(text) as unknown };
+  } catch {
+    return { kind: "unreadable" };
+  }
+}
 
 /** The steward's refusal, passed on with its code and message; the other outcomes said in the API's words. */
 function relayed(reached: Reached): Response {
@@ -229,6 +278,35 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
   }
 
   const visible = (identity: Identity, slug: string) => identity.owned.includes(slug) || identity.scope.slugs.includes(slug);
+
+  /**
+   * What sharing a project needs once the token is known to reach it: a site
+   * whose manifest asks for the portal and whose block carries it, as the
+   * Sharing section requires, and the portal's word on how people sign in and
+   * on every site's policy. Or the refusal.
+   */
+  async function sharingContext(slug: string): Promise<{ portal: SharingPortal; host: string; list: PortalSharing } | Response> {
+    const { sites } = await snapshotSites();
+    const site = sites.get(slug);
+    if (site === undefined) {
+      return failure("no-portal", `${slug} is not deployed yet, or the machine's snapshot, taken every minute, does not show it yet: deploy it, or try again in a minute`);
+    }
+    if (!site.portal.wanted) {
+      return failure("no-portal", `${slug} is not behind the portal: everyone gets in already, and only the owner of the machine puts a site behind it, from the dashboard's Access section`);
+    }
+    if (!site.portal.installed) {
+      return failure("no-portal", `${slug} asks for the portal, but its block in service does not carry it yet: deploy it again, then share it`);
+    }
+    const portal = dependencies.portal;
+    if (portal === undefined) return portalTooOld();
+    const answer = await askPortal(() => portal.list());
+    if (answer.kind === "unreachable") return portalUnreachable();
+    if (answer.kind === "unreadable") return portalUnreadable();
+    if (answer.status === 404) return portalTooOld();
+    const list = answer.status === 200 ? readPortalSharing(answer.body) : null;
+    if (list === null) return portalUnreadable();
+    return { portal, host: site.address, list };
+  }
 
   /** The deployment, if this token created it; any other id reads as unknown. */
   function ownDeployment(identity: Identity, id: string): DeploymentRow | Response {
@@ -426,6 +504,54 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       const reached = await reach(() => steward.logs({ bearer: auth.bearer, slug, lines, cursor }), [auth.bearer]);
       if (reached.kind !== "received" || reached.status !== 200) return relayed(reached);
       return json({ lines: reached.body.lines, cursor: reached.body.cursor });
+    },
+
+    async projectSharing(req, slug) {
+      const auth = await authenticated(req);
+      if (auth instanceof Response) return auth;
+      if (!visible(auth.identity, slug)) return failure("not-found", `no project ${slug.slice(0, 63)} for this token`);
+      const context = await sharingContext(slug);
+      if (context instanceof Response) return context;
+      return json({ sharing: projectSharing(slug, context.host, context.list, policyOf(context.list, context.host)) });
+    },
+
+    /**
+     * Replaces the policy, as the Sharing section's `PUT` does. The body is
+     * judged here first, so that a refusal names the entry at fault, then
+     * rebuilt key by key for the portal, which judges it again, writes it and
+     * records `sharing.update` in its audit with this token as the actor. The
+     * dashboard records nothing of its own: one change, one line in the
+     * Activity view.
+     */
+    async replaceProjectSharing(req, slug) {
+      const auth = await authenticated(req);
+      if (auth instanceof Response) return auth;
+      const { identity } = auth;
+      if (!visible(identity, slug)) return failure("not-found", `no project ${slug.slice(0, 63)} for this token`);
+      const body = await readJson(req, MAX_SHARING_BYTES);
+      if (body === "too-large") return failure("too-large", "the sharing policy is over 256 KiB: share with a domain rather than with people one by one");
+      if (body === null) return failure("invalid", 'send a JSON object: { "mode": "admins" | "people" | "domain", "people": [emails], "domains": [domains] }');
+      const reading = readTokenPolicy(body);
+      if ("refusal" in reading) return failure(reading.refusal.code, reading.refusal.message, { details: reading.refusal.details });
+
+      const context = await sharingContext(slug);
+      if (context instanceof Response) return context;
+      const before = policyOf(context.list, context.host);
+      const refusals = domainRefusals(before.policy, reading.policy, context.list.sso.allowedDomains);
+      if (refusals.length > 0) return failure("out-of-scope", domainMessage(context.list.sso.allowedDomains), { details: refusals });
+
+      const { mode, people, domains } = reading.policy;
+      const answer = await askPortal(() => context.portal.replace(context.host, { mode, people, domains, actor: `token:${identity.id}` }));
+      if (answer.kind === "unreachable") return portalUnreachable();
+      if (answer.kind === "unreadable") return portalUnreadable();
+      if (answer.status === 404) return portalTooOld();
+      if (answer.status === 400) {
+        const reason = (answer.body as { error?: unknown } | null)?.error;
+        return failure("invalid", `the portal refused this policy (${typeof reason === "string" ? reason : "no reason given"}): nothing was changed`);
+      }
+      const saved = answer.status === 200 ? readSavedPolicy(answer.body) : null;
+      if (saved === null) return portalUnreadable();
+      return json({ sharing: projectSharing(slug, context.host, context.list, saved) });
     },
   };
 }

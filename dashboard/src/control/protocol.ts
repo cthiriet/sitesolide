@@ -208,7 +208,8 @@ export const MAX_JOURNAL_LINES = 500;
  *   busy                409  a deployment of this project is already running, or too many are
  *   too-large           413  the archive or the manifest is over its limit
  *   expired             410  the archive arrived after the upload window
- *   not-available       503  the machine does not carry the control API yet
+ *   no-portal           409  sharing a site that is not behind the portal, or not deployed yet
+ *   not-available       503  the machine does not carry the control API yet, or its portal predates sharing
  *   failure             500/502  something broke on the machine; the message says where to look
  *
  * And one the public API never returns: `locked`, the steward's answer to a
@@ -227,6 +228,7 @@ export type ControlErrorCode =
   | "busy"
   | "too-large"
   | "expired"
+  | "no-portal"
   | "not-available"
   | "failure";
 
@@ -244,6 +246,7 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
   busy: 409,
   "too-large": 413,
   expired: 410,
+  "no-portal": 409,
   "not-available": 503,
   failure: 500,
 };
@@ -327,6 +330,8 @@ export type TeamPageResponse = {
 //   GET    /api/v1/projects                        -> { projects: ProjectStatus[] }
 //   GET    /api/v1/projects/:slug                  -> { project: ProjectStatus }
 //   GET    /api/v1/projects/:slug/logs[?lines=<n>&cursor=<c>] -> LogsResponse
+//   GET    /api/v1/projects/:slug/sharing          -> { sharing: ProjectSharing }
+//   PUT    /api/v1/projects/:slug/sharing   { mode, people, domains } -> { sharing: ProjectSharing }
 
 export type DeploymentView = {
   id: string;
@@ -359,4 +364,26 @@ export type ProjectStatus = {
   deployedAt: number | null;
   /** Age of the machine's snapshot these figures come from, in milliseconds. */
   snapshotAge: number | null;
+};
+
+/**
+ * Who may open a project with their work account, as the portal holds it, and
+ * what a token needs to change it: see sharing.ts for the rules. Never the
+ * admin emails, which a token has no use for, nor anything of the provider
+ * but its name.
+ */
+export type ProjectSharing = {
+  slug: string;
+  host: string;
+  url: string;
+  policy: { mode: "admins" | "people" | "domain"; people: string[]; domains: string[] };
+  /** null: never set, the site has what every site had before sharing, the admins alone. */
+  updatedAt: number | null;
+  sso: { configured: boolean; providerName: string | null };
+  /**
+   * The domains the portal admits at sign-in, `OIDC_ALLOWED_DOMAINS`: the
+   * only ones a token may open the site to. Empty: anyone the provider vouches
+   * for may sign in, and a token may open it to no domain at all.
+   */
+  allowedDomains: string[];
 };

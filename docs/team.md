@@ -37,8 +37,8 @@ belongs to and what it may do. It keeps the token in
 from standard input instead of a prompt.
 
 A workstation with no `server` in its configuration uses the dashboard for
-`deploy`, `status` and `logs`. Every other command (`lock`, `domain`, `remove`,
-`run`) needs the owner's SSH access and says so.
+`deploy`, `status`, `logs` and `share`. Every other command (`lock`, `domain`,
+`remove`, `run`) needs the owner's SSH access and says so.
 
 ### In an agent's sandbox
 
@@ -145,6 +145,39 @@ SSH access, which a token does not carry. Review `sitesolide.json` instead; the
 machine judges it before anything is built or uploaded. Every other option a
 command does not take with a token is refused the same way.
 
+## Sharing what you deployed
+
+A project you deploy with a token sits behind the portal, and opens to the
+admins alone: the owner's password, the admin emails, guests with a password.
+Once the owner has set up signing in with a company account
+([portal/README.md](../portal/README.md#signing-in-with-a-work-account)), you
+share it the way a Google Doc is shared, from its folder:
+
+```bash
+sitesolide share                            # who gets in, and the line to send them
+sitesolide share alice@acme.com bob@acme.com
+sitesolide share --domain acme.com          # everyone at acme.com
+sitesolide share --remove bob@acme.com
+sitesolide share --only-admins              # closed again, the lists kept for later
+```
+
+The dashboard relays each change to the portal as its *Sharing* section does,
+and the portal records it in its audit under your token, `token:<id>`, never
+as the owner. It holds from the next request. What a token may share is
+narrower than what the owner may:
+
+| You may | You may not |
+|---|---|
+| share a project you may deploy, your own or one granted to you | share another token's project, which reads as unknown |
+| add or remove anyone, by their work email | open a site to a domain the portal does not admit at sign-in (`OIDC_ALLOWED_DOMAINS`); with no such list, to any domain at all |
+| open it to a domain the portal admits, close a domain, go back to the admins | make a site public: that is turning its portal off, the owner's, from *Access* |
+
+A person you add still signs in with an account the portal admits: an address
+outside its domains gets in only if it is an admin, and the command warns of
+it. Sharing touches the portal alone, never Caddy, and a site that is not
+behind the portal, or not yet in the machine's snapshot, is refused with
+`no-portal`.
+
 ## The API, for an agent without the CLI
 
 Everything the CLI does is plain HTTPS with `Authorization: Bearer <token>`.
@@ -180,12 +213,14 @@ curl -s -H "$AUTH" "$API/api/v1/deployments/<id>?after=0"
 | `GET /api/v1/projects` | the projects the token reaches, with their status |
 | `GET /api/v1/projects/<slug>` | one of them |
 | `GET /api/v1/projects/<slug>/logs?lines=<n>&cursor=<c>` | the journal, and a cursor for the next call |
+| `GET /api/v1/projects/<slug>/sharing` | who may open it: `policy` (`mode`, `people`, `domains`), `updatedAt`, `url`, `sso` (`configured`, `providerName`), and `allowedDomains`, the only domains your token may open it to |
+| `PUT /api/v1/projects/<slug>/sharing` `{ mode, people, domains }` | replaces the policy whole, the portal's body: `mode` is `admins`, `people` or `domain`; one refused entry refuses the change, named in `details` |
 
 | Code | Status | What to do |
 |---|---|---|
 | `unauthenticated` | 401 | the token is missing, unknown, expired or revoked: ask the owner |
 | `too-many-attempts` | 429 | too many wrong tokens from your address: wait `wait` seconds |
-| `out-of-scope` | 403 | the token may not do this: the message says whom to ask |
+| `out-of-scope` | 403 | the token may not do this, a domain outside the ones the portal admits or `public` among them: the message says whom to ask |
 | `reserved` | 403 | the slug belongs to the platform: pick another |
 | `invalid-manifest` | 422 | fix every point of `details` |
 | `invalid` | 400 | the request itself is malformed |
@@ -193,7 +228,8 @@ curl -s -H "$AUTH" "$API/api/v1/deployments/<id>?after=0"
 | `busy` | 409 | a deployment of this project is already running, or, when the archive arrives, three deployments already run on the machine: send it again in a minute, the deployment waits for it until its 15 minutes are up |
 | `too-large` | 413 | exclude dependencies and caches |
 | `expired` | 410 | the archive arrived after 15 minutes: start again |
-| `not-available` | 503 | the machine does not carry the control API yet: tell the owner |
+| `no-portal` | 409 | sharing a site that is not behind the portal, or not deployed yet: deploy it; only the owner puts a site behind the portal |
+| `not-available` | 503 | the machine does not carry the control API yet, or its portal predates sharing: tell the owner |
 | `failure` | 500, 502 | something broke on the machine: the message says where the owner should look |
 
 A failed deployment carries its own `error.code`, the step that stopped it:

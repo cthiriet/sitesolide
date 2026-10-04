@@ -19,7 +19,9 @@ relays to a component that judges for itself what it accepts:
 
 - **guest access and sharing**, the *Guests* and *Sharing* sections, which
   touch only the portal's database: a password for one person, or who may sign
-  in with their work account, see [portal/README.md](../portal/README.md);
+  in with their work account, see [portal/README.md](../portal/README.md). A
+  team token shares the projects it may deploy through the control API, by the
+  same relay: see [Sharing by token](#sharing-by-token);
 - **the secret files of every deployed project** in `/etc/sitesolide`, and the
   restart of its service, the *Secrets* section. The steward, a root daemon,
   decides;
@@ -708,6 +710,51 @@ earlier by the steward and the dashboard: see
 - **Ports**: a service with no port gets the lowest free one of 3000 to 3099,
   or the one it had; one another project declares is refused.
 
+### Sharing by token
+
+A team member, or an agent, who deployed a tool shares it with the people who
+need it: `sitesolide share alice@acme.com` in its folder, or the two routes
+under it, `GET` and `PUT /api/v1/projects/<slug>/sharing`.
+
+```
+sitesolide share (team member, agent)          Authorization: Bearer sst_...
+   |  HTTPS, dashboard.<zone>/api/v1/projects/<slug>/sharing
+   v
+server.ts          the steward judges the bearer; the slug, the snapshot's door, the policy, the domains
+   |  HTTP on the loopback, the Sharing section's own client
+   v
+portal             PUT /admin/sharing/<host> { mode, people, domains, actor: "token:<id>" }
+   `-- writes      its database, and sharing.update in its audit
+```
+
+No new path: the dashboard already relays the *Sharing* section to the portal
+there, the one service besides root and Caddy the loopback rule lets reach it.
+The steward is asked only who the bearer is, as for every route; nothing in
+the registry changes, and neither the steward nor the installer needs updating
+for this.
+
+What the dashboard checks, in order ([src/control/sharing.ts](src/control/sharing.ts)):
+
+1. **The token may deploy the project**, its own or granted: any other slug
+   reads as `not-found`, as for its logs.
+2. **The body is the policy's three keys**, judged by the portal's own rule
+   (`borrowed/sharing.ts`), each refused entry named in `details`. An `actor`
+   key is refused: a token never speaks for the owner. `public` is refused as
+   `out-of-scope`, saying the portal turned off is the owner's, from *Access*.
+3. **The site carries the portal** in the snapshot, its manifest and its block,
+   as for the *Sharing* section: otherwise `no-portal`.
+4. **The domains**: the portal's `GET /admin/sharing` names the domains it
+   admits at sign-in, `OIDC_ALLOWED_DOMAINS`. A domain the token adds, or opens
+   by switching to domain mode, must be one of them; with none, a token opens a
+   site to no domain. One the owner opened, kept open, is not widening, and
+   closing is always allowed.
+5. **The portal judges again** and records `sharing.update` under
+   `token:<id>`: the dashboard records nothing of its own, so that one change
+   is one line of the Activity view.
+
+A portal from before sharing answers 404, which the API turns into
+`not-available`; a portal that does not answer, into `failure`, 502.
+
 ### Threat model
 
 | Threat | What stops it |
@@ -720,6 +767,7 @@ earlier by the steward and the dashboard: see
 | A token reaching another project | The slug decision on the steward, again on the installer; secrets limited to `<slug>.env`; `install` runs without the loopback, where the other projects listen, and the extraction without any network. |
 | A replayed request | The installer refuses a request older than ten minutes or for another slug, and writes nothing for it. |
 | A compromised dashboard | It sees the bearers that pass and can use them within their scope, and read deployment logs; it cannot mint a token without the password, nor deploy without one, nor hand root a file it could not read. |
+| A token sharing too widely | It shares only the projects it may deploy, opens them only to the domains the portal admits at sign-in, never to the public; every change is in the portal's audit under `token:<id>`, and the owner narrows it from *Sharing*. |
 | A compromised project | Its service's unit binds `app/`, `public/` and `data/` alone, so it never sees the staging directory its next deployment is extracted into; once in place, the trees are handed to the deployment account and bound read-only, as over SSH. |
 
 ### Where the installer is the weak point
@@ -806,6 +854,44 @@ bin/deploy-gatekeeper.sh            # 3. the same generator for the portal's doo
    previous commit.
 
 The steward needs nothing: it judges tokens and slugs, not manifests.
+
+### Upgrading: sharing by token
+
+`GET` and `PUT /api/v1/projects/<slug>/sharing`, and `sitesolide share` on the
+workstations. Opt-in in the plainest sense: nothing changes on the machine
+until somebody shares, and the routes only reach the portal's database, never
+Caddy. The steward, the gatekeeper and the installer need nothing.
+
+```bash
+bin/test.sh                         # 0. on the workstation
+cd dashboard && sitesolide deploy   # 1. the two routes
+```
+
+0. **The workstation.** Pull, then `bin/test.sh`. Check, in the folder of a
+   site behind the portal: `sitesolide share` prints who gets in, `over SSH,
+   as the owner`, and changes nothing. That read is the owner's way: root asks
+   the portal on the loopback (`sudo curl -sS http://127.0.0.1:3026/admin/sharing`),
+   after reading the site's manifest and block; it needs `curl` on the machine,
+   which cloud-init installs, and a portal that knows sharing (portal/README.md,
+   "Upgrading", step 1). A portal from before it is said so, and nothing is
+   changed.
+1. **The dashboard.** Check, with a token of yours that may deploy a site
+   behind the portal, from a workstation with no server
+   (`SITESOLIDE_API=https://dashboard.<zone> SITESOLIDE_TOKEN=sst_...`):
+   `sitesolide share` prints the policy `through https://dashboard.<zone>`;
+   `sitesolide share you@<your domain>` saves it, and the *Sharing* section of
+   that site shows you listed; the portal's audit, `sudo curl -s
+   'http://127.0.0.1:3026/admin/audit?limit=1'`, shows `sharing.update` with
+   the actor `token:<id>`; `sitesolide share --domain gmail.com` is refused
+   with `out-of-scope` unless `gmail.com` is in `OIDC_ALLOWED_DOMAINS`. Then
+   `sitesolide share --remove you@<your domain>` to put it back. Before this
+   step, the API's catch-all answers these routes `not-found`, `no such
+   route`, which the CLI says as `not-available`: the dashboard does not carry
+   sharing yet.
+
+**Rolling back.** Deploy the previous commit of `dashboard/`: the two routes
+answer `not-found` again, nothing else changes, and the policies a token set
+stay in the portal, where the *Sharing* section shows and changes them.
 
 ## Deployment, in this order
 
@@ -909,7 +995,9 @@ archive); the installer's pipeline on a throwaway tree with a real extraction
 in a child process, a real `install`, and every refusal, before and after the
 files are in place; the steward's control routes on real files; and the whole
 chain, the API on a real port, the steward on a real socket, the installer
-started by the simulated `systemctl` (tests/control-api.test.ts). What only a
+started by the simulated `systemctl` (tests/control-api.test.ts); sharing by
+token on a real port in front of a fake portal on another, every authorisation
+and the actor the portal receives (tests/control-sharing.test.ts). What only a
 machine can prove, `useradd`, `systemd-run`'s confinement and the template
 unit, is not covered here.
 

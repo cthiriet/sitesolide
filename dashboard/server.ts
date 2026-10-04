@@ -113,6 +113,8 @@ const api = createApiRoutes({
   stateFile: STATE_FILE,
   publicUrl: PUBLIC_URL,
   zone: ZONE,
+  // Sharing by token goes to the portal as the Sharing section does.
+  portal: localSharing(PORTAL_URL),
 });
 const team = createTeamRoutes({ session: sessionReader, publicUrl: PUBLIC_URL, steward: controlSteward, tokens: unlockTokens, store: controlStore });
 setInterval(() => void tracker.tick(), 3_000);
@@ -247,6 +249,10 @@ const server = Bun.serve({
     "/api/v1/projects": { GET: api.projects },
     "/api/v1/projects/:slug": { GET: (req) => api.project(req, req.params.slug) },
     "/api/v1/projects/:slug/logs": { GET: (req) => api.projectLogs(req, req.params.slug) },
+    "/api/v1/projects/:slug/sharing": {
+      GET: (req) => api.projectSharing(req, req.params.slug),
+      PUT: (req) => api.replaceProjectSharing(req, req.params.slug),
+    },
     "/api/v1/*": () => failure("not-found", "no such route: see docs/team.md for the control API's routes"),
     // The backups go through the steward too: it reads them as root, and starts
     // a restore under the same lock and the same unlocking as the secrets.

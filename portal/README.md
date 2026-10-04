@@ -39,6 +39,7 @@ browser --> Caddy, block for portal.<zone>
 
 dashboard (site-dashboard) --> portal 127.0.0.1:3026 /admin/guests, /admin/sharing, /admin/audit
                                never through Caddy
+root, over the owner's SSH --> portal 127.0.0.1:3026 /admin/sharing, for `sitesolide share`
 ```
 
 Signing in happens on the site itself, at `/_portal/connexion` for a password,
@@ -320,8 +321,8 @@ configured.
 
 ## Sharing
 
-Who may open a site with their work account, decided per site from the
-dashboard's *Sharing* section. Three modes, cumulative:
+Who may open a site with their work account, decided per site. Three modes,
+cumulative:
 
 | Mode | Who gets in |
 |---|---|
@@ -332,6 +333,21 @@ dashboard's *Sharing* section. Three modes, cumulative:
 **Public is not a mode.** It is the portal turned off, which the site's *Access*
 section already does through the steward and the gatekeeper; *Sharing* links to
 it rather than doing it a second way.
+
+**Who may change it**, and every way ends at `PUT /admin/sharing/:host`:
+
+| Who | How | What they may do |
+|---|---|---|
+| the owner | the dashboard's *Sharing* section | anything but public, recorded as `owner` |
+| the owner | `sitesolide share` in the project's folder, over SSH: root asks this port on the loopback, after reading on the machine that the site's manifest asks for the portal and its block carries it | the same, recorded as `owner` |
+| a team member or an agent | `sitesolide share` with a team token, or `GET` and `PUT /api/v1/projects/<slug>/sharing`: the dashboard relays, as for its own section | only the projects its token may deploy; people at any address; a domain only among `OIDC_ALLOWED_DOMAINS`, none when that list is empty; recorded as `token:<id>` |
+
+A token is narrower on domains because its holder is not the one who chose
+the company's own: the owner did, in `OIDC_ALLOWED_DOMAINS`. Keeping a domain
+already open, or closing one, is always allowed; see
+`dashboard/src/control/sharing.ts` for the rule and
+[docs/team.md](../docs/team.md#sharing-what-you-deployed) for the holder's
+side.
 
 **A change touches the portal's database and nothing else**, never Caddy, and
 holds from the next request: the gate reads the site's policy on every request
@@ -406,7 +422,8 @@ Bun.serve({
 
 ## The admin API
 
-On the portal's port, called by the dashboard alone:
+On the portal's port, called by the dashboard, and by root for `sitesolide
+share` over the owner's SSH, which reads and replaces policies alone:
 
 | Route | What it does |
 |---|---|
@@ -419,7 +436,10 @@ They have no secret, and that is deliberate: the only accounts that can reach
 that port are root, Caddy and `site-dashboard`, through the exception
 `bin/cli/loopback.ts` adds to the loopback rule, and a shared secret would
 protect nothing more. The dashboard checks its session, its origin for a change,
-and that the host carries the portal in its snapshot, before relaying.
+and that the host carries the portal in its snapshot, before relaying; for a
+team token, the token instead of the session, its scope, and the domains it may
+open. The CLI over SSH reads the deposited manifest and the block in service
+for the same check, then speaks to the port as root.
 
 Caddy never relays them: a protected site forwards to the portal only
 `/_portal/*` and the `forward_auth` call to `/verifier`, and the portal's own
@@ -445,7 +465,7 @@ of the repository shares (`id`, `at` in ISO 8601 UTC, `actor`, `action`,
 | `portal.signin` | `owner`, `guest:<access>` or the email | `method`: `password`, `guest` or `oidc`, and the `role` for an identity; `count` when repeated |
 | `portal.signin_failed` | `anonymous`, or the email when the provider named one | `method`, and for a provider the `reason`: `bad-signature`, `wrong-audience`, `expired`, `wrong-nonce`, `unverified-email`, `unusable-email`, `domain-not-allowed`, `unmanaged-account`, `not-shared`, `wrong-browser`, `expired-session`... |
 | `portal.signout` | who the cookie names | none, or `count` when repeated |
-| `sharing.update` | `owner` | the new and previous mode, the people and domains added and removed |
+| `sharing.update` | `owner`, or `token:<id>` for a change made with a team token | the new and previous mode, the people and domains added and removed |
 
 Never a password, a code or a token. What a stranger can cause is bounded where
 it happens: failed password attempts by the rate limiting, a row per attempt
@@ -547,6 +567,11 @@ another account*, which asks the provider to choose.
   dashboard's own, which the steward checks, but which compromised code would
   capture as it is typed. It never touches Caddy itself: the gatekeeper refuses
   everything its rules refuse, and restores.
+- A stolen team token can share the projects it may deploy with any address,
+  and open them to the domains the portal already admits, never to another
+  domain nor to the public. Every change is in the audit under `token:<id>`;
+  revoking the token on the *Team* page stops it, and the owner narrows the
+  sharing back from the dashboard.
 - An account closed at the provider keeps its site cookies until they lapse, 24
   hours at most after it last signed in at the provider: a site's cookie never
   outlives the portal session it came from. Removing the person from a site's
@@ -646,6 +671,11 @@ a `POST` to a protected site's `/_portal/deconnexion` from its own pages shows
 *Signed out.*, passes through `portal.<zone>/oidc/signout`, and comes back to
 the site's sign-in page; the next *Sign in with ...* goes to the provider and
 asks which account.
+
+**Sharing by token, and `sitesolide share`**, need nothing of the portal beyond
+step 1: it already records the actor the dashboard names, `token:<id>`
+included. The dashboard is what changes, see
+[dashboard/README.md](../dashboard/README.md), "Upgrading: sharing by token".
 
 **Rolling back.** The portal from before reads the owner's and the guests'
 cookies as always and refuses the identity cookies, four pieces where it
