@@ -114,21 +114,24 @@ describe("the heartbeat's request", () => {
   const url = "https://hc-ping.test-zone.invalid/5a7f";
 
   test("all clear: the URL itself, and how many checks passed", () => {
-    const checks = { caddy: tracked("ok", "critical", "Caddy is active (running)"), memory: tracked("failing", "warning", "x") };
-    const { url: target, init } = heartbeatRequest(url, checks);
+    const checks = {
+      caddy: { ...tracked("ok", "critical", "Caddy is active (running)"), kind: "caddy" as const },
+      memory: { ...tracked("failing", "warning", "x"), kind: "memory" as const },
+    };
+    const { url: target, init } = heartbeatRequest(url, checks, ZONE);
     expect(target).toBe(url);
     expect(init.body).toBe("ok: 2 checks pass");
-    expect(heartbeatFails(checks)).toBe(false);
+    expect(heartbeatFails(checks, ZONE)).toBe(false);
   });
 
-  test("something critical down: /fail, and what is down", () => {
+  test("the platform down: /fail, and everything that is down, the platform's first", () => {
     const checks = {
-      caddy: tracked("down", "critical", "Caddy is inactive (dead), result success"),
       "site:a": tracked("recovering", "critical", "https://a.test-zone.invalid/ answered 200"),
-      backup: tracked("down", "warning", "The last backup run finished 30 h ago, more than 26 h"),
-      memory: tracked("ok", "warning", "40% of memory available"),
+      caddy: { ...tracked("down", "critical", "Caddy is inactive (dead), result success"), kind: "caddy" as const },
+      backup: { ...tracked("down", "warning", "The last backup run finished 30 h ago, more than 26 h"), kind: "backup" as const },
+      memory: { ...tracked("ok", "warning", "40% of memory available"), kind: "memory" as const },
     };
-    const { url: target, init } = heartbeatRequest(url, checks);
+    const { url: target, init } = heartbeatRequest(url, checks, ZONE);
     expect(target).toBe(`${url}/fail`);
     expect((init.body as string).split("\n")).toEqual([
       "down: 3 of 4 checks",
@@ -138,16 +141,42 @@ describe("the heartbeat's request", () => {
     ]);
   });
 
-  test("warnings alone never fail the heartbeat: it must stay able to report the machine dying", () => {
-    const checks = { backup: tracked("down", "warning", "The last backup run failed for shop, 2 h ago") };
-    const { url: target, init } = heartbeatRequest(url, checks);
+  test("each platform-wide check fails it: Caddy, a disk, the memory, the monitor's blindness, the bare domain, the dashboard", () => {
+    const platform: Record<string, Tracked> = {
+      caddy: { ...tracked("down", "critical", "Caddy is failed (failed)"), kind: "caddy" },
+      "disk:/": { ...tracked("down", "critical", "/ is 93% full, 5.2 GB free"), kind: "disk" },
+      memory: { ...tracked("down", "warning", "4% of memory available"), kind: "memory" },
+      monitor: { ...tracked("down", "warning", "The monitor could not run fully: systemctl list-units: timed out"), kind: "monitor" },
+      [`site:${ZONE}`]: tracked("down", "critical", `https://${ZONE}/ answered 502`, ZONE),
+      [`site:dashboard.${ZONE}`]: tracked("down", "critical", `https://dashboard.${ZONE}/ answered 502`, `dashboard.${ZONE}`),
+    };
+    for (const [id, check] of Object.entries(platform)) {
+      expect([id, heartbeatFails({ [id]: check }, ZONE)]).toEqual([id, true]);
+      expect(heartbeatRequest(url, { [id]: check }, ZONE).url).toBe(`${url}/fail`);
+    }
+  });
+
+  test("one project down, however long, never fails it: the dead man's switch must stay armed", () => {
+    const checks = {
+      [`site:shop.${ZONE}`]: { ...tracked("down", "critical", `https://shop.${ZONE}/ answered 502`, `shop.${ZONE}`), slug: "shop" },
+      "unit:shop.service": { ...tracked("down", "critical", "shop.service is failed (failed)", "shop.service"), kind: "unit" as const, slug: "shop" },
+      [`site:www.${ZONE}`]: tracked("ok", "critical", `https://www.${ZONE}/ answered 200`, `www.${ZONE}`),
+      backup: { ...tracked("down", "warning", "The last backup run failed for shop, 2 h ago"), kind: "backup" as const },
+    };
+    expect(heartbeatFails(checks, ZONE)).toBe(false);
+    const { url: target, init } = heartbeatRequest(url, checks, ZONE);
     expect(target).toBe(url);
-    expect(init.body).toBe("ok, with warnings: 1 of 1 checks\nWARNING The last backup run failed for shop, 2 h ago");
+    expect((init.body as string).split("\n")).toEqual([
+      "ok for the platform: 3 of 4 checks down, none of them platform-wide",
+      "DOWN shop.service is failed (failed)",
+      `DOWN https://shop.${ZONE}/ answered 502`,
+      "WARNING The last backup run failed for shop, 2 h ago",
+    ]);
   });
 
   test("/fail goes on the path, before a query string, whatever the trailing slash", () => {
-    const checks = { caddy: tracked("down", "critical", "Caddy is failed (failed)") };
-    expect(heartbeatRequest("https://hc.test-zone.invalid/ping/5a7f/?create=1", checks).url).toBe(
+    const checks = { caddy: { ...tracked("down", "critical", "Caddy is failed (failed)"), kind: "caddy" as const } };
+    expect(heartbeatRequest("https://hc.test-zone.invalid/ping/5a7f/?create=1", checks, ZONE).url).toBe(
       "https://hc.test-zone.invalid/ping/5a7f/fail?create=1",
     );
     expect(crashRequest("https://hc.test-zone.invalid/ping/5a7f", "ENOSPC").url).toBe("https://hc.test-zone.invalid/ping/5a7f/fail");
@@ -196,8 +225,8 @@ describe("delivery", () => {
 
   test("the heartbeat arrives on /fail with its body, the webhook as JSON", async () => {
     received.length = 0;
-    const checks = { caddy: tracked("down", "critical", "Caddy is inactive (dead), result success") };
-    expect(await deliver(heartbeatRequest(`${base}/ping/5a7f`, checks), 5000)).toEqual({ ok: true });
+    const checks = { caddy: { ...tracked("down", "critical", "Caddy is inactive (dead), result success"), kind: "caddy" as const } };
+    expect(await deliver(heartbeatRequest(`${base}/ping/5a7f`, checks, ZONE), 5000)).toEqual({ ok: true });
     const notices = [notice("down", "caddy", "critical", "Caddy is inactive (dead), result success")];
     expect(await deliver(webhookRequest(`${base}/hooks/discord`, "json", notices, ZONE), 5000)).toEqual({ ok: true });
 

@@ -170,7 +170,7 @@ export async function run(config: Config, machine: Machine, now: number, clock: 
   const [heartbeat, webhook] = await Promise.all([
     (async (): Promise<MonitorStatus["heartbeat"]> => {
       if (config.heartbeatUrl === null) return "unconfigured";
-      const delivery = await machine.send(heartbeatRequest(config.heartbeatUrl, checks), SEND_TIMEOUT_MS);
+      const delivery = await machine.send(heartbeatRequest(config.heartbeatUrl, checks, config.zone), SEND_TIMEOUT_MS);
       if (delivery.ok) return "ok";
       machine.log(`monitor: heartbeat not delivered (${delivery.reason})`);
       return "failed";

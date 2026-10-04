@@ -67,14 +67,23 @@ from the dashboard:
 
 | Variable | What it does |
 |---|---|
-| `HEARTBEAT_URL` | a dead man's switch, [healthchecks.io](https://healthchecks.io) style. Every pass pings it: the URL itself while nothing critical is down, `<url>/fail` with the list of what is down otherwise. The outside service alerts when the pings stop: **the only thing that notices the machine itself dying**, which no check run on it ever could. |
+| `HEARTBEAT_URL` | a dead man's switch, [healthchecks.io](https://healthchecks.io) style. Every pass pings it: the URL itself while the platform stands, `<url>/fail` while the platform itself is down, with the list of what is down in either case. The outside service alerts when the pings stop: **the only thing that notices the machine itself dying**, which no check run on it ever could. |
 | `ALERT_WEBHOOK_URL` | one message per pass that has something to say. A JSON body carrying the message as `text` (Slack, Mattermost, Google Chat) and as `content` (Discord). |
 | `ALERT_WEBHOOK_FORMAT` | `text` for a raw text body, what [ntfy](https://ntfy.sh) takes, with a title and a high priority when something critical went down. Chosen by itself for `ntfy.sh`; say it for a self-hosted ntfy. |
 
-**Warnings never fail the heartbeat.** A certificate fourteen days from expiry
-or a missed backup can wait days, and a heartbeat held on `/fail` that long
-could no longer report the machine dying. Warnings go to the webhook, the
-dashboard and the journal; the heartbeat's body lists them all the same.
+**Only the platform fails the heartbeat**: Caddy, a disk, the memory, the
+monitor's own blindness (a reading it could not take, an alerting address that
+is not one), the bare domain and the dashboard's site. Everything else, one
+project's site or unit however critical, a certificate, a backup, Caddy's
+restarts, pings success, its summary in the ping's body. The reason is the
+outside service itself: it alerts once when a check goes down and never again
+until it comes back up, so a heartbeat held on `/fail` is a dead man's switch
+that no longer hears anything, and the machine can die unnoticed for as long as
+it stays there. What breaks the platform breaks every site and is fixed within
+the hour; one project left broken for a week, or a certificate fourteen days
+from expiry, must not disarm the switch all that time. Those go to the
+webhook, the dashboard and the journal, one message when they go down and one
+when they recover, and travel in the body of every successful ping.
 
 **A webhook that refuses keeps its notices** for the next pass, a day and fifty
 notices at most, and the dashboard says how many wait. Neither address is ever
@@ -104,10 +113,18 @@ RECOVERED https://shop.example.com/ answered 200 (after 8 min)
 ```
 
 The heartbeat's body, which healthchecks.io shows in the check's log and in its
-email:
+email. With a project down, the ping succeeds:
 
 ```
-down: 1 of 41 checks
+ok for the platform: 1 of 41 checks down, none of them platform-wide
+DOWN https://shop.example.com/ answered 502
+```
+
+With the platform down, it goes to `/fail`, the platform's lines first:
+
+```
+down: 2 of 41 checks
+DOWN Caddy is inactive (dead), result success
 DOWN https://shop.example.com/ answered 502
 ```
 
@@ -348,8 +365,9 @@ echo 'HEARTBEAT_URL=https://hc-ping.com/<a test check>' | sudo tee /etc/sitesoli
 sudo systemctl start sitesolide-monitor.service
 sudo journalctl -u sitesolide-monitor -n 1 -o cat               # ends with "heartbeat ok"
 
-# A project's service down: one DOWN for its unit and its site, then one RECOVERED.
-sudo systemctl stop <a test project>          # within 3 minutes: DOWN, heartbeat on /fail
+# A project's service down: one DOWN for its unit and its site, then one
+# RECOVERED; the heartbeat stays green, the site in its body.
+sudo systemctl stop <a test project>          # within 3 minutes: DOWN, heartbeat still ok
 sudo systemctl start <a test project>         # within 3 minutes: RECOVERED
 
 # Caddy stopped through its admin API: systemd brings it back, the monitor

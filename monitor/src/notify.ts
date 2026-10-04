@@ -5,11 +5,12 @@
  * /etc/sitesolide/dashboard-monitor.env from the dashboard's Secrets:
  *
  *   HEARTBEAT_URL      a dead man's switch, healthchecks.io style. Every run
- *                      pings it: the URL itself when nothing critical is down,
- *                      `<url>/fail` with the list of what is down otherwise. It
- *                      is the only thing that notices the machine itself dying:
- *                      the outside service alerts when the pings stop, which
- *                      no check run on this machine ever could.
+ *                      pings it: the URL itself while the platform stands,
+ *                      `<url>/fail` while the platform itself is down, the
+ *                      body listing what is down in either case. It is the
+ *                      only thing that notices the machine itself dying: the
+ *                      outside service alerts when the pings stop, which no
+ *                      check run on this machine ever could.
  *   ALERT_WEBHOOK_URL  one message per run that has something to say, down and
  *                      recovered alike, in a JSON body Slack and Discord
  *                      incoming webhooks both accept, or as plain text for
@@ -20,11 +21,17 @@
  * heartbeat's address can silence it, whoever holds the webhook's can post in
  * the channel.
  *
- * Warnings do not fail the heartbeat. A certificate fourteen days from expiry
- * or a missed backup can stay unresolved for days, and a heartbeat held on
- * `/fail` that long can no longer tell anybody that the machine died. They go
- * to the webhook, the dashboard and the journal; the heartbeat's body lists
- * them all the same, where the outside service keeps it.
+ * Only the platform fails the heartbeat: Caddy, a disk, the memory, the
+ * monitor's own blindness, the bare domain and the dashboard. The outside
+ * service sends one alert when a check goes down and none after: while the
+ * heartbeat is held on `/fail`, the machine can die without anybody hearing of
+ * it. What breaks the platform is fixed within the hour, or nothing else
+ * matters; one project broken for a week, a certificate fourteen days from
+ * expiry or a missed backup can stay unresolved for days, and holding the
+ * heartbeat on `/fail` all that time would disarm the one thing that notices
+ * the machine dying. They go to the webhook, the dashboard and the journal;
+ * the heartbeat's body lists them all the same, where the outside service
+ * keeps it.
  *
  * Pure, `deliver` aside, which only carries a request built here.
  */
@@ -159,26 +166,53 @@ export function webhookRequest(url: string, format: WebhookFormat, notices: read
   };
 }
 
-/** Whether the heartbeat fails this run: something critical is down. */
-export function heartbeatFails(checks: Readonly<Record<string, Tracked>>): boolean {
-  return Object.values(checks).some((tracked) => isDown(tracked) && tracked.severity === "critical");
+/** The dashboard's directory, served at `dashboard.<zone>` like any project. */
+export const DASHBOARD_SLUG = "dashboard";
+
+/** The kinds that are the platform's whatever they name. */
+const PLATFORM_KINDS: ReadonlySet<Tracked["kind"]> = new Set(["caddy", "disk", "memory", "monitor"]);
+
+/**
+ * Whether a check is the platform's rather than one project's: Caddy, a disk,
+ * the memory, the monitor's own blindness, and two sites, the bare domain and
+ * the dashboard, which every installation serves and from which the author
+ * sees the rest. The memory and the monitor are warnings on the dashboard, yet
+ * they fail the heartbeat: a machine out of memory is about to lose every
+ * site, and a monitor that cannot read the machine cannot be trusted when it
+ * says all is well.
+ */
+export function platformWide(tracked: Tracked, zone: string): boolean {
+  if (PLATFORM_KINDS.has(tracked.kind)) return true;
+  return tracked.kind === "site" && (tracked.label === zone || tracked.label === `${DASHBOARD_SLUG}.${zone}`);
+}
+
+/** Whether the heartbeat fails this run: something of the platform is down. */
+export function heartbeatFails(checks: Readonly<Record<string, Tracked>>, zone: string): boolean {
+  return Object.values(checks).some((tracked) => isDown(tracked) && platformWide(tracked, zone));
 }
 
 /**
- * The heartbeat's request: `<url>/fail` when something critical is down, the
- * URL itself otherwise, the body listing what is down in either case. The
- * suffix goes on the path, before any query string.
+ * The heartbeat's request: `<url>/fail` when something of the platform is
+ * down, the URL itself otherwise, the body listing what is down in either
+ * case, the platform's first: a project down a week long travels in the body
+ * of a successful ping. The suffix goes on the path, before any query string.
  */
-export function heartbeatRequest(url: string, checks: Readonly<Record<string, Tracked>>): { url: string; init: RequestInit } {
-  const failing = heartbeatFails(checks);
+export function heartbeatRequest(url: string, checks: Readonly<Record<string, Tracked>>, zone: string): { url: string; init: RequestInit } {
+  const failing = heartbeatFails(checks, zone);
   const target = new URL(url);
   if (failing) target.pathname = `${target.pathname.replace(/\/+$/, "")}/fail`;
 
+  const rank = (tracked: Tracked): number => (platformWide(tracked, zone) ? 0 : 2) + (tracked.severity === "critical" ? 0 : 1);
   const down = Object.values(checks)
     .filter(isDown)
-    .sort((a, b) => (a.severity === b.severity ? a.label.localeCompare(b.label) : a.severity === "critical" ? -1 : 1));
+    .sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
   const total = Object.keys(checks).length;
-  const head = down.length === 0 ? `ok: ${total} checks pass` : `${failing ? "down" : "ok, with warnings"}: ${down.length} of ${total} checks`;
+  const head =
+    down.length === 0
+      ? `ok: ${total} checks pass`
+      : failing
+        ? `down: ${down.length} of ${total} checks`
+        : `ok for the platform: ${down.length} of ${total} checks down, none of them platform-wide`;
   let body = head;
   for (const tracked of down) {
     const line = `\n${tracked.severity === "critical" ? "DOWN" : "WARNING"} ${tracked.summary}`;

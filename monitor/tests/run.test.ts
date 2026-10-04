@@ -18,8 +18,10 @@ import { OPENSSL, drawAuthority, drawCertificate, fakeSystemctl } from "./fixtur
  * never asks systemd for anything but readings.
  *
  * What it proves is the promise of the README: one message when a site goes
- * down, one when it recovers, the heartbeat on /fail in between, and nothing
- * else however many runs pass.
+ * down, one when it recovers, and nothing else however many runs pass; the
+ * heartbeat on /fail only while the platform itself is down, never for one
+ * project, which would silence the dead man's switch for as long as that
+ * project stays broken.
  */
 
 const ZONE = "test-zone.invalid";
@@ -91,7 +93,7 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
   /** One run, one simulated minute later than the previous one. */
   async function pass(
     overrides: Partial<Config> = {},
-  ): Promise<{ status: MonitorStatus; heartbeat: string[]; webhook: string[]; journal: string[] }> {
+  ): Promise<{ status: MonitorStatus; heartbeat: string[]; heartbeatBody: string[]; webhook: string[]; journal: string[] }> {
     received.length = 0;
     const journal: string[] = [];
     const machine = {
@@ -104,6 +106,7 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     return {
       status: outcome.status,
       heartbeat: received.filter((r) => r.path.startsWith("/ping/")).map((r) => r.path),
+      heartbeatBody: received.filter((r) => r.path.startsWith("/ping/")).map((r) => r.body),
       webhook: received.filter((r) => r.path.startsWith("/hooks/")).map((r) => (JSON.parse(r.body) as { text: string }).text),
       journal,
     };
@@ -163,7 +166,7 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     ]);
   });
 
-  test("a site goes down and recovers: one message each way, the heartbeat on /fail in between", async () => {
+  test("a project's site goes down and recovers: one message each way, the heartbeat kept armed, the site in its body", async () => {
     const quiet = await pass();
     expect(quiet.heartbeat).toEqual(["/ping/5a7f"]);
     expect(quiet.webhook).toEqual([]);
@@ -178,7 +181,10 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     expect(first.heartbeat).toEqual(["/ping/5a7f"]);
 
     const second = await pass();
-    expect(second.heartbeat).toEqual(["/ping/5a7f/fail"]);
+    expect(second.heartbeat).toEqual(["/ping/5a7f"]);
+    expect(second.heartbeatBody).toEqual([
+      `ok for the platform: 1 of 16 checks down, none of them platform-wide\nDOWN https://shop.${ZONE}/ answered 502`,
+    ]);
     expect(second.webhook).toEqual([
       `sitesolide monitor, ${ZONE}: 1 down\nDOWN https://shop.${ZONE}/ answered 502 (since 2026-10-04 12:01 UTC)`,
     ]);
@@ -197,7 +203,7 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     for (let i = 0; i < 5; i++) {
       const still = await pass();
       expect(still.webhook).toEqual([]);
-      expect(still.heartbeat).toEqual(["/ping/5a7f/fail"]);
+      expect(still.heartbeat).toEqual(["/ping/5a7f"]);
     }
 
     answers.delete(`shop.${ZONE}`);
@@ -213,6 +219,18 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     // Only readings were asked of systemd, never a change.
     const calls = readFileSync(join(systemd, "calls"), "utf8").trim().split("\n");
     expect(calls.every((call) => call.startsWith("show caddy.service ") || call.startsWith("list-units "))).toBe(true);
+  });
+
+  test("the bare domain down is the platform down: the heartbeat on /fail until it recovers", async () => {
+    await pass();
+    answers.set(ZONE, 502);
+    expect((await pass()).heartbeat).toEqual(["/ping/5a7f"]);
+    const down = await pass();
+    expect(down.heartbeat).toEqual(["/ping/5a7f/fail"]);
+    expect(down.heartbeatBody).toEqual([`down: 1 of 16 checks\nDOWN https://${ZONE}/ answered 502`]);
+    answers.delete(ZONE);
+    expect((await pass()).heartbeat).toEqual(["/ping/5a7f/fail"]);
+    expect((await pass()).heartbeat).toEqual(["/ping/5a7f"]);
   });
 
   test("Caddy stopped: one alert for Caddy, none per site; back with a restart counted, a warning", async () => {
