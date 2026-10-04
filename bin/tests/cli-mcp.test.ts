@@ -213,6 +213,21 @@ describe("tools/call", () => {
     expect(h.sent).toEqual([]);
   });
 
+  test("an id still in flight is refused for another request, and the first one keeps its answer", async () => {
+    const h = harness();
+    h.hold();
+    const first = h.server.receive(JSON.stringify({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { _meta: META, name: "status", arguments: {} } }));
+    await h.server.receive(JSON.stringify({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { _meta: META, name: "detect", arguments: { folder: FOLDER } } }));
+    expect(h.sent).toEqual([{ jsonrpc: "2.0", id: 8, error: { code: -32600, message: "Invalid Request: this id belongs to a request still in progress" } }]);
+    // The second never ran: only the first command was started.
+    expect(h.ran.map((entry) => entry.argv)).toEqual([["status"]]);
+    h.release();
+    await first;
+    expect(h.sent.at(-1)).toMatchObject({ id: 8, result: { isError: false } });
+    // Once answered, the id is free again.
+    expect(await h.send({ jsonrpc: "2.0", id: 8, method: "ping", params: { _meta: META } })).toMatchObject({ id: 8, result: {} });
+  });
+
   test("calls are served side by side: a slow one does not hold a quick one back", async () => {
     const h = harness();
     h.hold();

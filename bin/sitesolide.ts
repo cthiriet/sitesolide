@@ -260,9 +260,20 @@ function warn(message: string, details: string[] = []): void {
   for (const line of details) console.error(`   ${line}`);
 }
 
+/**
+ * The last event of a run, under --json: the Caddy lock released first, so
+ * that the warning a failed release prints comes before the `result` or the
+ * `error`, never after the line an agent reads as the end. The `exit` event
+ * still releases it on the paths that never get here.
+ */
+function finalEvent(event: OutputEvent): void {
+  releaseCaddyLock();
+  emit(event);
+}
+
 function die(message: string, details: string[] = []): never {
   if (jsonOutput) {
-    emit({ type: "error", message, details: details.filter((line) => line.trim() !== ""), hint: hintFor(message) });
+    finalEvent({ type: "error", message, details: details.filter((line) => line.trim() !== ""), hint: hintFor(message) });
     process.exit(1);
   }
   console.error(`!! ${message}`);
@@ -323,7 +334,7 @@ function childEnvironment(extra?: Record<string, string>): Record<string, string
 
 /** The final event of a run that succeeded, under --json. */
 function finish(command: string): void {
-  if (jsonOutput) emit({ type: "result", ok: true, command, ...outcome });
+  if (jsonOutput) finalEvent({ type: "result", ok: true, command, ...outcome });
 }
 
 // --- Caddy lock --------------------------------------------------------------
@@ -429,7 +440,12 @@ function envUnderLock(config: Config): Record<string, string> {
  * the `exit` event.
  */
 function interrupt(signal: string, code: number): void {
-  if (interruption !== null || running === 0) process.exit(code);
+  if (interruption !== null || running === 0) {
+    // Under --json, the run still ends with its error, the lock released
+    // before it, rather than with nothing at all.
+    if (jsonOutput) finalEvent({ type: "error", message: `interrupted by ${signal}`, details: [], hint: hintFor(`interrupted by ${signal}`) });
+    process.exit(code);
+  }
   interruption = { signal, code };
   warn(`${signal}: the running step finishes first, then everything stops`);
 }
@@ -437,7 +453,7 @@ function interrupt(signal: string, code: number): void {
 function stopIfInterrupted(): void {
   if (interruption === null) return;
   const message = `interrupted by ${interruption.signal}`;
-  if (jsonOutput) emit({ type: "error", message, details: [], hint: hintFor(message) });
+  if (jsonOutput) finalEvent({ type: "error", message, details: [], hint: hintFor(message) });
   else console.error(`!! ${message}`);
   process.exit(interruption.code);
 }

@@ -82,6 +82,24 @@ describe("a stream read line by line", () => {
     // two chunks comes back whole.
     expect(lines).toEqual(["first line", "second, Zürich", "last without a break"]);
   });
+
+  test("with a limit, a line too long is never held whole nor handed over, and reading resumes after it", async () => {
+    const long = "x".repeat(50);
+    const text = `short\n${long}\nafter\n${long}`;
+    const bytes = new TextEncoder().encode(text);
+    // In chunks of 7 bytes: the long line arrives in pieces, none of them ending it.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < bytes.length; i += 7) controller.enqueue(bytes.slice(i, i + 7));
+        controller.close();
+      },
+    });
+    const lines: string[] = [];
+    let overflows = 0;
+    await forEachLine(stream, (line) => lines.push(line), { length: 20, onOverflow: () => overflows++ });
+    expect(lines).toEqual(["short", "after"]);
+    expect(overflows).toBe(2);
+  });
 });
 
 describe("the status table", () => {

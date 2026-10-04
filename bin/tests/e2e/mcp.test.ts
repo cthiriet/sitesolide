@@ -3,7 +3,7 @@ import { cpSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { forEachLine } from "../../cli/output";
-import { LEGACY_VERSIONS, MODERN_VERSIONS } from "../../mcp";
+import { LEGACY_VERSIONS, MAX_MESSAGE, MODERN_VERSIONS } from "../../mcp";
 import { createFakeVm, type FakeVm } from "./fake-vm";
 import { CLI, TEST_EMAIL, TEST_ZONE, TESTS_ROOT } from "./run";
 
@@ -141,6 +141,17 @@ describe("sitesolide mcp over stdio", () => {
     expect(events.some((event) => event.type === "planned")).toBe(true);
     // Only reads reached the machine.
     expect(vm!.logs().every((line) => line.startsWith("READ ") || line.startsWith("UNITS "))).toBe(true);
+    expect(await mcp.close()).toBe(0);
+  });
+
+  test("a line beyond the limit is refused without being held, and the next one is served", async () => {
+    const mcp = start();
+    mcp.send({ jsonrpc: "2.0", id: "big", method: "ping", params: { _meta: META, padding: "x".repeat(MAX_MESSAGE + 10) } });
+    mcp.send({ jsonrpc: "2.0", id: "after", method: "ping", params: { _meta: META } });
+    expect((await mcp.answer("after")).result).toMatchObject({ resultType: "complete" });
+    const refused = mcp.lines.map((line) => JSON.parse(line)).find((message) => message.id === null);
+    expect(refused.error).toMatchObject({ code: -32700, message: expect.stringContaining("at most") });
+    expect(mcp.lines.some((line) => line.includes('"big"'))).toBe(false);
     expect(await mcp.close()).toBe(0);
   });
 

@@ -113,7 +113,9 @@ repository may only point `source` inside its own repository.
 
 Every command but `init` and `run` takes `--json`: standard output then
 carries one JSON object per line, nothing else, and the run ends with exactly
-one `result` or one `error`. A failure exits non-zero.
+one `result` or one `error`, always the last line: the Caddy lock is released
+before it, so that what its release says comes first. A failure exits non-zero.
+Through a team token, the same holds.
 
 ```console
 $ sitesolide deploy --dry-run --json
@@ -189,7 +191,9 @@ it once and for all, so that every real deploy is yours to approve.
 It speaks both eras of the protocol: 2026-07-28, with no handshake and the
 version on every request, and 2025-11-25 back to 2024-11-05, with `initialize`.
 `notifications/cancelled` interrupts a command as Ctrl-C would: the step in
-progress finishes, then it stops and releases the Caddy lock.
+progress finishes, then it stops and releases the Caddy lock. A request whose id
+is still in flight is refused, so that an answer or a cancellation always names
+one command, and a message longer than a mebibyte is refused unread.
 
 ### Registering it
 

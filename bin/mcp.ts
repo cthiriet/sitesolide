@@ -436,6 +436,9 @@ export function createServer(send: (message: Message) => void, runner: Runner = 
       if (!("id" in message)) return notice(message.method, params);
       const id = message.id;
       if (typeof id !== "string" && typeof id !== "number") return send(failure(null, -32600, "Invalid Request: id must be a string or a number"));
+      // An id still in flight: its answer, and a cancellation aimed at it,
+      // could no longer say which of the two commands they stand for.
+      if (running.has(id)) return send(failure(id, -32600, "Invalid Request: this id belongs to a request still in progress"));
       const reply = await answer(id, message.method, params);
       if (reply !== null) send(reply);
     },
@@ -449,17 +452,31 @@ export function createServer(send: (message: Message) => void, runner: Runner = 
   };
 }
 
+/**
+ * The longest message read, in characters. This server's requests are a few
+ * hundred bytes; a line without end would otherwise grow in memory until the
+ * process fell over, taking the commands it runs with it.
+ */
+export const MAX_MESSAGE = 1024 * 1024;
+
 /** The server on standard input and output, until standard input closes. */
-export async function serve(): Promise<void> {
+export async function serve(input: ReadableStream<Uint8Array> = Bun.stdin.stream()): Promise<void> {
   const server = createServer((message) => console.log(JSON.stringify(message)));
   const pending = new Set<Promise<void>>();
-  for await (const line of console) {
-    const task = server.receive(line).catch((error: unknown) => {
-      console.error(`sitesolide mcp: ${(error as Error).message}`);
-    });
-    pending.add(task);
-    void task.finally(() => pending.delete(task));
-  }
+  await forEachLine(
+    input,
+    (line) => {
+      const task = server.receive(line).catch((error: unknown) => {
+        console.error(`sitesolide mcp: ${(error as Error).message}`);
+      });
+      pending.add(task);
+      void task.finally(() => pending.delete(task));
+    },
+    {
+      length: MAX_MESSAGE,
+      onOverflow: () => console.log(JSON.stringify(failure(null, -32700, `Parse error: a message is one JSON object per line, of ${MAX_MESSAGE} characters at most`))),
+    },
+  );
   server.interruptAll();
   await Promise.all(pending);
 }

@@ -75,21 +75,42 @@ export function eventFor(line: string): OutputEvent | null {
  * Calls `onLine` for every line of a stream, the last one included when it
  * has no line break. A chunk ends anywhere, in the middle of a line or of a
  * character: the decoder keeps a split character, and the buffer a split line.
+ *
+ * `limit`, for a stream someone else writes: a line longer than `length`
+ * characters is never held whole, nor handed over; `onOverflow` is called
+ * once for it, and reading resumes at the next line.
  */
-export async function forEachLine(stream: ReadableStream<Uint8Array>, onLine: (line: string) => void): Promise<void> {
+export async function forEachLine(
+  stream: ReadableStream<Uint8Array>,
+  onLine: (line: string) => void,
+  limit?: { length: number; onOverflow: () => void },
+): Promise<void> {
   const decoder = new TextDecoder();
   let pending = "";
+  /** The rest of a line already found too long, dropped up to its end. */
+  let skipping = false;
+  const deliver = (line: string): void => {
+    if (limit !== undefined && line.length > limit.length) limit.onOverflow();
+    else onLine(line);
+  };
   for await (const chunk of stream) {
     pending += decoder.decode(chunk, { stream: true });
     let end = pending.indexOf("\n");
     while (end !== -1) {
-      onLine(pending.slice(0, end).replace(/\r$/, ""));
+      const line = pending.slice(0, end).replace(/\r$/, "");
       pending = pending.slice(end + 1);
+      if (skipping) skipping = false;
+      else deliver(line);
       end = pending.indexOf("\n");
+    }
+    if (limit !== undefined && pending.length > limit.length) {
+      if (!skipping) limit.onOverflow();
+      skipping = true;
+      pending = "";
     }
   }
   pending += decoder.decode();
-  if (pending !== "") onLine(pending.replace(/\r$/, ""));
+  if (pending !== "" && !skipping) deliver(pending.replace(/\r$/, ""));
 }
 
 // --- status ------------------------------------------------------------------

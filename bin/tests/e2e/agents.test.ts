@@ -205,6 +205,25 @@ describe("deploy --json", () => {
     expect(machine.logs()).toEqual([]);
   });
 
+  test("the final event is the last line, even when releasing the Caddy lock has something to say", async () => {
+    const machine = fakeVm();
+    // The manifest's deposit, under the lock, is refused: the run dies holding it.
+    machine.acceptWrites(["/dev/stdin"]);
+    machine.pause("READ agent-site#2");
+    const running = run(project({ slug: "agent-site", publicDir: "public" }, "agent-site"), ["deploy", "--json"], { vm: machine });
+    for (let i = 0; i < 400 && !machine.logs().includes("PAUSE READ agent-site"); i++) await Bun.sleep(25);
+    // Meanwhile the lock went to someone else: its release will warn.
+    machine.setLock(`gatekeeper 4242 ${Date.now()}`);
+    machine.resume();
+    const r = await running;
+    expect(r.code).toBe(1);
+    const list = events(r);
+    expect(ended(r, "error").message).toBe("write refused: /srv/sites/agent-site/sitesolide.json");
+    const warning = list.findIndex((event) => event.type === "warning" && String(event.message).includes("the Caddy lock was taken over"));
+    expect(warning).toBeGreaterThan(-1);
+    expect(warning).toBeLessThan(list.length - 1);
+  });
+
   test("an unknown command and --json on run are refused as events too", async () => {
     const unknown = await run("projects/simple-site", ["dance", "--json"], { vm: fakeVm() });
     expect(unknown.code).toBe(1);
