@@ -103,6 +103,8 @@ type Connection = {
   upstream: Side;
   lastActivity: number;
   headTimer: ReturnType<typeof setTimeout> | null;
+  /** The number of the current connection attempt, see connect(). */
+  attempt: number;
 };
 
 export type Proxy = { port: number; stop: () => void; open: () => number };
@@ -194,10 +196,19 @@ export function startProxy(options: ProxyOptions): Proxy {
     close(connection);
   }
 
-  /** Tries each judged address in turn, within the delay. */
+  /** Is this socket the connection's upstream, and not an attempt given up on? */
+  const isUpstream = (socket: Socket<Connection>) => socket.data.upstream.socket === (socket as unknown as Socket<unknown>);
+
+  /**
+   * Tries each judged address in turn, within the delay. Each attempt carries
+   * a number, and a socket adopts the connection in its `open` only if its
+   * attempt is still the current one: an address that answers after its delay
+   * ran out is closed, and its events never reach the client.
+   */
   async function connect(connection: Connection, addresses: string[], port: number): Promise<Socket<Connection> | null> {
     for (const address of addresses) {
       const target = route(address, port);
+      const attempt = ++connection.attempt;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const expired = new Promise<null>((resolve) => {
@@ -209,15 +220,25 @@ export function startProxy(options: ProxyOptions): Proxy {
             port: target.port,
             data: connection,
             socket: {
+              open(socket) {
+                const owner = socket.data;
+                if (owner.attempt !== attempt || isClosed(owner)) {
+                  socket.end();
+                  return;
+                }
+                owner.upstream.socket = socket as unknown as Socket<unknown>;
+              },
               data(socket, chunk) {
+                if (!isUpstream(socket)) return;
                 const owner = socket.data;
                 owner.lastActivity = Date.now();
                 send(owner.client, owner.upstream, chunk);
               },
               drain(socket) {
-                flush(socket.data.upstream, socket.data.client);
+                if (isUpstream(socket)) flush(socket.data.upstream, socket.data.client);
               },
               close(socket) {
+                if (!isUpstream(socket)) return;
                 const owner = socket.data;
                 owner.upstream.socket = null;
                 // What the origin sent is delivered before the client's side
@@ -232,7 +253,7 @@ export function startProxy(options: ProxyOptions): Proxy {
           }),
           expired,
         ]);
-        if (socket !== null) return socket;
+        if (socket !== null && isUpstream(socket)) return socket;
       } catch {
         // The next address, if there is one.
       } finally {
@@ -240,6 +261,8 @@ export function startProxy(options: ProxyOptions): Proxy {
       }
       if (isClosed(connection)) return null;
     }
+    // The last attempt is given up on too, should it answer late.
+    connection.attempt++;
     return null;
   }
 
@@ -341,6 +364,7 @@ export function startProxy(options: ProxyOptions): Proxy {
           upstream: { socket: null, queue: [], queued: 0, ending: false },
           lastActivity: Date.now(),
           headTimer: null,
+          attempt: 0,
         };
         socket.data = connection;
         if (connections.size >= limits.maxConnections) {

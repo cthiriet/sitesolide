@@ -19,6 +19,8 @@ const PLAIN = "plain.test-zone.invalid";
 const PUBLIC_V4 = "203.0.114.10";
 const PUBLIC_V6 = "2a01:4f8:ffff::10";
 const PLAIN_ADDRESS = "203.0.114.20";
+/** Public to the classification, routed to a closed local port by the test. */
+const UNROUTED = "203.0.114.99";
 /** Bigger than the proxy's buffer, so that both directions have to wait for each other. */
 const BIG = 8 * 1024 * 1024;
 
@@ -62,6 +64,7 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
       "metadata.test-zone.invalid": ["169.254.169.254"],
       "mapped.test-zone.invalid": ["::ffff:127.0.0.1"],
       "empty.test-zone.invalid": [],
+      "twice.test-zone.invalid": [UNROUTED, PUBLIC_V4],
     });
     route = stubRoute({ [`${PUBLIC_V4}:443`]: api.port!, [`${PLAIN_ADDRESS}:80`]: plain.port! });
     proxy = startProxy({
@@ -169,6 +172,15 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
       tls: { ca: tls.cert },
     });
     expect(await upload.json()).toEqual({ received: BIG });
+  });
+
+  test("an address that refuses the connection gives way to the next judged one", async () => {
+    allow("twice.test-zone.invalid");
+    route.asked.length = 0;
+    // The first address routes nowhere (a closed local port), the second to the API.
+    const answer = await rawExchange(proxy.port, "CONNECT twice.test-zone.invalid:443 HTTP/1.1\r\n\r\n", 1000);
+    expect(answer).toStartWith("HTTP/1.1 200 Connection Established");
+    expect(route.asked).toEqual([`${UNROUTED}:443`, `${PUBLIC_V4}:443`]);
   });
 
   test("a host the manifest does not list is refused, with a sentence naming it", async () => {
