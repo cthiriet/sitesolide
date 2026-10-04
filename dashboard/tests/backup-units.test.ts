@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_CHILD_TIMEOUT_MS } from "../src/backup/config";
 import { readRestoreLaunch, restoreUnit } from "../src/backup/request";
-import { RESTORE_LOCK_WAIT_MS } from "../src/backup/restore";
-import { LOCK_WAIT_MS, OFFSITE_DEADLINE_MS, SNAPSHOT_DEADLINE_MS } from "../src/backup/run";
+import { AFTER_STOP_MS, DOWNLOAD_TIMEOUT_MS, MEASURE_TIMEOUT_MS, RESTORE_LOCK_WAIT_MS, RESTORE_TIMEOUT_MS } from "../src/backup/restore";
+import { LOCK_WAIT_MS, OFFSITE_DEADLINE_MS, OFFSITE_STOP_MS, SNAPSHOT_DEADLINE_MS } from "../src/backup/run";
 
 /**
  * The backup component's three units, read the way systemd reads them. Only a
@@ -53,6 +53,10 @@ describe("sitesolide-backup.service", () => {
     expect(values(text, "EnvironmentFile")).toEqual(["/etc/caddy/sitesolide.env", "-/etc/sitesolide/dashboard-backup.env"]);
   });
 
+  test("sees no project's secrets, though PID 1 hands it the bucket's settings from among them", () => {
+    expect(values(text, "InaccessiblePaths")).toEqual(["-/etc/sitesolide -/var/lib/sitesolide-steward"]);
+  });
+
   test("writes only its archives and its own folders, with one capability, to read", () => {
     expect(values(text, "ProtectSystem")).toEqual(["strict"]);
     expect(values(text, "ReadWritePaths")).toEqual(["/var/backups/sitesolide"]);
@@ -72,7 +76,8 @@ describe("sitesolide-backup.service", () => {
     // The last copy starts by 25 minutes and lasts 20 at most, which leaves the
     // pruning and the status file time; the uploads stop at 40.
     expect(SNAPSHOT_DEADLINE_MS + DEFAULT_CHILD_TIMEOUT_MS).toBeLessThan(50 * 60_000);
-    expect(OFFSITE_DEADLINE_MS).toBeLessThan(50 * 60_000);
+    expect(OFFSITE_DEADLINE_MS).toBeLessThan(OFFSITE_STOP_MS);
+    expect(OFFSITE_STOP_MS).toBeLessThan(50 * 60_000);
     expect(LOCK_WAIT_MS).toBeLessThan(SNAPSHOT_DEADLINE_MS);
     expect(values(text, "Nice")).toEqual(["10"]);
     expect(values(text, "IOSchedulingClass")).toEqual(["idle"]);
@@ -106,14 +111,28 @@ describe("sitesolide-restore@.service", () => {
   test("writes only into the folder of the project it is named for, and the archives", () => {
     expect(values(text, "ReadWritePaths")).toEqual(["/srv/sites/%i /var/backups/sitesolide"]);
     expect(values(text, "ReadOnlyPaths")).toEqual(["-/srv/sites/%i/app -/srv/sites/%i/public"]);
-    expect(values(text, "InaccessiblePaths")).toEqual(["-/var/lib/sitesolide-steward"]);
+    expect(values(text, "InaccessiblePaths")).toEqual(["-/var/lib/sitesolide-steward -/etc/sitesolide"]);
     // `%I` would turn a slug's dashes into slashes: in no directive.
     expect(directives(text, "Service").some(([, value]) => value.includes("%I"))).toBe(false);
   });
 
-  test("outlasts its longest path: the lock's wait, an extraction, a snapshot, the watch", () => {
-    expect(values(text, "TimeoutStartSec")).toEqual(["60min"]);
-    expect(RESTORE_LOCK_WAIT_MS + 2 * DEFAULT_CHILD_TIMEOUT_MS + 2 * 60_000).toBeLessThan(60 * 60_000);
+  test("outlasts its longest path: the lock's wait, a measure, a download, an extraction, a snapshot, the watch", () => {
+    expect(values(text, "TimeoutStartSec")).toEqual(["90min"]);
+    expect(RESTORE_TIMEOUT_MS).toBe(90 * 60_000);
+    expect(RESTORE_LOCK_WAIT_MS + MEASURE_TIMEOUT_MS + DOWNLOAD_TIMEOUT_MS + 2 * DEFAULT_CHILD_TIMEOUT_MS + AFTER_STOP_MS).toBeLessThanOrEqual(RESTORE_TIMEOUT_MS);
+  });
+
+  test("a restore cut short starts the project again once its process is gone", () => {
+    expect(values(text, "ExecStopPost")).toEqual(["/usr/local/bin/bun /usr/local/lib/sitesolide/backup.js after-restore %n"]);
+    expect(values(text, "TimeoutStopSec")).toEqual(["3min"]);
+    expect(readRestoreLaunch(["sitesolide-restore@cms.service"])).toEqual({ ok: true, folder: "cms" });
+  });
+
+  test("has no network: the bucket is a download child's business", () => {
+    expect(values(text, "RestrictAddressFamilies")).toEqual(["AF_UNIX"]);
+    expect(values(text, "IPAddressDeny")).toEqual(["any"]);
+    // The settings still reach it, read by PID 1 before the walls.
+    expect(values(text, "EnvironmentFile")).toContain("-/etc/sitesolide/dashboard-backup.env");
   });
 
   test("two capabilities, the ones a folder swap and a chown need", () => {

@@ -6,9 +6,10 @@ import { snapshotName } from "../borrowed/backups";
 import { generateUnit } from "../borrowed/unit";
 import { PRAGMAS, openDatabase, openForReading, recordAudit, readAudit } from "../src/backup/database";
 import { HOLDER_NAME, LOCK_NAME, takeLock } from "../src/backup/lock";
-import { listProjects, readProject } from "../src/backup/projects";
+import { projectFolders, readProject } from "../src/backup/projects";
 import { recoveryPlan, INTERRUPTED_REASON } from "../src/backup/recovery";
 import { isActor, judgeResult, readRequest, readRestoreLaunch, restoreUnit, encodeRequest } from "../src/backup/request";
+import { descriptionMismatch } from "../src/backup/extract";
 import { childCommand, confinement, readReport, unitName, type Job } from "../src/backup/runner";
 
 const FOLDER = mkdtempSync(join(tmpdir(), "backup-rules-"));
@@ -54,6 +55,25 @@ describe("the restore's unit and request", () => {
     expect(judgeResult({ info: { ...info, mode: 0o666 }, bytes }, null)).toEqual({ unreadable: "the restore's result is writable by other accounts" });
     expect(judgeResult({ info, bytes: new TextEncoder().encode("{}") }, 0)).toEqual({ unreadable: "the restore's result is unreadable" });
     expect(judgeResult({ info: { ...info, regular: false }, bytes: null }, 0)).toHaveProperty("unreadable");
+  });
+});
+
+describe("an archive's description, against the snapshot asked for", () => {
+  const expected = { folder: "cms", takenAt: T };
+  const takenAt = new Date(T).toISOString();
+
+  test("format 2 must name the folder and the second of the snapshot", () => {
+    expect(descriptionMismatch({ format: 2, folder: "cms", takenAt }, expected)).toBeNull();
+    expect(descriptionMismatch({ format: 2, folder: "cms", takenAt: new Date(T + 999).toISOString() }, expected)).toBeNull();
+    expect(descriptionMismatch({ format: 2, folder: "shop", takenAt }, expected)).toBe("the archive is a snapshot of another site than the one being restored");
+    expect(descriptionMismatch({ format: 2, takenAt }, expected)).toBe("the archive is a snapshot of another site than the one being restored");
+    expect(descriptionMismatch({ format: 2, folder: "cms", takenAt: new Date(T + 1000).toISOString() }, expected)).toBe("the archive was taken at another time than its name says");
+    expect(descriptionMismatch({ format: 2, folder: "cms" }, expected)).toBe("the archive was taken at another time than its name says");
+  });
+
+  test("format 1, written before the check, and an archive made by hand, are not judged", () => {
+    expect(descriptionMismatch({ format: 1, takenAt }, expected)).toBeNull();
+    expect(descriptionMismatch({ files: 3 }, expected)).toBeNull();
   });
 });
 
@@ -136,7 +156,7 @@ describe("the projects as a run reads them", () => {
   });
 
   test("a folder that is not a site is not listed", () => {
-    expect(listProjects(sites, passwd, false).map((found) => ("project" in found ? found.project.folder : found.folder))).toEqual(["cms", "notes", "orphan"]);
+    expect(projectFolders(sites)).toEqual(["cms", "notes", "orphan"]);
   });
 });
 
@@ -195,8 +215,9 @@ describe("a child, run as the project", () => {
     cacheDirectory: "sitesolide-backup/cms",
     stdin: null,
     stdout: "pipe",
+    timeoutMs: 1_800_000,
   };
-  const config = { isolation: "systemd" as const, systemdRun: "/usr/bin/systemd-run", bun: "/usr/local/bin/bun", script: "/usr/local/lib/sitesolide/backup.js", childTimeoutMs: 1_800_000 };
+  const config = { isolation: "systemd" as const, systemdRun: "/usr/bin/systemd-run", bun: "/usr/local/bin/bun", script: "/usr/local/lib/sitesolide/backup.js", offsiteFile: "/etc/sitesolide/dashboard-backup.env" };
 
   test("goes through systemd-run, as the project's account, its pipes handed over", () => {
     const command = childCommand(job, config, "a1b2c3d4");
@@ -231,7 +252,7 @@ describe("a child, run as the project", () => {
       .split("\n")
       .filter((line) => /^(NoNewPrivileges|PrivateTmp|PrivateDevices|ProtectSystem|ProtectHome|ReadWritePaths|TemporaryFileSystem|BindPaths|ProtectKernelTunables|ProtectKernelModules|ProtectControlGroups|RestrictNamespaces|RestrictSUIDSGID|RestrictRealtime|LockPersonality|UMask|IPAddressDeny)=/.test(line))
       .map((line) => line.replace(/^(\w+)=true$/, "$1=yes"));
-    const properties = confinement(job, 1_800_000);
+    const properties = confinement(job);
     for (const line of wanted) expect(properties).toContain(line);
     expect(properties).toContain("IPAddressDeny=any");
     expect(properties).not.toContain("IPAddressAllow=localhost");
@@ -241,13 +262,17 @@ describe("a child, run as the project", () => {
   });
 
   test("reports one JSON line, and the rest is kept as the tail of a failure", () => {
-    expect(readReport('noise\n{"event":"summary","files":3}\n')).toEqual({ summary: { event: "summary", files: 3 }, error: null, path: null, tail: "noise" });
+    expect(readReport('noise\n{"event":"summary","files":3}\n')).toEqual({ summary: { event: "summary", files: 3 }, error: null, path: null, code: null, detail: null, tail: "noise" });
     expect(readReport('{"event":"error","message":"a folder of the data cannot be read (permission denied)","path":"private"}')).toEqual({
       summary: null,
       error: "a folder of the data cannot be read (permission denied)",
       path: "private",
+      code: null,
+      detail: null,
       tail: "",
     });
+    expect(readReport('{"event":"error","message":"a database could not be copied (SQLITE_CORRUPT)","code":"database","detail":"x"}')).toMatchObject({ code: "database", detail: "x" });
+    expect(readReport('{"event":"error","message":"m","code":"Not A Code; rm"}').code).toBeNull();
     expect(readReport("Failed to start transient service unit: Unit already exists.").tail).toContain("Unit already exists");
   });
 });

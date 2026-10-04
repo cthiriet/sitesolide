@@ -27,17 +27,28 @@ RequiresMountsFor=/srv/sites /var/backups
 Type=oneshot
 # `%n`: the full name, from which the restore draws the folder.
 ExecStart=/usr/local/bin/bun /usr/local/lib/sitesolide/backup.js restore %n
+# Once the restore's process is gone, however it went: a restore cut short
+# with the project's services stopped, by the timeout below or by anything
+# else, left a mark; this repairs what is certain and starts them again
+# (afterRestore in restore.ts). After a restore that finished, it does nothing.
+ExecStopPost=/usr/local/bin/bun /usr/local/lib/sitesolide/backup.js after-restore %n
 EnvironmentFile=/etc/caddy/sitesolide.env
-# A snapshot only the bucket still holds is fetched from it and decrypted.
+# The bucket's settings, and the disk reserve: a snapshot only the bucket
+# still holds is fetched by a download child, which PID 1 hands this same
+# file by name (dashboard/src/backup/runner.ts).
 EnvironmentFile=-/etc/sitesolide/dashboard-backup.env
 
 # The steward does not wait: it starts this unit with --no-block and the page
 # follows the result file. The longest restore waits ten minutes for a run to
-# finish, then extracts and saves, twenty minutes at most each
-# (DEFAULT_CHILD_TIMEOUT_MS), then watches the service: under the hour. Killed
-# in the middle, it would leave folders that the next restore repairs or
-# refuses (recovery.ts).
-TimeoutStartSec=60min
+# finish, measures the data (ten at most), downloads from the bucket (twenty),
+# extracts (twenty), saves the current data (twenty) and watches the service
+# (ten with a rollback): ninety minutes, RESTORE_TIMEOUT_MS in restore.ts. It
+# stops nothing without the time for what follows; killed all the same, the
+# ExecStopPost above starts the services again, and the next restore repairs
+# or refuses the folders left (recovery.ts).
+TimeoutStartSec=90min
+# The killed process's exit, then the ExecStopPost: a few systemctl calls.
+TimeoutStopSec=3min
 
 UMask=0077
 StateDirectory=sitesolide-backup
@@ -64,16 +75,21 @@ CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_CHOWN
 ProtectSystem=strict
 ReadWritePaths=/srv/sites/%i /var/backups/sitesolide
 ReadOnlyPaths=-/srv/sites/%i/app -/srv/sites/%i/public
-# The steward's state: nothing here needs it, and CAP_DAC_OVERRIDE would
-# make it readable.
-InaccessiblePaths=-/var/lib/sitesolide-steward
+# The steward's state and every project's secrets: nothing here needs them,
+# and CAP_DAC_OVERRIDE would make them readable. The bucket's settings still
+# arrive: PID 1 reads EnvironmentFile= before the walls go up (systemd.exec(5)).
+InaccessiblePaths=-/var/lib/sitesolide-steward -/etc/sitesolide
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
 PrivateIPC=true
 
-# The network, for a snapshot fetched from the bucket; AF_UNIX for systemd.
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# No network at all: root with CAP_DAC_OVERRIDE talks to systemd alone, over
+# AF_UNIX. A snapshot only the bucket holds is fetched by a download child,
+# a dynamic user with the network and no right on any project
+# (dashboard/src/backup/runner.ts).
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
 
 ProtectKernelTunables=true
 ProtectKernelModules=true

@@ -6,8 +6,8 @@ import { snapshotName } from "../borrowed/backups";
 import { openDatabase, readAudit } from "../src/backup/database";
 import { takeLock } from "../src/backup/lock";
 import { INCOMING, INTERRUPTED_REASON, PREVIOUS } from "../src/backup/recovery";
-import { encodeRequest } from "../src/backup/request";
-import { restore, type Command } from "../src/backup/restore";
+import { PORTAL_REFUSAL, encodeRequest } from "../src/backup/request";
+import { STOPPED_SUFFIX, afterRestore, restore, type Command } from "../src/backup/restore";
 import { runBackups } from "../src/backup/run";
 import { ACCOUNTS, BALANCE, audit, createAccounts, project, tree } from "./backup-fixtures";
 import { startFakeS3 } from "./fake-s3";
@@ -259,6 +259,25 @@ describe("what a restore refuses", () => {
     expect(result.message).toContain("the dashboard's own data is not restored from the dashboard");
   });
 
+  test("the portal, whose old copy would let revoked guests back in", async () => {
+    const result = await refused(({ config, sites, snapshot }) => {
+      mkdirSync(join(sites, "portal", "data"), { recursive: true });
+      request(config.stateFolder, "portal", snapshot.replace("cms", "portal"), T);
+    }, "portal");
+    expect(result).toMatchObject({ state: "rejects", message: PORTAL_REFUSAL });
+  });
+
+  test("a manifest naming another slug, whose services would be another project's", async () => {
+    const result = await refused(({ config, sites, snapshot }) => {
+      writeFileSync(
+        join(sites, "cms", "sitesolide.json"),
+        JSON.stringify({ slug: "shop", services: { web: { start: "bun web.ts", port: 3040 }, worker: { start: "bun worker.ts", port: 3041, internal: true } } }),
+      );
+      request(config.stateFolder, "cms", snapshot, T);
+    });
+    expect(result).toMatchObject({ state: "rejects", message: "cms: its sitesolide.json names another slug, so its services cannot be named safely" });
+  });
+
   test("while a run holds the lock", async () => {
     let release: (() => void) | null = null;
     const result = await refused(({ config, snapshot }) => {
@@ -304,5 +323,199 @@ describe("what a restore repairs before starting", () => {
     expect(result.state).toBe("ok");
     expect(result.preRestore).not.toBeNull();
     expect(readFileSync(join(data, "upload.txt"), "utf8")).toBe("the version of two hours ago");
+  });
+});
+
+const BUCKET = {
+  BACKUP_S3_BUCKET: "backups",
+  BACKUP_S3_ACCESS_KEY_ID: "AKIDRESTORE",
+  BACKUP_S3_SECRET_ACCESS_KEY: "secret",
+  BACKUP_ENCRYPTION_PASSPHRASE: "a long enough offsite passphrase",
+};
+
+/** A restore that must be refused before anything is stopped, the data in service untouched. */
+async function untouched(made: Awaited<ReturnType<typeof prepared>>, snapshot: string, extra: Partial<Parameters<typeof restore>[0]> = {}) {
+  const systemd = fakeSystemd(made.data, UNITS);
+  const time = clock(T);
+  request(made.config.stateFolder, "cms", snapshot, T);
+  const result = await restore({ config: made.config, now: time.now, wait: time.wait, log: silent, systemctl: systemd.systemctl, ...extra }, "cms");
+  expect(systemd.calls.filter((call) => call.startsWith("stop"))).toEqual([]);
+  expect(readFileSync(join(made.data, "upload.txt"), "utf8")).toBe("the version of now");
+  expect(existsSync(join(made.sites, "cms", INCOMING))).toBe(false);
+  return result;
+}
+
+describe("a snapshot is bound to its project and its time", () => {
+  test("an archive copied under another snapshot's name is refused once extracted, before anything stops", async () => {
+    const made = await prepared();
+    const elsewhere = snapshotName("cms", T - 30 * 60_000, "scheduled");
+    writeFileSync(join(made.config.backupFolder, "cms", elsewhere), readFileSync(join(made.config.backupFolder, "cms", made.snapshot)));
+    const result = await untouched(made, elsewhere);
+    expect(result).toMatchObject({ state: "rejects", message: "the snapshot could not be extracted, nothing was changed: the archive was taken at another time than its name says" });
+  });
+
+  test("a bucket's object copied under another key is refused, before anything stops", async () => {
+    const s3 = startFakeS3("AKIDRESTORE");
+    try {
+      const made = await prepared({ ...BUCKET, BACKUP_S3_ENDPOINT: s3.url });
+      const elsewhere = snapshotName("cms", T - 30 * 60_000, "scheduled");
+      s3.objects.set(`sitesolide/cms/${elsewhere}.enc`, s3.objects.get(`sitesolide/cms/${made.snapshot}.enc`)!);
+      const result = await untouched(made, elsewhere);
+      expect(result.state).toBe("rejects");
+      expect(result.message).toContain(`the snapshot could not be fetched from the bucket: this copy was sealed as "sitesolide/cms/${made.snapshot}.enc"`);
+      expect(readdirSync(join(made.config.stateFolder, "downloads"))).toEqual([]);
+    } finally {
+      s3.stop();
+    }
+  });
+});
+
+describe("a restore never leaves a site stopped", () => {
+  test("without the time to save and swap, nothing is stopped", async () => {
+    const made = await prepared();
+    const result = await untouched(made, made.snapshot, { unitTimeoutMs: 60_000 });
+    expect(result).toMatchObject({ state: "rejects", message: expect.stringContaining("not enough time left in this restore") });
+  });
+
+  test("it marks the services stopped before stopping them, and clears the mark once they run again", async () => {
+    const { config, data, snapshot } = await prepared();
+    const systemd = fakeSystemd(data, UNITS);
+    const mark = join(config.runFolder, "restore", `cms${STOPPED_SUFFIX}`);
+    const seen: boolean[] = [];
+    const time = clock(T);
+    request(config.stateFolder, "cms", snapshot, T);
+    const result = await restore(
+      {
+        config,
+        now: time.now,
+        wait: time.wait,
+        log: silent,
+        systemctl: async (args) => {
+          if (args[0] === "stop") seen.push(existsSync(mark));
+          return systemd.systemctl(args);
+        },
+      },
+      "cms",
+    );
+    expect(result.state).toBe("ok");
+    expect(seen).toEqual([true]);
+    expect(JSON.parse(readFileSync(mark.replace(STOPPED_SUFFIX, ".json"), "utf8")).state).toBe("ok");
+    expect(existsSync(mark)).toBe(false);
+  });
+
+  test("cut short with the services stopped, the unit's cleanup repairs and starts them again", async () => {
+    const { config, sites, data, snapshot } = await prepared();
+    const systemd = fakeSystemd(data, UNITS);
+    // The restore was killed while saving the current data: stopped, extracted, not swapped.
+    await systemd.systemctl(["stop", ...UNITS]);
+    mkdirSync(join(sites, "cms", INCOMING));
+    mkdirSync(join(config.runFolder, "restore"), { recursive: true });
+    writeFileSync(join(config.runFolder, "restore", `cms${STOPPED_SUFFIX}`), JSON.stringify({ units: UNITS }), { mode: 0o600 });
+    writeFileSync(
+      join(config.runFolder, "restore", "cms.json"),
+      JSON.stringify({ nonce: "0123456789abcdef", state: "running", message: "Saving the current data first.", snapshot, preRestore: null, actor: "owner", startedAt: T, at: T }),
+      { mode: 0o600 },
+    );
+    // A dead restore's lock, as it leaves it.
+    mkdirSync(join(config.runFolder, "lock"));
+    writeFileSync(join(config.runFolder, "lock", "holder"), "restore 999999 1\n");
+
+    await afterRestore({ config, now: () => T + 60_000, log: silent, systemctl: systemd.systemctl }, "cms");
+    expect(systemd.state.get("cms")).toBe("active");
+    expect(systemd.calls).toContain("start cms");
+    expect(existsSync(join(sites, "cms", INCOMING))).toBe(false);
+    expect(readFileSync(join(data, "upload.txt"), "utf8")).toBe("the version of now");
+    expect(existsSync(join(config.runFolder, "restore", `cms${STOPPED_SUFFIX}`))).toBe(false);
+    const result = JSON.parse(readFileSync(join(config.runFolder, "restore", "cms.json"), "utf8"));
+    expect(result).toMatchObject({ state: "failure", nonce: "0123456789abcdef", actor: "owner", snapshot });
+    expect(result.message).toContain("The restore was cut short");
+    expect(result.message).toContain("cms had been stopped, and was started again by the restore's cleanup (active).");
+    const db = openDatabase(join(config.stateFolder, "backup.db"));
+    expect(readAudit(db, "cms", 1)[0]).toMatchObject({ action: "backup.restore", detail: { result: "failure", cutShort: true } });
+    db.close();
+  });
+
+  test("a restore that finished leaves the cleanup nothing to do", async () => {
+    const { config, data, snapshot } = await prepared();
+    const systemd = fakeSystemd(data, UNITS);
+    const time = clock(T);
+    request(config.stateFolder, "cms", snapshot, T);
+    expect((await restore({ config, now: time.now, wait: time.wait, log: silent, systemctl: systemd.systemctl }, "cms")).state).toBe("ok");
+    const before = readFileSync(join(config.runFolder, "restore", "cms.json"), "utf8");
+    const calls = systemd.calls.length;
+    await afterRestore({ config, now: time.now, log: silent, systemctl: systemd.systemctl }, "cms");
+    expect(systemd.calls.length).toBe(calls);
+    expect(readFileSync(join(config.runFolder, "restore", "cms.json"), "utf8")).toBe(before);
+  });
+
+  test("cut short before stopping anything, the page is told so, and nothing is started", async () => {
+    const { config, data } = await prepared();
+    const systemd = fakeSystemd(data, UNITS);
+    mkdirSync(join(config.runFolder, "restore"), { recursive: true });
+    writeFileSync(
+      join(config.runFolder, "restore", "cms.json"),
+      JSON.stringify({ nonce: null, state: "running", message: "Extracting the snapshot.", snapshot: null, preRestore: null, actor: "owner", startedAt: T, at: T }),
+      { mode: 0o600 },
+    );
+    await afterRestore({ config, now: () => T, log: silent, systemctl: systemd.systemctl }, "cms");
+    expect(systemd.calls).toEqual([]);
+    expect(JSON.parse(readFileSync(join(config.runFolder, "restore", "cms.json"), "utf8"))).toMatchObject({
+      state: "failure",
+      message: "The restore was cut short before it changed anything: start it again from the dashboard.",
+    });
+  });
+});
+
+describe("a download from the bucket is bounded", () => {
+  test("in time: a line that stalls stops the restore before anything is stopped", async () => {
+    const s3 = startFakeS3("AKIDRESTORE");
+    try {
+      const made = await prepared({ ...BUCKET, BACKUP_S3_ENDPOINT: s3.url });
+      unlinkSync(join(made.config.backupFolder, "cms", made.snapshot));
+      s3.stall.value = true;
+      const started = Date.now();
+      const result = await untouched(made, made.snapshot, { downloadTimeoutMs: 800 });
+      expect(result).toMatchObject({ state: "rejects", message: "the snapshot could not be fetched from the bucket in time" });
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect(readdirSync(join(made.config.stateFolder, "downloads"))).toEqual([]);
+    } finally {
+      s3.stop();
+    }
+  });
+
+  test("in room: a disk at its reserve fetches nothing", async () => {
+    const s3 = startFakeS3("AKIDRESTORE");
+    try {
+      const made = await prepared({ ...BUCKET, BACKUP_S3_ENDPOINT: s3.url });
+      unlinkSync(join(made.config.backupFolder, "cms", made.snapshot));
+      const result = await untouched({ ...made, config: { ...made.config, reserveBytes: 10 ** 18 } }, made.snapshot);
+      expect(result).toMatchObject({ state: "rejects", message: "not enough disk space to fetch the snapshot from the bucket" });
+    } finally {
+      s3.stop();
+    }
+  });
+});
+
+describe("a current database that cannot be read consistently", () => {
+  test("is saved as raw files, said so, and the restore goes on", async () => {
+    const { config, data, snapshot } = await prepared();
+    // The very reason for a restore: the database in service is damaged.
+    const damaged = Bun.concatArrayBuffers([new TextEncoder().encode("SQLite format 3\u0000"), crypto.getRandomValues(new Uint8Array(8192))], Infinity, true);
+    for (const side of ["-wal", "-shm"]) rmSync(join(data, `app.db${side}`), { force: true });
+    writeFileSync(join(data, "app.db"), damaged);
+    const systemd = fakeSystemd(data, UNITS);
+    const time = clock(T);
+    request(config.stateFolder, "cms", snapshot, T);
+    const result = await restore({ config, now: time.now, wait: time.wait, log: silent, systemctl: systemd.systemctl }, "cms");
+    expect(result.state).toBe("ok");
+    expect(result.message).toContain("The data it replaced is saved as a before-restore snapshot, as raw files: one of its databases could not be read consistently.");
+    expect(audit(join(data, "app.db"))).toEqual({ total: ACCOUNTS * BALANCE, rows: ACCOUNTS, integrity: "ok" });
+    // The before-restore snapshot holds the damaged file as it was, and says how it was taken.
+    const saved = join(config.backupFolder, "cms", result.preRestore!);
+    expect(JSON.parse(Bun.spawnSync(["tar", "-xzOf", saved, "sitesolide-backup.json"]).stdout.toString())).toMatchObject({ format: 2, folder: "cms", raw: true, databases: [] });
+    expect(new Uint8Array(Bun.spawnSync(["tar", "-xzOf", saved, "data/app.db"]).stdout)).toEqual(damaged);
+    const db = openDatabase(join(config.stateFolder, "backup.db"));
+    expect(readAudit(db, "cms", 1)[0]).toMatchObject({ detail: { result: "ok", preRestoreRaw: true } });
+    db.close();
   });
 });

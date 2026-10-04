@@ -198,12 +198,15 @@ a day of hourly snapshots, a week of daily ones and a month of weekly ones, and
 can copy them, encrypted on the machine, to a bucket elsewhere. A snapshot is
 restored one project at a time from the dashboard's *Backups* section, which
 saves the current data first so that a restore can itself be undone, and puts
-it back if the service does not come back on the restored data.
+it back if the service does not come back on the restored data. Two sites are
+restored by hand only: the dashboard, which would cut off the page doing it,
+and the portal, whose old copy would let back in every guest revoked since.
 
-The boundary is the same as everywhere: **root never opens a project's file.**
-The copy and the extraction run as the project's own account, in a transient
-unit with its service's walls and no network; root only stores what they hand
-it, as archives no project can read. A manifest opts out with
+The boundary is the same as everywhere: **root never opens a project's file**,
+nor walks its folder. The copy, which measures the data too, and the
+extraction run as the project's own account, in a transient unit with its
+service's walls and no network, each within its own time; root only stores
+what they hand it, as archives no project can read. A manifest opts out with
 `"backup": false`. See
 [dashboard/src/backup/README.md](../dashboard/src/backup/README.md).
 

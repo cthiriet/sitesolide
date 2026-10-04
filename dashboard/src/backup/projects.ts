@@ -1,9 +1,16 @@
 /**
  * The projects the machine serves, as the backup component sees them: a
  * folder of /srv/sites, its account, its data folder, and whether it asks to be
- * left out. Read by root, which lists folders and their sizes, and never opens
- * a file inside a data folder: that is the copy's business, under the
- * project's own account.
+ * left out. Read by root, which never opens a file inside a data folder, nor
+ * walks one: that is the copy's business, under the project's own account,
+ * measuring included (copy.ts, measureData).
+ *
+ * **Root lists no data folder.** A project can put millions of names in its
+ * folder; root listing them would build them all in memory, under a unit
+ * whose MemoryMax keeps every project's snapshot, and would be killed before
+ * writing its status, every hour. The projects are read one at a time, as the
+ * run reaches them, never all up front, and whether a data folder is empty is
+ * asked of `find`, which stops at the first name (isEmptyFolder).
  */
 import { lstatSync, readdirSync, readFileSync, statfsSync, type Dirent } from "node:fs";
 import { join } from "node:path";
@@ -72,7 +79,7 @@ export function readProject(sitesDir: string, folder: string, accountsFile: stri
   else if (stat.isSymbolicLink() || !stat.isDirectory()) return { folder, error: "the data folder is not a plain folder" };
   else {
     try {
-      if (readdirSync(dataDir).length === 0) excluded ??= "empty data folder";
+      if (isEmptyFolder(dataDir)) excluded ??= "empty data folder";
     } catch {
       return { folder, error: "the data folder cannot be read" };
     }
@@ -87,8 +94,42 @@ export function readProject(sitesDir: string, folder: string, accountsFile: stri
   return { project: { folder, account, owner, dataDir, manifest }, excluded };
 }
 
-/** Every project of the machine, in folder order. A folder that is not a project is not listed. */
-export function listProjects(sitesDir: string, accountsFile: string, checkOwners: boolean): Found[] {
+/** Where `find` is, on Debian as on the workstation: an absolute path, nothing looked up. */
+export const FIND = "/usr/bin/find";
+
+/**
+ * True if the folder holds nothing. Asked of `find`, which stops at the first
+ * name it meets (`-quit`), follows no link (its default, `-P`), and does not
+ * descend (`-maxdepth 1`).
+ *
+ * Not `opendirSync` and its entries one at a time: measured on 4 October 2026
+ * with Bun 1.3.11, on a folder of 100,000 names of 240 bytes, `opendirSync`
+ * then one `readSync` raised the peak memory by 52 MB, more than
+ * `readdirSync` itself (37 MB): Bun's `Dir` lists the whole folder on its
+ * first read. `Bun.Glob` did the same (67 MB). Through `find`, the reading
+ * cost this process under 2 MB. `find` itself, GNU's on the machine, reads a
+ * folder by batches of 100,000 names at most (gnulib's fts) and stops at the
+ * first: some tens of megabytes at worst, for an instant, in the unit's
+ * cgroup. Its output is one path at most, and only its presence counts.
+ */
+export function isEmptyFolder(path: string): boolean {
+  const found = Bun.spawnSync([FIND, path, "-mindepth", "1", "-maxdepth", "1", "-print", "-quit"], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "ignore",
+    timeout: 60_000,
+  });
+  if (found.exitCode !== 0) throw new Error(`find could not read the folder (exit code ${found.exitCode})`);
+  return found.stdout.byteLength === 0;
+}
+
+/**
+ * The project folders of the machine, in order, by name alone: /srv/sites
+ * belongs to the deployment account, its entries are the projects, not
+ * anything a project writes. Each is read with readProject when its turn
+ * comes. A folder that is not a project is not listed.
+ */
+export function projectFolders(sitesDir: string): string[] {
   let entries: Dirent[];
   try {
     entries = readdirSync(sitesDir, { withFileTypes: true });
@@ -98,39 +139,7 @@ export function listProjects(sitesDir: string, accountsFile: string, checkOwners
   return entries
     .filter((entry) => entry.isDirectory() && isSiteFolder(entry.name) && isBackupFolder(entry.name))
     .map((entry) => entry.name)
-    .sort()
-    .map((folder) => readProject(sitesDir, folder, accountsFile, checkOwners));
-}
-
-/**
- * What a folder weighs, from `lstat` alone: no file is opened. Links are not
- * followed and count for nothing, as the copy leaves them out.
- */
-export function measure(folder: string, maxEntries = 2_000_000): number {
-  let total = 0;
-  let seen = 0;
-  const stack = [folder];
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    let names: string[];
-    try {
-      names = readdirSync(current);
-    } catch {
-      continue;
-    }
-    for (const name of names) {
-      if (++seen > maxEntries) return total;
-      const path = join(current, name);
-      try {
-        const stat = lstatSync(path);
-        if (stat.isDirectory()) stack.push(path);
-        else if (stat.isFile()) total += stat.size;
-      } catch {
-        // gone in the meantime
-      }
-    }
-  }
-  return total;
+    .sort();
 }
 
 /** The bytes an unprivileged writer could still put on this folder's disk. */

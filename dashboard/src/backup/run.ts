@@ -7,9 +7,17 @@
  * does not stop the next one, a bucket that does not answer does not cost the
  * local snapshots, and the status file is written whatever happened, so that
  * a silent machine is never mistaken for a healthy one.
+ *
+ * **No project can take the others' turn.** The projects are read one at a
+ * time, as the run reaches them, and whatever one of them throws is that
+ * project's failure, never the run's. Each is given a share of the time left,
+ * not the whole of it: a project whose copy is stopped or slowed by its own
+ * service is cut at its share and tried again once every other project has
+ * had its turn, with what is left. Its place in the order changes nothing.
  */
 import { lstatSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import type { Database } from "bun:sqlite";
 import { readSnapshotName } from "../../borrowed/backups";
 import type { BackupConfig } from "./config";
 import { newMaster } from "./crypto";
@@ -17,9 +25,10 @@ import { DATABASE_NAME, openDatabase, recordAudit, replaceOffsite, writeSetting 
 import { backupFolders, localSnapshots } from "./listing";
 import { waitForLock } from "./lock";
 import { objectKey, offsiteTarget, openBucket, redact, type Bucket, type Offsite, type RemoteObject } from "./offsite";
-import { listProjects } from "./projects";
+import { projectFolders, readProject, type Found, type Project } from "./projects";
 import { retain } from "./retention";
-import { takeSnapshot } from "./snapshot";
+import { within } from "./runner";
+import { TIMEOUT_ERROR, takeSnapshot, type SnapshotOutcome } from "./snapshot";
 import { shortError, writeStatus, type ProjectStatus, type RunStatus } from "./status";
 
 export type RunDependencies = {
@@ -30,6 +39,8 @@ export type RunDependencies = {
   openBucket?: (offsite: Offsite) => Bucket;
   /** How long to wait for a restore in progress to finish. */
   lockWaitMs?: number;
+  /** When, from the run's start, a call to the bucket still waiting is abandoned: OFFSITE_STOP_MS. */
+  offsiteStopMs?: number;
 };
 
 /** A restore takes minutes; a run waits that long before giving up on this hour. */
@@ -43,12 +54,39 @@ export const LOCK_WAIT_MS = 15 * 60 * 1000;
 export const OFFSITE_DEADLINE_MS = 40 * 60 * 1000;
 
 /**
+ * Past this, a call to the bucket still waiting, an upload begun at 39
+ * minutes on a slow line for one, is abandoned and said so: the status file
+ * must be written before systemd kills the run at 50.
+ */
+export const OFFSITE_STOP_MS = 45 * 60 * 1000;
+
+/**
  * Past this, the projects not reached yet are reported as skipped rather than
  * started: a copy begun at 45 minutes would have the unit killed before the
  * status file is written, and a silent run is the one thing the monitor cannot
  * tell from a healthy one.
  */
 export const SNAPSHOT_DEADLINE_MS = 25 * 60 * 1000;
+
+/** The least a project is given, whatever its share: a small folder's copy takes seconds, a stuck one never ends. */
+export const MIN_PROJECT_MS = 60 * 1000;
+
+/**
+ * A project's time: an equal share of what is left of the snapshot window
+ * among the projects still to come, this one included, within the child
+ * timeout. Every project gets at least its share of the whole window,
+ * wherever it stands in the order, and the time a quick project leaves goes
+ * to the ones after it.
+ */
+export function projectTime(remainingMs: number, projectsLeft: number, childTimeoutMs: number): number {
+  return Math.min(childTimeoutMs, Math.max(MIN_PROJECT_MS, Math.floor(remainingMs / Math.max(1, projectsLeft))));
+}
+
+/** The code or the name only, for the status: a system error's message quotes a path. */
+function errorCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : error instanceof Error ? error.name : "unknown";
+}
 
 export async function runBackups(dependencies: RunDependencies): Promise<RunStatus> {
   const { config, now, log } = dependencies;
@@ -66,43 +104,28 @@ export async function runBackups(dependencies: RunDependencies): Promise<RunStat
     log(`backup: ${runError}, no run this time`);
   }
 
-  const db = openDatabase(join(config.stateFolder, DATABASE_NAME));
+  // A database that does not open costs the audit and the bucket's index,
+  // never the snapshots nor the status file.
+  let db: Database | null = null;
+  try {
+    db = openDatabase(join(config.stateFolder, DATABASE_NAME));
+  } catch (error) {
+    runError ??= `the component's database could not be opened (${errorCode(error)}), see the journal of sitesolide-backup`;
+    log(`backup: the database could not be opened: ${(error as Error).message}`);
+  }
+
   try {
     if (lock.ok) {
-      writeSetting(db, "retention", config.retention);
-      writeSetting(db, "offsite", {
-        target: config.offsite !== null && !("error" in config.offsite) ? offsiteTarget(config.offsite) : null,
-        error: config.offsite !== null && "error" in config.offsite ? config.offsite.error : null,
-      });
+      if (db !== null) {
+        writeSetting(db, "retention", config.retention);
+        writeSetting(db, "offsite", {
+          target: config.offsite !== null && !("error" in config.offsite) ? offsiteTarget(config.offsite) : null,
+          error: config.offsite !== null && "error" in config.offsite ? config.offsite.error : null,
+        });
+      }
 
       // --- The snapshots
-      const taken: string[] = [];
-      for (const found of listProjects(config.sitesDir, config.accountsFile, config.checkOwners)) {
-        if ("error" in found) {
-          fail(found.folder, found.error);
-          log(`backup ${found.folder}: ${found.error}`);
-          continue;
-        }
-        const { project, excluded } = found;
-        if (excluded !== null) {
-          projects[project.folder] = { ok: true, snapshot: null, error: null };
-          continue;
-        }
-        if (now() - startedAt > SNAPSHOT_DEADLINE_MS) {
-          fail(project.folder, "skipped: the run ran out of time before reaching it");
-          continue;
-        }
-        const outcome = await takeSnapshot(config, project, "scheduled", now(), log);
-        if (outcome.ok) {
-          projects[project.folder] = { ok: true, snapshot: outcome.name, error: null };
-          taken.push(project.folder);
-          log(`backup ${project.folder}: ${outcome.name}, ${outcome.bytes} bytes`);
-        } else {
-          fail(project.folder, outcome.error);
-          log(`backup ${project.folder}: ${outcome.error}`);
-        }
-      }
-      audit.snapshots = taken.length;
+      audit.snapshots = await snapshotStep(dependencies, startedAt, projects, fail);
 
       // --- Retention, on the server
       let pruned = 0;
@@ -126,9 +149,7 @@ export async function runBackups(dependencies: RunDependencies): Promise<RunStat
       audit.offsite = await offsiteStep(dependencies, db, startedAt, fail);
     }
   } catch (error) {
-    // The code or the name only in the status: a system error's message quotes a path.
-    const code = (error as { code?: unknown } | null)?.code;
-    runError = `the run failed (${typeof code === "string" ? code : (error as Error).name}), see the journal of sitesolide-backup`;
+    runError = `the run failed (${errorCode(error)}), see the journal of sitesolide-backup`;
     log(`backup: the run failed: ${(error as Error).message}`);
   } finally {
     if (lock.ok) lock.release();
@@ -141,23 +162,102 @@ export async function runBackups(dependencies: RunDependencies): Promise<RunStat
     ok: runError === null && failed.length === 0,
     projects,
   };
+  // Each written on its own: a status that cannot be written does not cost the audit, nor the reverse.
   try {
     writeStatus(config.stateFolder, status);
-  } finally {
-    recordAudit(db, { actor: "system", action: "backup.run", target: null, detail: { ok: status.ok, ...audit, failed, ...(runError === null ? {} : { error: runError }) } }, now());
-    db.close();
+  } catch (error) {
+    log(`backup: the status file could not be written: ${(error as Error).message}`);
+  }
+  if (db !== null) {
+    try {
+      recordAudit(db, { actor: "system", action: "backup.run", target: null, detail: { ok: status.ok, ...audit, failed, ...(runError === null ? {} : { error: runError }) } }, now());
+    } catch (error) {
+      log(`backup: the audit could not be written: ${(error as Error).message}`);
+    } finally {
+      db.close();
+    }
   }
   return status;
 }
 
 /**
+ * Every project, read when its turn comes, snapshotted within its share of
+ * the window; those cut at their share are tried once more at the end, with
+ * what is left. Returns the number of snapshots taken.
+ */
+async function snapshotStep(
+  dependencies: RunDependencies,
+  startedAt: number,
+  projects: Record<string, ProjectStatus>,
+  fail: (folder: string, error: string) => void,
+): Promise<number> {
+  const { config, now, log } = dependencies;
+  const windowEnd = startedAt + SNAPSHOT_DEADLINE_MS;
+  const folders = projectFolders(config.sitesDir);
+  const again: Project[] = [];
+  let taken = 0;
+
+  const attempt = async (project: Project, left: number, last: boolean, late: string) => {
+    if (now() > windowEnd) {
+      fail(project.folder, late);
+      return;
+    }
+    const timeoutMs = projectTime(windowEnd - now(), left, config.childTimeoutMs);
+    let outcome: SnapshotOutcome;
+    try {
+      outcome = await takeSnapshot(config, project, "scheduled", now(), log, { timeoutMs });
+    } catch (error) {
+      log(`backup ${project.folder}: the snapshot failed: ${(error as Error).message}`);
+      outcome = { ok: false, error: `the snapshot failed (${errorCode(error)}), see the journal of sitesolide-backup`, cause: null };
+    }
+    if (outcome.ok) {
+      projects[project.folder] = { ok: true, snapshot: outcome.name, error: null };
+      taken++;
+      log(`backup ${project.folder}: ${outcome.name}, ${outcome.bytes} bytes`);
+      return;
+    }
+    if (outcome.cause === "timeout" && !last) {
+      again.push(project);
+      log(`backup ${project.folder}: out of its time, tried again after the others`);
+      return;
+    }
+    fail(project.folder, outcome.error);
+    log(`backup ${project.folder}: ${outcome.error}`);
+  };
+
+  for (const [index, folder] of folders.entries()) {
+    let found: Found;
+    try {
+      found = readProject(config.sitesDir, folder, config.accountsFile, config.checkOwners);
+    } catch (error) {
+      fail(folder, `the project could not be read (${errorCode(error)}), see the journal of sitesolide-backup`);
+      log(`backup ${folder}: the project could not be read: ${(error as Error).message}`);
+      continue;
+    }
+    if ("error" in found) {
+      fail(found.folder, found.error);
+      log(`backup ${found.folder}: ${found.error}`);
+      continue;
+    }
+    if (found.excluded !== null) {
+      projects[found.project.folder] = { ok: true, snapshot: null, error: null };
+      continue;
+    }
+    await attempt(found.project, folders.length - index, false, "skipped: the run ran out of time before reaching it");
+  }
+  for (const [index, project] of again.entries()) await attempt(project, again.length - index, true, TIMEOUT_ERROR);
+  return taken;
+}
+
+/**
  * The bucket: what it holds, what it lacks, what it keeps. The newest snapshot
  * of each project goes first, then the older ones the bucket lacks, until the
- * deadline. Nothing is deleted from a listing that failed.
+ * deadline. Nothing is deleted from a listing that failed. Every call is
+ * abandoned at OFFSITE_STOP_MS, and nothing more is asked of the bucket after.
  */
 async function offsiteStep(
   dependencies: RunDependencies,
-  db: ReturnType<typeof openDatabase>,
+  db: Database | null,
   startedAt: number,
   fail: (folder: string, error: string) => void,
 ): Promise<Record<string, unknown> | null> {
@@ -169,11 +269,15 @@ async function offsiteStep(
     for (const folder of folders) if (localSnapshots(config.backupFolder, folder).length > 0) fail(folder, `no offsite copy: ${setting.error}`);
     return { error: setting.error };
   }
+  const stopAt = startedAt + (dependencies.offsiteStopMs ?? OFFSITE_STOP_MS);
+  const bounded = <T>(promise: Promise<T>) => within(promise, stopAt - now());
 
   const bucket = (dependencies.openBucket ?? openBucket)(setting);
   let remote: RemoteObject[];
   try {
-    remote = await bucket.list();
+    const listed = await bounded(bucket.list());
+    if (listed === null) throw new Error("no answer in time");
+    remote = listed.value;
   } catch (error) {
     const message = `the bucket could not be listed: ${redact((error as Error).message, setting)}`;
     for (const folder of folders) fail(folder, `no offsite copy: ${message}`);
@@ -183,6 +287,7 @@ async function offsiteStep(
   const master = await newMaster(setting.passphrase);
   const present = new Set(remote.map((object) => object.key));
   let uploaded = 0;
+  let abandoned = false;
   const errors = new Map<string, string>();
   // Round one: each project's newest snapshot. Round two: the older ones.
   for (const round of [0, 1]) {
@@ -192,17 +297,23 @@ async function offsiteStep(
       const missing = kept.filter((name) => !present.has(objectKey(setting, folder, name)));
       const wanted = round === 0 ? missing.slice(0, 1) : missing;
       for (const name of wanted) {
-        if (now() - startedAt > OFFSITE_DEADLINE_MS) {
+        if (abandoned || now() - startedAt > OFFSITE_DEADLINE_MS) {
           // The older ones wait for the next run; a newest one skipped is a missing copy, said so.
           if (round === 0) errors.set(folder, "offsite upload skipped: the run ran out of time");
           break;
         }
         const key = objectKey(setting, folder, name);
         try {
-          const bytes = await bucket.upload(key, join(config.backupFolder, folder, name), master);
+          const sent = await bounded(bucket.upload(key, join(config.backupFolder, folder, name), master));
+          if (sent === null) {
+            abandoned = true;
+            errors.set(folder, "offsite upload stopped: the run ran out of time");
+            log(`backup ${folder}: ${name} not uploaded, abandoned at the run's offsite deadline`);
+            break;
+          }
           present.add(key);
           const snapshot = readSnapshotName(folder, name)!;
-          remote.push({ folder, snapshot, key, bytes });
+          remote.push({ folder, snapshot, key, bytes: sent.value });
           uploaded++;
         } catch (error) {
           const message = redact((error as Error).message, setting);
@@ -224,12 +335,18 @@ async function offsiteStep(
     const decision = retain(objects.map((object) => object.snapshot), config.retention);
     const prune = new Set(decision.prune);
     for (const object of objects) {
-      if (!prune.has(object.snapshot.name)) {
+      if (abandoned || !prune.has(object.snapshot.name)) {
         kept.push(object);
         continue;
       }
       try {
-        await bucket.remove(object.key);
+        const removed = await bounded(bucket.remove(object.key));
+        if (removed === null) {
+          abandoned = true;
+          kept.push(object);
+          log(`backup ${folder}: ${object.key} not pruned from the bucket, abandoned at the run's offsite deadline`);
+          continue;
+        }
         pruned++;
       } catch (error) {
         kept.push(object);
@@ -237,6 +354,6 @@ async function offsiteStep(
       }
     }
   }
-  replaceOffsite(db, kept.map((object) => ({ folder: object.folder, name: object.snapshot.name, bytes: object.bytes })));
-  return { uploaded, pruned, ...(errors.size === 0 ? {} : { failed: [...errors.keys()] }) };
+  if (db !== null) replaceOffsite(db, kept.map((object) => ({ folder: object.folder, name: object.snapshot.name, bytes: object.bytes })));
+  return { uploaded, pruned, ...(errors.size === 0 ? {} : { failed: [...errors.keys()] }), ...(abandoned ? { abandoned: true } : {}) };
 }

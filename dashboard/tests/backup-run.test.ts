@@ -7,7 +7,7 @@ import { decryptStream } from "../src/backup/crypto";
 import { openDatabase, readAudit, readOffsite, readSetting } from "../src/backup/database";
 import { takeLock } from "../src/backup/lock";
 import { listing } from "../src/backup/main";
-import { redact } from "../src/backup/offsite";
+import { redact, type Bucket } from "../src/backup/offsite";
 import { runBackups } from "../src/backup/run";
 import { readStatus } from "../src/backup/status";
 import { createAccounts, project, SCRIPT, tree } from "./backup-fixtures";
@@ -143,8 +143,10 @@ describe("what stops a run, or a project", () => {
     const { root, config } = machine({ BACKUP_DISK_RESERVE: String(10 ** 18) });
     const status = await runBackups({ config, now: () => T, log: silent });
     expect(status.ok).toBe(false);
-    expect(status.projects.ledger).toEqual({ ok: false, snapshot: null, error: expect.stringContaining("not enough disk space") });
+    expect(status.projects.ledger).toEqual({ ok: false, snapshot: null, error: "not enough disk space: the disk of the archives is at its reserve" });
     expect(readdirSync(join(root, "backups", "ledger"))).toEqual([]);
+    // Neither the disk's figures nor the data's reach a file anyone may read.
+    expect(readFileSync(join(root, "state", "last-run.json"), "utf8")).not.toMatch(/[0-9]+ ?(MB|bytes)/);
   });
 
   test("an unreadable data folder fails that project alone, without naming it to the monitor", async () => {
@@ -267,6 +269,42 @@ describe("the offsite copy", () => {
     } finally {
       s3.stop();
     }
+  });
+
+  test("a bucket that stops answering mid-upload is abandoned at the deadline, and the status still written", async () => {
+    const { root, config } = offsiteMachine({ url: "https://bucket.test-zone.invalid", bucket: "backups" });
+    const uploads: string[] = [];
+    const stalled: Bucket = {
+      list: async () => [],
+      upload: (key) => {
+        uploads.push(key);
+        return new Promise<number>(() => undefined);
+      },
+      download: () => Promise.reject(new Error("not used")),
+      remove: () => Promise.reject(new Error("not used")),
+    };
+    const started = Date.now();
+    const status = await runBackups({ config, now: () => T, log: silent, openBucket: () => stalled, offsiteStopMs: 500 });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(uploads).toEqual(["sitesolide/ledger/ledger-20261004T130000Z.tar.gz.enc"]);
+    expect(status.projects.ledger).toEqual({ ok: false, snapshot: "ledger-20261004T130000Z.tar.gz", error: "offsite upload stopped: the run ran out of time" });
+    expect(status.projects["test-zone.invalid"]).toMatchObject({ ok: false, error: "offsite upload skipped: the run ran out of time" });
+    expect(readStatus(readFileSync(join(root, "state", "last-run.json"), "utf8"))?.ok).toBe(false);
+    const db = state(root);
+    expect(readAudit(db, null, 1)[0]!.detail).toMatchObject({ offsite: { uploaded: 0, abandoned: true } });
+    db.close();
+  });
+
+  test("a bucket that never answers its listing is abandoned too", async () => {
+    const { config } = offsiteMachine({ url: "https://bucket.test-zone.invalid", bucket: "backups" });
+    const silentBucket: Bucket = {
+      list: () => new Promise<never>(() => undefined),
+      upload: () => Promise.reject(new Error("not used")),
+      download: () => Promise.reject(new Error("not used")),
+      remove: () => Promise.reject(new Error("not used")),
+    };
+    const status = await runBackups({ config, now: () => T, log: silent, openBucket: () => silentBucket, offsiteStopMs: 300 });
+    expect(status.projects.ledger).toMatchObject({ ok: false, error: "no offsite copy: the bucket could not be listed: no answer in time" });
   });
 
   test("half a configuration is an error the page shows, not a silent fallback", async () => {

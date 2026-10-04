@@ -12,6 +12,8 @@ export type FakeS3 = {
   requests: string[];
   /** When set, every request answers 503: the bucket is down. */
   down: { value: boolean };
+  /** When set, an object's read starts and never ends: a line that stalls. */
+  stall: { value: boolean };
   stop: () => void;
 };
 
@@ -26,6 +28,7 @@ export function startFakeS3(accessKeyId: string, bucket = "backups"): FakeS3 {
   const uploads = new Map<string, Map<number, Uint8Array>>();
   const requests: string[] = [];
   const down = { value: false };
+  const stall = { value: false };
 
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -81,6 +84,17 @@ export function startFakeS3(accessKeyId: string, bucket = "backups"): FakeS3 {
       if (req.method === "GET" || req.method === "HEAD") {
         const object = objects.get(key);
         if (object === undefined) return new Response("<Error><Code>NoSuchKey</Code><Message>no</Message></Error>", { status: 404, headers: XML });
+        if (stall.value && req.method === "GET") {
+          // The first bytes, then nothing, for ever.
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(object.slice(0, 16) as Uint8Array<ArrayBuffer>);
+              },
+            }),
+            { headers: { "Content-Length": String(object.byteLength), ETag: '"e"' } },
+          );
+        }
         return new Response(req.method === "HEAD" ? null : (object as Uint8Array<ArrayBuffer>), { headers: { "Content-Length": String(object.byteLength), ETag: '"e"' } });
       }
       if (req.method === "DELETE") {
@@ -90,5 +104,5 @@ export function startFakeS3(accessKeyId: string, bucket = "backups"): FakeS3 {
       return new Response("<Error><Code>NotImplemented</Code><Message>no</Message></Error>", { status: 501, headers: XML });
     },
   });
-  return { url: `http://127.0.0.1:${server.port}`, bucket, objects, requests, down, stop: () => void server.stop(true) };
+  return { url: `http://127.0.0.1:${server.port}`, bucket, objects, requests, down, stall, stop: () => void server.stop(true) };
 }

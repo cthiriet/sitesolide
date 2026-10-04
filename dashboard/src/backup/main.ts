@@ -4,8 +4,11 @@
  *
  *   backup.js run                     the timer's run, as root
  *   backup.js restore <unit name>     a restore, as root, from its template unit
- *   backup.js copy <data> <staging>   as a project, the archive on stdout
- *   backup.js extract <folder> <max>  as a project, the archive on stdin
+ *   backup.js after-restore <unit>    its ExecStopPost: a restore cut short never leaves a site stopped
+ *   backup.js copy <data> ...         as a project, the archive on stdout
+ *   backup.js extract <folder> ...    as a project, the archive on stdin
+ *   backup.js measure <data>          as a project, what its data weighs
+ *   backup.js download <folder> <s>   as a dynamic user, a bucket's copy on stdout
  *   backup.js list <folder>           what `sitesolide backups` prints, read-only
  *   backup.js decrypt <in> <out>      a bucket's copy back to a tar.gz, anywhere
  *
@@ -18,15 +21,15 @@
 import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { isBackupFolder, readSnapshotName, type Listing, type ListedSnapshot } from "../../borrowed/backups";
-import { copyMain, extractMain } from "./child";
+import { copyMain, downloadMain, extractMain, measureMain } from "./child";
 import { configFrom, type Environment } from "./config";
 import { decryptStream } from "./crypto";
 import { DATABASE_NAME, openForReading, readOffsite } from "./database";
 import { readRestoreLaunch } from "./request";
-import { restore, type Command } from "./restore";
+import { afterRestore, restore, type Command } from "./restore";
 import { localSnapshots } from "./listing";
 import { runBackups } from "./run";
-import { STATUS_NAME, readStatus } from "./status";
+import { STATUS_NAME, readStatus, writeStatus } from "./status";
 
 /** systemctl as an array of arguments, never a shell line, and bounded in time. */
 export function realSystemctl(path: string): (args: string[], timeoutMs: number) => Promise<Command> {
@@ -134,12 +137,19 @@ async function decryptMain(args: string[], env: Environment): Promise<number> {
   const passphrase = env.BACKUP_ENCRYPTION_PASSPHRASE ?? (await readSecret("passphrase (no echo): "));
   const writer = Bun.file(output).writer();
   try {
-    const bytes = await decryptStream(Bun.file(input).stream() as ReadableStream<Uint8Array>, passphrase, async (chunk) => {
+    const read = await decryptStream(Bun.file(input).stream() as ReadableStream<Uint8Array>, passphrase, async (chunk) => {
       writer.write(chunk);
       await writer.flush();
     });
     await writer.end();
-    console.log(`${output}: ${bytes} bytes, read it with: tar -xzf ${output}`);
+    console.log(`${output}: ${read.bytes} bytes, read it with: tar -xzf ${output}`);
+    // The key it was sealed for says which project and which snapshot it is,
+    // whatever name the file was given since: check it before restoring it.
+    console.log(
+      read.sealedFor === null
+        ? "sealed before format 2: the copy does not name the object it was stored as, check its sitesolide-backup.json"
+        : `sealed as ${read.sealedFor}`,
+    );
     return 0;
   } catch (error) {
     await writer.end();
@@ -157,6 +167,10 @@ export async function main(argv: string[], env: Environment): Promise<number> {
       return copyMain(args, env);
     case "extract":
       return extractMain(args, env);
+    case "measure":
+      return measureMain(args, env);
+    case "download":
+      return downloadMain(args, env);
     case "decrypt":
       return decryptMain(args, env);
     case "list": {
@@ -169,7 +183,23 @@ export async function main(argv: string[], env: Environment): Promise<number> {
       return 0;
     }
     case "run": {
-      const config = configFrom(env, { bun: process.execPath, script: Bun.main });
+      let config;
+      try {
+        config = configFrom(env, { bun: process.execPath, script: Bun.main });
+      } catch (error) {
+        // A setting at fault, from the file the dashboard edits for one: the
+        // run says so where the monitor looks, rather than dying in silence.
+        const at = new Date().toISOString();
+        const reason = (error as Error).message;
+        console.error(`backup: the run did not start: ${reason}`);
+        try {
+          // The contract's shape and nothing more: the reason is in the journal.
+          writeStatus(env.BACKUP_STATE_FOLDER ?? "/var/lib/sitesolide-backup", { startedAt: at, finishedAt: at, ok: false, projects: {} });
+        } catch (failure) {
+          console.error(`backup: the status file could not be written: ${(failure as Error).message}`);
+        }
+        return 1;
+      }
       const status = await runBackups({ config, now: Date.now, log });
       return status.ok ? 0 : 1;
     }
@@ -183,8 +213,18 @@ export async function main(argv: string[], env: Environment): Promise<number> {
       await restore({ config, now: Date.now, log, systemctl: realSystemctl(config.systemctl) }, launch.folder);
       return 0;
     }
+    case "after-restore": {
+      const launch = readRestoreLaunch(args);
+      if (!launch.ok) {
+        console.error(`after-restore: refused: ${launch.reason}`);
+        return 2;
+      }
+      const config = configFrom(env, { bun: process.execPath, script: Bun.main });
+      await afterRestore({ config, now: Date.now, log, systemctl: realSystemctl(config.systemctl) }, launch.folder);
+      return 0;
+    }
     default:
-      console.error("usage: backup.js run | restore <unit> | list <folder> | decrypt <in> <out> | copy | extract");
+      console.error("usage: backup.js run | restore <unit> | after-restore <unit> | list <folder> | decrypt <in> <out> | copy | extract | measure | download");
       return 2;
   }
 }

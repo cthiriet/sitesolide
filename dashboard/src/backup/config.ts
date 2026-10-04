@@ -54,10 +54,17 @@ export type BackupConfig = {
   /** The longest a copy or an extraction of one project may take. */
   childTimeoutMs: number;
   offsite: OffsiteSetting;
+  /**
+   * The file the bucket's settings come from: the unit reads it, and a
+   * download child is handed it by name, read by PID 1 (runner.ts).
+   */
+  offsiteFile: string;
   zone: string;
 };
 
 export const DEFAULT_RESERVE_BYTES = 1024 * 1024 * 1024;
+/** Where the units read the bucket's settings, managed from the dashboard's Secrets. */
+export const OFFSITE_FILE = "/etc/sitesolide/dashboard-backup.env";
 /**
  * A copy of several gigabytes takes minutes, not twenty: beyond, the child is
  * stuck, and the run must still have time for the others and for its status.
@@ -97,6 +104,7 @@ export function configFrom(env: Environment, entry: { bun: string; script: strin
     reserveBytes: countFrom(env.BACKUP_DISK_RESERVE ?? String(DEFAULT_RESERVE_BYTES), "BACKUP_DISK_RESERVE"),
     childTimeoutMs: countFrom(env.BACKUP_CHILD_TIMEOUT_MS ?? String(DEFAULT_CHILD_TIMEOUT_MS), "BACKUP_CHILD_TIMEOUT_MS"),
     offsite: offsiteFrom(env),
+    offsiteFile: env.BACKUP_OFFSITE_FILE ?? OFFSITE_FILE,
     // No default: the landing's folder bears the zone's name, and an invented
     // zone would leave the landing's data out of every snapshot.
     zone: env.SITESOLIDE_ZONE ?? "",

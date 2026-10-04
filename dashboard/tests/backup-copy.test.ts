@@ -1,7 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { startChild } from "../src/backup/runner";
+import { readSnapshotName } from "../borrowed/backups";
+import { startChild, type Job } from "../src/backup/runner";
 import { takeSnapshot, verifyArchive } from "../src/backup/snapshot";
 import { ACCOUNTS, BALANCE, audit, createAccounts, createLegacy, project, startWriter, tree } from "./backup-fixtures";
 
@@ -25,6 +26,23 @@ symlinkSync("/etc/passwd", join(data, "link"));
 Bun.spawnSync(["mkfifo", join(data, "pipe")]);
 
 const ledger = { folder: "ledger", account: "site-ledger", owner: null, dataDir: data, manifest: null };
+
+/** An extraction as a restore starts it, the snapshot's folder and time given. */
+function extraction(destination: string, archive: string, folder: string, takenAt: number, maxBytes = 1 << 30): Job {
+  return {
+    mode: "extract",
+    folder: "ledger",
+    account: "site-ledger",
+    uid: null,
+    args: [destination, String(maxBytes), folder, String(takenAt)],
+    readWrite: [destination],
+    bind: [destination],
+    cacheDirectory: null,
+    stdin: archive,
+    stdout: "ignore",
+    timeoutMs: 60_000,
+  };
+}
 
 describe("a snapshot taken while the database is written", () => {
   let name = "";
@@ -72,21 +90,7 @@ describe("a snapshot taken while the database is written", () => {
   test("extracts, as the project would, into a sound copy of everything", async () => {
     const destination = join(root, "restored");
     mkdirSync(destination);
-    const child = startChild(
-      {
-        mode: "extract",
-        folder: "ledger",
-        account: "site-ledger",
-        uid: null,
-        args: [destination, String(1 << 30)],
-        readWrite: [destination],
-        bind: [destination],
-        cacheDirectory: null,
-        stdin: join(config.backupFolder, "ledger", name),
-        stdout: "ignore",
-      },
-      config,
-    );
+    const child = startChild(extraction(destination, join(config.backupFolder, "ledger", name), "ledger", readSnapshotName("ledger", name)!.takenAt), config);
     const { code, report } = await child.result;
     expect(report.error).toBeNull();
     expect(code).toBe(0);
@@ -99,6 +103,23 @@ describe("a snapshot taken while the database is written", () => {
     expect(readFileSync(join(destination, "été.txt"), "utf8")).toBe("accents survive");
     expect(statSync(join(destination, "cache")).isDirectory()).toBe(true);
     expect(existsSync(join(destination, "link"))).toBe(false);
+  });
+
+  test("names its project and its time, and an extraction asked for another refuses it", async () => {
+    const archive = join(config.backupFolder, "ledger", name);
+    const listed = Bun.spawnSync(["tar", "-xzOf", archive, "sitesolide-backup.json"]).stdout.toString();
+    const takenAt = readSnapshotName("ledger", name)!.takenAt;
+    expect(JSON.parse(listed)).toMatchObject({ format: 2, folder: "ledger", takenAt: new Date(takenAt).toISOString(), raw: false });
+    for (const [folder, at, reason] of [
+      ["cms", takenAt, "the archive is a snapshot of another site than the one being restored"],
+      ["ledger", takenAt + 3_600_000, "the archive was taken at another time than its name says"],
+    ] as const) {
+      const destination = join(root, `refused-${folder}-${at}`);
+      mkdirSync(destination);
+      const { code, report } = await startChild(extraction(destination, archive, folder, at), config).result;
+      expect(code).toBe(1);
+      expect(report.error).toBe(reason);
+    }
   });
 
   test("a refused archive extracts nothing and says why", async () => {
@@ -116,10 +137,7 @@ describe("a snapshot taken while the database is written", () => {
     writeFileSync(forged, Bun.gzipSync(Bun.concatArrayBuffers([block, new Uint8Array(1024)], Infinity, true)));
     const destination = join(root, "refused");
     mkdirSync(destination);
-    const { code, report } = await startChild(
-      { mode: "extract", folder: "ledger", account: "site-ledger", uid: null, args: [destination, "1000000"], readWrite: [], bind: [], cacheDirectory: null, stdin: forged, stdout: "ignore" },
-      config,
-    ).result;
+    const { code, report } = await startChild(extraction(destination, forged, "ledger", 0, 1_000_000), config).result;
     expect(code).toBe(1);
     expect(report.error).toContain("outside data/");
     expect(readdirSync(destination)).toEqual([]);

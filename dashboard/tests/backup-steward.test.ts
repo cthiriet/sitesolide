@@ -8,7 +8,7 @@ import { openDatabase, recordAudit, replaceOffsite, writeSetting } from "../src/
 import type { BackupsResponse, RestoreResponse } from "../src/backup/protocol";
 import { createBackupReader } from "../src/backup/reader";
 import { INTERRUPTED_REASON, PREVIOUS } from "../src/backup/recovery";
-import { DASHBOARD_REASON, NOT_INSTALLED_REASON, RUNNING_REASON } from "../src/backup/routes";
+import { DASHBOARD_REASON, NOT_INSTALLED_REASON, PORTAL_REASON, RUNNING_REASON } from "../src/backup/routes";
 import { encodeRequest } from "../src/backup/request";
 import { writeStatus } from "../src/backup/status";
 import { ROOT_FILES } from "../src/secrets/scope";
@@ -49,6 +49,7 @@ function site(slug: string, manifest: Record<string, unknown> | null, data = tru
 site("cms", { start: "bun run server.ts", port: 3040 });
 site("notes", { publicDir: "public" }, false);
 site("dashboard", { start: "bun run server.ts", port: 3022 });
+site("portal", { start: "bun run server.ts", port: 3026 });
 site("scratch", { start: "bun run server.ts", port: 3050, backup: false });
 writeFileSync(join(paths.secrets, "dashboard.env"), "PASSWORD_HASH=not-checked-here\n", { mode: 0o600 });
 writeFileSync(join(paths.units, "sitesolide-restore@.service"), "[Service]\n");
@@ -151,6 +152,11 @@ describe("what the steward says of a site's backups", () => {
     expect(await backups("dashboard")).toMatchObject({ restorable: false, reason: DASHBOARD_REASON });
   });
 
+  test("nor the portal, whose old copy would let revoked guests back in", async () => {
+    expect(PORTAL_REASON).toContain("revoked guest access");
+    expect(await backups("portal")).toMatchObject({ restorable: false, reason: PORTAL_REASON });
+  });
+
   test("a steward without the component's folders says backups are not set up", async () => {
     expect(await backups("cms", bare)).toMatchObject({ installed: false, restorable: false, reason: NOT_INSTALLED_REASON, snapshots: [] });
     const unlocked = (await (await call("POST", "/unlock", { password: PASSWORD }, bare)).json()) as { token: string };
@@ -189,6 +195,7 @@ describe("a restore asked of the steward", () => {
     expect(await refused({ snapshot: snapshotName("cms", T - 7_200_000, "scheduled") })).toMatchObject({ status: 404 });
     expect(await refused({ actor: "root\nX" })).toMatchObject({ status: 400 });
     expect(await refused({ slug: "dashboard", confirmation: "dashboard", snapshot: snapshotName("dashboard", T, "scheduled") })).toMatchObject({ status: 403 });
+    expect(await refused({ slug: "portal", confirmation: "portal", snapshot: snapshotName("portal", T, "scheduled") })).toMatchObject({ status: 403, body: { message: PORTAL_REASON } });
     expect((await call("POST", "/backups/restore", { ...(await restoreBody()), extra: 1 })).status).toBe(400);
     expect(systemctlCalls.filter((args) => args[0] === "start")).toEqual([]);
   });

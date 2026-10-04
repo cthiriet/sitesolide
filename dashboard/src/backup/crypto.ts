@@ -22,14 +22,32 @@
  * The format, every number big-endian:
  *
  *   0   8   "SSBACKUP"
- *   8   1   version, 1
+ *   8   1   version, 2
  *   9   1   derivation, 1 for PBKDF2-SHA256
  *   10  4   iterations
  *   14  16  derivation salt
  *   30  16  file salt, for HKDF
  *   46  4   plaintext bytes per chunk
- *   50      chunks: ciphertext and its 16-byte tag; the header is the
- *           associated data of every one of them
+ *   50  2   length of the object's key, in bytes
+ *   52  n   the object's key, UTF-8: `<prefix>/<folder>/<snapshot>.enc`
+ *   52+n    chunks: ciphertext and its 16-byte tag; the whole header, key
+ *           included, is the associated data of every one of them
+ *
+ * **Why the key is sealed in.** Without it, a copy is bound to the passphrase
+ * and nothing else: someone who may write to the bucket, and only that, could
+ * copy project alpha's object under beta's prefix, and an admin restoring beta
+ * would hand alpha's data to beta's service. The key sits in the header, which
+ * every chunk authenticates: it cannot be changed without failing them all,
+ * and the restore refuses an object sealed for another key than the one it
+ * fetched. By hand, `decrypt` prints the key the object was sealed for.
+ *
+ * Version 1 is the same without the two key fields (the header is 50 bytes,
+ * and those 50 bytes are the associated data). It is still read, by the
+ * restore and by `decrypt`: the objects uploaded before version 2 must stay
+ * restorable, and refusing them would cost exactly the copies a lost machine
+ * needs. They carry no name, which the reader reports; retention replaces
+ * them with sealed ones as it prunes, within the policy's horizon (four weeks
+ * by default). None is written any more.
  *
  * `bun dashboard/backup.ts decrypt <file> <output>` reads it back anywhere,
  * with the passphrase alone: see src/backup/README.md.
@@ -38,11 +56,17 @@ import { open } from "node:fs/promises";
 import { ByteSource } from "./tar";
 
 export const MAGIC = "SSBACKUP";
-export const VERSION = 1;
+/** The version written: the object's key sealed in the header. */
+export const VERSION = 2;
+/** The version before it, without the key: read, never written. */
+export const VERSION_UNBOUND = 1;
 export const KDF_PBKDF2_SHA256 = 1;
 export const ITERATIONS = 600_000;
 export const CHUNK_BYTES = 1024 * 1024;
+/** The fixed part of the header, the whole of it in version 1. */
 export const HEADER_BYTES = 50;
+/** A key longer than this is not one of ours: S3 itself stops at 1024 bytes. */
+export const MAX_KEY_BYTES = 1024;
 export const TAG_BYTES = 16;
 /** A passphrase shorter than this is refused: offsite copies stay off rather than weakly sealed. */
 export const MIN_PASSPHRASE = 16;
@@ -60,8 +84,14 @@ type Bytes = Uint8Array<ArrayBuffer>;
 
 export type Header = { iterations: number; kdfSalt: Bytes; fileSalt: Bytes; chunkBytes: number };
 
-export function encodeHeader(header: Header): Bytes {
-  const bytes = new Uint8Array(HEADER_BYTES);
+/** The fixed part, as both versions read it: the key, if any, follows it. */
+export type FixedHeader = Header & { version: number };
+
+/** A version 2 header: the fixed part, the key's length, the key. */
+export function encodeHeader(header: Header, key: string): Bytes {
+  const keyBytes = new TextEncoder().encode(key);
+  if (keyBytes.byteLength === 0 || keyBytes.byteLength > MAX_KEY_BYTES) throw new Error("an object's key must be 1 to 1024 bytes long");
+  const bytes = new Uint8Array(HEADER_BYTES + 2 + keyBytes.byteLength);
   bytes.set(new TextEncoder().encode(MAGIC), 0);
   bytes[8] = VERSION;
   bytes[9] = KDF_PBKDF2_SHA256;
@@ -70,21 +100,25 @@ export function encodeHeader(header: Header): Bytes {
   bytes.set(header.kdfSalt, 14);
   bytes.set(header.fileSalt, 30);
   view.setUint32(46, header.chunkBytes);
+  view.setUint16(HEADER_BYTES, keyBytes.byteLength);
+  bytes.set(keyBytes, HEADER_BYTES + 2);
   return bytes;
 }
 
-export function decodeHeader(bytes: Uint8Array): Header {
+/** The fixed 50 bytes, judged. Version 2 says how many bytes of key follow. */
+export function decodeHeader(bytes: Uint8Array): FixedHeader {
   if (bytes.byteLength < HEADER_BYTES || new TextDecoder().decode(bytes.subarray(0, 8)) !== MAGIC) {
     throw new DecryptionError("not an encrypted sitesolide backup");
   }
-  if (bytes[8] !== VERSION) throw new DecryptionError(`unknown format version ${bytes[8]}`);
+  const version = bytes[8]!;
+  if (version !== VERSION && version !== VERSION_UNBOUND) throw new DecryptionError(`unknown format version ${version}`);
   if (bytes[9] !== KDF_PBKDF2_SHA256) throw new DecryptionError("unknown key derivation");
   const view = new DataView(bytes.buffer, bytes.byteOffset, HEADER_BYTES);
   const iterations = view.getUint32(10);
   const chunkBytes = view.getUint32(46);
   if (iterations < ITERATIONS_RANGE[0] || iterations > ITERATIONS_RANGE[1]) throw new DecryptionError("implausible iteration count in the header");
   if (chunkBytes < CHUNK_RANGE[0] || chunkBytes > CHUNK_RANGE[1]) throw new DecryptionError("implausible chunk size in the header");
-  return { iterations, kdfSalt: bytes.slice(14, 30), fileSalt: bytes.slice(30, 46), chunkBytes };
+  return { version, iterations, kdfSalt: bytes.slice(14, 30), fileSalt: bytes.slice(30, 46), chunkBytes };
 }
 
 /** The key all of a run's files derive from. Costly on purpose: derived once per run, not per file. */
@@ -122,17 +156,26 @@ export async function newMaster(passphrase: string, iterations = ITERATIONS): Pr
  * last chunk is known from the size, with no lookahead. Returns the number of
  * bytes written. A file that changes size while being read is refused: the
  * archives are never written in place, so that only happens to a file that
- * is not one.
+ * is not one. `objectKey` is the name the copy is stored under, sealed in.
  */
-export async function encryptFile(path: string, master: Master, write: (bytes: Uint8Array) => Promise<void>, chunkBytes = CHUNK_BYTES): Promise<number> {
-  const header = encodeHeader({ iterations: master.iterations, kdfSalt: master.kdfSalt, fileSalt: crypto.getRandomValues(new Uint8Array(16)), chunkBytes });
-  const key = await fileKey(master.key, header.subarray(30, 46));
+export async function encryptFile(
+  path: string,
+  objectKey: string,
+  master: Master,
+  write: (bytes: Uint8Array) => Promise<void>,
+  chunkBytes = CHUNK_BYTES,
+): Promise<number> {
+  const header = encodeHeader(
+    { iterations: master.iterations, kdfSalt: master.kdfSalt, fileSalt: crypto.getRandomValues(new Uint8Array(16)), chunkBytes },
+    objectKey,
+  );
+  const key = await fileKey(master.key, header.slice(30, 46));
   const handle = await open(path, "r");
   try {
     const size = (await handle.stat()).size;
     const chunks = Math.max(1, Math.ceil(size / chunkBytes));
     await write(header);
-    let total = HEADER_BYTES;
+    let total = header.byteLength;
     const buffer = new Uint8Array(chunkBytes);
     for (let index = 0; index < chunks; index++) {
       const wanted = Math.min(chunkBytes, size - index * chunkBytes);
@@ -156,6 +199,20 @@ export async function encryptFile(path: string, master: Master, write: (bytes: U
   }
 }
 
+/** What a decryption read: its size, its version, and the key it was sealed for (null in version 1). */
+export type Decrypted = { bytes: number; version: number; sealedFor: string | null };
+
+export type DecryptOptions = {
+  /**
+   * The key the object was fetched from. A version 2 object sealed for
+   * another key is refused before a byte is handed over; a version 1 object
+   * names none and is accepted, its `sealedFor` null says so.
+   */
+  expectedKey?: string;
+  /** Master keys already derived, by salt: a run reads several objects of one passphrase. */
+  masters?: Map<string, CryptoKey>;
+};
+
 /**
  * Decrypts a stream into `write`. Every chunk is checked before it is handed
  * over, and the end must be the flagged last chunk: a truncated object fails
@@ -166,13 +223,34 @@ export async function decryptStream(
   stream: ReadableStream<Uint8Array>,
   passphrase: string,
   write: (bytes: Uint8Array) => Promise<void>,
-  masters: Map<string, CryptoKey> = new Map(),
-): Promise<number> {
+  options: DecryptOptions = {},
+): Promise<Decrypted> {
+  const masters = options.masters ?? new Map<string, CryptoKey>();
   const source = new ByteSource(stream);
   try {
-    const headerBytes = await source.exact(HEADER_BYTES);
-    if (headerBytes === null) throw new DecryptionError("not an encrypted sitesolide backup");
-    const header = decodeHeader(headerBytes);
+    const fixed = await source.exact(HEADER_BYTES);
+    if (fixed === null) throw new DecryptionError("not an encrypted sitesolide backup");
+    const header = decodeHeader(fixed);
+    // Version 2: the key follows, and the associated data is the whole header.
+    let headerBytes: Uint8Array<ArrayBuffer> = fixed;
+    let sealedFor: string | null = null;
+    if (header.version === VERSION) {
+      const lengthBytes = await source.exact(2);
+      if (lengthBytes === null) throw new DecryptionError("the encrypted backup is truncated");
+      const length = new DataView(lengthBytes.buffer).getUint16(0);
+      if (length === 0 || length > MAX_KEY_BYTES) throw new DecryptionError("implausible key length in the header");
+      const keyBytes = await source.exact(length);
+      if (keyBytes === null) throw new DecryptionError("the encrypted backup is truncated");
+      try {
+        sealedFor = new TextDecoder("utf-8", { fatal: true }).decode(keyBytes);
+      } catch {
+        throw new DecryptionError("the key in the header is not UTF-8");
+      }
+      headerBytes = Bun.concatArrayBuffers([fixed, lengthBytes, keyBytes], Infinity, true) as Uint8Array<ArrayBuffer>;
+      if (options.expectedKey !== undefined && sealedFor !== options.expectedKey) {
+        throw new DecryptionError(`this copy was sealed as ${JSON.stringify(sealedFor.slice(0, 200))}, not as the object it was read from: refused`);
+      }
+    }
     const cacheKey = `${header.iterations}:${[...header.kdfSalt].join(",")}`;
     let master = masters.get(cacheKey);
     if (master === undefined) {
@@ -199,7 +277,7 @@ export async function decryptStream(
       }
       await write(new Uint8Array(plain));
       total += plain.byteLength;
-      if (last) return total;
+      if (last) return { bytes: total, version: header.version, sealedFor };
       current = next;
     }
   } finally {

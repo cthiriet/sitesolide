@@ -11,21 +11,52 @@
  * The disk is watched while the archive grows. One disk carries every site and
  * its backups: an archive allowed to fill it would stop every service, the
  * very thing a backup exists to protect against.
+ *
+ * **Root does not measure the data.** It says how much room the disk has
+ * above its reserve, and the copy, which alone sees the data, measures it and
+ * refuses what would not fit (child.ts). The verdict reaches the status file
+ * without a figure: the size of a project's tree is that project's business,
+ * and the status file is world-readable.
+ *
+ * **Bounded in time, whatever the copy does.** The project's service shares
+ * its uid with the copy and may stop it or slow it: past its time the copy is
+ * killed and root moves on, and the read-back shares that same time. The
+ * outcome says `timeout`, which the run uses to try the project again once
+ * the others have had their turn (run.ts).
  */
 import { closeSync, constants, fchmodSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { snapshotName, type SnapshotKind } from "../../borrowed/backups";
 import type { BackupConfig } from "./config";
-import type { CopySummary } from "./copy";
-import { freeBytes, measure, type Project } from "./projects";
-import { startChild, type Job } from "./runner";
+import { MAX_ENTRIES, type CopySummary } from "./copy";
+import { freeBytes, type Project } from "./projects";
+import { startChild, within, type Job } from "./runner";
 import { shortError, syncFolder } from "./status";
-import { gunzip, readTar } from "./tar";
+import { ArchiveError, gunzip, readTar, type Limits, type ReadSummary } from "./tar";
 
-export type SnapshotOutcome = { ok: true; name: string; bytes: number; summary: CopySummary } | { ok: false; error: string };
+/**
+ * `cause`: `timeout` when the snapshot did not finish in its time, `database`
+ * when a database could not be read consistently, which a restore works
+ * around with a raw copy (restore.ts). Null for anything else.
+ */
+export type SnapshotOutcome =
+  | { ok: true; name: string; bytes: number; summary: CopySummary; raw: boolean }
+  | { ok: false; error: string; cause: "timeout" | "database" | null };
+
+export type SnapshotOptions = {
+  /** The time the copy and the read-back have, together. The configured child timeout by default. */
+  timeoutMs?: number;
+  /** The databases copied as files: only for a restore's own snapshot, its services stopped. */
+  raw?: boolean;
+};
 
 /** How often, in bytes written, the free space is measured again. */
 const CHECK_EVERY = 64 * 1024 * 1024;
+
+/** How long a copy that ran out of time is still listened to, for the journal's sake. */
+const REPORT_GRACE_MS = 2000;
+
+export const TIMEOUT_ERROR = "the copy did not finish in its time, see the journal of sitesolide-backup";
 
 /** The staging folder of a project's copy: under systemd, the copy unit's own CacheDirectory. */
 export function staging(config: BackupConfig, folder: string): { path: string; cacheDirectory: string | null } {
@@ -35,10 +66,26 @@ export function staging(config: BackupConfig, folder: string): { path: string; c
 
 /**
  * Reads an archive back entirely, writing nothing: a damaged gzip, a header
- * that does not add up, a missing end, and it throws.
+ * that does not add up, a missing end, and it throws. So does an archive with
+ * more entries than an extraction accepts, more bytes than `limits` allow, or
+ * one still being read at `deadline` (a time of `Date.now()`): a gigabyte of
+ * compressed zeros is a terabyte to read.
  */
-export async function verifyArchive(path: string): Promise<{ entries: number; bytes: number }> {
-  return readTar(gunzip(Bun.file(path).stream() as ReadableStream<Uint8Array>), { maxEntries: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER }, async () => {
+export async function verifyArchive(
+  path: string,
+  limits: Limits = { maxEntries: MAX_ENTRIES, maxBytes: Number.MAX_SAFE_INTEGER },
+  deadline: number = Number.POSITIVE_INFINITY,
+): Promise<ReadSummary> {
+  // The file is local and never stalls: a look at the clock at every chunk is enough.
+  const clocked = gunzip(Bun.file(path).stream() as ReadableStream<Uint8Array>).pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        if (Date.now() > deadline) controller.error(new ArchiveError("the archive could not be read back in time"));
+        else controller.enqueue(chunk);
+      },
+    }),
+  );
+  return readTar(clocked, limits, async () => {
     // Nothing kept: the contents are skipped by the reader.
   });
 }
@@ -54,7 +101,12 @@ export async function takeSnapshot(
   kind: SnapshotKind,
   now: number,
   log: (line: string) => void = () => undefined,
+  options: SnapshotOptions = {},
 ): Promise<SnapshotOutcome> {
+  const timeoutMs = options.timeoutMs ?? config.childTimeoutMs;
+  // Real time, whatever clock the caller keeps: it bounds real waits.
+  const deadline = Date.now() + timeoutMs;
+  const raw = options.raw === true;
   const folder = join(config.backupFolder, project.folder);
   mkdirSync(config.backupFolder, { recursive: true, mode: 0o700 });
   mkdirSync(folder, { recursive: true, mode: 0o700 });
@@ -63,16 +115,18 @@ export async function takeSnapshot(
   const final = join(folder, name);
   try {
     statSync(final);
-    return { ok: false, error: "a snapshot was already taken this very second" };
+    return { ok: false, error: "a snapshot was already taken this very second", cause: null };
   } catch {
     // free: the expected case
   }
 
-  // Room for a copy of the databases and an archive at most as big as the data.
-  const needed = 2 * measure(project.dataDir) + config.reserveBytes;
+  // The room above the reserve. The copy needs it for a copy of the
+  // databases and an archive at most as big as the data, and checks that.
   const free = freeBytes(config.backupFolder);
-  if (free < needed) {
-    return { ok: false, error: `not enough disk space: ${Math.round(free / 1048576)} MB free, ${Math.round(needed / 1048576)} MB needed` };
+  const room = free - config.reserveBytes;
+  if (room <= 0) {
+    log(`backup ${project.folder}: ${free} bytes free, under the reserve of ${config.reserveBytes}`);
+    return { ok: false, error: "not enough disk space: the disk of the archives is at its reserve", cause: null };
   }
 
   const place = staging(config, project.folder);
@@ -83,12 +137,14 @@ export async function takeSnapshot(
     folder: project.folder,
     account: project.account,
     uid: project.owner?.uid ?? null,
-    args: [project.dataDir, place.path],
+    // The time to the second, as the name carries it: the description says the same.
+    args: [project.dataDir, place.path, project.folder, String(Math.floor(now / 1000) * 1000), String(room), ...(raw ? ["raw"] : [])],
     readWrite: [project.dataDir],
     bind: [project.dataDir],
     cacheDirectory: place.cacheDirectory,
     stdin: null,
     stdout: "pipe",
+    timeoutMs,
   };
 
   const temporary = join(folder, `.${name}.${[...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("")}.tmp`);
@@ -101,8 +157,14 @@ export async function takeSnapshot(
     let written = 0;
     let nextCheck = CHECK_EVERY;
     let stopped: string | null = null;
+    let timedOut = false;
     for (;;) {
-      const { done, value } = await reader.read();
+      const next = await within(reader.read(), deadline - Date.now());
+      if (next === null) {
+        timedOut = true;
+        break;
+      }
+      const { done, value } = next.value;
       if (done) break;
       let offset = 0;
       while (offset < value.byteLength) offset += writeSync(fd, value, offset, value.byteLength - offset);
@@ -111,32 +173,50 @@ export async function takeSnapshot(
         nextCheck += CHECK_EVERY;
         if (freeBytes(config.backupFolder) < config.reserveBytes) {
           stopped = "stopped: the disk was about to fill";
-          // Closing our end makes the copy's next write fail: it stops by itself.
-          await reader.cancel();
           break;
         }
       }
     }
-    const { code, report } = await child.result;
-    if (stopped !== null) return { ok: false, error: stopped };
+    if (timedOut || stopped !== null) {
+      // Closing our end makes the copy's next write fail; a stopped copy is killed.
+      void reader.cancel().catch(() => undefined);
+      if (timedOut) child.stop();
+    }
+    const finished = await within(child.result, timedOut ? REPORT_GRACE_MS : Math.max(deadline - Date.now(), REPORT_GRACE_MS));
+    if (timedOut || finished === null) {
+      child.stop();
+      log(`backup ${project.folder}: the copy did not finish within ${Math.round(timeoutMs / 1000)} s, it was stopped`);
+      return { ok: false, error: TIMEOUT_ERROR, cause: "timeout" };
+    }
+    if (stopped !== null) return { ok: false, error: stopped, cause: null };
+    const { code, report } = finished.value;
     if (code !== 0 || report.summary === null) {
-      log(`backup ${project.folder}: copy failed, exit code ${code}${report.path === null ? "" : `, at ${JSON.stringify(report.path)}`}${report.tail === "" ? "" : `: ${report.tail}`}`);
-      return { ok: false, error: shortError(report.error ?? `the copy failed with exit code ${code}, see the journal of sitesolide-backup`) };
+      log(
+        `backup ${project.folder}: copy failed, exit code ${code}${report.path === null ? "" : `, at ${JSON.stringify(report.path)}`}${report.detail === null ? "" : `, ${report.detail}`}${report.tail === "" ? "" : `: ${report.tail}`}`,
+      );
+      return {
+        ok: false,
+        error: shortError(report.error ?? `the copy failed with exit code ${code}, see the journal of sitesolide-backup`),
+        cause: report.code === "database" ? "database" : null,
+      };
     }
     fsyncSync(fd);
     closeSync(fd);
     kept = true;
 
     try {
-      await verifyArchive(temporary);
+      // No more entries than an extraction accepts, no more bytes than the
+      // room the copy was given, and within the time left.
+      await verifyArchive(temporary, { maxEntries: MAX_ENTRIES, maxBytes: room }, deadline);
     } catch (error) {
       unlinkSync(temporary);
       log(`backup ${project.folder}: the archive does not read back: ${(error as Error).message}`);
-      return { ok: false, error: "the archive written does not read back, see the journal of sitesolide-backup" };
+      if (Date.now() > deadline) return { ok: false, error: TIMEOUT_ERROR, cause: "timeout" };
+      return { ok: false, error: "the archive written does not read back, see the journal of sitesolide-backup", cause: null };
     }
     renameSync(temporary, final);
     syncFolder(folder);
-    return { ok: true, name, bytes: written, summary: report.summary as unknown as CopySummary };
+    return { ok: true, name, bytes: written, summary: report.summary as unknown as CopySummary, raw };
   } finally {
     if (!kept) {
       try {

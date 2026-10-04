@@ -107,10 +107,11 @@ echo "   backup.js, fingerprint ${FINGERPRINT:0:12}"
 
 echo "-> preliminary check"
 # Absolute paths of the units, and systemd-run with --pipe (systemd 235 and
-# above): without it, a copy could not hand its archive back.
-if ! ssh -n "$SITESOLIDE_SERVER" "test -x /usr/local/bin/bun && test -x /usr/bin/systemctl && test -x /usr/bin/systemd-run && test -d /srv/sites && test -f /etc/caddy/sitesolide.env && systemd-run --help | grep -q -- '--pipe'"; then
+# above): without it, a copy could not hand its archive back. /usr/bin/find
+# tells the run whether a data folder is empty without listing it.
+if ! ssh -n "$SITESOLIDE_SERVER" "test -x /usr/local/bin/bun && test -x /usr/bin/systemctl && test -x /usr/bin/systemd-run && test -x /usr/bin/find && test -d /srv/sites && test -f /etc/caddy/sitesolide.env && systemd-run --help | grep -q -- '--pipe'"; then
   fail "a prerequisite is missing on the machine" \
-    "expected: /usr/local/bin/bun, /usr/bin/systemctl, /usr/bin/systemd-run with --pipe, /srv/sites, /etc/caddy/sitesolide.env"
+    "expected: /usr/local/bin/bun, /usr/bin/systemctl, /usr/bin/systemd-run with --pipe, /usr/bin/find, /srv/sites, /etc/caddy/sitesolide.env"
 fi
 in_progress="$(busy)"
 [ -z "$in_progress" ] || fail "a backup run or a restore is in progress, try again in a few minutes" "$in_progress"

@@ -41,9 +41,10 @@ EnvironmentFile=-/etc/sitesolide/dashboard-backup.env
 Nice=10
 IOSchedulingClass=idle
 
-# Under the hour of the timer. No copy starts after 25 minutes and none lasts
-# more than 20, no upload starts after 40 (dashboard/src/backup/run.ts), so that
-# the status file is always written before systemd would kill the run.
+# Under the hour of the timer. No copy starts after 25 minutes, and each is
+# given its share of what is left of those 25, 20 minutes at most; no upload
+# starts after 40, and none is waited for past 45 (dashboard/src/backup/run.ts),
+# so that the status file is always written before systemd would kill the run.
 TimeoutStartSec=50min
 
 UMask=0077
@@ -70,6 +71,11 @@ CapabilityBoundingSet=CAP_DAC_READ_SEARCH
 # 226/NAMESPACE.
 ProtectSystem=strict
 ReadWritePaths=/var/backups/sitesolide
+# Every project's secrets, and the steward's state: CAP_DAC_READ_SEARCH would
+# read them, and nothing here needs them. The bucket's settings above still
+# arrive: PID 1 reads EnvironmentFile= on its own side, "before any file
+# system changes like bind mounts take place" (systemd.exec(5)).
+InaccessiblePaths=-/etc/sitesolide -/var/lib/sitesolide-steward
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true

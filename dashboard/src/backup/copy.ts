@@ -33,7 +33,20 @@
  *   summary: a link restored as root could point anywhere.
  *
  * The archive holds `data/` and, last, `sitesolide-backup.json`, which says
- * what was copied and what was left out. `tar -xzf` gives back `data/`.
+ * what was copied and what was left out, of which project and when: the
+ * extraction checks those two against the snapshot it was asked for.
+ * `tar -xzf` gives back `data/`.
+ *
+ * **Bounded, before and during.** The folder is measured first, here, as the
+ * project, never by root (measureData): a project can put millions of names
+ * in its folder, and a root process listing them would be the one to run out
+ * of memory, for every project at once. Here, under the project's own
+ * MemoryMax, a folder too big to list costs that project its snapshot, and
+ * nothing else. The copy then stops past the measured size with a margin, and
+ * past the number of entries an extraction accepts: a file grown afterwards,
+ * a sparse one of a terabyte for instance, cannot hold the run while it
+ * archives zeros, and no snapshot is ever reported sound that a restore would
+ * refuse.
  */
 import { Database } from "bun:sqlite";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, rmSync, statSync, type Stats } from "node:fs";
@@ -50,6 +63,25 @@ export const SQLITE_COMPANIONS = ["-wal", "-shm", "-journal"];
 /** The archive's top folder, and the description that ends it. */
 export const DATA_ROOT = "data";
 export const DESCRIPTION_NAME = "sitesolide-backup.json";
+/**
+ * 2: the description names its folder and its time. 1, before, did not, and
+ * an archive of that format is extracted without the check.
+ */
+export const DESCRIPTION_FORMAT = 2;
+
+/**
+ * The entries of an archive, `data/`, its folders, its files and the
+ * description all counted. The extraction refuses beyond, so the copy stops
+ * before: a snapshot taken is a snapshot that restores.
+ */
+export const MAX_ENTRIES = 2_000_000;
+
+/**
+ * What the data may grow by between its measure and the end of its copy: a
+ * quarter, and 64 MiB at least, for a service that keeps writing. Past it,
+ * the copy stops: see measureData.
+ */
+export const GROWTH_FLOOR = 64 * 1024 * 1024;
 
 /** Prefix of the copies this mode leaves in its staging folder, and removes. */
 const COPY_PREFIX = ".copy-";
@@ -77,6 +109,8 @@ export class CopyError extends Error {
   constructor(
     message: string,
     readonly path: string | null = null,
+    /** `database`: a database could not be read consistently, which a restore may work around (restore.ts). */
+    readonly code: "database" | null = null,
   ) {
     super(message);
   }
@@ -153,6 +187,71 @@ function vacuumInto(source: string, target: string): void {
   }
 }
 
+/**
+ * What the data weighs, in apparent bytes of its regular files, and how many
+ * folders and files it holds, from `lstat` alone. Run by the copy, as the
+ * project, never by root. It stops at `maxEntries`.
+ *
+ * One folder's names are listed at a time, and those of the folders above it
+ * kept until walked: Bun reads a folder whole whatever the call (the figures
+ * are in projects.ts, isEmptyFolder), so the memory follows the biggest
+ * folders along one path; names as strings, the lightest of its listings. A
+ * folder of millions of names can exhaust the copy's MemoryMax: that
+ * project's snapshot fails, said so, and the run goes on.
+ *
+ * Apparent bytes, not allocated blocks: the archive holds a sparse file's
+ * holes as zeros, so the disk check counts them, and a hole cannot slip under
+ * it. A file made sparse and huge once measured is the copy's budget's
+ * business (copyData).
+ */
+export function measureData(dataDir: string, maxEntries: number = MAX_ENTRIES): { bytes: number; entries: number } {
+  const top = lstatSync(dataDir);
+  if (!top.isDirectory()) throw new CopyError("the data folder is not a folder");
+  let bytes = 0;
+  let entries = 0;
+  const stack: { path: string; rel: string; names: string[]; next: number }[] = [];
+  const enter = (path: string, rel: string) => {
+    try {
+      stack.push({ path, rel, names: readdirSync(path), next: 0 });
+    } catch (error) {
+      throw new CopyError(`a folder of the data cannot be read (${describeError(error)})`, rel || ".");
+    }
+  };
+  enter(dataDir, "");
+  while (stack.length > 0) {
+    const level = stack[stack.length - 1]!;
+    if (level.next >= level.names.length) {
+      stack.pop();
+      continue;
+    }
+    const name = level.names[level.next++]!;
+    const path = join(level.path, name);
+    const rel = level.rel === "" ? name : `${level.rel}/${name}`;
+    let stat: Stats;
+    try {
+      stat = lstatSync(path);
+    } catch (error) {
+      if ((error as { code?: string }).code === "ENOENT") continue;
+      throw new CopyError(`a file of the data cannot be examined (${describeError(error)})`, rel);
+    }
+    if (!stat.isDirectory() && !stat.isFile()) continue;
+    // `data/` and the description take two entries of the archive.
+    if (++entries > maxEntries - 2) throw tooManyEntries(maxEntries);
+    if (stat.isFile()) bytes += stat.size;
+    else enter(path, rel);
+  }
+  return { bytes, entries };
+}
+
+function tooManyEntries(maxEntries: number): CopyError {
+  return new CopyError(`more than ${maxEntries} files and folders in the data: a snapshot of them could not be restored, so none is taken`);
+}
+
+/** The most the copy may archive: the measure and its margin, within the room the disk has. */
+export function copyBudget(measured: number, room: number): number {
+  return Math.min(room, measured + Math.max(GROWTH_FLOOR, Math.ceil(measured / 4)));
+}
+
 /** Removes the copies a previous, interrupted run may have left in the staging folder. */
 export function cleanStaging(stagingDir: string): void {
   for (const name of readdirSync(stagingDir)) {
@@ -160,18 +259,46 @@ export function cleanStaging(stagingDir: string): void {
   }
 }
 
+export type CopyOptions = {
+  /** The project's folder and the snapshot's time, written into the description, checked at extraction. */
+  folder: string;
+  takenAt: number;
+  /** At most this many bytes of contents (copyBudget): beyond, the data grew during the copy. */
+  maxBytes: number;
+  /** At most this many entries in the archive, everything counted. */
+  maxEntries?: number;
+  /**
+   * Every database copied as a plain file, with its `-wal` and `-journal`
+   * beside it, rather than through `VACUUM INTO`. Only for the snapshot a
+   * restore takes of the data it replaces, its services stopped, when a
+   * database cannot be read consistently: see restore.ts. The description
+   * says so.
+   */
+  raw?: boolean;
+};
+
 /**
  * Writes the archive of `dataDir` into `sink`, compressed. `stagingDir` takes
  * the database copies, one at a time, removed as soon as archived.
  */
-export async function copyData(dataDir: string, stagingDir: string, sink: Sink, now: number = Date.now()): Promise<CopySummary> {
+export async function copyData(dataDir: string, stagingDir: string, sink: Sink, options: CopyOptions): Promise<CopySummary> {
   const top = lstatSync(dataDir);
   if (!top.isDirectory()) throw new CopyError("the data folder is not a folder");
   cleanStaging(stagingDir);
+  const maxEntries = options.maxEntries ?? MAX_ENTRIES;
+  const raw = options.raw === true;
 
   const summary: CopySummary = { files: 0, directories: 0, databases: [], bytes: 0, skipped: [], changed: [] };
   const tar = new TarWriter(gzipSink(sink));
   let copies = 0;
+  // `data/` and the description, counted from the start.
+  let entries = 2;
+  const count = () => {
+    if (++entries > maxEntries) throw tooManyEntries(maxEntries);
+  };
+  const spend = (size: number, rel: string) => {
+    if (summary.bytes + size > options.maxBytes) throw new CopyError("the data grew past its measured size while being copied: copy stopped", rel);
+  };
 
   await tar.directory(DATA_ROOT, metaOf(top));
 
@@ -206,11 +333,12 @@ export async function copyData(dataDir: string, stagingDir: string, sink: Sink, 
       entries.push({ name, path, rel, stat });
     }
 
-    const databases = new Set(entries.filter((entry) => entry.stat.isFile() && isSqlite(entry.path)).map((entry) => entry.name));
+    const databases = new Set(raw ? [] : entries.filter((entry) => entry.stat.isFile() && isSqlite(entry.path)).map((entry) => entry.name));
 
     for (const { name, path, rel, stat } of entries) {
       const archived = `${DATA_ROOT}/${rel}`;
       if (stat.isDirectory()) {
+        count();
         await tar.directory(archived, metaOf(stat));
         summary.directories++;
         await walk(path, rel);
@@ -224,16 +352,18 @@ export async function copyData(dataDir: string, stagingDir: string, sink: Sink, 
       const companion = SQLITE_COMPANIONS.find((suffix) => name.endsWith(suffix));
       if (companion !== undefined && databases.has(name.slice(0, -companion.length))) continue;
 
+      count();
       if (databases.has(name)) {
         const copy = join(stagingDir, `${COPY_PREFIX}${copies++}.db`);
         try {
           vacuumInto(path, copy);
         } catch (error) {
           rmSync(copy, { force: true });
-          throw new CopyError(`a database could not be copied (${describeError(error)})`, rel);
+          throw new CopyError(`a database could not be copied (${describeError(error)})`, rel, "database");
         }
         try {
           const copied = statSync(copy);
+          spend(copied.size, rel);
           await tar.file(archived, metaOf(stat), copied.size, readExactly(copy, copied, copied.size));
           summary.bytes += copied.size;
         } finally {
@@ -244,6 +374,8 @@ export async function copyData(dataDir: string, stagingDir: string, sink: Sink, 
         continue;
       }
 
+      // Before a byte is read: a file grown to a terabyte stops the copy now, not in an hour.
+      spend(stat.size, rel);
       let outcome: Awaited<ReturnType<TarWriter["file"]>>;
       try {
         outcome = await tar.file(archived, metaOf(stat), stat.size, readExactly(path, stat, stat.size));
@@ -260,9 +392,9 @@ export async function copyData(dataDir: string, stagingDir: string, sink: Sink, 
   await walk(dataDir, "");
 
   const description = new TextEncoder().encode(
-    `${JSON.stringify({ format: 1, takenAt: new Date(now).toISOString(), ...summary }, null, 2)}\n`,
+    `${JSON.stringify({ format: DESCRIPTION_FORMAT, folder: options.folder, takenAt: new Date(options.takenAt).toISOString(), raw, ...summary }, null, 2)}\n`,
   );
-  await tar.file(DESCRIPTION_NAME, { mode: 0o600, mtime: Math.floor(now / 1000), uid: 0, gid: 0 }, description.byteLength, description);
+  await tar.file(DESCRIPTION_NAME, { mode: 0o600, mtime: Math.floor(options.takenAt / 1000), uid: 0, gid: 0 }, description.byteLength, description);
   await tar.end();
   return summary;
 }

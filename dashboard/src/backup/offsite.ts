@@ -14,10 +14,11 @@
  * of five believes they have offsite copies.
  *
  * The objects are `<prefix>/<folder>/<snapshot>.enc`: one folder per project,
- * the snapshot's own name, so that the bucket can be read by hand.
+ * the snapshot's own name, so that the bucket can be read by hand. Each object
+ * is sealed for that key (crypto.ts): copied under another, it is refused.
  */
 import { readSnapshotName, type Snapshot } from "../../borrowed/backups";
-import { decryptStream, encryptFile, MIN_PASSPHRASE, type Master } from "./crypto";
+import { decryptStream, encryptFile, MIN_PASSPHRASE, type Decrypted, type Master } from "./crypto";
 
 export type Offsite = {
   endpoint: string;
@@ -101,6 +102,23 @@ export function redact(message: string, offsite: Offsite): string {
   return clean.replace(/\?[^\s"']*/g, "?[redacted]");
 }
 
+/**
+ * The settings as the variables offsiteFrom reads, for a download child run
+ * without isolation, on the workstation. Under systemd the child reads them
+ * from the file itself (runner.ts): they never ride on a command line.
+ */
+export function offsiteEnvironment(offsite: Offsite): Record<string, string> {
+  return {
+    BACKUP_S3_ENDPOINT: offsite.endpoint,
+    BACKUP_S3_BUCKET: offsite.bucket,
+    ...(offsite.region === null ? {} : { BACKUP_S3_REGION: offsite.region }),
+    BACKUP_S3_ACCESS_KEY_ID: offsite.accessKeyId,
+    BACKUP_S3_SECRET_ACCESS_KEY: offsite.secretAccessKey,
+    BACKUP_S3_PREFIX: offsite.prefix,
+    BACKUP_ENCRYPTION_PASSPHRASE: offsite.passphrase,
+  };
+}
+
 /** What the dashboard may show of the bucket: where it is, never how to get in. */
 export function offsiteTarget(offsite: Offsite): string {
   return `${offsite.bucket} at ${new URL(offsite.endpoint).host}`;
@@ -132,7 +150,8 @@ export type Bucket = {
   /** Every object under the prefix, all pages read. Throws rather than return a partial list. */
   list: () => Promise<RemoteObject[]>;
   upload: (key: string, path: string, master: Master) => Promise<number>;
-  download: (key: string, write: (bytes: Uint8Array) => Promise<void>) => Promise<number>;
+  /** Refuses an object sealed for another key than `key`. */
+  download: (key: string, write: (bytes: Uint8Array) => Promise<void>) => Promise<Decrypted>;
   remove: (key: string) => Promise<void>;
 };
 
@@ -169,7 +188,7 @@ export function openBucket(offsite: Offsite): Bucket {
     async upload(key, path, master) {
       const writer = client.file(key).writer({ partSize: PART_BYTES, queueSize: 2, retry: 3, type: "application/octet-stream" });
       let buffered = 0;
-      const total = await encryptFile(path, master, async (bytes) => {
+      const total = await encryptFile(path, key, master, async (bytes) => {
         writer.write(bytes);
         buffered += bytes.byteLength;
         if (buffered >= PART_BYTES) {
@@ -182,7 +201,7 @@ export function openBucket(offsite: Offsite): Bucket {
     },
 
     async download(key, write) {
-      return decryptStream(client.file(key).stream() as ReadableStream<Uint8Array>, offsite.passphrase, write);
+      return decryptStream(client.file(key).stream() as ReadableStream<Uint8Array>, offsite.passphrase, write, { expectedKey: key });
     },
 
     async remove(key) {

@@ -23,7 +23,10 @@ repositories, and the next deploy puts them back.
   without blocking a WAL writer. Their `-wal`, `-shm` and `-journal` are not
   archived, the copy holds them. A database the copy cannot read consistently
   (corrupt, locked for more than ten seconds) fails that project's snapshot,
-  loudly, rather than archiving a file that may be half written.
+  loudly, rather than archiving a file that may be half written. The one
+  exception is the snapshot a restore takes of the data it replaces, its
+  services stopped: there, a database that cannot be read consistently is
+  saved as raw files, side files included, and said so (below).
 - **Every other regular file** is copied as it is. A file that changes while it
   is read is archived padded or cut, as `tar` does, and the archive's
   description names it.
@@ -35,6 +38,12 @@ repositories, and the next deploy puts them back.
 static site (no data folder), an app whose data folder is missing or empty, and
 an app whose manifest says `"backup": false` (see
 [docs/manifest.md](../../../docs/manifest.md#backup)).
+
+**Refused, rather than half saved**, and said so: a data folder of more than
+2,000,000 files and folders (an extraction would refuse its archive, so none
+is taken), one that does not fit twice in the disk above its reserve, and one
+that grows during its copy past what was measured at its start, by a quarter
+and 64 MiB at least (see [Limits](#limits)).
 
 ## Where, and how often
 
@@ -48,9 +57,13 @@ an app whose manifest says `"backup": false` (see
 | The lock shared by a run and a restore | `/run/sitesolide-backup/lock/` | root, 0700 |
 
 A snapshot is a plain `tar.gz`: `data/`, then `sitesolide-backup.json`, which
-says what was copied and what was left out. `tar -xzf` reads it on any machine.
-It is written beside its final name, read back entirely, and only then named:
-an archive that exists under its name is complete.
+says of which project and when it was taken, how (`"raw": true` for the raw
+files of a restore's own snapshot), what was copied and what was left out.
+`tar -xzf` reads it on any machine. It is written beside its final name, read
+back entirely, and only then named: an archive that exists under its name is
+complete. A restore checks the project and the time it names against the
+snapshot it was asked for: an archive copied under another project's name, or
+another time's, is refused before anything stops.
 
 `sitesolide-backup.timer` runs every hour, five minutes of random delay at most.
 A run missed while the machine was off is made at boot.
@@ -74,7 +87,8 @@ Count the room it takes: about 38 archives per project. A data folder of
 100 MB that compresses to 20 takes about 760 MB. **A run never fills the disk**:
 it refuses a snapshot that would leave less than `BACKUP_DISK_RESERVE` bytes
 free (1 GiB by default), and stops a copy that would, since one disk carries
-every site.
+every site. Root says how much room the disk has above the reserve; the copy,
+which alone sees the data, measures it and refuses what does not fit twice.
 
 ### The status file
 
@@ -88,39 +102,59 @@ whatever happened:
 
 `snapshot: null` with `ok: true` is a project left out on purpose. A project
 whose snapshot was taken but whose offsite copy failed is `ok: false` with its
-snapshot named. The errors never name a file inside a project's data and never
-carry a credential: the details, paths included, go to the journal
-(`journalctl -u sitesolide-backup`).
+snapshot named. The errors never name a file inside a project's data, never
+carry a figure of its size (the file is world-readable, and a project's tree is
+its own business) and never carry a credential: the details, paths and figures
+included, go to the journal (`journalctl -u sitesolide-backup`).
+
+The file is written whatever happens to a project: whatever one project's
+snapshot throws is that project's failure, and the run goes on to the next.
+A database of the component that does not open costs the audit, not the
+snapshots nor the file; a setting at fault in
+`/etc/sitesolide/dashboard-backup.env` writes `ok: false` with no project, and
+the reason to the journal.
 
 ## Who may touch what
 
 ```
 sitesolide-backup.timer, every hour
    v
-backup.js run                        root, CAP_DAC_READ_SEARCH only, no write outside its folders
-   |-- lists  /srv/sites/*           the projects, their manifests, their data folders' size
-   |-- starts, for each project:
+backup.js run                        root, CAP_DAC_READ_SEARCH only, no write outside its folders,
+   |                                 /etc/sitesolide hidden
+   |-- lists  /srv/sites/*           the projects, their manifests; whether a data folder is
+   |                                 empty, asked of `find`, which stops at the first name
+   |-- starts, for each project, within its share of the time:
    |     systemd-run --pipe --uid=site-<slug> ... backup.js copy
    |        as the project, /srv an empty mount with its data alone bound back,
-   |        no network at all: the archive comes back on standard output
+   |        no network at all: measures the data, refuses what does not fit,
+   |        and the archive comes back on standard output
    |-- writes /var/backups/sitesolide/<folder>/   the archive, read back before it is named
    |-- prunes by the retention policy
-   |-- uploads to the bucket, encrypted on the machine
+   |-- uploads to the bucket, encrypted on the machine, each object sealed for its key
    `-- writes /var/lib/sitesolide-backup/last-run.json, and its audit
 
 dashboard, Backups, an unlocked session, the slug retyped
    v
 steward                              checks, writes the request, starts the unit, does not wait
    v
-sitesolide-restore@<slug>            root, one-shot, writes only into /srv/sites/<slug>
+sitesolide-restore@<slug>            root, one-shot, writes only into /srv/sites/<slug>,
+   |                                 no network, /etc/sitesolide hidden
    |-- consumes the request, takes the lock
-   |-- fetches the snapshot, from the server or from the bucket
+   |-- fetches the snapshot, from the server, or from the bucket through
+   |     systemd-run --pipe -p DynamicUser=yes ... backup.js download
+   |        a user of its own, the network and the bucket's settings, no project's rights
+   |-- measures the current data, AS THE PROJECT, for the room
    |-- extracts it into /srv/sites/<slug>/.restore-incoming, AS THE PROJECT
-   |-- stops the project's services
+   |-- stops nothing without the time left for what follows
+   |-- marks the services stopped, stops them
    |-- snapshots the current data, `pre-restore`
    |-- swaps the folders by rename
-   |-- starts the services, watches them for eight seconds
+   |-- starts the services, watches them for eight seconds, clears the mark
    `-- running: removes the previous data. Not running: puts it back, starts again
+   v
+backup.js after-restore              its ExecStopPost: a mark left behind, the restore was
+                                     cut short with the services stopped; it repairs what is
+                                     certain and starts them again
 ```
 
 **Root never opens a project's file.** The copy and the extraction run as the
@@ -132,6 +166,16 @@ in its folder, a forged database included, which is then parsed with that
 project's rights, never root's. The archive root receives is read by
 [tar.ts](tar.ts), which accepts files and folders only and refuses any path
 that is absolute, climbs or is not UTF-8.
+
+**Root lists no data folder, and walks none.** A project can put millions of
+names in its folder; root listing them would be killed by its unit's
+`MemoryMax` before writing the status, for every project, every hour. Bun has
+no way to read a folder one name at a time (measured on 4 October 2026 with
+Bun 1.3.11: `opendirSync` reads the whole folder at its first entry, and costs
+more than `readdirSync`), so whether a data folder is empty is asked of
+`find -quit`, and its weight is measured by the copy, as the project, under
+the project's limits. A folder too big for those costs that project its
+snapshot, said so, and nothing else.
 
 **`Bun.Archive` was set aside**, measured with Bun 1.3.11: an entry given as
 `Bun.file()` was archived empty without an error, the gzip option wrote an
@@ -148,10 +192,28 @@ what the server does, then follows it phase by phase.
   that one undoes the restore. The last three are kept whatever their age.
 - **Nothing changes until the snapshot has been extracted**: an archive that
   does not read stops the restore before the service is stopped.
+- **The current data is saved even when a database of it is damaged**, which
+  is often why one restores: the services being stopped, a database the copy
+  cannot read consistently is saved as raw files, its `-wal` and `-journal`
+  beside it, what SQLite itself would recover from. The page says so, the
+  audit records it (`preRestoreRaw`), and the snapshot's description says
+  `"raw": true`.
 - **A service that does not come back gets its previous data back**, and is
   started on it again. The page says so.
+- **Nothing is stopped without the time to finish.** Before stopping the
+  services, the restore checks that its unit has the time left to save the
+  current data, swap and watch, and refuses otherwise, nothing changed.
+- **A restore cut short never leaves a site stopped.** It marks the services
+  stopped before stopping them, and clears the mark once it has started them
+  again. Killed in between, by its timeout or anything else, its unit's
+  `ExecStopPost` finds the mark, repairs what is certain and starts them; the
+  page says the restore was cut short.
 - **The dashboard's own data is not restored from the dashboard**: the page
   doing it would cut itself off. Restore it by hand (below).
+- **Nor the portal's**: its data is who may enter which site. An old copy
+  would let back in every guest revoked since, under the sharing rules of
+  that day, without anyone deciding it. Restore it by hand (below), knowing
+  what it brings back.
 
 Every restore is recorded in the component's audit with who asked, readable in
 the section's *Activity*.
@@ -205,7 +267,10 @@ sudo rm -rf /srv/sites/cms/.restore-previous
 ```
 
 For the landing, the folder is the zone's name, the account `site-landing` and
-the unit `sitesolide-landing`. For the dashboard, the unit is `dashboard`.
+the unit `sitesolide-landing`. For the dashboard, the unit is `dashboard`; for
+the portal, `portal`, and a copy of the portal brings back the guests, the
+invitations and the sharing policies of its time: revoke again, from the
+dashboard, whatever was revoked since.
 
 From the bucket, on any machine with Bun and a clone of this repository, the
 machine itself being gone:
@@ -218,6 +283,12 @@ cd sitesolide/dashboard && bun install && bun run borrow
 bun backup.ts decrypt cms-20261004T130211Z.tar.gz.enc cms.tar.gz   # asks for the passphrase
 tar -tzf cms.tar.gz
 ```
+
+`decrypt` prints the key the object was sealed for, `sealed as
+sitesolide/cms/cms-20261004T130211Z.tar.gz.enc`: check it names the project and
+the time you meant, whatever the file was called since. An object uploaded
+before format 2 names none; `tar -xzOf cms.tar.gz sitesolide-backup.json`
+then says what it is.
 
 ## The offsite copy
 
@@ -234,6 +305,18 @@ then one key per file through HKDF. The bucket's provider stores bytes it
 cannot read; a stolen access key yields nothing without the passphrase. The
 format is described at the top of [crypto.ts](crypto.ts).
 
+**Each object is sealed for its key** (format 2): `<prefix>/<folder>/<snapshot>.enc`
+is written in its header, which every chunk authenticates. Someone who may
+write to the bucket cannot copy one project's object under another's name for
+an admin to restore into the wrong site: the restore refuses an object sealed
+for another key. The objects uploaded before format 2 carry no key; they are
+still read, by the restore and by `decrypt`, because they may be the only copy
+left, and retention replaces them as it prunes, within its horizon (four weeks
+by default). The restore itself has no network: a download child, a user of
+its own with the network and no right on any project, fetches and decrypts
+the object, within twenty minutes, and stops when the disk comes down to its
+reserve.
+
 **The passphrase is the only way back.** Lose it, and every offsite copy is
 noise. Put it in your password manager the moment you set it, not later.
 
@@ -249,7 +332,8 @@ noise. Put it in your password manager the moment you set it, not later.
    - Any S3: its endpoint, `https://` only, and its region.
 
    In the bucket, a lifecycle rule that aborts incomplete multipart uploads
-   after a day: a run killed in the middle of an upload leaves parts behind.
+   after a day: an upload abandoned at the run's deadline, or a run killed in
+   the middle of one, leaves parts behind.
    If the provider offers object versioning or object lock, turn it on: a
    compromised machine holds keys that can delete, and versions survive it.
 
@@ -289,6 +373,28 @@ noise. Put it in your password manager the moment you set it, not later.
    ssh you@your-machine 'sudo systemctl start sitesolide-backup.service; sudo cat /var/lib/sitesolide-backup/last-run.json'
    ```
 
+## Limits
+
+What one project can cost the others, at most, and what a snapshot can be.
+
+| What | Bound | Where |
+|---|---|---|
+| Entries of an archive, `data/` and the description counted | 2,000,000: the copy refuses beyond, as the extraction does | `MAX_ENTRIES`, copy.ts |
+| Bytes a copy archives | the data measured at its start, plus a quarter and 64 MiB at least, within the room above the reserve | `copyBudget`, copy.ts |
+| Room a snapshot needs | twice the data's apparent size (a sparse file counts whole), above `BACKUP_DISK_RESERVE` | child.ts |
+| A project's time in a run | its share of what is left of the 25-minute window among the projects still to come, one minute at least, `BACKUP_CHILD_TIMEOUT_MS` (20 minutes) at most; cut short, it is tried again once every other project has had its turn | `projectTime`, run.ts |
+| Reading an archive back | the same time, the same entries, no more bytes than the room | `verifyArchive`, snapshot.ts |
+| A child past its time | killed (`systemctl kill --signal=SIGKILL`), its unit's `RuntimeMaxSec` and `TimeoutStopSec=15s` as the backstop: a copy stopped by its own service does not hold the run | runner.ts |
+| Uploads | none started after 40 minutes, none waited for past 45; the status is written before the unit's 50 | run.ts |
+| A restore | 90 minutes in all; a download 20, a measure 10, an extraction and a snapshot 20 each, the swap and the watch 10 | restore.ts, the unit |
+| Memory | a run 256M, a child 512M; a data folder too big for its copy's 512M costs that project its snapshot | the units, runner.ts |
+
+**Why not a fresh PID namespace for the copy.** The copy runs under the
+project's uid, so the project's service may `SIGSTOP` it. `PrivatePIDs=`
+(systemd 257, Debian 13) would not prevent it: a process may signal those of a
+descendant PID namespace, and SIGSTOP reaches even a namespace's init when sent
+from an ancestor (pid_namespaces(7)). The time bound above is what handles it.
+
 ## Deployment
 
 In this order, from the workstation, each step checked before the next. The
@@ -327,11 +433,21 @@ Then, if you want it, [the offsite copy](#setting-it-up).
 | What changed | The command |
 |---|---|
 | `backup.ts`, `src/backup/`, `infra/backup/`, `bin/cli/backups.ts` | `bin/deploy-backup.sh install` |
-| `src/backup/routes.ts`, `reader.ts`, `src/secrets/` | `bin/deploy-steward.sh` |
+| `src/backup/routes.ts`, `reader.ts`, `request.ts`, `src/secrets/` | `bin/deploy-steward.sh` |
 | the page, the relay | `sitesolide deploy` from `dashboard/` |
 
 `install` refuses while a run or a restore is in progress, and keeps the timer
 as it was.
+
+**From a version before format 2** (the bounds above, the portal left out of
+the dashboard's restores, the objects sealed for their key, the restore
+without network): `bin/deploy-backup.sh install`, then `bin/deploy-steward.sh`,
+in either order: a steward updated first refuses the portal's restore that an
+old one-shot would carry out, and a one-shot updated first refuses it whatever
+the steward asks. Check after `install`: `systemd-analyze verify` said nothing,
+and the next run's status, or `bin/deploy-backup.sh state`, names every project
+as before. The archives already written restore as they did; the bucket's
+older objects are read as they were.
 
 ### Rolling back
 
@@ -348,6 +464,10 @@ Then the previous steward and dashboard, from the commit before, with
 `bin/deploy-steward.sh` and `sitesolide deploy`. The snapshots stay in
 `/var/backups/sitesolide` until you delete them; so does
 `/etc/sitesolide/dashboard-backup.env`.
+
+Going back to a version before format 2 keeps the local archives readable,
+but not the objects uploaded since: an older `backup.js` says `unknown format
+version 2`. Decrypt those with this version of the repository, by hand.
 
 ## What only the machine can prove
 
@@ -389,6 +509,40 @@ Also to measure there: the memory of a run and of a copy on the largest site
 `systemctl stop` and `start` act on every unit of a project with several
 services.
 
+What the bounds rely on, which the workstation cannot show, on a test machine:
+
+```bash
+# EnvironmentFile= is read by PID 1 although /etc/sitesolide is hidden from the units:
+sudo systemctl show sitesolide-backup -p InaccessiblePaths -p EnvironmentFiles
+sudo systemd-run --wait --pipe -p InaccessiblePaths=-/etc/sitesolide \
+  -p EnvironmentFile=/etc/sitesolide/dashboard-backup.env sh -c 'test -n "$BACKUP_S3_BUCKET" && ! ls /etc/sitesolide'
+
+# The run's emptiness test, find inside the unit's walls (CAP_DAC_READ_SEARCH, @system-service):
+sudo systemd-run --wait --pipe -p CapabilityBoundingSet=CAP_DAC_READ_SEARCH -p ProtectSystem=strict \
+  -p SystemCallFilter=@system-service /usr/bin/find /srv/sites/cms/data -mindepth 1 -maxdepth 1 -print -quit
+
+# A folder of 650,000 long names in a throwaway site's data: the run's memory stays low,
+# that site fails or is saved, the others are saved, and the status is written.
+sudo -u site-test sh -c 'cd /srv/sites/test/data && mkdir crowd && cd crowd && seq -f "%0240g" 650000 | xargs touch'
+sudo systemctl start sitesolide-backup.service
+journalctl -u sitesolide-backup -n 3   # "Consumed ... memory peak": far under 256M
+sudo cat /var/lib/sitesolide-backup/last-run.json
+
+# A copy stopped by its own service: the run moves on at the site's share.
+sudo systemctl start --no-block sitesolide-backup.service; sleep 5
+sudo -u site-test pkill -STOP -f 'backup.js copy'
+journalctl -u sitesolide-backup -f   # "out of its time, tried again after the others", then the next site
+
+# The restore has no network, and its download child does:
+systemctl show 'sitesolide-restore@test.service' -p IPAddressDeny -p RestrictAddressFamilies
+systemctl list-units 'sitesolide-backup-download-*'   # during a restore from the bucket only
+
+# A restore cut short with the services stopped is started again by its ExecStopPost:
+# a test site, a restore from the dashboard, then, once the page says "Saving the current data first.":
+sudo systemctl kill --signal=SIGKILL sitesolide-restore@test.service
+systemctl is-active test; sudo cat /run/sitesolide-backup/restore/test.json   # active; "cut short"
+```
+
 ## Tests
 
 ```bash
@@ -401,4 +555,10 @@ against `tar` itself, the encryption round trip and its tampering, a snapshot of
 WAL databases written to by another process during the copy and restored with
 `PRAGMA integrity_check`, a whole run on a throwaway tree, the offsite copy
 against a local S3 endpoint, a restore and its rollback with a simulated
-systemd, the steward's routes and the relay, the units.
+systemd, the steward's routes and the relay, the units. And the bounds
+(tests/backup-bounds.test.ts): root's memory against a folder of 60,000 long
+names, measured on a child's peak, a copy stopped by `SIGSTOP`, a terabyte of
+holes grown after the measure, a data folder swapped for a link, the entries
+counted alike by the copy and the extraction; a restore cut short and its
+cleanup, a stalled download, a damaged database saved raw, an object or an
+archive copied under another name.

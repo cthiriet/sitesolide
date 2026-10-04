@@ -16,12 +16,11 @@
  */
 import { isBackedUp } from "../../borrowed/manifest";
 import { readSnapshotName } from "../../borrowed/backups";
-import { DASHBOARD_SLUG } from "../gatekeeper/rules";
 import type { ErrorCode } from "../secrets/protocol";
 import { checkSite, isSiteFolder, type Site } from "../secrets/scope";
 import type { BackupReader } from "./reader";
 import { recoveryPlan } from "./recovery";
-import { isActor, judgeResult, restoreUnit } from "./request";
+import { DASHBOARD_REFUSAL, PORTAL_REFUSAL, excludedFromRestore, isActor, judgeResult, restoreUnit } from "./request";
 import type { BackupAuditResponse, BackupsResponse, BackupsView, RestoreResponse, RestoreView, SnapshotView } from "./protocol";
 
 export type Command = { code: number; output: string };
@@ -47,7 +46,8 @@ export type BackupRoutes = {
 };
 
 export const NOT_INSTALLED_REASON = "backups are not set up on this server: bin/deploy-backup.sh install, then enable";
-export const DASHBOARD_REASON = "the dashboard's own data is not restored from the dashboard: see the Backups README to do it by hand";
+export const DASHBOARD_REASON = DASHBOARD_REFUSAL;
+export const PORTAL_REASON = PORTAL_REFUSAL;
 export const RUNNING_REASON = "a restore of this site is in progress";
 /** The audit entries a page reads at once. */
 export const AUDIT_ENTRIES = 50;
@@ -120,7 +120,8 @@ export function createBackupRoutes(dependencies: BackupRouteDependencies): Backu
   /** Why a restore of this site would be refused now, or null. */
   function refusalReason(site: Site, restore: RestoreView | null, snapshots: SnapshotView[]): string | null {
     if (reader === null || !reader.installed()) return NOT_INSTALLED_REASON;
-    if (site.folder === DASHBOARD_SLUG) return DASHBOARD_REASON;
+    const excluded = excludedFromRestore(site.folder);
+    if (excluded !== null) return excluded;
     if (restore?.state === "running") return RUNNING_REASON;
     if (!reader.hasData(site.folder) && !reader.present(site.folder).previous) return "no data folder to restore into";
     const plan = recoveryPlan(reader.present(site.folder));
@@ -192,7 +193,8 @@ export function createBackupRoutes(dependencies: BackupRouteDependencies): Backu
         if ("refusal" in found) return fail(found.refusal.error, found.refusal.message);
         const { site } = found;
         const folder = site.folder;
-        if (folder === DASHBOARD_SLUG) return fail("out-of-scope", DASHBOARD_REASON);
+        const excluded = excludedFromRestore(folder);
+        if (excluded !== null) return fail("out-of-scope", excluded);
 
         const name = body.snapshot as string;
         if (readSnapshotName(folder, name) === null) return fail("invalid", `not a snapshot of ${folder}`);

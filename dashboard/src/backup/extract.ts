@@ -13,7 +13,13 @@
  *   no link is followed, and the same path twice refuses the archive;
  * - a parent folder is created by this process or refused: never one found in
  *   place, which could be a link planted between two entries;
- * - the destination must be an empty folder.
+ * - the destination must be an empty folder;
+ * - a description of format 2 or later must name the project and the time of
+ *   the snapshot asked for. A snapshot is bound to its name by nothing else
+ *   on the server's disk, and an archive of another project copied under
+ *   this one's name would hand its data to the wrong service. It is the last
+ *   entry: the check refuses the archive once its files are written, into a
+ *   folder the restore then deletes, before anything is stopped.
  *
  * A refusal leaves a half-filled folder that the restore deletes: the data in
  * service has not been touched yet at that point.
@@ -47,7 +53,25 @@ export type ExtractSummary = {
 /** A description bigger than this is not one of ours. */
 const MAX_DESCRIPTION_BYTES = 1024 * 1024;
 
-export async function extractData(source: ReadableStream<Uint8Array>, destination: string, limits: Limits): Promise<ExtractSummary> {
+/** The snapshot an extraction was asked for: its project's folder and its time, to the second. */
+export type Expected = { folder: string; takenAt: number };
+
+/**
+ * Why a description does not match the snapshot asked for, or null. A
+ * description of format 1, or none, names neither and is not judged: those
+ * archives were written before the check, or by hand.
+ */
+export function descriptionMismatch(description: Record<string, unknown>, expected: Expected): string | null {
+  if (typeof description.format !== "number" || description.format < 2) return null;
+  if (description.folder !== expected.folder) return "the archive is a snapshot of another site than the one being restored";
+  const takenAt = typeof description.takenAt === "string" ? Date.parse(description.takenAt) : Number.NaN;
+  if (!Number.isFinite(takenAt) || Math.floor(takenAt / 1000) !== Math.floor(expected.takenAt / 1000)) {
+    return "the archive was taken at another time than its name says";
+  }
+  return null;
+}
+
+export async function extractData(source: ReadableStream<Uint8Array>, destination: string, limits: Limits, expected: Expected | null = null): Promise<ExtractSummary> {
   const top = lstatSync(destination);
   if (!top.isDirectory()) throw new ArchiveError("the destination is not a folder");
   if (readdirSync(destination).length > 0) throw new ArchiveError("the destination folder is not empty");
@@ -85,6 +109,8 @@ export async function extractData(source: ReadableStream<Uint8Array>, destinatio
       } catch {
         // A description that does not read is not a reason to refuse the data.
       }
+      const mismatch = summary.description === null || expected === null ? null : descriptionMismatch(summary.description, expected);
+      if (mismatch !== null) throw new ArchiveError(mismatch);
       return;
     }
     if (entry.path === DATA_ROOT && entry.type === "directory") return;
