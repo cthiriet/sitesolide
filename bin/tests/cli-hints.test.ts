@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { decideTake, type TakeAnswer } from "../cli/caddy-lock";
-import { DEFAULT_HINT, HINTS, hintFor } from "../cli/hints";
+import { DEFAULT_HINT, HINTS, hintFor, hintForFailure, REMOTE_HINTS } from "../cli/hints";
 import { PROJECT_PORTS_FILE } from "../cli/loopback";
 import { confirmDoorUnderLock, decidePortal, guardDepositedManifest } from "../cli/portal-vm";
 import { decideSecret } from "../cli/secrets";
@@ -93,6 +93,20 @@ describe("the hints", () => {
     const hint = hintFor("secret missing on the server: /etc/sitesolide/shop.env");
     expect(hint).toContain("dashboard");
     expect(hint).toContain("never put secret values in the repository");
+  });
+
+  test("a refusal through the API is answered by its code, and never with --force", () => {
+    expect(hintForFailure("no-dry-run", "deploy --dry-run is not available with a team token: nothing was sent")).toContain("without --dry-run");
+    expect(hintForFailure("secret-missing", "/etc/sitesolide/shop.env missing")).toContain("never put secret values in the repository");
+    // A code the table lacks falls back to what the message says.
+    expect(hintForFailure("brand-new", "build failed: bun run build")).toBe(hintFor("build failed: bun run build"));
+    for (const hint of Object.values(REMOTE_HINTS)) {
+      if (hint.includes("--force")) expect(hint).toMatch(/do not re-run with --force/);
+    }
+    // The codes the installer stops on, as docs/team.md lists them.
+    for (const code of ["install-failed", "secret-missing", "edited-by-hand", "system-unit", "caddy-busy", "bundle-refused", "service-failed", "verify-failed"]) {
+      expect(Object.hasOwn(REMOTE_HINTS, code)).toBe(true);
+    }
   });
 
   test("a refusal nobody foresaw gets the default, which forbids the workarounds", () => {

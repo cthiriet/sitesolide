@@ -173,7 +173,7 @@ import {
 } from "./cli/caddy-lock";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, type ProjectAccount } from "./cli/loopback";
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
-import { login, remoteMode, runRemote } from "./cli/remote";
+import { eventOutput, humanOutput, login, remoteMode, runRemote } from "./cli/remote";
 import {
   foreignUnit,
   listUnitsCommand,
@@ -2457,12 +2457,17 @@ if (import.meta.main) {
   // A team member's workstation has no server and no root: `login`, and the
   // commands the dashboard's control API carries, go through it instead of
   // SSH. The owner's path below is untouched. See bin/cli/remote.ts.
-  if (command === "login") process.exit(await login(arguments_, { environment: process.env }));
+  //
+  // `--json` reaches them too: the same events, and one final `result` or
+  // `error` with its hint, whichever way the command runs.
+  const remoteOutput = jsonOutput ? eventOutput() : humanOutput;
+  if (command === "login") process.exit(await login(arguments_, { environment: process.env, output: remoteOutput }));
   if (remoteMode(arguments_, process.env)) {
     process.exit(
       await runRemote(command, arguments_, {
         folder,
         environment: process.env,
+        output: remoteOutput,
         build: (project) => runBuild(project, executor),
         checkPublic: (project) => checkPublicFolder(project),
       }),

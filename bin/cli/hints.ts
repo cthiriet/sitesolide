@@ -101,6 +101,56 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/ is required$/, "pass every setting: sitesolide init --server <user@host> --zone <dns.zone> --email <address>"],
 ];
 
+/**
+ * The hints of a run through the dashboard's control API, by the code its
+ * refusal carries: the API's own (docs/team.md), the installer's for a
+ * deployment that failed on the machine, and the CLI's for what it refuses
+ * before a request leaves. Their messages are worded on the machine, where no
+ * pattern of HINTS reads them; a code this table lacks falls back to them.
+ */
+export const REMOTE_HINTS: Readonly<Record<string, string>> = {
+  // --- refused before a request leaves
+  "no-dry-run": "review sitesolide.json with the user, then run `sitesolide deploy` without --dry-run once they agree: the machine judges the manifest before anything is built or uploaded",
+  "unknown-option": "run the command without that option; `details` lists the ones it takes with a team token",
+  "needs-ssh": "this command is the owner's: ask the owner of the machine to run it; with a team token, only deploy, status, logs and login run",
+  usage: "run one of the commands `details` lists",
+  // --- the control API
+  unauthenticated: "the token is missing, unknown, expired or revoked: ask the owner of the machine for one, then run `sitesolide login`; never guess a token or borrow another one",
+  "too-many-attempts": "wait the seconds `details` names, then run the same command once; never retry in a loop",
+  "out-of-scope": "the token may not do this: change what `details` names in sitesolide.json, or ask the owner of the machine to widen the token; never pick another slug to get around it",
+  reserved: "the slug belongs to the platform: pick another one in sitesolide.json",
+  "invalid-manifest": "fix every point of `details` in sitesolide.json (docs/manifest.md), then deploy again",
+  invalid: "fix what the message names, then run the same command again",
+  "not-found": "no such project for this token: check the slug in sitesolide.json, and run `sitesolide status` for the projects it reaches",
+  busy: "a deployment of this project is already running: wait for it to finish, then deploy again",
+  "too-large": "exclude dependencies, caches and build leftovers in sitesolide.json: the machine installs the dependencies itself",
+  expired: "the archive arrived too late: run `sitesolide deploy` again",
+  "not-available": "the machine does not carry the control API yet: tell the owner of the machine; nothing deploys with a token until it does",
+  failure: "something broke on the machine: tell the owner of the machine, with the message; do not retry in a loop",
+  unreachable: "the dashboard did not answer: check the network and the address (`sitesolide login --url`), then run the same command again",
+  unreadable: "the address answered with something that is not the control API: check it with `sitesolide login --url https://dashboard.<zone>`",
+  // --- a deployment that failed on the machine
+  "install-failed": "run the install command from the message in the project folder, fix what it reports, then deploy again",
+  "secret-missing": "ask the owner of the machine to create that file in the dashboard's Secrets section, then deploy again; never put secret values in the repository or in sitesolide.json",
+  "edited-by-hand": "do not re-run with --force, a token has none: tell the owner of the machine, who reads the file and decides",
+  "system-unit": "pick another slug in sitesolide.json: this one names a service of the machine",
+  "caddy-busy": LOCK_BUSY,
+  "door-changed": "the portal changed from the dashboard while the deployment ran: deploy again",
+  "port-taken": "delete `port` from sitesolide.json and let the machine choose one, or pick a free one between 3000 and 3099",
+  "no-port": "the owner has to free a port by removing a project the machine no longer needs",
+  "bundle-refused": "replace symbolic links and special files with the files they point to, or exclude them in sitesolide.json, then deploy again",
+  "public-empty": "make the build produce the site in publicDir: an empty folder would wipe the live one",
+  "portal-not-ready": "the portal has to be deployed first: tell the owner of the machine",
+  "service-failed": "read `sitesolide logs --json` to see why the service did not start, fix the code, then deploy again",
+  "verify-failed": "read `sitesolide logs --json`; a site declared behind the portal that answers in the clear must be reported to the owner of the machine at once",
+  "machine-unreadable": "the machine could not be read, nothing was changed: deploy again in a minute, then tell the owner of the machine if it persists",
+};
+
+/** The hint of a refusal through the API: its code's, or what its message says. */
+export function hintForFailure(code: string, message: string): string {
+  return Object.hasOwn(REMOTE_HINTS, code) ? REMOTE_HINTS[code]! : hintFor(message);
+}
+
 /** What a refusal no pattern covers gets: never a workaround. */
 export const DEFAULT_HINT =
   "read `message` and `details`, fix the cause they name, then run the same command again; never work around a refusal with --force or by changing the server by hand";

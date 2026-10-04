@@ -117,7 +117,8 @@ export const TOOLS: ToolDefinition[] = [
       "and replaces the version of the site visitors get. Ask the user before a real deploy, and run with dry_run true first to show them what would happen. " +
       "Needs a sitesolide.json in the folder, or accept_inferred true to write the inferred one first (refused if the server already has a project of that name). " +
       "On success the result carries the site's url, and manifestWritten true when sitesolide.json was written (an inferred manifest, a port chosen): commit it. " +
-      "On failure the error carries a hint: follow it. A missing secret stops the deploy and names the dashboard page where the user sets it.",
+      "On failure the error carries a hint: follow it. A missing secret stops the deploy and names the dashboard page where the user sets it. " +
+      "On a workstation that deploys with a team token rather than the owner's SSH access, dry_run is refused and nothing is sent: review sitesolide.json with the user instead.",
     inputSchema: {
       type: "object",
       properties: {

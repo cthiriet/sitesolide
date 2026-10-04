@@ -137,6 +137,13 @@ sitesolide logs            # the journal of this folder's project
 sitesolide logs --follow
 ```
 
+`--json` works here as over SSH (see [agents.md](agents.md)): one event per
+line, and one final `result` or `error` carrying a `hint`. `deploy --dry-run`
+is refused, and nothing is sent: a dry run reads the machine over the owner's
+SSH access, which a token does not carry. Review `sitesolide.json` instead; the
+machine judges it before anything is built or uploaded. Every other option a
+command does not take with a token is refused the same way.
+
 ## The API, for an agent without the CLI
 
 Everything the CLI does is plain HTTPS with `Authorization: Bearer <token>`.

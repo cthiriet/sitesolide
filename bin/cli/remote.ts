@@ -27,13 +27,22 @@
  * The build stays on the workstation, as over SSH: the archive carries its
  * result, the code minus its exclusions in `app/`, and the public files in
  * `public/`. The machine installs dependencies itself, as the project's account.
+ *
+ * **An option this path does not carry is refused, never passed over.**
+ * `deploy --dry-run` used to deploy for real here, and `--json` to print plain
+ * text, so that the MCP tool's dry run replaced the live site and then
+ * reported a failure inviting a retry. Both now behave as over SSH: `--json`
+ * prints the same events and one final `result` or `error`, and a dry run is
+ * refused, saying why, until the control API can judge without deploying.
  */
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { bundle, excludedBy, type BundleEntry } from "./bundle";
 import { configPath, defaultPaths, expandHome, readConfigFile } from "./config";
-import { isApp, missingExclusions, readManifest, type Manifest } from "./manifest";
+import { hintForFailure } from "./hints";
+import { hasServices, isApp, mainPort, missingExclusions, readManifest, type Manifest } from "./manifest";
+import { eventFor, formatEvent, type OutputEvent } from "./output";
 
 /** Where the token is kept in the vault. */
 export const TOKEN_FILE = "team-token";
@@ -155,14 +164,58 @@ export async function call<T>(remote: Remote, path: string, init: RequestInit = 
   };
 }
 
-export type Output = { say: (line: string) => void; fail: (line: string) => void };
+/**
+ * What the commands print, for a person or, under `--json`, for a program, as
+ * bin/sitesolide.ts does over SSH: see bin/cli/output.ts.
+ *
+ * `say` is a line of the run, `journal` a line of a service's journal.
+ * `failed` and `succeeded` end the run, and are what `--json` is for: exactly
+ * one `error`, with its hint, or one `result`, with what the run concluded,
+ * always the last line. Without them an agent read the plain console text,
+ * and a deploy that went wrong looked like one that said nothing.
+ */
+export type Output = {
+  say: (line: string) => void;
+  journal: (line: string) => void;
+  /** `said`: a person already read the message, in the machine's log. */
+  failed: (failure: Failure, said?: boolean) => void;
+  succeeded: (command: string, fields: Record<string, unknown>) => void;
+};
 
-const console_: Output = { say: (line) => console.log(line), fail: (line) => console.error(line) };
+export const humanOutput: Output = {
+  say: (line) => console.log(line),
+  journal: (line) => console.log(line),
+  failed: (failure, said = false) => {
+    if (said) return;
+    console.error(`!! ${failure.message}`);
+    for (const detail of failure.details ?? []) console.error(`   ${detail}`);
+    if (failure.wait !== undefined) console.error(`   wait ${failure.wait} s`);
+  },
+  succeeded: () => {},
+};
+
+/** The events of `--json`, one per line on standard output, and nothing else. */
+export function eventOutput(write: (line: string) => void = (line) => console.log(line)): Output {
+  const emit = (event: OutputEvent): void => write(formatEvent(event));
+  return {
+    say: (line) => {
+      const event = eventFor(line);
+      if (event !== null) emit(event);
+    },
+    journal: (line) => emit({ type: "log", at: null, unit: null, priority: null, message: line }),
+    failed: (failure) =>
+      emit({
+        type: "error",
+        message: failure.message,
+        details: [...(failure.details ?? []), ...(failure.wait === undefined ? [] : [`wait ${failure.wait} s`])],
+        hint: hintForFailure(failure.error, failure.message),
+      }),
+    succeeded: (command, fields) => emit({ type: "result", ok: true, command, ...fields }),
+  };
+}
 
 function report(output: Output, failure: Failure): number {
-  output.fail(`!! ${failure.message}`);
-  for (const detail of failure.details ?? []) output.fail(`   ${detail}`);
-  if (failure.wait !== undefined) output.fail(`   wait ${failure.wait} s`);
+  output.failed(failure);
   return 1;
 }
 
@@ -316,20 +369,26 @@ export function describeIdentity(identity: Identity): string[] {
 }
 
 export async function login(arguments_: string[], dependencies: Omit<RemoteDependencies, "build" | "checkPublic" | "folder">): Promise<number> {
-  const output = dependencies.output ?? console_;
+  const output = dependencies.output ?? humanOutput;
   const home = dependencies.home ?? homedir();
   const environment = dependencies.environment;
+  const refused = unknownOptions("login", arguments_);
+  if (refused !== null) return report(output, refused);
+  // Under --json nothing prompts: the question would land on standard output
+  // among the events, and the answer never come from an agent's empty stdin.
+  const interactive = !arguments_.includes("--json");
+  const ask = (question: string): string => (interactive ? ((dependencies.prompt ?? prompt)(question) ?? "") : "");
   const value = (name: string) => {
     const marker = arguments_.indexOf(`--${name}`);
     return marker === -1 ? undefined : arguments_[marker + 1];
   };
-  const raw = value("url") ?? environment.SITESOLIDE_API ?? (dependencies.prompt ?? prompt)("Dashboard address, https://dashboard.<zone>:") ?? "";
+  const raw = value("url") ?? environment.SITESOLIDE_API ?? ask("Dashboard address, https://dashboard.<zone>:");
   const api = apiOrigin(raw);
   if (api === null) return report(output, { error: "invalid", message: `not an https address: ${raw || "nothing given"}` });
 
   let token = environment.SITESOLIDE_TOKEN ?? "";
   if (arguments_.includes("--token-stdin")) token = (await (dependencies.stdin ?? (() => Bun.stdin.text()))()).trim();
-  if (token === "") token = ((dependencies.prompt ?? prompt)("Token, sst_..., as the owner of the machine gave it:") ?? "").trim();
+  if (token === "") token = ask("Token, sst_..., as the owner of the machine gave it:").trim();
   if (!/^sst_[A-Za-z0-9_-]{43}$/.test(token)) return report(output, { error: "invalid", message: "this is not a sitesolide token: it starts with sst_ and is 47 characters long" });
 
   const remote = { api, token };
@@ -349,11 +408,12 @@ export async function login(arguments_: string[], dependencies: Omit<RemoteDepen
   for (const line of describeIdentity(answer.body.identity)) output.say(line);
   output.say(`   token kept in ${path}, address in ${configPath(home)}`);
   if (typeof file.server === "string" && file.server !== "") output.say("   this workstation also has a server: commands use SSH unless given --api");
+  output.succeeded("login", { api, identity: answer.body.identity, tokenFile: path });
   return 0;
 }
 
 async function deploy(remote: Remote, dependencies: RemoteDependencies): Promise<number> {
-  const output = dependencies.output ?? console_;
+  const output = dependencies.output ?? humanOutput;
   const read = readRemoteProject(dependencies.folder);
   if ("errors" in read) {
     const [first, ...rest] = read.errors;
@@ -419,10 +479,25 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies): Promise
       for (const { service, port } of view.allocated) {
         output.say(`   the machine chose port ${port}${service === null ? "" : ` for ${service}`}: write it in sitesolide.json to keep it explicit`);
       }
+      const main = view.allocated.find((entry) => entry.service === null) ?? view.allocated[0];
+      output.succeeded("deploy", {
+        slug: project.manifest.slug,
+        kind: isApp(project.manifest) ? (hasServices(project.manifest) ? "services" : "service") : "static",
+        dryRun: false,
+        port: main?.port ?? mainPort(project.manifest),
+        ...(view.allocated.length > 0 ? { portChosen: "free" } : {}),
+        manifestWritten: false,
+        url: view.url,
+        deployment: deployment.id,
+        creating: deployment.creating,
+      });
       return 0;
     }
     if (view.state === "failed" || view.state === "expired") {
-      if (view.error !== null && !view.log.some((line) => line.includes(view.error!.message))) output.fail(`!! ${view.error.message}`);
+      const error = view.error ?? { code: view.state === "expired" ? "expired" : "failure", message: `the deployment ended ${view.state}` };
+      // A person already read the message in the machine's log; an agent
+      // still gets it as the final event, with its hint.
+      output.failed({ error: error.code, message: error.message }, view.log.some((line) => line.includes(error.message)));
       return 1;
     }
     await pause();
@@ -440,7 +515,7 @@ type ProjectStatus = {
 };
 
 async function status(remote: Remote, dependencies: RemoteDependencies): Promise<number> {
-  const output = dependencies.output ?? console_;
+  const output = dependencies.output ?? humanOutput;
   const who = await call<{ identity: Identity }>(remote, "/api/v1/whoami", {}, dependencies.fetcher);
   if (!who.ok) return report(output, who.failure);
   output.say(`=== ${remote.api}`);
@@ -454,36 +529,99 @@ async function status(remote: Remote, dependencies: RemoteDependencies): Promise
     const door = project.portal === null ? "-" : project.portal.installed ? "portal" : "public";
     output.say(`${project.slug.padEnd(22)} ${project.access.padEnd(8)} ${(project.type ?? (project.deployed ? "?" : "-")).padEnd(7)} ${service.padEnd(10)} ${door.padEnd(8)} ${project.url ?? "not deployed"}`);
   }
+  output.succeeded("status", { api: remote.api, identity: who.body.identity, projects: answer.body.projects });
   return 0;
 }
 
-async function logs(remote: Remote, dependencies: RemoteDependencies, follow: boolean): Promise<number> {
-  const output = dependencies.output ?? console_;
+async function logs(remote: Remote, dependencies: RemoteDependencies, follow: boolean, lines: number): Promise<number> {
+  const output = dependencies.output ?? humanOutput;
   const path = join(dependencies.folder, "sitesolide.json");
   if (!existsSync(path)) return report(output, { error: "invalid", message: `sitesolide.json not found in ${dependencies.folder}: run this from the project's folder` });
   const { manifest } = checkManifest(readFileSync(path, "utf8"));
   if (manifest === undefined) return report(output, { error: "invalid", message: "sitesolide.json rejected" });
   let cursor: string | null = null;
+  let entries = 0;
   const pause = dependencies.pause ?? (() => Bun.sleep(2000));
   for (;;) {
-    const parameters: Record<string, string> = cursor === null ? { lines: "50" } : { lines: "500", cursor };
+    const parameters: Record<string, string> = cursor === null ? { lines: String(lines) } : { lines: "500", cursor };
     const query = new URLSearchParams(parameters);
     const answer: Answer<{ lines: string[]; cursor: string | null }> = await call(remote, `/api/v1/projects/${encodeURIComponent(manifest.slug)}/logs?${query}`, {}, dependencies.fetcher);
     if (!answer.ok) return report(output, answer.failure);
-    for (const line of answer.body.lines) output.say(line);
+    for (const line of answer.body.lines) output.journal(line);
+    entries += answer.body.lines.length;
     cursor = answer.body.cursor;
-    if (!follow) return 0;
+    if (!follow) {
+      output.succeeded("logs", { slug: manifest.slug, entries, cursor });
+      return 0;
+    }
     await pause();
   }
 }
 
 /** What a command that needs the machine's root says through the API. */
-export function needsSsh(command: string): string[] {
-  return [
-    `!! sitesolide ${command} needs the owner's SSH access to the machine`,
-    "   with a team token, this workstation runs: deploy, status, logs, login",
-    "   ask the owner of the machine, who runs it from a workstation configured with sitesolide init",
-  ];
+export function needsSsh(command: string): Failure {
+  return {
+    error: "needs-ssh",
+    message: `sitesolide ${command} needs the owner's SSH access to the machine`,
+    details: [
+      "with a team token, this workstation runs: deploy, status, logs, login",
+      "ask the owner of the machine, who runs it from a workstation configured with sitesolide init",
+    ],
+  };
+}
+
+/**
+ * The options each command takes through the API, and whether one carries a
+ * value. Anything else is refused before a request leaves, rather than passed
+ * over: `--dry-run` passed over deployed for real, the live site replaced by
+ * a run its author believed changed nothing. A dry run needs the owner's SSH
+ * reads, which a token does not have, and the control API has no route that
+ * judges without deploying; until it does, the option is refused, saying so.
+ */
+const REMOTE_OPTIONS: Readonly<Record<string, Readonly<Record<string, boolean>>>> = {
+  deploy: {},
+  status: {},
+  logs: { "--follow": false, "--lines": true },
+  login: { "--url": true, "--token-stdin": false },
+};
+
+/** Every command takes these two: they choose the output and the mode, read before here. */
+const GLOBAL_OPTIONS = ["--json", "--api"];
+
+/** The refusal of an option the command does not take through the API, or null. */
+export function unknownOptions(command: string, arguments_: string[]): Failure | null {
+  const known = REMOTE_OPTIONS[command] ?? {};
+  const rest = arguments_[0] === command ? arguments_.slice(1) : arguments_;
+  for (let i = 0; i < rest.length; i++) {
+    const option = rest[i]!;
+    if (GLOBAL_OPTIONS.includes(option)) continue;
+    if (Object.hasOwn(known, option)) {
+      if (known[option]) i++;
+      continue;
+    }
+    if (!option.startsWith("-")) continue;
+    if (command === "deploy" && option === "--dry-run") {
+      return {
+        error: "no-dry-run",
+        message: "deploy --dry-run is not available with a team token: nothing was sent",
+        details: [
+          "a dry run reads the machine over the owner's SSH access, which a token does not carry",
+          "through the API, the machine judges the manifest when the deployment starts, before anything is built or uploaded",
+          "review sitesolide.json, then run sitesolide deploy",
+        ],
+      };
+    }
+    const takes = Object.keys(known);
+    return {
+      error: "unknown-option",
+      message: `${option}: not an option of sitesolide ${command} with a team token: nothing was sent`,
+      details: [
+        takes.length === 0 ? `with a team token, sitesolide ${command} takes no option` : `with a team token, sitesolide ${command} takes ${takes.join(", ")}`,
+        ...(option === "--yes" || option === "--slug" ? ["a folder without sitesolide.json: write it first with sitesolide detect --write, review it, then deploy"] : []),
+      ],
+    };
+  }
+  return null;
 }
 
 /** The commands only the owner's SSH access carries. */
@@ -496,21 +634,27 @@ export const REMOTE_USAGE = [
   "  sitesolide deploy                                 build here, upload, follow the machine's log",
   "  sitesolide status                                 the projects this token may deploy",
   "  sitesolide logs [--follow]                        the journal of this folder's project",
+  "     --lines <n>                                    how many lines back, 50 by default, 500 at most",
   "",
+  "--json, on every one of them: one JSON event per line, see docs/agents.md",
   "SITESOLIDE_API and SITESOLIDE_TOKEN in the environment win over the files.",
 ];
 
 /** Runs a command through the API; the exit code is returned, never thrown. */
 export async function runRemote(command: string, arguments_: string[], dependencies: RemoteDependencies): Promise<number> {
-  const output = dependencies.output ?? console_;
+  const output = dependencies.output ?? humanOutput;
   const remote = readRemote(dependencies.environment, dependencies.home ?? homedir());
-  if (SSH_COMMANDS.includes(command)) {
-    for (const line of needsSsh(command)) output.fail(line);
-    return 1;
-  }
+  if (SSH_COMMANDS.includes(command)) return report(output, needsSsh(command));
   if (!["deploy", "status", "logs"].includes(command)) {
-    for (const line of REMOTE_USAGE) output.fail(line);
-    return 1;
+    const [title, ...usage] = REMOTE_USAGE;
+    return report(output, { error: "usage", message: command === "" ? (title ?? "usage") : `unknown command with a team token: ${command}`, details: command === "" ? usage : REMOTE_USAGE });
+  }
+  const refused = unknownOptions(command, arguments_);
+  if (refused !== null) return report(output, refused);
+  const marker = arguments_.indexOf("--lines");
+  const lines = marker === -1 ? "50" : (arguments_[marker + 1] ?? "");
+  if (command === "logs" && (!/^[0-9]+$/.test(lines) || Number(lines) < 1 || Number(lines) > 500)) {
+    return report(output, { error: "invalid", message: `--lines: ${lines || "nothing given"} is not a number of lines between 1 and 500, what the API returns at most` });
   }
   if ("missing" in remote) return report(output, { error: "unauthenticated", message: remote.missing });
   switch (command) {
@@ -519,6 +663,6 @@ export async function runRemote(command: string, arguments_: string[], dependenc
     case "status":
       return status(remote, dependencies);
     default:
-      return logs(remote, dependencies, arguments_.includes("--follow"));
+      return logs(remote, dependencies, arguments_.includes("--follow"), Number(lines));
   }
 }

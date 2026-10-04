@@ -185,6 +185,149 @@ describe("deploy through the API", () => {
   });
 });
 
+/** Every line of standard output, each of which must be an event, the last one ending the run. */
+function events(output: string): Record<string, unknown>[] {
+  const list = output
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  expect(list.filter((event) => event.type === "result" || event.type === "error")).toHaveLength(1);
+  expect(["result", "error"]).toContain(list.at(-1)!.type as string);
+  return list;
+}
+
+describe("what a token's run refuses, and --json", () => {
+  test("deploy --dry-run is refused before anything is sent: it used to deploy for real", async () => {
+    scenario = "succeeds";
+    received.length = 0;
+    const root = project({ ...APP, build: "touch build-ran" }, APP_FILES);
+    const env = { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN };
+    const human = await cli(root, ["deploy", "--dry-run"], env);
+    expect(human.code).toBe(1);
+    expect(human.error).toContain("!! deploy --dry-run is not available with a team token: nothing was sent");
+    const json = await cli(root, ["deploy", "--dry-run", "--json"], env);
+    expect(json.code).toBe(1);
+    const error = events(json.output).at(-1)!;
+    expect(error).toMatchObject({ type: "error", message: "deploy --dry-run is not available with a team token: nothing was sent" });
+    expect(error.hint).toContain("without --dry-run once they agree");
+    expect(received).toEqual([]);
+    expect(() => statSync(join(root, "build-ran"))).toThrow();
+  });
+
+  test("an option the token's path does not carry is refused, never passed over", async () => {
+    received.length = 0;
+    const root = project(APP, APP_FILES);
+    const env = { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN };
+    for (const arguments_ of [["deploy", "--yes"], ["deploy", "--force"], ["status", "--follow"], ["logs", "--lines", "9000"]]) {
+      const result = await cli(root, [...arguments_, "--json"], env);
+      expect({ arguments_, code: result.code }).toEqual({ arguments_, code: 1 });
+      expect(events(result.output).at(-1)!.type).toBe("error");
+    }
+    expect(received).toEqual([]);
+  });
+
+  test("deploy --json: the steps and the machine's log as events, and a result carrying the address", async () => {
+    scenario = "succeeds";
+    const root = project(APP, APP_FILES);
+    const result = await cli(root, ["deploy", "--json"], { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN });
+    expect(result.code).toBe(0);
+    const list = events(result.output);
+    expect(list).toContainEqual({ type: "step", message: "manifest, validated on the machine" });
+    expect(list.at(-1)).toMatchObject({ type: "result", command: "deploy", slug: "shop", kind: "service", dryRun: false, port: 3002, portChosen: "free", url: "https://shop.test-zone.invalid/" });
+  });
+
+  test("a deployment that fails ends with one error, whose hint follows its code", async () => {
+    scenario = "fails";
+    const root = project(APP, APP_FILES);
+    const result = await cli(root, ["deploy", "--json"], { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN });
+    expect(result.code).toBe(1);
+    const error = events(result.output).at(-1)!;
+    expect(error).toMatchObject({ type: "error", message: "bun install --production failed (exit 1): nothing served was changed" });
+    expect(error.hint).toContain("run the install command");
+  });
+
+  test("status and logs hand over data; a wrong token is an error with what to do", async () => {
+    const root = project(APP, APP_FILES);
+    const env = { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN };
+    const status = events((await cli(root, ["status", "--json"], env)).output).at(-1)!;
+    expect(status).toMatchObject({ type: "result", command: "status", projects: [{ slug: "shop", access: "owned" }] });
+    const logs = events((await cli(root, ["logs", "--json", "--lines", "20"], env)).output);
+    expect(logs).toContainEqual({ type: "log", at: null, unit: null, priority: null, message: "2026-10-04T10:00:00+0000 vm shop[1]: listening on 3002" });
+    expect(logs.at(-1)).toMatchObject({ type: "result", command: "logs", slug: "shop", entries: 1 });
+    expect(received.at(-1)!.path).toBe("/api/v1/projects/shop/logs?lines=20");
+    const wrong = events((await cli(root, ["status", "--json"], { ...env, SITESOLIDE_TOKEN: `sst_${"W".repeat(43)}` })).output).at(-1)!;
+    expect(wrong).toMatchObject({ type: "error", message: "missing or unknown token" });
+    expect(wrong.hint).toContain("ask the owner of the machine");
+  });
+
+  test("login --json never prompts: without the token on its standard input, an error, and nothing written", async () => {
+    const home = folder("remote-home-");
+    const refused = await cli(home, ["login", "--url", api, "--json"], { HOME: home });
+    expect(refused.code).toBe(1);
+    expect(events(refused.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("not a sitesolide token") });
+    const signed = await cli(home, ["login", "--url", api, "--token-stdin", "--json"], { HOME: home }, `${TOKEN}\n`);
+    expect(signed.code).toBe(0);
+    const result = events(signed.output).at(-1)!;
+    expect(result).toMatchObject({ type: "result", command: "login", api, identity: { email: "ada@test-zone.invalid" } });
+    expect(JSON.stringify(result)).not.toContain(TOKEN);
+  });
+});
+
+describe("the MCP server, with a team token", () => {
+  /** `sitesolide mcp`, its tools running the CLI through the fake API. */
+  async function callTool(cwd: string, name: string, args: object): Promise<Record<string, any>> {
+    const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("SITESOLIDE_")));
+    const proc = Bun.spawn(["bun", CLI, "mcp"], {
+      cwd,
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...inherited, PATH: vm.env.PATH!, FAKE_VM: vm.env.FAKE_VM!, HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN },
+    });
+    proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } })}\n`);
+    proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } })}\n`);
+    proc.stdin.flush();
+    const reader = proc.stdout.getReader();
+    let text = "";
+    for (;;) {
+      const answer = text
+        .split("\n")
+        .filter((line) => line.trim() !== "")
+        .map((line) => JSON.parse(line) as Record<string, any>)
+        .find((message) => message.id === 2);
+      if (answer !== undefined) {
+        proc.stdin.end();
+        await proc.exited;
+        return answer;
+      }
+      const { value, done } = await reader.read();
+      if (done) throw new Error(`the server ended without answering: ${text}`);
+      text += new TextDecoder().decode(value);
+    }
+  }
+
+  test("deploy with dry_run is a tool error carrying the refusal and its hint, and the live site is not touched", async () => {
+    scenario = "succeeds";
+    received.length = 0;
+    const root = project(APP, APP_FILES);
+    const answer = await callTool(root, "deploy", { folder: root, dry_run: true });
+    expect(answer.result.isError).toBe(true);
+    expect(answer.result.structuredContent.error.message).toBe("deploy --dry-run is not available with a team token: nothing was sent");
+    expect(answer.result.structuredContent.error.hint).toContain("without --dry-run");
+    expect(received).toEqual([]);
+  });
+
+  test("a real deploy returns the result and the address, as over SSH", async () => {
+    scenario = "succeeds";
+    const root = project(APP, APP_FILES);
+    const answer = await callTool(root, "deploy", { folder: root });
+    expect(answer.result.isError).toBe(false);
+    expect(answer.result.structuredContent.result).toMatchObject({ command: "deploy", slug: "shop", url: "https://shop.test-zone.invalid/" });
+    const logs = await callTool(root, "logs", { folder: root, lines: 20 });
+    expect(logs.result.structuredContent.result).toMatchObject({ command: "logs", entries: 1 });
+  });
+});
+
 describe("login, status, logs", () => {
   test("login checks the token, keeps it 0600 in the vault, and the address beside the owner's keys", async () => {
     const home = folder("remote-home-");

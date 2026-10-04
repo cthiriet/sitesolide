@@ -78,6 +78,9 @@ sitesolide login --url <https://dashboard.zone>   keep the token, check it
 sitesolide deploy                                 build here, upload, follow the machine's log
 sitesolide status                                 the projects this token may deploy
 sitesolide logs [--follow]                        the journal of this folder's project
+   --lines <n>                                    how many lines back, 50 by default, 500 at most
+
+--json, on every one of them: one JSON event per line, see docs/agents.md
 ```
 
 `login` keeps the token in `~/.config/sitesolide/secrets/team-token`, 0600, and
@@ -89,6 +92,11 @@ then a gzip-compressed tar holding `app/` and `public/`, exactly what rsync
 would have sent, and follows the machine's log until the end; it exits
 non-zero when the deployment fails. A manifest with a `start` and no `port`
 gets one chosen on the machine.
+
+Any other option is refused before a request leaves, `deploy --dry-run` first:
+a dry run reads the machine over the owner's SSH access, which a token does
+not carry, and the control API has no route that judges without deploying.
+`--json` prints the same events as over SSH, and one final `result` or `error`.
 
 The other commands need the owner's SSH access and say so. The owner, whose
 configuration has a `server`, keeps SSH for every command; `--api` makes one
