@@ -601,6 +601,50 @@ describe("what a session, a flow and a sign-out may still do", () => {
   });
 });
 
+describe("what the audit hands to the dashboard", () => {
+  test("no row carries a password, the client secret, a code, a verifier or a cookie", async () => {
+    // One of each on top of everything above: a password sign-in and a wrong
+    // one, a provider's sign-in and a refused one, a sharing change.
+    const WRONG = "a-wrong-password-for-the-audit-test";
+    const signIn = (password: string) =>
+      fetch(`${PORTAL}/_portal/connexion`, {
+        method: "POST",
+        headers: { "X-Portal-Hote": SITE, Origin: `http://${SITE}`, "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ motdepasse: password, retour: "/" }),
+        redirect: "manual",
+      });
+    const owner = new Browser();
+    owner.keep(SITE, await signIn(PASSWORD));
+    await signIn(WRONG);
+    const member = new Browser();
+    provider.next = { email: "owner@acme.test" };
+    await member.follow(signInAt(SITE));
+    provider.next = { email: "eve@elsewhere.test" };
+    await new Browser().follow(signInAt(SITE));
+    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+
+    // Every row the dashboard can read, page after page, as the Activity page does.
+    const rows: unknown[] = [];
+    let before: number | null = null;
+    for (;;) {
+      const query: string = before === null ? "limit=500" : `limit=500&before=${before}`;
+      const page = ((await (await admin(`/admin/audit?${query}`)).json()) as { events: { id: number }[] }).events;
+      rows.push(...page);
+      if (page.length < 500) break;
+      before = page.at(-1)!.id;
+    }
+    const handed = JSON.stringify(rows);
+    expect(handed).toInclude("portal.signin_failed");
+    expect(handed).toInclude("sharing.update");
+
+    const codes = provider.tokenRequests.flatMap((request) => [request.body.get("code"), request.body.get("code_verifier")]);
+    const cookies = [owner, member].flatMap((browser) => [...browser.jars.values()].flatMap((jar) => [...jar.values()]));
+    const forbidden = [PASSWORD, WRONG, hash, provider.clientSecret, ...codes, ...cookies].filter((value): value is string => typeof value === "string" && value.length >= 8);
+    expect(forbidden.length).toBeGreaterThan(4);
+    for (const value of forbidden) expect(handed).not.toInclude(value);
+  });
+});
+
 // Last, on purpose: the bound it reaches holds for the rest of the minute on
 // that host, and would hide the failures the tests above read.
 describe("the audit under a flood", () => {

@@ -43,6 +43,9 @@ import { createControlStore } from "./src/control/store";
 import { createTeamRoutes } from "./src/control/team";
 import { createTracker } from "./src/control/tracker";
 import { localBackupSteward } from "./src/backup/client";
+import { createAuditRoutes } from "./src/audit/routes";
+import { createReaders } from "./src/audit/sources";
+import { read } from "./src/read";
 
 // The service starts despite an incomplete configuration, and says so. Dying
 // here would make it loop on Restart=always without the log explaining
@@ -133,6 +136,26 @@ const sharing = createSharingRoutes({
   portal: localSharing(PORTAL_URL),
 });
 
+// The Activity page: every component's audit, read through the very clients
+// above, merged newest first. Read with the session alone. See src/audit/.
+const audit = createAuditRoutes({
+  session: sessionReader,
+  readers: createReaders({
+    store: controlStore,
+    portal: localSharing(PORTAL_URL),
+    egress: localEgress(EGRESS_URL),
+    steward: localSteward(STEWARD_SOCKET),
+    backups: localBackupSteward(STEWARD_SOCKET),
+    connectors: localConnectorsSteward(STEWARD_SOCKET),
+    portalDeployed: async () => {
+      const reading = await read(STATE_FILE, Date.now());
+      return reading.present ? reading.snapshot.sites.some((site) => site.slug === "portal") : null;
+    },
+  }),
+  stateFile: STATE_FILE,
+  zone: ZONE,
+});
+
 /**
  * The delay of the relay towards the steward, and five seconds more to answer
  * the page. It covers the longest action under its lock, `/portal`, and
@@ -170,6 +193,7 @@ const server = Bun.serve({
     "/api/sharing": { GET: sharing.list },
     "/api/sharing/:host": { PUT: (req) => sharing.replace(req, req.params.host) },
     "/api/portal/audit": { GET: sharing.audit },
+    "/api/audit": { GET: audit.list },
     "/api/secrets": { GET: secrets.dashboard },
     "/api/secrets/log": { GET: secrets.log },
     "/api/secrets/lock": { POST: secrets.lock },

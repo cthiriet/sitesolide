@@ -64,6 +64,9 @@ export type DeploymentRow = {
 
 type RawRow = Omit<DeploymentRow, "creating" | "state"> & { creating: number; state: string };
 
+/** An audit row as the table holds it, its detail still JSON text. */
+export type RawAuditRow = { id: number; at: string; actor: string; action: string; target: string | null; detail: string | null };
+
 const COLUMNS =
   "id, token_id AS tokenId, email, slug, state, creating, manifest, created_at AS createdAt, started_at AS startedAt, finished_at AS finishedAt, message";
 
@@ -83,6 +86,11 @@ export function createControlStore(db: Database) {
     ),
     listAudit: db.query<{ id: number; at: string; actor: string; action: string; target: string | null; detail: string | null }, [string, number]>(
       "SELECT id, at, actor, action, target, detail FROM audit WHERE action LIKE ? ORDER BY at DESC, id DESC LIMIT ?",
+    ),
+    // By id rather than by date: the Activity page pages through it by the
+    // last id it read, like the portal's and the egress proxy's audits.
+    pageAudit: db.query<RawAuditRow, [number, number]>(
+      "SELECT id, at, actor, action, target, detail FROM audit WHERE id < ? ORDER BY id DESC LIMIT ?",
     ),
     create: db.query<undefined, [string, string, string, string, string, number, string, number]>(
       "INSERT INTO deployments (id, token_id, email, slug, state, creating, manifest, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -137,6 +145,15 @@ export function createControlStore(db: Database) {
         }
         return { ...entry, detail };
       });
+    },
+
+    /**
+     * The entries older than the one of id `before`, newest first, as they
+     * are stored: the Activity page reads them with the other components'
+     * audits, which hand over their detail as text or as an object.
+     */
+    readAudit(before: number | null, limit: number): RawAuditRow[] {
+      return queries.pageAudit.all(before ?? Number.MAX_SAFE_INTEGER, limit);
     },
 
     createDeployment(created: { id: string; tokenId: string; email: string; slug: string; creating: boolean; manifest: string; createdAt: number }): void {

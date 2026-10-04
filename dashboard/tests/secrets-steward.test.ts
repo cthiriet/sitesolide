@@ -34,6 +34,7 @@ import type {
   ValueResponse,
 } from "../src/secrets/protocol";
 import { UNLOCK_DURATION_MS } from "../src/secrets/protocol";
+import { fromJournal } from "../src/audit/normalize";
 import { IDENTITY_VARIABLES } from "../borrowed/sharing";
 import {
   MAX_BODY_BYTES,
@@ -2667,6 +2668,13 @@ describe("no value outside /value and /content", () => {
     expect(entries.map((e) => e.operation)).toContain("password");
     expect(entries.map((e) => e.operation)).toContain("replace");
     expect(entries.every((e) => e.variable === null || /^[A-Za-z_][A-Za-z0-9_]*$/.test(e.variable))).toBe(true);
+
+    // The Activity page reads this very answer, put in the shared shape: the
+    // same names, and still no value.
+    const rows = fromJournal(entries);
+    expect(rows.length).toBe(entries.length);
+    const handed = JSON.stringify(rows);
+    for (const forbidden of forbiddenValues) expect(handed).not.toContain(forbidden);
   });
 });
 

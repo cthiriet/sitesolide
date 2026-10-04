@@ -157,6 +157,35 @@ describe("changes to the connectors and their grants", () => {
     expect(everything).not.toContain(VALUE);
     expect(everything).not.toContain("test-value");
   });
+
+  test("what /audit hands to the dashboard's Activity page carries no value, through every action", () => {
+    // Every action the proxy records, each with a credential's value in play:
+    // a connector created, its value replaced, its address changed, granted,
+    // used, withdrawn, removed, and refusals of a host and of a connector.
+    const { audit, advance } = bench();
+    const REPLACED = "Bearer replaced-test-value-9876543210";
+    const created = connectors();
+    audit.observe(created, EMPTY_GRANTS);
+    advance(1000);
+    const replaced = putConnector(created, { name: "chat", baseUrl: "https://chat.example.com/v2", header: "X-Api-Key", value: REPLACED }, "2026-10-04T12:00:01.000Z", "owner");
+    if ("error" in replaced) throw new Error(replaced.error);
+    const granted = setGrant(EMPTY_GRANTS, replaced.file, "shop", "chat", true, "2026-10-04T12:00:02.000Z", "owner");
+    if ("error" in granted) throw new Error(granted.error);
+    audit.observe(replaced.file, granted.file);
+    audit.used("shop", "chat", 200);
+    audit.used("shop", "chat", null);
+    audit.denied({ target: "shop", destination: "connector:mail", reason: "not granted" });
+    audit.denied({ target: "shop", destination: "pastebin.example.net:443", reason: "not in the list" });
+    audit.flush();
+    const removed = removeConnector(replaced.file, granted.file, "chat", "2026-10-04T12:00:03.000Z", "owner");
+    if ("error" in removed) throw new Error(removed.error);
+    audit.observe(removed.connectors, removed.grants);
+
+    const rows = audit.recent(500);
+    expect(new Set(rows.map((row) => row.action))).toEqual(new Set(["connector.update", "connector.grant", "connector.use", "egress.denied"]));
+    const handed = JSON.stringify(rows);
+    for (const value of [VALUE, REPLACED, "test-value", "0123456789", "9876543210"]) expect(handed).not.toContain(value);
+  });
 });
 
 describe("reading and keeping", () => {

@@ -317,6 +317,29 @@ describe("the offsite copy", () => {
     db.close();
   });
 
+  test("what the Activity page reads of the audit carries no credential, whatever the bucket says", async () => {
+    const SECRET = "secret-key-that-must-stay-home";
+    const leaky = (where: string) => new Error(`${where} denied for ${ACCESS} with ${SECRET} under ${PASSPHRASE} at https://s3.test-zone.invalid/b/k?X-Amz-Signature=abc0123`);
+    const refusing: Bucket = {
+      list: () => Promise.reject(leaky("ListObjectsV2")),
+      upload: () => Promise.reject(leaky("PutObject")),
+      download: () => Promise.reject(new Error("not used")),
+      remove: () => Promise.reject(new Error("not used")),
+    };
+    const uploadRefused: Bucket = { ...refusing, list: () => Promise.resolve([]) };
+    const settings = { BACKUP_S3_ENDPOINT: "https://s3.test-zone.invalid", BACKUP_S3_BUCKET: "b", BACKUP_S3_ACCESS_KEY_ID: ACCESS, BACKUP_S3_SECRET_ACCESS_KEY: SECRET, BACKUP_ENCRYPTION_PASSPHRASE: PASSPHRASE };
+    const { root, config } = machine(settings);
+    await runBackups({ config, now: () => T, log: silent, openBucket: () => refusing });
+    await runBackups({ config, now: () => T + HOUR, log: silent, openBucket: () => uploadRefused });
+    const db = state(root);
+    const rows = readAudit(db, null, 50);
+    db.close();
+    expect(rows.map((row) => row.action)).toEqual(["backup.run", "backup.run"]);
+    expect(JSON.stringify(rows.map((row) => row.detail))).toContain("denied");
+    const handed = JSON.stringify(rows);
+    for (const value of [ACCESS, SECRET, PASSPHRASE, "abc0123"]) expect(handed).not.toContain(value);
+  });
+
   test("a bucket's error reaches the status with no credential and no signature in it", () => {
     const setting = { endpoint: "https://e.invalid", bucket: "b", region: null, accessKeyId: "AKIDLEAKED", secretAccessKey: "SECRETLEAKED", prefix: "p", passphrase: "PASSPHRASE-LEAKED-0" };
     expect(redact("AccessDenied for AKIDLEAKED with SECRETLEAKED at https://e.invalid/b/k?X-Amz-Signature=abc&X-Amz-Credential=AKIDLEAKED", setting)).toBe(

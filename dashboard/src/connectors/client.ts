@@ -35,7 +35,8 @@ export function localConnectorsSteward(socket: string, timeouts: Timeouts = DEFA
 }
 
 export type EgressReader = {
-  audit: (limit: number) => Promise<Response>;
+  /** The latest `limit` rows, or those older than the row of id `before`. */
+  audit: (limit: number, before?: number | null) => Promise<Response>;
   status: () => Promise<Response>;
 };
 
@@ -47,7 +48,11 @@ export type EgressReader = {
 export function localEgress(base = `http://${EGRESS_ADDRESS}:${CONNECTORS_PORT}`, timeoutMs = 5_000): EgressReader {
   const call = (path: string) => fetch(`${base}${path}`, { redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
   return {
-    audit: (limit) => call(`/audit?limit=${limit}`),
+    audit: (limit, before = null) => {
+      const query = new URLSearchParams({ limit: String(limit) });
+      if (before !== null) query.set("before", String(before));
+      return call(`/audit?${query}`);
+    },
     status: () => call("/status"),
   };
 }

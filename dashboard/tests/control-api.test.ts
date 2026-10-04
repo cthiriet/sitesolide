@@ -183,6 +183,7 @@ describe("a deployment, from the manifest to the site", () => {
     expect(taken.status).toBe(403);
     expect(((await taken.json()) as { message: string }).message).toContain("belongs to another token");
   });
+
 });
 
 describe("refusals an agent can act on", () => {
@@ -318,5 +319,17 @@ describe("an older steward, without the control routes", () => {
     } finally {
       old.stop(true);
     }
+  });
+});
+
+// After every deployment above, the succeeded, the failed and the refused.
+describe("what the Activity page reads of this audit", () => {
+  test("no entry carries a token's value, nor the unlock token", async () => {
+    await tick();
+    const rows = store.readAudit(null, 500);
+    const actions = new Set(rows.map((row) => row.action));
+    expect(actions.has("deploy.start") && actions.has("deploy.success")).toBe(true);
+    const handed = JSON.stringify(rows);
+    for (const value of [secret, other, UNLOCK, secret.slice(4), other.slice(4)]) expect(handed).not.toContain(value);
   });
 });

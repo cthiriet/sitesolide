@@ -202,6 +202,12 @@ describe("a restore", () => {
       expect(readFileSync(join(data, "upload.txt"), "utf8")).toBe("the version of two hours ago");
       // The decrypted copy does not outlive the restore.
       expect(readdirSync(join(config.stateFolder, "downloads"))).toEqual([]);
+      // What the Activity page reads of the audit names the snapshot, never a credential.
+      const db = openDatabase(join(config.stateFolder, "backup.db"), { reader: true });
+      const handed = JSON.stringify(readAudit(db, null, 50));
+      db.close();
+      expect(handed).toContain("backup.restore");
+      for (const value of ["AKIDRESTORE", "a long enough offsite passphrase"]) expect(handed).not.toContain(value);
     } finally {
       s3.stop();
     }

@@ -88,4 +88,15 @@ describe("the Team page's routes", () => {
     expect(response.status).toBe(200);
     expect(s.store.listAudit(5)[0]).toMatchObject({ actor: "owner", action: "token.revoke", detail: { id: view.id } });
   });
+
+  test("what the Activity page reads of a creation and a revocation carries neither the token nor the unlock", async () => {
+    const s = setup();
+    s.tokens.set(SESSION, { token: "unlock-token-never-audited", expiresAt: Date.now() + 60_000 });
+    expect((await s.routes.createToken(post("/api/team/tokens", REQUEST))).status).toBe(201);
+    expect((await s.routes.revokeToken(post("/api/team/revoke", { id: view.id }))).status).toBe(200);
+    const rows = s.store.readAudit(null, 10);
+    expect(rows.map((row) => row.action)).toEqual(["token.revoke", "token.create"]);
+    const handed = JSON.stringify(rows);
+    for (const value of ["sst_the-value-shown-once", "the-value-shown-once", "unlock-token-never-audited"]) expect(handed).not.toContain(value);
+  });
 });
