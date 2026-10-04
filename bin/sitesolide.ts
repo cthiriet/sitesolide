@@ -108,6 +108,7 @@ import {
   isValidSlug,
   mainPort,
   missingExclusions,
+  NEVER_SENT,
   readManifest,
   servicesOf,
   setDomainActive,
@@ -840,8 +841,8 @@ async function deploy(
       "--delete",
       ...exclusions,
       ...also,
-      "--exclude",
-      ".git",
+      // .git and every .env, at any depth: see NEVER_SENT.
+      ...NEVER_SENT.flatMap((pattern) => ["--exclude", pattern]),
       // The manifest is already deposited at the project's root, where the
       // service reads it: a second copy in app/ would make two of them diverge,
       // and nothing would say which one is authoritative.
@@ -859,6 +860,12 @@ async function deploy(
       "rsync",
       "-a",
       "--delete",
+      // Neither .git nor a .env is ever served: excluded here, at any depth,
+      // and removed from the machine if an earlier deployment left one there,
+      // which a mere exclusion would protect from --delete. The public tree
+      // has no other exclusion this could reach.
+      "--delete-excluded",
+      ...NEVER_SENT.flatMap((pattern) => ["--exclude", pattern]),
       `${publicDir}/`,
       `${config.server}:${paths.publicDir}/`,
     ]);

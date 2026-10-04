@@ -261,6 +261,13 @@ Directories the upload leaves behind, on top of `.git` and the manifest.
 "exclude": ["node_modules", "data", "tests"]
 ```
 
+`.git` and every file whose name starts with `.env` never leave, at any depth,
+from the code nor from `publicDir`, whatever this list says: a history's
+`.git/config` may carry a token, and a `.env` holds secrets by convention. The
+deploy also removes them from the machine's `public/` when an earlier
+deployment left them there, and Caddy answers 404 for those names in every
+folder it serves.
+
 `node_modules` matters: dependencies built on macOS, poured onto a Linux
 machine, give a service that does not start, after erasing the one that worked.
 The deploy refuses to run if it finds one on disk that you have not excluded.

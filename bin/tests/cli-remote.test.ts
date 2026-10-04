@@ -413,4 +413,31 @@ describe("the pure parts", () => {
     const paths = projectEntries(read).entries.map((entry) => entry.path).sort();
     expect(paths).toEqual(["app", "app/server.ts", "app/src", "public", "public/index.html"]);
   });
+
+  test("neither tree carries .git nor a .env, at any depth, whatever the manifest says", () => {
+    const root = project(APP, {
+      ...APP_FILES,
+      ".env": "SECRET=1",
+      "config/.env.production": "SECRET=2",
+      "config/settings.json": "{}",
+      "public/.git/config": "[remote]",
+      "public/.env": "SECRET=3",
+      "public/docs/.env.local": "SECRET=4",
+      "public/.well-known/security.txt": "Contact: mailto:ops@test-zone.invalid",
+    });
+    const read = readRemoteProject(root);
+    if ("errors" in read) throw new Error(read.errors.join(", "));
+    const paths = projectEntries(read).entries.map((entry) => entry.path).sort();
+    expect(paths).toEqual([
+      "app",
+      "app/config",
+      "app/config/settings.json",
+      "app/server.ts",
+      "public",
+      "public/.well-known",
+      "public/.well-known/security.txt",
+      "public/docs",
+      "public/index.html",
+    ]);
+  });
 });

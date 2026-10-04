@@ -28,6 +28,7 @@ import {
   isValidHeaderName,
   isValidHeaderValue,
   isValidRoute,
+  NEVER_SENT,
   servicesOf,
   type Manifest,
 } from "./manifest";
@@ -78,7 +79,29 @@ export function declaresRobots(manifest: Manifest): boolean {
   return Object.keys(manifest.headers ?? {}).some((name) => name.toLowerCase() === "x-robots-tag");
 }
 
-export function generateRoutes(manifest: Manifest): string {
+/**
+ * The generations of a block's file server, the current one first:
+ *
+ * - `hidden`: `.git` and the `.env` files answer 404 at any depth, what an
+ *   earlier deployment left in `public/` included (NEVER_SENT in manifest.ts).
+ *   `hide` takes file names, matched against every component of the path on
+ *   disk, so `.git` hides `.git/config` too;
+ * - `plain`: the bare `file_server` of the blocks deployed before.
+ *
+ * A block of the earlier generation is the generator's own, one release
+ * behind, never a hand edit: deploy, the gatekeeper and the installer replace
+ * it without `--force`, as for the portal's generations. See
+ * isEarlierGeneration.
+ */
+export const FILE_GENERATIONS = ["hidden", "plain"] as const;
+
+export type FileGeneration = (typeof FILE_GENERATIONS)[number];
+
+function fileServer(files: FileGeneration): string[] {
+  return files === "hidden" ? ["\tfile_server {", `\t\thide ${NEVER_SENT.join(" ")}`, "\t}"] : ["\tfile_server"];
+}
+
+export function generateRoutes(manifest: Manifest, files: FileGeneration = "hidden"): string {
   const paths = projectPaths(manifest.slug);
   const lines = [`(${manifest.slug}-routes) {`, "\timport commun", ""];
 
@@ -97,7 +120,7 @@ export function generateRoutes(manifest: Manifest): string {
   }
 
   if (hasServices(manifest)) {
-    lines.push(...servicesRoutes(manifest));
+    lines.push(...servicesRoutes(manifest, files));
   } else if (manifest.publicDir === undefined) {
     lines.push(
       "\t# No static file at all: the whole site is rendered by the service.",
@@ -117,7 +140,7 @@ export function generateRoutes(manifest: Manifest): string {
       `\treverse_proxy @dynamic 127.0.0.1:${manifest.port}`,
       "",
       "\t# The rest is served straight by Caddy, without waking the service.",
-      "\tfile_server",
+      ...fileServer(files),
     );
   }
 
@@ -139,7 +162,7 @@ export function generateRoutes(manifest: Manifest): string {
  * An internal service has no line here: Caddy never reaches it, only the
  * project's other services do, over the loopback.
  */
-function servicesRoutes(manifest: Manifest): string[] {
+function servicesRoutes(manifest: Manifest, files: FileGeneration): string[] {
   const paths = projectPaths(manifest.slug);
   const exposed = servicesOf(manifest).filter((service) => !service.internal);
   const routed = exposed.filter((service) => service.routes !== undefined);
@@ -177,7 +200,7 @@ function servicesRoutes(manifest: Manifest): string[] {
   }
 
   if (manifest.publicDir !== undefined) {
-    lines.push("", "\t# The rest is served straight by Caddy, without waking a service.", "\tfile_server");
+    lines.push("", "\t# The rest is served straight by Caddy, without waking a service.", ...fileServer(files));
   }
   return lines;
 }
@@ -202,10 +225,11 @@ export const ZONE_HOST = "{$SITESOLIDE_ZONE}";
  * rewrite the same block, and a deposited fragment would stop being valid the
  * day the zone changed.
  *
- * `generation` exists to recognise the blocks an earlier release wrote, see
- * `isEarlierGeneration`; everything that deposits a block takes the default.
+ * `generation` and `files` exist to recognise the blocks an earlier release
+ * wrote, see `isEarlierGeneration`; everything that deposits a block takes the
+ * defaults.
  */
-export function generateFragment(manifest: Manifest, generation: PortalGeneration = "identity"): string | null {
+export function generateFragment(manifest: Manifest, generation: PortalGeneration = "identity", files: FileGeneration = "hidden"): string | null {
   if (!isApp(manifest)) return null;
 
   const slug = manifest.slug;
@@ -216,7 +240,7 @@ export function generateFragment(manifest: Manifest, generation: PortalGeneratio
     "# hand: the next deployment overwrites it, and a fragment never validated",
     "# holds until the first restart of Caddy.",
     "",
-    generateRoutes(manifest),
+    generateRoutes(manifest, files),
     "",
   ];
 
@@ -275,14 +299,20 @@ export function generateFragment(manifest: Manifest, generation: PortalGeneratio
  * Is this block what an earlier release of this generator wrote for the
  * manifest? Then it is the generator's own, behind by a release, and never a
  * decision taken by hand: replacing it with the current generation loses
- * nothing. Every block deployed before the identity headers is the case
- * today, protected or not, see PORTAL_GENERATIONS in portal.ts.
+ * nothing. Two cases today, and their combinations: every block deployed
+ * before the identity headers, protected or not, see PORTAL_GENERATIONS in
+ * portal.ts, and the file servers deployed before they hid `.git` and `.env`,
+ * see FILE_GENERATIONS.
  */
 export function isEarlierGeneration(block: string, manifest: Manifest): boolean {
-  return PORTAL_GENERATIONS.slice(1).some((generation) => {
-    const earlier = generateFragment(manifest, generation);
-    return earlier !== null && earlier !== generateFragment(manifest) && sameDirectives(block, earlier);
-  });
+  const current = generateFragment(manifest);
+  return PORTAL_GENERATIONS.some((generation) =>
+    FILE_GENERATIONS.some((files) => {
+      if (generation === PORTAL_GENERATIONS[0] && files === FILE_GENERATIONS[0]) return false;
+      const earlier = generateFragment(manifest, generation, files);
+      return earlier !== null && earlier !== current && sameDirectives(block, earlier);
+    }),
+  );
 }
 
 /** What `deploy` does with its block, given the one in service. */

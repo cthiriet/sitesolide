@@ -16,7 +16,9 @@
  *   naming the line, and the decision stays with whoever reads it;
  * - **the port is left out.** Only the machine knows which one is free, and
  *   `deploy` picks it there, see bin/cli/ports.ts;
- * - **a `.env` never leaves.** Excluded from the upload, with a note.
+ * - **a `.env` never leaves, nor `.git`**, at any depth: excluded from every
+ *   upload whatever the manifest says (NEVER_SENT in manifest.ts), and said
+ *   in a note, the ones under a public folder included.
  *
  * What it recognises, first match wins: a Go module, a FastAPI or Flask app,
  * a package.json (an app run by Bun, the runtime the machine carries, or a
@@ -29,9 +31,9 @@
  *
  * Reads the folder, writes nothing.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
-import { isSystemName, isValidSlug, KNOWN_KEYS, RESERVED_ENV, SERVICE_PORTS, SUSPICIOUS_ENV, validate, type Manifest } from "./manifest";
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
+import { basename, join, relative } from "node:path";
+import { DEPENDENCIES, isSystemName, isValidSlug, KNOWN_KEYS, RESERVED_ENV, SERVICE_PORTS, SUSPICIOUS_ENV, validate, type Manifest } from "./manifest";
 import { needsPort } from "./ports";
 import { projectPaths } from "./unit";
 
@@ -173,9 +175,36 @@ class Folder {
     return found;
   }
 
-  /** The `.env` files at the root, which hold secrets by convention. */
-  envFiles(): string[] {
-    return [...this.entries].filter((name) => /^\.env($|\.)/.test(name)).sort();
+  /**
+   * The entries NEVER_SENT names under `start`, at any depth: `.git` and the
+   * `.env` files, relative to the folder. They never leave, whatever the
+   * manifest says; saying so is what keeps a reader from believing a
+   * `public/.git` is served, or a `config/.env.production` deployed. Links are
+   * not followed, dependencies not walked, and the scan keeps its limits.
+   */
+  neverSent(start = ""): string[] {
+    const found: string[] = [];
+    let level = [join(this.path, start)];
+    let visited = 0;
+    for (let depth = 0; depth < SCAN_LIMITS.depth && level.length > 0 && found.length < SCAN_LIMITS.files; depth++) {
+      const next: string[] = [];
+      for (const folder of level) {
+        if (++visited > SCAN_LIMITS.folders) break;
+        let entries: Dirent[];
+        try {
+          entries = readdirSync(folder, { withFileTypes: true });
+        } catch {
+          continue;
+        }
+        for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+          const path = join(folder, entry.name);
+          if (entry.name === ".git" || entry.name.startsWith(".env")) found.push(relative(this.path, path));
+          else if (entry.isDirectory() && !DEPENDENCIES.includes(entry.name)) next.push(path);
+        }
+      }
+      level = next;
+    }
+    return found.sort();
   }
 }
 
@@ -388,14 +417,19 @@ function declined(...reasons: string[]): Inference {
 function exclusions(folder: Folder, always: string[]): { exclude: string[]; notes: string[] } {
   const exclude = [...always];
   const notes: string[] = [];
-  const env = folder.envFiles();
+  const env = folder.neverSent().filter((path) => basename(path).startsWith(".env"));
   if (env.length > 0) {
     exclude.push(".env*");
     notes.push(
-      `${env.join(", ")} ${env.length === 1 ? "stays" : "stay"} on this workstation: on the server, secrets are set in the dashboard's Secrets section`,
+      `${listed(env)} ${env.length === 1 ? "stays" : "stay"} on this workstation: on the server, secrets are set in the dashboard's Secrets section`,
     );
   }
   return { exclude, notes };
+}
+
+/** A few paths, the rest counted: a note is read, not scrolled. */
+function listed(paths: string[]): string {
+  return paths.length <= 5 ? paths.join(", ") : `${paths.slice(0, 5).join(", ")} and ${paths.length - 5} more`;
 }
 
 function detectGo(folder: Folder): Detection {
@@ -656,11 +690,15 @@ function detectJavaScript(folder: Folder): Detection {
 function detectStatic(folder: Folder): Detection {
   const found = builtFolder(folder);
   if (found !== null) {
+    const hidden = folder.neverSent(found);
     return {
       kind: "static",
       manifest: { slug: folder.slug, publicDir: found },
       reasons: [`index.html in ${found}/`],
-      notes: [`only ${found}/ is sent, and served as it is: nothing runs on the server`],
+      notes: [
+        `only ${found}/ is sent, and served as it is: nothing runs on the server`,
+        ...(hidden.length > 0 ? [`${listed(hidden)} ${hidden.length === 1 ? "is" : "are"} never sent nor served: .git and .env files stay on this workstation`] : []),
+      ],
     };
   }
   if (folder.entries.has("index.html")) {

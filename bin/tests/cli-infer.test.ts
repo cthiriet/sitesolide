@@ -81,6 +81,26 @@ describe("a folder of files", () => {
     expect(manifest).toEqual({ slug: "folder", publicDir: "public" });
   });
 
+  test("a public/ holding .git or a .env says they are never sent nor served", () => {
+    const folder = copy(join(FIXTURES, "static-public"));
+    mkdirSync(join(folder, "public", ".git"));
+    writeFileSync(join(folder, "public", ".git", "config"), "[remote]");
+    mkdirSync(join(folder, "public", "admin"));
+    writeFileSync(join(folder, "public", "admin", ".env.production"), "SECRET=1");
+    const { manifest, notes } = inferred(folder, "folder");
+    expect(manifest).toEqual({ slug: "folder", publicDir: "public" });
+    expect(notes).toContain("public/.git, public/admin/.env.production are never sent nor served: .git and .env files stay on this workstation");
+  });
+
+  test("a .env deeper in an app's code stays on the workstation too, and says so", () => {
+    const folder = copy(join(FIXTURES, "bun-app"));
+    mkdirSync(join(folder, "config"));
+    writeFileSync(join(folder, "config", ".env.production"), "SECRET=1");
+    const { manifest, notes } = inferred(folder, "bun-app");
+    expect(manifest.exclude).toEqual(["node_modules", ".env*"]);
+    expect(notes.join("\n")).toContain("config/.env.production stays on this workstation");
+  });
+
   test("dist/ is found when public/ is absent", () => {
     expect(inferred(join(FIXTURES, "static-dist"), "built").manifest).toEqual({ slug: "built", publicDir: "dist" });
   });

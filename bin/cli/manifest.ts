@@ -907,6 +907,18 @@ function serviceErrors(manifest: Manifest): string[] {
  */
 export const DEPENDENCIES = ["node_modules", ".venv", "venv", "__pycache__"];
 
+/**
+ * What never leaves the workstation, whatever the manifest says, at any depth
+ * of the code and of the public files: a repository's history, whose
+ * `.git/config` may carry a token, and the `.env` files that hold secrets by
+ * convention. A `public/` that is a clone used to serve `/.git/config`, and a
+ * `config/.env.production` left with the code. As rsync and the archive read
+ * patterns, a name without a slash matches at any depth; Caddy's file servers
+ * hide the same names, for what an earlier deployment left on the machine,
+ * see fragment.ts.
+ */
+export const NEVER_SENT: readonly string[] = [".git", ".env*"];
+
 export function missingExclusions(manifest: Manifest, entries: string[]): string[] {
   const declared = new Set(manifest.exclude ?? []);
   return DEPENDENCIES.filter((name) => entries.includes(name) && !declared.has(name));

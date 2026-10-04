@@ -69,6 +69,12 @@ describe("mixed Bun project", () => {
     expect(r.output).toContain("--exclude public");
     expect(r.output).toContain("--exclude .git");
 
+    // Nor do a repository's history and the .env files, at any depth, from
+    // either tree; the public one also removes what an earlier deployment
+    // left there, which a mere exclusion would keep.
+    expect(r.output).toMatch(/rsync -a --delete [^\n]*--exclude \.git --exclude \.env\* [^\n]*\/srv\/sites\/sample-bun\/app\//);
+    expect(r.output).toMatch(/rsync -a --delete --delete-excluded --exclude \.git --exclude \.env\* \S+\/public\/ \S+:\/srv\/sites\/sample-bun\/public\//);
+
     expect(r.output).toContain("bun install --production");
     expect(r.output).toContain("sudo systemctl restart sample-bun");
   });

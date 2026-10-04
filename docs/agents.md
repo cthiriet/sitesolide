@@ -74,8 +74,9 @@ What is recognised, first match wins:
 **What is never decided for you.** A secret is never guessed: code that reads
 `STRIPE_SECRET_KEY` gets a note, not a value nor a declared file. The network
 is never opened: code that obviously calls out gets a note naming the line,
-and `"network": "outbound"` stays your decision. A `.env` is excluded from the
-upload, with a note. An `index.html` at the root of a folder is refused rather
+and `"network": "outbound"` stays your decision. Neither `.git` nor a `.env`
+ever leaves, at any depth, from the code or the public folder, and a note names
+the ones the folder holds. An `index.html` at the root of a folder is refused rather
 than served from there, because the root would serve `.git` with it: move the
 site into `public/`.
 

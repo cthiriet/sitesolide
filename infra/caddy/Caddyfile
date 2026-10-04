@@ -138,7 +138,9 @@
 	request_header -X_sitesolide*
 
 	root * /srv/sites/{$SITESOLIDE_ZONE}/public
-	file_server
+	file_server {
+		hide .git .env*
+	}
 
 	header Strict-Transport-Security "max-age=31536000"
 }
@@ -149,7 +151,16 @@
 	import tls-zone
 	import commun
 	root * /srv/sites/{$SITESOLIDE_SLUG}/public
-	file_server
+
+	# Neither a repository's history nor a .env is ever served, at any depth,
+	# whatever an earlier deployment left in public/: they answer 404. hide
+	# takes file names, matched against every component of the path on disk,
+	# so .git hides .git/config too. Here and in every file server, the
+	# generated blocks' included (FILE_GENERATIONS in bin/cli/fragment.ts);
+	# not in (commun), where a matcher would reach the services too.
+	file_server {
+		hide .git .env*
+	}
 
 	# These URLs are previews: the final site will live on the client's domain.
 	# Without noindex, the two would compete with each other in Google.
@@ -208,7 +219,9 @@ https:// {
 	}
 
 	root * /srv/sites/{folder}/public
-	file_server
+	file_server {
+		hide .git .env*
+	}
 }
 
 # Redirection of client domains arriving in the clear. The names Caddy knows

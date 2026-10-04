@@ -438,6 +438,27 @@ describe("the block against the one in service", () => {
     expect(decide(OPEN, generateFragment(CLOSED, "cookie"))).toBe("diverged");
   });
 
+  test("the file server hides .git and .env; a block from before it did is upgraded without --force", () => {
+    const SERVED: Manifest = { ...OPEN, publicDir: "public" };
+    expect(block(SERVED)).toInclude("\tfile_server {\n\t\thide .git .env*\n\t}");
+    const before = generateFragment(SERVED, "identity", "plain")!;
+    expect(before).toInclude("\tfile_server\n");
+    expect(isEarlierGeneration(before, SERVED)).toBe(true);
+    expect(decide(SERVED, before)).toBe("upgrades");
+    // Both releases behind at once: a protected block from before identities
+    // and before hide.
+    const closed = { ...SERVED, portal: true as const };
+    expect(decide(closed, generateFragment(closed, "cookie", "plain"))).toBe("upgrades");
+    expect(decide({ ...SERVED, portal: undefined }, generateFragment(closed, "cookie", "plain"), false, true)).toBe("follows-door");
+    // A project of several services serving files hides them too; one with no
+    // public folder has no file server, and its block did not change.
+    expect(generateFragment({ slug: "lab", publicDir: "public", services: { web: { start: "x", port: 3040 } } })).toInclude("hide .git .env*");
+    expect(block(OPEN)).not.toInclude("file_server");
+    expect(isEarlierGeneration(block(OPEN), OPEN)).toBe(false);
+    // Hand-edited before hide: still a hand edit.
+    expect(decide(SERVED, `${before}\n\theader X-Extra yes`)).toBe("diverged");
+  });
+
   test("an earlier block edited by hand is still a hand edit", () => {
     const edited = generateFragment({ ...CLOSED, port: 3031 }, "cookie")!;
     expect(isEarlierGeneration(edited, CLOSED)).toBe(false);

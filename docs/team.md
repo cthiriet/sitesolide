@@ -78,10 +78,11 @@ In order:
    built or sent. Every reason it refuses comes back at once.
 2. **The build runs on your workstation**, as for the owner: the machine
    receives its result, not your toolchain.
-3. **The archive** carries your code in `app/`, without what `exclude` lists,
-   `.git` and the manifest, and your `publicDir` in `public/`: exactly what the
-   owner's rsync would send. Symbolic links are refused; replace them with the
-   files they point to.
+3. **The archive** carries your code in `app/`, without what `exclude` lists
+   and the manifest, and your `publicDir` in `public/`: exactly what the
+   owner's rsync would send. Neither tree ever carries `.git` nor a `.env`, at
+   any depth. Symbolic links are refused; replace them with the files they
+   point to.
 4. **The machine installs it**: it extracts the archive as the project's own
    account, runs your `install` there, then follows the same steps as the
    owner's deployment. You read its log as it goes, and the command exits

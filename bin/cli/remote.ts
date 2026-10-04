@@ -41,7 +41,7 @@ import { join, resolve } from "node:path";
 import { bundle, excludedBy, type BundleEntry } from "./bundle";
 import { configPath, defaultPaths, expandHome, readConfigFile } from "./config";
 import { hintForFailure } from "./hints";
-import { hasServices, isApp, mainPort, missingExclusions, readManifest, type Manifest } from "./manifest";
+import { hasServices, isApp, mainPort, missingExclusions, NEVER_SENT, readManifest, type Manifest } from "./manifest";
 import { eventFor, formatEvent, type OutputEvent } from "./output";
 
 /** Where the token is kept in the vault. */
@@ -298,21 +298,22 @@ export function collect(root: string, prefix: string, patterns: readonly string[
 
 /**
  * What leaves, as rsync would have sent it: the code into `app/`, minus its
- * exclusions, `.git`, the manifest and the public files; the public files into
- * `public/`.
+ * exclusions, the manifest and the public files; the public files into
+ * `public/`. Neither tree carries `.git` nor a `.env`, at any depth: see
+ * NEVER_SENT.
  */
 export function projectEntries(project: RemoteProject): { entries: BundleEntry[]; refused: string[] } {
   const { manifest } = project;
   const entries: BundleEntry[] = [];
   const refused: string[] = [];
   if (isApp(manifest)) {
-    const patterns = [...(manifest.exclude ?? []), ".git", "sitesolide.json", ...(manifest.publicDir === undefined ? [] : [manifest.publicDir])];
+    const patterns = [...(manifest.exclude ?? []), ...NEVER_SENT, "sitesolide.json", ...(manifest.publicDir === undefined ? [] : [manifest.publicDir])];
     const app = collect(project.code, "app", patterns);
     entries.push(...app.entries);
     refused.push(...app.refused);
   }
   if (manifest.publicDir !== undefined) {
-    const files = collect(join(project.code, manifest.publicDir), "public", []);
+    const files = collect(join(project.code, manifest.publicDir), "public", NEVER_SENT);
     entries.push(...files.entries);
     refused.push(...files.refused);
   }
