@@ -130,6 +130,29 @@ describe("the monitor's status, copied as root from the monitor's directory", ()
   });
 });
 
+describe("the audience snapshot, copied as root from analytics' directory", () => {
+  const AUDIENCE = join(ANALYTICS_DATA, "instantane.json");
+
+  test("a snapshot of the directory's owner is copied as it stands", async () => {
+    writeFileSync(AUDIENCE, '{"version":1}');
+    expect((await collect()).audience).toBe('{"version":1}');
+  });
+
+  test("a symbolic link in its place is not followed, and what it points to never reaches the snapshot", async () => {
+    symlinkSync(SECRET_FILE, AUDIENCE);
+    const raw = await collect();
+    expect(raw.audience ?? null).toBeNull();
+    expect(JSON.stringify(raw)).not.toContain(SECRET);
+  });
+
+  test("a hard link to a file elsewhere is refused too", async () => {
+    linkSync(SECRET_FILE, AUDIENCE);
+    const raw = await collect();
+    expect(raw.audience ?? null).toBeNull();
+    expect(JSON.stringify(raw)).not.toContain(SECRET);
+  });
+});
+
 describe("the files the collector writes as root into directories it does not own", () => {
   test("a link at the old temporary name of the host table is not followed", async () => {
     symlinkSync(VICTIM, join(ANALYTICS_DATA, "hotes.json.tmp"));

@@ -135,6 +135,42 @@ async function text(path: string, incomplete: string | null = null): Promise<str
   }
 }
 
+/** The audience snapshot holds a few days of counts per host: a few kilobytes, sixteen megabytes is far beyond it. */
+const AUDIENCE_MAX_BYTES = 16 * 1024 * 1024;
+
+/**
+ * The audience snapshot as `analytics` left it, or null when it could not be
+ * read as it should be.
+ *
+ * Read as root from analytics' own data directory, which makes it a door like
+ * the monitor's status: a compromised analytics service could put a symbolic
+ * link, or a hard link, at instantane.json pointing at /etc/sitesolide/*.env,
+ * and root would copy the secret into the reading site-dashboard reads. So the
+ * file is opened without following a link, only if it is a regular file with
+ * a single name, owned by its directory's owner, and smaller than a cap. Its
+ * content is passed as it stands: it is analytics' own data, which src/state.ts
+ * judges with no privilege.
+ */
+function readAudience(): string | null {
+  let folder: Stats;
+  try {
+    folder = statSync(dirname(AUDIENCE_FILE));
+  } catch {
+    return null;
+  }
+  let examination: Examination;
+  try {
+    examination = readBounded(AUDIENCE_FILE, AUDIENCE_MAX_BYTES);
+  } catch {
+    return null;
+  }
+  if (examination.kind === "absent") return null;
+  const { info } = examination;
+  if (info.link || !info.regular || info.links > 1 || info.uid !== folder.uid) return null;
+  if (examination.bytes === null) return null;
+  return new TextDecoder().decode(examination.bytes);
+}
+
 /**
  * The monitor's status, as the dashboard may see it, or null when there is
  * none.
@@ -396,7 +432,7 @@ async function collect(): Promise<Raw> {
     domains: await text(DOMAINS_FILE),
     // Missing as long as `analytics` has not run once, which is a normal state:
     // the dashboard says so rather than showing an empty page.
-    audience: await text(AUDIENCE_FILE),
+    audience: readAudience(),
     monitor: readMonitorStatus(),
     ports: await ports(),
     blocks: readBlocks(),
