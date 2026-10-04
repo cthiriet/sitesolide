@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { guestStore, openDatabase, PRAGMAS } from "../src/database";
+import { AUDIT_RETENTION_MS, auditStore, guestStore, openDatabase, PRAGMAS, sharingStore } from "../src/database";
 import { DATA_DIR } from "../src/config";
 import type { Guest } from "../src/guests";
+import { DEFAULT_POLICY } from "../src/sharing";
 
 // Safety rail: tests/setup.ts must have diverted DATA_DIR before any import,
 // failing which these tests would write next to the portal's database.
@@ -92,5 +93,109 @@ describe("the guest access store", () => {
     expect(store.remove("AAAAAAAAAAAAAAA2")).toBe(true);
     expect(store.byId("AAAAAAAAAAAAAAA2")).toBeNull();
     expect(store.remove("AAAAAAAAAAAAAAA2")).toBe(false);
+  });
+});
+
+describe("a database from before sharing", () => {
+  test("gains its tables at the next opening, and keeps its guests", () => {
+    // The state of a database in service today: the invites table alone.
+    const path = join(DATA_DIR, "before-sharing.db");
+    const old = openDatabase(path);
+    old.run("DROP TABLE sharing");
+    old.run("DROP TABLE audit");
+    old.run(
+      "INSERT INTO invites (id, hote, libelle, empreinte, cree_a) VALUES ('AAAAAAAAAAAAAAA9', 'forum.test-zone.invalid', 'Alice', 'h', 1)",
+    );
+    expect(old.query("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([{ name: "invites" }]);
+    old.close();
+
+    const db = openDatabase(path);
+    expect(guestStore(db).byId("AAAAAAAAAAAAAAA9")?.label).toBe("Alice");
+    expect(sharingStore(db).get("forum.test-zone.invalid")).toEqual(DEFAULT_POLICY);
+    expect(auditStore(db).recent(10)).toEqual([]);
+  });
+});
+
+describe("the sharing store", () => {
+  const db = openDatabase(join(DATA_DIR, "sharing.db"));
+  const store = sharingStore(db);
+  const HOST = "forum.test-zone.invalid";
+
+  test("a site never shared gets the narrowest policy", () => {
+    expect(store.get("never.test-zone.invalid")).toEqual(DEFAULT_POLICY);
+  });
+
+  test("a policy replaces the previous one whole", () => {
+    store.set(HOST, { mode: "people", people: ["alice@acme.test"], domains: [] }, 1_000);
+    store.set(HOST, { mode: "domain", people: ["bob@acme.test"], domains: ["acme.test"] }, 2_000);
+    expect(store.get(HOST)).toEqual({ mode: "domain", people: ["bob@acme.test"], domains: ["acme.test"] });
+    expect(store.list()).toEqual([
+      { host: HOST, policy: { mode: "domain", people: ["bob@acme.test"], domains: ["acme.test"] }, updatedAt: 2_000 },
+    ]);
+  });
+
+  test("a row this version cannot read falls back to the admins alone, never wider", () => {
+    db.run("INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES ('odd.test-zone.invalid', 'everyone', '[]', '[]', 1)");
+    db.run("INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES ('broken.test-zone.invalid', 'people', 'not json', '[]', 1)");
+    expect(store.get("odd.test-zone.invalid")).toEqual(DEFAULT_POLICY);
+    expect(store.get("broken.test-zone.invalid")).toEqual(DEFAULT_POLICY);
+  });
+});
+
+describe("the audit store", () => {
+  const db = openDatabase(join(DATA_DIR, "audit.db"));
+  const store = auditStore(db);
+  const DAY = 24 * 3600 * 1000;
+  const START = Date.UTC(2026, 9, 4);
+
+  test("has the columns every component shares", () => {
+    const columns = db.query<{ name: string; notnull: number }, []>("PRAGMA table_info(audit)").all();
+    expect(columns.map((column) => [column.name, column.notnull])).toEqual([
+      ["id", 0],
+      ["at", 1],
+      ["actor", 1],
+      ["action", 1],
+      ["target", 0],
+      ["detail", 0],
+    ]);
+  });
+
+  test("records an event with its time in ISO 8601, UTC, and its detail as JSON", () => {
+    store.record({ actor: "alice@acme.test", action: "portal.signin", target: "forum.test-zone.invalid", detail: { method: "oidc" } }, START);
+    store.record({ actor: "owner", action: "portal.signout" }, START + 1_000);
+    expect(store.recent(10)).toEqual([
+      { id: 2, at: "2026-10-04T00:00:01.000Z", actor: "owner", action: "portal.signout", target: null, detail: null },
+      {
+        id: 1,
+        at: "2026-10-04T00:00:00.000Z",
+        actor: "alice@acme.test",
+        action: "portal.signin",
+        target: "forum.test-zone.invalid",
+        detail: { method: "oidc" },
+      },
+    ]);
+  });
+
+  test("reads by pages, the most recent first", () => {
+    for (let i = 0; i < 5; i++) store.record({ actor: "owner", action: "sharing.update" }, START + 2_000 + i);
+    const first = store.recent(3);
+    expect(first.map((event) => event.id)).toEqual([7, 6, 5]);
+    expect(store.recent(3, first.at(-1)!.id).map((event) => event.id)).toEqual([4, 3, 2]);
+    expect(store.recent(0).length).toBe(1);
+    expect(store.recent(10_000).length).toBe(7);
+  });
+
+  test("keeps the most recent rows only, beyond its bound", () => {
+    const capped = auditStore(openDatabase(join(DATA_DIR, "audit-capped.db")), 3);
+    for (let i = 0; i < 5; i++) capped.record({ actor: "owner", action: `test.${i}` }, START + i);
+    // The bound applies on the hourly pass, before a write.
+    capped.record({ actor: "owner", action: "test.last" }, START + 2 * 3600 * 1000);
+    expect(capped.recent(100).map((event) => event.action)).toEqual(["test.last", "test.4", "test.3", "test.2"]);
+  });
+
+  test("forgets what is older than the retention, at most once an hour", () => {
+    const later = START + AUDIT_RETENTION_MS + DAY;
+    store.record({ actor: "owner", action: "portal.signin" }, later);
+    expect(store.recent(100).map((event) => event.at)).toEqual([new Date(later).toISOString()]);
   });
 });

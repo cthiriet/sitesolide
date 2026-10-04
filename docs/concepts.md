@@ -102,8 +102,9 @@ door of its own; it trusts the header Caddy puts on the request, and that trust
 is only founded because nothing else on the machine can forge it.
 
 One exception, deliberate: the dashboard may reach the portal, where it creates
-and revokes guest access. Those routes have no other guard than this rule, and a
-test refuses any fragment that would expose them.
+and revokes guest access, sets each site's sharing and reads the portal's audit.
+Those routes have no other guard than this rule, and a test refuses any fragment
+that would expose them.
 
 And one set: a project that declares several `services` reaches its own ports,
 and nobody else's. Its front calls its API, its API its worker, and a neighbour
@@ -164,12 +165,22 @@ repository. Every URL of the locked host is rewritten to a door page that stands
 on its own, inline CSS, inline icon, no external request, because anything it
 asked for would come back as HTML.
 
-**The portal** is one shared password for your personal projects, which Caddy
-consults with `forward_auth` before every request. The dashboard can also mint
-per-person guest access, one password per person and per site.
+**The portal** is the door of your personal projects, which Caddy consults with
+`forward_auth` before every request. One shared password opens them all; the
+dashboard can also mint per-person guest access, one password per person and per
+site; and once an identity provider is configured, people sign in with their
+company account, Google Workspace, Microsoft Entra or any OpenID Connect
+provider, and the dashboard's *Sharing* section decides per site who gets in:
+the admins only, a list of people, or everyone at a domain. A change of sharing
+touches only the portal's database, never Caddy, and holds from the next
+request.
 
 A project behind the portal writes no door of its own. It trusts Caddy, which is
-sound only because of the loopback rule.
+sound only because of the loopback rule. It also learns who came in, from three
+request headers, `X-Sitesolide-User`, `X-Sitesolide-User-Name` and
+`X-Sitesolide-Role`: its block takes the visitor's own off every request before
+copying the portal's on, so a site can trust them once its block has been
+deployed with them. See [portal/README.md](../portal/README.md).
 
 ## What the deploy actually does
 
@@ -207,6 +218,6 @@ without touching anything.
 - [docs/commands.md](commands.md), what the CLI does
 - [infra/README.md](../infra/README.md), the machine itself
 - [dashboard/README.md](../dashboard/README.md), the dashboard, the steward and the gatekeeper
-- [portal/README.md](../portal/README.md), the shared door and guest access
+- [portal/README.md](../portal/README.md), the shared door, guest access, signing in with a company account, sharing and the identity headers
 - [analytics/README.md](../analytics/README.md), how a visit is counted, and why it is anonymous
 - [monitor/README.md](../monitor/README.md), what is checked every minute, and who hears of it

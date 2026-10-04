@@ -5,7 +5,7 @@
  *
  * Two levels. The machine's: the home page, where the machine, its
  * discrepancies and the list of sites live, and the steward's activity. A
- * site's: five sections, Overview, Audience, Secrets, Guests and Access, the
+ * site's: six sections, Overview, Audience, Secrets, Guests, Sharing and Access, the
  * site as a parameter.
  *
  * Every page is a file of the build, `site/secrets/index.html` for
@@ -24,7 +24,7 @@
 import type { Verdict } from "./verdict"
 
 /** A site's sections, in the order of the sidebar and the tabs. */
-export type Section = "overview" | "audience" | "secrets" | "guests" | "access"
+export type Section = "overview" | "audience" | "secrets" | "guests" | "sharing" | "access"
 
 /** The pages of the machine level. */
 export type MachinePage = "home" | "activity"
@@ -46,6 +46,7 @@ export const SECTIONS: readonly SectionEntry[] = [
   { section: "audience", title: "Audience", path: "/site/audience/" },
   { section: "secrets", title: "Secrets", path: "/site/secrets/" },
   { section: "guests", title: "Guests", path: "/site/guests/" },
+  { section: "sharing", title: "Sharing", path: "/site/sharing/" },
   { section: "access", title: "Access", path: "/site/access/" },
 ]
 

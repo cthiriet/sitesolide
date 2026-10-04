@@ -5,8 +5,8 @@ levels. **The machine**: *Sites*, the home page, with the state of the machine,
 the discrepancies between what the repositories ask for and what the machine
 does, the only part of the dashboard that teaches you something, and the list
 of sites; *Activity*, the latest operations on secrets and portals. **A site**:
-*Overview*, *Audience*, *Secrets*, *Guests* and *Access*, everything that
-concerns that site and only it.
+*Overview*, *Audience*, *Secrets*, *Guests*, *Sharing* and *Access*, everything
+that concerns that site and only it.
 
 **Few writes, and each one is a decision.** No button sets a preview lock. One
 machine serves every site, with no staging and no automatic recovery: what
@@ -14,8 +14,9 @@ touches their shared configuration stays in the workstation's scripts, under the
 eyes of whoever runs them. Three exceptions, and in all three the dashboard only
 relays to a component that judges for itself what it accepts:
 
-- **guest access**, the *Guests* section, which touches only the portal's
-  database;
+- **guest access and sharing**, the *Guests* and *Sharing* sections, which
+  touch only the portal's database: a password for one person, or who may sign
+  in with their work account, see [portal/README.md](../portal/README.md);
 - **the secret files of every deployed project** in `/etc/sitesolide`, and the
   restart of its service, the *Secrets* section. The steward, a root daemon,
   decides;
@@ -302,13 +303,14 @@ unmanaged, with the command that repairs it.
 |---|---|---|
 | **write-only**: replaced, never read back, size not shown | files read whole and closed to other accounts | a private key never comes back to the screen, and its size would already give away its algorithm |
 | **Change password only**: never read, never set by hand, never restored, the old one erased | any `PASSWORD_HASH`, in any file | a hash is cracked offline, and restoring would revalidate the password you changed because it had leaked |
-| **hash only**: no other variable | `dashboard.env`, `portal.env` | one more variable there would change what the service does, not a secret |
+| **hash only**: no other variable | `dashboard.env`, `portal.env` | one more variable there would change what the service does, not a secret. `portal.env` also takes the portal's sign-in settings, `OIDC_*`, named one by one in `portal/src/sharing.ts` |
 
 ### What a compromise yields
 
 A compromised dashboard yields what the page already showed, plus what an
 unlocked session grants: reading and writing the secrets of every project, for
-ten minutes, and creating guest access. It never touches Caddy itself, the
+ten minutes, among them the portal's sign-in settings, and creating guest
+access or sharing a site. It never touches Caddy itself, the
 gatekeeper refuses everything its own rules refuse, and restores. It cannot
 rewrite the hash that unlocks the secrets, which belongs to root.
 
@@ -433,8 +435,8 @@ ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
 
 | What changes | The command |
 |---|---|
-| `steward.ts`, `src/secrets/`, `infra/steward/` | `bin/deploy-steward.sh` |
-| `gatekeeper.ts`, `src/gatekeeper/`, `infra/gatekeeper/`, `bin/cli/fragment.ts` | `bin/deploy-gatekeeper.sh` |
+| `steward.ts`, `src/secrets/`, `infra/steward/`, `portal/src/sharing.ts` | `bin/deploy-steward.sh` |
+| `gatekeeper.ts`, `src/gatekeeper/`, `infra/gatekeeper/`, `bin/cli/fragment.ts`, `bin/cli/portal.ts` | `bin/deploy-gatekeeper.sh` |
 | anything else | `sitesolide deploy` |
 
 ## Local development

@@ -124,7 +124,7 @@ describe("the machine's indicators", () => {
 
 describe("a site's indicators", () => {
   const empty = { discrepancies: null, project: null, site: null, guests: null, now: NOW, serverNow: NOW }
-  const nothing = { overview: null, audience: null, secrets: null, guests: null, access: null }
+  const nothing = { overview: null, audience: null, secrets: null, guests: null, sharing: null, access: null }
 
   test("before any data, and when all is well, nothing is shown", () => {
     expect(siteIndicators(empty)).toEqual(nothing)

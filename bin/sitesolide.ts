@@ -657,6 +657,9 @@ async function checkRemoteBlock(
   switch (decideBlock({ manifest, inService, replace, doorConfirmed })) {
     case "deposit":
       return;
+    case "upgrades":
+      say(`   ${path} was written by an earlier release, the current one replaces it`);
+      return;
     case "follows-door":
       say(`   ${path} will follow the portal set from the dashboard`);
       return;

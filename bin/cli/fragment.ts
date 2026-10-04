@@ -22,7 +22,7 @@
  */
 import { sameDirectives } from "./comparison";
 import { hasServices, isApp, isProtected, servicesOf, type Manifest } from "./manifest";
-import { portalStanza } from "./portal";
+import { portalStanza, PORTAL_GENERATIONS, type PortalGeneration } from "./portal";
 import { projectPaths } from "./unit";
 
 export const IMPORT_LOCKS = "import /etc/caddy/locks/*.caddy";
@@ -168,8 +168,11 @@ export const ZONE_HOST = "{$SITESOLIDE_ZONE}";
  * the clear here would force the dashboard's gatekeeper to know it in order to
  * rewrite the same block, and a deposited fragment would stop being valid the
  * day the zone changed.
+ *
+ * `generation` exists to recognise the blocks an earlier release wrote, see
+ * `isEarlierGeneration`; everything that deposits a block takes the default.
  */
-export function generateFragment(manifest: Manifest): string | null {
+export function generateFragment(manifest: Manifest, generation: PortalGeneration = "identity"): string | null {
   if (!isApp(manifest)) return null;
 
   const slug = manifest.slug;
@@ -221,7 +224,7 @@ export function generateFragment(manifest: Manifest): string | null {
     "\t# lock itself, and bin/lock.sh enable would fail on its check.",
     `\t${IMPORT_LOCKS}`,
     "",
-    ...portalStanza(manifest),
+    ...portalStanza(manifest, generation),
     `\timport ${slug}-routes`,
     "}",
     "",
@@ -230,16 +233,32 @@ export function generateFragment(manifest: Manifest): string | null {
   return lines.join("\n");
 }
 
+/**
+ * Is this block what an earlier release of this generator wrote for the
+ * manifest? Then it is the generator's own, behind by a release, and never a
+ * decision taken by hand: replacing it with the current generation loses
+ * nothing. The protected blocks deployed before the identity headers are the
+ * case today, see PORTAL_GENERATIONS in portal.ts.
+ */
+export function isEarlierGeneration(block: string, manifest: Manifest): boolean {
+  return PORTAL_GENERATIONS.slice(1).some((generation) => {
+    const earlier = generateFragment(manifest, generation);
+    return earlier !== null && earlier !== generateFragment(manifest) && sameDirectives(block, earlier);
+  });
+}
+
 /** What `deploy` does with its block, given the one in service. */
-export type BlockDecision = "deposit" | "follows-door" | "forced" | "diverged";
+export type BlockDecision = "deposit" | "upgrades" | "follows-door" | "forced" | "diverged";
 
 /**
  * The block this deployment generates, against the one the machine serves.
  *
  * - none in service, or the same directives: `deposit`, the ordinary case;
+ * - the same, as an earlier release generated it: `upgrades`, the current
+ *   generation replaces it without `--force`;
  * - different by the door alone, when the machine carries that door
  *   (`doorConfirmed`): `follows-door`, the dashboard changed it and this
- *   deployment catches up;
+ *   deployment catches up, whichever release generated it;
  * - different otherwise: `diverged`, a decision made by hand on the machine
  *   that the generator knows nothing of, unless `replace` says to overwrite it,
  *   `forced`.
@@ -255,12 +274,13 @@ export function decideBlock(state: {
   const generated = generateFragment(state.manifest);
   if (generated === null || state.inService === null) return "deposit";
   if (sameDirectives(state.inService, generated)) return "deposit";
+  if (isEarlierGeneration(state.inService, state.manifest)) return "upgrades";
   if (state.doorConfirmed) {
-    const otherDoor = generateFragment({
-      ...state.manifest,
-      portal: isProtected(state.manifest) ? undefined : true,
-    });
-    if (otherDoor !== null && sameDirectives(state.inService, otherDoor)) return "follows-door";
+    const other = { ...state.manifest, portal: isProtected(state.manifest) ? undefined : true };
+    const otherDoor = generateFragment(other);
+    if (otherDoor !== null && (sameDirectives(state.inService, otherDoor) || isEarlierGeneration(state.inService, other))) {
+      return "follows-door";
+    }
   }
   return state.replace ? "forced" : "diverged";
 }

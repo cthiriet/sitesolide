@@ -121,5 +121,7 @@ export function siteIndicators(sources: SiteSources): Record<Section, Indicator 
 
   // Audience reports nothing: it is looked at, not watched over, and a pill on
   // a traffic figure would cry wolf every Monday.
-  return { overview: discrepancyIndicator(discrepancies), audience: null, secrets, guests: guestsIndicator, access }
+  // Sharing reports nothing either: who a site is shared with is a choice,
+  // not a problem.
+  return { overview: discrepancyIndicator(discrepancies), audience: null, secrets, guests: guestsIndicator, sharing: null, access }
 }

@@ -6,6 +6,7 @@ import { invitableHosts } from "../src/guests";
 import { MAX_RESTART_MS } from "../src/secrets/protocol";
 import { downServices } from "../web/src/lib/sidebar";
 import { guestRefusal, canHaveGuests, sitesWithGuests } from "../web/src/lib/invitations";
+import { canShare, sharingRefusal } from "../web/src/lib/sharing";
 import { PEAK_WARNING_SHARE, serviceLevel } from "../web/src/lib/gauges";
 import { RESTART_SCALE_MS } from "../web/src/lib/secrets";
 import { siteAddresses } from "../web/src/lib/site-card";
@@ -249,6 +250,28 @@ describe("the page and the server say the same thing", () => {
     for (const code of codes) {
       expect([code, sources.includes(`error: "${code}"`)]).toEqual([code, true]);
       expect(guestRefusal(400, { error: code }).message).not.toContain(code);
+    }
+  });
+
+  /** src/sharing.ts refuses a policy outside these hosts: the page must offer Sharing only on them. */
+  test("the sites that can be shared are those where the service accepts a policy", () => {
+    const server = invitableHosts(SNAPSHOT);
+    for (const site of SITES) expect([site.slug, canShare(site)]).toEqual([site.slug, server.includes(site.address)]);
+  });
+
+  /** The sharing refusals the page translates, emitted by the relay or by the portal's rules. */
+  test("every translated sharing refusal still exists where it is emitted", () => {
+    const sources = ["src/sharing.ts", "src/routes.ts", "../portal/src/admin.ts", "../portal/src/sharing.ts"]
+      .map((path) => readFileSync(join(PROJECT, path), "utf8"))
+      .join("\n");
+    const translated = readFileSync(join(WEB, "lib", "sharing.ts"), "utf8")
+      .split("export function sharingRefusal")[1]!
+      .split("\n}")[0]!;
+    const codes = [...translated.matchAll(/case "([^"]+)":/g)].map((m) => m[1]!);
+    expect(codes.length).toBeGreaterThan(3);
+    for (const code of codes) {
+      expect([code, sources.includes(`"${code}"`)]).toEqual([code, true]);
+      expect(sharingRefusal(400, { error: code })).not.toContain(code);
     }
   });
 });

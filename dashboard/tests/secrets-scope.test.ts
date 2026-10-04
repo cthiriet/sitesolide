@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   MAX_CONTENT_BYTES,
   HASH_ONLY,
+  HASH_FILE_SETTINGS,
   MAX_FILE_BYTES,
   MIN_PASSWORD,
   PASSWORD_VARIABLE,
@@ -35,6 +36,7 @@ import {
   type Refusal,
   type Site,
 } from "../src/secrets/scope";
+import { IDENTITY_VARIABLES } from "../borrowed/sharing";
 import { LANDING_FOLDER } from "../src/config";
 
 /**
@@ -306,18 +308,31 @@ describe("kind, readability and passwords", () => {
 
   test("hash only: the dashboard and the portal carry nothing other than PASSWORD_HASH", () => {
     expect(HASH_ONLY).toEqual(["dashboard.env", "portal.env"]);
+    const settings = "OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_ALLOWED_DOMAINS, OIDC_ADMIN_EMAILS, OIDC_PROVIDER_NAME";
+    const held = { "dashboard.env": "PASSWORD_HASH", "portal.env": `PASSWORD_HASH and ${settings}` } as Record<string, string>;
     for (const name of HASH_ONLY) {
-      for (const variable of ["STEWARD_SOCKET", "PORTAL_URL", "STATE_FILE", "OTHER"]) {
+      for (const variable of ["STEWARD_SOCKET", "PORTAL_URL", "STATE_FILE", "OTHER", "DATA_DIR", "PORT", "PUBLIC_URL", "oidc_issuer"]) {
         const refusal = outsideHashRefusal(name, variable);
         expect(refusal?.error).toBe("out-of-scope");
         // The message says why, without quoting the name submitted.
-        expect(refusal?.message).toBe(`${name} holds PASSWORD_HASH only: any other variable would change how its service runs, not add a secret`);
+        expect(refusal?.message).toBe(`${name} holds ${held[name]} only: any other variable would change how its service runs, not add a secret`);
       }
       // PASSWORD_HASH itself is refused elsewhere, as a password.
       expect(outsideHashRefusal(name, "PASSWORD_HASH")).toBeNull();
     }
     expect(outsideHashRefusal("calendar.env", "STEWARD_SOCKET")).toBeNull();
     expect(outsideHashRefusal("cms.env", "OTHER")).toBeNull();
+  });
+
+  test("the portal's sign-in settings, by name, in portal.env and nowhere else that is hash only", () => {
+    expect(HASH_FILE_SETTINGS["portal.env"]).toEqual(IDENTITY_VARIABLES);
+    for (const variable of IDENTITY_VARIABLES) {
+      expect(outsideHashRefusal("portal.env", variable)).toBeNull();
+      expect(outsideHashRefusal("dashboard.env", variable)?.error).toBe("out-of-scope");
+    }
+    const path = "/etc/sitesolide/portal.env";
+    expect(outsideHashReason("portal.env", ["PASSWORD_HASH", "OIDC_ISSUER", "OIDC_CLIENT_SECRET"], path)).toBeNull();
+    expect(outsideHashReason("portal.env", ["PASSWORD_HASH", "OIDC_ISSUER", "DATA_DIR"], path)).toContain("(DATA_DIR)");
   });
 
   test("hash only: a file carrying anything else is unmanaged, and the reason names the variables", () => {

@@ -12,6 +12,7 @@ import { AccessSection } from "@/components/pages/site-access"
 import { OverviewSection } from "@/components/pages/site-overview"
 import { AudienceSection } from "@/components/pages/site-audience"
 import { GuestsSection } from "@/components/pages/site-guests"
+import { SharingSection } from "@/components/pages/site-sharing"
 import { SecretsSection } from "@/components/pages/site-secrets"
 import { SecretsActionsProvider } from "@/components/secrets-actions"
 import { readCollapsed, storeCollapsed } from "@/lib/sidebar"
@@ -28,6 +29,8 @@ function Section({ page }: { page: Extract<Page, { name: "site" }> }) {
       return <SecretsSection slug={page.slug} />
     case "guests":
       return <GuestsSection slug={page.slug} />
+    case "sharing":
+      return <SharingSection slug={page.slug} />
     case "access":
       return <AccessSection slug={page.slug} />
   }

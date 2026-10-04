@@ -34,6 +34,7 @@ import type {
   ValueResponse,
 } from "../src/secrets/protocol";
 import { UNLOCK_DURATION_MS } from "../src/secrets/protocol";
+import { IDENTITY_VARIABLES } from "../borrowed/sharing";
 import {
   MAX_BODY_BYTES,
   MAX_QUEUED,
@@ -1333,12 +1334,16 @@ describe("hash only: dashboard.env and portal.env carry nothing but PASSWORD_HAS
       ["portal", "portal.env", "OTHER"],
     ];
     const before = { dashboard: readFileSync(join(bench.secrets, "dashboard.env"), "utf8"), portal: readFileSync(join(bench.secrets, "portal.env"), "utf8") };
+    const held: Record<string, string> = {
+      "dashboard.env": "PASSWORD_HASH",
+      "portal.env": `PASSWORD_HASH and ${IDENTITY_VARIABLES.join(", ")}`,
+    };
     for (const [slug, file, variable] of cas) {
       const response = await bench.call("PUT", "/variable", { token, slug, file, variable, value: "/tmp/trap.sock" });
       expect(response.status).toBe(403);
       expect(await errorOf(response)).toEqual({
         error: "out-of-scope",
-        message: `${file} holds PASSWORD_HASH only: any other variable would change how its service runs, not add a secret`,
+        message: `${file} holds ${held[file]} only: any other variable would change how its service runs, not add a secret`,
       });
     }
     expect(readFileSync(join(bench.secrets, "dashboard.env"), "utf8")).toBe(before.dashboard);
@@ -1376,6 +1381,36 @@ describe("hash only: dashboard.env and portal.env carry nothing but PASSWORD_HAS
     }
     expect(account.total).toBe(totalBefore);
     expect(readFileSync(join(bench.secrets, "portal.env"), "utf8")).toBe(trap);
+  });
+
+  test("the portal's sign-in settings are written into portal.env, which stays managed", async () => {
+    const bench = await mount({ hashPassword: hashFast });
+    const token = await unlock(bench);
+    for (const [variable, value] of [
+      ["OIDC_ISSUER", "https://idp.test-zone.invalid"],
+      ["OIDC_CLIENT_SECRET", "not-a-real-secret"],
+      ["OIDC_ADMIN_EMAILS", "owner@test-zone.invalid"],
+    ]) {
+      const response = await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable, value });
+      expect({ variable, status: response.status }).toEqual({ variable, status: 200 });
+    }
+    const content = readFileSync(join(bench.secrets, "portal.env"), "utf8");
+    expect(content).toContain("OIDC_ISSUER=https://idp.test-zone.invalid");
+    expect(content).toContain("PASSWORD_HASH=");
+
+    const seen = await fileSeen(bench, "portal", "portal.env");
+    expect(seen.state).not.toBe("unmanaged");
+    // Change password still works on the file that carries them.
+    const password = await bench.call("POST", "/password", {
+      token,
+      slug: "portal",
+      file: "portal.env",
+      variable: "PASSWORD_HASH",
+      dashboardPassword: PASSWORD,
+      newPassword: null,
+    });
+    expect(password.status).toBe(200);
+    expect(readFileSync(join(bench.secrets, "portal.env"), "utf8")).toContain("OIDC_CLIENT_SECRET=not-a-real-secret");
   });
 });
 

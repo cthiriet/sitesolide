@@ -1,15 +1,23 @@
 /**
- * The portal's database: the guest accesses, and nothing else.
+ * The portal's database: the guest accesses, each site's sharing policy, and
+ * the audit of sign-ins and policy changes.
  *
  * The owner does not appear in it: their cookie is enough on its own, and
- * their password lives in the vault. A lost database therefore only closes the
- * guests out, never the owner.
+ * their password lives in the vault. A lost database therefore closes the
+ * guests and the shared people out, never the owner nor the admin emails,
+ * which live in the environment. Every site falls back to `admins`, the
+ * narrowest policy.
+ *
+ * Every table is created if it is missing, at every opening: a database from
+ * before sharing gains its tables at the first start of this version, and
+ * keeps its guests.
  *
  * No effect at import: `server.ts` opens the database, the tests open one of
  * their own.
  */
 import { Database } from "bun:sqlite";
 import type { Guest } from "./guests";
+import { DEFAULT_POLICY, readPolicy, type Policy } from "./sharing";
 
 /**
  * Connection settings, applied in this order. A PRAGMA does not survive the
@@ -40,6 +48,27 @@ export const SCHEMA = [
      expire_a  INTEGER,
      vu_a      INTEGER
    )`,
+  // One row per site whose policy was ever set; a site without a row gets
+  // DEFAULT_POLICY. The lists are JSON arrays, read whole on every request of
+  // an identity: a few hundred addresses at most, see PEOPLE_MAX.
+  `CREATE TABLE IF NOT EXISTS sharing (
+     host       TEXT PRIMARY KEY,
+     mode       TEXT NOT NULL,
+     people     TEXT NOT NULL,
+     domains    TEXT NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
+  // The shape every component of the repository shares, so that one Activity
+  // view can read them all side by side.
+  `CREATE TABLE IF NOT EXISTS audit (
+     id     INTEGER PRIMARY KEY,
+     at     TEXT NOT NULL,
+     actor  TEXT NOT NULL,
+     action TEXT NOT NULL,
+     target TEXT,
+     detail TEXT
+   )`,
+  "CREATE INDEX IF NOT EXISTS audit_at ON audit (at)",
 ] as const;
 
 /**
@@ -116,5 +145,146 @@ export function guestStore(db: Database): GuestStore {
       queries.touch.run(now, id);
     },
     remove: (id) => queries.remove.run(id).changes > 0,
+  };
+}
+
+// --- Sharing ---------------------------------------------------------------------
+
+export type SharedSite = { host: string; policy: Policy; updatedAt: number };
+
+export type SharingStore = {
+  /** The site's policy, `DEFAULT_POLICY` when none was ever set. */
+  get: (host: string) => Policy;
+  /** The sites whose policy was set, by host. */
+  list: () => SharedSite[];
+  set: (host: string, policy: Policy, now: number) => void;
+};
+
+type SharingRow = { host: string; mode: string; people: string; domains: string; updated_at: number };
+
+function parseArray(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A stored row judged again with the rule the admin API applies. A row this
+ * version cannot read, written by hand or by a later version, falls back to
+ * `DEFAULT_POLICY`: closed to everyone but the admins, never open wider than
+ * intended.
+ */
+function toPolicy(row: SharingRow | null): Policy {
+  if (row === null) return DEFAULT_POLICY;
+  const reading = readPolicy({ mode: row.mode, people: parseArray(row.people), domains: parseArray(row.domains) });
+  return "policy" in reading ? reading.policy : DEFAULT_POLICY;
+}
+
+export function sharingStore(db: Database): SharingStore {
+  const queries = {
+    get: db.query<SharingRow, [string]>("SELECT host, mode, people, domains, updated_at FROM sharing WHERE host = ?"),
+    list: db.query<SharingRow, []>("SELECT host, mode, people, domains, updated_at FROM sharing ORDER BY host"),
+    set: db.query<undefined, [string, string, string, string, number]>(
+      `INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (host) DO UPDATE SET mode = excluded.mode, people = excluded.people,
+         domains = excluded.domains, updated_at = excluded.updated_at`,
+    ),
+  };
+
+  return {
+    get: (host) => toPolicy(queries.get.get(host)),
+    list: () => queries.list.all().map((row) => ({ host: row.host, policy: toPolicy(row), updatedAt: row.updated_at })),
+    set(host, policy, now) {
+      queries.set.run(host, policy.mode, JSON.stringify(policy.people), JSON.stringify(policy.domains), now);
+    },
+  };
+}
+
+// --- Audit -----------------------------------------------------------------------
+
+export type AuditEvent = {
+  id: number;
+  /** ISO 8601, UTC. */
+  at: string;
+  /** An email, `owner` for the password holder, `guest:<id>`, or `anonymous` before anyone is known. */
+  actor: string;
+  /** Dotted: `portal.signin`, `portal.signin_failed`, `portal.signout`, `sharing.update`. */
+  action: string;
+  /** The host concerned, or null. */
+  target: string | null;
+  /** Never a password, a code or a token: what happened, not what opened it. */
+  detail: Record<string, unknown> | null;
+};
+
+export type NewEvent = Pick<AuditEvent, "actor" | "action"> & Partial<Pick<AuditEvent, "target" | "detail">>;
+
+export type AuditStore = {
+  record: (event: NewEvent, now: number) => void;
+  /** Most recent first, `limit` at most, older than the event `before` when given. */
+  recent: (limit: number, before?: number) => AuditEvent[];
+};
+
+/** Beyond this, an event is forgotten: the audit answers "who got in lately", not "since when". */
+export const AUDIT_RETENTION_MS = 180 * 24 * 3600 * 1000;
+
+/**
+ * And beyond this many rows, the oldest are: the writes that strangers can
+ * cause are bounded where they happen, this bounds the file whatever happens.
+ * A hundred thousand rows weigh a few tens of megabytes.
+ */
+export const AUDIT_MAX_ROWS = 100_000;
+
+/** The forgetting runs at most once an hour, on the write that comes after. */
+const PRUNE_EVERY_MS = 3600 * 1000;
+
+export const AUDIT_PAGE_MAX = 500;
+
+type AuditRow = { id: number; at: string; actor: string; action: string; target: string | null; detail: string | null };
+
+function toEvent(row: AuditRow): AuditEvent {
+  let detail: Record<string, unknown> | null = null;
+  if (row.detail !== null) {
+    const parsed = parseArray(row.detail);
+    detail = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  }
+  return { id: row.id, at: row.at, actor: row.actor, action: row.action, target: row.target, detail };
+}
+
+export function auditStore(db: Database, maxRows: number = AUDIT_MAX_ROWS): AuditStore {
+  const queries = {
+    insert: db.query<undefined, [string, string, string, string | null, string | null]>(
+      "INSERT INTO audit (at, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)",
+    ),
+    prune: db.query<undefined, [string]>("DELETE FROM audit WHERE at < ?"),
+    trim: db.query<undefined, [number]>(
+      "DELETE FROM audit WHERE id <= (SELECT id FROM audit ORDER BY id DESC LIMIT 1 OFFSET ?)",
+    ),
+    recent: db.query<AuditRow, [number, number]>(
+      "SELECT id, at, actor, action, target, detail FROM audit WHERE id < ? ORDER BY id DESC LIMIT ?",
+    ),
+  };
+  let prunedAt = 0;
+
+  return {
+    record(event, now) {
+      if (now - prunedAt >= PRUNE_EVERY_MS) {
+        queries.prune.run(new Date(now - AUDIT_RETENTION_MS).toISOString());
+        queries.trim.run(maxRows);
+        prunedAt = now;
+      }
+      queries.insert.run(
+        new Date(now).toISOString(),
+        event.actor,
+        event.action,
+        event.target ?? null,
+        event.detail === undefined || event.detail === null ? null : JSON.stringify(event.detail),
+      );
+    },
+    recent(limit, before = Number.MAX_SAFE_INTEGER) {
+      const bounded = Math.max(1, Math.min(AUDIT_PAGE_MAX, Math.floor(limit)));
+      return queries.recent.all(before, bounded).map(toEvent);
+    },
   };
 }

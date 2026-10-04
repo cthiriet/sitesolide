@@ -39,6 +39,10 @@ const BORROWINGS = [
   // The types and the durations of guest access, which the portal applies: the
   // page's menu must offer only what the portal will accept.
   "portal/src/guests.ts",
+  // The sharing modes and the rules of an email and a domain, which the portal
+  // applies, and the names of its sign-in settings, which the steward lets the
+  // dashboard write into portal.env.
+  "portal/src/sharing.ts",
   // The generator of the Caddy blocks and what it imports: the gatekeeper puts
   // up or takes away a site's portal by generating the block exactly like
   // `sitesolide deploy`, failing which the next deployment would write a block

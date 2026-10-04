@@ -268,6 +268,25 @@ a code; the code itself lives on the machine and never enters the repository.
 every request. `portalExempt` lists the paths that go straight through, signed
 webhooks, mostly, which carry their own proof and have no cookie.
 
+**Who gets in** is not in the manifest: the owner's password and guest access,
+and, once the portal knows an identity provider, the people the site is shared
+with from the dashboard's *Sharing* section. **The service learns who came in**
+from three request headers the generated block sets on every request that went
+through the portal:
+
+| Header | Value |
+|---|---|
+| `X-Sitesolide-User` | the verified email, lowercase; absent for the owner's password and a guest |
+| `X-Sitesolide-User-Name` | the display name, percent-encoded UTF-8; absent when unknown |
+| `X-Sitesolide-Role` | `admin`, `member` or `guest` |
+
+The block takes any `X-Sitesolide-*` header the visitor sends off every request
+first, exempted paths included, so a protected service can trust them. A
+service that is not behind the portal must not: it receives whatever the visitor
+sends. A protected site deployed before these headers existed keeps working, and
+gains them at its next `sitesolide deploy`. Reading them in a Bun service:
+[portal/README.md](../portal/README.md#who-came-in-the-identity-headers).
+
 **For a deployed project the machine is the source of truth.** The door is set
 in the dashboard's *Access* section; `sitesolide deploy` reads what the machine
 carries and rewrites the local manifest, which you then commit. Every command

@@ -2,9 +2,11 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { DATA_DIR } from "../src/config";
 import type { Guest } from "../src/guests";
-import { deriveKey, issueToken, guestHash } from "../src/gate";
+import { deriveKey, issueToken, guestHash, issueIdentityToken } from "../src/gate";
+import { readSettings } from "../src/oidc";
 import { createRoutes, type Options } from "../src/routes";
-import { memoryStore } from "./memory";
+import type { Policy } from "../src/sharing";
+import { memoryAudit, memorySharing, memoryStore } from "./memory";
 
 // The diversion of DATA_DIR is checked rather than assumed: without it, a test
 // would write the portal's key where the service looks for it.
@@ -318,4 +320,204 @@ describe("/_portal/deconnexion", () => {
 test("/sante says whether a hash is in place, without saying anything more about it", async () => {
   expect(await routes().health().json()).toEqual({ ok: true, configure: true });
   expect(await routes({ key: null }).health().json()).toEqual({ ok: true, configure: false });
+});
+
+const SETTINGS = readSettings(
+  {
+    OIDC_ISSUER: "https://idp.test-zone.invalid",
+    OIDC_CLIENT_ID: "client",
+    OIDC_CLIENT_SECRET: "not-a-real-secret",
+    OIDC_ADMIN_EMAILS: "owner@acme.test",
+    OIDC_PROVIDER_NAME: "Acme",
+  },
+  "https://portal.test-zone.invalid",
+).settings!;
+
+describe("an identity on /verifier", () => {
+  const NOW_S = START / 1000;
+
+  function identityCookie(email: string, name: string | null = null, host = HOST): string {
+    return `__Host-portal=${issueIdentityToken(KEY, host, NOW_S + 3600, { email, name })}`;
+  }
+
+  function withSharing(policy: Policy | null) {
+    const sharing = memorySharing();
+    if (policy !== null) sharing.set(HOST, policy, START);
+    return { sharing, r: routes({ settings: SETTINGS, sharing }) };
+  }
+
+  function visit(r: ReturnType<typeof routes>, cookie: string) {
+    return r.verify(verification({ "X-Portal-Hote": HOST, Cookie: cookie, "X-Forwarded-Uri": "/board" }));
+  }
+
+  test("an admin email gets in everywhere, as admin, its email and name passed on", () => {
+    const { r } = withSharing(null);
+    const response = visit(r, identityCookie("owner@acme.test", "Owner Name"));
+    expect(response.status).toBe(200);
+    expect(Object.fromEntries(response.headers)).toEqual({
+      "x-sitesolide-role": "admin",
+      "x-sitesolide-user": "owner@acme.test",
+      "x-sitesolide-user-name": "Owner%20Name",
+    });
+  });
+
+  test("a site never shared lets nobody else in, and says so, offering another account", async () => {
+    const { r } = withSharing(null);
+    const response = visit(r, identityCookie("alice@acme.test"));
+    expect(response.status).toBe(401);
+    expect(response.headers.get("x-portal")).toBe("connexion");
+    expect(response.headers.get("x-sitesolide-user")).toBeNull();
+    const page = await response.text();
+    expect(page).toInclude("You are signed in as alice@acme.test, but this site isn&#39;t shared with you.");
+    expect(page).toInclude("account=choose");
+  });
+
+  test("people: the listed email gets in as member, the others do not", () => {
+    const { r } = withSharing({ mode: "people", people: ["alice@acme.test"], domains: [] });
+    const alice = visit(r, identityCookie("alice@acme.test"));
+    expect(alice.status).toBe(200);
+    expect(alice.headers.get("x-sitesolide-role")).toBe("member");
+    expect(alice.headers.get("x-sitesolide-user")).toBe("alice@acme.test");
+    expect(alice.headers.get("x-sitesolide-user-name")).toBeNull();
+    expect(visit(r, identityCookie("bob@acme.test")).status).toBe(401);
+  });
+
+  test("domain: everyone at the domain gets in", () => {
+    const { r } = withSharing({ mode: "domain", people: [], domains: ["acme.test"] });
+    expect(visit(r, identityCookie("bob@acme.test")).status).toBe(200);
+    expect(visit(r, identityCookie("eve@elsewhere.test")).status).toBe(401);
+  });
+
+  test("removed from the list, refused at the very next request, cookie in hand", () => {
+    const { sharing, r } = withSharing({ mode: "people", people: ["alice@acme.test"], domains: [] });
+    const cookie = identityCookie("alice@acme.test");
+    expect(visit(r, cookie).status).toBe(200);
+    sharing.set(HOST, { mode: "people", people: [], domains: [] }, START);
+    expect(visit(r, cookie).status).toBe(401);
+    sharing.set(HOST, { mode: "admins", people: ["alice@acme.test"], domains: [] }, START);
+    expect(visit(r, cookie).status).toBe(401);
+  });
+
+  test("a domain taken off the allowed ones closes its people out at the next request, the admins excepted", () => {
+    const sharing = memorySharing();
+    sharing.set(HOST, { mode: "domain", people: [], domains: ["acme.test", "partner.test"] }, START);
+    const narrowed = { ...SETTINGS, allowedDomains: ["acme.test"] };
+    const r = routes({ settings: narrowed, sharing });
+    expect(visit(r, identityCookie("bob@acme.test")).status).toBe(200);
+    expect(visit(r, identityCookie("carol@partner.test")).status).toBe(401);
+    expect(visit(routes({ settings: { ...narrowed, admins: ["boss@partner.test"] }, sharing }), identityCookie("boss@partner.test")).status).toBe(200);
+  });
+
+  test("the identity cookie of another site opens nothing here, shared or not", () => {
+    const { r } = withSharing({ mode: "people", people: ["alice@acme.test"], domains: [] });
+    expect(visit(r, identityCookie("alice@acme.test", null, OTHER)).status).toBe(401);
+  });
+
+  test("without the provider's settings, an identity cookie opens nothing, an admin's included", () => {
+    const sharing = memorySharing();
+    sharing.set(HOST, { mode: "people", people: ["alice@acme.test"], domains: [] }, START);
+    const r = routes({ sharing });
+    expect(visit(r, identityCookie("owner@acme.test")).status).toBe(401);
+    expect(visit(r, identityCookie("alice@acme.test")).status).toBe(401);
+  });
+
+  test("the owner's and a guest's cookies say their role and nobody, with or without a provider", async () => {
+    for (const settings of [null, SETTINGS]) {
+      const guests = memoryStore();
+      guests.create(
+        { id: "InViTeInViTe0001", host: HOST, label: "Alice", createdAt: START, expiresAt: null, seenAt: null },
+        guestHash(GUEST_PASSWORD),
+      );
+      const r = routes({ settings, guests });
+      const owner = visit(r, `__Host-portal=${issueToken(KEY, HOST, NOW_S + 60)}`);
+      expect(Object.fromEntries(owner.headers)).toEqual({ "x-sitesolide-role": "admin" });
+      const guest = visit(r, `__Host-portal=${issueToken(KEY, HOST, NOW_S + 60, "InViTeInViTe0001")}`);
+      expect(Object.fromEntries(guest.headers)).toEqual({ "x-sitesolide-role": "guest" });
+    }
+  });
+
+  test("a POST from elsewhere is refused to an identity as to anyone", () => {
+    const { r } = withSharing(null);
+    const request = verification({
+      "X-Portal-Hote": HOST,
+      Cookie: identityCookie("owner@acme.test"),
+      "X-Forwarded-Method": "POST",
+      Origin: "https://agency.test-zone.invalid",
+    });
+    expect(r.verify(request).status).toBe(403);
+  });
+});
+
+describe("the sign-in page offers the provider", () => {
+  test("when it is configured, a link that keeps the return", async () => {
+    const page = await routes({ settings: SETTINGS })
+      .verify(verification({ "X-Portal-Hote": HOST, "X-Forwarded-Uri": "/board?x=1" }))
+      .text();
+    expect(page).toInclude('href="/_portal/oidc?retour=%2Fboard%3Fx%3D1"');
+    expect(page).toInclude("Sign in with Acme");
+    expect(page).toInclude('name="motdepasse"');
+  });
+
+  test("never without a hash, nor without settings", async () => {
+    expect(await routes().verify(verification({ "X-Portal-Hote": HOST })).text()).not.toInclude("/_portal/oidc");
+    expect(await routes({ key: null, settings: SETTINGS }).verify(verification({ "X-Portal-Hote": HOST })).text()).not.toInclude(
+      "/_portal/oidc",
+    );
+  });
+});
+
+describe("the audit of sign-ins", () => {
+  test("the owner's password, a failure and a sign-out, never the password itself", async () => {
+    const audit = memoryAudit();
+    const r = routes({ audit });
+    await r.signIn(signIn({ motdepasse: "wrong" }));
+    const cookie = cookieOf(await r.signIn(signIn({ motdepasse: PASSWORD })));
+    r.signOut(
+      new Request("http://127.0.0.1:3026/_portal/deconnexion", {
+        method: "POST",
+        headers: { "X-Portal-Hote": HOST, Origin: ORIGIN, Cookie: cookie },
+      }),
+    );
+    expect(audit.events.map(({ actor, action, target, detail }) => ({ actor, action, target, detail }))).toEqual([
+      { actor: "anonymous", action: "portal.signin_failed", target: HOST, detail: { method: "password" } },
+      { actor: "owner", action: "portal.signin", target: HOST, detail: { method: "password" } },
+      { actor: "owner", action: "portal.signout", target: HOST, detail: null },
+    ]);
+    expect(JSON.stringify(audit.events)).not.toInclude(PASSWORD);
+  });
+
+  test("a guest is named by their access, not by their password", async () => {
+    const audit = memoryAudit();
+    const guests = memoryStore();
+    guests.create(
+      { id: "InViTeInViTe0001", host: HOST, label: "Alice", createdAt: START, expiresAt: null, seenAt: null },
+      guestHash(GUEST_PASSWORD),
+    );
+    await routes({ audit, guests }).signIn(signIn({ motdepasse: GUEST_PASSWORD }));
+    expect(audit.events.map(({ actor, detail }) => ({ actor, detail }))).toEqual([
+      { actor: "guest:InViTeInViTe0001", detail: { method: "guest" } },
+    ]);
+    expect(JSON.stringify(audit.events)).not.toInclude(GUEST_PASSWORD);
+  });
+
+  test("a rate-limited attempt writes nothing: the limit bounds the audit too", async () => {
+    const audit = memoryAudit();
+    const r = routes({ audit });
+    for (let i = 0; i < 10; i++) await r.signIn(signIn({ motdepasse: "wrong" }));
+    expect(audit.events.length).toBe(4);
+  });
+
+  test("an audit that fails does not stop the sign-in", async () => {
+    const audit = memoryAudit();
+    audit.record = () => {
+      throw new Error("disk full");
+    };
+    const original = console.error;
+    console.error = () => {};
+    try {
+      expect((await routes({ audit }).signIn(signIn({ motdepasse: PASSWORD }))).status).toBe(303);
+    } finally {
+      console.error = original;
+    }
+  });
 });

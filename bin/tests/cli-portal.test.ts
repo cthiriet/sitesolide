@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { knownManifests } from "./manifests";
 import { generateFragment } from "../cli/fragment";
 import { readManifest, type Manifest } from "../cli/manifest";
-import { fragmentIsProtected, PORTAL_PORT } from "../cli/portal";
+import { fragmentIsProtected, IDENTITY_HEADERS, IDENTITY_PREFIX, PORTAL_PORT } from "../cli/portal";
 
 /**
  * The portal's port is written in three places: its manifest, which decides
@@ -25,12 +25,20 @@ test("the portal's configuration has the same default port", () => {
   expect(config).toInclude(`process.env.PORT ?? ${PORTAL_PORT}`);
 });
 
-test("the portal only exposes /sante on its own host", () => {
+test("the portal only exposes /sante and the provider's two steps on its own host", () => {
   // /verifier and /_portal/* are only reachable through Caddy, from a
   // protected site, with an X-Portal-Hote that Caddy sets. On the portal's
-  // subdomain, the visitor would choose that header.
+  // subdomain, the visitor would choose that header: the two steps of a
+  // sign-in with the provider never read it, see portal/src/sso.ts and the
+  // test that sends them a forged one.
   const { manifest } = readManifest(readFileSync(join(REPO_ROOT, "portal", "sitesolide.json"), "utf8"));
-  expect(manifest?.routes).toEqual(["/sante"]);
+  expect(manifest?.routes).toEqual(["/sante", "/oidc/start", "/oidc/callback"]);
+});
+
+test("the portal announces the identity headers the CLI copies, under the same names", async () => {
+  const { IDENTITY_HEADERS: announced } = await import("../../portal/src/gate");
+  expect(Object.values(announced)).toEqual([...IDENTITY_HEADERS]);
+  for (const name of IDENTITY_HEADERS) expect(name.startsWith(IDENTITY_PREFIX)).toBe(true);
 });
 
 test("no fragment relays anything to the portal beyond its door, its login and /sante", () => {
@@ -54,11 +62,11 @@ test("no fragment relays anything to the portal beyond its door, its login and /
     }
   }
 
-  // On its own host, @dynamic is only /sante, and forward_auth never asks for
-  // anything but /verifier.
+  // On its own host, @dynamic is only /sante and the provider's two steps,
+  // and forward_auth never asks for anything but /verifier.
   const portal = knownManifests().find((manifest) => manifest.slug === "portal");
   expect(portal).toBeDefined();
-  expect(generateFragment(portal as Manifest)).toInclude("@dynamic path /sante\n");
+  expect(generateFragment(portal as Manifest)).toInclude("@dynamic path /sante /oidc/start /oidc/callback\n");
   expect(generateFragment(isProtected)).toInclude("\t\turi /verifier\n");
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { signInPage, doorPage } from "../src/page";
+import { signInPage, doorPage, portalPage } from "../src/page";
 
 /** The chunk of page between two markers, bounds included. */
 function between(page: string, start: string, end: string): string {
@@ -49,6 +49,44 @@ describe("the portal login page", () => {
   test("the message is only displayed if there is one", () => {
     expect(signInPage("/")).not.toInclude('role="alert"');
     expect(signInPage("/", "Password refused.")).toInclude('role="alert">Password refused.</p>');
+  });
+
+  test("without a provider, exactly the page from before: no link, the password field focused", () => {
+    const page = signInPage("/list");
+    expect(page).not.toInclude("/_portal/oidc");
+    expect(page).toInclude("Enter your password.");
+    expect(page).toInclude("required autofocus>");
+  });
+
+  test("with a provider, a link to begin the flow above the password, the return kept", () => {
+    const page = signInPage("/list?week=3", "", { providerName: "Google" });
+    expect(page).toInclude('<a class="sso" href="/_portal/oidc?retour=%2Flist%3Fweek%3D3">Sign in with Google</a>');
+    expect(page.indexOf('class="sso"')).toBeLessThan(page.indexOf('action="/_portal/connexion"'));
+    expect(page).toInclude('name="motdepasse"');
+    expect(page).not.toInclude("autofocus");
+    expect(page).not.toInclude("account=choose");
+  });
+
+  test("another account is offered when the one signed in is not let in", () => {
+    const page = signInPage("/", "Not shared.", { providerName: "Google", chooseAccount: true });
+    expect(page).toInclude('href="/_portal/oidc?retour=%2F&amp;account=choose">Use another account</a>');
+  });
+
+  test("the provider's name is escaped, it comes from the configuration", () => {
+    const page = signInPage("/", "", { providerName: "<b>Acme</b>" });
+    expect(page).toInclude("Sign in with &lt;b&gt;Acme&lt;/b&gt;");
+  });
+});
+
+describe("the pages of the portal's own host", () => {
+  test("escape the title, the message and the way back", () => {
+    const page = portalPage("<t>", "<m>", { href: 'https://kanban.test-zone.invalid/"x', label: "<l>" });
+    for (const raw of ["<t>", "<m>", "<l>", '/"x']) expect(page).not.toInclude(raw);
+    expect(page).toInclude('href="https://kanban.test-zone.invalid/&quot;x"');
+  });
+
+  test("without a way back, no link", () => {
+    expect(portalPage("Expired.", "Sign in again.")).not.toInclude("<a ");
   });
 });
 

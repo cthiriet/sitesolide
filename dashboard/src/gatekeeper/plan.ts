@@ -16,7 +16,7 @@
  * deployment will write the same block, and nothing will diverge.
  */
 import { compareDirectives, sameDirectives } from "../../borrowed/comparison";
-import { generateFragment } from "../../borrowed/fragment";
+import { generateFragment, isEarlierGeneration } from "../../borrowed/fragment";
 import { isProtected, readManifest, setPortal, validate, type Manifest } from "../../borrowed/manifest";
 import { fragmentIsProtected } from "../../borrowed/portal";
 import { fixedRefusal, actionRefusal } from "./rules";
@@ -63,7 +63,9 @@ export function planPortal(
   // block touched up by hand carries a decision the manifest knows nothing
   // about, and rewriting it would erase it without anyone having seen it. The
   // directives alone count, as for `sitesolide deploy`: a changed comment is
-  // not a touch-up.
+  // not a touch-up. Nor is the same block as an earlier release generated it,
+  // a protected site deployed before the identity headers: the generator's
+  // own, which the new block replaces as `deploy` would.
   const expected = generate(manifest);
   if (expected === null && deployed.block !== null) {
     return {
@@ -77,7 +79,12 @@ export function planPortal(
       message: `/etc/caddy/sites/${slug}.caddy is missing, redeploy the site first`,
     };
   }
-  if (expected !== null && deployed.block !== null && !sameDirectives(deployed.block, expected)) {
+  if (
+    expected !== null &&
+    deployed.block !== null &&
+    !sameDirectives(deployed.block, expected) &&
+    !isEarlierGeneration(deployed.block, manifest)
+  ) {
     const { lost, added } = compareDirectives(deployed.block, expected);
     return {
       kind: "rejects",

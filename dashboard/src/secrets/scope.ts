@@ -34,13 +34,14 @@
  *
  * Inside, two more rules: `PASSWORD_HASH` changes only through `/password`, in
  * whatever file it may be, and `dashboard.env` and `portal.env` carry nothing
- * else (hash only).
+ * else (hash only), but for the portal's sign-in settings, named one by one.
  *
  * A refusal is a value, never an exception: an exception forgotten in a handler
  * would become a mute 500, a refusal is read and displayed.
  */
 import { relative, resolve } from "node:path";
 import { isApp, readManifest, isValidSlug, type Manifest } from "../../borrowed/manifest";
+import { IDENTITY_VARIABLES } from "../../borrowed/sharing";
 import { PASSWORD_MAX } from "../auth";
 import { LANDING_FOLDER } from "../state";
 import type { ErrorCode, FileKind } from "./protocol";
@@ -101,6 +102,21 @@ export const PASSWORD_VARIABLE = "PASSWORD_HASH";
  * management.
  */
 export const HASH_ONLY: readonly string[] = ["dashboard.env", "portal.env"];
+
+/**
+ * The one exception, by name and never by pattern: `portal.env` also carries
+ * the settings of a sign-in with an identity provider, which the portal reads
+ * in its environment like the rest, and of which the client secret is a real
+ * secret. The list is the portal's own, borrowed: a name it does not read
+ * cannot be written here, and `DATA_DIR` or `PORT` stay refused.
+ */
+export const HASH_FILE_SETTINGS: Readonly<Record<string, readonly string[]>> = {
+  "portal.env": IDENTITY_VARIABLES,
+};
+
+function isAllowedBesideHash(name: string, variable: string): boolean {
+  return variable === PASSWORD_VARIABLE || (HASH_FILE_SETTINGS[name] ?? []).includes(variable);
+}
 
 /** Beyond that, the reason for a file out of management no longer quotes the names one by one. */
 const MAX_QUOTED_NAMES = 3;
@@ -440,8 +456,12 @@ export function isPassword(declaration: Declaration, variable: unknown): boolean
  * itself is not refused here: it is refused as a password.
  */
 export function outsideHashRefusal(name: string, variable: unknown): Refusal | null {
-  if (!HASH_ONLY.includes(name) || variable === PASSWORD_VARIABLE) return null;
-  const message = `${name} holds ${PASSWORD_VARIABLE} only: any other variable would change how its service runs, not add a secret`;
+  if (!HASH_ONLY.includes(name) || (typeof variable === "string" && isAllowedBesideHash(name, variable))) return null;
+  const settings = HASH_FILE_SETTINGS[name] ?? [];
+  const message =
+    settings.length === 0
+      ? `${name} holds ${PASSWORD_VARIABLE} only: any other variable would change how its service runs, not add a secret`
+      : `${name} holds ${PASSWORD_VARIABLE} and ${settings.join(", ")} only: any other variable would change how its service runs, not add a secret`;
   return outOfScope(message);
 }
 
@@ -452,7 +472,7 @@ export function outsideHashRefusal(name: string, variable: unknown): Refusal | n
  */
 export function outsideHashReason(name: string, names: readonly string[], path: string): string | null {
   if (!HASH_ONLY.includes(name)) return null;
-  const foreign = names.filter((key) => key !== PASSWORD_VARIABLE);
+  const foreign = names.filter((key) => !isAllowedBesideHash(name, key));
   if (foreign.length === 0) return null;
   const quoted = foreign.slice(0, MAX_QUOTED_NAMES).join(", ");
   const remaining = foreign.length > MAX_QUOTED_NAMES ? ` and ${foreign.length - MAX_QUOTED_NAMES} more` : "";

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { generateFragment } from "../borrowed/fragment";
 import {
   LANDING_FOLDER,
   LANDING_UNIT,
@@ -441,8 +442,16 @@ describe("the portal's door", () => {
         blocks: { kanban: WITH_DOOR },
       }),
     );
-    expect(snapshot.sites[0]?.portal).toEqual({ wanted: true, installed: true, exemptions: [] });
+    // A door from before the identity headers: closed all the same, nothing to
+    // flag, and the snapshot says its site learns nobody.
+    expect(snapshot.sites[0]?.portal).toEqual({ wanted: true, installed: true, identity: false, exemptions: [] });
     expect(messages(snapshot, "kanban").filter((m) => m.includes("portal"))).toEqual([]);
+  });
+
+  test("a block that hands the site who is in says so", () => {
+    const current = generateFragment({ slug: "kanban", port: 3045, start: "bun run server.ts", portal: true })!;
+    const snapshot = buildSnapshot(raw([folder("kanban", PROTEGE)], { blocks: { kanban: current } }));
+    expect(snapshot.sites[0]?.portal).toMatchObject({ installed: true, identity: true });
   });
 
   test("portal asked for and block with no door: the worst state, told as an error", () => {

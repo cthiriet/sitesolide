@@ -6,12 +6,16 @@
   "build": "bun scripts/borrow.ts",
   "start": "/usr/local/bin/bun run server.ts",
   "routes": [
-    "/sante"
+    "/sante",
+    "/oidc/start",
+    "/oidc/callback"
   ],
   "env": {
     "NODE_ENV": "production",
-    "SITESOLIDE_CONTACT": "{contact}"
+    "SITESOLIDE_CONTACT": "{contact}",
+    "PUBLIC_URL": "https://{slug}.{zone}"
   },
+  "network": "outbound",
   "exclude": [
     "node_modules",
     "data",

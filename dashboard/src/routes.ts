@@ -61,7 +61,7 @@ export type Routes = {
  * The portal's response, returned as it stands to the page. Unreachable, it is
  * said unreachable: an exception here would return a mute 500.
  */
-async function relay(call: () => Promise<Response>): Promise<Response> {
+export async function relay(call: () => Promise<Response>): Promise<Response> {
   let response: Response;
   try {
     response = await call();

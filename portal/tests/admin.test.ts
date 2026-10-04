@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { createAdmin } from "../src/admin";
+import { createAdmin, createSharingAdmin } from "../src/admin";
 import type { Guest } from "../src/guests";
 import { guestHash } from "../src/gate";
-import { memoryStore } from "./memory";
+import { readSettings, type Settings } from "../src/oidc";
+import { memoryAudit, memorySharing, memoryStore } from "./memory";
 
 const NOW = 1_800_000_000_000;
 const PASSWORD = "Xith-G4r4-nRJs-uDMV";
@@ -122,6 +123,136 @@ describe("a request that came through Caddy reaches nothing", () => {
       });
       expect(routes.remove(removal, "AAAAAAAAAAAAAAA0").status).toBe(403);
       expect(store.rows.size).toBe(0);
+    });
+  }
+});
+
+const HOST = "forum.test-zone.invalid";
+
+const SETTINGS = readSettings(
+  {
+    OIDC_ISSUER: "https://idp.test-zone.invalid",
+    OIDC_CLIENT_ID: "client-id-the-dashboard-never-sees",
+    OIDC_CLIENT_SECRET: "secret-the-dashboard-never-sees",
+    OIDC_ALLOWED_DOMAINS: "acme.test",
+    OIDC_ADMIN_EMAILS: "owner@acme.test",
+    OIDC_PROVIDER_NAME: "Acme",
+  },
+  "https://portal.test-zone.invalid",
+).settings!;
+
+function sharingAdmin(settings: Settings | null = SETTINGS) {
+  const sharing = memorySharing();
+  const audit = memoryAudit();
+  return { sharing, audit, routes: createSharingAdmin({ sharing, audit, settings }, () => NOW) };
+}
+
+function replacement(body: unknown, headers: Record<string, string> = {}): Request {
+  return new Request(`http://127.0.0.1:3026/admin/sharing/${HOST}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
+
+describe("the sharing policies", () => {
+  test("the list says how people sign in, never the client's secret nor its identifier", async () => {
+    const { routes } = sharingAdmin();
+    const response = routes.list(new Request("http://127.0.0.1:3026/admin/sharing"));
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const body = await response.json();
+    expect(body).toEqual({
+      sso: {
+        configured: true,
+        providerName: "Acme",
+        portalUrl: "https://portal.test-zone.invalid",
+        admins: ["owner@acme.test"],
+        allowedDomains: ["acme.test"],
+      },
+      sites: [],
+    });
+    expect(JSON.stringify(body)).not.toInclude("never-sees");
+  });
+
+  test("without a provider, the list says so", async () => {
+    const { routes } = sharingAdmin(null);
+    const body = (await routes.list(new Request("http://127.0.0.1:3026/admin/sharing")).json()) as { sso: unknown };
+    expect(body.sso).toEqual({ configured: false, providerName: null, portalUrl: null, admins: [], allowedDomains: [] });
+  });
+
+  test("a policy replaces the previous one, and the audit says what changed", async () => {
+    const { sharing, audit, routes } = sharingAdmin();
+    sharing.set(HOST, { mode: "people", people: ["alice@acme.test", "bob@acme.test"], domains: [] }, 1);
+
+    const response = await routes.replace(replacement({ mode: "domain", people: ["Bob@acme.test", "carol@acme.test"], domains: ["acme.test"] }), HOST);
+    expect(response.status).toBe(200);
+    const policy = { mode: "domain", people: ["bob@acme.test", "carol@acme.test"], domains: ["acme.test"] };
+    expect(await response.json()).toEqual({ host: HOST, policy, updatedAt: NOW });
+    expect(sharing.get(HOST)).toEqual(policy as never);
+
+    expect(audit.events).toEqual([
+      {
+        id: 1,
+        at: new Date(NOW).toISOString(),
+        actor: "owner",
+        action: "sharing.update",
+        target: HOST,
+        detail: {
+          mode: "domain",
+          previousMode: "people",
+          peopleAdded: ["carol@acme.test"],
+          peopleRemoved: ["alice@acme.test"],
+          domainsAdded: ["acme.test"],
+          domainsRemoved: [],
+        },
+      },
+    ]);
+  });
+
+  test("the host is judged, in lowercase", async () => {
+    const { sharing, routes } = sharingAdmin();
+    expect((await routes.replace(replacement({ mode: "admins" }), "Forum.Test-Zone.Invalid")).status).toBe(200);
+    expect(sharing.rows.has(HOST)).toBe(true);
+    expect((await routes.replace(replacement({ mode: "admins" }), "a b")).status).toBe(400);
+  });
+
+  test("a bad policy changes nothing and records nothing", async () => {
+    const { sharing, audit, routes } = sharingAdmin();
+    for (const body of ["{", { mode: "public" }, { mode: "people", people: ["nobody"] }, { mode: "domain", domains: ["com"] }]) {
+      expect((await routes.replace(replacement(body), HOST)).status).toBe(400);
+    }
+    expect(sharing.rows.size).toBe(0);
+    expect(audit.events).toEqual([]);
+  });
+
+  test("the actor is the owner unless the dashboard names an email or a token", async () => {
+    const { audit, routes } = sharingAdmin();
+    await routes.replace(replacement({ mode: "admins", actor: "token:abc_1" }), HOST);
+    await routes.replace(replacement({ mode: "admins", actor: "Alice@acme.test" }), HOST);
+    expect((await routes.replace(replacement({ mode: "admins", actor: "root; drop" }), HOST)).status).toBe(400);
+    expect(audit.events.map((event) => event.actor)).toEqual(["token:abc_1", "alice@acme.test"]);
+  });
+
+  test("the audit reads by pages", async () => {
+    const { audit, routes } = sharingAdmin();
+    for (let i = 0; i < 5; i++) audit.record({ actor: "owner", action: "portal.signin" }, NOW + i);
+    const page = (await routes.audit(new Request("http://127.0.0.1:3026/admin/audit?limit=2")).json()) as { events: { id: number }[] };
+    expect(page.events.map((event) => event.id)).toEqual([5, 4]);
+    const next = (await routes.audit(new Request("http://127.0.0.1:3026/admin/audit?limit=2&before=4")).json()) as { events: { id: number }[] };
+    expect(next.events.map((event) => event.id)).toEqual([3, 2]);
+    for (const query of ["limit=0", "limit=x", "before=-1", "limit=1.5"]) {
+      expect(routes.audit(new Request(`http://127.0.0.1:3026/admin/audit?${query}`)).status).toBe(400);
+    }
+  });
+
+  for (const header of ["X-Forwarded-For", "X-Portal-Hote"]) {
+    test(`refused if it carries ${header}, like the guest routes`, async () => {
+      const { sharing, routes } = sharingAdmin();
+      const carried = { [header]: "203.0.113.7" };
+      expect(routes.list(new Request("http://127.0.0.1:3026/admin/sharing", { headers: carried })).status).toBe(403);
+      expect((await routes.replace(replacement({ mode: "domain", domains: ["acme.test"] }, carried), HOST)).status).toBe(403);
+      expect(routes.audit(new Request("http://127.0.0.1:3026/admin/audit", { headers: carried })).status).toBe(403);
+      expect(sharing.rows.size).toBe(0);
     });
   }
 });

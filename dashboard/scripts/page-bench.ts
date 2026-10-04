@@ -48,7 +48,8 @@
  *   BENCH_PORT=4322          the front end's port, the service takes the next one
  *   BENCH_STALE=1           a snapshot ten minutes old, never rewritten
  *   BENCH_NO_STEWARD=1  no steward: Secrets and Access say 502
- *   BENCH_NO_PORTAL=1     no portal: Guests says 502
+ *   BENCH_NO_PORTAL=1     no portal: Guests and Sharing say 502
+ *   BENCH_NO_SSO=1        a portal with passwords only: Sharing says how to set it up
  *   BENCH_EMPTY=1             no snapshot at all: the "No snapshot" state
  *   BENCH_SHOWCASE=1          the same fleet healed, for the README's screenshots
  *
@@ -58,6 +59,7 @@ import { mkdtempSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, normalize, resolve } from "node:path";
 import { GUEST_DURATIONS, cleanLabel, type Guest } from "../borrowed/guests";
+import { readPolicy, type Policy } from "../borrowed/sharing";
 import { fixedRefusal } from "../src/gatekeeper/rules";
 import { lockHeldMessage } from "../src/gatekeeper/transaction";
 import { HASH_ONLY, PASSWORD_VARIABLE, MIN_PASSWORD } from "../src/secrets/scope";
@@ -486,7 +488,13 @@ function audience(generatedAt: number): string {
 function reading(now: number) {
   const generatedAt = process.env.BENCH_STALE === "1" ? start - 10 * MINUTE : now;
   const cpu: Record<string, number> = {};
-  const kept = "\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\turi /verifier\n\t}\n";
+  // The current stanza hands the site who is in; outside the showcase, photos
+  // keeps the one from before identities, for the Sharing section to say so.
+  const earlier = "\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\turi /verifier\n\t}\n";
+  const current =
+    "\troute {\n\t\trequest_header -X-Sitesolide-*\n\t\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\t\turi /verifier\n" +
+    "\t\t\tcopy_headers X-Sitesolide-User X-Sitesolide-User-Name X-Sitesolide-Role\n\t\t}\n\t}\n";
+  const kept = (slug: string) => (!SHOWCASE && slug === "photos" ? earlier : current);
   const blocks: Record<string, string> = SHOWCASE ? {} : { "old-kiosk": "# forgotten block\n" };
 
   // What systemctl show would return for a fake unit, its CPU counter kept
@@ -509,7 +517,7 @@ function reading(now: number) {
   };
 
   const folders = FOLDERS.map((d) => {
-    blocks[d.slug] = `# ${d.slug}\n${d.portal === true ? kept : ""}`;
+    blocks[d.slug] = `# ${d.slug}\n${d.portal === true ? kept(d.slug) : ""}`;
     const unit = d.unit === null ? null : raw(d.slug, d.unit);
     const units =
       d.units === undefined
@@ -1219,6 +1227,33 @@ const guests: Guest[] = [
   { id: "benchGuest000004", host: "library.example.com", label: "Dave, intern", createdAt: start - 32 * DAY, expiresAt: start - 2 * DAY, seenAt: start - 3 * DAY },
 ];
 
+/** How people sign in on the bench: Google, unless BENCH_NO_SSO asks for a portal with passwords only. */
+const sso =
+  process.env.BENCH_NO_SSO === "1"
+    ? { configured: false, providerName: null, portalUrl: null, admins: [], allowedDomains: [] }
+    : {
+        configured: true,
+        providerName: "Google",
+        portalUrl: "https://portal.example.com",
+        admins: ["owner@example.com"],
+        allowedDomains: ["example.com"],
+      };
+
+const sharing = new Map<string, { host: string; policy: Policy; updatedAt: number }>([
+  [
+    "cms.example.com",
+    {
+      host: "cms.example.com",
+      policy: { mode: "people", people: ["alice@example.com", "editor@example.org"], domains: [] },
+      updatedAt: start - 2 * DAY,
+    },
+  ],
+  [
+    "calendar.example.com",
+    { host: "calendar.example.com", policy: { mode: "domain", people: [], domains: ["example.com"] }, updatedAt: start - 9 * DAY },
+  ],
+]);
+
 const portal =
   process.env.BENCH_NO_PORTAL === "1"
     ? null
@@ -1258,6 +1293,19 @@ const portal =
               return new Response(null, { status: 204 });
             },
           },
+          // Sharing, like portal/src/admin.ts: the policy judged with the
+          // portal's own rule, replaced whole.
+          "/admin/sharing": { GET: () => Response.json({ sso, sites: [...sharing.values()] }) },
+          "/admin/sharing/:host": {
+            PUT: async (req) => {
+              const reading = readPolicy(await readBody(req));
+              if ("error" in reading) return Response.json({ error: reading.error }, { status: 400 });
+              const entry = { host: req.params.host, policy: reading.policy, updatedAt: Date.now() };
+              sharing.set(entry.host, entry);
+              return Response.json(entry);
+            },
+          },
+          "/admin/audit": { GET: () => Response.json({ events: [] }) },
         },
         fetch: () => new Response("404", { status: 404 }),
       });

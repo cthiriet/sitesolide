@@ -15,6 +15,12 @@ import {
   isAcceptableRequest,
   returnForRequest,
   safeReturnTo,
+  issueIdentityToken,
+  cleanName,
+  identityHeaders,
+  purposeKey,
+  seal,
+  unseal,
 } from "../src/gate";
 
 const SEED = new Uint8Array(32).fill(7);
@@ -238,4 +244,134 @@ test("the page loads nothing from anywhere but itself, its data: icon included",
   expect(csp).toInclude("default-src 'none'");
   expect(csp).toInclude("img-src data:");
   expect(csp).not.toInclude("script-src");
+});
+
+describe("an identity token", () => {
+  const ALICE = { email: "alice@acme.test", name: "Alice Martin" };
+  const IDENTITY_DURATION = 24 * 3600;
+  const validToken = issueIdentityToken(KEY, HOST, NOW + 3600, ALICE);
+
+  test("carries the verified email and the name, and nothing of a guest", () => {
+    expect(readToken(validToken, KEY, HOST, NOW, DURATION, IDENTITY_DURATION)).toEqual({ guest: null, identity: ALICE });
+    expect(validToken.split(".")).toHaveLength(4);
+  });
+
+  test("a person without a name stays a person", () => {
+    const token = issueIdentityToken(KEY, HOST, NOW + 60, { email: "bob@acme.test", name: null });
+    expect(readToken(token, KEY, HOST, NOW, DURATION)?.identity).toEqual({ email: "bob@acme.test", name: null });
+  });
+
+  test("opens no other host, and falls with the password", () => {
+    expect(readToken(validToken, KEY, "roster.test-zone.invalid", NOW, DURATION)).toBeNull();
+    expect(readToken(validToken, deriveKey(SEED, "$argon2id$other")!, HOST, NOW, DURATION)).toBeNull();
+  });
+
+  test("expires, and never lives beyond the identity duration, even when signed for longer", () => {
+    expect(readToken(validToken, KEY, HOST, NOW + 3600, DURATION, IDENTITY_DURATION)).toBeNull();
+    const distant = issueIdentityToken(KEY, HOST, NOW + IDENTITY_DURATION + 1, ALICE);
+    expect(readToken(distant, KEY, HOST, NOW, DURATION, IDENTITY_DURATION)).toBeNull();
+    expect(readToken(distant, KEY, HOST, NOW, DURATION)).not.toBeNull();
+  });
+
+  test("another email in the payload invalidates the signature", () => {
+    const [expiration, mark, , signature] = validToken.split(".");
+    const forged = Buffer.from(JSON.stringify({ e: "ceo@acme.test", n: "CEO" })).toString("base64url");
+    expect(readToken(`${expiration}.${mark}.${forged}.${signature}`, KEY, HOST, NOW, DURATION)).toBeNull();
+  });
+
+  test("does not turn into an owner's or a guest's token by dropping pieces, nor the reverse", () => {
+    const [expiration, , payload, signature] = validToken.split(".");
+    expect(readToken(`${expiration}.${signature}`, KEY, HOST, NOW, DURATION)).toBeNull();
+    expect(readToken(`${expiration}.${payload}.${signature}`, KEY, HOST, NOW, DURATION)).toBeNull();
+    const [ownerExpiration, ownerSignature] = issueToken(KEY, HOST, NOW + 3600).split(".");
+    expect(readToken(`${ownerExpiration}.id.${payload}.${ownerSignature}`, KEY, HOST, NOW, DURATION)).toBeNull();
+    const [guestExpiration, guest, guestSignature] = issueToken(KEY, HOST, NOW + 3600, GUEST_ID).split(".");
+    expect(readToken(`${guestExpiration}.id.${guest}.${guestSignature}`, KEY, HOST, NOW, DURATION)).toBeNull();
+  });
+
+  test("a fourth piece needs the identity mark", () => {
+    const [expiration, , payload, signature] = validToken.split(".");
+    expect(readToken(`${expiration}.xx.${payload}.${signature}`, KEY, HOST, NOW, DURATION)).toBeNull();
+  });
+
+  test("a signed payload that is not an identity is refused all the same", () => {
+    // Only the portal signs, but what it reads back it judges again.
+    for (const identity of [
+      { email: "not an email", name: null },
+      { email: "Alice@acme.test", name: null },
+      { email: "alice@acme.test", name: "two\nlines" },
+    ]) {
+      const token = issueIdentityToken(KEY, HOST, NOW + 60, identity);
+      expect(readToken(token, KEY, HOST, NOW, DURATION)).toBeNull();
+    }
+  });
+});
+
+describe("a display name", () => {
+  test("loses its control characters and its edges, and is cut", () => {
+    expect(cleanName("  Alice\r\nX-Sitesolide-Role: admin ")).toBe("Alice  X-Sitesolide-Role: admin");
+    expect(cleanName("a".repeat(500))).toHaveLength(200);
+    expect(cleanName("   ")).toBeNull();
+    expect(cleanName(42)).toBeNull();
+  });
+});
+
+describe("the identity headers", () => {
+  test("the owner and a guest are a role and nobody", () => {
+    expect(identityHeaders("admin", null)).toEqual({ "X-Sitesolide-Role": "admin" });
+    expect(identityHeaders("guest", null)).toEqual({ "X-Sitesolide-Role": "guest" });
+  });
+
+  test("a person carries the email as is and the name percent-encoded", () => {
+    const headers = identityHeaders("member", { email: "zoe@acme.test", name: "Zoë 李" });
+    expect(headers).toEqual({
+      "X-Sitesolide-Role": "member",
+      "X-Sitesolide-User": "zoe@acme.test",
+      "X-Sitesolide-User-Name": "Zo%C3%AB%20%E6%9D%8E",
+    });
+    expect(decodeURIComponent(headers["X-Sitesolide-User-Name"]!)).toBe("Zoë 李");
+  });
+
+  test("no name, no name header rather than an empty one", () => {
+    expect(identityHeaders("admin", { email: "owner@acme.test", name: null })).toEqual({
+      "X-Sitesolide-Role": "admin",
+      "X-Sitesolide-User": "owner@acme.test",
+    });
+  });
+
+  test("every value fits in a header", () => {
+    const headers = identityHeaders("member", { email: "a@acme.test", name: cleanName("Ünïcødé ✓ ") });
+    expect(() => new Headers(headers)).not.toThrow();
+  });
+});
+
+describe("sealed tokens", () => {
+  const FLOW_KEY = purposeKey(KEY, "flow");
+
+  test("read back what was sealed, with the same key only", () => {
+    const token = seal(FLOW_KEY, { h: HOST, n: 1 });
+    expect(unseal(FLOW_KEY, token)).toEqual({ h: HOST, n: 1 });
+    expect(unseal(purposeKey(KEY, "session"), token)).toBeNull();
+    expect(unseal(KEY, token)).toBeNull();
+  });
+
+  test("a purpose key never equals the cookie key, nor another purpose's", () => {
+    expect(Buffer.from(FLOW_KEY).equals(Buffer.from(KEY))).toBe(false);
+    expect(Buffer.from(FLOW_KEY).equals(Buffer.from(purposeKey(KEY, "session")))).toBe(false);
+  });
+
+  test("a changed payload, or anything malformed, is refused without throwing", () => {
+    const [, signature] = seal(FLOW_KEY, { h: HOST }).split(".");
+    const other = Buffer.from(JSON.stringify({ h: "evil.test" })).toString("base64url");
+    expect(unseal(FLOW_KEY, `${other}.${signature}`)).toBeNull();
+    for (const token of [null, "", ".", "a.b.c", "!!.x", seal(FLOW_KEY, [1, 2])]) {
+      expect(unseal(FLOW_KEY, token)).toBeNull();
+    }
+  });
+
+  test("the flow's own cookies follow the __Host- rule", () => {
+    expect(cookieName(true, "-sso")).toBe("__Host-portal-sso");
+    expect(cookieName(false, "-sso")).toBe("portal-sso");
+    expect(setCookie("v", true, 60, "-sso").startsWith("__Host-portal-sso=v;")).toBe(true);
+  });
 });

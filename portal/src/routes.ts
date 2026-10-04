@@ -4,14 +4,18 @@
  * server, for its part, creates only one.
  */
 import { remainingWait, isAcceptableSubmission } from "../borrowed/auth";
-import type { GuestStore } from "./database";
+import type { AuditStore, GuestStore, NewEvent, SharingStore } from "./database";
 import { guestExpiration, guestOpens, type Guest } from "./guests";
+import { IDENTITY_DURATION_S } from "./handoff";
+import type { Settings } from "./oidc";
 import { signInPage } from "./page";
+import { DEFAULT_POLICY, identityRole, maySignIn, type Role } from "./sharing";
 import {
   clearCookie,
   issueToken,
   guestHash,
   doorHeaders,
+  identityHeaders,
   isValidHost,
   readCookie,
   readToken,
@@ -21,6 +25,8 @@ import {
   isAcceptableRequest,
   returnForRequest,
   safeReturnTo,
+  type Bearer,
+  type Identity,
 } from "./gate";
 
 export type Options = {
@@ -30,7 +36,29 @@ export type Options = {
   online: boolean;
   cookieDurationS: number;
   guests: GuestStore;
+  /**
+   * Signing in with the identity provider. Absent or `null`: not offered, and
+   * an identity cookie opens nothing, so that removing the settings closes
+   * every session they opened.
+   */
+  settings?: Settings | null;
+  /** Absent: every site keeps `DEFAULT_POLICY`, the admins alone. */
+  sharing?: SharingStore;
+  /** Absent: nothing is recorded. */
+  audit?: AuditStore;
 };
+
+/** What the sign-in page says to someone the policy does not let in. */
+export function notSharedMessage(email: string): string {
+  return `You are signed in as ${email}, but this site isn't shared with you. Ask its owner, or use another account.`;
+}
+
+/** Who a valid cookie says its holder is, as the audit names them. */
+export function actorOf(bearer: Bearer | null): string {
+  if (bearer === null) return "anonymous";
+  if (bearer.identity !== undefined) return bearer.identity.email;
+  return bearer.guest === null ? "owner" : `guest:${bearer.guest}`;
+}
 
 export type Routes = {
   verify: (req: Request) => Response;
@@ -76,11 +104,31 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
     return isValidHost(host) ? host : null;
   }
 
-  function door(returnTo: string, status: number, message = "", headers: Record<string, string> = {}) {
-    return new Response(signInPage(returnTo, message), {
+  const settings = options.settings ?? null;
+
+  function door(
+    returnTo: string,
+    status: number,
+    message = "",
+    headers: Record<string, string> = {},
+    chooseAccount = false,
+  ) {
+    // The provider is offered only where a cookie could follow: a portal with
+    // no hash signs nothing, an identity no more than a password.
+    const sso = settings === null || options.key === null ? null : { providerName: settings.providerName, chooseAccount };
+    return new Response(signInPage(returnTo, message, sso), {
       status,
       headers: { ...doorHeaders(), ...headers },
     });
+  }
+
+  function audit(event: NewEvent, now: number): void {
+    try {
+      options.audit?.record(event, now);
+    } catch (err) {
+      // The audit tells what happened; it must never be what stops it.
+      console.error(`audit: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   function open(returnTo: string, token: string, durationS: number): Response {
@@ -113,16 +161,38 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       const token = readCookie(req.headers.get("cookie"), cookieName(options.online));
       const now = clock();
 
-      const bearer = readToken(token, options.key, host, Math.floor(now / 1000), options.cookieDurationS);
+      const bearer = readToken(
+        token,
+        options.key,
+        host,
+        Math.floor(now / 1000),
+        options.cookieDurationS,
+        IDENTITY_DURATION_S,
+      );
       if (bearer === null) return door(returnTo, 401);
 
       // A guest's access is re-read on every request, and that is what makes
       // revocation immediate: the cookie stays properly signed, the row is no
-      // longer there.
+      // longer there. An identity is judged against the site's policy the same
+      // way, every request: removed from the list, refused at the next one.
       let guest: Guest | null = null;
-      if (bearer.guest !== null) {
+      let identity: Identity | null = null;
+      let role: Role = "admin";
+      if (bearer.identity !== undefined) {
+        // The settings are judged again too: a domain taken off the allowed
+        // ones closes its people out at the next request, not in a day.
+        if (settings === null || !maySignIn(bearer.identity.email, settings.allowedDomains, settings.admins)) {
+          return door(returnTo, 401);
+        }
+        const policy = options.sharing?.get(host) ?? DEFAULT_POLICY;
+        const granted = identityRole(bearer.identity.email, policy, settings.admins);
+        if (granted === null) return door(returnTo, 401, notSharedMessage(bearer.identity.email), {}, true);
+        identity = bearer.identity;
+        role = granted;
+      } else if (bearer.guest !== null) {
         guest = options.guests.byId(bearer.guest);
         if (!guestOpens(guest, host, now)) return door(returnTo, 401, "This access is no longer valid.");
+        role = "guest";
       }
 
       if (!isAcceptableRequest(method, req.headers.get("origin"), host, options.online)) {
@@ -132,7 +202,11 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       if (guest !== null && now - (guest.seenAt ?? 0) > TOUCH_STEP_MS) {
         options.guests.touch(guest.id, now);
       }
-      return new Response(null, { status: 200 });
+      // Caddy copies these onto the request it sends the site, after taking
+      // off any the visitor sent: see portalStanza in bin/cli/portal.ts. A
+      // block from before identities copies nothing, and the site simply
+      // learns nothing.
+      return new Response(null, { status: 200, headers: identityHeaders(role, identity) });
     },
 
     async signIn(req) {
@@ -176,6 +250,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
         const guest = options.guests.byHash(guestHash(submitted));
         if (guestOpens(guest, host, now)) {
           attempts.delete(host);
+          audit({ actor: `guest:${guest.id}`, action: "portal.signin", target: host, detail: { method: "guest" } }, now);
           const expiration = guestExpiration(guest, nowS, options.cookieDurationS);
           return open(returnTo, issueToken(options.key, host, expiration, guest.id), expiration - nowS);
         }
@@ -194,6 +269,9 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
 
       if (!ok) {
         attempts.set(host, { failures: record.failures + 1, lastAt: now });
+        // The rate limiting above bounds these writes: a stranger hammering
+        // one site writes a row per attempt it is allowed, not per request.
+        audit({ actor: "anonymous", action: "portal.signin_failed", target: host, detail: { method: "password" } }, now);
         // A single message for every cause: wrong password, revoked access,
         // absent or malformed hash. What the portal knows about its own
         // configuration is not learned here.
@@ -201,6 +279,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       }
 
       attempts.delete(host);
+      audit({ actor: "owner", action: "portal.signin", target: host, detail: { method: "password" } }, now);
       const expiration = nowS + options.cookieDurationS;
       return open(returnTo, issueToken(options.key!, host, expiration), options.cookieDurationS);
     },
@@ -211,6 +290,12 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       if (!isAcceptableOrigin(req.headers.get("origin"), host, options.online)) {
         return refuse("portal: origin refused", 403);
       }
+      const now = clock();
+      const token = readCookie(req.headers.get("cookie"), cookieName(options.online));
+      const bearer = readToken(token, options.key, host, Math.floor(now / 1000), options.cookieDurationS, IDENTITY_DURATION_S);
+      // Only someone who was in signs out: a stranger posting here, any Origin
+      // being easy to forge outside a browser, writes nothing.
+      if (bearer !== null) audit({ actor: actorOf(bearer), action: "portal.signout", target: host }, now);
       // The cookie is erased even if it was no longer valid: a dead cookie
       // would otherwise stay in the browser.
       return new Response(null, {

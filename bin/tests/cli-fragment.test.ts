@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { decideBlock, generateFragment, ZONE_HOST, IMPORT_LOCKS, matcher } from "../cli/fragment";
+import { decideBlock, generateFragment, isEarlierGeneration, ZONE_HOST, IMPORT_LOCKS, matcher } from "../cli/fragment";
 import type { Manifest } from "../cli/manifest";
-import { PORTAL_PORT, portalStanza } from "../cli/portal";
+import { fragmentPassesIdentity, PORTAL_GENERATIONS, PORTAL_PORT, portalStanza } from "../cli/portal";
 
 const MIXED: Manifest = {
   slug: "budget",
@@ -185,10 +185,63 @@ describe("portal", () => {
   });
 
   test("the stanza uses no handle, which would form a group with the lock", () => {
-    for (const line of portalStanza(PROTECTED)) {
-      if (line.trimStart().startsWith("#")) continue;
-      expect(line).not.toMatch(/\b(handle|route)\b/);
+    for (const generation of PORTAL_GENERATIONS) {
+      for (const line of portalStanza(PROTECTED, generation)) {
+        if (line.trimStart().startsWith("#")) continue;
+        expect(line).not.toMatch(/\bhandle\b/);
+      }
     }
+  });
+
+  test("one route, and only to take the visitor's identity headers off before the portal is asked", () => {
+    // Order is what this route is for: Caddy keeps it inside, and sorts
+    // request_header after forward_auth outside. Anything else slipped into it
+    // would run in the order written, which the comparison of blocks does not
+    // see: nothing else goes in.
+    const stanza = portalStanza(PROTECTED)
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("#"));
+    const start = stanza.indexOf("route {");
+    expect(stanza.filter((line) => /\broute\b/.test(line))).toEqual(["route {"]);
+    expect(stanza.slice(start, start + 3)).toEqual([
+      "route {",
+      "request_header -X-Sitesolide-*",
+      `forward_auth @portal_guard 127.0.0.1:${PORTAL_PORT} {`,
+    ]);
+    expect(stanza).toContain("copy_headers X-Sitesolide-User X-Sitesolide-User-Name X-Sitesolide-Role");
+    expect(stanza.slice(start)).toEqual([
+      "route {",
+      "request_header -X-Sitesolide-*",
+      `forward_auth @portal_guard 127.0.0.1:${PORTAL_PORT} {`,
+      "uri /verifier",
+      "header_up X-Portal-Hote {host}",
+      "lb_try_duration 5s",
+      "copy_headers X-Sitesolide-User X-Sitesolide-User-Name X-Sitesolide-Role",
+      "}",
+      "}",
+    ]);
+  });
+
+  test("the earlier generation is the stanza from before identities, line for line", () => {
+    const earlier = portalStanza(PROTECTED, "cookie")
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("#"));
+    expect(earlier.slice(-6)).toEqual([
+      "@portal_guard not path /_portal/* /webhooks/*",
+      `forward_auth @portal_guard 127.0.0.1:${PORTAL_PORT} {`,
+      "uri /verifier",
+      "header_up X-Portal-Hote {host}",
+      "lb_try_duration 5s",
+      "}",
+    ]);
+    expect(earlier.join("\n")).not.toInclude("X-Sitesolide");
+    expect(earlier.join("\n")).not.toMatch(/\broute\b/);
+  });
+
+  test("whether a block hands the site who is in: the current one does, the earlier one does not", () => {
+    expect(fragmentPassesIdentity(generateFragment(PROTECTED)!)).toBe(true);
+    expect(fragmentPassesIdentity(generateFragment(PROTECTED, "cookie")!)).toBe(false);
+    expect(fragmentPassesIdentity(generateFragment(MIXED)!)).toBe(false);
   });
 
   test("an unprotected site does not have the stanza", () => {
@@ -242,6 +295,28 @@ describe("the block against the one in service", () => {
 
   test("a project without a block has nothing to decide", () => {
     expect(decide({ slug: "brochure", publicDir: "public" }, "anything")).toBe("deposit");
+  });
+
+  test("a protected block from before identities is upgraded without --force", () => {
+    const earlier = generateFragment(CLOSED, "cookie")!;
+    expect(isEarlierGeneration(earlier, CLOSED)).toBe(true);
+    expect(decide(CLOSED, earlier)).toBe("upgrades");
+    // An open site's block never changed: nothing to upgrade, it is the same.
+    expect(isEarlierGeneration(block(OPEN), OPEN)).toBe(false);
+    expect(decide(OPEN, generateFragment(OPEN, "cookie"))).toBe("deposit");
+  });
+
+  test("the dashboard's door is followed whichever release wrote the block in service", () => {
+    // A dashboard not yet upgraded closed the site with the earlier stanza.
+    expect(decide(OPEN, generateFragment(CLOSED, "cookie"), false, true)).toBe("follows-door");
+    expect(decide(OPEN, generateFragment(CLOSED, "cookie"))).toBe("diverged");
+  });
+
+  test("an earlier block edited by hand is still a hand edit", () => {
+    const edited = generateFragment({ ...CLOSED, port: 3031 }, "cookie")!;
+    expect(isEarlierGeneration(edited, CLOSED)).toBe(false);
+    expect(decide(CLOSED, edited)).toBe("diverged");
+    expect(decide(CLOSED, `${generateFragment(CLOSED, "cookie")}\n\theader X-Extra yes`)).toBe("diverged");
   });
 });
 

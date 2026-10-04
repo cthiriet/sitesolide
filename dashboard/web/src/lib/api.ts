@@ -3,6 +3,7 @@
  * SameSite=Strict, and nothing here addresses another host.
  */
 import type { Guest } from "./guests"
+import type { Policy, SharingList } from "./sharing"
 import type {
   ContentRequest,
   FileRequest,
@@ -81,6 +82,21 @@ export function createGuest(host: string, label: string, durationS: number | nul
 /** 204 on success, so with no body. */
 export function revokeGuest(id: string) {
   return callApi<Failure>(`/api/invites/${encodeURIComponent(id)}`, { method: "DELETE" })
+}
+
+// --- Sharing -------------------------------------------------------------------
+
+export function readSharing() {
+  return callApi<SharingList & Failure>("/api/sharing")
+}
+
+/** The whole policy, rebuilt key by key: the portal replaces it as a whole. */
+export function replaceSharing(host: string, { mode, people, domains }: Policy) {
+  return callApi<{ host: string; policy: Policy; updatedAt: number } & Failure>(`/api/sharing/${encodeURIComponent(host)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode, people, domains }),
+  })
 }
 
 // --- The secrets ---------------------------------------------------------------

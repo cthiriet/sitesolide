@@ -23,6 +23,7 @@ import {
   touchSession,
 } from "./src/database";
 import { createSessionReader, createRoutes } from "./src/routes";
+import { createSharingRoutes, localSharing } from "./src/sharing";
 import { DEFAULT_TIMEOUTS, localSteward } from "./src/secrets/client";
 import { createTokens } from "./src/secrets/tokens";
 import { createSecretsRoutes } from "./src/secrets/routes";
@@ -72,6 +73,15 @@ const routes = createRoutes(store, {
   forgetUnlock: secrets.forgetUnlock,
 });
 
+// Who may open a site with their work account: relayed to the portal like the
+// guests, behind the same session check. See src/sharing.ts.
+const sharing = createSharingRoutes({
+  session: createSessionReader(store, { online: ONLINE, sessionDurationMs: SESSION_DURATION_MS }),
+  publicUrl: PUBLIC_URL,
+  stateFile: STATE_FILE,
+  portal: localSharing(PORTAL_URL),
+});
+
 /**
  * The delay of the relay towards the steward, and five seconds more to answer
  * the page. It covers the longest action under its lock, `/portal`, and
@@ -106,6 +116,9 @@ const server = Bun.serve({
     "/api/state": { GET: routes.state },
     "/api/guests": { GET: routes.guests, POST: routes.createGuest },
     "/api/invites/:id": { DELETE: (req) => routes.revokeGuest(req, req.params.id) },
+    "/api/sharing": { GET: sharing.list },
+    "/api/sharing/:host": { PUT: (req) => sharing.replace(req, req.params.host) },
+    "/api/portal/audit": { GET: sharing.audit },
     "/api/secrets": { GET: secrets.dashboard },
     "/api/secrets/log": { GET: secrets.log },
     "/api/secrets/lock": { POST: secrets.lock },

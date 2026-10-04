@@ -155,6 +155,43 @@ const STYLE = `
 
     button:hover { background: #1c2c47; }
 
+    a.sso {
+      display: block;
+      margin-top: 26px;
+      padding: 13px 22px;
+      font-size: 0.9375rem;
+      font-weight: 500;
+      text-align: center;
+      text-decoration: none;
+      color: var(--surface);
+      background: var(--ink);
+      border-radius: 5px;
+    }
+
+    a.sso:hover { background: #1c2c47; }
+
+    a.sso:focus-visible {
+      outline: 2px solid var(--seal);
+      outline-offset: 2px;
+    }
+
+    .or {
+      margin-top: 22px;
+      font-size: 0.875rem;
+      color: var(--ink-45);
+      text-align: center;
+    }
+
+    .or + form { margin-top: 6px; }
+
+    .or + form button {
+      color: var(--ink);
+      background: var(--surface);
+      border-color: var(--line);
+    }
+
+    .or + form button:hover { border-color: var(--ink-70); background: var(--surface); }
+
     .help {
       margin-top: 22px;
       padding-top: 18px;
@@ -223,17 +260,48 @@ ${form}${footer === "" ? "" : `\n${footer}`}
  * The host name no longer appears in it: the address bar already shows it, and
  * the page of a closed site has no business saying more than the lock's one.
  */
-export function signInPage(returnTo: string, message = ""): string {
+export function signInPage(returnTo: string, message = "", sso: SsoOffer | null = null): string {
   const alertHtml = message === "" ? "" : `\n      <p class="alert" role="alert">${escapeHtml(message)}</p>`;
-  return template({
-    title: "This site is private.",
-    text: "Enter your password.",
-    form: `    <form method="post" action="/_portal/connexion">
+  const passwordForm = `    <form method="post" action="/_portal/connexion">
       <input type="hidden" name="retour" value="${escapeHtml(returnTo)}">
       <label for="motdepasse">Password</label>
-      <input id="motdepasse" name="motdepasse" type="password" autocomplete="current-password" required autofocus>${alertHtml}
+      <input id="motdepasse" name="motdepasse" type="password" autocomplete="current-password" required${sso === null ? " autofocus" : ""}>${alertHtml}
       <button type="submit">Enter</button>
-    </form>`,
+    </form>`;
+  if (sso === null) {
+    return template({ title: "This site is private.", text: "Enter your password.", form: passwordForm });
+  }
+
+  // A link and not a form: the flow leaves for the portal's own host, which
+  // the CSP's `form-action 'self'` would refuse to a form's redirect. What the
+  // link starts changes nothing on its own, see src/sso.ts.
+  const begin = (choose: boolean) =>
+    escapeHtml(`/_portal/oidc?${new URLSearchParams({ retour: returnTo, ...(choose ? { account: "choose" } : {}) })}`);
+  const another = sso.chooseAccount
+    ? `\n    <p class="or"><a href="${begin(true)}">Use another account</a></p>`
+    : "";
+  return template({
+    title: "This site is private.",
+    text: "Sign in with your work account, or enter a password.",
+    form: `    <a class="sso" href="${begin(false)}">Sign in with ${escapeHtml(sso.providerName)}</a>${another}
+    <p class="or">or</p>
+${passwordForm}`,
+  });
+}
+
+/** The provider the sign-in page offers, and whether to offer choosing another account. */
+export type SsoOffer = { providerName: string; chooseAccount?: boolean };
+
+/**
+ * A page of the portal's own host, where a sign-in with the provider passes:
+ * what went wrong, and the way back to the site when the portal knows it.
+ * Everything in it is escaped, the message included.
+ */
+export function portalPage(title: string, message: string, back: { href: string; label: string } | null = null): string {
+  return template({
+    title: escapeHtml(title),
+    text: escapeHtml(message),
+    form: back === null ? "" : `    <a class="sso" href="${escapeHtml(back.href)}">${escapeHtml(back.label)}</a>`,
   });
 }
 

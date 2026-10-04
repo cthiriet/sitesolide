@@ -20,7 +20,7 @@
  * after a deployment that otherwise succeeded.
  */
 import { isApp, isProtected, mainPort, PORTAL_SLUG, servicesOf, type Manifest } from "../borrowed/manifest";
-import { fragmentIsProtected } from "../borrowed/portal";
+import { fragmentIsProtected, fragmentPassesIdentity } from "../borrowed/portal";
 import { isValidCode, previewHost } from "../borrowed/locks";
 import { monitorDiscrepancies } from "./monitor";
 
@@ -202,6 +202,13 @@ export type Portal = {
   wanted: boolean;
   /** Is the portal's stanza in the fragment in service? */
   installed: boolean;
+  /**
+   * Does that stanza hand the site the portal's identity headers, the
+   * visitor's taken off first? False for a block deployed before them, which
+   * the site's next deployment upgrades. Absent from a snapshot written by a
+   * collector from before them: unknown, not false.
+   */
+  identity?: boolean;
   /** The paths the door lets through, public and under the site's sole guard. */
   exemptions: string[];
 };
@@ -426,6 +433,7 @@ function readPortal(manifest: Manifest | null, fragment: string | undefined): Po
   return {
     wanted: manifest !== null && isProtected(manifest),
     installed: fragment !== undefined && fragmentIsProtected(fragment),
+    identity: fragment !== undefined && fragmentPassesIdentity(fragment),
     exemptions: (manifest?.portalExempt ?? []).filter((path): path is string => typeof path === "string"),
   };
 }

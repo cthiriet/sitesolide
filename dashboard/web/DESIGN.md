@@ -145,7 +145,7 @@ Phone (< 768 px), inside a site
 +------------------------------------+
 |  content, px-4                     |
 +------------------------------------+
-| Overview  Secrets  Guests  Access  |  mobile tabs, fixed, h-16
+| Overview  Secrets  ...  Access     |  mobile tabs, fixed, h-16, one row
 +------------------------------------+
 ```
 
@@ -159,15 +159,16 @@ rule above the tab.
 **Two levels.** On the home page and on Activity, the sidebar carries the
 machine's pages. Inside a site it becomes that site's: the *All sites* return,
 the current site on a white surface (initial, name, state in one sentence, tone
-dot), which opens the site switcher, then its four sections. Collapsed, the site
+dot), which opens the site switcher, then its six sections. Collapsed, the site
 is just its initial and its dot. On a phone the tabs follow the level: two for
-the machine, four for a site.
+the machine, six for a site, on one row.
 
 Indicators (`lib/sidebar.ts`). Machine: *Sites* the number of discrepancies (error
 if there is one, otherwise attention). Site: *Overview* its discrepancies;
 *Secrets* what its files ask for, missing as an error, unmanaged or restart
 pending as attention; *Guests* its active accesses (neutral); *Access* a door in
-disagreement (error). Zero is not shown.
+disagreement (error). *Audience* and *Sharing* report nothing: who a site is
+shared with is a choice, not a problem. Zero is not shown.
 
 ### 3.2 The screen decides the shell, the container decides the content
 
@@ -322,7 +323,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Object | Word | Do not write |
 |---|---|---|
 | Machine pages | Sites (the home page), Activity | Dashboard, Home, Overview |
-| Site sections | Overview, Secrets, Guests, Access; the breadcrumb *All sites > cms*; *Switch site* | Settings, Details |
+| Site sections | Overview, Audience, Secrets, Guests, Sharing, Access; the breadcrumb *All sites > cms*; *Switch site* | Settings, Details |
 | The machine | Server | VM, host |
 | Discrepancy | Refusal, issues; Error, Warning | Alert, Critical |
 | Verdict | All clear, `N errors, N warnings`, Stale data, No data | OK, Healthy |
@@ -332,6 +333,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Secrets | Locked, Unlocked, Unlock, Lock, Restart pending, Unmanaged, Missing, Write-only, Restart service, Restore previous, Add variable, Create file, Replace, Reveal | Vault, Decrypt, Edit file |
 | Passwords | Change password, Dashboard password, Generate a strong one, Set my own, New password, Copy password | Set hash, Regenerate |
 | Guests | Guest, access, Create access, Revoke, Remove, Expires, Last visit, No expiry | New access, User, guest link |
+| Sharing | Who gets in, Only admins, Specific people, Everyone at a domain, People, Domains, Add people, Add a domain, Remove, Always let in, Send them the link, Make it public, work account | Permissions, ACL, Invite, Public mode |
 | Unreachable | Can't reach the dashboard., Can't reach the portal., Can't reach the steward. | is not answering |
 | Common actions | Refresh, Retry, Sign in, Sign out, Copy, Copied, Cancel, Close, Manage | Reload, Try again, Log out, Submit |
 | Empty states | No issues, No sites match "x", No guest access to cms yet, cms has no secret files, cms isn't behind the portal | Nothing here! |
@@ -349,6 +351,7 @@ One page per served file, the site in `?s=`:
 | A site's Overview | `/site/?s=cms` | `site/index.html` |
 | A site's Secrets | `/site/secrets/?s=cms` | `site/secrets/index.html` |
 | A site's Guests | `/site/guests/?s=cms` | `site/guests/index.html` |
+| A site's Sharing | `/site/sharing/?s=cms` | `site/sharing/index.html` |
 | A site's Access | `/site/access/?s=cms` | `site/access/index.html` |
 
 Older addresses keep their file and redirect client-side, with no history entry.
@@ -380,6 +383,16 @@ asks you to unlock again.
 **A site's Guests.** *Create access* in the header, the site already chosen. The
 table: active ones by expiry, then expired ones under their subheading. With no
 portal, the empty state leads to Access.
+
+**A site's Sharing.** Who may sign in with their work account. On the left,
+**Who gets in**, the three modes as cards, choosing one saves at once; then
+**People** and, for a domain, **Domains**, each entry with *Remove* and a field
+that adds one or several. On the right, **Send them the link**, the line to
+paste with *Copy*; **Always let in**, the admin emails set in `portal.env`; and
+**Make it public**, which leads to Access, public being the portal turned off.
+Banners say when no provider is configured, with where to set it, and when the
+site's block predates the identity headers. With no portal, the empty state
+leads to Access, like Guests.
 
 **A site's Access.** Two panels. **Portal**: its state, `sitesolide.json` and
 the server side by side, the public paths, and *Turn on portal* or *Turn off

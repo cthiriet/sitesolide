@@ -16,3 +16,7 @@ process.env.NODE_ENV = "test";
 // A test must be worth the same on the workstation, where the hash may
 // be lying around in the environment, and elsewhere.
 delete process.env.PASSWORD_HASH;
+delete process.env.PUBLIC_URL;
+for (const name of Object.keys(process.env)) {
+  if (name.startsWith("OIDC_")) delete process.env[name];
+}

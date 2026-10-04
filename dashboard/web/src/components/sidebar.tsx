@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { ChartNoAxesColumn, ChevronLeft, Gauge, Globe, History, KeyRound, LogOut, PanelLeft, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react"
+import { ChartNoAxesColumn, ChevronLeft, Gauge, Globe, History, KeyRound, LogOut, PanelLeft, Share2, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -34,6 +34,7 @@ export const SECTION_ICONS: Record<Section, LucideIcon> = {
   audience: ChartNoAxesColumn,
   secrets: KeyRound,
   guests: UsersRound,
+  sharing: Share2,
   access: ShieldCheck,
 }
 
@@ -237,8 +238,21 @@ export function AppSidebar() {
 }
 
 /**
+ * One row of tabs whatever their number, spelled out for Tailwind, which only
+ * generates the classes it finds written whole. A count missing here wrapped
+ * the tabs onto rows of two, three rows tall once a site had six sections.
+ */
+const TAB_COLUMNS: Record<number, string> = {
+  2: "grid-cols-2",
+  3: "grid-cols-3",
+  4: "grid-cols-4",
+  5: "grid-cols-5",
+  6: "grid-cols-6",
+}
+
+/**
  * On a phone, the entries of the current level at the bottom of the screen,
- * within thumb's reach: the machine's pages, or the site's four sections.
+ * within thumb's reach: the machine's pages, or the site's sections.
  * Targets 64 px tall, above the system's gesture area.
  */
 export function MobileTabs() {
@@ -249,7 +263,7 @@ export function MobileTabs() {
       aria-label={page.name === "site" ? `${page.slug} sections` : "Pages"}
       className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-md md:hidden"
     >
-      <ul className={cn("grid", entries.length === 4 ? "grid-cols-4" : "grid-cols-2")}>
+      <ul className={cn("grid", TAB_COLUMNS[entries.length] ?? "grid-cols-2")}>
         {entries.map(({ key, target, title, Icon, signal }) => {
           const current = ariaCurrent(page, target)
           return (

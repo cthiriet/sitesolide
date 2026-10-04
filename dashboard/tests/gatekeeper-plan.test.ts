@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { generateFragment } from "../borrowed/fragment";
 import { isProtected, readManifest, type Manifest } from "../borrowed/manifest";
-import { fragmentIsProtected } from "../borrowed/portal";
+import { fragmentIsProtected, fragmentPassesIdentity } from "../borrowed/portal";
 import { portalState, planPortal, type Plan } from "../src/gatekeeper/plan";
 
 /**
@@ -61,6 +61,25 @@ function change(plan: Plan): Extract<Plan, { kind: "change" }> {
   if (plan.kind !== "change") throw new Error(`plan ${plan.kind}: ${"message" in plan ? plan.message : ""}`);
   return plan;
 }
+
+describe("planPortal, on a block deployed before the identity headers", () => {
+  const earlier = (raw: string) => generateFragment(parsed(raw), "cookie");
+
+  test("removing the portal from cms: accepted, the earlier block being the generator's own", () => {
+    const plan = change(planPortal("cms", false, { manifest: CMS, block: earlier(CMS) }));
+    expect(fragmentIsProtected((plan.block as { text: string }).text)).toBe(false);
+  });
+
+  test("an earlier block edited by hand is still refused", () => {
+    const edited = `${earlier(CMS)}\n\theader X-Extra yes`;
+    expect(planPortal("cms", false, { manifest: CMS, block: edited }).kind).toBe("rejects");
+  });
+
+  test("setting the portal writes the current block, which hands the site who is in", () => {
+    const plan = change(planPortal("library", true, { manifest: LIBRARY, block: blockOf(LIBRARY) }));
+    expect(fragmentPassesIdentity((plan.block as { text: string }).text)).toBe(true);
+  });
+});
 
 describe("planPortal, on the manifests from the sites repository", () => {
   test("removing the portal from cms: manifest with no portal, exemptions kept, block with no guard", () => {
