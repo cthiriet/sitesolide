@@ -754,6 +754,16 @@ ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
 | `src/backup/routes.ts`, `src/backup/reader.ts` | `bin/deploy-steward.sh` |
 | anything else | `sitesolide deploy` |
 
+When the CLI's block generator changes the blocks it writes, as it did when its
+file servers began to hide `.git` and `.env*`, update the gatekeeper and the
+installer **before** redeploying other sites with the new CLI: until then, they
+take a block of the new generation for a hand edit, and refuse a portal change
+or a token's deploy of that site, changing nothing served. See
+[docs/commands.md](../docs/commands.md), "Upgrading to the hardened deploy", for
+the order of that release. The installer now also asks systemd what it knows of
+a unit name before writing anything (`systemctl show -p LoadState -p
+FragmentPath`), and stops on `system-unit` when it is a service of the machine.
+
 ## Local development
 
 ```bash

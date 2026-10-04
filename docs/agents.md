@@ -274,6 +274,12 @@ One behaviour changed: an app whose manifest has no `port` used to be refused,
 and is now given one by `deploy`. Every manifest already deployed declares its
 port and is untouched.
 
+A later release hardened what an agent, a token or a cloned folder can make
+`deploy` do: a dry run no longer runs the build, `install` runs as the project's
+account in its service's walls, `.git` and `.env` never leave, and more. Some of
+it does change the machine, and has an order: see [commands.md](commands.md),
+"Upgrading to the hardened deploy".
+
 **What only the machine can confirm**, on the first real deploy of each kind:
 
 - an inferred Python app's `start` uses `${PORT}`, which systemd expands from

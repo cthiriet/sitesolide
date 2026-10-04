@@ -108,3 +108,76 @@ data folder, on the server and in the bucket, and its last run. It reads and
 changes nothing: a restore is made from the dashboard's *Backups* section, which
 saves the current data first. See
 [dashboard/src/backup/README.md](../dashboard/src/backup/README.md).
+
+## Upgrading to the hardened deploy
+
+A release of the CLI that closes holes found in review: what an agent, a token
+or a cloned folder could make `deploy` do. It changes how some deployments
+behave, listed below. The commands are yours to run, in this order.
+
+**What changes for you.**
+
+| Before | Now |
+|---|---|
+| any valid slug | `caddy`, `ssh`, `cron`, `nftables`, `www`, every `systemd-*` and `sitesolide-*`... are refused, and so is a slug systemd already gives to a unit deploy did not write and that does not serve `/srv/sites/<slug>`, `--force` or not |
+| `deploy --dry-run` ran the build | it shows the build and does not run it; `--dry-run --build` runs it |
+| `install` ran in `app/` as the deployment account, with sudo | it runs as `site-<slug>`, in a transient unit with its service's walls: the network but not the loopback, only `app/` writable, `HOME` in a throwaway `/tmp`, 1G and fifteen minutes at most |
+| ports checked before the build | checked again under the Caddy lock, before the manifest is deposited; 3022, 3026 and 3029 are refused to every project but the dashboard, the portal and analytics |
+| `.git` sent with the code, `public/` sent as it is | `.git` and every `.env*` never leave, at any depth; the next deploy removes those an earlier one left in `public/`, and Caddy answers 404 for them |
+| `source` could lead anywhere | from a manifest outside the `sites` repository of your configuration, only inside its own repository |
+| a token's `deploy --dry-run` deployed for real | refused, as is every option the token's path does not carry; `--json` speaks events there too |
+
+**1. The workstation.** Pull, then `bin/test.sh`. Check that `sitesolide
+deploy --dry-run` in a project with a `build` prints `[dry-run] build (...), not
+run`, and that `config.json` names your sites repository under `sites` (`sitesolide
+init --sites <path>` otherwise): a manifest there keeps a `source` that climbs
+out, as `mini-lab` does.
+
+**2. What the machine runs from this repository**, before redeploying any other
+site: they recognise the Caddy blocks the new generator writes, whose file server
+hides `.git` and `.env*`. Until they are updated, the dashboard refuses to change
+the portal of a site redeployed with the new CLI ("redeploy the site first"), and
+a token's deploy of it stops on `edited-by-hand`; nothing served changes.
+
+```bash
+cd dashboard && sitesolide deploy   # the dashboard itself, and its own block
+bin/deploy-steward.sh               # policy.ts
+bin/deploy-gatekeeper.sh            # bin/cli/fragment.ts
+bin/deploy-installer.sh             # src/installer/, policy.ts, bin/cli/
+```
+
+Each script checks what it installs. Then the dashboard's *Access* page should
+toggle a test site's portal as before.
+
+**3. The Caddyfile**, whose landing, wildcard and customer-domain blocks now hide
+`.git` and `.env*`:
+
+```bash
+bin/deploy-caddy.sh                 # validates with systemd's environment, reloads, restores on failure
+```
+
+Check: `curl -s -o /dev/null -w '%{http_code}\n' https://<static-site>.<zone>/.git/config`
+answers `404`, and the site's home `200`.
+
+**4. Every app, one by one**, with `sitesolide deploy`. Its block is replaced
+without `--force` ("written by an earlier release, the current one replaces
+it"), and its `install` now runs as `site-<slug>`: the step reads `->
+dependencies (...), as site-<slug> in its service's walls`. An install that
+wrote outside `app/`, needed root or a tool installed into `HOME` now fails with
+`install failed`, the code in place and the service not restarted: move that
+step into `build`, or install the tool on the machine. The platform's own
+manifests, the dashboard's and analytics' `bun install --production`, run in
+`app/` and need nothing more.
+
+**5. Leftovers.** A `.env` an earlier deploy put in `app/` stays there, since an
+excluded file is protected from rsync's `--delete`, and Bun still loads it at
+start. Read them, then remove the stale ones:
+
+```bash
+ssh <server> "sudo find /srv/sites/*/app -maxdepth 3 -name '.env*' -not -path '*/node_modules/*'"
+```
+
+**Rolling back.** Check out the previous commit on the workstation, and run
+steps 2 and 3 from it. A site whose block was written by this release then reads,
+to the previous CLI, as a block that "no longer matches the manifest":
+`sitesolide deploy --force` in its folder puts the previous block back.
