@@ -28,6 +28,13 @@ describe("the memory between two runs", () => {
   test("what was written is read back", () => {
     const state: State = { version: STATE_VERSION, checks: { caddy: TRACKED }, restarts: { count: 2, increasedAt: T0 }, outbox: [notice(T0)] };
     expect(parseState(JSON.stringify(state))).toEqual({ state, problem: null });
+    const later: State = { ...state, checks: { caddy: { ...TRACKED, status: "failing", recent: "ofo", checkedAt: T0 } } };
+    expect(parseState(JSON.stringify(later))).toEqual({ state: later, problem: null });
+  });
+
+  test("a check whose recent verdicts are not that is dropped like any malformed one", () => {
+    const text = JSON.stringify({ version: STATE_VERSION, checks: { caddy: { ...TRACKED, recent: "<script>" }, other: { ...TRACKED, recent: "ffffff" } }, outbox: [] });
+    expect(parseState(text).state.checks).toEqual({});
   });
 
   test("a truncated or foreign file is a fresh start with a reason, never a crash", () => {

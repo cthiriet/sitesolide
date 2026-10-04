@@ -50,7 +50,8 @@ function isTracked(value: unknown): value is Tracked {
     Number.isInteger(tracked.streak) &&
     typeof tracked.since === "number" &&
     typeof tracked.summary === "string" &&
-    (tracked.checkedAt === undefined || typeof tracked.checkedAt === "number")
+    (tracked.checkedAt === undefined || typeof tracked.checkedAt === "number") &&
+    (tracked.recent === undefined || (typeof tracked.recent === "string" && /^[fo]{0,5}$/.test(tracked.recent)))
   );
 }
 

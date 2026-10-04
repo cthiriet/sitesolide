@@ -19,6 +19,15 @@
  * monitor that runs every minute and on a machine where the restart policy
  * already brings Caddy back within seconds.
  *
+ * Or three failures among the last five verdicts. Counted in a row only, a
+ * site that fails every other pass, half its visitors refused, never reached
+ * two and was never reported. Three in five catches it within five minutes,
+ * while a deployment's blink, one failure, and two of them minutes apart,
+ * still say nothing. Between failures that do not yet make an alert, the
+ * check stays `failing`, dated from the first, until the last failure has
+ * left the five; a recovery starts the count afresh, its failures having
+ * already cost their alert.
+ *
  * An `unknown` verdict changes nothing, not even the streak: a reading that
  * could not be taken neither confirms nor clears a failure. A check this run
  * did not produce at all is gone, a removed site, a unit systemd unloaded: it
@@ -32,6 +41,9 @@ import type { Kind, Result, Severity } from "./checks";
 
 export const FAIL_AFTER = 2;
 export const RECOVER_AFTER = 2;
+/** Or this many failures among the last WINDOW verdicts. */
+export const FAIL_WITHIN = 3;
+export const WINDOW = 5;
 
 export type Status = "ok" | "failing" | "down" | "recovering";
 
@@ -56,6 +68,12 @@ export type Tracked = {
    * memory written before it existed, which reads as never checked.
    */
   checkedAt?: number;
+  /**
+   * The last WINDOW verdicts that were not `unknown`, oldest first, `f` for a
+   * failure and `o` for a success. Absent from a memory written before it
+   * existed, which reads as no failure yet.
+   */
+  recent?: string;
 };
 
 export type Event = "down" | "recovered" | "cleared";
@@ -115,22 +133,31 @@ function step(previous: Tracked, result: Result, now: number): { tracked: Tracke
   tracked.summary = result.summary;
   tracked.checkedAt = now;
   const failed = result.verdict === "fail";
+  tracked.recent = `${previous.recent ?? ""}${failed ? "f" : "o"}`.slice(-WINDOW);
+  const failures = tracked.recent.split("").filter((verdict) => verdict === "f").length;
 
   if (previous.status === "ok" || previous.status === "failing") {
     if (!failed) {
+      // A failure still among the last five may be the first of a site that
+      // fails every other pass: still failing, still dated from it.
+      if (failures > 0 && previous.status === "failing") {
+        return { tracked: { ...tracked, status: "failing", streak: 0 }, event: null };
+      }
       const since = previous.status === "ok" ? previous.since : now;
       return { tracked: { ...tracked, status: "ok", streak: 0, since }, event: null };
     }
     const streak = previous.status === "ok" ? 1 : previous.streak + 1;
     const since = previous.status === "ok" ? now : previous.since;
-    if (streak >= FAIL_AFTER) return { tracked: { ...tracked, status: "down", streak: 0, since }, event: "down" };
+    if (streak >= FAIL_AFTER || failures >= FAIL_WITHIN) {
+      return { tracked: { ...tracked, status: "down", streak: 0, since }, event: "down" };
+    }
     return { tracked: { ...tracked, status: "failing", streak, since }, event: null };
   }
 
   // down or recovering
   if (failed) return { tracked: { ...tracked, status: "down", streak: 0 }, event: null };
   const streak = previous.status === "down" ? 1 : previous.streak + 1;
-  if (streak >= RECOVER_AFTER) return { tracked: { ...tracked, status: "ok", streak: 0 }, event: "recovered" };
+  if (streak >= RECOVER_AFTER) return { tracked: { ...tracked, status: "ok", streak: 0, recent: "" }, event: "recovered" };
   return { tracked: { ...tracked, status: "recovering", streak }, event: null };
 }
 

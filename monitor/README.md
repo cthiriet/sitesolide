@@ -56,9 +56,13 @@ then with what has waited longest, so that every host gets its turn.
 
 ## How it alerts
 
-**Twice in a row before an alert, twice in a row before a recovery.** A
-deployment restarts its service and may miss one probe; a site that blinks once
-costs no message. Something down is reported within two to three minutes.
+**Twice in a row, or three times in five passes, before an alert; twice in a
+row before a recovery.** A deployment restarts its service and may miss one
+probe; a site that blinks once, or twice minutes apart, costs no message.
+Something down is reported within two to three minutes. Counted in a row only,
+a site failing every other pass, half its visitors refused, would never have
+been reported: three failures among the last five passes catch it within five
+minutes, and the alert holds until two passes in a row succeed.
 
 **Once down, then silence until it recovers**, however long it lasts and even if
 it blinks in between. A disk or memory that hovers at its threshold does not go

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FAIL_AFTER, RECOVER_AFTER, advance, isBad, isDown, type Notice, type Tracked } from "../src/alerts";
+import { FAIL_AFTER, FAIL_WITHIN, RECOVER_AFTER, WINDOW, advance, isBad, isDown, type Notice, type Tracked } from "../src/alerts";
 import type { Kind, Result, Verdict } from "../src/checks";
 
 const T0 = Date.UTC(2026, 9, 4, 12, 0, 0);
@@ -32,8 +32,10 @@ function replay(verdicts: Verdict[]): { notices: Notice[]; checks: Record<string
 const events = (notices: Notice[]) => notices.map((notice) => notice.event);
 
 describe("the alert state machine", () => {
-  test("two failures in a row before down, two successes before recovered", () => {
+  test("two failures in a row, or three in the last five verdicts, before down; two successes before recovered", () => {
     expect(FAIL_AFTER).toBe(2);
+    expect(FAIL_WITHIN).toBe(3);
+    expect(WINDOW).toBe(5);
     expect(RECOVER_AFTER).toBe(2);
   });
 
@@ -58,6 +60,29 @@ describe("the alert state machine", () => {
 
   test("a single failed probe, a deployment's restart, says nothing", () => {
     expect(replay(["ok", "fail", "ok", "ok", "fail", "ok"]).notices).toEqual([]);
+    // Two in five, again and again: never three.
+    expect(replay(["fail", "ok", "ok", "fail", "ok", "ok", "fail", "ok", "ok", "fail", "ok", "ok"]).notices).toEqual([]);
+  });
+
+  test("a site failing every other pass goes down at its third failure in five, dated from the first", () => {
+    const { notices, checks } = replay(["ok", "fail", "ok", "fail", "ok", "fail"]);
+    expect(notices.map((n) => [n.event, n.at, n.since])).toEqual([["down", T0 + 5 * MINUTE, T0 + MINUTE]]);
+    expect(checks["site:cms.test-zone.invalid"]!.status).toBe("down");
+  });
+
+  test("between two failures that do not yet make an alert, the check stays failing", () => {
+    const { checks } = replay(["ok", "fail", "ok"]);
+    expect(checks["site:cms.test-zone.invalid"]).toMatchObject({ status: "failing", since: T0 + MINUTE });
+    // Once the failure has left the last five verdicts, it is ok again.
+    expect(replay(["ok", "fail", "ok", "ok", "ok", "ok"]).checks["site:cms.test-zone.invalid"]).toMatchObject({ status: "failing" });
+    expect(replay(["ok", "fail", "ok", "ok", "ok", "ok", "ok"]).checks["site:cms.test-zone.invalid"]).toMatchObject({
+      status: "ok",
+      since: T0 + 6 * MINUTE,
+    });
+  });
+
+  test("a recovery starts afresh: one failure after it is not a third in five", () => {
+    expect(events(replay(["fail", "fail", "fail", "ok", "ok", "fail", "ok", "ok", "ok"]).notices)).toEqual(["down", "recovered"]);
   });
 
   test("a site that blinks while down stays down without a word", () => {
@@ -68,8 +93,9 @@ describe("the alert state machine", () => {
 
   test("a check that flaps every minute costs one down, then silence, never a storm", () => {
     const flapping = Array.from({ length: 60 }, (_, minute): Verdict => (minute % 2 === 0 ? "fail" : "ok"));
-    // Never two failures in a row: never down at all.
-    expect(replay(flapping).notices).toEqual([]);
+    // Never two failures in a row, but three in five: down once, and never
+    // two successes in a row to clear it.
+    expect(events(replay(flapping).notices)).toEqual(["down"]);
     const worse = Array.from({ length: 60 }, (_, minute): Verdict => (minute % 3 === 2 ? "ok" : "fail"));
     // Two failures then one success, over and over: down once, and the lone
     // success never clears it.
