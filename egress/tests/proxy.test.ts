@@ -96,9 +96,15 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
 
   test("an allowed host: CONNECT, then TLS end to end with the real host's certificate", async () => {
     allow(API);
+    // `keepalive: false` on every fetch through this proxy: Bun 1.4.2 keeps a
+    // tunnel open after the answer and sends the next request to the same
+    // host through it, measured on the test machine on 4 October 2026. The
+    // next test would then see no CONNECT at all, and the last one a
+    // connection still open. Bun 1.3.11 opened a tunnel per request.
     const response = await fetch(`https://${API}/v1/ping`, {
       proxy: `http://127.0.0.1:${proxy.port}`,
       tls: { ca: tls.cert },
+      keepalive: false,
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ host: API, path: "/v1/ping" });
@@ -188,14 +194,14 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
   test("the proxy connects to an address it judged, never to the name again", async () => {
     allow(API);
     route.asked.length = 0;
-    const response = await fetch(`https://${API}/`, { proxy: `http://127.0.0.1:${proxy.port}`, tls: { ca: tls.cert } });
+    const response = await fetch(`https://${API}/`, { proxy: `http://127.0.0.1:${proxy.port}`, tls: { ca: tls.cert }, keepalive: false });
     expect(response.status).toBe(200);
     expect(route.asked).toEqual([`${PUBLIC_V4}:443`]);
   });
 
   test("a large answer and a large upload go through whole, whichever side is slower", async () => {
     allow(API);
-    const download = await fetch(`https://${API}/big`, { proxy: `http://127.0.0.1:${proxy.port}`, tls: { ca: tls.cert } });
+    const download = await fetch(`https://${API}/big`, { proxy: `http://127.0.0.1:${proxy.port}`, tls: { ca: tls.cert }, keepalive: false });
     const bytes = new Uint8Array(await download.arrayBuffer());
     expect(bytes.length).toBe(BIG);
     expect(bytes.every((byte) => byte === 7)).toBe(true);
@@ -204,6 +210,7 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
       body: new Uint8Array(BIG).fill(3),
       proxy: `http://127.0.0.1:${proxy.port}`,
       tls: { ca: tls.cert },
+      keepalive: false,
     });
     expect(await upload.json()).toEqual({ received: BIG });
   });
@@ -296,7 +303,7 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
   test("plain HTTP is forwarded to the judged address, origin form, connection closed", async () => {
     allow(PLAIN);
     seen.length = 0;
-    const response = await fetch(`http://${PLAIN}/hello?x=1`, { proxy: `http://127.0.0.1:${proxy.port}` });
+    const response = await fetch(`http://${PLAIN}/hello?x=1`, { proxy: `http://127.0.0.1:${proxy.port}`, keepalive: false });
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("plain origin");
     expect(seen).toEqual([{ host: PLAIN, path: "/hello?x=1", connection: "close" }]);
@@ -447,8 +454,17 @@ async function floodingClient(port: number, floods = true, onOpen?: (socket: Soc
       data(_socket, chunk) {
         if (head.includes("\r\n\r\n")) received += chunk.length;
         else {
+          // latin1: one character per byte, so lengths count bytes.
           head += new TextDecoder("latin1").decode(chunk);
-          if (head.includes("\r\n\r\n")) answer.resolve();
+          const end = head.indexOf("\r\n\r\n");
+          if (end !== -1) {
+            // The proxy's answer and the first bytes of the tunnel can come in
+            // one read, and on Linux they do: measured on the test machine on
+            // 4 October 2026, the kernel had delivered every byte and this
+            // count missed the 127,616 that followed the head.
+            received += head.length - end - 4;
+            answer.resolve();
+          }
         }
       },
       drain: () => pump(flood),
