@@ -105,6 +105,14 @@ export function scopeRefusals(manifest: Manifest, scope: Scope, slug: string): s
   if (manifest.network === "outbound" && !scope.outbound) {
     refusals.push('network: your token may not deploy "network": "outbound"; remove it, or ask the owner of the machine to allow it');
   }
+  // `egress` reaches outside hosts too, through the egress proxy: narrower
+  // than `outbound`, but a way out all the same, and the hosts are the
+  // manifest's own choice. It needs the same permission. `connectors` does
+  // not: a manifest only asks for one, and nothing reaches it until the
+  // owner grants it to the project from the dashboard, on the machine.
+  if (manifest.egress !== undefined && !scope.outbound) {
+    refusals.push("egress: your token may not reach outside hosts; remove egress, or ask the owner of the machine to allow outbound network");
+  }
   if (manifest.domain !== undefined && !scope.domain) {
     refusals.push("domain: your token may not declare a domain; remove it, or ask the owner of the machine to allow it");
   }

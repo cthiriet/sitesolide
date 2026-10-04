@@ -256,7 +256,7 @@ export function CreateTokenDialog({
                   Sites anyone can open, and paths exempted from the portal. Off: everything it deploys asks for a sign-in.
                 </Permission>
                 <Permission checked={scope.outbound} onChange={(next) => setScope({ ...scope, outbound: next })} title="Use outbound network">
-                  Services that call an outside API. Off: they reach the loopback only.
+                  Services that call an outside API, openly or through the hosts they list. Off: they reach the loopback only, and the connectors you grant.
                 </Permission>
                 <Permission checked={scope.domain} onChange={(next) => setScope({ ...scope, domain: next })} title="Declare a domain">
                   A customer domain in the manifest. Switching to it stays yours.

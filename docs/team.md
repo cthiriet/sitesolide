@@ -98,6 +98,7 @@ it in `sitesolide.json` to make it explicit.
 | no `portal`, or `portalExempt` | the token may deploy public sites | private by default |
 | a static site (no `start`) | the token may deploy public sites | a static site cannot sit behind the portal yet |
 | `"network": "outbound"` | the token may use outbound network | services reach only the loopback otherwise |
+| `egress` | the token may use outbound network | the hosts it lists are reached through the egress proxy, a way out all the same |
 | `domain` | the token may declare a domain | switching to it stays the owner's job |
 | `secrets` other than `<slug>.env` | never | the unit hands the file to the service as root |
 | `lock` | never | the preview lock is the owner's (`sitesolide lock`) |
@@ -105,6 +106,10 @@ it in `sitesolide.json` to make it explicit.
 
 A project that already exists keeps the door the machine carries: the portal
 of a deployed site changes from the dashboard, never from a deployment.
+
+`connectors` needs no permission of the token: a manifest only asks for one,
+and nothing reaches it until the owner grants it to the project from the
+dashboard.
 
 Every string of the manifest that lands in the project's Caddy block or systemd
 unit is judged for that, the same way for the owner and for a token: header

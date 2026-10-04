@@ -40,7 +40,11 @@ export type Scope = {
   slugs: string[];
   /** May create projects the machine does not carry yet. */
   create: boolean;
-  /** May deploy a manifest with `"network": "outbound"`. */
+  /**
+   * May deploy a manifest with `"network": "outbound"`, or with `egress`, the
+   * hosts it reaches through the egress proxy. `connectors` needs no flag: the
+   * owner grants each one on the machine.
+   */
   outbound: boolean;
   /** May deploy a manifest that declares a `domain`. */
   domain: boolean;

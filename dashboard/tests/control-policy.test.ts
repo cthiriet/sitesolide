@@ -78,6 +78,16 @@ describe("scopeRefusals", () => {
     expect(scopeRefusals(app({ portal: true, portalExempt: ["/hook"] }), { ...NONE, public: true }, "shop")).toEqual([]);
   });
 
+  test("egress reaches outside hosts, and needs outbound like network does; connectors need the owner's grant alone", () => {
+    // A token denied outbound used to list any host and reach it through the
+    // egress proxy.
+    const egress = app({ egress: ["attacker.example.com"] });
+    expect(scopeRefusals(egress, NONE, "shop")).toEqual([expect.stringContaining("egress")]);
+    expect(scopeRefusals(egress, { ...NONE, public: true, domain: true, create: true }, "shop")[0]).toContain("outbound");
+    expect(scopeRefusals(egress, { ...NONE, outbound: true }, "shop")).toEqual([]);
+    expect(scopeRefusals(app({ connectors: ["slack"] }), NONE, "shop")).toEqual([]);
+  });
+
   test("the secret file named after its slug, and no other: the unit would hand it over as root", () => {
     expect(scopeRefusals(app({ secrets: ["shop.env"] }), NONE, "shop")).toEqual([]);
     for (const name of ["dashboard.env", "portal.env", "shop-mail.env", "shop2.env", "cms.env"]) {

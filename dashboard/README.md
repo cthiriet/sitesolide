@@ -545,7 +545,8 @@ differ, both on purpose:
   value is `sst_` and 43 characters of base64url.
 - **One per person**: a label, an email, an optional expiry, and a scope, all
   off by default: existing slugs it may deploy; whether it may create projects,
-  deploy public sites, use `network: outbound`, declare a domain.
+  deploy public sites, use outbound network (`network: outbound` or `egress`),
+  declare a domain.
 - **Ownership**: a project a token creates is recorded as its own at the start
   of its first deployment, before anything is written, so that a first
   deployment that fails half way stays its creator's, and nobody else's.
@@ -573,6 +574,10 @@ earlier by the steward and the dashboard: see
   `dashboard.env` or another project's file would read it.
 - **No `lock`**: the preview lock is the owner's, and the installer keeps the
   one the machine carries.
+- **Outbound network**: `network: outbound`, and `egress` with it, which
+  reaches the hosts the manifest lists through the egress proxy, need the
+  token's outbound permission. `connectors` does not: nothing reaches a
+  connector until the owner grants it to the project from the dashboard.
 - **Bounds**: 1G of memory per service, six services, `install` fifteen minutes
   and 1G, the archive 100 MiB compressed.
 - **Ports**: a service with no port gets the lowest free one of 3000 to 3099,
