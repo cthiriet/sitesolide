@@ -54,30 +54,37 @@ export function readProject(sitesDir: string, folder: string, accountsFile: stri
   // not take a deployed project out of its backups.
   const manifest = text === null ? null : (readManifest(text).manifest ?? null);
   const account = siteAccount(folder);
-  let owner: Project["owner"] = null;
-  if (checkOwners) {
-    owner = accountOf(accountsFile, account);
-    if (owner === null) return { folder, error: `account ${account} does not exist` };
-  }
   const dataDir = join(sitesDir, folder, "data");
-  const project: Project = { folder, account, owner, dataDir, manifest };
 
-  if (manifest !== null && !isBackedUp(manifest)) return { project, excluded: "opted out by its sitesolide.json" };
+  // What leaves a project out on purpose, before its account: a static site
+  // has neither a data folder nor an account, and is not an error.
+  let excluded: Exclusion | null = null;
+  if (manifest !== null && !isBackedUp(manifest)) excluded = "opted out by its sitesolide.json";
   let stat;
   try {
     stat = lstatSync(dataDir);
   } catch (error) {
-    if ((error as { code?: string }).code === "ENOENT") return { project, excluded: "no data folder" };
-    return { folder, error: "the data folder cannot be read" };
+    if ((error as { code?: string }).code !== "ENOENT") return { folder, error: "the data folder cannot be read" };
+    stat = null;
   }
+  if (stat === null) excluded ??= "no data folder";
   // A link in the place of the data folder would have the copy read elsewhere.
-  if (stat.isSymbolicLink() || !stat.isDirectory()) return { folder, error: "the data folder is not a plain folder" };
-  try {
-    if (readdirSync(dataDir).length === 0) return { project, excluded: "empty data folder" };
-  } catch {
-    return { folder, error: "the data folder cannot be read" };
+  else if (stat.isSymbolicLink() || !stat.isDirectory()) return { folder, error: "the data folder is not a plain folder" };
+  else {
+    try {
+      if (readdirSync(dataDir).length === 0) excluded ??= "empty data folder";
+    } catch {
+      return { folder, error: "the data folder cannot be read" };
+    }
   }
-  return { project, excluded: null };
+
+  let owner: Project["owner"] = null;
+  if (checkOwners) {
+    owner = accountOf(accountsFile, account);
+    // Only a project that has data to save, or to get back, needs its account.
+    if (owner === null && stat !== null) return { folder, error: `account ${account} does not exist` };
+  }
+  return { project: { folder, account, owner, dataDir, manifest }, excluded };
 }
 
 /** Every project of the machine, in folder order. A folder that is not a project is not listed. */

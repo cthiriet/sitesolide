@@ -6,6 +6,7 @@ import { snapshotName } from "../borrowed/backups";
 import { generateUnit } from "../borrowed/unit";
 import { PRAGMAS, openDatabase, openForReading, recordAudit, readAudit } from "../src/backup/database";
 import { HOLDER_NAME, LOCK_NAME, takeLock } from "../src/backup/lock";
+import { listProjects, readProject } from "../src/backup/projects";
 import { recoveryPlan, INTERRUPTED_REASON } from "../src/backup/recovery";
 import { isActor, judgeResult, readRequest, readRestoreLaunch, restoreUnit, encodeRequest } from "../src/backup/request";
 import { childCommand, confinement, readReport, unitName, type Job } from "../src/backup/runner";
@@ -109,6 +110,33 @@ describe("the lock shared by a run and a restore", () => {
     mkdirSync(join(run, LOCK_NAME), { recursive: true });
     expect(takeLock(run, "run").ok).toBe(false);
     expect(takeLock(run, "run", () => true, () => Date.now() + 120_000).ok).toBe(true);
+  });
+});
+
+describe("the projects as a run reads them", () => {
+  const sites = join(FOLDER, "projects-sites");
+  const passwd = join(FOLDER, "projects-passwd");
+  mkdirSync(join(sites, "cms", "data"), { recursive: true });
+  writeFileSync(join(sites, "cms", "data", "app.db"), "x");
+  writeFileSync(join(sites, "cms", "sitesolide.json"), JSON.stringify({ slug: "cms", start: "bun run server.ts", port: 3040 }));
+  mkdirSync(join(sites, "notes", "public"), { recursive: true });
+  writeFileSync(join(sites, "notes", "sitesolide.json"), JSON.stringify({ slug: "notes", publicDir: "public" }));
+  mkdirSync(join(sites, "orphan", "data"), { recursive: true });
+  writeFileSync(join(sites, "orphan", "data", "x"), "x");
+  mkdirSync(join(sites, "Not-A-Site"));
+  writeFileSync(passwd, "site-cms:x:1042:1042::/nonexistent:/usr/sbin/nologin\n");
+
+  test("a static site has neither data nor account, and is left out, not failed", () => {
+    expect(readProject(sites, "notes", passwd, true)).toMatchObject({ excluded: "no data folder", project: { folder: "notes", owner: null } });
+  });
+
+  test("a project with data needs its account, and gets its ids", () => {
+    expect(readProject(sites, "cms", passwd, true)).toMatchObject({ excluded: null, project: { account: "site-cms", owner: { uid: 1042, gid: 1042 } } });
+    expect(readProject(sites, "orphan", passwd, true)).toEqual({ folder: "orphan", error: "account site-orphan does not exist" });
+  });
+
+  test("a folder that is not a site is not listed", () => {
+    expect(listProjects(sites, passwd, false).map((found) => ("project" in found ? found.project.folder : found.folder))).toEqual(["cms", "notes", "orphan"]);
   });
 });
 
