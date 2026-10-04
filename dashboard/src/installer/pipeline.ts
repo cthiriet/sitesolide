@@ -429,7 +429,16 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
       if (!fromPortal(answer)) throw new Stop("verify-failed", `${url} should answer the portal's 401, got ${describe(answer)}: the site is declared behind the portal and is not; tell the owner of the machine now`);
       host.log(`   ${url} 401, behind the portal: unknown visitors get the sign-in page`);
     } else {
-      if (!answers(answer)) throw new Stop("verify-failed", `${url} answered ${describe(answer)}, expected 200`);
+      if (!answers(answer)) {
+        // The rule of `deploy`, said the same way: docs/manifest.md, under `start`.
+        const nothing = "code" in answer && answer.code === 404;
+        throw new Stop(
+          "verify-failed",
+          nothing
+            ? `${url} answered 404: nothing is served at the site's root; make it answer 200, from the app, which receives / unless the manifest has routes, or from an index.html in publicDir (docs/manifest.md, under start)`
+            : `${url} answered ${describe(answer)}, expected 200`,
+        );
+      }
       host.log(`   ${url} ${"code" in answer ? answer.code : ""}`);
     }
     succeeded = true;

@@ -354,6 +354,15 @@ describe("after the files are in place", () => {
     expect((await run(bench, request({ ...APP, secrets: ["shop.env"] }))).ok).toBe(true);
   });
 
+  test("a site whose root answers 404 fails, saying what to serve there", async () => {
+    const bench = createBench({ probe: (host, path) => (host === `shop.${ZONE}` && path === "/" ? { code: 404, door: false, body: "" } : null) });
+    stageBundle(bench, [file("public/about.html", "no index")]);
+    const outcome = await run(bench, request({ slug: "shop", publicDir: "public" }, PUBLIC));
+    expect(outcome).toMatchObject({ ok: false, code: "verify-failed" });
+    expect(outcome.ok === false && outcome.message).toContain("nothing is served at the site's root");
+    expect(outcome.ok === false && outcome.message).toContain("index.html in publicDir");
+  });
+
   test("a service that does not come back is a failure that says where to look", async () => {
     const bench = createBench({ restartFails: true });
     stageBundle(bench, APP_FILES);

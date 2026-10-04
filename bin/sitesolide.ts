@@ -1305,6 +1305,12 @@ async function depositText(
 /**
  * 200 and 401 only: the 401 is the intended behaviour of a locked preview, and
  * taking it for an error would make a perfectly healthy deployment fail.
+ *
+ * A 404 at the root stays a failure, on purpose: most often nothing is served
+ * at all, a service answering elsewhere or a publicDir without its
+ * index.html. It is the one failure an app that works can still hit, one that
+ * answers only its routes, so it says so plainly, with what to do, as
+ * docs/manifest.md does under `start`.
  */
 async function verify(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
   const address = `https://${manifest.slug}.${config.zone}/`;
@@ -1345,6 +1351,13 @@ async function verify(manifest: Manifest, config: Config, executor: Executor): P
   if (code === 401) {
     say(`   preview locked, see bin/lock.sh state ${manifest.slug}`);
     return;
+  }
+  if (code === 404) {
+    die(`${address} answered 404: nothing is served at the site's root`, [
+      "deploy counts a 404 at / as a failure: most often it means nothing is served at all",
+      "make / answer 200, from the app, which receives / unless the manifest has routes, or from an index.html in publicDir",
+      "docs/manifest.md says why, under start",
+    ]);
   }
   if (code !== 200) die(`unexpected response: ${code}`);
 }

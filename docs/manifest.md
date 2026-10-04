@@ -136,6 +136,19 @@ these are refused, as a line break or a trailing backslash is. Quotes and
 `$PORT` keep their systemd meaning; a `%` is written as `%%`, so it reaches the
 program as it is.
 
+**The site's root has to answer.** `deploy` ends by requesting
+`https://<slug>.<zone>/`, and only a 200 counts, or the 401 of a locked
+preview or of the portal. A 404 at `/` most often means nothing is served at
+all, so it fails the deployment, even for an app whose other paths work: one
+that answers only `/api/*`, say. For an app, the Caddy step then puts the
+previous configuration back, over SSH as through a team token, and its block
+stays out; a static site's files stay in place, and the failure is reported.
+Serve something at `/` that answers 200. An app without `routes` receives `/`
+itself, even beside a `publicDir` holding an `index.html`, and must answer it;
+with `routes`, or for a static site, `/` comes from `publicDir`, which then
+needs its `index.html`. A redirect does not count either: `/` itself must
+answer.
+
 ### `port`
 
 The loopback port the service listens on, between 3000 and 3099. Caddy
@@ -173,7 +186,9 @@ letters, digits and `._~/*%-`, never under `/_portal`, which the portal owns.
 
 Without this key, everything that is not a file on disk goes to the service.
 With it, only these paths do. Use it when most of the site is static and only a
-form or a webhook is dynamic.
+form or a webhook is dynamic. `/` is then served from `publicDir` unless a
+route covers it, so `publicDir` needs its `index.html`: a 404 at the root fails
+the deployment, see [`start`](#start).
 
 ### `services`
 

@@ -434,6 +434,7 @@ probe() {
 }
 
 FAILURES=0
+NOTHING_AT_ROOT=""
 for address in ${ADDRESSES[@]+"${ADDRESSES[@]}"}; do
   code="$(probe "$address")"
   # On a first install a 000 is most often a certificate the authority has not
@@ -453,12 +454,19 @@ for address in ${ADDRESSES[@]+"${ADDRESSES[@]}"}; do
     # a site behind the portal, see portal/README.md.
     200) printf "   %-44s %s\n" "$address" "$code" ;;
     401) printf "   %-44s %s (closed: lock or portal)\n" "$address" "$code" ;;
+    # A 404 at the root most often means nothing is served there: an app
+    # that answers only its routes, a publicDir without its index.html. It
+    # stays a failure, and says so plainly (docs/manifest.md, under start).
+    404) printf "   %-44s %s  FAILED, nothing served at /\n" "$address" "$code"; FAILURES=$((FAILURES + 1)); NOTHING_AT_ROOT=1 ;;
     *)   printf "   %-44s %s  FAILED\n" "$address" "$code"; FAILURES=$((FAILURES + 1)) ;;
   esac
 done
 
 if [ "$FAILURES" -gt 0 ]; then
   echo "!! $FAILURES address(es) no longer answer" >&2
+  if [ -n "$NOTHING_AT_ROOT" ]; then
+    echo "   a 404 at / means nothing is served at the site's root: make it answer 200, from the app, which receives / unless the manifest has routes, or from an index.html in publicDir (docs/manifest.md, under start)" >&2
+  fi
   restore
   exit 1
 fi

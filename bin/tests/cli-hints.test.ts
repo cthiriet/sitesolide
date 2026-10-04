@@ -89,6 +89,11 @@ describe("the hints", () => {
     expect(DEFAULT_HINT).toContain("never work around");
   });
 
+  test("a 404 at the root says what to serve there, over SSH and through the API", () => {
+    expect(hintFor("https://shop.test-zone.invalid/ answered 404: nothing is served at the site's root")).toContain("index.html in publicDir");
+    expect(hintForFailure("verify-failed", "https://shop.test-zone.invalid/ answered 404: nothing is served at the site's root")).toContain("index.html in publicDir");
+  });
+
   test("a missing secret sends to the dashboard, never to the repository", () => {
     const hint = hintFor("secret missing on the server: /etc/sitesolide/shop.env");
     expect(hint).toContain("dashboard");
