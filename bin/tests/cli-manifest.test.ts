@@ -171,6 +171,15 @@ describe("reading", () => {
     expect(errors[0]).toContain("unreadable");
   });
 
+  test("an unreadable JSON never quotes the file back: it may be a link to a secret", () => {
+    // Bun's parser names the word it stopped at.
+    const [error] = readManifest(`sst_${"S".repeat(43)}\n`).errors;
+    expect(error).toStartWith("sitesolide.json is unreadable: ");
+    expect(error).not.toContain("sst_");
+    // What was expected, a punctuation mark, is still said.
+    expect(readManifest('{"slug": "x"').errors[0]).toContain("'}'");
+  });
+
   test("gives back all the errors at once", () => {
     const { errors } = readManifest(JSON.stringify({ slug: "UPPERCASE", port: 80 }));
     expect(errors.length).toBeGreaterThan(1);

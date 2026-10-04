@@ -41,7 +41,7 @@ import { join, resolve } from "node:path";
 import { bundle, excludedBy, type BundleEntry } from "./bundle";
 import { configPath, defaultPaths, expandHome, projectsRepo, readConfigFile } from "./config";
 import { hintForFailure } from "./hints";
-import { hasServices, isApp, mainPort, missingExclusions, NEVER_SENT, readManifest, type Manifest } from "./manifest";
+import { hasServices, isApp, mainPort, missingExclusions, NEVER_SENT, parserComplaint, readManifest, type Manifest } from "./manifest";
 import { eventFor, formatEvent, type OutputEvent } from "./output";
 import { sourceRefusal } from "./source";
 
@@ -234,7 +234,7 @@ export function checkManifest(raw: string): { manifest?: Manifest; errors: strin
   try {
     object = JSON.parse(raw);
   } catch (error) {
-    return { errors: [`sitesolide.json is unreadable: ${(error as Error).message}`] };
+    return { errors: [`sitesolide.json is unreadable: ${parserComplaint(error)}`] };
   }
   if (typeof object !== "object" || object === null || Array.isArray(object)) return { errors: ["sitesolide.json must contain an object"] };
   const filled: Record<string, unknown> = { ...(object as Record<string, unknown>) };

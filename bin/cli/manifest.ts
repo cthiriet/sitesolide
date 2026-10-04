@@ -527,12 +527,23 @@ export function servedContact(environment: Record<string, string | undefined> = 
   return environment.SITESOLIDE_CONTACT ?? "";
 }
 
+/**
+ * What a JSON parser said, without what it quoted: Bun names the word it
+ * stopped at, and a sitesolide.json that was a link to a secret would hand
+ * that word to whoever reads the refusal, an agent through MCP included. A
+ * quoted punctuation mark, `'}'`, stays: it says what was expected.
+ */
+export function parserComplaint(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/(["'])[^"']{2,}\1/g, "$1...$1").slice(0, 120);
+}
+
 export function readManifest(raw: string): { manifest?: Manifest; errors: string[] } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    return { errors: [`sitesolide.json is unreadable: ${(err as Error).message}`] };
+    return { errors: [`sitesolide.json is unreadable: ${parserComplaint(err)}`] };
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return { errors: ["sitesolide.json must contain an object"] };

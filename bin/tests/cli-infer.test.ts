@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUN, inferManifest, renderManifest, slugFromFolder, UV, type Inference } from "../cli/infer";
@@ -306,6 +306,44 @@ describe("a Go app", () => {
     const { manifest, notes } = inferred(join(FIXTURES, "go-cmd"), "api");
     expect(manifest.build).toBe("CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o api ./cmd/server");
     expect(notes.join(" ")).toContain("does not seem to read PORT");
+  });
+});
+
+describe("what detect reads, and what it says back", () => {
+  // detect is the read-only tool an agent calls on any folder without asking.
+  const TOKEN = `sst_${"S".repeat(43)}`;
+
+  test("a package.json linked outside the folder is never read: the folder is refused, naming the link", () => {
+    const vault = copy(join(FIXTURES, "nothing"));
+    writeFileSync(join(vault, "team-token"), `${TOKEN}\n`);
+    const folder = copy(join(FIXTURES, "bun-app"));
+    rmSync(join(folder, "package.json"));
+    symlinkSync(join(vault, "team-token"), join(folder, "package.json"));
+    const inference = inferManifest(folder, "bun-app");
+    expect(inference.kind).toBe("none");
+    expect(inference.reasons.join(" ")).toContain("package.json: a symbolic link leading outside the folder");
+    expect(JSON.stringify(inference)).not.toContain("sst_");
+  });
+
+  test("a public folder linked outside is not served from there, and a link inside the folder is followed", () => {
+    const elsewhere = copy(join(FIXTURES, "static-public"));
+    const folder = copy(join(FIXTURES, "nothing"));
+    symlinkSync(join(elsewhere, "public"), join(folder, "public"));
+    expect(inferManifest(folder, "folder")).toMatchObject({ kind: "none", reasons: expect.arrayContaining([expect.stringContaining("public/index.html: a symbolic link")]) });
+    const inside = copy(join(FIXTURES, "static-public"));
+    symlinkSync(join(inside, "public"), join(inside, "dist"));
+    rmSync(join(inside, "public", "index.html"));
+    writeFileSync(join(inside, "public", "index.html"), "<h1>site</h1>");
+    expect(inferred(inside, "folder").manifest.publicDir).toBe("public");
+  });
+
+  test("a package.json that does not parse is refused without the parser's words, which quote the file", () => {
+    const folder = copy(join(FIXTURES, "bun-app"));
+    writeFileSync(join(folder, "package.json"), `${TOKEN}\n`);
+    rmSync(join(folder, "public"), { recursive: true });
+    const inference = inferManifest(folder, "bun-app");
+    expect(inference.reasons).toContain("package.json is not valid JSON: fix it, then run detect again");
+    expect(JSON.stringify(inference)).not.toContain("sst_");
   });
 });
 

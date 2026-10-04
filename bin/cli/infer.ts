@@ -31,8 +31,8 @@
  *
  * Reads the folder, writes nothing.
  */
-import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync, type Dirent } from "node:fs";
+import { basename, join, relative, sep } from "node:path";
 import { DEPENDENCIES, isSystemName, isValidSlug, KNOWN_KEYS, RESERVED_ENV, SERVICE_PORTS, SUSPICIOUS_ENV, validate, type Manifest } from "./manifest";
 import { needsPort } from "./ports";
 import { projectPaths } from "./unit";
@@ -111,14 +111,42 @@ const SCAN_LIMITS = { files: 400, folders: 2000, depth: 5, bytes: 512 * 1024 };
 class Folder {
   readonly entries: Set<string>;
   private readonly sources = new Map<string, string[]>();
+  private readonly real: string;
+  /**
+   * The links met that lead outside the folder. detect is the read-only tool
+   * an agent may call on any folder without asking: a `package.json` linked
+   * to `~/.config/sitesolide/secrets/team-token` used to be read, and its
+   * first word echoed back by the parser's message. Such a link is never
+   * followed, and the folder is refused, see inferManifest.
+   */
+  readonly outside = new Set<string>();
 
   constructor(readonly path: string, readonly slug: string) {
     this.entries = new Set(readdirSync(path));
+    this.real = realpathSync(path);
   }
 
-  /** A file's text, or null when it is missing, a folder, or too big to be source. */
-  text(name: string): string | null {
+  /**
+   * The path to read for `name`: itself, or what a link inside the folder
+   * leads to; null for a missing path or a link leading out, which is noted.
+   */
+  private within(name: string): string | null {
     const full = join(this.path, name);
+    try {
+      if (!lstatSync(full).isSymbolicLink() && !name.includes("/")) return full;
+      const target = realpathSync(full);
+      if (target === this.real || target.startsWith(`${this.real}${sep}`)) return target;
+      this.outside.add(name);
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** A file's text, or null when it is missing, a folder, too big to be source, or a link leading out. */
+  text(name: string): string | null {
+    const full = this.within(name);
+    if (full === null) return null;
     try {
       const stat = statSync(full);
       if (!stat.isFile() || stat.size > SCAN_LIMITS.bytes) return null;
@@ -129,11 +157,19 @@ class Folder {
   }
 
   isFolder(name: string): boolean {
+    const full = this.within(name);
+    if (full === null) return false;
     try {
-      return statSync(join(this.path, name)).isDirectory();
+      return statSync(full).isDirectory();
     } catch {
       return false;
     }
+  }
+
+  /** Is there a file at `name`, inside the folder? */
+  holds(name: string): boolean {
+    const full = this.within(name);
+    return full !== null && existsSync(full);
   }
 
   /** The source files with one of these extensions, relative paths, shallowest first. */
@@ -159,11 +195,13 @@ class Folder {
           const full = join(folder, name);
           let stat;
           try {
-            stat = statSync(full);
+            // A link is never walked nor read: it may lead out of the folder.
+            stat = lstatSync(full);
           } catch {
             continue;
           }
           if (stat.isDirectory()) next.push(full);
+          else if (!stat.isFile()) continue;
           else if (extensions.some((extension) => name.endsWith(extension)) && found.length < SCAN_LIMITS.files) {
             found.push(relative(this.path, full));
           }
@@ -385,7 +423,7 @@ function serverEntry(folder: Folder, start: string | null, main: unknown, hasBui
   const named = start === null ? null : RUNS_A_FILE.exec(start)?.[1];
   // A start script that runs a file names the server, even one the build has
   // not produced yet: `node dist/server.js` after a TypeScript build.
-  if (named !== undefined && named !== null && (existsSync(join(folder.path, named)) || hasBuild)) {
+  if (named !== undefined && named !== null && (folder.holds(named) || hasBuild)) {
     return { path: named.replace(/^\.\//, ""), reason: `the start script runs ${named}` };
   }
   const candidates = [...(typeof main === "string" ? [main.replace(/^\.\//, "")] : []), ...ENTRY_FILES];
@@ -398,7 +436,7 @@ function serverEntry(folder: Folder, start: string | null, main: unknown, hasBui
 
 /** The first static folder that holds an index.html, or null. */
 function builtFolder(folder: Folder): string | null {
-  return STATIC_FOLDERS.find((name) => existsSync(join(folder.path, name, "index.html"))) ?? null;
+  return STATIC_FOLDERS.find((name) => folder.holds(`${name}/index.html`)) ?? null;
 }
 
 // --- the detectors -----------------------------------------------------------
@@ -651,8 +689,10 @@ function detectJavaScript(folder: Folder): Detection {
   let pkg: PackageJson;
   try {
     pkg = record(JSON.parse(raw)) as PackageJson;
-  } catch (error) {
-    return declined(`package.json does not parse: ${(error as Error).message}`);
+  } catch {
+    // Never the parser's own message: it quotes what it stopped at, which
+    // is the file's content, and detect answers whoever asks.
+    return declined("package.json is not valid JSON: fix it, then run detect again");
   }
   const scripts = record(pkg.scripts);
   const dependencies = record(pkg.dependencies);
@@ -750,15 +790,25 @@ function description(folder: Folder): string | undefined {
  */
 export function inferManifest(folder: string, slug: string): Inference {
   const view = new Folder(folder, slug);
+  const outside = (): Inference => ({
+    kind: "none",
+    reasons: [
+      `${[...view.outside].sort().join(", ")}: a symbolic link leading outside the folder, which detect never follows`,
+      "replace it with the file itself, then run detect again",
+    ],
+    notes: [],
+  });
   const refusals: string[] = [];
   for (const detector of [detectGo, detectPython, detectJavaScript, detectStatic]) {
     const detection = detector(view);
+    if (view.outside.size > 0) return outside();
     if (detection === null) continue;
     if (detection.kind === "none") {
       refusals.push(...detection.reasons);
       continue;
     }
     const about = description(view);
+    if (view.outside.size > 0) return outside();
     const manifest: Manifest = about === undefined ? detection.manifest : { ...detection.manifest, description: about };
     // Never hand back a manifest deploy would refuse. An app is checked with
     // the port deploy will give it, the one key left to the machine.

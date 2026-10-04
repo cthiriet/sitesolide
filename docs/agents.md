@@ -60,6 +60,11 @@ folder shows the same manifest and stops, giving the command that accepts it;
 `deploy --yes` writes it and deploys. `--slug <name>` names the project
 otherwise than after its folder.
 
+`detect` reads the folder and nothing outside it: a symbolic link leading out,
+a `package.json` linked to a file of your home directory for instance, is never
+followed, and the folder is refused, naming the link. A file that does not parse
+is said not to, without the parser's message, which quotes the file.
+
 What is recognised, first match wins:
 
 | The folder holds | The manifest |

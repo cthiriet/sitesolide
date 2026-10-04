@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { cpSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { forEachLine } from "../../cli/output";
 import { LEGACY_VERSIONS, MODERN_VERSIONS } from "../../mcp";
@@ -140,5 +142,26 @@ describe("sitesolide mcp over stdio", () => {
     // Only reads reached the machine.
     expect(vm!.logs().every((line) => line.startsWith("READ ") || line.startsWith("UNITS "))).toBe(true);
     expect(await mcp.close()).toBe(0);
+  });
+
+  test("detect, the tool called without asking, never reads through a link out of the folder", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mcp-link-"));
+    try {
+      const token = `sst_${"L".repeat(43)}`;
+      writeFileSync(join(root, "team-token"), `${token}\n`);
+      const folder = join(root, "project");
+      cpSync(join(TESTS_ROOT, "..", "infer", "bun-app"), folder, { recursive: true });
+      rmSync(join(folder, "package.json"));
+      symlinkSync(join(root, "team-token"), join(folder, "package.json"));
+      const mcp = start();
+      mcp.send({ jsonrpc: "2.0", id: "l", method: "tools/call", params: { _meta: META, name: "detect", arguments: { folder } } });
+      const answer = await mcp.answer("l");
+      expect(answer.result.isError).toBe(true);
+      expect(answer.result.structuredContent.error.details.join(" ")).toContain("a symbolic link leading outside the folder");
+      expect(JSON.stringify(answer)).not.toContain("sst_");
+      expect(await mcp.close()).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
