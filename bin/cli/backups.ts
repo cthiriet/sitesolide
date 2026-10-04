@@ -187,6 +187,21 @@ export function utcMinute(ms: number): string {
   return `${new Date(ms).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
+/**
+ * All of `sitesolide backups`, but the ssh: the command sent, the answer
+ * judged, the lines printed. `read` runs a read-only command on the machine.
+ * `ok` false makes the CLI exit in error, a script chaining it must not
+ * believe it saw a list.
+ */
+export async function backupsReport(folder: string, dashboardUrl: string, read: (command: string) => Promise<string>): Promise<{ ok: boolean; lines: string[] }> {
+  const answer = readListAnswer(await read(listCommand(folder)));
+  if (answer.kind === "listing") return { ok: true, lines: listingLines(answer.listing, dashboardUrl) };
+  if (answer.kind === "not-installed") {
+    return { ok: false, lines: ["backups are not installed on the server", "install them from the platform's repository: bin/deploy-backup.sh install, then enable"] };
+  }
+  return { ok: false, lines: ["the server's answer could not be read", "check that the deployment account may run sudo, and the component's version: bin/deploy-backup.sh install"] };
+}
+
 /** The lines `sitesolide backups` prints, newest snapshot first. */
 export function listingLines(listing: Listing, dashboardUrl: string): string[] {
   const lines = [`=== backups of ${listing.folder} ===`];

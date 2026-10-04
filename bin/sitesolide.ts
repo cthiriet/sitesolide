@@ -6,6 +6,7 @@
  *   sitesolide deploy [--dry-run]   prepare, build, push, install, verify
  *   sitesolide status               what the VM actually carries
  *   sitesolide logs [--follow]      journalctl for the service
+ *   sitesolide backups              the project's data snapshots, read only
  *   sitesolide remove --confirm <slug>  take the project off the machine
  *   sitesolide run -- <command>     load the vault secret and run
  *   sitesolide mcp                  the same commands, as tools for an agent
@@ -95,6 +96,7 @@ import {
   readConfig,
   type Config,
 } from "./cli/config";
+import { backupsReport } from "./cli/backups";
 import { decideBlock, generateFragment } from "./cli/fragment";
 import { hintFor } from "./cli/hints";
 import { inferManifest, renderManifest, slugFromFolder, type Inference } from "./cli/infer";
@@ -2473,6 +2475,14 @@ if (import.meta.main) {
       }
       await logs(readProject(folder), config, arguments_.includes("--follow"), executor, Number(lines));
       break;
+    case "backups": {
+      // Read only: the restore itself is the dashboard's, see bin/cli/backups.ts.
+      const report = await backupsReport(readProject(folder).manifest.slug, dashboardAddress(config.zone), (command) =>
+        executor.read(config, command),
+      );
+      for (const line of report.lines) (report.ok ? say : console.error)(line);
+      if (!report.ok) process.exit(1);
+      break;
     }
     case "secrets":
       pointToDashboard(config);
@@ -2536,6 +2546,7 @@ if (import.meta.main) {
           "  sitesolide status               what the server actually runs",
           "  sitesolide logs [--follow]      journalctl for this project",
           "     --lines <n>                  how many lines back, 50 by default",
+          "  sitesolide backups              this project's data snapshots, read only",
           "  sitesolide lock   [--dry-run]   close the preview behind a code, or show it",
           "     --status                     wanted / installed / measured, without touching",
           "     --new-code                   replace the code in force by a fresh one",

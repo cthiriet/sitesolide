@@ -20,6 +20,7 @@
  *   E=$(mktemp -d) && mkdir -p $E/sites $E/secrets $E/units $E/state $E/run $E/caddy $E/gatekeeper
  *   SITES_DIR=$E/sites SECRETS_FOLDER=$E/secrets UNITS_FOLDER=$E/units \
  *     STATE_FOLDER=$E/state CADDY_FOLDER=$E/caddy GATEKEEPER_FOLDER=$E/gatekeeper \
+ *     BACKUP_FOLDER=$E/backups BACKUP_STATE_FOLDER=$E/backup-state BACKUP_RUN_FOLDER=$E/backup-run \
  *     SOCKET=$E/run/steward.sock SOCKET_GROUP= OWNERS= SYSTEMCTL=false \
  *     bun steward.ts
  *   curl --unix-socket $E/run/steward.sock http://steward/projects
@@ -39,6 +40,8 @@ import { EGRESS_ACCOUNT, EGRESS_CONFIG_DIR } from "./borrowed/connectors";
 import { createControlSteward, isControlPath } from "./src/control/steward";
 import { createControlSystem } from "./src/control/system";
 import { INSTALLER_RUN_FOLDER } from "./src/control/protocol";
+import { BACKUP_FOLDER } from "./borrowed/backups";
+import { createBackupReader } from "./src/backup/reader";
 
 const SITES_DIR = process.env.SITES_DIR ?? "/srv/sites";
 const SECRETS_FOLDER = process.env.SECRETS_FOLDER ?? "/etc/sitesolide";
@@ -129,11 +132,22 @@ const connectors = createConnectorStore({
 });
 const leftovers = connectors.clean();
 if (leftovers > 0) console.log(`steward: ${leftovers} temporary connectors file(s) left by an abrupt stop removed`);
+// The backup component's folders, read for the Backups section; the restore
+// requests are written into its state folder, which the unit makes writable.
+// Missing, the section says backups are not set up, and nothing else changes.
+const backups = createBackupReader({
+  sitesDir: SITES_DIR,
+  backupFolder: process.env.BACKUP_FOLDER ?? BACKUP_FOLDER,
+  stateFolder: process.env.BACKUP_STATE_FOLDER ?? "/var/lib/sitesolide-backup",
+  runFolder: process.env.BACKUP_RUN_FOLDER ?? "/run/sitesolide-backup",
+  unitsFolder: UNITS_FOLDER,
+});
 
 const handler = createSteward(system, {
   secretsFolder: SECRETS_FOLDER,
   checkAccounts: OWNERS !== "",
   connectors,
+  backups,
 });
 
 // The control API's routes, under /team/ and /control/: the token registry and

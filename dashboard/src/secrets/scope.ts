@@ -72,8 +72,12 @@ export const ACCOUNT_PREFIX = "site-";
  *   site-dashboard, a compromised dashboard would read the heartbeat's address
  *   without unlocking anything, and could ping it to hide that the machine is
  *   down.
+ * - `dashboard-backup.env`, the backups' bucket and encryption passphrase,
+ *   which the backup units read (dashboard/src/backup/README.md): attached to
+ *   the dashboard site by its name, managed from its Secrets, and root's so
+ *   that the dashboard's own account never reads them.
  */
-export const ROOT_FILES = ["dashboard.env", "dashboard-monitor.env"];
+export const ROOT_FILES = ["dashboard.env", "dashboard-monitor.env", "dashboard-backup.env"];
 
 /**
  * The variable that changes only through `/password`, in every managed

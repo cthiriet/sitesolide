@@ -19,6 +19,8 @@ import type { SessionReader } from "../routes";
 import { isAcceptableOrigin, type Session } from "../sessions";
 import type { Steward } from "./client";
 import type { Tokens } from "./tokens";
+import type { BackupSteward } from "../backup/client";
+import type { RestoreRequest } from "../backup/protocol";
 import type {
   WithToken,
   ErrorCode,
@@ -40,6 +42,8 @@ export type SecretsDependencies = {
   publicUrl: string;
   steward: Steward;
   tokens: Tokens;
+  /** The steward's backup routes; absent, the Backups section says the steward is unreachable. */
+  backups?: BackupSteward;
 };
 
 type Handler = (req: Request) => Promise<Response>;
@@ -59,6 +63,11 @@ export type SecretsRoutes = {
   changePassword: Handler;
   togglePortal: Handler;
   restart: Handler;
+  /** A site's snapshots and its restore, read with the session alone, like the projects. */
+  backups: Handler;
+  /** Starts a restore, under the session's token, the slug retyped. */
+  restoreBackup: Handler;
+  backupAudit: Handler;
   /**
    * Not a route: what signing out calls. Forgets the session's token and
    * revokes it as best it can. Never rejects, a mute steward not being allowed
@@ -199,6 +208,20 @@ const extractPassword: Extraction<WithoutToken<PasswordRequest>> = (body) => {
   if (!isAcceptableSubmission(dashboardPassword)) return error(400, "invalid", "Dashboard password missing or too long.");
   if (newPassword !== null && typeof newPassword !== "string") return error(400, "invalid", "Missing or non-text field: newPassword.");
   return { ...names, dashboardPassword, newPassword };
+};
+
+/**
+ * Who the audit says asked for a restore. The dashboard has one password and
+ * no names: its holder is `owner`, as every component's audit writes it. Set
+ * here and not taken from the page, which could claim to be anyone.
+ */
+export const SESSION_ACTOR = "owner";
+
+/** `/backups/restore`: the slug, the snapshot and the retyped slug; the requester is the relay's to say. */
+const extractRestore: Extraction<WithoutToken<RestoreRequest>> = (body) => {
+  const names = fields(["slug", "snapshot", "confirmation"] as const)(body);
+  if (names instanceof Response) return names;
+  return { ...names, actor: SESSION_ACTOR };
 };
 
 /** `/portal`: the slug, `active` a boolean, and the confirmation, a string. */
@@ -432,6 +455,32 @@ export function createSecretsRoutes(dependencies: SecretsDependencies, clock: ()
     }),
     togglePortal: withToken(extractPortal, (requested) => steward.togglePortal(requested)),
     restart: withToken(fields(PROJECT_FIELDS), (requested) => steward.restart(requested)),
+
+    async backups(req) {
+      const open = await check(req, false);
+      if (open instanceof Response) return open;
+      const wanted = new URL(req.url).searchParams.getAll("slug");
+      if (wanted.length !== 1 || wanted[0] === "" || wanted[0]!.length > MAX_LOG_SLUG) return error(400, "invalid", "Name one site.");
+      if (dependencies.backups === undefined) return unreachable();
+      const backups = dependencies.backups;
+      return relay(await reach(() => backups.readBackups(wanted[0]!), null));
+    },
+
+    async backupAudit(req) {
+      const open = await check(req, false);
+      if (open instanceof Response) return open;
+      const wanted = new URL(req.url).searchParams.getAll("slug");
+      if (wanted.length > 1) return error(400, "invalid", "Name one site at most.");
+      const slug = wanted[0] ?? null;
+      if (slug !== null && (slug === "" || slug.length > MAX_LOG_SLUG)) return error(400, "invalid", "Unreadable site name.");
+      if (dependencies.backups === undefined) return unreachable();
+      const backups = dependencies.backups;
+      return relay(await reach(() => backups.readBackupAudit(slug), null));
+    },
+
+    restoreBackup: withToken(extractRestore, (requested) =>
+      dependencies.backups === undefined ? Promise.reject(new Error("no backup steward")) : dependencies.backups.restoreBackup(requested),
+    ),
 
     forgetUnlock,
     withToken,

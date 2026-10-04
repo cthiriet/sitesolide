@@ -99,6 +99,15 @@ ReadWritePaths=/etc/sitesolide
 # nothing more. The dash: the folder only exists once bin/deploy-egress.sh has
 # run, and a missing one must not fail the unit with 226/NAMESPACE.
 ReadWritePaths=-/etc/sitesolide-egress
+# The backup component's state (dashboard/src/backup/README.md): the steward
+# writes a restore request there, the one-shot that restores consumes it, and
+# it reads the component's database, whose WAL connection must write its -shm.
+# The archives in /var/backups/sitesolide and the restores' results in
+# /run/sitesolide-backup are only read, which strict allows. The dash: a
+# machine without backups starts the steward as before. A folder created after
+# the steward started is not writable for it until its next restart, hence
+# bin/deploy-backup.sh install before bin/deploy-steward.sh.
+ReadWritePaths=-/var/lib/sitesolide-backup
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true

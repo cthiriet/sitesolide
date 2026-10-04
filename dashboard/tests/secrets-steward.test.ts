@@ -2880,12 +2880,15 @@ describe("unit and capabilities", () => {
       expect(directives).toContain(expected);
     }
     expect(unit).not.toMatch(/^CapabilityBoundingSet=.*(CAP_FOWNER|CAP_DAC_OVERRIDE|CAP_SYS_ADMIN)/m);
-    // Nothing written outside /etc/sitesolide, the egress proxy's connectors
-    // and its own directories: Caddy and the gatekeeper are only read.
+    // Nothing written outside /etc/sitesolide, the egress proxy's connectors,
+    // its own directories and the backup component's state, where it drops
+    // restore requests: Caddy, the gatekeeper and the archives are only read.
     expect(directives.filter((line) => line.startsWith("ReadWritePaths="))).toEqual([
       "ReadWritePaths=/etc/sitesolide",
       "ReadWritePaths=-/etc/sitesolide-egress",
+      "ReadWritePaths=-/var/lib/sitesolide-backup",
     ]);
+    expect(unit).not.toMatch(/^ReadWritePaths=.*\/var\/backups/m);
     expect(unit).not.toMatch(/^(ReadWritePaths|BindPaths)=.*(caddy|gatekeeper)/m);
     expect(unit).not.toMatch(/^(InaccessiblePaths|TemporaryFileSystem)=.*(\/etc\/caddy|\/run)/m);
   });

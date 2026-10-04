@@ -58,24 +58,27 @@ export const SCHEMA = [
 export const DATABASE_NAME = "backup.db";
 
 /**
- * `strict` throws on a missing parameter instead of binding it to NULL. The
- * schema is only created by a writer: a reader that finds no database finds
- * nothing, and creates nothing.
+ * `strict` throws on a missing parameter instead of binding it to NULL.
+ *
+ * A reader, the steward or `sitesolide backups`, is opened read-write but
+ * `query_only`: SQLite's read-only mode cannot open a WAL database whose `-wal`
+ * the last writer removed on closing, which is the normal state between two
+ * runs, whereas a read-write connection recreates it. `query_only` then
+ * refuses every write on that connection, and the schema is only ever created
+ * by a writer: a reader that finds no database creates none.
  */
-export function openDatabase(path: string, options: { readonly?: boolean } = {}): Database {
-  const base = new Database(path, options.readonly === true ? { readonly: true, strict: true } : { create: true, strict: true });
-  for (const pragma of PRAGMAS) {
-    // A read-only connection cannot change the journal mode: the writer set it.
-    if (options.readonly === true && pragma.startsWith("journal_mode")) continue;
-    base.run(`PRAGMA ${pragma}`);
-  }
-  if (options.readonly !== true) for (const statement of SCHEMA) base.run(statement);
+export function openDatabase(path: string, options: { reader?: boolean } = {}): Database {
+  const reader = options.reader === true;
+  const base = new Database(path, reader ? { readwrite: true, create: false, strict: true } : { create: true, strict: true });
+  for (const pragma of PRAGMAS) base.run(`PRAGMA ${pragma}`);
+  if (reader) base.run("PRAGMA query_only = ON");
+  else for (const statement of SCHEMA) base.run(statement);
   return base;
 }
 
 /** A reader's connection, or null when no run has created the database yet. */
 export function openForReading(path: string): Database | null {
-  return existsSync(path) ? openDatabase(path, { readonly: true }) : null;
+  return existsSync(path) ? openDatabase(path, { reader: true }) : null;
 }
 
 export type AuditEntry = {

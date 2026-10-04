@@ -118,6 +118,8 @@ import { showArguments, readShow, restartPending, serviceView, verdict, type Ser
 import type { Command, Permissions, Examination, System } from "./system";
 import { createConnectorRoutes } from "../connectors/steward";
 import type { ConnectorStore } from "../connectors/store";
+import { createBackupRoutes } from "../backup/routes";
+import type { BackupReader } from "../backup/reader";
 
 export type StewardOptions = {
   secretsFolder: string;
@@ -161,6 +163,8 @@ export type StewardOptions = {
   random?: RandomSource;
   /** The egress proxy's connectors files, see src/connectors/store.ts. */
   connectors?: ConnectorStore;
+  /** The backups' folders, read for `/backups`; absent, the routes say backups are not set up. */
+  backups?: BackupReader | null;
 };
 
 export type Handler = (req: Request) => Promise<Response>;
@@ -1398,6 +1402,21 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     });
   }
 
+  // --- Backups -----------------------------------------------------------------
+
+  // Their rules live in src/backup/routes.ts; the token, the body, the lock and
+  // the scope of the sites are this steward's own, handed over.
+  const backups = createBackupRoutes({
+    reader: options.backups ?? null,
+    sites,
+    bodyWithToken: (req, texts, others) => bodyWithToken(req, texts, others),
+    underLock,
+    systemctl: (args, timeoutMs) => system.systemctl(args, timeoutMs),
+    fail: error,
+    now: system.now,
+    uidRoot: checked ? uidRoot : null,
+  });
+
   // --- Routing -----------------------------------------------------------------
 
   // The connectors of the egress proxy, written under the same unlock and the
@@ -1422,6 +1441,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     "/password": { POST: changePassword },
     "/portal": { POST: togglePortal },
     "/restart": { POST: restart },
+    "/backups": { GET: backups.list },
+    "/backups/restore": { POST: backups.restore },
+    "/backups/audit": { GET: backups.audit },
   };
 
   let inFlight = 0;

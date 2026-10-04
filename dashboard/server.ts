@@ -42,6 +42,7 @@ import { createSpool } from "./src/control/spool";
 import { createControlStore } from "./src/control/store";
 import { createTeamRoutes } from "./src/control/team";
 import { createTracker } from "./src/control/tracker";
+import { localBackupSteward } from "./src/backup/client";
 
 // The service starts despite an incomplete configuration, and says so. Dying
 // here would make it loop on Restart=always without the log explaining
@@ -79,6 +80,7 @@ const secrets = createSecretsRoutes({
   publicUrl: PUBLIC_URL,
   steward: localSteward(STEWARD_SOCKET),
   tokens: unlockTokens,
+  backups: localBackupSteward(STEWARD_SOCKET),
 });
 
 // The egress proxy's connectors: written through the steward under the same
@@ -222,6 +224,11 @@ const server = Bun.serve({
     "/api/v1/projects/:slug": { GET: (req) => api.project(req, req.params.slug) },
     "/api/v1/projects/:slug/logs": { GET: (req) => api.projectLogs(req, req.params.slug) },
     "/api/v1/*": () => failure("not-found", "no such route: see docs/team.md for the control API's routes"),
+    // The backups go through the steward too: it reads them as root, and starts
+    // a restore under the same lock and the same unlocking as the secrets.
+    "/api/backups": { GET: secrets.backups },
+    "/api/backups/audit": { GET: secrets.backupAudit },
+    "/api/backups/restore": { POST: (req, server) => long(req, server, secrets.restoreBackup) },
   },
 
   /**
