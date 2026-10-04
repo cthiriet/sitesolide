@@ -233,6 +233,11 @@ any caller.
   that token can; scope it at the provider. An upstream that echoes request
   headers, a debugging endpoint or a verbose error page, hands the credential
   back to the app: the proxy cannot tell an echo from data.
+- **A few projects slowing every other.** Past 32 MiB waiting in the whole
+  proxy, no tunnel is read until half has drained: several projects each
+  holding their 8 MiB of unread bytes slow down everyone's tunnels. That is
+  the trade made against the proxy being killed for memory, which would cut
+  them all.
 - **The proxy itself.** It holds every connector's credential and reaches
   every listed host. It runs as its own account, with no capability, a
   read-only system, the secrets and Caddy hidden; a compromise yields those
@@ -255,10 +260,26 @@ any caller.
 | Request head | 16 KiB, 10 s to arrive |
 | Idle tunnel | closed after 10 min with no byte delivered either way; a byte sent to a side already gone does not count |
 | Connection, resolution | 10 s, 5 s |
+| Bytes waiting for one side of a tunnel | 64 KiB, then the other side is no longer read |
+| Bytes waiting in all of one project's connections | 8 MiB, then none of them is read until half has drained |
+| Bytes waiting in the whole proxy | 32 MiB, then no connection is read until half has drained |
+| Bytes sent before a tunnel opens | 2 MiB per connection, then 400 |
 | Connector request body | 10 MiB, streamed through, not held |
 | Connector calls waiting for an answer, per project | 32, then 503 |
 | Connector answer headers | 30 s; the body then streams as long as it needs |
 | Refused pairs held between two audit writes | 10 000, the rest only counted |
+
+**Memory.** The unit gives the proxy 256 MiB, and the byte limits above keep
+what it holds for slow readers under 100 MiB in the worst case, for every
+project together: the arithmetic is next to the constants, in
+[src/proxy.ts](src/proxy.ts). The mark of one direction alone could not: a
+pause lands only once Bun has drained the kernel's receive buffer, up to
+6.5 MiB a direction, which is why each project's bytes and the proxy's are
+counted as well. A paused socket must also stay paused: Bun 1.3 starts
+reading a paused socket again whenever a write to it comes up short, and a
+single tunnel whose two ends both sent without reading took the proxy past
+3 GiB in under a second until the proxy put the pause back after every such
+write. `/status` gives `buffered`, the bytes waiting now.
 
 ## Deployment
 
@@ -374,7 +395,10 @@ audit's counting, capping and diffing, and, on real sockets with a TLS server
 of the test's own: an allowed CONNECT end to end, a refused host, a refused
 private resolution, a refused resolution to the machine's own address, read
 from interfaces the test injects, plain HTTP forwarding, large transfers in
-both directions, the per-project limit, a connector forwarded with its header
-set and the app's removed, an ungranted or unrequested connector refused, a
-connector's host presenting a valid certificate for another name refused
-before the request is written, and the dashboard's read-only routes.
+both directions, a slow reader stopping the proxy from reading the other side,
+both ends flooding included, a project's budget and the proxy's, the bytes
+sent before a tunnel opens capped, a tunnel closed whichever end goes first,
+the per-project limit counted before any head, a connector forwarded with its
+header set and the app's removed, an ungranted or unrequested connector
+refused, a connector's host presenting a valid certificate for another name
+refused before the request is written, and the dashboard's read-only routes.

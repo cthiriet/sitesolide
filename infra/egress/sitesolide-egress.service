@@ -97,6 +97,9 @@ SystemCallArchitectures=native
 # filter kills Bun at start. MemoryDenyWriteExecute stays out for the JIT.
 SystemCallFilter=@system-service
 
+# What the proxy holds for slow readers stays under 100 MiB for every project
+# together (DEFAULT_LIMITS in src/proxy.ts, the arithmetic beside it); the
+# rest is Bun itself and the kernel's socket buffers, charged here too.
 MemoryMax=256M
 
 [Install]

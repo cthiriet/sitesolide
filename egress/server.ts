@@ -83,7 +83,9 @@ const connectors = startConnectors({
   dashboardAccount: DASHBOARD_ACCOUNT,
   // How many of the machine's own addresses it refuses: null says the
   // interfaces could not be read, and that every egress is refused for it.
-  status: () => ({ started, openTunnels: proxy.open(), ownAddresses: ownAddresses()?.size ?? null }),
+  // `buffered`, the bytes waiting for a slow reader, against the budgets of
+  // src/proxy.ts.
+  status: () => ({ started, openTunnels: proxy.open(), buffered: proxy.buffered(), ownAddresses: ownAddresses()?.size ?? null }),
 });
 
 watch();
