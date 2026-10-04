@@ -7,7 +7,8 @@
  * (`bin/cli/loopback.ts`) reserves for Caddy, for root and for the dashboard's
  * single user. Caddy never relays them: a protected site only forwards
  * `/_portal/*` and the `forward_auth` call to `/verifier` to the portal, and
- * the portal's subdomain only `/sante`. `bin/tests/cli-portal.test.ts` checks
+ * the portal's subdomain only `/sante` and the provider's routes, `/oidc/*`,
+ * behind a 400 for any ambiguous path. `bin/tests/cli-portal.test.ts` checks
  * that no fragment aims at anything else.
  *
  * One more safety net: any request carrying `X-Forwarded-For`, which Caddy

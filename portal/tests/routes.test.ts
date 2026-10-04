@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { DATA_DIR } from "../src/config";
 import type { Guest } from "../src/guests";
 import { deriveKey, issueToken, guestHash, issueIdentityToken } from "../src/gate";
+import { readSignOut } from "../src/handoff";
 import { readSettings } from "../src/oidc";
 import { createRoutes, type Options } from "../src/routes";
 import type { Policy } from "../src/sharing";
@@ -314,6 +315,26 @@ describe("/_portal/deconnexion", () => {
       headers: { "X-Portal-Hote": HOST, Origin: "https://evil.test" },
     });
     expect(routes().signOut(request).status).toBe(403);
+  });
+
+  test("with a provider, goes on to the portal's host to end its session too, with a ticket for this host", () => {
+    // A page rather than a 303: a site whose CSP says form-action 'self'
+    // would see its sign-out form refused on a redirect to another host.
+    const request = new Request("http://127.0.0.1:3026/_portal/deconnexion", {
+      method: "POST",
+      headers: { "X-Portal-Hote": HOST, Origin: ORIGIN },
+    });
+    const response = routes({ settings: SETTINGS }).signOut(request);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toInclude("Max-Age=0");
+    expect(response.headers.get("x-portal")).toBe("connexion");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    return response.text().then((page) => {
+      const next = new URL(page.match(/<meta http-equiv="refresh" content="0; url=([^"]+)">/)![1]!);
+      expect(next.origin).toBe("https://portal.test-zone.invalid");
+      expect(next.pathname).toBe("/oidc/signout");
+      expect(readSignOut(KEY, next.searchParams.get("ticket"), START / 1000)).toBe(HOST);
+    });
   });
 });
 

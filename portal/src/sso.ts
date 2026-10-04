@@ -17,12 +17,16 @@
  * - `GET /oidc/start?flow=` mints a code at once when the portal already
  *   knows who this is, or sends them to the provider;
  * - `GET /oidc/callback` checks what the provider sends back and mints the
- *   code.
+ *   code;
+ * - `GET /oidc/signout?ticket=` ends the portal's session, where a site's
+ *   sign-out sends the browser, and makes the next sign-in ask the provider
+ *   which account.
  *
- * All four are GETs: they are top-level navigations, and none of them
+ * All five are GETs: they are top-level navigations, and none of them
  * changes anything a stranger could choose. Whoever makes a browser start a
  * flow signs its owner in as themselves; a callback or a code without the
- * cookie of the browser that began is refused.
+ * cookie of the browser that began is refused; a sign-out needs the ticket
+ * that only a site's own sign-out, a POST from its origin, mints.
  *
  * Built around their dependencies, like src/routes.ts: the tests drive them
  * with a provider they run themselves.
@@ -36,6 +40,7 @@ import {
   issueTransaction,
   readFlow,
   readSession,
+  readSignOut,
   readTransaction,
   transactionSuffix,
   IDENTITY_DURATION_S,
@@ -83,11 +88,29 @@ export type SsoRoutes = {
   complete: (req: Request) => Response;
   start: (req: Request) => Promise<Response>;
   callback: (req: Request) => Promise<Response>;
+  signOut: (req: Request) => Response;
 };
 
 /** The binding cookie on the site, and the portal's session on its own host. */
 export const BINDING_SUFFIX = "-sso";
 export const SESSION_SUFFIX = "-session";
+
+/**
+ * Set on the portal's host by a sign-out, erased by the next sign-in that
+ * succeeds: while it is there, a sign-in asks the provider which account
+ * rather than taking the one it is still signed in with. On a shared computer,
+ * the next person clicking *Sign in with* would otherwise come back as the
+ * previous one. Unsigned on purpose: forged or stale, it only makes the
+ * provider ask once more.
+ */
+export const SIGNED_OUT_SUFFIX = "-signed-out";
+
+/**
+ * How long the portal remembers that this browser signed out: a provider's own
+ * session outlives the portal's by weeks, and the next person may come days
+ * later.
+ */
+export const SIGNED_OUT_DURATION_S = 30 * 24 * 3600;
 
 /**
  * What the person reads when the provider refuses or the token fails. Short
@@ -96,8 +119,10 @@ export const SESSION_SUFFIX = "-session";
  */
 const REFUSALS: Record<string, string> = {
   "domain-not-allowed": "This account's domain isn't allowed to sign in here.",
+  "unmanaged-account": "This account isn't one of your organization's: sign in with your work account.",
   "unverified-email": "Your identity provider didn't confirm this account's email address.",
   "no-email": "Your identity provider didn't share this account's email address.",
+  "unusable-email": "Your identity provider sent an email address this server can't use.",
   "provider-error": "The sign-in was cancelled or refused by your identity provider.",
   "provider-unreachable": "Your identity provider can't be reached right now. Try again in a moment.",
 };
@@ -164,13 +189,25 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
     return isValidHost(host) ? host : null;
   }
 
-  /** The way back to the site with a fresh code, or the page saying too many sign-ins are in flight. */
-  function handOver(flow: { host: string; binding: string; returnTo: string }, identity: Identity, now: number, cookies: string[]): Response {
-    const code = options.handoffs.mint({ ...flow, identity }, now);
-    if (code === null) {
-      return page(503, "Too many sign-ins at once.", "Try again in a minute.", flow, cookies);
+  /**
+   * The way back to the site with a fresh code, or the page saying why there
+   * is none. `sessionExpiry` travels with the code: the site's cookie will not
+   * outlive the session that vouched for the person.
+   */
+  function handOver(
+    flow: { host: string; binding: string; returnTo: string },
+    identity: Identity,
+    sessionExpiry: number,
+    now: number,
+    cookies: string[],
+  ): Response {
+    const minting = options.handoffs.mint({ ...flow, identity, sessionExpiry }, now);
+    if ("refusal" in minting) {
+      return minting.refusal === "spent-flow"
+        ? page(400, "This sign-in link was already used.", "Go back to the site and sign in again.", flow, cookies)
+        : page(503, "Too many sign-ins at once.", "Try again in a minute.", flow, cookies);
     }
-    const target = `${siteOrigin(flow.host)}/_portal/oidc/complete?${new URLSearchParams({ code })}`;
+    const target = `${siteOrigin(flow.host)}/_portal/oidc/complete?${new URLSearchParams({ code: minting.code })}`;
     return redirect(target, cookies);
   }
 
@@ -210,10 +247,15 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       // The portal already knows this person: no detour through the provider.
       // The settings are judged again, an address taken off the allowed
       // domains since does not keep signing in for a day.
-      const known = readSession(options.key, readCookie(req.headers.get("cookie"), cookieName(online, SESSION_SUFFIX)), nowS);
-      if (known !== null && !flow.chooseAccount && maySignIn(known.email, options.settings.allowedDomains, options.settings.admins)) {
-        return handOver(flow, known, now, []);
+      const cookies = req.headers.get("cookie");
+      const known = readSession(options.key, readCookie(cookies, cookieName(online, SESSION_SUFFIX)), nowS);
+      const allowed = known !== null && maySignIn(known.identity.email, options.settings.allowedDomains, options.settings.admins);
+      if (known !== null && allowed && !flow.chooseAccount) {
+        return handOver(flow, known.identity, known.expiry, now, []);
       }
+      // After a sign-out on this browser, the provider is asked which account,
+      // whatever the site asked: see SIGNED_OUT_SUFFIX.
+      const chooseAccount = flow.chooseAccount || readCookie(cookies, cookieName(online, SIGNED_OUT_SUFFIX)) !== null;
 
       let discovery;
       try {
@@ -230,7 +272,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
         { state: secrets.state, nonce: secrets.nonce, verifier: secrets.verifier, flow: sealed },
         nowS,
       );
-      return redirect(authorizationUrl(discovery, options.settings, secrets, flow.chooseAccount), [
+      return redirect(authorizationUrl(discovery, options.settings, secrets, chooseAccount), [
         setCookie(transaction, online, FLOW_DURATION_S, transactionSuffix(secrets.state)),
       ]);
     },
@@ -279,8 +321,10 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
         return fail(result.refusal, result.email, result.refusal === "provider-unreachable" ? 502 : 403);
       }
 
+      // A new session, and this browser no longer counts as signed out.
       const session = setCookie(issueSession(options.key, result.identity, nowS), online, IDENTITY_DURATION_S, SESSION_SUFFIX);
-      return handOver(flow, result.identity, now, [...spent, session]);
+      const cookies = [...spent, session, clearCookie(online, SIGNED_OUT_SUFFIX)];
+      return handOver(flow, result.identity, nowS + IDENTITY_DURATION_S, now, cookies);
     },
 
     complete(req) {
@@ -308,10 +352,32 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
         return door(returnTo, 403, notSharedMessage(identity.email), spent, true);
       }
 
+      // A day at most, and never past the portal session that vouched for the
+      // person: an account closed at the provider is out of every site a day
+      // after signing in there, not a day after the last site it reached.
+      const nowS = Math.floor(now / 1000);
+      const expiration = Math.min(nowS + IDENTITY_DURATION_S, redemption.handoff.sessionExpiry);
+      if (expiration <= nowS) {
+        audit({ actor: identity.email, action: "portal.signin_failed", target: host, detail: { method: "oidc", reason: "expired-session" } }, now);
+        return door(returnTo, 400, "Your sign-in has expired. Sign in again.", spent);
+      }
       audit({ actor: identity.email, action: "portal.signin", target: host, detail: { method: "oidc", role } }, now);
-      const expiration = Math.floor(now / 1000) + IDENTITY_DURATION_S;
-      const cookie = setCookie(issueIdentityToken(options.key, host, expiration, identity), online, IDENTITY_DURATION_S);
+      const cookie = setCookie(issueIdentityToken(options.key, host, expiration, identity), online, expiration - nowS);
       return redirect(returnTo, [...spent, cookie]);
+    },
+
+    signOut(req) {
+      if (options.key === null || options.settings === null) {
+        return page(404, "Not available.", "Signing in with a work account isn't configured on this server.", null);
+      }
+      const host = readSignOut(options.key, new URL(req.url).searchParams.get("ticket"), Math.floor(clock() / 1000));
+      if (host === null) {
+        return page(400, "This sign-out link has expired.", "Go back to the site and sign out again.", null);
+      }
+      return redirect(`${siteOrigin(host)}/`, [
+        clearCookie(online, SESSION_SUFFIX),
+        setCookie("1", online, SIGNED_OUT_DURATION_S, SIGNED_OUT_SUFFIX),
+      ]);
     },
   };
 }

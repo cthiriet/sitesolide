@@ -34,6 +34,14 @@
  *   an authorization code stolen in transit is worth nothing elsewhere.
  * - **The code** lives sixty seconds, in this process's memory only, and is
  *   gone at the first attempt to redeem it, right or wrong.
+ * - **A flow mints one code**, ever: replaying `/oidc/start` with the same
+ *   flow and a portal session would otherwise mint a code per request, and
+ *   one account filled the codes in flight for everyone. And one email holds
+ *   `HANDOFF_PER_EMAIL` codes in flight at most, whatever its flows.
+ *
+ * The site's cookie never outlives the portal session that vouched for the
+ * person: an account closed at the provider is out of every site within a day
+ * of signing in there, not a day after the last site it reached.
  *
  * Pure apart from the store, which holds the codes in memory and takes its
  * time and its draw as parameters.
@@ -48,12 +56,32 @@ export const HANDOFF_TTL_MS = 60_000;
 export const HANDOFF_MAX = 10_000;
 
 /**
+ * Codes in flight for one email. A person signs in to a few sites at once at
+ * most, and each code is redeemed within its redirect: ten leaves room for a
+ * burst of tabs, and makes filling `HANDOFF_MAX` take a thousand accounts the
+ * provider accepts rather than one.
+ */
+export const HANDOFF_PER_EMAIL = 10;
+
+/**
+ * The flows that minted their code are remembered until they would have
+ * expired anyway, so that none mints twice. Bounded like the codes: past it,
+ * minting refuses rather than forgetting, since forgetting would let a flow
+ * be replayed.
+ */
+export const SPENT_FLOWS_MAX = 100_000;
+
+/**
  * How long the portal remembers who signed in on its own host, so that the
- * next site skips the provider. Also the life of a site's identity cookie: an
- * account closed at the provider loses every site within a day, and removing
+ * next site skips the provider. Also the longest life of a site's identity
+ * cookie, which never outlives that session: an account closed at the
+ * provider loses every site within a day of signing in there, and removing
  * someone from a site's sharing closes that site at their next request.
  */
 export const IDENTITY_DURATION_S = 24 * 3600;
+
+/** A sign-out is carried from the site to the portal's host within a redirect: a minute is generous. */
+export const SIGN_OUT_DURATION_S = 60;
 
 /** 32 drawn bytes in base64url: the shape of a binding and of a code. */
 const DRAWN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -141,29 +169,66 @@ export function readTransaction(key: Uint8Array, token: string | null, state: st
 
 // --- The portal's session ----------------------------------------------------------
 
+/** Who the portal's session names, and until when, in seconds: the site's cookie lives no longer. */
+export type Session = { identity: Identity; expiry: number };
+
 export function issueSession(key: Uint8Array, identity: Identity, nowS: number): string {
   return seal(purposeKey(key, "session"), { e: identity.email, n: identity.name, x: nowS + IDENTITY_DURATION_S });
 }
 
-export function readSession(key: Uint8Array, token: string | null, nowS: number): Identity | null {
+export function readSession(key: Uint8Array, token: string | null, nowS: number): Session | null {
   const fields = unseal(purposeKey(key, "session"), token);
   if (fields === null) return null;
   const { x } = fields;
   if (typeof x !== "number" || x <= nowS || x > nowS + IDENTITY_DURATION_S) return null;
-  return readIdentity(fields);
+  const identity = readIdentity(fields);
+  return identity === null ? null : { identity, expiry: x };
+}
+
+// --- The sign-out ----------------------------------------------------------------
+
+/**
+ * What a site's sign-out hands the portal's host: the host it came from,
+ * sealed, for a minute. Only a POST from the site's own origin mints one, so
+ * a stranger can neither sign someone out of the portal nor make its host
+ * send them anywhere but back to a site Caddy announced.
+ */
+export function issueSignOut(key: Uint8Array, host: string, nowS: number): string {
+  return seal(purposeKey(key, "sign-out"), { h: host, e: nowS + SIGN_OUT_DURATION_S });
+}
+
+/** The site a sign-out came from, unexpired; or `null`. */
+export function readSignOut(key: Uint8Array, token: string | null, nowS: number): string | null {
+  const fields = unseal(purposeKey(key, "sign-out"), token);
+  if (fields === null) return null;
+  const { h, e } = fields;
+  if (typeof e !== "number" || e <= nowS || e > nowS + SIGN_OUT_DURATION_S) return null;
+  return typeof h === "string" && isValidHost(h) ? h : null;
 }
 
 // --- The codes -------------------------------------------------------------------
 
-export type Handoff = { host: string; binding: string; identity: Identity; returnTo: string };
+export type Handoff = {
+  host: string;
+  binding: string;
+  identity: Identity;
+  returnTo: string;
+  /** When the portal session that vouched for the identity expires, in seconds. */
+  sessionExpiry: number;
+};
 
 export type Redemption =
   | { handoff: Handoff }
   | { refusal: "unknown-code" | "expired-code" | "wrong-host" | "wrong-browser" };
 
+/**
+ * A fresh code, or why none: `spent-flow` when this flow already minted its
+ * own, `too-many` when too many are in flight, for everyone or for this email.
+ */
+export type Minting = { code: string } | { refusal: "spent-flow" | "too-many" };
+
 export type HandoffStore = {
-  /** A fresh code for this handoff, or `null` when too many are in flight. */
-  mint: (handoff: Handoff, now: number) => string | null;
+  mint: (handoff: Handoff, now: number) => Minting;
   /** Burns the code whatever the outcome, then says whether it hands over its identity here. */
   redeem: (code: string, host: string, binding: string | null, now: number) => Redemption;
 };
@@ -175,22 +240,48 @@ function codeKey(code: string): string {
 /**
  * The codes in flight, kept under their hash: the map holds nothing a memory
  * dump could replay. A restart forgets them all, and the person in the middle
- * of a redirect signs in again.
+ * of a redirect signs in again; it forgets the spent flows too, which lets a
+ * flow of the last ten minutes mint once more, nothing beyond.
+ *
+ * A flow is known by its binding's hash, drawn afresh for each one. Minting
+ * looks only at that email's own codes, ten at most, and sweeps the whole map
+ * only once it is full: a flood of mints costs no full sweep each.
  */
 export function handoffStore(drawCode: () => string = () => draw(32)): HandoffStore {
   const codes = new Map<string, Handoff & { expiresAt: number }>();
+  const byEmail = new Map<string, Set<string>>();
+  const spent = new Map<string, number>();
+
+  function forget(key: string): void {
+    const entry = codes.get(key);
+    if (entry === undefined) return;
+    codes.delete(key);
+    const keys = byEmail.get(entry.identity.email);
+    keys?.delete(key);
+    if (keys?.size === 0) byEmail.delete(entry.identity.email);
+  }
 
   function sweep(now: number): void {
-    for (const [key, entry] of codes) if (entry.expiresAt <= now) codes.delete(key);
+    for (const [key, entry] of codes) if (entry.expiresAt <= now) forget(key);
+    for (const [binding, until] of spent) if (until <= now) spent.delete(binding);
   }
 
   return {
     mint(handoff, now) {
-      if (codes.size >= HANDOFF_MAX) sweep(now);
-      if (codes.size >= HANDOFF_MAX) return null;
+      if ((spent.get(handoff.binding) ?? 0) > now) return { refusal: "spent-flow" };
+      const email = handoff.identity.email;
+      for (const key of byEmail.get(email) ?? []) if (codes.get(key)!.expiresAt <= now) forget(key);
+      if ((byEmail.get(email)?.size ?? 0) >= HANDOFF_PER_EMAIL) return { refusal: "too-many" };
+      if (codes.size >= HANDOFF_MAX || spent.size >= SPENT_FLOWS_MAX) sweep(now);
+      if (codes.size >= HANDOFF_MAX || spent.size >= SPENT_FLOWS_MAX) return { refusal: "too-many" };
+
       const code = drawCode();
-      codes.set(codeKey(code), { ...handoff, expiresAt: now + HANDOFF_TTL_MS });
-      return code;
+      const key = codeKey(code);
+      codes.set(key, { ...handoff, expiresAt: now + HANDOFF_TTL_MS });
+      byEmail.set(email, (byEmail.get(email) ?? new Set()).add(key));
+      // No flow outlives FLOW_DURATION_S from any moment it is still valid.
+      spent.set(handoff.binding, now + FLOW_DURATION_S * 1000);
+      return { code };
     },
 
     redeem(code, host, binding, now) {
@@ -198,7 +289,7 @@ export function handoffStore(drawCode: () => string = () => draw(32)): HandoffSt
       const key = codeKey(code);
       const entry = codes.get(key);
       if (entry === undefined) return { refusal: "unknown-code" };
-      codes.delete(key);
+      forget(key);
       if (entry.expiresAt <= now) return { refusal: "expired-code" };
       if (entry.host !== host) return { refusal: "wrong-host" };
       if (binding === null || bindingHash(binding) !== entry.binding) return { refusal: "wrong-browser" };

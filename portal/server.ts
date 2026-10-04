@@ -88,12 +88,13 @@ const server = Bun.serve({
     "/sante": { GET: routes.health },
 
     // Signing in with the identity provider: the first two on the protected
-    // site, through /_portal/*; the last two on the portal's own host,
+    // site, through /_portal/*; the last three on the portal's own host,
     // through the manifest's routes. See src/sso.ts.
     "/_portal/oidc": { GET: sso.begin },
     "/_portal/oidc/complete": { GET: sso.complete },
     "/oidc/start": { GET: sso.start },
     "/oidc/callback": { GET: sso.callback },
+    "/oidc/signout": { GET: sso.signOut },
 
     // Never relayed by Caddy: see src/admin.ts.
     "/admin/guests": { GET: admin.list, POST: admin.create },

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { AUDIT_RETENTION_MS, auditStore, guestStore, openDatabase, PRAGMAS, sharingStore } from "../src/database";
+import { AUDIT_FLOOR_MS, AUDIT_RETENTION_MS, COLLAPSE_WINDOW_MS, auditStore, guestStore, openDatabase, PRAGMAS, sharingStore } from "../src/database";
 import { DATA_DIR } from "../src/config";
 import type { Guest } from "../src/guests";
 import { DEFAULT_POLICY } from "../src/sharing";
@@ -188,9 +188,56 @@ describe("the audit store", () => {
   test("keeps the most recent rows only, beyond its bound", () => {
     const capped = auditStore(openDatabase(join(DATA_DIR, "audit-capped.db")), 3);
     for (let i = 0; i < 5; i++) capped.record({ actor: "owner", action: `test.${i}` }, START + i);
-    // The bound applies on the hourly pass, before a write.
-    capped.record({ actor: "owner", action: "test.last" }, START + 2 * 3600 * 1000);
+    // The bound applies on the hourly pass, before a write, to rows past the floor.
+    capped.record({ actor: "owner", action: "test.last" }, START + AUDIT_FLOOR_MS + DAY);
     expect(capped.recent(100).map((event) => event.action)).toEqual(["test.last", "test.4", "test.3", "test.2"]);
+  });
+
+  test("never forgets a row of the last thirty days to the bound, however many come after", () => {
+    // A cookie replayed in a loop must not push a revocation out of the audit.
+    const capped = auditStore(openDatabase(join(DATA_DIR, "audit-floor.db")), 3);
+    capped.record({ actor: "owner", action: "sharing.update", target: "forum.test-zone.invalid" }, START);
+    for (let i = 0; i < 5; i++) capped.record({ actor: "owner", action: `test.${i}` }, START + DAY + i);
+    capped.record({ actor: "owner", action: "test.last" }, START + AUDIT_FLOOR_MS - DAY);
+    expect(capped.recent(100).map((event) => event.action)).toEqual([
+      "test.last",
+      "test.4",
+      "test.3",
+      "test.2",
+      "test.1",
+      "test.0",
+      "sharing.update",
+    ]);
+  });
+
+  test("a sign-in repeated within a minute by the same actor, on the same site, is one row that counts", () => {
+    const db = openDatabase(join(DATA_DIR, "audit-collapse.db"));
+    const collapsing = auditStore(db);
+    const guest = { actor: "guest:InViTeInViTe0001", action: "portal.signin", target: "forum.test-zone.invalid", detail: { method: "guest" } };
+    for (let i = 0; i < 100; i++) collapsing.record(guest, START + i * 500);
+    // Another site, another actor, another action: rows of their own.
+    collapsing.record({ ...guest, target: "roster.test-zone.invalid" }, START + 1_000);
+    collapsing.record({ ...guest, actor: "owner", detail: { method: "password" } }, START + 1_000);
+    collapsing.record({ actor: "guest:InViTeInViTe0001", action: "portal.signout", target: "forum.test-zone.invalid" }, START + 2_000);
+    collapsing.record({ actor: "guest:InViTeInViTe0001", action: "portal.signout", target: "forum.test-zone.invalid" }, START + 3_000);
+    expect(collapsing.recent(100).map(({ actor, action, target, detail, at }) => ({ actor, action, target, detail, at }))).toEqual([
+      { actor: guest.actor, action: "portal.signout", target: "forum.test-zone.invalid", detail: { count: 2 }, at: new Date(START + 2_000).toISOString() },
+      { actor: "owner", action: "portal.signin", target: "forum.test-zone.invalid", detail: { method: "password" }, at: new Date(START + 1_000).toISOString() },
+      { actor: guest.actor, action: "portal.signin", target: "roster.test-zone.invalid", detail: { method: "guest" }, at: new Date(START + 1_000).toISOString() },
+      { actor: guest.actor, action: "portal.signin", target: "forum.test-zone.invalid", detail: { method: "guest", count: 100 }, at: new Date(START).toISOString() },
+    ]);
+  });
+
+  test("a minute later, a new row; a failure or a different detail is never folded in", () => {
+    const collapsing = auditStore(openDatabase(join(DATA_DIR, "audit-collapse-later.db")));
+    const owner = { actor: "owner", action: "portal.signin", target: "forum.test-zone.invalid", detail: { method: "password" } };
+    collapsing.record(owner, START);
+    collapsing.record(owner, START + COLLAPSE_WINDOW_MS);
+    collapsing.record({ ...owner, actor: "alice@acme.test", detail: { method: "oidc", role: "member" } }, START + 1);
+    collapsing.record({ ...owner, actor: "alice@acme.test", detail: { method: "oidc", role: "admin" } }, START + 2);
+    collapsing.record({ actor: "anonymous", action: "portal.signin_failed", target: "forum.test-zone.invalid", detail: { method: "password" } }, START + 3);
+    collapsing.record({ actor: "anonymous", action: "portal.signin_failed", target: "forum.test-zone.invalid", detail: { method: "password" } }, START + 4);
+    expect(collapsing.recent(100).length).toBe(6);
   });
 
   test("forgets what is older than the retention, at most once an hour", () => {

@@ -108,12 +108,19 @@ export type Identity = { email: string; name: string | null };
 
 /**
  * A display name fit for a cookie and a header, or `null`: without a control
- * character, trimmed, cut at `NAME_MAX`. A line break in a name would
- * otherwise become a header of its own.
+ * character, trimmed, cut at `NAME_MAX` characters. A line break in a name
+ * would otherwise become a header of its own.
+ *
+ * Cut on code points, and made well formed: `slice` counts UTF-16 units, and
+ * cutting `😀` in half left a lone surrogate, on which `encodeURIComponent`
+ * throws. The person whose provider sent that name then got a 500 from
+ * `/verifier` on every request of every site. A lone surrogate the provider
+ * sent itself becomes U+FFFD the same way.
  */
 export function cleanName(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const cleaned = value.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, NAME_MAX).trim();
+  const trimmed = value.toWellFormed().replace(/[\x00-\x1f\x7f]/g, " ").trim();
+  const cleaned = Array.from(trimmed).slice(0, NAME_MAX).join("").trim();
   return cleaned === "" ? null : cleaned;
 }
 
@@ -401,12 +408,16 @@ export const IDENTITY_HEADERS = {
  * The name is percent-encoded UTF-8: a header carries bytes, and `Zoë` or
  * `李` would reach the site garbled, or not at all. `decodeURIComponent`
  * gives it back. The email needs nothing: `cleanEmail` keeps it ASCII.
+ *
+ * `toWellFormed` again, though `cleanName` already did it: `encodeURIComponent`
+ * throws on nothing else, and this function runs on every request of every
+ * protected site, where a throw is a 500 nobody can sign their way out of.
  */
 export function identityHeaders(role: Role, identity: Identity | null): Record<string, string> {
   const headers: Record<string, string> = { [IDENTITY_HEADERS.role]: role };
   if (identity !== null) {
     headers[IDENTITY_HEADERS.user] = identity.email;
-    if (identity.name !== null) headers[IDENTITY_HEADERS.name] = encodeURIComponent(identity.name);
+    if (identity.name !== null) headers[IDENTITY_HEADERS.name] = encodeURIComponent(identity.name.toWellFormed());
   }
   return headers;
 }

@@ -314,6 +314,17 @@ describe("a display name", () => {
     expect(cleanName("   ")).toBeNull();
     expect(cleanName(42)).toBeNull();
   });
+
+  test("is cut on characters, never inside one, and leaves no lone surrogate", () => {
+    // 199 letters then an emoji, two UTF-16 units: slice(0, 200) kept half of
+    // it, and encodeURIComponent threw on every request of that person.
+    const name = cleanName(`${"a".repeat(199)}😀😀`)!;
+    expect(name).toBe(`${"a".repeat(199)}😀`);
+    expect(name.isWellFormed()).toBe(true);
+    expect(Array.from(cleanName("😀".repeat(300))!)).toHaveLength(200);
+    // A lone surrogate the provider sent itself becomes U+FFFD.
+    expect(cleanName("Zo\ud800e")).toBe("Zo�e");
+  });
 });
 
 describe("the identity headers", () => {
@@ -337,6 +348,19 @@ describe("the identity headers", () => {
       "X-Sitesolide-Role": "admin",
       "X-Sitesolide-User": "owner@acme.test",
     });
+  });
+
+  test("a name the encoding cannot take does not throw, it is carried well formed", () => {
+    // Whatever slipped past cleanName, /verifier must answer, not fail.
+    const headers = identityHeaders("member", { email: "a@acme.test", name: "a\ud83d" });
+    expect(headers["X-Sitesolide-User-Name"]).toBe("a%EF%BF%BD");
+  });
+
+  test("an identity cookie carrying a lone surrogate opens nothing, and does not throw", () => {
+    // Minted before names were cut on characters: refused, the person signs
+    // in again and gets a name that encodes.
+    const token = issueIdentityToken(KEY, HOST, NOW + 60, { email: "zoe@acme.test", name: `${"a".repeat(199)}\ud83d` });
+    expect(readToken(token, KEY, HOST, NOW, DURATION)).toBeNull();
   });
 
   test("every value fits in a header", () => {

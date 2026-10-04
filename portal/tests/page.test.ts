@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { signInPage, doorPage, portalPage } from "../src/page";
+import { signInPage, signedOutPage, doorPage, portalPage } from "../src/page";
 
 /** The chunk of page between two markers, bounds included. */
 function between(page: string, start: string, end: string): string {
@@ -87,6 +87,17 @@ describe("the pages of the portal's own host", () => {
 
   test("without a way back, no link", () => {
     expect(portalPage("Expired.", "Sign in again.")).not.toInclude("<a ");
+  });
+});
+
+describe("the page a site's sign-out answers", () => {
+  test("goes on to the portal's host on its own, and offers the link for a browser that does not", () => {
+    const page = signedOutPage('https://portal.test-zone.invalid/oidc/signout?ticket=a.b&x="y');
+    expect(page).toInclude('<meta http-equiv="refresh" content="0; url=https://portal.test-zone.invalid/oidc/signout?ticket=a.b&amp;x=&quot;y">');
+    expect(page).toInclude('href="https://portal.test-zone.invalid/oidc/signout?ticket=a.b&amp;x=&quot;y"');
+    expect(page).not.toInclude('"y"');
+    // The door page shares the template and gains nothing from it.
+    expect(doorPage()).not.toInclude("http-equiv");
   });
 });
 

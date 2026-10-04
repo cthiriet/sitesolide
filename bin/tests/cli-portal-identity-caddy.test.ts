@@ -372,6 +372,28 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     });
   });
 
+  test("signing out of a site ends the portal's session too, through the portal's own block", async () => {
+    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    const browser = new Browser();
+    provider.next = { email: "alice@acme.test", name: "Alice Martin" };
+    await browser.follow(`http://${SITE}/_portal/oidc?retour=%2Flist`);
+    expect(browser.jars.get(PORTAL_HOST)?.has("portal-session")).toBe(true);
+
+    const page = await browser.get(`http://${SITE}/_portal/deconnexion`, {
+      method: "POST",
+      headers: { Origin: `http://${SITE}:${caddyPort}` },
+    });
+    expect(page.status).toBe(200);
+    const next = (await page.text()).match(/<meta http-equiv="refresh" content="0; url=([^"]+)">/)![1]!.replaceAll("&amp;", "&");
+    expect(new URL(next).host).toBe(`${PORTAL_HOST}:${caddyPort}`);
+    const { response, url } = await browser.follow(next);
+    expect(url).toBe(`http://${SITE}/`);
+    expect(response.status).toBe(401);
+    expect(browser.jars.get(PORTAL_HOST)?.has("portal-session")).toBe(false);
+    expect(browser.jars.get(PORTAL_HOST)?.get("portal-signed-out")).toBe("1");
+    await share(SITE, { mode: "admins" });
+  });
+
   test("a site not behind the portal hands its app nobody, whatever the visitor claims", async () => {
     // A site whose door was turned off: anyone gets in, and an app written to
     // trust the headers behind the portal must not believe a stranger's.
@@ -400,6 +422,7 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
   test("the portal's own host serves the provider's two steps, and nothing of the site side nor the admin", async () => {
     const browser = new Browser();
     expect((await browser.get(`http://${PORTAL_HOST}/oidc/start?flow=x`)).status).toBe(400);
+    expect((await browser.get(`http://${PORTAL_HOST}/oidc/signout?ticket=x`)).status).toBe(400);
     for (const path of ["/_portal/oidc", "/_portal/oidc/complete?code=x", "/admin/sharing", "/admin/audit", "/verifier"]) {
       const response = await browser.get(`http://${PORTAL_HOST}${path}`);
       expect({ path, status: response.status }).toEqual({ path, status: 404 });

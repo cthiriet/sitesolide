@@ -236,6 +236,28 @@ export const AUDIT_RETENTION_MS = 180 * 24 * 3600 * 1000;
  */
 export const AUDIT_MAX_ROWS = 100_000;
 
+/**
+ * Except the rows of the last thirty days, which the row cap never forgets.
+ * Without this floor, anyone holding a cookie could sign in and out in a loop
+ * and push every older event out of the cap, a revocation or a sharing change
+ * included, the very rows someone would come looking for. When the cap would
+ * need them, they are kept, and the file grows past it: what bounds it then is
+ * the collapsing below, at most one row a minute per actor, action and site
+ * for what a holder of a cookie can repeat.
+ */
+export const AUDIT_FLOOR_MS = 30 * 24 * 3600 * 1000;
+
+/**
+ * Sign-ins and sign-outs repeated by the same actor on the same site within a
+ * minute make one row, which says how many in `detail.count`: a guest's
+ * password or any valid cookie can be replayed as fast as the network allows,
+ * and each replay used to be a row. The row keeps the time of the first.
+ * Failed sign-ins are not collapsed: they are bounded where they happen, by
+ * the rate limiting and the per-minute bound of src/sso.ts.
+ */
+export const COLLAPSED_ACTIONS: ReadonlySet<string> = new Set(["portal.signin", "portal.signout"]);
+export const COLLAPSE_WINDOW_MS = 60 * 1000;
+
 /** The forgetting runs at most once an hour, on the write that comes after. */
 const PRUNE_EVERY_MS = 3600 * 1000;
 
@@ -258,22 +280,46 @@ export function auditStore(db: Database, maxRows: number = AUDIT_MAX_ROWS): Audi
       "INSERT INTO audit (at, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)",
     ),
     prune: db.query<undefined, [string]>("DELETE FROM audit WHERE at < ?"),
-    trim: db.query<undefined, [number]>(
-      "DELETE FROM audit WHERE id <= (SELECT id FROM audit ORDER BY id DESC LIMIT 1 OFFSET ?)",
+    trim: db.query<undefined, [number, string]>(
+      "DELETE FROM audit WHERE id <= (SELECT id FROM audit ORDER BY id DESC LIMIT 1 OFFSET ?) AND at < ?",
     ),
+    // The `audit_at` index narrows it to the last minute's rows: a handful.
+    latest: db.query<{ id: number; detail: string | null }, [string, string, string | null, string]>(
+      "SELECT id, detail FROM audit WHERE actor = ? AND action = ? AND target IS ? AND at > ? ORDER BY id DESC LIMIT 1",
+    ),
+    count: db.query<undefined, [string, number]>("UPDATE audit SET detail = ? WHERE id = ?"),
     recent: db.query<AuditRow, [number, number]>(
       "SELECT id, at, actor, action, target, detail FROM audit WHERE id < ? ORDER BY id DESC LIMIT ?",
     ),
   };
   let prunedAt = 0;
 
+  /**
+   * Counts this event on the row of the same actor, action, site and detail
+   * written in the last minute, if there is one. JSON in JavaScript rather
+   * than SQLite's JSON functions, which a system SQLite may lack.
+   */
+  function collapse(event: NewEvent, now: number): boolean {
+    if (!COLLAPSED_ACTIONS.has(event.action)) return false;
+    const since = new Date(now - COLLAPSE_WINDOW_MS).toISOString();
+    const row = queries.latest.get(event.actor, event.action, event.target ?? null, since);
+    if (row === null) return false;
+    const stored = row.detail === null ? {} : parseArray(row.detail);
+    if (typeof stored !== "object" || stored === null || Array.isArray(stored)) return false;
+    const { count, ...rest } = stored as Record<string, unknown>;
+    if (JSON.stringify(rest) !== JSON.stringify(event.detail ?? {})) return false;
+    queries.count.run(JSON.stringify({ ...rest, count: (typeof count === "number" ? count : 1) + 1 }), row.id);
+    return true;
+  }
+
   return {
     record(event, now) {
       if (now - prunedAt >= PRUNE_EVERY_MS) {
         queries.prune.run(new Date(now - AUDIT_RETENTION_MS).toISOString());
-        queries.trim.run(maxRows);
+        queries.trim.run(maxRows, new Date(now - AUDIT_FLOOR_MS).toISOString());
         prunedAt = now;
       }
+      if (collapse(event, now)) return;
       queries.insert.run(
         new Date(now).toISOString(),
         event.actor,

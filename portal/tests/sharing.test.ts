@@ -54,6 +54,19 @@ describe("an email", () => {
     expect(cleanEmail("alice@acmé.test")).toBeNull();
   });
 
+  test("nothing outside ASCII reaches the lowercasing, where it would become another person's address", () => {
+    // The Kelvin sign lowercases to the letter k, and trim() takes off a
+    // no-break space: judged after them, both collapsed onto kim@acme.test.
+    expect("Kim@acme.test".toLowerCase()).toBe("kim@acme.test");
+    expect(cleanEmail("Kim@acme.test")).toBeNull();
+    expect(cleanEmail("kim@acme.Kim")).toBeNull();
+    expect(cleanEmail(" kim@acme.test ")).toBeNull();
+    expect(cleanEmail(" kim@acme.test")).toBeNull();
+    expect(cleanEmail("\tkim@acme.test")).toBeNull();
+    expect(cleanDomain("acme.Kim")).toBeNull();
+    expect(cleanDomain(" acme.test")).toBeNull();
+  });
+
   test("its domain is what follows the @", () => {
     expect(domainOf("alice@sub.acme.test")).toBe("sub.acme.test");
   });

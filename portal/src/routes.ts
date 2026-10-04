@@ -6,9 +6,9 @@
 import { remainingWait, isAcceptableSubmission } from "../borrowed/auth";
 import type { AuditStore, GuestStore, NewEvent, SharingStore } from "./database";
 import { guestExpiration, guestOpens, type Guest } from "./guests";
-import { IDENTITY_DURATION_S } from "./handoff";
+import { issueSignOut, IDENTITY_DURATION_S } from "./handoff";
 import type { Settings } from "./oidc";
-import { signInPage } from "./page";
+import { signedOutPage, signInPage } from "./page";
 import { DEFAULT_POLICY, identityRole, maySignIn, type Role } from "./sharing";
 import {
   clearCookie,
@@ -284,6 +284,20 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       return open(returnTo, issueToken(options.key!, host, expiration), options.cookieDurationS);
     },
 
+    /**
+     * Signs out of this site, and, with a provider configured, of the portal's
+     * own session too: on a shared computer, the next person clicking *Sign
+     * in with* would otherwise be signed in as the previous one, silently.
+     *
+     * The second half happens on the portal's host, which this host cannot
+     * set a cookie for: the answer is a page that sends the browser there,
+     * with a ticket naming this host, and the portal's host sends it back
+     * here. A page and not a 303: a browser applies the site's own
+     * `form-action` to every redirect after a form, and a site whose CSP says
+     * `'self'` would see its sign-out refused on the way to the portal. The
+     * page carries `X-Portal`, so a front end that signs out with `fetch`
+     * reloads on it, as it did on the sign-in page the 303 led to.
+     */
     signOut(req) {
       const host = hostOf(req);
       if (host === null) return refuse("portal: unknown host", 400);
@@ -291,17 +305,20 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
         return refuse("portal: origin refused", 403);
       }
       const now = clock();
+      const nowS = Math.floor(now / 1000);
       const token = readCookie(req.headers.get("cookie"), cookieName(options.online));
-      const bearer = readToken(token, options.key, host, Math.floor(now / 1000), options.cookieDurationS, IDENTITY_DURATION_S);
+      const bearer = readToken(token, options.key, host, nowS, options.cookieDurationS, IDENTITY_DURATION_S);
       // Only someone who was in signs out: a stranger posting here, any Origin
       // being easy to forge outside a browser, writes nothing.
       if (bearer !== null) audit({ actor: actorOf(bearer), action: "portal.signout", target: host }, now);
       // The cookie is erased even if it was no longer valid: a dead cookie
       // would otherwise stay in the browser.
-      return new Response(null, {
-        status: 303,
-        headers: { Location: "/", "Set-Cookie": clearCookie(options.online), "Cache-Control": "no-store" },
-      });
+      const cleared = { "Set-Cookie": clearCookie(options.online), "Cache-Control": "no-store" };
+      if (options.key === null || settings === null) {
+        return new Response(null, { status: 303, headers: { Location: "/", ...cleared } });
+      }
+      const next = `${settings.portalOrigin}/oidc/signout?${new URLSearchParams({ ticket: issueSignOut(options.key, host, nowS) })}`;
+      return new Response(signedOutPage(next), { status: 200, headers: { ...doorHeaders(), ...cleared } });
     },
 
     /**

@@ -61,12 +61,21 @@ const LABEL = "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?";
 const DOMAIN_PATTERN = new RegExp(`^${LABEL}(\\.${LABEL})+$`);
 
 /**
+ * Printable ASCII and the space, judged on the text as it came, before any
+ * lowercasing or trimming. Both reach beyond ASCII: `"K".toLowerCase()`,
+ * the Kelvin sign, is the letter `k`, and `trim()` takes off a no-break space.
+ * Judged after them, `Kim@acme.test` or an address wrapped in no-break
+ * spaces would collapse onto `kim@acme.test`, another person's.
+ */
+const RAW_TEXT = /^[\x20-\x7e]*$/;
+
+/**
  * A domain in lowercase, or `null`. At least two labels: `com` alone would
  * share a site with half the internet. A leading `@` is forgiven, people
  * often type the domain the way it follows their own address.
  */
 export function cleanDomain(value: unknown): string | null {
-  if (typeof value !== "string") return null;
+  if (typeof value !== "string" || !RAW_TEXT.test(value)) return null;
   const cleaned = value.trim().toLowerCase().replace(/^@/, "");
   if (cleaned.length === 0 || cleaned.length > 253) return null;
   return DOMAIN_PATTERN.test(cleaned) ? cleaned : null;
@@ -81,9 +90,13 @@ export function cleanDomain(value: unknown): string | null {
  * same person. The comparison that follows is exact, on the lowercase form:
  * the identity provider hands over the address it verified, and the policy
  * names the one the owner typed.
+ *
+ * Nothing outside ASCII is let into the lowercasing: see `RAW_TEXT`. The
+ * spaces at the edges of a typed address are still forgiven; an address the
+ * identity provider sends must carry none at all, see `identityFromClaims`.
  */
 export function cleanEmail(value: unknown): string | null {
-  if (typeof value !== "string") return null;
+  if (typeof value !== "string" || !RAW_TEXT.test(value)) return null;
   const cleaned = value.trim().toLowerCase();
   if (cleaned.length === 0 || cleaned.length > EMAIL_MAX) return null;
   const at = cleaned.lastIndexOf("@");

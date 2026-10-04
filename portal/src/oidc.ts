@@ -24,9 +24,11 @@
  * - `nonce` the one this browser's flow drew, which ties the token to it;
  * - an email the provider says it verified. Microsoft Entra does not send
  *   `email_verified`: it sends `xms_edov`, true when the domain of the address
- *   is one its tenant proved it owns, once the claim is added to the token.
- *   Without either, the address is whatever the account's holder typed, and
- *   proves nothing.
+ *   is one its tenant proved it owns, once the claim is added to the token,
+ *   and it is read from Microsoft's issuer alone. Without either, the address
+ *   is whatever the account's holder typed, and proves nothing;
+ * - with Google and allowed domains, an account of those domains' Workspace,
+ *   named by `hd`: see `isHostedAccount`.
  */
 // Types only: the verification itself goes through the global WebCrypto.
 import type { webcrypto } from "node:crypto";
@@ -69,11 +71,26 @@ export type Settings = {
 
 export type SettingsReading = { settings: Settings | null; problems: string[] };
 
+/** Google's issuer, `https://accounts.google.com`, by its host. */
+const GOOGLE_HOST = "accounts.google.com";
+
+/** Microsoft Entra's, `https://login.microsoftonline.com/<tenant>/v2.0`, by its host. */
+const MICROSOFT_HOST = "login.microsoftonline.com";
+
 /** The providers whose issuer says who they are, for the button's label. */
 const KNOWN_PROVIDERS: Record<string, string> = {
-  "accounts.google.com": "Google",
-  "login.microsoftonline.com": "Microsoft",
+  [GOOGLE_HOST]: "Google",
+  [MICROSOFT_HOST]: "Microsoft",
 };
+
+/** Is this issuer, already judged an https address, served by that host? */
+function issuedBy(issuer: string, host: string): boolean {
+  try {
+    return new URL(issuer).hostname === host;
+  } catch {
+    return false;
+  }
+}
 
 /** RFC 6761 reserves `localhost` and every name under it for the loopback. */
 function isLoopback(hostname: string): boolean {
@@ -392,11 +409,25 @@ function isTrue(value: unknown): boolean {
   return value === true || value === "true";
 }
 
-/** The verified identity in the claims, or the reason there is none. */
-export function identityFromClaims(claims: Record<string, unknown>): Identity | string {
+/**
+ * The verified identity in the claims, or the reason there is none.
+ *
+ * The address must come exactly as an address: no space anywhere, not even at
+ * its edges, which `cleanEmail` forgives a person typing one. What the
+ * provider verified is that string, and another string, however close, is not
+ * what it vouched for.
+ *
+ * `xms_edov` counts only from Microsoft Entra, the one provider that defines
+ * it: from any other issuer, it is a claim like any other, which an
+ * administrator of that provider might let a user set, and proves nothing.
+ */
+export function identityFromClaims(claims: Record<string, unknown>, issuer: string): Identity | string {
+  if (claims.email === undefined || claims.email === null) return "no-email";
+  if (typeof claims.email !== "string" || !/^[\x21-\x7e]+$/.test(claims.email)) return "unusable-email";
   const email = cleanEmail(claims.email);
-  if (email === null) return "no-email";
-  if (!isTrue(claims.email_verified) && !isTrue(claims.xms_edov)) return "unverified-email";
+  if (email === null) return "unusable-email";
+  const verified = isTrue(claims.email_verified) || (issuedBy(issuer, MICROSOFT_HOST) && isTrue(claims.xms_edov));
+  if (!verified) return "unverified-email";
   const given = [claims.given_name, claims.family_name].filter((part) => typeof part === "string").join(" ");
   return { email, name: cleanName(claims.name) ?? cleanName(given) };
 }
@@ -551,10 +582,37 @@ export async function completeSignIn(
   const refusal = claimsRefusal(parts.claims, { issuer: settings.issuer, clientId: settings.clientId, nonce: flow.nonce, nowS });
   if (refusal !== null) return { refusal, email: null };
 
-  const identity = identityFromClaims(parts.claims);
+  const identity = identityFromClaims(parts.claims, settings.issuer);
   if (typeof identity === "string") return { refusal: identity, email: cleanEmail(parts.claims.email) };
   if (!maySignIn(identity.email, settings.allowedDomains, settings.admins)) {
     return { refusal: "domain-not-allowed", email: identity.email };
   }
+  if (!isHostedAccount(parts.claims, settings, identity.email)) {
+    return { refusal: "unmanaged-account", email: identity.email };
+  }
   return { identity };
+}
+
+/**
+ * With Google and allowed domains, is this account one of those domains' own,
+ * managed by their Google Workspace?
+ *
+ * Google says `email_verified` of any account whose address was once proved,
+ * a personal Google account opened with a work address included, and that
+ * account outlives the mailbox: someone who left keeps a Google account that
+ * still carries `alice@acme.com`, verified. Google is the authority for an
+ * address only when the account belongs to a Workspace, which it names in
+ * `hd`, the hosted domain. Allowed domains mean "our organization's
+ * accounts", so the account's `hd` must be one of them.
+ *
+ * Only then: an admin email is let in by name, from wherever it comes, and
+ * without allowed domains anyone Google vouches for may sign in by design,
+ * which is why the README asks for an Internal client with Google. Other
+ * providers have no such claim, and vouch for their own directory.
+ */
+export function isHostedAccount(claims: Record<string, unknown>, settings: Settings, email: string): boolean {
+  if (!issuedBy(settings.issuer, GOOGLE_HOST)) return true;
+  if (settings.allowedDomains.length === 0 || settings.admins.includes(email)) return true;
+  const hd = typeof claims.hd === "string" ? cleanDomain(claims.hd) : null;
+  return hd !== null && settings.allowedDomains.includes(hd);
 }

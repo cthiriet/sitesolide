@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "../src/config";
+import { deriveKey } from "../src/gate";
+import { HANDOFF_PER_EMAIL, IDENTITY_DURATION_S, issueSession } from "../src/handoff";
 import { makeSigner, startProvider, type MockProvider } from "./provider";
 
 /**
@@ -32,6 +34,7 @@ function freePort(): number {
 
 let provider: MockProvider;
 let portal: ReturnType<typeof Bun.spawn>;
+let hash = "";
 const portalPort = freePort();
 const PORTAL = `http://127.0.0.1:${portalPort}`;
 
@@ -127,7 +130,7 @@ beforeAll(async () => {
   rmSync(FOLDER, { recursive: true, force: true });
   mkdirSync(FOLDER, { recursive: true });
   provider = await startProvider();
-  const hash = await Bun.password.hash(PASSWORD, { algorithm: "argon2id", memoryCost: 8, timeCost: 1 });
+  hash = await Bun.password.hash(PASSWORD, { algorithm: "argon2id", memoryCost: 8, timeCost: 1 });
   Bun.spawnSync(["bun", join(import.meta.dir, "..", "scripts", "borrow.ts")], { stdout: "ignore" });
   portal = Bun.spawn(["bun", "run", join(import.meta.dir, "..", "server.ts")], {
     env: {
@@ -365,11 +368,12 @@ describe("the flow's defences", () => {
     const browser = new Browser();
     const { visited } = await browser.follow(signInAt(SITE));
     const complete = visited.find((one) => one.includes("/_portal/oidc/complete"))!;
+    const before = await events();
     const replay = await browser.get(complete);
     expect(replay.status).toBe(400);
     // A code the portal does not know is noise, and is not recorded: anyone
-    // can send one. The last event is still the sign-in.
-    expect((await events())[0]).toMatchObject({ action: "portal.signin", actor: "alice@acme.test" });
+    // can send one. The audit is as the sign-in left it.
+    expect(await events()).toEqual(before);
   });
 
 
@@ -452,6 +456,148 @@ describe("the flow's defences", () => {
     const verified = await browser.verify();
     expect(verified.headers.get("x-sitesolide-role")).toBe("admin");
     expect(verified.headers.get("x-sitesolide-user")).toBeNull();
+  });
+});
+
+describe("what a session, a flow and a sign-out may still do", () => {
+  const PORTAL_HOST = `127.0.0.1:${portalPort}`;
+
+  /** The portal's key, as the server derived it: the tests own its data folder and its hash. */
+  function portalKey(): Uint8Array {
+    return deriveKey(new Uint8Array(readFileSync(join(FOLDER, "key"))), hash)!;
+  }
+
+  /** The portal's start address of a fresh flow for this site. */
+  async function startOf(browser: Browser, site = SITE): Promise<string> {
+    return new URL((await browser.get(signInAt(site))).headers.get("location")!).toString();
+  }
+
+  function maxAge(response: Response, name: string): number | null {
+    const cookie = response.headers.getSetCookie().find((one) => one.startsWith(`${name}=`));
+    const match = cookie?.match(/Max-Age=(\d+)/);
+    return match === undefined || match === null ? null : Number(match[1]);
+  }
+
+  async function signOutOf(browser: Browser, site: string): Promise<Response> {
+    const response = await fetch(`${PORTAL}/_portal/deconnexion`, {
+      method: "POST",
+      headers: { "X-Portal-Hote": site, Origin: `http://${site}`, Cookie: browser.cookies(site) },
+      redirect: "manual",
+    });
+    browser.keep(site, response);
+    return response;
+  }
+
+  /** Follows a sign-in up to the site's last step, and gives that step's answer. */
+  async function completion(browser: Browser, site = SITE): Promise<Response> {
+    let address = signInAt(site);
+    for (let i = 0; i < 6; i++) {
+      const answer = await browser.get(address);
+      if (new URL(address).pathname === "/_portal/oidc/complete") return answer;
+      address = new URL(answer.headers.get("location")!, address).toString();
+    }
+    throw new Error("the sign-in never reached the site");
+  }
+
+  test("a site's cookie never outlives the portal session that vouched for the person", async () => {
+    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    // Through the provider, the session is new: a day for the site.
+    expect(maxAge(await completion(new Browser()), "portal")).toBe(IDENTITY_DURATION_S);
+
+    // Through a session with two minutes left: two minutes, not a day.
+    // Otherwise someone disabled at the provider kept every site for up to two
+    // days, the session's day and then the last site's.
+    const browser = new Browser();
+    const nowS = Math.floor(Date.now() / 1000);
+    const session = issueSession(portalKey(), { email: "alice@acme.test", name: null }, nowS - IDENTITY_DURATION_S + 120);
+    browser.jars.set(PORTAL_HOST, new Map([["portal-session", session]]));
+    const response = await completion(browser);
+    expect(response.status).toBe(303);
+    const age = maxAge(response, "portal")!;
+    expect(age).toBeGreaterThan(100);
+    expect(age).toBeLessThanOrEqual(120);
+    // The token says the same as the cookie: the gate refuses it past then.
+    const expiry = Number(browser.cookie(SITE, "portal")!.split(".")[0]);
+    expect(expiry).toBeLessThanOrEqual(nowS + 121);
+  });
+
+  test("a flow replayed with a portal session mints no second code", async () => {
+    // One account replaying one flow used to fill every code in flight, and
+    // block every sign-in on every site.
+    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    const browser = new Browser();
+    await browser.follow(signInAt(SITE));
+    const start = await startOf(browser);
+    expect((await browser.get(start)).status).toBe(303);
+    const replayed = await browser.get(start);
+    expect(replayed.status).toBe(400);
+    expect(replayed.headers.get("location")).toBeNull();
+    expect(await replayed.text()).toInclude("already used");
+  });
+
+  test("one account holds ten codes in flight at most", async () => {
+    provider.next = { email: "carol@acme.test" };
+    const browser = new Browser();
+    await browser.follow(signInAt(SITE));
+    const starts: string[] = [];
+    for (let i = 0; i <= HANDOFF_PER_EMAIL; i++) starts.push(await startOf(browser));
+    // The first sign-in's code was redeemed: ten more may wait, not eleven.
+    for (const start of starts.slice(0, HANDOFF_PER_EMAIL)) expect((await browser.get(start)).status).toBe(303);
+    expect((await browser.get(starts.at(-1)!)).status).toBe(503);
+    // Someone else is not held back.
+    const other = new Browser();
+    const { url } = await other.follow(signInAt(SITE));
+    expect(url).not.toInclude("/oidc/start");
+  });
+
+  test("signing out of a site ends the portal's session too, and the next sign-in asks which account", async () => {
+    await share(SITE, { mode: "people", people: ["alice@acme.test", "bob@acme.test"] });
+    await share(OTHER_SITE, { mode: "people", people: ["alice@acme.test", "bob@acme.test"] });
+    const browser = new Browser();
+    await browser.follow(signInAt(SITE));
+    expect(browser.cookie(PORTAL_HOST, "portal-session")).toBeDefined();
+
+    // The site's answer is a page that goes on to the portal's host on its own.
+    const signedOut = await signOutOf(browser, SITE);
+    expect(signedOut.status).toBe(200);
+    expect(signedOut.headers.get("x-portal")).toBe("connexion");
+    expect(browser.cookie(SITE, "portal")).toBeUndefined();
+    const page = await signedOut.text();
+    const next = page.match(/<meta http-equiv="refresh" content="0; url=([^"]+)">/)![1]!.replaceAll("&amp;", "&");
+    expect(next).toStartWith(`${PORTAL}/oidc/signout?ticket=`);
+    expect(page).toInclude(`href="${next}"`);
+
+    // The portal's host ends its session and sends the browser back to the site.
+    const back = await browser.get(next);
+    expect(back.status).toBe(303);
+    expect(back.headers.get("location")).toBe(`http://${SITE}/`);
+    expect(browser.cookie(PORTAL_HOST, "portal-session")).toBeUndefined();
+    expect(browser.cookie(PORTAL_HOST, "portal-signed-out")).toBe("1");
+
+    // The next person at this computer clicking "Sign in with" goes to the
+    // provider, which is told to ask which account, even on another site.
+    provider.next = { email: "bob@acme.test" };
+    const again = await browser.follow(signInAt(OTHER_SITE, "/team"));
+    const authorize = again.visited.find((url) => url.startsWith(`${provider.url}/authorize`));
+    expect(authorize).toBeDefined();
+    expect(new URL(authorize!).searchParams.get("prompt")).toBe("select_account");
+    expect((await browser.verify(OTHER_SITE)).headers.get("x-sitesolide-user")).toBe("bob@acme.test");
+
+    // Signed in again: no longer signed out, and the next site skips the provider.
+    expect(browser.cookie(PORTAL_HOST, "portal-signed-out")).toBeUndefined();
+    expect(providerVisits((await browser.follow(signInAt(SITE))).visited)).toBe(0);
+  });
+
+  test("a sign-out link forged, expired or replayed elsewhere signs nobody out", async () => {
+    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    const browser = new Browser();
+    await browser.follow(signInAt(SITE));
+    for (const ticket of ["", "forged.ticket", "eyJoIjoiYmFuay5sb2NhbGhvc3QiLCJlIjo5OTk5OTk5OTk5fQ.AAAA"]) {
+      const response = await browser.get(`${PORTAL}/oidc/signout?${new URLSearchParams({ ticket })}`);
+      expect(response.status).toBe(400);
+      expect(response.headers.get("location")).toBeNull();
+    }
+    expect(browser.cookie(PORTAL_HOST, "portal-session")).toBeDefined();
   });
 });
 

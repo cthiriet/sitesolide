@@ -10,6 +10,7 @@ import {
   createProvider,
   identityFromClaims,
   isAcceptableUrl,
+  isHostedAccount,
   readDiscovery,
   readKeys,
   readSettings,
@@ -276,23 +277,66 @@ describe("the ID token's claims", () => {
     expect(claimsRefusal({ ...good, sub: "" }, expected)).toBe("no-subject");
   });
 
+  const ENTRA = "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0";
+
   test("an email the provider verified, the Entra way included", () => {
-    expect(identityFromClaims({ email: "Alice@Acme.test", email_verified: true, name: "Alice" })).toEqual({
+    expect(identityFromClaims({ email: "Alice@Acme.test", email_verified: true, name: "Alice" }, ISSUER)).toEqual({
       email: "alice@acme.test",
       name: "Alice",
     });
-    expect(identityFromClaims({ email: "alice@acme.test", email_verified: "true" })).toEqual({ email: "alice@acme.test", name: null });
-    expect(identityFromClaims({ email: "alice@acme.test", xms_edov: true, given_name: "Alice", family_name: "Martin" })).toEqual({
+    expect(identityFromClaims({ email: "alice@acme.test", email_verified: "true" }, ISSUER)).toEqual({ email: "alice@acme.test", name: null });
+    expect(identityFromClaims({ email: "alice@acme.test", xms_edov: true, given_name: "Alice", family_name: "Martin" }, ENTRA)).toEqual({
       email: "alice@acme.test",
       name: "Alice Martin",
     });
   });
 
   test("no email, or one nobody verified, is no identity", () => {
-    expect(identityFromClaims({ email_verified: true })).toBe("no-email");
-    expect(identityFromClaims({ email: "alice@acme.test" })).toBe("unverified-email");
-    expect(identityFromClaims({ email: "alice@acme.test", email_verified: false })).toBe("unverified-email");
-    expect(identityFromClaims({ email: "alice@acme.test", email_verified: "false", xms_edov: false })).toBe("unverified-email");
+    expect(identityFromClaims({ email_verified: true }, ISSUER)).toBe("no-email");
+    expect(identityFromClaims({ email: "alice@acme.test" }, ISSUER)).toBe("unverified-email");
+    expect(identityFromClaims({ email: "alice@acme.test", email_verified: false }, ISSUER)).toBe("unverified-email");
+    expect(identityFromClaims({ email: "alice@acme.test", email_verified: "false", xms_edov: false }, ENTRA)).toBe("unverified-email");
+  });
+
+  test("xms_edov counts from Microsoft's issuer alone", () => {
+    // Elsewhere it is a claim like any other, which a provider's administrator
+    // might let a user set: it proves nothing there.
+    expect(identityFromClaims({ email: "alice@acme.test", xms_edov: true }, ISSUER)).toBe("unverified-email");
+    expect(identityFromClaims({ email: "alice@acme.test", xms_edov: true }, "https://login.microsoftonline.com.evil.test/v2.0")).toBe(
+      "unverified-email",
+    );
+    expect(identityFromClaims({ email: "alice@acme.test", xms_edov: true }, ENTRA)).toEqual({ email: "alice@acme.test", name: null });
+  });
+
+  test("the address must come exactly as one: no space, nothing outside ASCII", () => {
+    // What the provider verified is that string; a close one is someone else.
+    for (const email of [" alice@acme.test", "alice@acme.test ", " alice@acme.test", "Kim@acme.test", "alice @acme.test"]) {
+      expect({ email, result: identityFromClaims({ email, email_verified: true }, ISSUER) }).toEqual({ email, result: "unusable-email" });
+    }
+    expect(identityFromClaims({ email: 42, email_verified: true }, ISSUER)).toBe("unusable-email");
+  });
+
+  describe("a Google account, with allowed domains", () => {
+    const google = readSettings(
+      { OIDC_ISSUER: "https://accounts.google.com", OIDC_CLIENT_ID: "c", OIDC_CLIENT_SECRET: "s", OIDC_ALLOWED_DOMAINS: "acme.test", OIDC_ADMIN_EMAILS: "owner@gmail.test" },
+      PUBLIC_URL,
+    ).settings!;
+
+    test("must belong to the domain's Workspace: a personal account bearing a work address does not", () => {
+      // Someone who left keeps a personal Google account opened with their work
+      // address, verified once: Google sends no hd for it.
+      expect(isHostedAccount({ hd: "acme.test" }, google, "alice@acme.test")).toBe(true);
+      expect(isHostedAccount({ hd: "ACME.test" }, google, "alice@acme.test")).toBe(true);
+      expect(isHostedAccount({}, google, "alice@acme.test")).toBe(false);
+      expect(isHostedAccount({ hd: "elsewhere.test" }, google, "alice@acme.test")).toBe(false);
+      expect(isHostedAccount({ hd: ["acme.test"] }, google, "alice@acme.test")).toBe(false);
+    });
+
+    test("an admin email is let in by name, and other providers or no allowed domains are not judged on hd", () => {
+      expect(isHostedAccount({}, google, "owner@gmail.test")).toBe(true);
+      expect(isHostedAccount({}, { ...google, allowedDomains: [] }, "alice@acme.test")).toBe(true);
+      expect(isHostedAccount({}, { ...google, issuer: ISSUER }, "alice@acme.test")).toBe(true);
+    });
   });
 });
 

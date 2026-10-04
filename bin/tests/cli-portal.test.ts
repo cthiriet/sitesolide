@@ -25,14 +25,14 @@ test("the portal's configuration has the same default port", () => {
   expect(config).toInclude(`process.env.PORT ?? ${PORTAL_PORT}`);
 });
 
-test("the portal only exposes /sante and the provider's two steps on its own host", () => {
+test("the portal only exposes /sante, the provider's two steps and the sign-out on its own host", () => {
   // /verifier and /_portal/* are only reachable through Caddy, from a
   // protected site, with an X-Portal-Hote that Caddy sets. On the portal's
   // subdomain, the visitor would choose that header: the two steps of a
-  // sign-in with the provider never read it, see portal/src/sso.ts and the
-  // test that sends them a forged one.
+  // sign-in with the provider and the sign-out never read it, see
+  // portal/src/sso.ts and the test that sends them a forged one.
   const { manifest } = readManifest(readFileSync(join(REPO_ROOT, "portal", "sitesolide.json"), "utf8"));
-  expect(manifest?.routes).toEqual(["/sante", "/oidc/start", "/oidc/callback"]);
+  expect(manifest?.routes).toEqual(["/sante", "/oidc/start", "/oidc/callback", "/oidc/signout"]);
 });
 
 test("the portal announces the identity headers the CLI copies, under the same names", async () => {
@@ -62,11 +62,11 @@ test("no fragment relays anything to the portal beyond its door, its login and /
     }
   }
 
-  // On its own host, @dynamic is only /sante and the provider's two steps,
-  // and forward_auth never asks for anything but /verifier.
+  // On its own host, @dynamic is only /sante, the provider's two steps and
+  // the sign-out, and forward_auth never asks for anything but /verifier.
   const portal = knownManifests().find((manifest) => manifest.slug === "portal");
   expect(portal).toBeDefined();
-  expect(generateFragment(portal as Manifest)).toInclude("@dynamic path /sante /oidc/start /oidc/callback\n");
+  expect(generateFragment(portal as Manifest)).toInclude("@dynamic path /sante /oidc/start /oidc/callback /oidc/signout\n");
   expect(generateFragment(isProtected)).toInclude("\t\turi /verifier\n");
 });
 

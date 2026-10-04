@@ -219,9 +219,11 @@ type Template = {
   footer?: string;
   /** An HTML comment at the top, for the file written to disk. */
   comment?: string;
+  /** Where the page sends the browser on its own, already escaped. */
+  refresh?: string;
 };
 
-function template({ title, text, form, footer = "", comment = "" }: Template): string {
+function template({ title, text, form, footer = "", comment = "", refresh = "" }: Template): string {
   const tabTitle = title.replace(/\.$/, "");
   return `<!doctype html>
 <html lang="en">
@@ -229,7 +231,7 @@ function template({ title, text, form, footer = "", comment = "" }: Template): s
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="robots" content="noindex, nofollow">
+  <meta name="robots" content="noindex, nofollow">${refresh === "" ? "" : `\n  <meta http-equiv="refresh" content="0; url=${refresh}">`}
   <title>${tabTitle}</title>${comment === "" ? "" : `\n  <!--\n${comment}\n  -->`}
   <meta name="theme-color" content="#e8ecf1">
   <link rel="icon" href="${ICON}">
@@ -302,6 +304,22 @@ export function portalPage(title: string, message: string, back: { href: string;
     title: escapeHtml(title),
     text: escapeHtml(message),
     form: back === null ? "" : `    <a class="sso" href="${escapeHtml(back.href)}">${escapeHtml(back.label)}</a>`,
+  });
+}
+
+/**
+ * What a site's sign-out answers once the portal knows a provider: signed out
+ * of the site, on the way to the portal's host to end its session too. The
+ * browser goes on its own, and the link is there for one that does not follow
+ * a refresh. `next` is the portal's address, escaped here.
+ */
+export function signedOutPage(next: string): string {
+  const href = escapeHtml(next);
+  return template({
+    title: "Signed out.",
+    text: "You&#39;re signed out of this site. The next sign-in on this device will ask which account to use.",
+    form: `    <a class="sso" href="${href}">Continue</a>`,
+    refresh: href,
   });
 }
 
