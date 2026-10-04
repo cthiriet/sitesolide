@@ -9,7 +9,8 @@
  * Per connection, in order:
  *
  *   1. who is calling: the kernel's answer, started as soon as the connection
- *      opens (proc-net.ts);
+ *      opens (proc-net.ts), and the project's share of connections counted
+ *      from that moment;
  *   2. the head, bounded in size and in time;
  *   3. the destination it names, and whether the caller's manifest lists it
  *      (decide.ts);
@@ -42,7 +43,7 @@ import { machineAddresses, resolveChecked, type Lookup, type OwnAddresses } from
 export type Limits = {
   /** Open client connections, all projects together. */
   maxConnections: number;
-  /** Open tunnels per project. */
+  /** Open connections per project, counted from the moment the caller is known, head or no head. */
   maxPerProject: number;
   /** The biggest head accepted. */
   headBytes: number;
@@ -96,11 +97,15 @@ type Side = {
   ending: boolean;
 };
 
+/** What one project holds of the proxy. */
+type Share = { slug: string; connections: Set<Connection> };
+
 type Connection = {
   phase: "head" | "deciding" | "open" | "closed";
   head: Uint8Array;
   caller: Promise<Caller>;
-  slug: string | null;
+  /** The caller's project, once the kernel named one and its share had room. */
+  share: Share | null;
   client: Side;
   upstream: Side;
   lastActivity: number;
@@ -146,7 +151,7 @@ export function startProxy(options: ProxyOptions): Proxy {
   const route = options.route ?? ((address: string, port: number) => ({ hostname: address, port }));
   const ownAddresses = options.ownAddresses ?? machineAddresses();
   const connections = new Set<Connection>();
-  const perProject = new Map<string, number>();
+  const shares = new Map<string, Share>();
 
   /** Writes what it can, keeps the rest, and pauses the other side while too much waits. */
   function send(to: Side, from: Side, chunk: Uint8Array): void {
@@ -185,10 +190,10 @@ export function startProxy(options: ProxyOptions): Proxy {
     connection.phase = "closed";
     if (connection.headTimer !== null) clearTimeout(connection.headTimer);
     connections.delete(connection);
-    if (connection.slug !== null) {
-      const count = (perProject.get(connection.slug) ?? 1) - 1;
-      if (count <= 0) perProject.delete(connection.slug);
-      else perProject.set(connection.slug, count);
+    const share = connection.share;
+    if (share !== null) {
+      share.connections.delete(connection);
+      if (share.connections.size === 0) shares.delete(share.slug);
     }
     connection.upstream.socket?.end();
     connection.client.socket?.end();
@@ -197,6 +202,27 @@ export function startProxy(options: ProxyOptions): Proxy {
   function refuse(connection: Connection, status: number, message: string): void {
     connection.client.socket?.write(refusal(status, message));
     close(connection);
+  }
+
+  /**
+   * Counts the connection in its project's share as soon as the kernel names
+   * the project, before any head. Counted later, once the head was read, the
+   * share let one project open the proxy's every slot with connections that
+   * never send one, each held for the head's delay and opened again, and
+   * starve every other project. Beyond its share, a project is refused at
+   * once; another kind of caller is refused on its head, with the sentence
+   * that names it.
+   */
+  function admit(connection: Connection, caller: Caller): void {
+    if (isClosed(connection) || caller.kind !== "project") return;
+    const share = shares.get(caller.slug) ?? { slug: caller.slug, connections: new Set<Connection>() };
+    if (share.connections.size >= limits.maxPerProject) {
+      options.audit.denied({ target: caller.slug, destination: null, reason: "too many connections" });
+      return refuse(connection, 503, `egress: ${caller.slug} already holds ${share.connections.size} connections through the proxy`);
+    }
+    shares.set(caller.slug, share);
+    share.connections.add(connection);
+    connection.share = share;
   }
 
   /** Is this socket the connection's upstream, and not an attempt given up on? */
@@ -308,14 +334,6 @@ export function startProxy(options: ProxyOptions): Proxy {
       return refuse(connection, verdict.status, verdict.message);
     }
 
-    const open = perProject.get(verdict.slug) ?? 0;
-    if (open >= limits.maxPerProject) {
-      options.audit.denied({ target: verdict.slug, destination: written, reason: "too many connections" });
-      return refuse(connection, 503, `egress: ${verdict.slug} already holds ${open} connections through the proxy`);
-    }
-    connection.slug = verdict.slug;
-    perProject.set(verdict.slug, open + 1);
-
     const resolution = await resolveChecked(destination.host, options.lookup, limits.lookupTimeoutMs, ownAddresses);
     if (isClosed(connection)) return;
     if (!resolution.ok) {
@@ -362,7 +380,7 @@ export function startProxy(options: ProxyOptions): Proxy {
           caller: Promise.resolve()
             .then(() => options.identify(peer))
             .catch((): Caller => ({ kind: "unknown", reason: "identification failed" })),
-          slug: null,
+          share: null,
           client: { socket: socket as unknown as Socket<unknown>, queue: [], queued: 0, ending: false },
           upstream: { socket: null, queue: [], queued: 0, ending: false },
           lastActivity: Date.now(),
@@ -377,6 +395,9 @@ export function startProxy(options: ProxyOptions): Proxy {
           return;
         }
         connections.add(connection);
+        // Registered before handle() awaits the same promise: the share is
+        // settled by the time the head is judged.
+        void connection.caller.then((caller) => admit(connection, caller));
         connection.headTimer = setTimeout(() => {
           if (connection.phase === "head") refuse(connection, 400, "egress: the request head did not arrive in time");
         }, limits.headTimeoutMs);

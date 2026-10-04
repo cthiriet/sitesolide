@@ -345,6 +345,36 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
   });
 });
 
+/**
+ * A raw client of the proxy that keeps what it reads, for the tests that hold
+ * connections open on purpose. Its caller is decided by its own port, which
+ * is what the proxy's `identify` receives as the peer's.
+ */
+async function rawClient(port: number) {
+  const chunks: Uint8Array[] = [];
+  const closed = Promise.withResolvers<void>();
+  const socket = await Bun.connect({
+    hostname: "127.0.0.1",
+    port,
+    socket: {
+      data: (_socket, chunk) => void chunks.push(new Uint8Array(chunk)),
+      close: () => closed.resolve(),
+      error: () => closed.resolve(),
+    },
+  });
+  return { socket, closed: closed.promise, text: () => new TextDecoder().decode(Bun.concatArrayBuffers(chunks)) };
+}
+
+/** An identification by the client's port, as the kernel's would be, the table filled by the test. */
+function identifyByPort(owners: Map<number, Caller>) {
+  return async (peer: { remotePort: number }): Promise<Caller> => {
+    // The test learns its client's port once connected, which may come a
+    // moment after the proxy asks.
+    for (let i = 0; i < 200 && !owners.has(peer.remotePort); i++) await Bun.sleep(2);
+    return owners.get(peer.remotePort) ?? { kind: "unknown", reason: "no owner in the test" };
+  };
+}
+
 describe("the per-project limit", () => {
   test("refuses a project's connection beyond its share, and frees the share on close", async () => {
     const recorded = recordingAudit();
@@ -378,6 +408,56 @@ describe("the per-project limit", () => {
       again.write(`CONNECT ${API}:443 HTTP/1.1\r\n\r\n`);
       expect(await promise).toStartWith("HTTP/1.1 200");
       again.end();
+    } finally {
+      proxy.stop();
+      held.stop(true);
+    }
+  });
+
+  test("counts a connection from the moment its project is known, before any head: silent ones cannot starve the others", async () => {
+    const recorded = recordingAudit();
+    const held = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+    const owners = new Map<number, Caller>();
+    const proxy = startProxy({
+      hostname: "127.0.0.1",
+      port: 0,
+      identify: identifyByPort(owners),
+      egressOf: () => [parseEgressEntry(API)!],
+      lookup: stubLookup({ [API]: [PUBLIC_V4] }),
+      audit: recorded.audit,
+      route: () => ({ hostname: "127.0.0.1", port: held.port }),
+      limits: { maxPerProject: 2, headTimeoutMs: 3000 },
+      log: () => undefined,
+    });
+    const open = async (slug: string) => {
+      const client = await rawClient(proxy.port);
+      owners.set(client.socket.localPort, { kind: "project", slug, account: `site-${slug}` });
+      return client;
+    };
+    try {
+      // Two connections that never send a head: the whole share of shop.
+      const silent = [await open("shop"), await open("shop")];
+      await Bun.sleep(100);
+      // The third is refused on the spot, without waiting for a head that
+      // would only have come to be refused.
+      const third = await open("shop");
+      await Promise.race([third.closed, Bun.sleep(1000)]);
+      expect(third.text()).toStartWith("HTTP/1.1 503");
+      expect(third.text()).toContain("shop already holds 2 connections");
+      expect(recorded.denied.at(-1)).toEqual({ target: "shop", destination: null, reason: "too many connections" });
+      // Another project is not touched by shop's share.
+      const blog = await open("blog");
+      blog.socket.write(`CONNECT ${API}:443 HTTP/1.1\r\n\r\n`);
+      await Bun.sleep(200);
+      expect(blog.text()).toStartWith("HTTP/1.1 200");
+      // A silent connection gone, its place is free again.
+      silent[0]!.socket.end();
+      await Bun.sleep(100);
+      const again = await open("shop");
+      again.socket.write(`CONNECT ${API}:443 HTTP/1.1\r\n\r\n`);
+      await Bun.sleep(200);
+      expect(again.text()).toStartWith("HTTP/1.1 200");
+      for (const client of [silent[1]!, blog, again]) client.socket.end();
     } finally {
       proxy.stop();
       held.stop(true);
