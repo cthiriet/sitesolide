@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { entryBlocks, header } from "../borrowed/bundle";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import { bundle, entryBlocks, header } from "../borrowed/bundle";
 import { generateFragment } from "../borrowed/fragment";
 import { readManifest, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected } from "../borrowed/portal";
+import { generateUnits } from "../borrowed/unit";
 import type { InstallRequest, Scope } from "../src/control/protocol";
 import { finalManifest, replaceable, runPipeline, type Outcome } from "../src/installer/pipeline";
 import { createBench as newBench, file, hostOf, stageBundle as stage, ZONE, type Bench, type BenchOptions } from "./installer-bench";
@@ -238,6 +239,105 @@ describe("refusals, before anything served changes", () => {
     const bench = createBench({ probe: (host, path) => (path === "/sante" ? { code: 502, door: false, body: "" } : null) });
     stageBundle(bench, APP_FILES);
     expect(await run(bench, request(APP))).toMatchObject({ ok: false, code: "portal-not-ready" });
+  });
+});
+
+describe("a new project refused before anything is served leaves nothing behind", () => {
+  const passwd = (bench: Bench) => readFileSync(join(bench.root, "passwd"), "utf8");
+  const traversal = () => bundle([file("app/../../../etc/cron.d/x", "* * * * * root id")]);
+  const withLink = () => {
+    const link = header("app/escape", { type: "2", mode: 0o777, size: 0, mtime: 1 });
+    return Bun.gzipSync(new Uint8Array([...entryBlocks(file("app/a"))[0]!, ...entryBlocks(file("app/a"))[1]!, ...link, ...new Uint8Array(1024)]));
+  };
+
+  /** Every file and directory the machine's stand-ins carry, with the files' content. */
+  function snapshot(bench: Bench): Record<string, string> {
+    const seen: Record<string, string> = { passwd: passwd(bench) };
+    const visit = (folder: string) => {
+      for (const name of readdirSync(folder)) {
+        const path = join(folder, name);
+        const directory = lstatSync(path).isDirectory();
+        seen[relative(bench.root, path)] = directory ? "<directory>" : readFileSync(path, "utf8");
+        if (directory) visit(path);
+      }
+    };
+    for (const folder of [bench.sites, bench.units, bench.blocks]) visit(folder);
+    return seen;
+  }
+
+  test("a refused archive, a traversal or a link: no account, no directory, no unit, no block", async () => {
+    // Through the control API, each such deployment left site-<slug> and an
+    // empty /srv/sites/<slug>/{app,public,data}, which the token's status
+    // then listed as a public project of no type.
+    for (const archive of [traversal(), withLink()]) {
+      const bench = createBench();
+      stageBundle(bench, archive);
+      const outcome = await run(bench, request(APP));
+      expect(outcome).toMatchObject({ ok: false, code: "bundle-refused" });
+      expect(passwd(bench)).not.toContain("site-shop");
+      expect(readdirSync(bench.sites)).toEqual([]);
+      expect(readdirSync(bench.units)).toEqual([]);
+      expect(readdirSync(bench.blocks)).toEqual([]);
+      expect(order(bench, "useradd site-shop", "userdel site-shop")).toBe(true);
+      expect(bench.events).toContain("log    removed    /srv/sites/shop");
+      expect(bench.events).toContain("log    removed    site-shop");
+    }
+  });
+
+  test("refused under the Caddy lock, once its units were laid: they go too, before the tree and the account", async () => {
+    const bench = createBench({ lockHeld: true });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ slug: "shop", publicDir: "public", services: { web: { start: "/usr/local/bin/bun run web.ts" }, api: { start: "/usr/local/bin/bun run api.ts", routes: ["/api/*"] } } }));
+    expect(outcome).toMatchObject({ ok: false, code: "caddy-busy" });
+    expect(bench.events).toContain("systemctl disable --now shop shop.api.service");
+    expect(readdirSync(bench.units)).toEqual([]);
+    expect(readdirSync(bench.sites)).toEqual([]);
+    expect(passwd(bench)).not.toContain("site-shop");
+    expect(order(bench, "systemctl disable --now shop shop.api.service", "userdel site-shop")).toBe(true);
+  });
+
+  test("an account the machine already had is kept, even for a new tree", async () => {
+    // A removal that stopped before its userdel, say: not this run's to take.
+    const bench = createBench();
+    writeFileSync(join(bench.root, "passwd"), `${passwd(bench)}site-shop:x:2001:2001::/nonexistent:/usr/sbin/nologin\n`);
+    stageBundle(bench, traversal());
+    expect(await run(bench, request(APP))).toMatchObject({ ok: false, code: "bundle-refused" });
+    expect(readdirSync(bench.sites)).toEqual([]);
+    expect(passwd(bench)).toContain("site-shop:x:2001");
+    expect(bench.events.some((event) => event.startsWith("userdel"))).toBe(false);
+  });
+
+  test("the same refusals for an existing project change nothing of it", async () => {
+    for (const [options, archive, code] of [
+      [{}, traversal(), "bundle-refused"],
+      [{}, withLink(), "bundle-refused"],
+      [{ lockHeld: true }, bundle(APP_FILES), "caddy-busy"],
+    ] as const) {
+      const bench = createBench(options);
+      const previous = { ...APP, port: 3040, portal: true } as Manifest;
+      deposit(bench, previous);
+      writeFileSync(join(bench.sites, "shop", "app", "server.ts"), "the version in service");
+      writeFileSync(join(bench.sites, "shop", "public", "index.html"), "<h1>in service</h1>");
+      mkdirSync(join(bench.sites, "shop", "data"));
+      writeFileSync(join(bench.sites, "shop", "data", "shop.db"), "the project's rows");
+      writeFileSync(join(bench.units, "shop.service"), generateUnits(previous)[0]!.text);
+      writeFileSync(join(bench.blocks, "shop.caddy"), generateFragment(previous)!);
+      writeFileSync(join(bench.root, "passwd"), `${passwd(bench)}site-shop:x:2001:2001::/nonexistent:/usr/sbin/nologin\n`);
+      const before = snapshot(bench);
+      stageBundle(bench, archive);
+      expect(await run(bench, request({ ...APP, port: 3040 }))).toMatchObject({ ok: false, code });
+      expect(snapshot(bench)).toEqual(before);
+      expect(bench.events.some((event) => event.startsWith("userdel") || event.startsWith("systemctl disable"))).toBe(false);
+    }
+  });
+
+  test("once something may be served, a new project keeps what it has, the owner then sees why", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    expect(await run(bench, request({ ...APP, secrets: ["shop.env"] }))).toMatchObject({ ok: false, code: "secret-missing" });
+    expect(passwd(bench)).toContain("site-shop");
+    expect(existsSync(join(bench.sites, "shop", "sitesolide.json"))).toBe(true);
+    expect(bench.events.some((event) => event.startsWith("userdel"))).toBe(false);
   });
 });
 

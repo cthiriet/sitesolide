@@ -260,6 +260,10 @@ describe("refusals an agent can act on", () => {
     expect(done.state).toBe("failed");
     expect(done.error).toMatchObject({ code: "bundle-refused" });
     expect(done.error!.message).toContain("climbing");
+    // A project that did not exist is left as it was: no directory for the
+    // snapshot to list as a public project of no type.
+    expect(existsSync(join(bench.sites, "evil"))).toBe(false);
+    expect(done.log).toContain("   removed    site-evil");
   });
 
   test("no token, a malformed one, a wrong one, and the rate limiting per address", async () => {

@@ -1,10 +1,10 @@
 /**
  * The installer's bench, shared by its tests: a throwaway tree standing in for
  * the machine, the real host mounted on it, and only what needs root or a
- * machine simulated: `systemctl`, `useradd`, `systemd-run`'s confinement,
- * `nft`, and Caddy, whose model is the gatekeeper tests' own: it serves the
- * block of its last reload, and a site answers the portal's 401 when that
- * block carries the guard.
+ * machine simulated: `systemctl`, `useradd`, `userdel`, `systemd-run`'s
+ * confinement, `nft`, and Caddy, whose model is the gatekeeper tests' own: it
+ * serves the block of its last reload, and a site answers the portal's 401
+ * when that block carries the guard.
  *
  * The extraction is the real one, `installer.ts --extract` in a child
  * process, fed the archive through a descriptor as on the machine; `install`
@@ -143,6 +143,13 @@ export function commandsOf(bench: Bench): Commands {
     async useradd(account) {
       bench.events.push(`useradd ${account}`);
       writeFileSync(join(bench.root, "passwd"), `${readFileSync(join(bench.root, "passwd"), "utf8")}${account}:x:2000:2000::/nonexistent:/usr/sbin/nologin\n`);
+      return { code: 0, output: "" };
+    },
+    async userdel(account) {
+      bench.events.push(`userdel ${account}`);
+      const lines = readFileSync(join(bench.root, "passwd"), "utf8").split("\n");
+      if (!lines.some((line) => line.startsWith(`${account}:`))) return { code: 6, output: `userdel: user '${account}' does not exist` };
+      writeFileSync(join(bench.root, "passwd"), lines.filter((line) => !line.startsWith(`${account}:`)).join("\n"));
       return { code: 0, output: "" };
     },
     // systemd-run stands for the confinement, which only a machine has: the

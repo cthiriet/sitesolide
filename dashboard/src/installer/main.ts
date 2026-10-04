@@ -183,6 +183,7 @@ export async function main(argv: string[], env: Environment, overrides: { comman
       realCommands({
         systemctl: env.SYSTEMCTL ?? "/usr/bin/systemctl",
         useradd: env.USERADD ?? "/usr/sbin/useradd",
+        userdel: env.USERDEL ?? "/usr/sbin/userdel",
         systemdRun: env.SYSTEMD_RUN ?? "/usr/bin/systemd-run",
         nft: env.NFT ?? "/usr/sbin/nft",
       }),

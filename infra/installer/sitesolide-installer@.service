@@ -67,13 +67,14 @@ UMask=0022
 # account, and the trees are moved in and out of it. CAP_DAC_READ_SEARCH: the
 # staged archive is in the dashboard's data directory, 0750 site-dashboard.
 # CAP_NET_ADMIN: the loopback's project set, `nft -f`. CAP_AUDIT_WRITE: useradd
-# reports to the audit subsystem. systemctl and systemd-run ask for none: PID 1
-# judges the caller's uid on its socket.
+# and userdel report to the audit subsystem. systemctl and systemd-run ask for
+# none: PID 1 judges the caller's uid on its socket.
 NoNewPrivileges=true
 CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_AUDIT_WRITE
 
-# Writing: the sites, /etc (useradd rewrites passwd, group and shadow by
-# renaming in /etc itself; the units; /etc/caddy/sites; the loopback's set
+# Writing: the sites, /etc (useradd, and userdel for a new project refused
+# before anything was served, rewrite passwd, group and shadow by renaming in
+# /etc itself; the units; /etc/caddy/sites; the loopback's set
 # file), and the gatekeeper's directory, where the Caddy lock and the backups
 # live. The secrets stay read-only: their presence is checked, never their
 # content. /var/lib/sitesolide-steward, where the request is, stays read-only

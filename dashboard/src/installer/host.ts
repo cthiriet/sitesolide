@@ -40,8 +40,12 @@ export type Host = {
 
   /** Creates `site-<slug>` when it is missing. */
   ensureAccount: (slug: string) => Promise<"created" | "present">;
-  /** The project's directories, owners and modes, as `directoryCommands` of bin/sitesolide.ts sets them. */
-  prepareTree: (slug: string, application: boolean) => Promise<void>;
+  /**
+   * The project's directories, owners and modes, as `directoryCommands` of
+   * bin/sitesolide.ts sets them. "created" when `/srv/sites/<slug>` did not
+   * exist before.
+   */
+  prepareTree: (slug: string, application: boolean) => Promise<"created" | "present">;
   /** An empty staging directory the project's account may write; returns its path. */
   stage: (slug: string) => Promise<string>;
   /** The deployment's archive, extracted into the staging directory as the project's account. */
@@ -54,6 +58,15 @@ export type Host = {
   place: (slug: string, staging: string, parts: Part[]) => Promise<void>;
   /** The staging directory and the trees set aside, removed. */
   cleanUp: (slug: string) => Promise<void>;
+
+  /**
+   * `/srv/sites/<slug>` removed whole, for a tree this deployment created and
+   * nothing was served from. False, and nothing removed, when a manifest
+   * appeared in it: somebody deployed it in the meantime.
+   */
+  removeTree: (slug: string) => Promise<boolean>;
+  /** `userdel site-<slug>`, for an account this deployment created. */
+  removeAccount: (slug: string) => Promise<Execution>;
 
   /** `/srv/sites/<slug>/sitesolide.json`, owned by the deployment account, 0644; the leftovers removed. */
   depositManifest: (slug: string, text: string) => Promise<void>;

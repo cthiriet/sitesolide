@@ -38,6 +38,14 @@
  *   9. the declared secrets, checked present, then every service restarted;
  *  10. for an app in the open, its block; then the verification.
  *
+ * **A new project refused leaves nothing behind.** Its account, its tree and
+ * its units are created at steps 4 and 5, before the archive is judged and
+ * before the Caddy lock: refused there, a project that did not exist kept an
+ * account, an empty `/srv/sites/<slug>` that the zone's wildcard served to
+ * everyone, and a line in the token's status, public and of no type. What
+ * this run created is therefore removed when it stops before anything was
+ * served, see undoCreation; an existing project keeps everything it had.
+ *
  * **One rule `deploy` cannot apply, applied here.** Over SSH, a block or a unit
  * in service that differs from the generated one stops the deployment until
  * `--force`: it may have been edited by hand, and a manifest that changed looks
@@ -185,6 +193,11 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
   const { zone } = options;
   let allocated: { service: string | null; port: number }[] = [];
   let release: (() => void) | null = null;
+  const created: Created = { account: false, tree: false, units: [] };
+  // Set once Caddy or the served trees may have changed: from there on, a
+  // stop keeps what this run created, see undoCreation.
+  let served = false;
+  let succeeded = false;
   const unlock = () => {
     if (release !== null) {
       release();
@@ -255,8 +268,9 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     // --- 4. the account, the directories, the archive, `install` ---------------
     host.log("-> system user and directories");
     const account = await host.ensureAccount(slug);
-    if (account === "created") host.log(`   site-${slug} created`);
-    await host.prepareTree(slug, application);
+    created.account = account === "created";
+    if (created.account) host.log(`   site-${slug} created`);
+    created.tree = (await host.prepareTree(slug, application)) === "created";
 
     host.log("-> archive, extracted as the project's own account");
     const staging = await host.stage(slug);
@@ -287,10 +301,11 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
       const previousUnits = previous === null ? [] : attempt(() => generateUnits(previous), []);
       const decisions = [];
       for (const { unit, text: generated } of units) {
-        const installed = (await host.readUnit(unit)) ?? "";
+        const onDisk = await host.readUnit(unit);
+        const installed = onDisk ?? "";
         const before = previousUnits.find((candidate) => candidate.unit === unit)?.text ?? null;
         const replace = replaceable(installed, generated, before);
-        decisions.push({ unit, generated, installed, action: decideUnit({ installed, generated, replace }) });
+        decisions.push({ unit, generated, installed, absent: onDisk === null, action: decideUnit({ installed, generated, replace }) });
       }
       // As `deploy` does: a unit edited by hand stays, and says so; the main
       // one of a project with several services stops everything, since it is
@@ -310,6 +325,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
           continue;
         }
         await host.installUnit(decision.unit, decision.generated);
+        if (decision.absent) created.units.push(decision.unit);
         host.log(`   installed  ${decision.unit}.service`);
         changed = true;
       }
@@ -349,6 +365,11 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     if (collisions.length > 0) {
       throw new Stop("port-taken", `${collisions.join("; ")}, since this deployment started: nothing served was changed, deploy again`);
     }
+    // The first change anybody may see: a protected site's block, or the
+    // trees. A Caddy step that fails restores the block, but one whose
+    // restore failed leaves it to the owner, and this run cannot tell them
+    // apart from here: everything stays from this point on.
+    served = true;
 
     if (block !== null && behindPortal) {
       host.log("-> Caddy block, before the files: the door goes up first");
@@ -411,6 +432,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
       if (!answers(answer)) throw new Stop("verify-failed", `${url} answered ${describe(answer)}, expected 200`);
       host.log(`   ${url} ${"code" in answer ? answer.code : ""}`);
     }
+    succeeded = true;
     return { ok: true, url, allocated };
   } catch (error) {
     if (error instanceof Stop) return { ok: false, code: error.code, message: error.message, allocated };
@@ -423,6 +445,48 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     } catch {
       // A staging directory left behind is removed by the next deployment.
     }
+    if (!succeeded && !served) await undoCreation(host, slug, created);
+  }
+}
+
+/** What this run created on the machine, as opposed to what it found there. */
+type Created = { account: boolean; tree: boolean; units: string[] };
+
+/**
+ * A project this run created, taken away again when it stops before anything
+ * was served: its units, its tree, then its account, the order of
+ * `sitesolide remove` (bin/cli/removal.ts), the account last so that no file
+ * outlives its owner for the next account to inherit on the same uid.
+ *
+ * Only for a project that did not exist: `/srv/sites/<slug>` absent before
+ * the run. A project that had its tree keeps everything, whatever this run
+ * added to it, and an account or a unit found on the machine is never
+ * removed, even for a new tree: an account left by a removal that stopped half
+ * way is not this run's to take. A step that fails leaves the rest, and says
+ * so: the refusal stands either way, the leftovers are the owner's.
+ */
+async function undoCreation(host: Host, slug: string, created: Created): Promise<void> {
+  if (!created.tree) return;
+  host.log("-> nothing was served: what this deployment created is removed");
+  try {
+    if (created.units.length > 0) {
+      await host.removeUnits(created.units);
+      for (const unit of created.units) host.log(`   removed    ${unit}.service`);
+    }
+    if (!(await host.removeTree(slug))) {
+      host.log(`   !! /srv/sites/${slug} carries a manifest deposited in the meantime: left as it is${created.account ? `, and site-${slug} with it` : ""}`);
+      return;
+    }
+    host.log(`   removed    /srv/sites/${slug}`);
+    if (!created.account) return;
+    const removed = await host.removeAccount(slug);
+    if (removed.code !== 0) {
+      host.log(`   !! userdel site-${slug} failed (${removed.output.trim().slice(0, 200) || `exit ${removed.code}`}): the account is left for the owner`);
+      return;
+    }
+    host.log(`   removed    site-${slug}`);
+  } catch (error) {
+    host.log(`   !! ${(error as Error).message}: the rest is left for the owner`);
   }
 }
 

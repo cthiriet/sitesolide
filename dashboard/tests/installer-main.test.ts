@@ -55,6 +55,10 @@ describe("main", () => {
         writeFileSync(join(root, "passwd"), `${readFileSync(join(root, "passwd"), "utf8")}${account}:x:2000:2000::/nonexistent:/usr/sbin/nologin\n`);
         return { code: 0, output: "" };
       },
+      userdel: async (account) => {
+        calls.push(`userdel ${account}`);
+        return { code: 0, output: "" };
+      },
       asProject: async (run) => (run.purpose === "extract" ? spawn(run.command, 60_000, { stdin: run.stdin }) : { code: 1, output: "unexpected" }),
       nft: async () => ({ code: 1, output: "" }),
     };

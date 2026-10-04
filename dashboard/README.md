@@ -605,6 +605,7 @@ installer.js       root, one-shot, one project: the pipeline of `sitesolide depl
    |-- systemd-run as site-<slug>, no network: installer.js --extract, the archive on stdin
    |-- systemd-run as site-<slug>, network but not the loopback: the manifest's `install`
    |-- useradd, the units, the trees moved into place, the manifest, the loopback's set
+   |-- a new project refused before anything was served: its units, tree and account removed
    |-- the Caddy block through the gatekeeper's machine: lock, validate, reload, probe, restore
    `-- writes /run/sitesolide-installer/<id>.json, 0600, after every step
 ```
@@ -616,7 +617,7 @@ installer.js       root, one-shot, one project: the pipeline of `sitesolide depl
 | The CLI | the holder | the project's folder, the token | nothing on the machine directly |
 | `server.ts` | `site-dashboard` | its database, the snapshot | `data/control/<id>/bundle.tar.gz`, `deployments` and `audit` in `dashboard.db` |
 | The steward | root, the socket | `team.json`, the installer's results, the journal | `team.json`, `installs/<slug>.json` |
-| The installer | root, one-shot | the request, the staged archive's descriptor, the manifests | `/srv/sites/<slug>`, its units, its block, `/etc/passwd` through `useradd` |
+| The installer | root, one-shot | the request, the staged archive's descriptor, the manifests | `/srv/sites/<slug>`, its units, its block, `/etc/passwd` through `useradd`, and `userdel` for a new project it refused |
 | The extractor | `site-<slug>`, transient unit | the archive on stdin | the staging directory, nothing else |
 | `install` | `site-<slug>`, transient unit | the staged `app/` | the staged `app/`, mounted at its final path |
 
@@ -772,8 +773,8 @@ A portal from before sharing answers 404, which the API turns into
 
 ### Where the installer is the weak point
 
-It is root with most of the system writable (`/etc` for `useradd`, the units,
-`/srv/sites`, the Caddy blocks). It has to be: deploying a project is root on
+It is root with most of the system writable (`/etc` for `useradd` and
+`userdel`, the units, `/srv/sites`, the Caddy blocks). It has to be: deploying a project is root on
 the machine whichever way it is done. Its confinement bounds what a bug in its
 own code would reach, not what it may legitimately do; what keeps a token from
 using it as root is that it never interprets the archive, that every file it
@@ -893,6 +894,43 @@ cd dashboard && sitesolide deploy   # 1. the two routes
 answer `not-found` again, nothing else changes, and the policies a token set
 stay in the portal, where the *Sharing* section shows and changes them.
 
+### Upgrading: a refused new project leaves nothing behind
+
+A verification on a test machine found that a new project the installer
+refused, its archive above all (a `..`, a link), kept the account and the
+empty `/srv/sites/<slug>/{app,public,data}` created before the archive was
+judged: the zone's wildcard served that empty tree to everyone, and the
+token's `status` listed it as a public project of no type. The installer now
+removes what it created, units, tree, then account, when it stops before
+anything was served, and only for a project whose tree did not exist: an
+existing project, an account or a unit already on the machine are never
+touched. A stop from the Caddy step on keeps everything, as before. The same
+verification found a private token deploying `dashboard` told "this site is
+public on the machine" (422) instead of `reserved` (403): the dashboard now
+judges the reserved slugs first. Each step stands without the other.
+
+```bash
+bin/test.sh                         # 0. on the workstation
+bin/deploy-installer.sh             # 1. the installer, which undoes what it created
+cd dashboard && sitesolide deploy   # 2. the reserved slugs judged first
+```
+
+1. **The installer.** It now runs `/usr/sbin/userdel`, from the same package
+   as `useradd` on Debian and Ubuntu, under the template unit as it stands:
+   `/etc` is already writable for `useradd`. Check, with a token that may
+   create projects, from a workstation with no server: in a throwaway folder
+   holding a `server.ts`, a manifest `{ "slug": "undo-check", "start":
+   "/usr/local/bin/bun run server.ts", "install": "false" }` fails with
+   `install-failed`, and its log ends with `removed    /srv/sites/undo-check`
+   and `removed    site-undo-check`; on the machine, `getent passwd
+   site-undo-check` prints nothing and `ls /srv/sites/undo-check` finds
+   nothing. `examples/bun-app` still deploys. A `userdel` that fails says so
+   in the log and leaves the account: `sudo userdel site-<slug>` removes it.
+   Roll back: `bin/deploy-installer.sh` from the previous commit.
+2. **The dashboard.** Check: the same token deploying a folder whose manifest
+   names `"slug": "dashboard"` gets `reserved`, 403, "pick another slug".
+   Roll back: deploy the previous commit of `dashboard/`; no table changed.
+
 ## Deployment, in this order
 
 ```bash
@@ -998,8 +1036,8 @@ chain, the API on a real port, the steward on a real socket, the installer
 started by the simulated `systemctl` (tests/control-api.test.ts); sharing by
 token on a real port in front of a fake portal on another, every authorisation
 and the actor the portal receives (tests/control-sharing.test.ts). What only a
-machine can prove, `useradd`, `systemd-run`'s confinement and the template
-unit, is not covered here.
+machine can prove, `useradd` and `userdel`, `systemd-run`'s confinement and
+the template unit, is not covered here.
 
 For the audit: each source's rows in the shared shape, bounded, and garbage
 left out (tests/audit-merge.test.ts); the merge, the filters and a cursor

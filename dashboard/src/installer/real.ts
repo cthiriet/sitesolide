@@ -57,6 +57,7 @@ export { systemdRunArguments, type ProjectRun };
 export type Commands = {
   systemctl: (arguments_: string[], timeoutMs: number) => Promise<Execution>;
   useradd: (account: string) => Promise<Execution>;
+  userdel: (account: string) => Promise<Execution>;
   asProject: (run: ProjectRun) => Promise<Execution>;
   nft: (arguments_: string[], timeoutMs: number) => Promise<Execution>;
 };
@@ -121,10 +122,13 @@ export async function spawn(command: string[], timeoutMs: number, options: { std
   }
 }
 
-export function realCommands(paths: { systemctl: string; useradd: string; systemdRun: string; nft: string }): Commands {
+export function realCommands(paths: { systemctl: string; useradd: string; userdel: string; systemdRun: string; nft: string }): Commands {
   return {
     systemctl: (arguments_, timeoutMs) => spawn([paths.systemctl, ...arguments_], timeoutMs),
     useradd: (account) => spawn([paths.useradd, "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", account], 30_000),
+    // No --remove: the account has no home, and its files go with the tree
+    // before it, as `sitesolide remove` orders it (bin/cli/removal.ts).
+    userdel: (account) => spawn([paths.userdel, account], 30_000),
     asProject: (run) => spawn(systemdRunArguments(run, paths.systemdRun), (run.timeoutS + 30) * 1000, { stdin: run.stdin }),
     nft: (arguments_, timeoutMs) => spawn([paths.nft, ...arguments_], timeoutMs),
   };
@@ -250,6 +254,7 @@ export function createHost(config: HostConfig): Host {
 
     async prepareTree(slug, application) {
       const base = root(slug);
+      const existed = existsSync(base);
       const folders = application ? [base, join(base, "app"), join(base, "public")] : [base, join(base, "public")];
       for (const folder of folders) mkdirSync(folder, { recursive: true, mode: 0o755 });
       const deploy = deployIds();
@@ -257,7 +262,7 @@ export function createHost(config: HostConfig): Host {
         if (deploy !== null) chownSync(folder, deploy.uid, deploy.gid);
         chmodSync(folder, 0o755);
       }
-      if (!application) return;
+      if (!application) return existed ? "present" : "created";
       // The data folder is the service's own, and the only one it writes. Its
       // content is never walked: a link the service laid there must not lead
       // root's chown elsewhere.
@@ -267,6 +272,7 @@ export function createHost(config: HostConfig): Host {
       const owner = projectIds(slug);
       if (owner !== null && (created || lstatSync(data).uid === 0)) chownSync(data, owner.uid, owner.gid);
       chmodSync(data, 0o750);
+      return existed ? "present" : "created";
     },
 
     async stage(slug) {
@@ -394,6 +400,21 @@ export function createHost(config: HostConfig): Host {
     async cleanUp(slug) {
       const base = root(slug);
       for (const name of [STAGING, `${ASIDE}app`, `${ASIDE}public`]) rmSync(join(base, name), { recursive: true, force: true });
+    },
+
+    async removeTree(slug) {
+      const base = root(slug);
+      // A manifest is the one thing this deployment never laid before it
+      // stopped: one there was deposited by somebody else since.
+      if (existsSync(join(base, "sitesolide.json"))) return false;
+      // Links inside are removed, never followed.
+      rmSync(base, { recursive: true, force: true });
+      return true;
+    },
+
+    async removeAccount(slug) {
+      if (!isValidSlug(slug)) throw new Error("invalid slug");
+      return config.commands.userdel(systemUser(slug));
     },
 
     async depositManifest(slug, text) {
