@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CONNECTORS_PORT,
   EGRESS_PROXY_PORT,
+  egressErrors,
   egressPatterns,
   egressStateCommand,
   egressUnitLines,
@@ -174,6 +175,30 @@ describe("the manifest's keys", () => {
     expect(validate(services)).toContainEqual(expect.stringContaining("env: SITESOLIDE_CONNECTORS is set by the deployment"));
     // Without the keys, the variable is the project's own business, as before.
     expect(validate({ ...APP, env: { HTTPS_PROXY: "http://corporate:3128" } })).toEqual([]);
+  });
+
+  test("the lowercase spellings too, which the unit also writes and systemd would let the env override", () => {
+    // validate() already refuses a lowercase name in `env`, for a rule of its
+    // own about variable names. The reservation must not lean on that rule: it
+    // is checked here on its own, as if the names rule were relaxed one day.
+    for (const name of ["https_proxy", "http_proxy", "no_proxy"]) {
+      expect(egressErrors({ ...APP, egress: ["api.example.com"], env: { [name]: "http://elsewhere" } }, true)).toContainEqual(
+        expect.stringContaining(`env: ${name} is set by the deployment`),
+      );
+    }
+  });
+
+  test("every variable the unit writes for the keys is one a manifest may not set", () => {
+    // Read from the lines themselves, so that a variable added to the unit one
+    // day cannot be forgotten in the list that guards it.
+    const written = egressUnitLines({ ...APP, egress: ["api.example.com"], connectors: ["slack"] })
+      .map((line) => /^Environment=([A-Za-z_][A-Za-z0-9_]*)=/.exec(line)?.[1])
+      .filter((name): name is string => name !== undefined);
+    expect(written).toHaveLength(7);
+    for (const name of written) {
+      const errors = egressErrors({ ...APP, egress: ["api.example.com"], connectors: ["slack"], env: { [name]: "x" } }, true);
+      expect({ name, errors }).toEqual({ name, errors: [`env: ${name} is set by the deployment for egress and connectors, and cannot be redefined`] });
+    }
   });
 });
 

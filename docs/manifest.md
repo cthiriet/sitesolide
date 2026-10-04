@@ -286,8 +286,8 @@ Refused next to `"network": "outbound"`, which already reaches everything, and
 on a static site, where nothing runs. The deployment refuses a project that
 declares it, before pushing anything, while the egress proxy is not installed
 on the machine. A change to the list applies at the service's next connection.
-`HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` then belong to the deployment, and
-`env` may not set them.
+`HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, in both spellings, then belong to
+the deployment, and `env` may not set them.
 
 ### `connectors`
 

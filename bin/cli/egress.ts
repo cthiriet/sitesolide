@@ -64,8 +64,22 @@ export const CONNECTORS_URL = `http://${EGRESS_ADDRESS}:${CONNECTORS_PORT}/conne
  * `connectors`, which its own `env` may therefore not set. Both spellings of
  * the proxy variables are written, since clients disagree: curl reads only the
  * lowercase `http_proxy`, Go and Python read either.
+ *
+ * Both spellings are reserved for the same reason: systemd keeps the last
+ * value of a variable set twice, and a lowercase `https_proxy` in `env` would
+ * override the unit's for every client that reads that spelling. The manifest
+ * refuses lowercase names in `env` anyway, for a rule of its own; this list
+ * does not lean on it.
  */
-export const PROXY_VARIABLES = ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SITESOLIDE_CONNECTORS"];
+export const PROXY_VARIABLES = [
+  "HTTPS_PROXY",
+  "https_proxy",
+  "HTTP_PROXY",
+  "http_proxy",
+  "NO_PROXY",
+  "no_proxy",
+  "SITESOLIDE_CONNECTORS",
+];
 
 /**
  * An entry of `egress`, read: an exact host or a wildcard over its
