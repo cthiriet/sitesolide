@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/config";
-import { createMachine } from "../src/machine";
-import { run } from "../src/run";
+import { createMachine, type Machine } from "../src/machine";
+import { bounded, run } from "../src/run";
 import type { MonitorStatus } from "../src/status";
 import { OPENSSL, drawAuthority, drawCertificate, fakeSystemctl } from "./fixtures";
 
@@ -90,17 +90,24 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     };
   }
 
-  /** One run, one simulated minute later than the previous one. */
+  /**
+   * One run, one simulated minute later than the previous one. `replaced`
+   * stands in for some of the machine's readings, `clock` for the time the
+   * probes' budget is measured against.
+   */
   async function pass(
     overrides: Partial<Config> = {},
+    replaced: Partial<Machine> = {},
+    clock: () => number = Date.now,
   ): Promise<{ status: MonitorStatus; heartbeat: string[]; heartbeatBody: string[]; webhook: string[]; journal: string[] }> {
     received.length = 0;
     const journal: string[] = [];
     const machine = {
       ...createMachine(config(overrides), { systemctl: join(systemd, "systemctl"), meminfoFile }),
       log: (line: string) => journal.push(line),
+      ...replaced,
     };
-    const outcome = await run(config(overrides), machine, T0 + minute++ * MINUTE);
+    const outcome = await run(config(overrides), machine, T0 + minute++ * MINUTE, clock);
     const written = JSON.parse(readFileSync(join(state, "status.json"), "utf8")) as MonitorStatus;
     expect(written).toEqual(outcome.status);
     return {
@@ -233,6 +240,68 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     expect((await pass()).heartbeat).toEqual(["/ping/5a7f"]);
   });
 
+  /**
+   * A Caddy slower than the probes' budget allows, on a clock the probes
+   * themselves advance: each host takes 2.4 s of a 2.5 s timeout, five hosts
+   * against a budget of 10 s. A probe started with less than its full timeout
+   * left would time out and be judged a failure, the same host at the tail
+   * every pass, and go down for nothing.
+   */
+  function slowCaddy(order: string[]): { replaced: Partial<Machine>; clock: () => number; overrides: Partial<Config> } {
+    let now = 0;
+    const latency = 2400;
+    return {
+      overrides: { concurrency: 1, probeBudgetMs: 10_000, probe: { address: "127.0.0.1", port: caddyPort, ca, timeoutMs: 2500 } },
+      clock: () => now,
+      replaced: {
+        async probe(host, timeoutMs) {
+          order.push(host);
+          if (timeoutMs < latency) {
+            now += timeoutMs;
+            return { error: "TimeoutError" };
+          }
+          now += latency;
+          return { status: answers.get(host) ?? 200 };
+        },
+        async certificate() {
+          return { notAfter: T0 + 60 * 24 * 60 * MINUTE };
+        },
+      },
+    };
+  }
+
+  test("out of time: what does not fit is not checked rather than failed, and the next pass starts with it", async () => {
+    const order: string[] = [];
+    const slow = slowCaddy(order);
+    const hosts = [ZONE, `www.${ZONE}`, `cms.${ZONE}`, `shop.${ZONE}`, "sample-agency.example"];
+
+    const probed: string[][] = [];
+    for (let i = 0; i < 4; i++) {
+      order.length = 0;
+      const outcome = await pass(slow.overrides, slow.replaced, slow.clock);
+      probed.push([...order]);
+      expect(outcome.status.down).toEqual([]);
+      expect(outcome.status.unchecked).toBe(1);
+      expect(outcome.journal.at(-1)).toContain(" 0 down, 0 failing, 1 not checked;");
+    }
+    // Four of five each pass, the one left out first at the next.
+    expect(probed[0]).toEqual(hosts.slice(0, 4));
+    expect(probed[1]).toEqual(["sample-agency.example", ...hosts.slice(0, 3)]);
+    expect(probed[2]).toEqual([`shop.${ZONE}`, ZONE, `www.${ZONE}`, `cms.${ZONE}`]);
+    expect(probed[3]).toEqual(["sample-agency.example", ZONE, `www.${ZONE}`, `cms.${ZONE}`]);
+  });
+
+  test("out of time: a host that failed is probed first, before those that answered", async () => {
+    const order: string[] = [];
+    const slow = slowCaddy(order);
+    answers.set(`shop.${ZONE}`, 502);
+    await pass(slow.overrides, slow.replaced, slow.clock);
+    order.length = 0;
+    const second = await pass(slow.overrides, slow.replaced, slow.clock);
+    expect(order[0]).toBe(`shop.${ZONE}`);
+    expect(second.status.down.map((problem) => problem.id)).toEqual([`site:shop.${ZONE}`]);
+  });
+
   test("Caddy stopped: one alert for Caddy, none per site; back with a restart counted, a warning", async () => {
     await pass();
     caddy!.stop(true);
@@ -315,5 +384,28 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     const kept = JSON.parse(readFileSync(join(state, "state.json"), "utf8")) as { outbox: unknown[] };
     expect(kept.outbox).toEqual([]);
     expect(existsSync(join(state, "state.json.tmp"))).toBe(false);
+  });
+});
+
+describe("the probes' budget", () => {
+  test("an item starts only if its whole timeout fits in what is left; the rest is skipped", async () => {
+    let now = 0;
+    const started: Array<[string, number]> = [];
+    const results = await bounded(
+      ["a", "b", "c", "d"],
+      1,
+      10,
+      () => now,
+      4,
+      async (item) => {
+        started.push([item, 10 - now]);
+        now += 3;
+        return `probed ${item}`;
+      },
+      (item) => `skipped ${item}`,
+    );
+    // d would have had 1 of its 4: it is not started at all.
+    expect(started).toEqual([["a", 10], ["b", 7], ["c", 4]]);
+    expect(results).toEqual(["probed a", "probed b", "probed c", "skipped d"]);
   });
 });

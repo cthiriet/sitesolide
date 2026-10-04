@@ -50,6 +50,12 @@ export type Tracked = {
   since: number;
   /** What the last known verdict said. */
   summary: string;
+  /**
+   * When the check last had a verdict that was not `unknown`: the probes of a
+   * run short of time start with the least recently checked. Absent from a
+   * memory written before it existed, which reads as never checked.
+   */
+  checkedAt?: number;
 };
 
 export type Event = "down" | "recovered" | "cleared";
@@ -107,6 +113,7 @@ function step(previous: Tracked, result: Result, now: number): { tracked: Tracke
   };
   if (result.verdict === "unknown") return { tracked, event: null };
   tracked.summary = result.summary;
+  tracked.checkedAt = now;
   const failed = result.verdict === "fail";
 
   if (previous.status === "ok" || previous.status === "failing") {

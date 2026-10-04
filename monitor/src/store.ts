@@ -49,7 +49,8 @@ function isTracked(value: unknown): value is Tracked {
     STATUSES.includes(tracked.status as Status) &&
     Number.isInteger(tracked.streak) &&
     typeof tracked.since === "number" &&
-    typeof tracked.summary === "string"
+    typeof tracked.summary === "string" &&
+    (tracked.checkedAt === undefined || typeof tracked.checkedAt === "number")
   );
 }
 

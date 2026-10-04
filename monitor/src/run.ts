@@ -8,7 +8,10 @@
  *      memory, disks, the backup status;
  *   3. probe every served host over HTTPS and read each certificate, unless
  *      Caddy is known to be down, in which case the probes are skipped as
- *      unknown: one alert for Caddy, not one more per site;
+ *      unknown: one alert for Caddy, not one more per site. What failed is
+ *      probed first, then what was checked least recently, and what no longer
+ *      fits in the budget is not checked this time rather than judged on a
+ *      timeout cut short;
  *   4. judge, then let the state machine say what changed;
  *   5. write the memory, notices included, BEFORE sending anything: a run
  *      killed while a webhook hangs loses no transition, the next run sends it;
@@ -21,7 +24,7 @@
  * with no address set, the journal is the only output, which is exactly what
  * the machine did before this monitor, and no worse.
  */
-import { advance, isBad, isDown, type Notice } from "./alerts";
+import { advance, isBad, isDown, type Notice, type Tracked } from "./alerts";
 import {
   judgeBackup,
   judgeCaddy,
@@ -50,17 +53,23 @@ export type Outcome = { status: MonitorStatus; notices: Notice[]; state: State }
 
 /**
  * Runs `work` over every item, `limit` at a time, and never past `deadline`:
- * an item not started in time gets `skipped` instead. A hung Caddy makes every
- * probe wait for its full timeout, and fifty of them in a row would outlast
- * the unit's TimeoutStartSec, which would kill the run before it pinged the
+ * an item is started only if `needMs`, its whole timeout, still fits before
+ * the deadline, and gets `skipped` otherwise. A hung Caddy makes every probe
+ * wait for its full timeout, and fifty of them in a row would outlast the
+ * unit's TimeoutStartSec, which would kill the run before it pinged the
  * heartbeat.
+ *
+ * Never a shortened timeout: a probe given the 400 ms left of the budget fails
+ * on its own clock and is judged a site that does not answer, the same site at
+ * the tail of every run, down for nothing.
  */
 export async function bounded<T, R>(
   items: readonly T[],
   limit: number,
   deadline: number,
   clock: () => number,
-  work: (item: T, timeoutMs: number) => Promise<R>,
+  needMs: number,
+  work: (item: T) => Promise<R>,
   skipped: (item: T) => R,
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
@@ -69,12 +78,27 @@ export async function bounded<T, R>(
     while (next < items.length) {
       const index = next++;
       const item = items[index]!;
-      const left = deadline - clock();
-      results[index] = left <= 0 ? skipped(item) : await work(item, left);
+      results[index] = deadline - clock() < needMs ? skipped(item) : await work(item);
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
   return results;
+}
+
+/**
+ * The order the probes start in, which only matters when they do not all fit:
+ * what is not ok first, a failure to confirm or a recovery to see, then the
+ * rest from the least recently checked, so that what one run left out is the
+ * first of the next and every host gets its turn. Stable: when everything
+ * fits, every run probes in the order of what is served.
+ */
+export function probeOrder<T>(items: readonly T[], idOf: (item: T) => string, checks: Readonly<Record<string, Tracked>>): T[] {
+  const ranked = items.map((item, index) => {
+    const tracked = checks[idOf(item)];
+    return { item, index, bad: isBad(tracked) ? 0 : 1, checkedAt: tracked?.checkedAt ?? Number.NEGATIVE_INFINITY };
+  });
+  ranked.sort((a, b) => a.bad - b.bad || (a.checkedAt < b.checkedAt ? -1 : a.checkedAt > b.checkedAt ? 1 : 0) || a.index - b.index);
+  return ranked.map(({ item }) => item);
 }
 
 export async function run(config: Config, machine: Machine, now: number, clock: () => number = Date.now): Promise<Outcome> {
@@ -83,6 +107,8 @@ export async function run(config: Config, machine: Machine, now: number, clock: 
   const problems = [...config.problems];
   const results: Result[] = [];
   const unknownKinds = new Set<Kind>();
+  /** Probes and readings skipped for lack of time, for the status and the journal. */
+  let unchecked = 0;
 
   const [caddy, units, backup] = await Promise.all([machine.caddy(), machine.units(), machine.backup()]);
   const folders = machine.folders();
@@ -129,22 +155,30 @@ export async function run(config: Config, machine: Machine, now: number, clock: 
       for (const certificate of certificates) results.push(judgeCertificate(certificate, { error: reason }, now));
     } else {
       const deadline = clock() + config.probeBudgetMs;
-      const timeout = (left: number) => Math.min(config.probe.timeoutMs, left);
+      const timeout = config.probe.timeoutMs;
       const probes = bounded(
-        targets,
+        probeOrder(targets, (target) => `site:${target.host}`, state.checks),
         config.concurrency,
         deadline,
         clock,
-        async (target, left) => judgeProbe(target.host, target.slug, await machine.probe(target.host, timeout(left))),
-        (target) => notProbed(target.host, target.slug, "not probed: the run ran out of time"),
+        timeout,
+        async (target) => judgeProbe(target.host, target.slug, await machine.probe(target.host, timeout)),
+        (target) => {
+          unchecked++;
+          return notProbed(target.host, target.slug, "not probed: the run ran out of time");
+        },
       );
       const readings = bounded(
-        certificates,
+        probeOrder(certificates, (certificate) => certificate.id, state.checks),
         config.concurrency,
         deadline,
         clock,
-        async (certificate, left) => judgeCertificate(certificate, await machine.certificate(certificate.sni, timeout(left)), now),
-        (certificate) => judgeCertificate(certificate, { error: "not read: the run ran out of time" }, now),
+        timeout,
+        async (certificate) => judgeCertificate(certificate, await machine.certificate(certificate.sni, timeout), now),
+        (certificate) => {
+          unchecked++;
+          return judgeCertificate(certificate, { error: "not read: the run ran out of time" }, now);
+        },
       );
       const [probed, read] = await Promise.all([probes, readings]);
       results.push(...probed, ...read);
@@ -189,12 +223,13 @@ export async function run(config: Config, machine: Machine, now: number, clock: 
 
   const final: State = { ...written, outbox };
   machine.writeState(`${JSON.stringify(final)}\n`);
-  const status = buildStatus({ now, zone: config.zone, checks, heartbeat, webhook, undelivered: outbox.length });
+  const status = buildStatus({ now, zone: config.zone, checks, heartbeat, webhook, undelivered: outbox.length, unchecked });
   machine.writeStatus(`${JSON.stringify(status)}\n`);
 
   const tracked = Object.values(checks);
   const down = tracked.filter(isDown).length;
   const failing = tracked.filter((check) => check.status === "failing").length;
-  machine.log(`${tracked.length} checks, ${down} down, ${failing} failing; heartbeat ${heartbeat}, webhook ${webhook}`);
+  const skipped = unchecked > 0 ? `, ${unchecked} not checked` : "";
+  machine.log(`${tracked.length} checks, ${down} down, ${failing} failing${skipped}; heartbeat ${heartbeat}, webhook ${webhook}`);
   return { status, notices, state: final };
 }

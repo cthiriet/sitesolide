@@ -17,7 +17,7 @@ function tracked(status: Tracked["status"], kind: Tracked["kind"], severity: Tra
  */
 function status(checks: Record<string, Tracked>, overrides: Partial<ReturnType<typeof buildStatus>> = {}): string {
   return JSON.stringify({
-    ...buildStatus({ now: NOW - 30_000, zone: "test-zone.invalid", checks, heartbeat: "ok", webhook: "idle", undelivered: 0 }),
+    ...buildStatus({ now: NOW - 30_000, zone: "test-zone.invalid", checks, heartbeat: "ok", webhook: "idle", undelivered: 0, unchecked: 0 }),
     ...overrides,
   });
 }
@@ -76,6 +76,18 @@ describe("the monitor among the Issues", () => {
       ["warning", "The monitor's heartbeat did not go through: its outside service will report the machine as down"],
       ["warning", "3 monitor alerts not delivered to the webhook, kept for its next run"],
     ]);
+  });
+
+  test("checks the monitor had no time to make are said, as a warning", () => {
+    expect(monitorDiscrepancies(status({}, { unchecked: 3 }), NOW)).toEqual([
+      {
+        slug: null,
+        severity: "warning",
+        message: "3 checks skipped by the monitor's last pass, out of time: they keep their last state, the next pass starts with them",
+      },
+    ]);
+    expect(monitorDiscrepancies(status({}, { unchecked: 1 }), NOW)[0]!.message).toStartWith("1 check skipped by");
+    expect(monitorDiscrepancies(status({}), NOW)).toEqual([]);
   });
 
   test("an unreadable status is a warning, never a crash; unknown fields are ignored", () => {

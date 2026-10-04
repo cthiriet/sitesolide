@@ -50,6 +50,11 @@ export type MonitorStatus = {
   webhook: ChannelState;
   /** Notices kept for a webhook that did not take them. */
   undelivered: number;
+  /**
+   * Probes and certificate readings the run had no time left to make: their
+   * checks kept their last state, and the next run starts with them.
+   */
+  unchecked: number;
 };
 
 export function buildStatus(options: {
@@ -59,6 +64,7 @@ export function buildStatus(options: {
   heartbeat: MonitorStatus["heartbeat"];
   webhook: ChannelState;
   undelivered: number;
+  unchecked: number;
 }): MonitorStatus {
   const down = Object.entries(options.checks)
     .filter(([, tracked]) => isDown(tracked))
@@ -81,5 +87,6 @@ export function buildStatus(options: {
     heartbeat: options.heartbeat,
     webhook: options.webhook,
     undelivered: options.undelivered,
+    unchecked: options.unchecked,
   };
 }

@@ -105,6 +105,18 @@ export function monitorDiscrepancies(content: string | null | undefined, generat
       message: "The monitor's heartbeat did not go through: its outside service will report the machine as down",
     });
   }
+  // A Caddy too slow for the monitor's budget: what it could not reach keeps
+  // its last state, which may be older than this page lets on.
+  const unchecked = typeof status.unchecked === "number" ? status.unchecked : 0;
+  if (unchecked > 0) {
+    discrepancies.push({
+      slug: null,
+      severity: "warning",
+      message:
+        `${unchecked} check${unchecked === 1 ? "" : "s"} skipped by the monitor's last pass, out of time: ` +
+        "they keep their last state, the next pass starts with them",
+    });
+  }
   const undelivered = typeof status.undelivered === "number" ? status.undelivered : 0;
   if (status.webhook === "failed" && undelivered > 0) {
     discrepancies.push({

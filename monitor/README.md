@@ -45,6 +45,15 @@ certificate.
 **When Caddy is down, the sites are not probed.** One alert for Caddy, not one
 more per site on top of it.
 
+**The probes have 25 seconds in all**, eight at a time, five seconds each, so
+that a hung Caddy cannot keep the run past its unit's limit and the heartbeat
+from leaving. A probe starts only if its whole five seconds still fit: one given
+the last fraction of the budget would time out on its own clock and be judged a
+site that does not answer, the same site every pass. What does not fit is not
+checked this pass, keeps its state, and is counted in the status, the journal
+(`3 not checked`) and the dashboard. The next pass starts with what is failing,
+then with what has waited longest, so that every host gets its turn.
+
 ## How it alerts
 
 **Twice in a row before an alert, twice in a row before a recovery.** A
@@ -223,7 +232,8 @@ unlocked session, like every secret.
   ],
   "heartbeat": "ok",
   "webhook": "ok",
-  "undelivered": 0
+  "undelivered": 0,
+  "unchecked": 0
 }
 ```
 
