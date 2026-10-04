@@ -119,7 +119,12 @@ bin/deploy-loopback.sh close   # the nftables rule that isolates the services
 bin/deploy-steward.sh    # the root daemon that writes secrets
 bin/deploy-gatekeeper.sh # the only thing that touches Caddy from the machine
 bin/deploy-collector.sh  # the timer that snapshots the machine for the dashboard
+bin/deploy-monitor.sh    # the timer that checks every site each minute, and alerts
 ```
+
+Caddy's own unit restarts it if it ever stops: the drop-in `deploy-caddy.sh`
+asks you to install sets `Restart=always`, see
+[infra/README.md](../infra/README.md#caddys-restart-policy).
 
 ## 4. Deploy the dashboard and the portal
 
@@ -161,6 +166,18 @@ sitesolide domain --activate
 
 That writes `domain.active`, puts the manifest on the machine and rebuilds the
 domain table, the last step being the one that authorises the certificate.
+
+## 6. Know when something breaks
+
+One machine serves everything, so its failures are everyone's. The monitor
+installed in step 3 checks every minute that Caddy runs, that every site
+answers over HTTPS, that no service failed, and that disk, memory,
+certificates and backups are fine. Out of the box it only writes to the
+journal. Give it a heartbeat, a free [healthchecks.io](https://healthchecks.io)
+check that alerts when the pings stop, which is the only thing that notices the
+machine itself dying, and optionally a Slack, Discord or ntfy webhook: five
+minutes, described in [monitor/README.md](../monitor/README.md#alerting-healthchecksio-in-five-minutes).
+What the monitor finds down also shows among the dashboard's Issues.
 
 ## Another host, another DNS
 

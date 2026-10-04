@@ -1,0 +1,21 @@
+# Cadence of the monitor. One minute: with two failures in a row before an
+# alert, something down is reported within two to three minutes, and the
+# heartbeat's outside service expects a ping every minute.
+
+[Unit]
+Description=Monitor, every minute
+
+[Timer]
+# Two minutes after boot: Caddy and the services have started, and a first
+# pass during their start would only count failures the next one clears.
+OnBootSec=2min
+OnUnitActiveSec=1min
+# Ten seconds of slack let systemd group the wake-ups; the outside service's
+# grace period is counted in minutes.
+AccuracySec=10s
+# A pass missed during a shutdown is not caught up: the next one comes within
+# the minute, and catching up would only judge a state already gone.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

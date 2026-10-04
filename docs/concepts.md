@@ -73,6 +73,7 @@ more.
 | The steward | root | write `/etc/sitesolide`, restart services, command the gatekeeper |
 | The gatekeeper | root, one-shot | rewrite one project's block, reload Caddy, probe, roll back |
 | The collector | root, on a timer | read the machine, drop a snapshot where the dashboard can read it |
+| The monitor | a dynamic account, on a timer | read what any account reads, ask Caddy for every site over HTTPS, alert |
 
 **The dashboard reads nothing itself.** Its unit replaces `/srv` with an empty
 mount, so it cannot open another project's files, and the loopback rule stops it
@@ -208,3 +209,4 @@ without touching anything.
 - [dashboard/README.md](../dashboard/README.md), the dashboard, the steward and the gatekeeper
 - [portal/README.md](../portal/README.md), the shared door and guest access
 - [analytics/README.md](../analytics/README.md), how a visit is counted, and why it is anonymous
+- [monitor/README.md](../monitor/README.md), what is checked every minute, and who hears of it

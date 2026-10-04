@@ -1,0 +1,104 @@
+# The monitor: one pass over the machine, every minute, by its timer. See
+# monitor/README.md for what it checks and how it alerts.
+#
+# It is the only component of the platform that watches the others, and it
+# holds no privilege at all: everything it reads is open to any account. The
+# unit makes that a guarantee rather than a habit. A compromised monitor holds
+# what any account on the machine already holds, plus its two alerting
+# addresses.
+#
+# Placed by bin/deploy-monitor.sh, never by `sitesolide deploy`, like the
+# steward: the code is built into one file and installed root:root under
+# /usr/local/lib/sitesolide/, so the account that runs it cannot rewrite it.
+
+[Unit]
+Description=Monitor: Caddy, the sites over HTTPS, units, disk, memory, certificates and backups
+# Nothing to watch until the code is there; a missing file must not pass for a
+# failed check.
+ConditionPathExists=/usr/local/lib/sitesolide/monitor.js
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/bun /usr/local/lib/sitesolide/monitor.js
+
+# A dynamic account, made at each start and gone after: no account to create
+# on the machine, no file of its own outside its state directory, and no uid
+# any other unit shares. DynamicUser also implies ProtectSystem=strict,
+# ProtectHome=read-only, PrivateTmp, RemoveIPC, NoNewPrivileges and
+# RestrictSUIDSGID.
+DynamicUser=yes
+
+# /var/lib/sitesolide-monitor: the memory of the previous runs and the status
+# the dashboard's collector copies. Under DynamicUser it really lives in
+# /var/lib/private/sitesolide-monitor, behind a link systemd keeps; the
+# collector runs as root and follows it. UMask=0077: what it writes belongs to
+# it alone, the collector reading as root regardless.
+StateDirectory=sitesolide-monitor
+StateDirectoryMode=0700
+UMask=0077
+
+# The zone, which names every host to probe. The file Caddy is given, so the
+# two can never disagree on what is served. Without it the run stops and says
+# so, and the heartbeat's silence reports it.
+EnvironmentFile=/etc/caddy/sitesolide.env
+
+# The alerting addresses, HEARTBEAT_URL, ALERT_WEBHOOK_URL and
+# ALERT_WEBHOOK_FORMAT, set from the dashboard's Secrets, file
+# dashboard-monitor.env of the dashboard site, root:root 0600. PID 1 reads it
+# as root before the account is made, so the account never can. The dash: with
+# no file, the monitor runs all the same and writes to the journal only.
+#
+# InaccessiblePaths=/etc/sitesolide is NOT laid, although the monitor never
+# opens that directory: whether systemd still hands over an EnvironmentFile
+# from a directory the namespace hides is measured on arm64 only, and the units
+# generated for projects follow the same rule until it is on x86_64
+# (bin/cli/unit.ts). The dynamic account cannot read the 0600 files there
+# anyway; it can list their names, which the monitor does not do.
+EnvironmentFile=-/etc/sitesolide/dashboard-monitor.env
+
+# A run takes a few seconds; the probes stop at 25 whatever happens, and the
+# heartbeat must leave before this kills the run. The timer starts no second
+# run while one is still going.
+TimeoutStartSec=50s
+
+# The monitor must never dispute the machine with a site answering a visitor.
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=128M
+
+# No capability at all, none to gain.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# What it reads: /srv/sites by name, /etc/caddy/domaines.map, /proc/meminfo,
+# statfs, the backup status. All read-only under ProtectSystem=strict.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# Other processes invisible. ProcSubset=pid is NOT laid: it would hide
+# /proc/meminfo, which the memory check reads.
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# @system-service and nothing stricter, the steward's measurement: a narrower
+# set kills Bun at start. MemoryDenyWriteExecute stays out for the JIT.
+SystemCallFilter=@system-service
+
+# The network, and only the families it needs: AF_UNIX for systemctl over
+# D-Bus, AF_INET and AF_INET6 for the probes on the loopback's 443 and for the
+# heartbeat and the webhook, outside. No address filter: the outside services
+# have no fixed address. The loopback rule (bin/cli/loopback.ts) closes the
+# services' ports and Caddy's admin API to this account all the same.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

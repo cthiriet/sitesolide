@@ -178,6 +178,16 @@ For the test VM only: the drop-in names `/etc/caddy/cloudflare.env` and
 `/etc/caddy/sitesolide.env` without a dash, so both must exist there, empty or
 with test values, or Caddy will not start under it at all.
 
+## The monitor
+
+`monitor/` checks the machine every minute and alerts on what goes down and
+recovers, with a heartbeat that notices the machine itself dying: see
+[monitor/README.md](../monitor/README.md). Its unit and timer are in
+`infra/monitor/`, `sitesolide-monitor.service` and `.timer`, placed by
+`bin/deploy-monitor.sh`. It runs as a dynamic account with no privilege and
+keeps its state in `/var/lib/sitesolide-monitor/`; nothing runs until that
+script has.
+
 ## Hardening to do once it works
 
 - Restrict `ssh_allowed_from` to a fixed IP rather than the whole world

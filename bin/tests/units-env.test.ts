@@ -27,6 +27,7 @@ const UNITS: ReadonlyArray<readonly [unit: string, entryPoint: string]> = [
   ["infra/collector/sitesolide-collector.service", "dashboard/collector.ts"],
   ["infra/steward/sitesolide-steward.service", "dashboard/steward.ts"],
   ["api/deploy/sitesolide-api.service", "api/src/config.ts"],
+  ["infra/monitor/sitesolide-monitor.service", "monitor/src/config.ts"],
 ];
 
 /**

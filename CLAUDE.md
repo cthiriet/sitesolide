@@ -41,7 +41,12 @@ The ban stands all the same: the blip is real, and the admin API can do worse
 than stop Caddy, it can load a configuration that serves nothing while the
 process stays alive, which no restart policy notices.
 
-No external monitoring is in place to notice that it had to.
+**The monitor is what notices.** `monitor/` runs every minute: Caddy active,
+every served site over HTTPS, failed units, disk, memory, certificates,
+backups, and Caddy's automatic restarts themselves. Its heartbeat to an outside
+service is the only thing that notices the machine itself dying. Until its
+alerting is configured in the dashboard, it writes to the journal only, which
+nobody reads in time. See [monitor/README.md](monitor/README.md).
 
 **`caddy validate` run by hand fails with nothing broken.** It does not load
 `/etc/caddy/cloudflare.env` or `/etc/caddy/sitesolide.env`, which systemd

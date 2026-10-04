@@ -10,6 +10,7 @@
 | `dashboard/` | The dashboard, the steward that writes secrets as root, and the gatekeeper that touches Caddy. |
 | `portal/` | The shared password for personal projects, and their guest access. |
 | `analytics/` | Audience measurement: ingestion only, the numbers are read in the dashboard. |
+| `monitor/` | Every minute, Caddy, the sites over HTTPS, units, disk, certificates and backups, and the alerts when one goes down. |
 | `docs/` | Install guide, concepts, manifest reference, commands, secrets. |
 | `examples/` | Two projects to deploy as they are: a static site and a Bun app. |
 
