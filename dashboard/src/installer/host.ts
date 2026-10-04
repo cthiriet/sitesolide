@@ -9,7 +9,7 @@
  * shapes.
  */
 import type { Machine } from "../gatekeeper/machine";
-import type { LoopbackState } from "../../borrowed/services";
+import type { LoopbackState, UnitFacts } from "../../borrowed/services";
 import type { ExtractOutcome } from "./extract";
 
 export type Execution = { code: number; output: string };
@@ -31,6 +31,10 @@ export type Host = {
   readUnit: (unit: string) => Promise<string | null>;
   /** The project's secondary units `deploy` generated, `<slug>.<name>`. */
   generatedUnits: (slug: string) => Promise<string[]>;
+  /** What systemd knows of a unit, wherever it reads it from; null when systemctl did not answer. */
+  unitFacts: (slug: string, unit: string) => Promise<UnitFacts | null>;
+  /** Where this host's systemd reads the units it lays: /etc/systemd/system. */
+  unitsFolder: string;
   /** Is the secret file in /etc/sitesolide? Its content is never read. */
   secretPresent: (name: string) => Promise<boolean>;
 

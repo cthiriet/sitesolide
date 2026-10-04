@@ -189,7 +189,7 @@ curl -s -H "$AUTH" "$API/api/v1/deployments/<id>?after=0"
 | `failure` | 500, 502 | something broke on the machine: the message says where the owner should look |
 
 A failed deployment carries its own `error.code`, the step that stopped it:
-`install-failed`, `secret-missing`, `edited-by-hand`, `caddy-busy`,
+`install-failed`, `secret-missing`, `edited-by-hand`, `system-unit`, `caddy-busy`,
 `bundle-refused`, `service-failed`, `verify-failed` and a few more, each with a
 message that says what to do.
 

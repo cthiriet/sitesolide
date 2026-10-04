@@ -138,6 +138,32 @@ describe("deploy --json", () => {
     expect(error.hint).toContain("delete the key and let deploy pick one");
   });
 
+  test("a slug systemd already gives to a package's service is refused before anything is written, --force included", async () => {
+    const machine = fakeVm();
+    machine.systemUnit("agent-shop", "/lib/systemd/system/agent-shop.service");
+    const r = await run(project({ ...APP, port: 3040 }), ["deploy", "--json", "--dry-run"], { vm: machine });
+    expect(r.code).toBe(1);
+    const error = ended(r, "error");
+    expect(error.message).toBe("agent-shop is already the name of a service of the server, which deploy never replaces");
+    expect((error.details as string[]).join(" ")).toContain("read from /lib/systemd/system/agent-shop.service");
+    expect(error.hint).toContain("pick another slug");
+    // For real: the refusal falls before the first write, and --force does not lift it.
+    machine.acceptWrites();
+    const forced = await run(project({ ...APP, port: 3040 }), ["deploy", "--json", "--force"], { vm: machine });
+    expect(ended(forced, "error").message).toBe(error.message);
+    expect(machine.logs().filter((line) => line.startsWith("ACCEPTED"))).toEqual([]);
+  });
+
+  test("a unit in /etc stays the project's when it serves the project's folder, and is refused otherwise", async () => {
+    const machine = fakeVm();
+    const unit = "/etc/systemd/system/agent-shop.service";
+    machine.writeFile(unit, "[Service]\nWorkingDirectory=/srv/sites/agent-shop/app\nExecStart=/usr/local/bin/bun run server.ts\n");
+    expect((await run(project({ ...APP, port: 3040 }), ["deploy", "--json", "--dry-run"], { vm: machine })).code).toBe(0);
+    machine.writeFile(unit, "[Service]\nExecStart=/usr/sbin/postfix start-fg\n");
+    const refused = await run(project({ ...APP, port: 3040 }), ["deploy", "--json", "--dry-run"], { vm: machine });
+    expect((ended(refused, "error").details as string[]).join(" ")).toContain(`${unit} is a unit deploy did not write`);
+  });
+
   test("an unknown command and --json on run are refused as events too", async () => {
     const unknown = await run("projects/simple-site", ["dance", "--json"], { vm: fakeVm() });
     expect(unknown.code).toBe(1);

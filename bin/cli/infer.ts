@@ -31,7 +31,7 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { isValidSlug, KNOWN_KEYS, RESERVED_ENV, SERVICE_PORTS, SUSPICIOUS_ENV, validate, type Manifest } from "./manifest";
+import { isSystemName, isValidSlug, KNOWN_KEYS, RESERVED_ENV, SERVICE_PORTS, SUSPICIOUS_ENV, validate, type Manifest } from "./manifest";
 import { needsPort } from "./ports";
 import { projectPaths } from "./unit";
 
@@ -52,7 +52,8 @@ export type Inference =
 /**
  * The slug a folder's name gives: lowercase, accents dropped, every other run
  * of characters a dash, 63 characters at most. Null when nothing usable is
- * left, or `landing`, which validate() reserves.
+ * left, or a name validate() reserves: `landing`, and the names of the
+ * machine's own services, a folder called `caddy` included.
  */
 export function slugFromFolder(name: string): string | null {
   const slug = name
@@ -63,7 +64,7 @@ export function slugFromFolder(name: string): string | null {
     .replace(/^-+|-+$/g, "")
     .slice(0, 63)
     .replace(/-+$/, "");
-  return isValidSlug(slug) && slug !== "landing" ? slug : null;
+  return isValidSlug(slug) && slug !== "landing" && !isSystemName(slug) ? slug : null;
 }
 
 /**

@@ -126,6 +126,62 @@ export function isValidSlug(slug: string): boolean {
   return slug.length <= 63 && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(slug);
 }
 
+/**
+ * The names a slug may not take, because the machine already runs something
+ * of that name that deploy must never replace.
+ *
+ * A project's unit is `/etc/systemd/system/<slug>.service`, while the units of
+ * the system's own packages live in /lib/systemd/system: finding no file of
+ * that name in /etc, deploy would lay one there, and systemd reads /etc first.
+ * A project called `caddy` would replace the web server of every site at its
+ * first restart, one called `ssh` the way into the machine. The list names
+ * what an Ubuntu cloud image and this platform run; the machine itself is
+ * asked before anything is written, for the units no list foresees, see
+ * unitOriginsCommand in services.ts.
+ *
+ * `www` is not a unit: the landing's block serves `www.<zone>`, and a project
+ * of that name would never be reached. The platform's own projects, the
+ * dashboard, the portal and analytics, are not here: their owner deploys them
+ * with this very validation. A token may not, see RESERVED_SLUGS in
+ * dashboard/src/control/policy.ts.
+ */
+export const SYSTEM_NAMES: readonly string[] = [
+  "www",
+  "caddy",
+  "ssh",
+  "sshd",
+  "dbus",
+  "cron",
+  "atd",
+  "nftables",
+  "networking",
+  "rsyslog",
+  "chrony",
+  "ufw",
+  "apparmor",
+  "polkit",
+  "snapd",
+  "udev",
+  "getty",
+  "sudo",
+  "rsync",
+  "logrotate",
+  "fstrim",
+  "cloud-init",
+  "cloud-config",
+  "cloud-final",
+  "unattended-upgrades",
+  "apt-daily",
+  "apt-daily-upgrade",
+];
+
+/** Whole families of units: systemd's own, and the platform's services, all `sitesolide-*`. */
+export const SYSTEM_PREFIXES: readonly string[] = ["systemd-", "sitesolide-"];
+
+export function isSystemName(slug: string): boolean {
+  return SYSTEM_NAMES.includes(slug) || SYSTEM_PREFIXES.some((prefix) => slug.startsWith(prefix));
+}
+
 /** Same rule as api's `isValidDomain`: what passes here must pass there too. */
 export function isValidDomain(domain: string): boolean {
   return (
@@ -509,6 +565,8 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     // /srv/sites/landing and publishes a duplicate of the landing that the
     // wildcard block serves straight away.
     errors.push("slug: landing is reserved for the site on the bare domain, which deploy does not handle");
+  } else if (isSystemName(manifest.slug)) {
+    errors.push(`slug: ${manifest.slug} is a name the machine already uses, a system service or the landing's www: pick another`);
   }
 
   if (manifest.description !== undefined) {

@@ -78,10 +78,11 @@ describe("deploy reads the door on the VM", () => {
     expect(r.all).not.toContain("from the dashboard");
     expect(r.output).toContain("check https://portal.");
     expect(r.output).toContain("forward_auth @portal_guard");
-    // The site's door, then every manifest for the ports they declare, and
-    // nothing else was asked of the machine: the other sites' blocks are not
-    // this deployment's business, and in a dry run there is no lock.
-    expect(vm.logs()).toEqual(["READ sample-door", "READ *"]);
+    // The site's door, what systemd knows of its unit, then every manifest
+    // for the ports they declare, and nothing else was asked of the machine:
+    // the other sites' blocks are not this deployment's business, and in a
+    // dry run there is no lock.
+    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *"]);
   });
 
   test("the same value on both sides changes nothing", async () => {
@@ -178,15 +179,16 @@ describe("deploy reads the door on the VM", () => {
     );
 
     // Nothing other than the readings went through, the site's door, its
-    // block in service and the manifests whose ports it checks: the
+    // block in service, what systemd knows of its unit and the manifests
+    // whose ports it checks: the
     // preparation of the service is the first write, and the simulated VM
     // refused it. The lock is only taken before the first deposit of the
     // manifest or of the block, much further on.
     expect(r.code).toBe(1);
     const logs = vm.logs();
-    expect(logs.slice(0, 3)).toEqual(["READ sample-door", "BLOCK sample-door", "READ *"]);
-    expect(logs.slice(3).every((line) => line.startsWith("REFUSED "))).toBe(true);
-    expect(logs).toHaveLength(4);
+    expect(logs.slice(0, 4)).toEqual(["READ sample-door", "BLOCK sample-door", "UNITS sample-door", "READ *"]);
+    expect(logs.slice(4).every((line) => line.startsWith("REFUSED "))).toBe(true);
+    expect(logs).toHaveLength(5);
   });
 });
 

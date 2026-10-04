@@ -47,6 +47,15 @@ Lowercase letters, digits and hyphens, not starting or ending with a hyphen, 63
 characters at most. `landing` is refused: it is reserved for the project that
 serves the bare domain.
 
+So are the names of the services the machine runs, `caddy`, `ssh`, `cron`,
+`nftables` and the others `isSystemName` lists in `bin/cli/manifest.ts`, every
+`systemd-*` and `sitesolide-*`, and `www`, which the landing serves. A unit laid
+in `/etc/systemd/system` under such a name would replace the system's own, which
+lives in `/lib/systemd/system`. For the names no list foresees, `deploy` asks
+systemd itself before writing anything, and stops when it already knows a unit of
+that name that deploy did not write and that does not serve
+`/srv/sites/<slug>`. `--force` does not lift that refusal.
+
 ### `description`
 
 One line, shown by `systemctl status` and in the dashboard. Without it, the unit

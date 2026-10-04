@@ -640,7 +640,7 @@ describe("sitesolide deploy leaves the other sites' blocks alone", () => {
     expect(existsSync(join(folder, "built"))).toBe(true);
     // Its manifest is read with every other one, for the ports it declares;
     // its block is not.
-    expect(vm.logs()).toEqual(["READ sample-door", "READ *"]);
+    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *"]);
   });
 
   test("the site in progress, whose door the dashboard changed, follows it", async () => {

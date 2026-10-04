@@ -131,6 +131,28 @@ describe("refusals, before anything served changes", () => {
     expect(bench.events.some((event) => event.startsWith("useradd"))).toBe(false);
   });
 
+  test("a slug systemd gives to a package's service: refused before any account, directory or unit", async () => {
+    // The unit lives in /lib/systemd/system: the bench's units folder, which
+    // stands for /etc/systemd/system, has no file of that name.
+    const bench = createBench({ systemUnits: { mailer: "/lib/systemd/system/mailer.service" } });
+    stageBundle(bench, [file("app/server.ts"), file("public/index.html")]);
+    const outcome = await run(bench, request({ ...APP, slug: "mailer" }, PRIVATE, "mailer"));
+    expect(outcome).toMatchObject({ ok: false, code: "system-unit" });
+    expect(outcome.ok === false && outcome.message).toContain("/lib/systemd/system/mailer.service");
+    expect(readdirSync(bench.sites)).toEqual([]);
+    expect(readdirSync(bench.units)).toEqual([]);
+    expect(bench.events.some((event) => event.startsWith("useradd"))).toBe(false);
+  });
+
+  test("a name validate() reserves for the machine's own services never reaches the machine", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, slug: "caddy" }, PRIVATE, "caddy"));
+    expect(outcome).toMatchObject({ ok: false, code: "invalid-manifest" });
+    expect(outcome.ok === false && outcome.message).toContain("a name the machine already uses");
+    expect(readdirSync(bench.sites)).toEqual([]);
+  });
+
   test("a failing install leaves the served code as it was", async () => {
     const bench = createBench();
     deposit(bench, { ...APP, port: 3040, portal: true });

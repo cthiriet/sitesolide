@@ -57,6 +57,8 @@ export type FakeVm = {
   onFirstAccepted(path: string, content: string): void;
   /** An accepted command that contains `pattern` prints `output`. */
   answer(pattern: string, output: string): void;
+  /** A unit systemd reads from `file`, a package's own: `caddy`, `/lib/systemd/system/caddy.service`. */
+  systemUnit(unit: string, file: string, content?: string): void;
   /** The commands received, one per line: CONNECT, READ <pattern>, REFUSED <command>... */
   logs(): string[];
   cleanup(): void;
@@ -139,6 +141,12 @@ export function createFakeVm(): FakeVm {
       const file = join(root, SWITCHES.answers);
       const pairs = existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Array<[string, string]>) : [];
       writeFileSync(file, JSON.stringify([...pairs, [pattern, output]]));
+    },
+    systemUnit(unit, file, content = "[Service]\nExecStart=/usr/bin/true\n") {
+      const switchFile = join(root, SWITCHES.systemUnits);
+      const laid = existsSync(switchFile) ? (JSON.parse(readFileSync(switchFile, "utf8")) as Record<string, string>) : {};
+      writeFileSync(switchFile, JSON.stringify({ ...laid, [unit]: file }));
+      put(file, content);
     },
     logs() {
       return existsSync(logs) ? readFileSync(logs, "utf8").split("\n").filter((line) => line !== "") : [];

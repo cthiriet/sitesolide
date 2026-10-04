@@ -21,8 +21,9 @@
  *   1. the manifest, re-validated with `validate()`, then the token's scope;
  *      missing ports chosen here, the door and the preview lock taken from the
  *      machine, as `deploy` does;
- *   2. the machine read: the block in service, the ports, the loopback rule,
- *      the portal's readiness, before anything is written;
+ *   2. the machine read: the block in service, the unit names systemd already
+ *      gives to a service of the machine, the ports, the loopback rule, the
+ *      portal's readiness, before anything is written;
  *   3. the build happened on the client: the archive carries its result;
  *   4. the account and the directories, then the archive extracted as the
  *      project's account into a staging directory, and `install` run there.
@@ -49,7 +50,7 @@ import { generateFragment, decideBlock } from "../../borrowed/fragment";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, type ProjectAccount } from "../../borrowed/loopback";
 import { hasServices, isApp, readManifest, servicesOf, setLock, setPortal, type Manifest } from "../../borrowed/manifest";
 import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "../../borrowed/portal-vm";
-import { portConflicts, staleUnits } from "../../borrowed/services";
+import { foreignUnit, portConflicts, staleUnits } from "../../borrowed/services";
 import { decideUnit, generateUnits, unitArgument } from "../../borrowed/unit";
 import { compareDirectives, sameDirectives, summariseDivergence } from "../../borrowed/comparison";
 import { isPortalReady, portalHost, fromPortal, answers, describe } from "../gatekeeper/probe";
@@ -219,6 +220,17 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
       const replace = replaceable(inService, block, before);
       if (decideBlock({ manifest, inService, replace, doorConfirmed: final.doorConfirmed }) === "diverged") {
         throw handEdited(`/etc/caddy/sites/${slug}.caddy`, inService ?? "", block);
+      }
+    }
+    // A unit name systemd already gives to a service of the machine, a
+    // package's unit in /lib/systemd/system above all, which a unit laid in
+    // /etc would replace: as `deploy` does, see foreignUnit in services.ts.
+    if (application) {
+      for (const { unit } of generateUnits(manifest)) {
+        const facts = await host.unitFacts(slug, unit);
+        if (facts === null) throw new Stop("machine-unreadable", `cannot tell whether systemd already runs a service named ${unit}: nothing was changed`);
+        const foreign = foreignUnit(unit, slug, facts, host.unitsFolder);
+        if (foreign !== null) throw new Stop("system-unit", `${foreign}: ${slug} is the name of a service of the machine, which a deployment never replaces; nothing was changed, pick another slug`);
       }
     }
     if (hasServices(manifest)) {

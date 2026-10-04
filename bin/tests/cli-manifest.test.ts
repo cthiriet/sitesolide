@@ -78,6 +78,19 @@ describe("validation", () => {
     );
   });
 
+  test("refuses the name of a service the machine runs, which deploy would replace", () => {
+    // caddy.service lives in /lib/systemd/system: deploy, seeing no file in
+    // /etc, would lay one there, and the next restart would take every site
+    // down. www is the landing's, which serves www.<zone>.
+    for (const slug of ["caddy", "ssh", "sshd", "dbus", "cron", "nftables", "networking", "www", "systemd-journald", "systemd-x", "sitesolide-steward", "sitesolide-anything"]) {
+      expect({ slug, errors: validate({ ...APP, slug }) }).toEqual({ slug, errors: [expect.stringContaining("a name the machine already uses")] });
+    }
+    // A name that merely starts like one is a project like any other.
+    for (const slug of ["caddy-notes", "my-ssh", "crontab-ui", "systemd", "sitesolide", "wwwx"]) {
+      expect(validate({ ...APP, slug })).toEqual([]);
+    }
+  });
+
   test("demands a port as soon as a start is declared", () => {
     expect(validate({ slug: "budget", start: "bun run server.ts" })).toContainEqual(
       expect.stringContaining("port"),

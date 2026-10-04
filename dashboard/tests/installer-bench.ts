@@ -30,6 +30,8 @@ export type BenchOptions = {
   onLock?: (bench: Bench) => void;
   validate?: (bench: Bench) => Command;
   restartFails?: boolean;
+  /** Units systemd reads from elsewhere than the bench's units folder, a package's own: unit -> file. */
+  systemUnits?: Record<string, string>;
   probe?: (host: string, path: string, bench: Bench) => ProbeResponse | null;
 };
 
@@ -125,6 +127,14 @@ export function machineOf(bench: Bench): Machine {
 export function commandsOf(bench: Bench): Commands {
   return {
     async systemctl(arguments_) {
+      // What systemd knows of a unit: the file the bench's units folder
+      // carries, a package's own unit the test laid, or nothing.
+      if (arguments_[0] === "show") {
+        const unit = arguments_.at(-1)!.replace(/\.service$/, "");
+        const own = join(bench.units, `${unit}.service`);
+        const fragment = bench.options.systemUnits?.[unit] ?? (existsSync(own) ? own : "");
+        return { code: 0, output: `LoadState=${fragment === "" ? "not-found" : "loaded"}\nFragmentPath=${fragment}\n` };
+      }
       bench.events.push(`systemctl ${arguments_.join(" ")}`);
       if (arguments_[0] === "restart" && bench.options.restartFails) return { code: 1, output: "failed" };
       if (arguments_[0] === "is-active") return { code: 0, output: arguments_.slice(1).map(() => "active").join("\n") };

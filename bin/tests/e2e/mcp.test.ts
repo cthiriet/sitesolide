@@ -138,7 +138,7 @@ describe("sitesolide mcp over stdio", () => {
     const events = deployed.result.structuredContent.events as Message[];
     expect(events.some((event) => event.type === "planned")).toBe(true);
     // Only reads reached the machine.
-    expect(vm!.logs().every((line) => line.startsWith("READ "))).toBe(true);
+    expect(vm!.logs().every((line) => line.startsWith("READ ") || line.startsWith("UNITS "))).toBe(true);
     expect(await mcp.close()).toBe(0);
   });
 });

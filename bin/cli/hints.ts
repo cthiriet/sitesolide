@@ -53,6 +53,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
 
   // --- the machine, read before anything is pushed
   [/no longer matches the manifest/, "do not re-run with --force on your own: show the differing lines in `details` to the owner, who decides whether the manifest or the file on the server is right"],
+  [/is already the name of a service of the server/, "pick another slug in sitesolide.json; never deploy under the name of a system service, and never remove, rename or mask anything on the server to make room"],
   [/^port already taken on the server/, "change `port` in sitesolide.json to a free port between 3000 and 3099, or delete the key and let deploy pick one"],
   [/^no free port left on the server/, "the owner has to free a port by removing a project the server no longer needs; deploy cannot pick one"],
   [/^the loopback rule in service predates the project set/, "the owner has to lay the current loopback rule first (the command is in `details`); an agent must not run it"],

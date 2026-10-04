@@ -29,7 +29,9 @@
  *   while a deployment is running;
  * - `answers.json`: pairs of `[pattern, output]`; an accepted command that
  *   contains the pattern prints the output, like a unit of the gatekeeper in
- *   progress.
+ *   progress;
+ * - `system-units.json`: `{ <unit>: <file> }`, the units systemd knows from
+ *   elsewhere than /etc/systemd/system, as a package's own.
  */
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -44,7 +46,7 @@ import {
   type Who,
 } from "../../cli/caddy-lock";
 import { MARKER_ABSENT, MARKER_PRESENT } from "../../cli/unit";
-import { loopbackStateCommand, MARKER_DONE } from "../../cli/services";
+import { GENERATOR_MARK, loopbackStateCommand, MARKER_DONE, unitOriginsCommand } from "../../cli/services";
 import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
 
 export const TEST_HOST = "sample@invalid.local";
@@ -61,6 +63,7 @@ export const SWITCHES = {
   loopbackState: "loopback-state",
   egressState: "egress-state",
   firstInstall: "first-install",
+  systemUnits: "system-units.json",
 } as const;
 
 /**
@@ -193,6 +196,34 @@ if (import.meta.main) {
     const laid = join(vm, SWITCHES.egressState);
     const state = existsSync(laid) ? readFileSync(laid, "utf8").trim() : "active";
     process.stdout.write(`${state}\n${EGRESS_MARKER}\n`);
+    process.exit(0);
+  }
+  // What systemd knows of the units a deployment is about to lay, read before
+  // anything is written. A unit the simulated VM carries under
+  // /etc/systemd/system is read from there; any other is unknown to systemd,
+  // unless the test lays it in SWITCHES.systemUnits, as a package's own unit.
+  const origins = /^sudo sh -c 'for u in ([a-z0-9. -]+); do .*\/srv\/sites\/([a-z0-9-]+)\//.exec(command);
+  if (origins !== null) {
+    const units = origins[1]!.split(" ");
+    let recognised = false;
+    try {
+      recognised = command === unitOriginsCommand(origins[2]!, units);
+    } catch {
+      recognised = false;
+    }
+    if (!recognised) refuse("unexpected reading of the units");
+    record(`UNITS ${units[0]}`);
+    const laidFile = join(vm, SWITCHES.systemUnits);
+    const laid = existsSync(laidFile) ? (JSON.parse(readFileSync(laidFile, "utf8")) as Record<string, string>) : {};
+    for (const unit of units) {
+      const own = `/etc/systemd/system/${unit}.service`;
+      const fragment = laid[unit] ?? (existsSync(join(vm, own)) ? own : "");
+      const text = fragment !== "" && existsSync(join(vm, fragment)) ? readFileSync(join(vm, fragment), "utf8") : "";
+      const generated = text.includes(GENERATOR_MARK) ? "yes" : "no";
+      const project = text.includes(`/srv/sites/${origins[2]}/`) ? "yes" : "no";
+      process.stdout.write(`UNIT ${unit} ${fragment === "" ? "not-found" : "loaded"} ${generated} ${project} ${fragment === "" ? "-" : fragment}\n`);
+    }
+    process.stdout.write(`${MARKER_DONE}\n`);
     process.exit(0);
   }
   const fingerprint = FINGERPRINT.exec(command);

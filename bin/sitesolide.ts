@@ -104,6 +104,7 @@ import {
   hasServices,
   isApp,
   isProtected,
+  isSystemName,
   isValidSlug,
   mainPort,
   missingExclusions,
@@ -174,6 +175,7 @@ import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, type ProjectAcc
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { login, remoteMode, runRemote } from "./cli/remote";
 import {
+  foreignUnit,
   listUnitsCommand,
   loopbackStateCommand,
   portConflicts,
@@ -182,10 +184,12 @@ import {
   currentPairsCommand,
   readLoopbackState,
   readUidsAnswer,
+  readUnitOrigins,
   readUnitsAnswer,
   removeUnitsCommand,
   staleUnits,
   uidsCommand,
+  unitOriginsCommand,
   unitPath,
 } from "./cli/services";
 
@@ -776,6 +780,7 @@ async function deploy(
   // blocks of the other sites are not this deployment's business: it deposits
   // its own, and leaves theirs as the machine carries them.
   if (isApplication) await checkRemoteBlock(manifest, config, executor, replace, doorConfirmed);
+  if (isApplication) await checkUnitNames(manifest, config, executor);
   if (isApplication) await checkPorts(manifest, config, executor);
   if (hasServices(manifest)) await requireProjectSet(config, executor);
   if (declaresEgress(manifest) || declaresConnectors(manifest)) await requireEgress(config, executor);
@@ -1370,6 +1375,33 @@ async function removeStaleUnits(manifest: Manifest, config: Config, executor: Ex
   step("units the manifest no longer declares");
   for (const unit of stale) say(`   remove ${unitPath(unit)}`);
   await executor.ssh(config, removeUnitsCommand(stale));
+}
+
+/**
+ * Refuses, before anything is written, a unit name systemd already gives to
+ * a service of the machine: a package's unit in /lib/systemd/system, which
+ * deploy would otherwise shadow with its own in /etc, or a unit in /etc that
+ * is not this project's. See unitOriginsCommand in bin/cli/services.ts.
+ *
+ * A read, hence done in a dry run too. `--force` does not lift it: it replaces
+ * a project's unit edited by hand, never a system service.
+ */
+async function checkUnitNames(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
+  const units = servicesOf(manifest).map((service) => service.unit);
+  const reading = readUnitOrigins(await executor.read(config, unitOriginsCommand(manifest.slug, units)), units);
+  if (reading.kind === "unreadable") {
+    die(`cannot tell whether systemd already runs a service named ${manifest.slug}`, [
+      "the server answered nothing readable",
+      "nothing was written: a unit is never laid over a service the reading could not see",
+    ]);
+  }
+  const foreign = units.flatMap((unit) => foreignUnit(unit, manifest.slug, reading.facts.get(unit)!) ?? []);
+  if (foreign.length > 0) {
+    die(`${manifest.slug} is already the name of a service of the server, which deploy never replaces`, [
+      ...foreign,
+      "nothing was written: pick another slug in sitesolide.json",
+    ]);
+  }
 }
 
 /**
@@ -2170,8 +2202,10 @@ function inferOrDie(
   chosen: string | undefined,
   forDeploy = false,
 ): { inference: Exclude<Inference, { kind: "none" }>; raw: string } {
-  if (chosen !== undefined && (!isValidSlug(chosen) || chosen === "landing")) {
-    die(`--slug: ${chosen} is not a usable slug`, ["lowercase letters, digits and dashes, no dot, not landing"]);
+  if (chosen !== undefined && (!isValidSlug(chosen) || chosen === "landing" || isSystemName(chosen))) {
+    die(`--slug: ${chosen} is not a usable slug`, [
+      "lowercase letters, digits and dashes, no dot, not landing, nor the name of a service the machine runs",
+    ]);
   }
   const slug = chosen ?? slugFromFolder(basename(folder));
   if (slug === null) die(`no usable slug in the folder name: ${basename(folder)}`, ["pass one with --slug <name>"]);

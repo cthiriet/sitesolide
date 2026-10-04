@@ -67,6 +67,11 @@ describe("the slug, from the folder's name", () => {
     expect(slugFromFolder("日本")).toBeNull();
     expect(slugFromFolder("Landing")).toBeNull();
   });
+
+  test("nor a folder named after a service of the machine, which deploy would replace", () => {
+    for (const name of ["caddy", "SSH", "www", "systemd-resolved", "sitesolide-gatekeeper"]) expect(slugFromFolder(name)).toBeNull();
+    expect(slugFromFolder("caddy-notes")).toBe("caddy-notes");
+  });
 });
 
 describe("a folder of files", () => {

@@ -12,7 +12,10 @@ import { removalActions } from "../cli/removal";
 import {
   MARKER_DONE,
   currentPairsCommand,
+  foreignUnit,
   listUnitsCommand,
+  readUnitOrigins,
+  unitOriginsCommand,
   projectPortsCommand,
   readCurrentPairs,
   portConflicts,
@@ -406,6 +409,75 @@ describe("units the manifest no longer declares", () => {
     expect(removeUnitsCommand(["lab.old"])).toBe(
       "sudo systemctl disable --now lab.old.service 2>/dev/null || true && sudo rm -f /etc/systemd/system/lab.old.service && sudo systemctl daemon-reload",
     );
+  });
+});
+
+describe("units systemd already knows, read before anything is laid", () => {
+  const facts = (loadState: string, fragmentPath: string, generated = false, project = false) => ({ loadState, fragmentPath, generated, project });
+
+  test("unknown, generated, or this project's own unit written by hand: free to lay", () => {
+    expect(foreignUnit("shop", "shop", facts("not-found", ""))).toBeNull();
+    expect(foreignUnit("shop", "shop", facts("loaded", "/etc/systemd/system/shop.service", true))).toBeNull();
+    expect(foreignUnit("shop.api", "shop", facts("loaded", "/etc/systemd/system/shop.api.service", true))).toBeNull();
+    // decideUnit settles a hand-written one as it always has, --force included.
+    expect(foreignUnit("shop", "shop", facts("loaded", "/etc/systemd/system/shop.service", false, true))).toBeNull();
+  });
+
+  test("a package's unit, an alias, a masked name, someone else's unit in /etc: never", () => {
+    expect(foreignUnit("mailer", "mailer", facts("loaded", "/lib/systemd/system/mailer.service"))).toContain("already a service of the machine, read from /lib/systemd/system/mailer.service");
+    // An alias in /etc names the vendor file systemd really reads.
+    expect(foreignUnit("sshd", "sshd", facts("loaded", "/usr/lib/systemd/system/ssh.service"))).toContain("/usr/lib/systemd/system/ssh.service");
+    expect(foreignUnit("shop", "shop", facts("masked", "/etc/systemd/system/shop.service", true))).toContain("masked");
+    expect(foreignUnit("backup", "backup", facts("loaded", "/etc/systemd/system/backup.service"))).toContain("a unit deploy did not write");
+    // A drop-in only, or a generator's unit: known, from nowhere deploy writes.
+    expect(foreignUnit("shop", "shop", facts("loaded", "/run/systemd/generator/shop.service", true))).not.toBeNull();
+  });
+
+  test("the script, run against a systemctl that knows a package's unit and one of deploy's", () => {
+    const root = mkdtempSync(join(tmpdir(), "sitesolide-origins-"));
+    try {
+      const units = join(root, "units");
+      Bun.spawnSync(["mkdir", "-p", units, join(root, "bin")]);
+      writeFileSync(join(units, "lab.service"), generateUnits(LAB, { slug: "lab", zone: "test-zone.invalid", contact: "" })[0]!.text);
+      writeFileSync(join(root, "vendor.service"), "[Service]\nExecStart=/usr/sbin/inference\n");
+      // A systemctl answering `show -p <property> --value <unit>.service` as
+      // systemd would for these three units.
+      writeFileSync(
+        join(root, "bin", "systemctl"),
+        [
+          "#!/bin/sh",
+          'property=$3; unit=$5',
+          `case "$unit" in`,
+          `  lab.service) state=loaded; file=${units}/lab.service ;;`,
+          `  lab.inference.service) state=loaded; file=${root}/vendor.service ;;`,
+          "  *) state=not-found; file= ;;",
+          "esac",
+          '[ "$property" = LoadState ] && echo "$state" || echo "$file"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const asked = ["lab", "lab.api", "lab.inference"];
+      const script = unitOriginsCommand("lab", asked).replace(/^sudo sh -c '/, "").replace(/'$/, "");
+      const output = Bun.spawnSync(["sh", "-c", script], { env: { PATH: `${join(root, "bin")}:/usr/bin:/bin` } }).stdout.toString();
+      const read = readUnitOrigins(output, asked);
+      if (read.kind !== "read") throw new Error(`unreadable: ${output}`);
+      expect(read.facts.get("lab")).toEqual({ loadState: "loaded", fragmentPath: join(units, "lab.service"), generated: true, project: true });
+      expect(read.facts.get("lab.api")).toEqual({ loadState: "not-found", fragmentPath: "", generated: false, project: false });
+      expect(foreignUnit("lab", "lab", read.facts.get("lab")!, units)).toBeNull();
+      expect(foreignUnit("lab.inference", "lab", read.facts.get("lab.inference")!, units)).toContain("vendor.service");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a unit asked for and not answered, or no systemd at all, is unreadable", () => {
+    expect(readUnitOrigins("", ["shop"])).toEqual({ kind: "unreadable" });
+    expect(readUnitOrigins(`${MARKER_DONE}\n`, ["shop"])).toEqual({ kind: "unreadable" });
+    expect(readUnitOrigins(`UNIT shop unknown no no -\n${MARKER_DONE}\n`, ["shop"])).toEqual({ kind: "unreadable" });
+    expect(readUnitOrigins(`UNIT other loaded no no /x\n${MARKER_DONE}\n`, ["shop"])).toEqual({ kind: "unreadable" });
+    expect(() => unitOriginsCommand("shop", ["other"])).toThrow();
+    expect(() => unitOriginsCommand("shop", ["shop; reboot"])).toThrow();
   });
 });
 
