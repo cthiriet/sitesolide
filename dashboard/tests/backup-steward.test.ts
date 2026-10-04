@@ -267,7 +267,7 @@ describe("a restore asked of the steward", () => {
 
 describe("the bucket's settings in the secrets scope", () => {
   test("dashboard-backup.env is root's, like the dashboard's hash: the dashboard's account never reads it", () => {
-    expect(ROOT_FILES).toEqual(["dashboard.env", "dashboard-backup.env"]);
+    expect(ROOT_FILES).toEqual(["dashboard.env", "dashboard-monitor.env", "dashboard-backup.env"]);
   });
 });
 

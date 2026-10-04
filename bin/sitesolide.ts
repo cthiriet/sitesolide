@@ -2475,6 +2475,7 @@ if (import.meta.main) {
       }
       await logs(readProject(folder), config, arguments_.includes("--follow"), executor, Number(lines));
       break;
+    }
     case "backups": {
       // Read only: the restore itself is the dashboard's, see bin/cli/backups.ts.
       const report = await backupsReport(readProject(folder).manifest.slug, dashboardAddress(config.zone), (command) =>
