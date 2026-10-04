@@ -29,6 +29,10 @@ sitesolide remove --confirm <slug>
    --dry-run                    show every step, remove nothing
 sitesolide run -- <command>     load the secret from the vault and run
 sitesolide mcp                  serve these commands to an agent, over MCP on stdio
+sitesolide login --url <https://dashboard.zone>
+                                a team member: keep a token, deploy without SSH
+   --token-stdin                read the token from standard input
+any command --api               go through the dashboard's API even with a server
 
 --json, on every command but init and run: one JSON event per line, see docs/agents.md
 secrets live on the server: manage them in the Secrets section of https://dashboard.<zone>
