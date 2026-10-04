@@ -5,7 +5,7 @@
  * Pure: returns text, touches nothing. The service itself lives in `portal/`,
  * and its README says what surprises people.
  */
-import { isProtected, isValidExemption, type Manifest } from "./manifest";
+import { isProtected, isValidExemption, PORTAL_SLUG, type Manifest } from "./manifest";
 
 /**
  * The portal's local port, written out in full in every protected site's
@@ -26,6 +26,12 @@ export const PORTAL_PORT = 3026;
 export const AMBIGUOUS_EXPRESSION =
   '`{http.request.uri}.matches("^[^?]*(%2[eEfF]|%5[cC]|//|/[.][.]?(/|[?]|$))")`';
 
+/** The two lines that answer 400 to such a path, before anything serves it. */
+const AMBIGUOUS_GUARD = [
+  `\t@portal_ambiguous expression ${AMBIGUOUS_EXPRESSION}`,
+  '\trespond @portal_ambiguous "400: ambiguous path" 400',
+];
+
 /**
  * The headers the portal's 200 carries to say who is in, which Caddy copies
  * onto the request the site receives. `portal/src/gate.ts` carries the same
@@ -33,22 +39,46 @@ export const AMBIGUOUS_EXPRESSION =
  */
 export const IDENTITY_HEADERS = ["X-Sitesolide-User", "X-Sitesolide-User-Name", "X-Sitesolide-Role"] as const;
 
-/**
- * What the visitor sends under this prefix never reaches the site: the whole
- * family is taken off, the names a later version adds included, before the
- * portal's own are copied on.
- */
+/** The family the portal's headers belong to, the names a later version adds included. */
 export const IDENTITY_PREFIX = "X-Sitesolide-";
+
+/**
+ * What `request_header` takes off before anything reaches an app, one line
+ * each: every name that an app could read as one of the portal's headers.
+ *
+ * Not the dash form alone. A CGI-style server, PHP's, Rack's, WSGI's, turns
+ * `X_Sitesolide_User` and `X-Sitesolide-User` into the same
+ * `HTTP_X_SITESOLIDE_USER`, so a visitor's underscore form would pass for
+ * the portal's. Caddy 2.11.4 drops a header whose name carries an underscore
+ * the moment it arrives, but the repository pins no Caddy version, and a
+ * release that kept them would open every site at once.
+ *
+ * Two patterns cover every spelling. Go canonicalises a name on arrival: its
+ * first letter and every letter after a dash in upper case, the rest in lower
+ * case, an underscore separating nothing. `x_SITESOLIDE_role` arrives as
+ * `X_sitesolide_role`, `x-sitesolide_user` as `X-Sitesolide_user`: every
+ * name an app could merge with the portal's starts with `X-Sitesolide` or
+ * `X_sitesolide`, whatever follows. Written in that canonical case, they
+ * match whether Caddy compares the case, as older releases did, or not, as
+ * 2.11 does. bin/tests/cli-portal-identity-caddy.test.ts measures it, the
+ * underscore forms put on inside Caddy since they cannot arrive.
+ */
+export const IDENTITY_STRIP = ["X-Sitesolide*", "X_sitesolide*"] as const;
+
+/** The strip as a block writes it, at the given indentation. */
+function stripLines(indent: string): string[] {
+  return IDENTITY_STRIP.map((pattern) => `${indent}request_header -${pattern}`);
+}
 
 /**
  * The stanzas this generator writes, the current one first.
  *
- * - `identity`: the visitor's `X-Sitesolide-*` taken off every request, then
- *   the portal's copied on after its 200;
- * - `cookie`: the stanza from before identities, which still runs on the
- *   blocks deployed before them. It opens and closes exactly like the current
- *   one; the site simply learns nothing of who came in, and a header the
- *   visitor sent under one of those names reaches it untouched.
+ * - `identity`: the visitor's `X-Sitesolide-*` taken off every request of every
+ *   block, then, behind the portal, the portal's copied on after its 200;
+ * - `cookie`: the blocks from before identities, which still run on the
+ *   machine. A protected one opens and closes exactly like the current one;
+ *   the site simply learns nothing of who came in. Protected or not, a header
+ *   the visitor sent under one of those names reaches the app untouched.
  *
  * A block in service written by the earlier generation is the generator's own,
  * one release behind, never a hand edit: `deploy` and the gatekeeper replace it
@@ -118,12 +148,13 @@ export function portalStanza(manifest: Manifest, generation: PortalGeneration = 
   const check =
     generation === "identity"
       ? [
-          "\t# Who is in: the visitor's own X-Sitesolide-* headers are taken off every",
-          "\t# request, then the portal's are copied on after its 200. Inside a route,",
-          "\t# because Caddy otherwise sorts request_header after forward_auth and",
-          "\t# would take off the portal's instead. See bin/cli/portal.ts.",
+          "\t# Who is in: the visitor's own X-Sitesolide-* headers, and their",
+          "\t# underscore spellings, are taken off every request, then the portal's",
+          "\t# are copied on after its 200. Inside a route, because Caddy otherwise",
+          "\t# sorts request_header after forward_auth and would take off the",
+          "\t# portal's instead. See bin/cli/portal.ts.",
           "\troute {",
-          `\t\trequest_header -${IDENTITY_PREFIX}*`,
+          ...stripLines("\t\t"),
           ...guard.map((line) => `\t\t${line}`),
           "\t}",
         ]
@@ -139,14 +170,66 @@ export function portalStanza(manifest: Manifest, generation: PortalGeneration = 
     "\t# service routes on the raw path. /api/x%2f..%2f..%2fhook/y would",
     "\t# otherwise look exempt to Caddy and reach /api/x/... in the service,",
     "\t# with no cookie. No browser sends such paths.",
-    `\t@portal_ambiguous expression ${AMBIGUOUS_EXPRESSION}`,
-    '\trespond @portal_ambiguous "400: ambiguous path" 400',
+    ...AMBIGUOUS_GUARD,
     "",
     `\treverse_proxy /_portal/* ${upstream} {`,
     "\t\theader_up X-Portal-Hote {host}",
     "\t}",
     `\t@portal_guard not path ${open}`,
     ...check,
+    "",
+  ];
+}
+
+/**
+ * The strip for a block that does not go through the portal: a site with its
+ * door off, or never on, and every customer domain. Without it, a site whose
+ * portal was turned off would hand its app whatever `X-Sitesolide-Role: admin`
+ * a stranger sends, and an app written to trust the headers behind the portal
+ * would believe it.
+ *
+ * At the block's level, where its position does not matter: such a block
+ * carries no `forward_auth` to sort after. Never in the `(<slug>-routes)`
+ * snippet nor in `(commun)`, which protected blocks import too: there, it would
+ * only hold as long as their `forward_auth` stays inside its `route`, which
+ * sorts after `request_header`. Measured, a `forward_auth` outside a route,
+ * the earlier generation's or one written by hand, sorts before it, and the
+ * strip then takes off the portal's own headers.
+ *
+ * Nothing in the earlier generation: those blocks took nothing off, and are
+ * recognised as the generator's own, see `PORTAL_GENERATIONS`.
+ */
+export function openStanza(generation: PortalGeneration = "identity"): string[] {
+  if (generation !== "identity") return [];
+  return [
+    "\t# Not behind the portal: nobody signed in, and the X-Sitesolide-* headers",
+    "\t# a visitor sends, in any spelling, are taken off before the app reads",
+    "\t# them. See openStanza in bin/cli/portal.ts.",
+    ...stripLines("\t"),
+    "",
+  ];
+}
+
+/**
+ * What the portal's own block adds, `portal.<zone>`, which no portal guards.
+ *
+ * Its manifest's `routes` are an allow list, `/sante` and the provider's
+ * steps, and they are the only thing standing between the web and the
+ * dashboard's `/admin/*` routes on the same port. Caddy compares them on the
+ * decoded, cleaned path, and the service routes on the raw one:
+ * `/admin/sharing/..%2f..%2fsante` looked like `/sante` to Caddy and reached
+ * the admin route, stopped only by its `X-Forwarded-For` check. The same 400
+ * as a protected block's, for the same reason.
+ */
+export function portalHostStanza(manifest: Manifest, generation: PortalGeneration = "identity"): string[] {
+  if (manifest.slug !== PORTAL_SLUG || isProtected(manifest) || generation !== "identity") return [];
+  return [
+    "\t# The portal's own host: its routes are an allow list, and a path Caddy",
+    "\t# and the service would read differently is refused. Caddy decodes %2f",
+    "\t# and cleans .. before comparing, the service routes on the raw path:",
+    "\t# /admin/sharing/..%2f..%2fsante would otherwise pass for /sante and",
+    "\t# reach the admin routes. See portalHostStanza in bin/cli/portal.ts.",
+    ...AMBIGUOUS_GUARD,
     "",
   ];
 }
@@ -172,7 +255,7 @@ export function fragmentIsProtected(fragment: string): boolean {
 export function fragmentPassesIdentity(fragment: string): boolean {
   return (
     fragmentIsProtected(fragment) &&
-    fragment.includes(`request_header -${IDENTITY_PREFIX}*`) &&
+    stripLines("").every((line) => fragment.includes(line)) &&
     fragment.includes(`copy_headers ${IDENTITY_HEADERS.join(" ")}`)
   );
 }

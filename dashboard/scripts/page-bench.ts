@@ -507,7 +507,8 @@ function reading(now: number) {
   // keeps the one from before identities, for the Sharing section to say so.
   const earlier = "\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\turi /verifier\n\t}\n";
   const current =
-    "\troute {\n\t\trequest_header -X-Sitesolide-*\n\t\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\t\turi /verifier\n" +
+    "\troute {\n\t\trequest_header -X-Sitesolide*\n\t\trequest_header -X_sitesolide*\n" +
+    "\t\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\t\turi /verifier\n" +
     "\t\t\tcopy_headers X-Sitesolide-User X-Sitesolide-User-Name X-Sitesolide-Role\n\t\t}\n\t}\n";
   const kept = (slug: string) => (!SHOWCASE && slug === "photos" ? earlier : current);
   const blocks: Record<string, string> = SHOWCASE ? {} : { "old-kiosk": "# forgotten block\n" };

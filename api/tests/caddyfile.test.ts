@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { generateFragment } from "../../bin/cli/fragment";
+import { IDENTITY_STRIP } from "../../bin/cli/portal";
 import { knownManifests } from "../../bin/tests/manifests";
 
 /**
@@ -58,6 +59,13 @@ describe("infra/caddy/Caddyfile", () => {
       expect(line.trim()).toBe(IMPORT_LOCKS);
     }
     expect(caddyfile).toInclude("/etc/caddy/locks/*.caddy");
+  });
+
+  test("the landing, which reaches an app, takes the visitor's identity headers off", () => {
+    // Every block that reaches an app does, in the spellings the generator
+    // writes: a header a visitor sends must never pass for the portal's.
+    const landing = block(caddyfile, "{$SITESOLIDE_ZONE}, www.{$SITESOLIDE_ZONE} {");
+    for (const pattern of IDENTITY_STRIP) expect(landing).toInclude(`\trequest_header -${pattern}\n`);
   });
 
   test("does not import the locks in the blocks that serve final domains", () => {

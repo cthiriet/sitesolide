@@ -326,12 +326,26 @@ directive that keeps the written order. Measured in a real Caddy by
 `bin/tests/cli-portal-identity-caddy.test.ts`, which sends
 `X-Sitesolide-User: ceo@acme.test` with and without a cookie.
 
-**Trust them only behind the portal, and only once the site's block carries
-them.** A site that is not behind the portal receives whatever the visitor
-sends. A protected site deployed before the identity headers keeps working with
-this portal, and its block takes nothing off: the dashboard's *Sharing* section
-says so for that site, and its next `sitesolide deploy` upgrades the block. An
-exempted path never carries them: it does not go through the portal.
+The underscore spellings go too, `X_Sitesolide_User` and its mixes: a CGI-style
+app server, PHP's, Rack's or WSGI's, reads them as the dash form. Caddy 2.11
+drops such a header on arrival, but nothing pins Caddy's version. Go
+canonicalises a name on arrival, so every spelling an app could merge with the
+portal's starts with `X-Sitesolide` or `X_sitesolide`: the block takes off
+`X-Sitesolide*` and `X_sitesolide*`, see `IDENTITY_STRIP` in `bin/cli/portal.ts`.
+
+**A site that is not behind the portal takes them off too**: a site whose door
+was turned off, or never on, and every customer domain. Its block carries the
+same two `request_header` lines, at the block's level, where they need no
+`route` since nothing in the block copies anything on. Its app is told nobody,
+and never a stranger's `X-Sitesolide-Role: admin`.
+
+**Trust them only once the site's block carries them.** A block deployed before
+this release, protected or not, takes nothing off, and its app receives
+whatever the visitor sends. A protected one keeps working with this portal: the
+dashboard's *Sharing* section says so for that site. The next
+`sitesolide deploy` of the site, or a door turned on or off from the dashboard,
+upgrades the block. An exempted path never carries them: it does not go through
+the portal.
 
 Reading them in a Bun service:
 
@@ -370,9 +384,12 @@ and that the host carries the portal in its snapshot, before relaying.
 Caddy never relays them: a protected site forwards to the portal only
 `/_portal/*` and the `forward_auth` call to `/verifier`, and the portal's own
 host only `/sante`, `/oidc/start` and `/oidc/callback`.
-`bin/tests/cli-portal.test.ts` checks that no fragment aims at anything else. As
-one more net, any request carrying `X-Forwarded-For`, which Caddy puts on what
-it relays, is refused.
+`bin/tests/cli-portal.test.ts` checks that no fragment aims at anything else.
+The portal's own block refuses an ambiguous path with 400, as a protected
+block does: Caddy compared `/admin/sharing/..%2f..%2fsante` cleaned, as
+`/sante`, and relayed it raw, which Bun routed to the admin API. As one more
+net, any request carrying `X-Forwarded-For`, which Caddy puts on what it
+relays, is refused.
 
 To read them by hand on the machine:
 `sudo curl http://127.0.0.1:3026/admin/sharing`.
@@ -449,15 +466,21 @@ another account*, which asks the provider to choose.
   before comparing against the exemptions, while the service routes on the raw
   path: `/api/x%2f..%2f..%2fhook/y` looked like an exemption to Caddy and reached
   `/api/x/...` with no cookie. Found during a migration, measured in a real
-  Caddy, closed by `@portal_ambiguous`.
+  Caddy, closed by `@portal_ambiguous`, which the portal's own block carries
+  too, in front of its allow list.
 - **Portal stopped, protected sites answer 502** and serve nothing.
   `lb_try_duration` makes a request wait out a restart. A restart also forgets
   the handoff codes in flight: whoever was in the middle of a redirect signs in
   again.
 - **The stanza has one `route`**, and must keep only that: see *Who came in*.
-  Never add a `request_header -X-Sitesolide-*` outside it, in a site's headers
-  or in `(commun)`: sorted after `forward_auth`, it would take off the portal's
-  headers on every protected site.
+  The comparison of blocks reads a `route` in its order, so a line moved inside
+  it is a divergence, never a block judged identical. An open block carries its
+  `request_header -X-Sitesolide*` at its own level, which is sound because it
+  has no `forward_auth`. Never put one in the `(<slug>-routes)` snippet or in
+  `(commun)`, which protected blocks import: measured, it then holds only as
+  long as their `forward_auth` stays inside its `route`, and one outside, the
+  earlier generation's or a hand-written one, sorts before it and loses the
+  portal's headers.
 
 ## What the door does not protect
 
@@ -522,11 +545,14 @@ wait for the next. Every command is run by the author, from the workstation.
 1. **The portal.** `cd portal && sitesolide deploy --force`.
    `--force`, because the unit gains `PUBLIC_URL` and loses its loopback-only
    confinement (`"network": "outbound"`), and the portal's own block gains
-   `/oidc/start /oidc/callback` in its `@dynamic` matcher: read the divergence
-   `deploy` prints first, it must be exactly those lines. Check:
+   `/oidc/start /oidc/callback` in its `@dynamic` matcher, the two
+   `@portal_ambiguous` lines and the two `request_header -X-Sitesolide*`,
+   `-X_sitesolide*` lines: read the divergence `deploy` prints first, it must be
+   exactly those lines. Check:
    `curl -s https://portal.<zone>/sante` answers `{"ok":true,"configure":true}`;
-   a protected site still opens with the cookie you already had, no sign-in
-   asked; a guest still gets in. The blocks of the protected sites are
+   `curl -s -o /dev/null -w '%{http_code}\n' 'https://portal.<zone>/admin/sharing/..%2f..%2fsante'`
+   answers `400`; a protected site still opens with the cookie you already had,
+   no sign-in asked; a guest still gets in. The blocks of the other sites are
    untouched: they keep working, and pass no identity yet.
 2. **The dashboard.** `cd dashboard && sitesolide deploy`. The *Sharing* section
    appears, saying signing in with a work account is not set up; the snapshot
@@ -536,19 +562,30 @@ wait for the next. Every command is run by the author, from the workstation.
    `portal.env` that carries one out of management, *Change password*
    included. Check: the `portal` site's *Secrets* still shows `portal.env`
    managed.
-4. **The gatekeeper**, `bin/deploy-gatekeeper.sh`: it embeds the block
-   generator. An older one refuses to turn the portal off a site whose block was
-   upgraded ("differs from what sitesolide.json generates"); this one accepts
-   both generations, and writes the current one.
+4. **The gatekeeper**, `bin/deploy-gatekeeper.sh`, right after the dashboard: it
+   embeds the block generator. An older one refuses to turn the portal on or off
+   a site whose block was upgraded ("differs from what sitesolide.json
+   generates"), and turning a door off writes a block that takes nothing off,
+   where the dashboard's *Sharing* now says the app is told nobody. This one
+   accepts both generations, protected or open, and writes the current one.
 5. **The provider**, when you want it: register the portal as above, set the
    `OIDC_*` variables in `portal.env`, *Restart service*. Check:
    `journalctl -u portal` says `sign-in with ... offered, callback
    https://portal.<zone>/oidc/callback`; a protected site's sign-in page shows
    the button; your admin email gets in.
-6. **Each protected site**, when its app wants to know who came in:
-   `sitesolide deploy` in its folder. It says the block "was written by an
-   earlier release, the current one replaces it", without `--force`. Check: its
-   *Sharing* section no longer says its app is not told who signed in.
+6. **Each app site, protected or not**, starting with any whose app reads the
+   `X-Sitesolide-*` headers: `sitesolide deploy` in its folder. It says the block
+   "was written by an earlier release, the current one replaces it", without
+   `--force`: a protected block gains the identity stanza, an open block and a
+   customer domain gain the two `request_header` lines. Check:
+   `sudo grep -c 'request_header -X' /etc/caddy/sites/<slug>.caddy` counts 2,
+   or 4 with a customer domain; for a protected site, its *Sharing* section no
+   longer says its app is not told who signed in. Until then, an open site's
+   app receives whatever `X-Sitesolide-*` a visitor sends, as it always has.
+7. **The Caddyfile**, whenever: `bin/deploy-caddy.sh`. The landing's block gains
+   the same two lines, in front of its `/api/*` service; the wildcard and
+   on-demand blocks only serve files, and are unchanged. The script validates,
+   reloads, checks every site and restores at the first error.
 
 **Rolling back.** The portal from before reads the owner's and the guests'
 cookies as always and refuses the identity cookies, four pieces where it
@@ -580,5 +617,8 @@ of this service and fake sites: what the door promises hangs entirely on the
 order in which Caddy sorts directives, and an order is measured, not read. The
 first also lets a guest in, revokes them, and checks that the admin API cannot
 be reached through the site. The second sends forged identity headers to every
-kind of path, signs in through the portal's own block with the provider, and
-checks that a block from before identities still works with this portal.
+kind of path, the underscore spellings put on inside Caddy since they cannot
+arrive, to a protected site, an open one and its customer domain; signs in
+through the portal's own block with the provider; checks that this block
+refuses an ambiguous path; and that a block from before identities still works
+with this portal.

@@ -376,10 +376,12 @@ through the portal:
 | `X-Sitesolide-Role` | `admin`, `member` or `guest` |
 
 The block takes any `X-Sitesolide-*` header the visitor sends off every request
-first, exempted paths included, so a protected service can trust them. A
-service that is not behind the portal must not: it receives whatever the visitor
-sends. A protected site deployed before these headers existed keeps working, and
-gains them at its next `sitesolide deploy`. Reading them in a Bun service:
+first, exempted paths included, and their underscore spellings, so a protected
+service can trust them. A service that is not behind the portal gets none: its
+block, and its customer domain's, take them off too, so it is never handed a
+stranger's `X-Sitesolide-Role: admin`. A site deployed before these headers
+existed, protected or not, keeps working, takes nothing off, and gains them at
+its next `sitesolide deploy`. Reading them in a Bun service:
 [portal/README.md](../portal/README.md#who-came-in-the-identity-headers).
 
 **For a deployed project the machine is the source of truth.** The door is set

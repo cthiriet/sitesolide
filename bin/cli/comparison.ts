@@ -8,12 +8,16 @@
  * that stopped on that difference would cost a minute for nothing, and
  * overwriting it would cost the reason.
  *
- * Order is set aside along with comments: systemd does not read the latter, and
- * Caddy sorts its own directives. The limit is known and worth stating: inside
- * a `route` block Caddy follows the written order, and two files with the same
- * lines in a different order would not be equivalent there. The generator does
- * not use `route`, it places matchers, precisely because an exclusive group
- * would break the preview lock.
+ * Order is set aside along with comments: systemd does not read the order of
+ * a section's lines, and Caddy sorts a block's directives itself. **Except
+ * inside a `route`**, the one Caddy directive that keeps the written order,
+ * and the reason the generator writes one: a protected block takes the
+ * visitor's identity headers off before `forward_auth` copies the portal's on
+ * (bin/cli/portal.ts). There, the same lines in another order are another
+ * block: an `import <slug>-routes` moved inside the route ahead of
+ * `forward_auth` would serve the site before the portal is asked. A `route`
+ * therefore compares as one directive, its lines in their order, nested
+ * blocks included.
  *
  * Pure: reads two texts, returns a comparison.
  */
@@ -33,12 +37,53 @@ export type Divergence = {
   added: string[];
 };
 
+/** A `route` opening, with or without a matcher: `route {`, `route /api/* {`. */
+const ROUTE_OPENING = /^route(\s.*)?\{$/;
+
+function braces(line: string): number {
+  return (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length;
+}
+
+/**
+ * What one directive is, for the comparison: `key` decides, `text` is what a
+ * refusal shows. A line outside any route is both. A whole route is one
+ * directive, its lines kept in order: `key` holds them as a JSON array, which no
+ * line can forge by carrying a separator, and `text` writes them on one line.
+ */
+type Directive = { key: string; text: string };
+
+function directives(text: string): Directive[] {
+  const lines = usefulDirectives(text);
+  const result: Directive[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!ROUTE_OPENING.test(lines[i]!)) {
+      result.push({ key: lines[i]!, text: lines[i]! });
+      continue;
+    }
+    const group: string[] = [];
+    let depth = 0;
+    for (; i < lines.length; i++) {
+      group.push(lines[i]!);
+      depth += braces(lines[i]!);
+      if (depth <= 0) break;
+    }
+    const shown = group.reduce((joined, line, n) => {
+      if (n === 0) return line;
+      return `${joined}${group[n - 1]!.endsWith("{") || line === "}" ? " " : "; "}${line}`;
+    }, "");
+    result.push({ key: JSON.stringify(group), text: shown });
+  }
+  return result;
+}
+
 export function compareDirectives(current: string, generated: string): Divergence {
-  const a = usefulDirectives(current);
-  const g = usefulDirectives(generated);
+  const a = directives(current);
+  const g = directives(generated);
+  const inA = new Set(a.map((directive) => directive.key));
+  const inG = new Set(g.map((directive) => directive.key));
   return {
-    lost: a.filter((line) => !g.includes(line)),
-    added: g.filter((line) => !a.includes(line)),
+    lost: a.filter((directive) => !inG.has(directive.key)).map((directive) => directive.text),
+    added: g.filter((directive) => !inA.has(directive.key)).map((directive) => directive.text),
   };
 }
 

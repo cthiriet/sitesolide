@@ -19,11 +19,18 @@ import { startProvider, type MockProvider } from "../../portal/tests/provider";
  * carry the visitor's `X-Sitesolide-User` to the site. Measured here, for
  * every path the block serves: the service, a file, an exempted path.
  *
- * Three blocks in one Caddy: the protected site as the CLI generates it now,
- * a second one as the release before identities generated it, and the
- * portal's own block, from portal/sitesolide.json, which a sign-in with the
- * provider goes through. The provider is the tests' own, the portal its real
- * server.ts. Caddy runs with `admin off` on free ports, stopped by its PID.
+ * Four sites in one Caddy: the protected site as the CLI generates it now, a
+ * second one as the release before identities generated it, an open site
+ * with its customer domain, and the portal's own block, from
+ * portal/sitesolide.json, which a sign-in with the provider goes through. The
+ * provider is the tests' own, the portal its real server.ts. Caddy runs with
+ * `admin off` on free ports, stopped by its PID.
+ *
+ * The underscore spellings, `X_Sitesolide_User`, which some app servers read
+ * as the dash form, never arrive: Caddy 2.11.4 drops such a header on
+ * arrival. The test sends them all the same, and puts them on inside Caddy
+ * too, ahead of the strip, in Go's canonical case: that is what a Caddy that
+ * kept them would carry, and what the strip has to take off.
  */
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -31,13 +38,25 @@ const CADDY = Bun.which("caddy");
 const PASSWORD = "sample-portal-password";
 const SITE = "sample.localhost";
 const LEGACY = "legacy.localhost";
+const OPEN = "open.localhost";
+const OPEN_DOMAIN = "open-agency.localhost";
 const PORTAL_HOST = "portal.localhost";
 const FORGED = {
   "X-Sitesolide-User": "ceo@acme.test",
   "x-sitesolide-user-name": "The CEO",
   "X-SITESOLIDE-ROLE": "admin",
   "X-Sitesolide-Impersonate": "yes",
+  X_Sitesolide_User: "ceo@acme.test",
+  "x-sitesolide_role": "admin",
+  "X_SITESOLIDE-ROLE": "admin",
 };
+
+/** The underscore spellings as Go canonicalises them, put on inside Caddy ahead of everything. */
+const INJECTED = [
+  "\trequest_header X_sitesolide_user ceo@acme.test",
+  "\trequest_header X-Sitesolide_role admin",
+  '\trequest_header X_sitesolide-User-Name "The CEO"',
+];
 
 function block(text: string, header: string): string {
   const lines = text.split("\n");
@@ -81,11 +100,12 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
 
   let site: ReturnType<typeof Bun.serve>;
   let legacySite: ReturnType<typeof Bun.serve>;
+  let openSite: ReturnType<typeof Bun.serve>;
   let portal: ReturnType<typeof Bun.spawn> | null = null;
   let caddy: ReturnType<typeof Bun.spawn>;
   let provider: MockProvider;
 
-  /** What a fake service received: its path, and every X-Sitesolide-* header, lowercased. */
+  /** What a fake service received: its path, and every header naming sitesolide, any spelling, lowercased. */
   function echo(name: string) {
     return Bun.serve({
       port: 0,
@@ -93,7 +113,7 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
       fetch(req) {
         const identity: Record<string, string> = {};
         req.headers.forEach((value, key) => {
-          if (key.startsWith("x-sitesolide-")) identity[key] = value;
+          if (key.includes("sitesolide")) identity[key] = value;
         });
         return Response.json({ [name]: new URL(req.url).pathname, identity });
       },
@@ -121,7 +141,7 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
      */
     async get(url: string, init: RequestInit = {}): Promise<Response> {
       const target = new URL(url);
-      const viaCaddy = [SITE, LEGACY, PORTAL_HOST].includes(target.hostname);
+      const viaCaddy = [SITE, LEGACY, OPEN, OPEN_DOMAIN, PORTAL_HOST].includes(target.hostname);
       const headers = new Headers(init.headers);
       const jar = this.jars.get(target.hostname);
       if (jar !== undefined && jar.size > 0) {
@@ -178,13 +198,15 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     const hash = await Bun.password.hash(PASSWORD, { algorithm: "argon2id", memoryCost: 8, timeCost: 1 });
     Bun.spawnSync(["bun", join(REPO_ROOT, "portal", "scripts", "borrow.ts")], { stdout: "ignore" });
 
-    for (const name of ["public", "public-legacy", "public-portal", "locks", "data"]) mkdirSync(join(folder, name));
+    for (const name of ["public", "public-legacy", "public-open", "public-portal", "locks", "data"]) mkdirSync(join(folder, name));
     writeFileSync(join(folder, "public", "style.css"), "body{}");
     writeFileSync(join(folder, "public-legacy", "style.css"), "body{}");
+    writeFileSync(join(folder, "public-open", "style.css"), "body{}");
     writeFileSync(join(folder, "public-portal", "index.html"), "portal");
 
     site = echo("site");
     legacySite = echo("legacy");
+    openSite = echo("open");
 
     const protectedSite: Manifest = {
       slug: "sample",
@@ -195,17 +217,29 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
       portalExempt: ["/webhook/*"],
     };
     const legacy: Manifest = { slug: "legacy", port: legacySite.port, publicDir: "public", start: "bun run server.ts", portal: true };
+    const open: Manifest = {
+      slug: "open",
+      port: openSite.port,
+      publicDir: "public",
+      start: "bun run server.ts",
+      domain: { name: OPEN_DOMAIN, active: true },
+    };
     const portalManifest = readManifest(readFileSync(join(REPO_ROOT, "portal", "sitesolide.json"), "utf8")).manifest!;
 
     // Each fragment as the CLI writes it, brought to the workstation: local
-    // addresses over HTTP, temporary folders, the test portal's port. Nothing
-    // else is touched, the order of the directives above all.
-    const local = (text: string, slug: string, host: string, publicDir: string) =>
-      text
-        .replace(`${slug}.${ZONE_HOST} {`, `http://${host}:${caddyPort} {`)
+    // addresses over HTTP, temporary folders, the test portal's port, and no
+    // on-demand certificate for the customer domain. Nothing else is touched,
+    // the order of the directives above all. `inject` puts the underscore
+    // spellings on as each site's block opens, ahead of its strip.
+    const local = (text: string, slug: string, host: string, publicDir: string, inject = false) => {
+      const opening = (address: string) => [`http://${address}:${caddyPort} {`, ...(inject ? INJECTED : [])].join("\n");
+      return text
+        .replace(`${slug}.${ZONE_HOST} {`, opening(host))
+        .replace(`${OPEN_DOMAIN} {\n\ttls {\n\t\ton_demand\n\t}\n`, `${opening(OPEN_DOMAIN)}\n`)
         .replace("import /etc/caddy/locks/*.caddy", `import ${folder}/locks/*.caddy`)
         .replaceAll(`/srv/sites/${slug}/public`, join(folder, publicDir))
         .replaceAll(`127.0.0.1:${PORTAL_PORT}`, `127.0.0.1:${portalPort}`);
+    };
 
     const caddyfile = readFileSync(join(REPO_ROOT, "infra", "caddy", "Caddyfile"), "utf8");
     writeFileSync(
@@ -218,8 +252,9 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
         "(tls-zone) {",
         "}",
         block(caddyfile, "(commun) {"),
-        local(generateFragment(protectedSite)!, "sample", SITE, "public"),
+        local(generateFragment(protectedSite)!, "sample", SITE, "public", true),
         local(generateFragment(legacy, "cookie")!, "legacy", LEGACY, "public-legacy"),
+        local(generateFragment(open)!, "open", OPEN, "public-open", true),
         local(generateFragment(portalManifest)!, "portal", PORTAL_HOST, "public-portal"),
       ].join("\n"),
     );
@@ -253,6 +288,7 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     portal?.kill();
     site?.stop(true);
     legacySite?.stop(true);
+    openSite?.stop(true);
     provider?.stop();
     rmSync(folder, { recursive: true, force: true });
   });
@@ -325,7 +361,7 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     // And what it does not do: it takes nothing off either, so the visitor's
     // headers reach the service. That is why a site's app must not trust them
     // before its block has been deployed again, see portal/README.md.
-    expect(await received(browser, "/list", LEGACY)).toEqual({
+    expect(await received(browser, "/list", LEGACY)).toMatchObject({
       status: 200,
       identity: {
         "x-sitesolide-user": "ceo@acme.test",
@@ -334,6 +370,31 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
         "x-sitesolide-impersonate": "yes",
       },
     });
+  });
+
+  test("a site not behind the portal hands its app nobody, whatever the visitor claims", async () => {
+    // A site whose door was turned off: anyone gets in, and an app written to
+    // trust the headers behind the portal must not believe a stranger's.
+    expect(await received(new Browser(), "/list", OPEN)).toEqual({ status: 200, identity: {} });
+  });
+
+  test("nor does its customer domain, which never goes through the portal", async () => {
+    expect(await received(new Browser(), "/list", OPEN_DOMAIN)).toEqual({ status: 200, identity: {} });
+  });
+
+  test("the portal's own host refuses a path that would pass its allow list for another route", async () => {
+    // Caddy cleaned /admin/sharing/..%2f..%2fsante into /sante, the allow
+    // list let it through, and Bun routed the raw path to the admin API,
+    // stopped only by its X-Forwarded-For check.
+    const browser = new Browser();
+    expect((await browser.get(`http://${PORTAL_HOST}/admin/sharing/..%2f..%2fsante`)).status).toBe(400);
+    const put = await browser.get(`http://${PORTAL_HOST}/admin/sharing/..%2f..%2fsante`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "domain", domains: ["acme.test"] }),
+    });
+    expect(put.status).toBe(400);
+    expect((await browser.get(`http://${PORTAL_HOST}/sante`)).status).toBe(200);
   });
 
   test("the portal's own host serves the provider's two steps, and nothing of the site side nor the admin", async () => {

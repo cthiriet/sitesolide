@@ -232,7 +232,8 @@ sound only because of the loopback rule. It also learns who came in, from three
 request headers, `X-Sitesolide-User`, `X-Sitesolide-User-Name` and
 `X-Sitesolide-Role`: its block takes the visitor's own off every request before
 copying the portal's on, so a site can trust them once its block has been
-deployed with them. See [portal/README.md](../portal/README.md).
+deployed with them. A site not behind the portal has them taken off too, and
+learns nobody. See [portal/README.md](../portal/README.md).
 
 ## What the deploy actually does
 

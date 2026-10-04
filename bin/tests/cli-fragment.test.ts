@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { decideBlock, generateFragment, isEarlierGeneration, ZONE_HOST, IMPORT_LOCKS, matcher } from "../cli/fragment";
 import { validate, type Manifest } from "../cli/manifest";
-import { fragmentPassesIdentity, PORTAL_GENERATIONS, PORTAL_PORT, portalStanza } from "../cli/portal";
+import { fragmentPassesIdentity, IDENTITY_STRIP, PORTAL_GENERATIONS, PORTAL_PORT, portalStanza } from "../cli/portal";
 
 const MIXED: Manifest = {
   slug: "budget",
@@ -245,22 +245,24 @@ describe("portal", () => {
   test("one route, and only to take the visitor's identity headers off before the portal is asked", () => {
     // Order is what this route is for: Caddy keeps it inside, and sorts
     // request_header after forward_auth outside. Anything else slipped into it
-    // would run in the order written, which the comparison of blocks does not
-    // see: nothing else goes in.
+    // would run in the order written: nothing else goes in, and the comparison
+    // of blocks reads a route in its order (comparison.ts).
     const stanza = portalStanza(PROTECTED)
       .map((line) => line.trim())
       .filter((line) => line !== "" && !line.startsWith("#"));
     const start = stanza.indexOf("route {");
     expect(stanza.filter((line) => /\broute\b/.test(line))).toEqual(["route {"]);
-    expect(stanza.slice(start, start + 3)).toEqual([
+    expect(stanza.slice(start, start + 4)).toEqual([
       "route {",
-      "request_header -X-Sitesolide-*",
+      "request_header -X-Sitesolide*",
+      "request_header -X_sitesolide*",
       `forward_auth @portal_guard 127.0.0.1:${PORTAL_PORT} {`,
     ]);
     expect(stanza).toContain("copy_headers X-Sitesolide-User X-Sitesolide-User-Name X-Sitesolide-Role");
     expect(stanza.slice(start)).toEqual([
       "route {",
-      "request_header -X-Sitesolide-*",
+      "request_header -X-Sitesolide*",
+      "request_header -X_sitesolide*",
       `forward_auth @portal_guard 127.0.0.1:${PORTAL_PORT} {`,
       "uri /verifier",
       "header_up X-Portal-Hote {host}",
@@ -296,6 +298,63 @@ describe("portal", () => {
   test("an unprotected site does not have the stanza", () => {
     expect(generateFragment(MIXED)).not.toInclude("forward_auth");
     expect(portalStanza(MIXED)).toEqual([]);
+  });
+
+  /** The strip lines of a text, comments aside, trimmed. */
+  const strips = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("request_header -X"));
+  const STRIP = IDENTITY_STRIP.map((pattern) => `request_header -${pattern}`);
+  const DOMAIN: Manifest = { ...MIXED, domain: { name: "sample-agency.example", active: true } };
+
+  test("the dash and the underscore spellings are both taken off, in Go's canonical case", () => {
+    // An app server that merges X_Sitesolide_User with X-Sitesolide-User would
+    // otherwise read the visitor's underscore form as the portal's. The case is
+    // the one Go gives a name on arrival: X_sitesolide_user, X-Sitesolide_user.
+    expect(STRIP).toEqual(["request_header -X-Sitesolide*", "request_header -X_sitesolide*"]);
+  });
+
+  test("a site not behind the portal takes the visitor's identity headers off too, in its own block", () => {
+    // Turned off from the dashboard, a site would otherwise hand its app the
+    // X-Sitesolide-Role: admin a stranger sends.
+    const fragment = generateFragment(MIXED)!;
+    expect(strips(block(fragment, `budget.${ZONE_HOST} {`))).toEqual(STRIP);
+    // Never in the snippet: protected blocks import it, and a strip there would
+    // only hold as long as their forward_auth stays inside its route.
+    expect(strips(block(fragment, "(budget-routes) {"))).toEqual([]);
+  });
+
+  test("so does a customer domain, which never goes through the portal", () => {
+    const fragment = generateFragment(DOMAIN)!;
+    expect(strips(block(fragment, "sample-agency.example {"))).toEqual(STRIP);
+    expect(strips(block(fragment, `budget.${ZONE_HOST} {`))).toEqual(STRIP);
+    expect(strips(block(fragment, "(budget-routes) {"))).toEqual([]);
+  });
+
+  test("a protected block takes them off inside its route alone", () => {
+    const preview = block(generateFragment(PROTECTED)!, `budget.${ZONE_HOST} {`);
+    expect(strips(preview)).toEqual(STRIP);
+    expect(strips(block(preview, "route {"))).toEqual(STRIP);
+  });
+
+  test("the earlier generation took nothing off, protected or not", () => {
+    for (const manifest of [MIXED, PROTECTED, DOMAIN]) {
+      expect(strips(generateFragment(manifest, "cookie")!)).toEqual([]);
+    }
+  });
+
+  test("the portal's own block refuses an ambiguous path, which would slip past its allow list", () => {
+    // /admin/sharing/..%2f..%2fsante passed Caddy's @dynamic path /sante and
+    // reached the admin routes on the portal's port.
+    const portal: Manifest = { slug: "portal", port: PORTAL_PORT, publicDir: "public", start: "bun run server.ts", routes: ["/sante"] };
+    const preview = block(generateFragment(portal)!, `portal.${ZONE_HOST} {`);
+    expect(preview).toInclude("@portal_ambiguous expression");
+    expect(preview).toInclude('respond @portal_ambiguous "400: ambiguous path" 400');
+    expect(generateFragment(portal, "cookie")).not.toInclude("@portal_ambiguous");
+    // Another open site keeps its allow list as it was.
+    expect(generateFragment({ ...portal, slug: "library" })).not.toInclude("@portal_ambiguous");
   });
 });
 
@@ -350,9 +409,27 @@ describe("the block against the one in service", () => {
     const earlier = generateFragment(CLOSED, "cookie")!;
     expect(isEarlierGeneration(earlier, CLOSED)).toBe(true);
     expect(decide(CLOSED, earlier)).toBe("upgrades");
-    // An open site's block never changed: nothing to upgrade, it is the same.
+    expect(isEarlierGeneration(block(CLOSED), CLOSED)).toBe(false);
+  });
+
+  test("so is an open one, which gains the strip of the visitor's identity headers", () => {
+    // Every open block on the machine today: none of them needs --force.
+    const earlier = generateFragment(OPEN, "cookie")!;
+    expect(isEarlierGeneration(earlier, OPEN)).toBe(true);
+    expect(decide(OPEN, earlier)).toBe("upgrades");
     expect(isEarlierGeneration(block(OPEN), OPEN)).toBe(false);
-    expect(decide(OPEN, generateFragment(OPEN, "cookie"))).toBe("deposit");
+    // And the dashboard closed it since: the door is followed all the same.
+    expect(decide(CLOSED, earlier, false, true)).toBe("follows-door");
+  });
+
+  test("the routes snippet moved inside the route, ahead of forward_auth, is a hand edit", () => {
+    // Every line still there: only the order inside the route says the site is
+    // served before the portal is asked.
+    const moved = block(CLOSED)
+      .replace("\timport budget-routes\n", "")
+      .replace("\troute {\n", "\troute {\n\t\timport budget-routes\n");
+    expect(moved).not.toBe(block(CLOSED));
+    expect(decide(CLOSED, moved)).toBe("diverged");
   });
 
   test("the dashboard's door is followed whichever release wrote the block in service", () => {

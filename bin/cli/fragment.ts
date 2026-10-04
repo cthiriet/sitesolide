@@ -31,7 +31,7 @@ import {
   servicesOf,
   type Manifest,
 } from "./manifest";
-import { portalStanza, PORTAL_GENERATIONS, type PortalGeneration } from "./portal";
+import { openStanza, portalHostStanza, portalStanza, PORTAL_GENERATIONS, type PortalGeneration } from "./portal";
 import { projectPaths } from "./unit";
 
 export const IMPORT_LOCKS = "import /etc/caddy/locks/*.caddy";
@@ -234,6 +234,9 @@ export function generateFragment(manifest: Manifest, generation: PortalGeneratio
       "\t\ton_demand",
       "\t}",
       "",
+      // No portal on a customer domain, whatever the manifest says: validate()
+      // refuses the two together, and this block carries no forward_auth.
+      ...openStanza(generation),
       `\timport ${slug}-routes`,
       "}",
       "",
@@ -258,6 +261,8 @@ export function generateFragment(manifest: Manifest, generation: PortalGeneratio
     `\t${IMPORT_LOCKS}`,
     "",
     ...portalStanza(manifest, generation),
+    ...portalHostStanza(manifest, generation),
+    ...(isProtected(manifest) ? [] : openStanza(generation)),
     `\timport ${slug}-routes`,
     "}",
     "",
@@ -270,8 +275,8 @@ export function generateFragment(manifest: Manifest, generation: PortalGeneratio
  * Is this block what an earlier release of this generator wrote for the
  * manifest? Then it is the generator's own, behind by a release, and never a
  * decision taken by hand: replacing it with the current generation loses
- * nothing. The protected blocks deployed before the identity headers are the
- * case today, see PORTAL_GENERATIONS in portal.ts.
+ * nothing. Every block deployed before the identity headers is the case
+ * today, protected or not, see PORTAL_GENERATIONS in portal.ts.
  */
 export function isEarlierGeneration(block: string, manifest: Manifest): boolean {
   return PORTAL_GENERATIONS.slice(1).some((generation) => {
@@ -296,7 +301,7 @@ export type BlockDecision = "deposit" | "upgrades" | "follows-door" | "forced" |
  *   that the generator knows nothing of, unless `replace` says to overwrite it,
  *   `forced`.
  *
- * Comments and order do not count: see comparison.ts.
+ * Comments do not count, nor order, except inside a `route`: see comparison.ts.
  */
 export function decideBlock(state: {
   manifest: Manifest;

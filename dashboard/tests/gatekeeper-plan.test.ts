@@ -79,6 +79,24 @@ describe("planPortal, on a block deployed before the identity headers", () => {
     const plan = change(planPortal("library", true, { manifest: LIBRARY, block: blockOf(LIBRARY) }));
     expect(fragmentPassesIdentity((plan.block as { text: string }).text)).toBe(true);
   });
+
+  test("setting the portal on an open site whose block predates the strip: accepted, not a hand edit", () => {
+    // Every open block on the machine today was written before open blocks
+    // took the visitor's identity headers off.
+    const plan = change(planPortal("library", true, { manifest: LIBRARY, block: earlier(LIBRARY) }));
+    expect(fragmentPassesIdentity((plan.block as { text: string }).text)).toBe(true);
+  });
+
+  test("removing the portal writes a block that still takes the visitor's identity headers off", () => {
+    // Public now, the site must not hand its app the X-Sitesolide-Role: admin
+    // a stranger sends: the strip moves out of the route, to the block itself.
+    for (const block of [blockOf(CMS), earlier(CMS)]) {
+      const text = (change(planPortal("cms", false, { manifest: CMS, block })).block as { text: string }).text;
+      const preview = text.slice(text.indexOf("cms.{$SITESOLIDE_ZONE} {"));
+      expect(preview).not.toInclude("route {");
+      expect(preview).toInclude("\n\trequest_header -X-Sitesolide*\n\trequest_header -X_sitesolide*\n");
+    }
+  });
 });
 
 describe("planPortal, on the manifests from the sites repository", () => {

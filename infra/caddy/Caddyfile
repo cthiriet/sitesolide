@@ -129,6 +129,14 @@
 	@form path /api/*
 	reverse_proxy @form 127.0.0.1:3000
 
+	# Nobody signs in on the landing, and the X-Sitesolide-* headers a visitor
+	# sends, in any spelling, are taken off before its service reads them, as in
+	# every block that reaches an app: see openStanza in bin/cli/portal.ts. The
+	# wildcard and the on-demand blocks below need none, they reach no app,
+	# only file_server and the preview locks' door page.
+	request_header -X-Sitesolide*
+	request_header -X_sitesolide*
+
 	root * /srv/sites/{$SITESOLIDE_ZONE}/public
 	file_server
 

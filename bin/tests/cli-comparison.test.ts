@@ -70,6 +70,55 @@ describe("what counts as identical", () => {
   });
 });
 
+describe("inside a route, order counts", () => {
+  // The one Caddy directive that keeps the written order, and the generator
+  // writes one: the visitor's identity headers come off before forward_auth
+  // copies the portal's on. The same lines in another order are another block.
+  const BLOCK = `sample.{$SITESOLIDE_ZONE} {
+\troute {
+\t\trequest_header -X-Sitesolide*
+\t\tforward_auth @portal_guard 127.0.0.1:3026 {
+\t\t\turi /verifier
+\t\t}
+\t}
+\timport sample-routes
+}
+`;
+
+  test("the routes snippet moved inside the route, ahead of forward_auth, is a divergence", () => {
+    // A hand edit that serves the site before the portal is asked: every line
+    // is still there, which a comparison by set of lines judged identical.
+    const moved = BLOCK.replace("\timport sample-routes\n", "").replace(
+      "\troute {\n",
+      "\troute {\n\t\timport sample-routes\n",
+    );
+    expect(usefulDirectives(moved).sort()).toEqual(usefulDirectives(BLOCK).sort());
+    expect(sameDirectives(moved, BLOCK)).toBe(false);
+  });
+
+  test("two lines of the route swapped, too", () => {
+    const swapped = BLOCK.replace(
+      "\t\trequest_header -X-Sitesolide*\n\t\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\t\turi /verifier\n\t\t}\n",
+      "\t\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\t\turi /verifier\n\t\t}\n\t\trequest_header -X-Sitesolide*\n",
+    );
+    expect(sameDirectives(swapped, BLOCK)).toBe(false);
+  });
+
+  test("outside the route, order still does not count, nor do comments inside it", () => {
+    const moved = BLOCK.replace("\timport sample-routes\n", "").replace("sample.{$SITESOLIDE_ZONE} {\n", "sample.{$SITESOLIDE_ZONE} {\n\timport sample-routes\n");
+    expect(sameDirectives(moved, BLOCK)).toBe(true);
+    expect(sameDirectives(BLOCK.replace("\troute {\n", "\troute {\n\t\t# why\n"), BLOCK)).toBe(true);
+  });
+
+  test("a route that differs is named whole, on one line", () => {
+    const divergence = compareDirectives(BLOCK.replace("-X-Sitesolide*", "-X-Other*"), BLOCK);
+    expect(divergence).toEqual({
+      lost: ["route { request_header -X-Other*; forward_auth @portal_guard 127.0.0.1:3026 { uri /verifier } }"],
+      added: ["route { request_header -X-Sitesolide*; forward_auth @portal_guard 127.0.0.1:3026 { uri /verifier } }"],
+    });
+  });
+});
+
 describe("naming what differs", () => {
   test("the file on one side, the manifest on the other", () => {
     const divergence = compareDirectives(UNIT, UNIT.replace("3022", "3099"));

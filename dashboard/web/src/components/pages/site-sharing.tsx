@@ -401,7 +401,8 @@ function Content({
             <div className="grid gap-3">
               <p className="text-pretty text-muted-foreground">
                 Public isn't a sharing mode: it means turning the portal off for {site.slug}. Anyone with the address
-                then gets in, and its app learns nobody.
+                then gets in, and its app is told nobody: any{" "}
+                <code className="font-mono text-xs">X-Sitesolide-*</code> header a visitor sends is taken off before it.
               </p>
               <div>
                 <AccessLink slug={site.slug}>Open Access</AccessLink>
