@@ -45,6 +45,7 @@ printf 'PASSWORD_HASH=%s\n' "$HASH" |
 echo "-> $TARGET in place, root:root 0600"
 
 # The dashboard reads its hash at startup: restarted if it runs, left alone if
-# it is not deployed yet.
-ssh "$SITESOLIDE_SERVER" "sudo systemctl try-restart dashboard.service"
+# it is not deployed yet. try-restart alone fails on a unit that does not exist
+# yet, which made a first install end on an error after the hash was in place.
+ssh "$SITESOLIDE_SERVER" "if systemctl cat dashboard.service >/dev/null 2>&1; then sudo systemctl try-restart dashboard.service; fi"
 echo "-> dashboard restarted if it was running"

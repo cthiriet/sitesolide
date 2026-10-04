@@ -51,7 +51,10 @@ ssh "$SITESOLIDE_SERVER" "sudo install -m 644 -o root -g root /dev/stdin /etc/sy
   <"$SOURCE/deploy/sitesolide-api.service"
 
 echo "-> service restart"
-ssh "$SITESOLIDE_SERVER" "sudo systemctl restart sitesolide-api && systemctl is-active sitesolide-api"
+# enable, so that the service comes back after a reboot: installed and
+# restarted but never enabled, it answered until the machine restarted and
+# then stayed down, and with it every certificate issued on demand.
+ssh "$SITESOLIDE_SERVER" "sudo systemctl enable --quiet sitesolide-api && sudo systemctl restart sitesolide-api && systemctl is-active sitesolide-api"
 
 echo "-> verification"
 # As root: the loopback rule lets only Caddy and root reach the ports of the
