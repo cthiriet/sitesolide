@@ -194,12 +194,23 @@ any caller.
   answer refusing the host, and the connection goes to the address that was
   checked, never to a second resolution. The unit refuses the same ranges at
   the kernel, against a fault in the code.
+- A connector's credential handed to whoever answers for its host in DNS.
+  The proxy connects to the address it judged and checks the certificate
+  against the connector's host name before it writes a byte of the request:
+  a valid certificate for any other name is refused, and the credential never
+  leaves. Bun makes that check; the tests prove it, with an authority of their
+  own signing a certificate for another name. Not `checkServerIdentity`, which
+  Bun 1.3 calls only once the request is written.
 - A project passing itself off as another: the uid comes from the kernel.
 - A manifest granting itself a credential; a credential sitting in a
   repository, an environment file or the app's memory.
 
 **What it does not stop.**
 
+- **A certificate inside a tunnel.** A CONNECT is TLS end to end between the
+  app and the host: the proxy does not check the certificate there, and could
+  not. The app's client does, against the name it asked for, as it would
+  without a proxy; a client told to skip that check is on its own.
 - **Exfiltration to a host on the project's own list.** An allowed API that
   stores arbitrary data, a paste service, an issue tracker: the proxy does not
   look inside TLS and could not judge what it saw. The list is the boundary;
@@ -340,5 +351,6 @@ audit's counting, capping and diffing, and, on real sockets with a TLS server
 of the test's own: an allowed CONNECT end to end, a refused host, a refused
 private resolution, plain HTTP forwarding, large transfers in both directions,
 the per-project limit, a connector forwarded with its header set and the
-app's removed, an ungranted or unrequested connector refused, and the
-dashboard's read-only routes.
+app's removed, an ungranted or unrequested connector refused, a connector's
+host presenting a valid certificate for another name refused before the
+request is written, and the dashboard's read-only routes.

@@ -151,6 +151,37 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
     expect(JSON.parse(output)).toEqual({ host: API, path: "/v1/curl" });
   });
 
+  test("in a tunnel the certificate is the app's to check: the proxy pipes, the app's client refuses another name", async () => {
+    // The proxy never sees inside the TLS of a CONNECT, so it neither checks
+    // nor could check the certificate: the app's client does, end to end,
+    // against the name it asked for. A listed host whose DNS points at a
+    // server with a valid certificate for another name gets a tunnel, and the
+    // app's handshake fails before the app has sent anything through it.
+    allow("decoy.test-zone.invalid");
+    const other = certificate(["other.test-zone.invalid"]);
+    const decoy = Bun.serve({ hostname: "127.0.0.1", port: 0, tls: other, fetch: () => new Response("decoy") });
+    const local = startProxy({
+      hostname: "127.0.0.1",
+      port: 0,
+      identify: () => caller,
+      egressOf: () => egress,
+      lookup: stubLookup({ "decoy.test-zone.invalid": [PUBLIC_V4] }),
+      audit: recordingAudit().audit,
+      route: stubRoute({ [`${PUBLIC_V4}:443`]: decoy.port! }),
+      log: () => undefined,
+    });
+    try {
+      const failure = await fetch("https://decoy.test-zone.invalid/", { proxy: `http://127.0.0.1:${local.port}`, tls: { ca: other.cert } }).then(
+        () => "accepted",
+        (error: { code?: string }) => error.code,
+      );
+      expect(failure).toBe("ERR_TLS_CERT_ALTNAME_INVALID");
+    } finally {
+      local.stop();
+      decoy.stop(true);
+    }
+  });
+
   test("the proxy connects to an address it judged, never to the name again", async () => {
     allow(API);
     route.asked.length = 0;

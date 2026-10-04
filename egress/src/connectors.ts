@@ -198,8 +198,15 @@ export function startConnectors(options: ConnectorsOptions): Server<undefined> {
         const abort = new AbortController();
         const timer = setTimeout(() => abort.abort(), headersTimeoutMs);
         try {
-          // The address judged, never the name again; TLS still checks the
-          // certificate against the name, which serverName carries.
+          // The address judged, never the name again. Bun checks the
+          // certificate against serverName, not against the address in the
+          // URL, and before it writes a byte of the request: a valid
+          // certificate for another name fails, ERR_TLS_CERT_ALTNAME_INVALID,
+          // with the system's authorities as with `ca`, and a pooled
+          // connection checked for one name is not reused for another. See
+          // "the certificate of a connector's host" in the tests. Never move
+          // this check into tls.checkServerIdentity: Bun 1.3 calls it once the
+          // request, credential included, has already been written.
           const response = await fetch(`https://${urlHost(target.hostname)}:${target.port}${path}${url.search}`, {
             method: req.method,
             headers,

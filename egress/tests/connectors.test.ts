@@ -7,7 +7,7 @@ import { DATA_DIR } from "../src/config";
 import { connectorPath, MAX_IN_FLIGHT_PER_PROJECT, startConnectors, upstreamHeaders } from "../src/connectors";
 import { createPolicy } from "../src/policy";
 import type { Caller } from "../src/proc-net";
-import { certificate, OPENSSL, recordingAudit, stubLookup, stubRoute } from "./helpers";
+import { authority, certificate, OPENSSL, recordingAudit, recordingTlsServer, stubLookup, stubRoute } from "./helpers";
 
 /**
  * The connectors on a random port, a real TLS upstream behind them that
@@ -227,6 +227,112 @@ describe.skipIf(OPENSSL === null)("the connectors", () => {
     caller = { kind: "project", slug: "dashboard", account: "site-dashboard" };
     expect((await fetch(`${base()}/audit`, { method: "POST" })).status).toBe(405);
     expect((await fetch(`${base()}/audit?limit=x`)).status).toBe(400);
+  });
+});
+
+/**
+ * The proxy fetches a connector by the address it judged, the host's name
+ * carried in `tls.serverName`. Everything rests on the client checking the
+ * certificate against that name: if it checked the chain alone, whoever
+ * answers for the connector's host in DNS could collect the credential with
+ * any valid certificate, theirs, for a name of theirs.
+ *
+ * One authority signs both certificates, and the proxy trusts it through the
+ * option the other tests use: the chain is valid either way, and only the name
+ * can refuse. The servers keep every decrypted byte, to prove the credential
+ * never reached the wrong one, not even as a request it would have rejected.
+ */
+describe.skipIf(OPENSSL === null)("the certificate of a connector's host", () => {
+  const API = "api.test-zone.invalid";
+  const GENUINE = "203.0.114.40";
+  const IMPOSTOR = "203.0.114.41";
+  const API_VALUE = "Bearer api-test-value-0123456789";
+  const TWIN_VALUE = "Bearer twin-test-value-0123456789";
+  let genuine: ReturnType<typeof recordingTlsServer>;
+  let impostor: ReturnType<typeof recordingTlsServer>;
+  let server: Server<undefined>;
+  let root: string;
+  const answers: Record<string, string[]> = {};
+
+  beforeAll(() => {
+    const signed = authority([[API], ["other.test-zone.invalid"]]);
+    genuine = recordingTlsServer(signed.leaves[0]!);
+    impostor = recordingTlsServer(signed.leaves[1]!);
+
+    root = mkdtempSync(join(DATA_DIR, "certificates-"));
+    const sites = join(root, "sites");
+    const config = join(root, "config");
+    mkdirSync(join(sites, "shop"), { recursive: true });
+    mkdirSync(config, { recursive: true });
+    writeFileSync(join(sites, "shop", "sitesolide.json"), JSON.stringify({ slug: "shop", port: 3040, start: "/x", connectors: ["api", "twin"] }));
+    const now = "2026-10-04T12:00:00.000Z";
+    let connectors = EMPTY_CONNECTORS;
+    let grants = EMPTY_GRANTS;
+    for (const [name, host, value] of [["api", API, API_VALUE], ["twin", "twin.test-zone.invalid", TWIN_VALUE]] as const) {
+      const put = putConnector(connectors, { name, baseUrl: `https://${host}`, header: "Authorization", value }, now, "owner");
+      if ("error" in put) throw new Error(put.error);
+      connectors = put.file;
+      const granted = setGrant(grants, connectors, "shop", name, true, now, "owner");
+      if ("error" in granted) throw new Error(granted.error);
+      grants = granted.file;
+    }
+    writeFileSync(join(config, "connectors.json"), serializeConnectors(connectors));
+    writeFileSync(join(config, "grants.json"), serializeGrants(grants));
+
+    server = startConnectors({
+      hostname: "127.0.0.1",
+      port: 0,
+      identify: () => ({ kind: "project", slug: "shop", account: "site-shop" }),
+      policy: createPolicy(sites, config),
+      lookup: async (host) => {
+        const answer = answers[host];
+        if (answer === undefined) throw new Error(`ENOTFOUND ${host}`);
+        return answer;
+      },
+      audit: recordingAudit().audit,
+      dashboardAccount: "site-dashboard",
+      route: stubRoute({ [`${GENUINE}:443`]: genuine.port, [`${IMPOSTOR}:443`]: impostor.port }),
+      ca: signed.ca,
+    });
+  });
+
+  afterAll(() => {
+    server?.stop(true);
+    genuine?.stop();
+    impostor?.stop();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("a valid certificate for another name is refused, and the credential never reaches that server", async () => {
+    // Whoever controls the name's DNS points it at a server of theirs, with a
+    // certificate the authority really signed, for a name of theirs.
+    answers[API] = [IMPOSTOR];
+    const response = await fetch(`http://127.0.0.1:${server.port}/connectors/api/v1/x`);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ message: "connectors: api: the connection failed" });
+    // The proxy did reach it, and stopped at the certificate: a handshake,
+    // then not one byte of the request.
+    expect(impostor.handshakes()).toBeGreaterThan(0);
+    expect(impostor.received).toEqual([]);
+  });
+
+  test("the same authority's certificate for the right name is accepted: the refusal above was the name", async () => {
+    answers[API] = [GENUINE];
+    const response = await fetch(`http://127.0.0.1:${server.port}/connectors/api/v1/x`);
+    expect(response.status).toBe(200);
+    expect(genuine.received.join("")).toContain(`Authorization: ${API_VALUE}`);
+  });
+
+  test("a connection checked for one name is not reused for another name on the same address", async () => {
+    // Two connectors behind one address, a CDN's for instance: the connection
+    // the previous test left open was checked for the api's name, and must
+    // not carry the twin's credential to a server that never proved the twin's.
+    answers["twin.test-zone.invalid"] = [GENUINE];
+    const before = genuine.received.length;
+    const response = await fetch(`http://127.0.0.1:${server.port}/connectors/twin/x`);
+    expect(response.status).toBe(502);
+    expect(genuine.received.slice(before).join("")).not.toContain("twin-test-value");
+    expect(impostor.received.join("") + genuine.received.join("")).not.toContain(TWIN_VALUE);
   });
 });
 
