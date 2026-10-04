@@ -128,6 +128,13 @@ into `sitesolide.json` and says so; commit it, so that every later deployment
 keeps it. Only a project with a single `start` gets one this way; the other
 commands refuse a manifest without a port until `deploy` has written it.
 
+A port another project declares on the machine is refused, measured before the
+build and again under the Caddy lock, just before the manifest is deposited, so
+that two deployments running side by side cannot both take it. So are 3000 and
+3001, the landing's and the shared service's, and the platform's own, 3022 for
+the dashboard, 3026 for the portal and 3029 for analytics, whether they are
+deployed yet or not.
+
 That range is not arbitrary: a nftables rule reserves it to Caddy and root, so
 no service can reach another one. Outside it, a service would be reachable by
 every other project on the machine. A project of several processes declares a

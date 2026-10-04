@@ -374,6 +374,34 @@ describe("sitesolide deploy takes the lock before its first deposit", () => {
     expect(readFileSync(join(vm.root, "srv", "sites", SHOWCASE.slug, "sitesolide.json"), "utf8")).toBe(closed);
   });
 
+  test("an app's ports are measured again under the lock: one deposited meanwhile stops it before its manifest", async () => {
+    const RACE: Manifest = { slug: "sample-race", start: "/usr/local/bin/bun run server.ts", port: 3044 };
+    vm = createFakeVm();
+    vm.acceptWrites();
+    vm.answer("test -f /etc/systemd/system/sample-race.service", "ABSENT\n");
+    // Another deployment, from another workstation or the installer, checked
+    // the same free port and deposits its manifest while this one prepares
+    // its service.
+    vm.onFirstAccepted("/srv/sites/sample-rival/sitesolide.json", text({ ...RACE, slug: "sample-rival" }));
+    const proc = Bun.spawn(["bun", CLI, "deploy"], {
+      cwd: project(RACE),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, ...vm.env, ...offlineHome() },
+    });
+    const r = await waitFor(proc);
+    expect(r.code).toBe(1);
+    expect(r.error).toContain("port already taken on the server, by a deployment that ran meanwhile");
+    expect(r.error).toContain("port 3044 is already declared by project sample-rival");
+    const logs = vm.logs();
+    // Read once before the build, then again under the lock, where it decides.
+    expect(logs.filter((line) => line === "READ *")).toHaveLength(2);
+    expect(logs.indexOf("LOCK take deploy")).toBeLessThan(logs.lastIndexOf("READ *"));
+    expect(logs.some((line) => line.includes("/srv/sites/sample-race/sitesolide.json"))).toBe(false);
+    expect(logs.at(-1)).toBe("LOCK release deploy");
+    expect(vm.lock()).toBeNull();
+  });
+
   test("held by the gatekeeper: refusal before the deposit, and its lock stays in place", async () => {
     vm = createFakeVm();
     vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));

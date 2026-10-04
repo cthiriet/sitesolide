@@ -23,19 +23,13 @@
  * Pure: returns decisions and text, touches nothing.
  */
 import { hasServices, isApp, mainPort, readManifest, SERVICE_PORTS, servicesOf, type Manifest } from "./manifest";
-import { PORTAL_PORT } from "./portal";
-import { RESERVED_PORTS } from "./services";
+import { PLATFORM_PORTS, reservedPorts } from "./services";
 
 /**
- * The platform's services that sitesolide deploys like any project, by the
- * port their manifest declares: `bin/tests/cli-ports.test.ts` reads the three
- * manifests and fails if one of them moves without this table.
+ * The platform's services, by port. In services.ts, which the dashboard
+ * borrows, so that the installer reserves them too: see reservedPorts.
  */
-export const PLATFORM_PORTS: ReadonlyMap<number, string> = new Map([
-  [3022, "the dashboard"],
-  [PORTAL_PORT, "the portal"],
-  [3029, "analytics"],
-]);
+export { PLATFORM_PORTS };
 
 /** An app with a single `start` and no `port`: the one shape `deploy` gives a port to. */
 export function needsPort(manifest: Manifest): boolean {
@@ -61,7 +55,7 @@ export type PortChoice =
  * for, as portConflicts in services.ts reads them.
  */
 export function choosePort(slug: string, deposited: ReadonlyMap<string, string>): PortChoice {
-  const taken = new Set<number>([...RESERVED_PORTS.keys(), ...PLATFORM_PORTS.keys()]);
+  const taken = new Set<number>(reservedPorts(slug).keys());
   for (const [folder, raw] of deposited) {
     const { manifest } = readManifest(raw);
     if (manifest === undefined) continue;

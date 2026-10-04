@@ -307,6 +307,19 @@ describe("a redeployment", () => {
     const outcome = await run(bench, request({ ...APP, port: 3040 }));
     expect(outcome).toMatchObject({ ok: false, code: "port-taken" });
   });
+
+  test("the portal's port is refused before the portal is deployed, and never handed out", async () => {
+    // The loopback rule lets the dashboard through to the portal's port: a
+    // token's project there would be reached by it.
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, port: 3026 }));
+    expect(outcome).toMatchObject({ ok: false, code: "port-taken" });
+    expect(outcome.ok === false && outcome.message).toContain("the platform's portal");
+    for (let port = 3002; port < 3026; port++) if (port !== 3022) deposit(bench, { slug: `p${port}`, start: "x", port } as Manifest);
+    const chosen = await run(bench, request(APP));
+    expect(chosen).toMatchObject({ ok: true, allocated: [{ service: null, port: 3027 }] });
+  });
 });
 
 describe("finalManifest and replaceable, pure", () => {

@@ -30,7 +30,7 @@ import {
   SERVICE_PORTS,
   type Manifest,
 } from "../../borrowed/manifest";
-import { RESERVED_PORTS } from "../../borrowed/services";
+import { reservedPorts } from "../../borrowed/services";
 import {
   MAX_TOKEN_MEMORY_BYTES,
   MAX_TOKEN_SERVICES,
@@ -166,13 +166,13 @@ export function decideDoor(manifest: Manifest, scope: Scope, onMachine: boolean 
 // --- ports ----------------------------------------------------------------------------
 
 /**
- * The ports taken on the machine for this project: the landing's and the
- * shared service's, and every port another deposited manifest declares. The
- * same knowledge `portConflicts` of bin/cli/services.ts uses, which refuses
- * what this would hand out.
+ * The ports taken on the machine for this project: the landing's, the shared
+ * service's, the platform services' whether deployed or not, and every port
+ * another deposited manifest declares. The same knowledge `portConflicts` of
+ * bin/cli/services.ts uses, which refuses what this would hand out.
  */
 export function takenPorts(deposited: ReadonlyMap<string, string>, slug: string): Set<number> {
-  const taken = new Set<number>(RESERVED_PORTS.keys());
+  const taken = new Set<number>(reservedPorts(slug).keys());
   for (const [folder, raw] of deposited) {
     if (folder === slug) continue;
     const { manifest } = readManifest(raw);

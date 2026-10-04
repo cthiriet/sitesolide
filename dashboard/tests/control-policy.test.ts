@@ -141,8 +141,12 @@ describe("ports", () => {
     ["broken", "{"],
   ]);
 
-  test("taken: the landing's, the shared service's, and every other project's", () => {
-    expect([...takenPorts(deposited, "shop")].sort()).toEqual([3000, 3001, 3002, 3003, 3004]);
+  test("taken: the landing's, the shared service's, the platform's, and every other project's", () => {
+    // The dashboard's, the portal's and analytics' ports, deployed or not: a
+    // token's project there would refuse their first deployment, and the
+    // loopback rule lets the dashboard reach the portal's.
+    expect([...takenPorts(deposited, "shop")].sort()).toEqual([3000, 3001, 3002, 3003, 3004, 3022, 3026, 3029]);
+    expect(takenPorts(new Map(), "portal").has(3026)).toBe(false);
   });
 
   test("a single service without a port gets the lowest free one", () => {

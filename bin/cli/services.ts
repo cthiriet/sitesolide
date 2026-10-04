@@ -8,7 +8,8 @@
  * a marker, for the reason given in unit.ts: an empty output is a failed read,
  * never an answer.
  */
-import { isValidSlug, readManifest, servicesOf, type Manifest } from "./manifest";
+import { isValidSlug, PORTAL_SLUG, readManifest, servicesOf, type Manifest } from "./manifest";
+import { PORTAL_PORT } from "./portal";
 import { LOOPBACK_TABLE, PROJECT_PORTS_FILE, PROJECT_PORTS_SET } from "./loopback";
 import { systemUser, unitArgument } from "./unit";
 
@@ -24,7 +25,32 @@ export const RESERVED_PORTS: ReadonlyMap<number, string> = new Map([
 ]);
 
 /**
- * The ports of `manifest` another project already declares on the machine.
+ * The platform's services that sitesolide deploys like any project, by the
+ * port their manifest declares, and the slug that deploys there:
+ * `bin/tests/cli-ports.test.ts` reads the three manifests and fails if one of
+ * them moves without this table.
+ *
+ * Reserved whether they are deployed or not, for every other project: a
+ * project on the portal's port would refuse the portal's first deployment,
+ * and the dashboard, which the loopback rule lets through to the portal's
+ * port, would reach it.
+ */
+export const PLATFORM_PORTS: ReadonlyMap<number, string> = new Map([
+  [3022, "dashboard"],
+  [PORTAL_PORT, PORTAL_SLUG],
+  [3029, "analytics"],
+]);
+
+/** The ports no project may declare, by owner, `slug` aside: the platform's own exempt for their own port. */
+export function reservedPorts(slug: string): Map<number, string> {
+  const reserved = new Map<number, string>(RESERVED_PORTS);
+  for (const [port, owner] of PLATFORM_PORTS) if (owner !== slug) reserved.set(port, `the platform's ${owner}, deployed or not`);
+  return reserved;
+}
+
+/**
+ * The ports of `manifest` another project already declares on the machine, or
+ * that the landing, the shared service or a platform service holds.
  *
  * Measured against the manifests deposited there rather than a list kept on the
  * workstation, which would lie from the first deployment made from somewhere
@@ -36,7 +62,7 @@ export const RESERVED_PORTS: ReadonlyMap<number, string> = new Map([
  * where it gets repaired, and its ports are unknown anyway.
  */
 export function portConflicts(manifest: Manifest, deposited: ReadonlyMap<string, string>): string[] {
-  const taken = new Map<number, string>(RESERVED_PORTS);
+  const taken = reservedPorts(manifest.slug);
   for (const [slug, raw] of deposited) {
     if (slug === manifest.slug) continue;
     const { manifest: other } = readManifest(raw);

@@ -359,6 +359,20 @@ describe("ports taken on the machine", () => {
       "port 3001 is already declared by the shared service (api/)",
     ]);
   });
+
+  test("the platform's ports too, deployed or not, for every project but the one they belong to", () => {
+    // A project on the portal's port before the portal is deployed would
+    // refuse the portal's first deployment, and the loopback rule lets the
+    // dashboard through to it.
+    expect(portConflicts({ ...APP, slug: "other", port: 3026 }, new Map())).toEqual([
+      "port 3026 is already declared by the platform's portal, deployed or not",
+    ]);
+    expect(portConflicts(lab({ web: { start: "/x", port: 3029 } }), new Map())).toEqual([
+      "port 3029 (service web) is already declared by the platform's analytics, deployed or not",
+    ]);
+    expect(portConflicts({ ...APP, slug: "portal", port: 3026 }, new Map())).toEqual([]);
+    expect(portConflicts({ ...APP, slug: "dashboard", port: 3022 }, new Map())).toEqual([]);
+  });
 });
 
 describe("units the manifest no longer declares", () => {

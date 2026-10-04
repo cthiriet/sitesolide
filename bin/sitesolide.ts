@@ -136,6 +136,7 @@ import {
   decidePortal,
   guardDepositedManifest,
   readDepositedManifest,
+  readManifestAmongAll,
   type ManifestAction,
   type DepositedRead,
 } from "./cli/portal-vm";
@@ -930,9 +931,15 @@ async function readDepositedDoor(
 
 /**
  * The door read again under the lock, just before the first deposit: it is what
- * decides. For an application project, the same read also guards the blocks of
- * every site once more, so that the Caddy step is not refused after the service
- * restart. In a dry run, nothing is read again: no lock is taken.
+ * decides. In a dry run, nothing is read again: no lock is taken.
+ *
+ * For an application project, every manifest is read, and its ports measured
+ * once more against them, as the installer does. The check before the build
+ * is minutes old by now: two deployments started side by side, from two
+ * workstations, two agents or a workstation and a token, chose and checked
+ * their ports on the same reading, and the first to get here has deposited
+ * its own since. Without this, the second deposited the same port, and the
+ * next reboot decided which project Caddy's visitors reached.
  */
 async function rereadUnderLock(
   manifest: Manifest,
@@ -941,13 +948,29 @@ async function rereadUnderLock(
   isApplication: boolean,
 ): Promise<void> {
   if (executor.simulated) {
-    say("   [dry-run] read the portal again under the lock, and decide on it");
+    say(`   [dry-run] read the portal${isApplication ? " and the ports" : ""} again under the lock, and decide on them`);
     return;
   }
   const slug = manifest.slug;
-  const output = await executor.read(config, readManifestsCommand(slug));
-  const agreement = confirmDoorUnderLock(slug, isProtected(manifest), readDepositedManifest(output, slug));
+  const output = await executor.read(config, readManifestsCommand(isApplication ? "*" : slug));
+  const door = isApplication ? readManifestAmongAll(output, slug) : readDepositedManifest(output, slug);
+  const agreement = confirmDoorUnderLock(slug, isProtected(manifest), door);
   if (agreement.kind === "rejects") die(agreement.message, agreement.details);
+  if (!isApplication) return;
+  const reading = readDepositedManifests(output);
+  if (reading.kind === "unreadable") {
+    die("cannot read the manifests on the server to check the ports again under the lock", [
+      reading.reason,
+      "neither the manifest nor the Caddy block was deposited",
+    ]);
+  }
+  const conflicts = portConflicts(manifest, reading.manifests);
+  if (conflicts.length > 0) {
+    die("port already taken on the server, by a deployment that ran meanwhile", [
+      ...conflicts,
+      "neither the manifest nor the Caddy block was deposited: delete `port` from sitesolide.json, or pick another free one, then deploy again",
+    ]);
+  }
 }
 
 /**
