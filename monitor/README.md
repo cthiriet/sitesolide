@@ -400,6 +400,31 @@ machine down.
 **Updating**: `bin/deploy-monitor.sh` again, for any change to `monitor/` or
 `infra/monitor/`. A `sitesolide deploy` never touches the monitor.
 
+**Upgrading from the first version** (heartbeat for the platform only, probes
+that wait their turn, three failures in five, a body per webhook service,
+alerting addresses in https only). Either side first, the monitor and the
+dashboard read each other's files whatever their age, and `state.json` is kept:
+
+```bash
+bin/deploy-monitor.sh                 # the monitor
+cd dashboard && sitesolide deploy     # the collector that copies the status, and the page that shows it
+ssh you@your-machine 'sudo journalctl -u sitesolide-monitor -n 3 -o cat'
+```
+
+Check: the last line reads `N checks, ...; heartbeat ok, ...`, and with only a
+project down, healthchecks.io stays green, the project listed in the ping's
+body, where it used to turn red. An address in plain `http://` is now refused
+and shows as `WARNING The monitor could not run fully: ... must be an https
+URL`: an `ALERT_WEBHOOK_URL` that way holds the heartbeat on `/fail`, a
+`HEARTBEAT_URL` that way is no longer pinged at all and healthchecks.io
+reports the machine down after its grace period; give either its `https://`
+address in the dashboard. A Google Chat webhook that never received anything
+starts receiving. On the dashboard, the Issues show `Monitor status refused by
+the collector: ...` if the status file is ever anything but the monitor's own.
+Roll back: `bin/deploy-monitor.sh` and `sitesolide deploy` from the previous
+commit; the older monitor reads the newer `state.json`, the fields it does not
+know ignored.
+
 ## Verification on a test VM
 
 What the tests here cannot prove, systemd's behaviour and the sandbox on a
@@ -437,7 +462,16 @@ systemctl show caddy -p NRestarts -p ActiveState               # NRestarts=1, Ac
 sudo systemctl stop caddy                     # within 3 minutes: DOWN Caddy, heartbeat on /fail
 sudo systemctl start caddy
 
-# The collector hands the status to the dashboard.
+# The collector hands the status to the dashboard: through the link systemd
+# keeps, owned by the dynamic account, so copied rather than refused.
 sudo systemctl start sitesolide-collector.service
-sudo grep -c '"monitor":' /srv/sites/dashboard/data/state.json  # 1
+sudo grep -o '"monitor":"{\\"[a-z]*' /srv/sites/dashboard/data/state.json  # "monitor":"{\"version
+sudo stat -c '%U:%G %a' /srv/sites/dashboard/data/state.json /srv/sites/analytics/data/hotes.json
+# site-dashboard:site-dashboard 600, site-analytics:site-analytics 640: the fchown on the descriptor
+
+# A link at status.json is refused, and its target never reaches the snapshot.
+sudo ln -sf /etc/sitesolide/dashboard-monitor.env /var/lib/private/sitesolide-monitor/status.json
+sudo systemctl start sitesolide-collector.service
+sudo grep -o '"monitor":"{\\"[a-z]*' /srv/sites/dashboard/data/state.json  # "monitor":"{\"refused
+sudo rm /var/lib/private/sitesolide-monitor/status.json && sudo systemctl start sitesolide-monitor.service
 ```
