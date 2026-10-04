@@ -8,7 +8,7 @@ import { lockHeldMessage } from "../src/gatekeeper/transaction";
 import { REQUEST_MAX_AGE_MS } from "../src/control/protocol";
 import { readLaunch, readRequest } from "../src/installer/instance";
 import { main } from "../src/installer/main";
-import { systemdRunArguments } from "../src/installer/real";
+import { createHost, systemdRunArguments, type ProjectRun } from "../src/installer/real";
 
 /**
  * The contract between the steward and the installer, the installer's unit
@@ -120,12 +120,42 @@ describe("the confinement asked of systemd-run", () => {
     expect(line.endsWith("/usr/local/bin/bun /usr/local/lib/sitesolide/installer.js --extract /srv/sites/shop/.incoming")).toBe(true);
   });
 
-  test("install: the network, never the loopback, the staged app/ at its final path", () => {
-    const line = systemdRunArguments({ ...run, purpose: "install", network: true, binds: [{ source: "/srv/sites/shop/.incoming/app", target: "/srv/sites/shop/app" }], workingDirectory: "/srv/sites/shop/app", command: ["/bin/sh", "-c", "bun install"] }).join(" ");
+  test("install: the network, never the loopback, the staged app/ at its final path, writable", () => {
+    const line = systemdRunArguments({ ...run, purpose: "install", network: true, binds: [{ source: "/srv/sites/shop/.incoming/app", target: "/srv/sites/shop/app" }], workingDirectory: "/srv/sites/shop/app", command: ["/bin/sh", "-s"] }).join(" ");
     expect(line).toContain("-p IPAddressDeny=localhost");
     expect(line).not.toContain("PrivateNetwork");
-    expect(line).toContain("-p BindPaths=/srv/sites/shop/.incoming/app:/srv/sites/shop/app");
+    expect(line).toContain("-p BindPaths=/srv/sites/shop/.incoming/app:/srv/sites/shop/app -p ReadWritePaths=/srv/sites/shop/app");
     expect(line).toContain("-p WorkingDirectory=/srv/sites/shop/app");
+  });
+
+  test("nothing expanded in the command line, and the manifest's command never in it", async () => {
+    expect(systemdRunArguments(run)).toContain("--expand-environment=no");
+    const seen: { command: string[]; stdin: unknown }[] = [];
+    const root = mkdtempSync(join(tmpdir(), "installer-install-"));
+    toClean.push(root);
+    const host = createHost({
+      sitesDir: root,
+      unitsFolder: root,
+      secretsFolder: root,
+      spoolFolder: root,
+      accountsFile: join(root, "passwd"),
+      projectPortsFile: join(root, "nft"),
+      deployAccount: null,
+      dashboardAccount: null,
+      extractor: [],
+      machine: {} as never,
+      commands: {
+        asProject: async (requested: ProjectRun) => {
+          seen.push({ command: requested.command, stdin: requested.stdin });
+          return { code: 0, output: "" };
+        },
+      } as never,
+      log: () => {},
+    });
+    mkdirSync(join(root, "shop", ".incoming"), { recursive: true });
+    await host.install("shop", join(root, "shop", ".incoming"), "echo $HOME %n && bun install");
+    expect(seen[0]!.command).toEqual(["/bin/sh", "-s"]);
+    expect(new TextDecoder().decode(seen[0]!.stdin as Uint8Array)).toBe("echo $HOME %n && bun install\n");
   });
 });
 

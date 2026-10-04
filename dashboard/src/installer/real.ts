@@ -51,9 +51,10 @@ import type { Execution, Host, Part } from "./host";
 export type ProjectRun = {
   slug: string;
   purpose: "extract" | "install";
+  /** Fixed paths only: nothing a manifest or an archive wrote ever goes into the arguments. */
   command: string[];
-  /** A descriptor for its standard input, or none. */
-  stdin: number | null;
+  /** Its standard input: the archive's descriptor, the install command's text, or none. */
+  stdin: number | Uint8Array | null;
   /** The only directories of /srv it sees: `source` mounted at `target`, writable. */
   binds: { source: string; target: string }[];
   workingDirectory: string | null;
@@ -112,7 +113,7 @@ function code(error: unknown): string | undefined {
 }
 
 /** Runs a command bounded in time, standard error folded into the output, never throwing. */
-export async function spawn(command: string[], timeoutMs: number, options: { stdin?: number | null; cwd?: string } = {}): Promise<Execution> {
+export async function spawn(command: string[], timeoutMs: number, options: { stdin?: number | Uint8Array | null; cwd?: string } = {}): Promise<Execution> {
   try {
     const process = Bun.spawn(command, {
       stdin: options.stdin ?? "ignore",
@@ -151,8 +152,10 @@ export function systemdRunArguments(run: ProjectRun, systemdRun = "/usr/bin/syst
     "RestrictSUIDSGID=yes",
     "LockPersonality=yes",
     "UMask=0022",
+    // The generated unit's own pattern for its data folder: /srv emptied, the
+    // directory bound back in, and declared writable for ProtectSystem=strict.
     "TemporaryFileSystem=/srv:ro",
-    ...run.binds.map(({ source, target }) => `BindPaths=${source}:${target}`),
+    ...run.binds.flatMap(({ source, target }) => [`BindPaths=${source}:${target}`, `ReadWritePaths=${target}`]),
     "InaccessiblePaths=-/etc/sitesolide",
     `MemoryMax=${run.memory}`,
     `RuntimeMaxSec=${run.timeoutS}`,
@@ -169,6 +172,9 @@ export function systemdRunArguments(run: ProjectRun, systemdRun = "/usr/bin/syst
     "--pipe",
     "--collect",
     "--service-type=exec",
+    // Nothing expanded in the command line (systemd 254 and later), which only
+    // carries fixed paths anyway.
+    "--expand-environment=no",
     `--description=sitesolide ${run.purpose} for ${run.slug}`,
     ...properties.flatMap((property) => ["-p", property]),
     "-E",
@@ -387,11 +393,14 @@ export function createHost(config: HostConfig): Host {
       const app = join(staging, "app");
       mkdirSync(app, { recursive: true, mode: 0o755 });
       const target = join(root(slug), "app");
+      // The command on the shell's standard input, never in its arguments:
+      // systemd expands `$VAR` and `%` specifiers in a unit's command line, and
+      // the manifest's text must reach `sh` exactly as it was written.
       return config.commands.asProject({
         slug,
         purpose: "install",
-        command: ["/bin/sh", "-c", command],
-        stdin: null,
+        command: ["/bin/sh", "-s"],
+        stdin: encoder.encode(`${command}\n`),
         binds: [{ source: app, target }],
         workingDirectory: target,
         network: true,

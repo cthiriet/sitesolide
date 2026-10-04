@@ -140,7 +140,7 @@ export function commandsOf(bench: Bench): Commands {
     async asProject(run: ProjectRun) {
       bench.events.push(`as ${run.slug} ${run.purpose}`);
       if (run.purpose === "extract") return spawn(run.command, 60_000, { stdin: run.stdin });
-      return spawn(run.command, 60_000, { cwd: run.binds[0]!.source });
+      return spawn(run.command, 60_000, { cwd: run.binds[0]!.source, stdin: run.stdin });
     },
     async nft() {
       return { code: 1, output: "Error: No such file or directory" };

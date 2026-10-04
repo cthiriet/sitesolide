@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bundle } from "../borrowed/bundle";
 import { BUNDLE_NAME, type InstallerResult } from "../src/control/protocol";
-import { main } from "../src/installer/main";
+import { main, pruneResults, RESULT_RETENTION_MS } from "../src/installer/main";
 import { spawn, type Commands } from "../src/installer/real";
 import { INSTALLER } from "./installer-bench";
 
@@ -92,6 +92,20 @@ describe("main", () => {
     expect(readFileSync(join(root, "sites", "notes", "public", "index.html"), "utf8")).toBe("<h1>notes</h1>");
     expect(JSON.parse(readFileSync(join(root, "sites", "notes", "sitesolide.json"), "utf8"))).toEqual({ slug: "notes", publicDir: "public" });
     expect(calls).toContain("useradd site-notes");
+  });
+
+  test("results older than a week are pruned, and nothing else in the folder", () => {
+    const root = mkdtempSync(join(tmpdir(), "installer-prune-"));
+    toClean.push(root);
+    const old = join(root, "111111111111111111111111.json");
+    const fresh = join(root, "222222222222222222222222.json");
+    const other = join(root, "notes.txt");
+    for (const path of [old, fresh, other]) writeFileSync(path, "{}");
+    const weekAgo = (Date.now() - RESULT_RETENTION_MS - 60_000) / 1000;
+    utimesSync(old, weekAgo, weekAgo);
+    utimesSync(other, weekAgo, weekAgo);
+    expect(pruneResults(root, Date.now())).toBe(1);
+    expect(readdirSync(root).sort()).toEqual(["222222222222222222222222.json", "notes.txt"]);
   });
 
   test("a machine whose environment file lost DEPLOY_ACCOUNT refuses, and says so in the result", async () => {

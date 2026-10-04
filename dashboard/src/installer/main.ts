@@ -14,6 +14,7 @@
  * as a result is written, a failed deployment included. Non-zero only for a
  * launch that could not produce one.
  */
+import { lstatSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { configFrom, type Environment } from "../gatekeeper/main";
 import { createMachine, type Systemctl } from "../gatekeeper/real";
@@ -87,6 +88,38 @@ export function createReporter(folder: string, request: InstallRequest, clock: (
   };
 }
 
+/** A result is read while its deployment is followed; a week later, nobody will. */
+export const RESULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The results older than the retention, removed: the folder is a tmpfs, and a
+ * busy team would otherwise fill it until the next reboot. Only files named
+ * like a result go; a failure to prune stops nothing.
+ */
+export function pruneResults(folder: string, now: number): number {
+  let removed = 0;
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    if (!/^[0-9a-f]{24}\.json$/.test(name)) continue;
+    try {
+      const path = join(folder, name);
+      const stat = lstatSync(path);
+      if (stat.isFile() && now - stat.mtimeMs > RESULT_RETENTION_MS) {
+        unlinkSync(path);
+        removed++;
+      }
+    } catch {
+      // Gone in the meantime, or unreadable: left for the next run.
+    }
+  }
+  return removed;
+}
+
 /**
  * Each path from a variable, with the production default, like the
  * gatekeeper. On the workstation, the tests set every one of them, and
@@ -120,6 +153,7 @@ export async function main(argv: string[], env: Environment, overrides: { comman
   const { request } = read;
 
   const resultsFolder = env.INSTALLER_FOLDER ?? INSTALLER_RUN_FOLDER;
+  pruneResults(resultsFolder, Date.now());
   const reporter = createReporter(resultsFolder, request, Date.now, (line) => console.log(line));
   reporter.log(`-> deployment ${request.deployment} of ${slug}, for ${request.token.email} (token ${request.token.id})`);
 

@@ -85,6 +85,19 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * What a generator gives for a previous manifest, or `fallback` when that
+ * manifest, deposited by an older checkout, no longer generates: it then only
+ * fails to vouch for a file, which a hand edit would also do.
+ */
+function attempt<T>(generate: () => T, fallback: T): T {
+  try {
+    return generate();
+  } catch {
+    return fallback;
+  }
+}
+
 /** The manifest a file of the machine was generated from, when it reads. */
 function previousManifest(raw: string | undefined): Manifest | null {
   if (raw === undefined) return null;
@@ -202,7 +215,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     const block = application ? generateFragment(manifest) : null;
     if (block !== null) {
       const inService = await host.machine.readBlock(slug);
-      const before = previous === null ? null : generateFragment(previous);
+      const before = previous === null ? null : attempt(() => generateFragment(previous), null);
       const replace = replaceable(inService, block, before);
       if (decideBlock({ manifest, inService, replace, doorConfirmed: final.doorConfirmed }) === "diverged") {
         throw handEdited(`/etc/caddy/sites/${slug}.caddy`, inService ?? "", block);
@@ -259,7 +272,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     const units = generateUnits(manifest);
     if (application) {
       host.log(units.length > 1 ? "-> systemd units" : "-> systemd unit");
-      const previousUnits = previous === null ? [] : generateUnits(previous);
+      const previousUnits = previous === null ? [] : attempt(() => generateUnits(previous), []);
       const decisions = [];
       for (const { unit, text: generated } of units) {
         const installed = (await host.readUnit(unit)) ?? "";

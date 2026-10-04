@@ -78,8 +78,11 @@ CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH 
 # live. The secrets stay read-only: their presence is checked, never their
 # content. /var/lib/sitesolide-steward, where the request is, stays read-only
 # under ProtectSystem=strict.
+#
+# useradd also resets the new account's entries in lastlog and faillog when the
+# files exist; the dash ignores them on a system that keeps neither.
 ProtectSystem=strict
-ReadWritePaths=/srv/sites /etc /run/sitesolide-gatekeeper
+ReadWritePaths=/srv/sites /etc /run/sitesolide-gatekeeper -/var/log/lastlog -/var/log/faillog
 ReadOnlyPaths=/etc/sitesolide
 ProtectHome=true
 PrivateTmp=true
