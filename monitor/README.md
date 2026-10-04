@@ -77,8 +77,29 @@ from the dashboard:
 | Variable | What it does |
 |---|---|
 | `HEARTBEAT_URL` | a dead man's switch, [healthchecks.io](https://healthchecks.io) style. Every pass pings it: the URL itself while the platform stands, `<url>/fail` while the platform itself is down, with the list of what is down in either case. The outside service alerts when the pings stop: **the only thing that notices the machine itself dying**, which no check run on it ever could. |
-| `ALERT_WEBHOOK_URL` | one message per pass that has something to say. A JSON body carrying the message as `text` (Slack, Mattermost, Google Chat) and as `content` (Discord). |
-| `ALERT_WEBHOOK_FORMAT` | `text` for a raw text body, what [ntfy](https://ntfy.sh) takes, with a title and a high priority when something critical went down. Chosen by itself for `ntfy.sh`; say it for a self-hosted ntfy. |
+| `ALERT_WEBHOOK_URL` | one message per pass that has something to say, in the body the service at that address takes (below). |
+| `ALERT_WEBHOOK_FORMAT` | which body, when the address does not say it: `slack`, `discord`, `googlechat`, `text` or `json`. |
+
+Each service refuses or mangles the others' body, so the format follows the
+address: `hooks.slack.com` is `slack`, `discord.com` and `discordapp.com` are
+`discord`, `chat.googleapis.com` is `googlechat`, `ntfy.sh` is `text`, and any
+other address `json`, unless `ALERT_WEBHOOK_FORMAT` says otherwise, for a
+self-hosted ntfy for instance.
+
+| Format | Body |
+|---|---|
+| `slack` | `{"text": ...}`, with `<`, `>` and `&` escaped: nothing in a summary can become a link or a `<!channel>` |
+| `discord` | `{"content": ..., "allowed_mentions": {"parse": []}}`: no `@everyone`, no mention of anybody |
+| `googlechat` | `{"text": ...}` and nothing else, Google Chat refusing a field it does not know |
+| `text` | the message as the raw body, what [ntfy](https://ntfy.sh) takes, with a title and a high priority when something critical went down |
+| `json` | `{"text": ..., "content": ...}`, for a service that reads one of the two (Mattermost reads `text`) |
+
+**What was tested, and what was not.** The tests check each body against a
+local receiver standing in for the service; none was sent to Slack, Discord,
+Google Chat or ntfy.sh from here. The bodies follow each service's documented
+incoming webhook; the first message on a new channel is the real test, and
+`sudo journalctl -u sitesolide-monitor` says `webhook not delivered (HTTP 400)`
+when a service refuses one.
 
 **Only the platform fails the heartbeat**: Caddy, a disk, the memory, the
 monitor's own blindness (a reading it could not take, an alerting address that
@@ -181,8 +202,9 @@ The free tier is enough: one check, pinged every minute.
    `sudo journalctl -u sitesolide-monitor -n 1` ends with `heartbeat ok`.
 
 For messages as well, add `ALERT_WEBHOOK_URL` in the same file: a Slack
-incoming webhook, a Discord channel's webhook, or `https://ntfy.sh/<topic>` with
-a topic nobody would guess, since ntfy.sh topics are public.
+incoming webhook, a Discord channel's webhook, a Google Chat space's webhook,
+or `https://ntfy.sh/<topic>` with a topic nobody would guess, since ntfy.sh
+topics are public.
 
 To see the dead man's switch work, stop the monitor's timer, which stops
 nothing else, and wait for the grace period:

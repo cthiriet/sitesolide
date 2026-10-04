@@ -12,9 +12,11 @@
  *                      outside service alerts when the pings stop, which no
  *                      check run on this machine ever could.
  *   ALERT_WEBHOOK_URL  one message per run that has something to say, down and
- *                      recovered alike, in a JSON body Slack and Discord
- *                      incoming webhooks both accept, or as plain text for
- *                      ntfy.
+ *                      recovered alike, in the body the service at that
+ *                      address takes: Slack, Discord and Google Chat each
+ *                      refuse or mangle the others', ntfy takes plain text.
+ *                      ALERT_WEBHOOK_FORMAT says which, when the address does
+ *                      not.
  *
  * Neither address is ever written anywhere else: not in the journal, not in
  * the status the dashboard reads, not in an error message. Whoever holds the
@@ -44,7 +46,14 @@ export const MAX_MESSAGE = 1900;
 /** What the outside service keeps of a ping is plenty with that. */
 export const MAX_HEARTBEAT_BODY = 2000;
 
-export type WebhookFormat = "json" | "text";
+/**
+ * The body the webhook gets. `json` carries the message twice, as `text` and
+ * as `content`, for a service this file does not name that reads one of the
+ * two; the others are each a service's own, see webhookRequest.
+ */
+export type WebhookFormat = "slack" | "discord" | "googlechat" | "text" | "json";
+
+const FORMATS: readonly WebhookFormat[] = ["slack", "discord", "googlechat", "text", "json"];
 
 export type Delivery = { ok: true } | { ok: false; reason: string };
 
@@ -69,16 +78,34 @@ export function alertUrl(name: string, raw: string | null | undefined): { url: s
 }
 
 /**
- * `json` unless told otherwise, and `text` for ntfy.sh itself, whose topics take
- * the message as the raw body. A self-hosted ntfy says so with
- * `ALERT_WEBHOOK_FORMAT=text`.
+ * The format a service's own address says: Slack's, Discord's and Google
+ * Chat's incoming webhooks and ntfy.sh live at hosts of their own. Anything
+ * else, a self-hosted ntfy or Mattermost, gets `json` unless
+ * `ALERT_WEBHOOK_FORMAT` says otherwise.
+ */
+function detectedFormat(url: string | null): WebhookFormat {
+  if (url === null) return "json";
+  const host = new URL(url).hostname;
+  const under = (domain: string): boolean => host === domain || host.endsWith(`.${domain}`);
+  if (host === "hooks.slack.com") return "slack";
+  if (under("discord.com") || under("discordapp.com")) return "discord";
+  if (host === "chat.googleapis.com") return "googlechat";
+  if (host === "ntfy.sh") return "text";
+  return "json";
+}
+
+/**
+ * What `ALERT_WEBHOOK_FORMAT` says, or what the address says when it is empty.
+ * A value that is none of the five is a problem of the monitor, and the
+ * address decides all the same.
  */
 export function webhookFormat(raw: string | null | undefined, url: string | null): { format: WebhookFormat; problem: string | null } {
   const value = (raw ?? "").trim().toLowerCase();
-  if (value === "json" || value === "text") return { format: value, problem: null };
-  const fallback: WebhookFormat = url !== null && new URL(url).hostname === "ntfy.sh" ? "text" : "json";
+  const told = FORMATS.find((format) => format === value);
+  if (told !== undefined) return { format: told, problem: null };
+  const fallback = detectedFormat(url);
   if (value === "") return { format: fallback, problem: null };
-  return { format: fallback, problem: "ALERT_WEBHOOK_FORMAT must be json or text" };
+  return { format: fallback, problem: `ALERT_WEBHOOK_FORMAT must be ${FORMATS.slice(0, -1).join(", ")} or ${FORMATS.at(-1)}` };
 }
 
 /** A time a person reads anywhere: UTC, to the minute. */
@@ -142,13 +169,37 @@ export function message(notices: readonly Notice[], zone: string): string {
 }
 
 /**
- * The webhook's request. The JSON body carries the message twice, `text` for
- * Slack, Mattermost and Google Chat, `content` for Discord, each ignoring the
- * other's field. The text body is ntfy's, with a title and a high priority
- * when something critical went down.
+ * Slack reads `<...>` as a link or a mention, `<!channel>` pinging everyone in
+ * it, and `&` as the start of an escape: the three are escaped, as its
+ * documentation asks. A summary is the monitor's own words, but it carries a
+ * host, a unit's name, a line of systemctl: defence in depth, nothing in it
+ * gets to wake a channel.
+ */
+export function slackEscape(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * The webhook's request, in the body its format names:
+ *
+ *   slack       `{ text }`, escaped as above;
+ *   discord     `{ content, allowed_mentions: { parse: [] } }`, every mention
+ *               disabled, `@everyone` included, for the reason above;
+ *   googlechat  `{ text }` and nothing else: Google Chat refuses a field it
+ *               does not know with a 400, which `{ text, content }` was;
+ *   json        `{ text, content }`, for a service that reads one of the two;
+ *   text        ntfy's raw body, with a title and a high priority when
+ *               something critical went down.
  */
 export function webhookRequest(url: string, format: WebhookFormat, notices: readonly Notice[], zone: string): { url: string; init: RequestInit } {
   const text = message(notices, zone);
+  const json = (body: unknown) => ({
+    url,
+    init: { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+  });
+  if (format === "slack") return json({ text: slackEscape(text) });
+  if (format === "discord") return json({ content: text, allowed_mentions: { parse: [] } });
+  if (format === "googlechat") return json({ text });
   if (format === "text") {
     const urgent = notices.some((notice) => notice.event === "down" && notice.severity === "critical");
     return {
@@ -160,10 +211,7 @@ export function webhookRequest(url: string, format: WebhookFormat, notices: read
       },
     };
   }
-  return {
-    url,
-    init: { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, content: text }) },
-  };
+  return json({ text, content: text });
 }
 
 /** The dashboard's directory, served at `dashboard.<zone>` like any project. */

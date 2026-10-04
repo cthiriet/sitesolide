@@ -45,12 +45,27 @@ describe("the alerting addresses", () => {
     expect(alertUrl("HEARTBEAT_URL", " https://hc-ping.test-zone.invalid/0b1c ").url).toBe("https://hc-ping.test-zone.invalid/0b1c");
   });
 
-  test("the webhook's format: json by default, text for ntfy.sh or when told", () => {
-    expect(webhookFormat(undefined, "https://hooks.test-zone.invalid/services/x")).toEqual({ format: "json", problem: null });
-    expect(webhookFormat(undefined, "https://ntfy.sh/sample-topic")).toEqual({ format: "text", problem: null });
+  test("the webhook's format: recognized by the address, json for any other, or as told", () => {
+    const detected = (url: string) => webhookFormat(undefined, url).format;
+    expect(detected("https://hooks.slack.com/services/T000/B000/sample")).toBe("slack");
+    expect(detected("https://discord.com/api/webhooks/1/sample")).toBe("discord");
+    expect(detected("https://ptb.discord.com/api/webhooks/1/sample")).toBe("discord");
+    expect(detected("https://discordapp.com/api/webhooks/1/sample")).toBe("discord");
+    expect(detected("https://chat.googleapis.com/v1/spaces/AAAA/messages?key=k&token=t")).toBe("googlechat");
+    expect(detected("https://ntfy.sh/sample-topic")).toBe("text");
+    expect(detected("https://hooks.test-zone.invalid/services/x")).toBe("json");
+    // A look-alike is not the service.
+    expect(detected("https://discord.com.test-zone.invalid/x")).toBe("json");
+    expect(webhookFormat(undefined, "https://hooks.test-zone.invalid/x")).toEqual({ format: "json", problem: null });
+
     expect(webhookFormat("text", "https://ntfy.test-zone.invalid/topic")).toEqual({ format: "text", problem: null });
+    expect(webhookFormat("GoogleChat", "https://chat.test-zone.invalid/x")).toEqual({ format: "googlechat", problem: null });
+    expect(webhookFormat("discord", "https://hooks.slack.com/services/x")).toEqual({ format: "discord", problem: null });
     expect(webhookFormat("JSON", "https://ntfy.sh/sample-topic")).toEqual({ format: "json", problem: null });
-    expect(webhookFormat("xml", null)).toEqual({ format: "json", problem: "ALERT_WEBHOOK_FORMAT must be json or text" });
+    expect(webhookFormat("xml", "https://hooks.slack.com/services/x")).toEqual({
+      format: "slack",
+      problem: "ALERT_WEBHOOK_FORMAT must be slack, discord, googlechat, text or json",
+    });
   });
 });
 
@@ -91,7 +106,7 @@ describe("the message", () => {
 describe("the webhook's request", () => {
   const notices = [notice("down", "caddy", "critical", "Caddy is inactive (dead), result success")];
 
-  test("JSON: the message as text for Slack and as content for Discord", () => {
+  test("json, for any other service: the message as text and as content", () => {
     const { url, init } = webhookRequest("https://hooks.test-zone.invalid/x", "json", notices, ZONE);
     expect(url).toBe("https://hooks.test-zone.invalid/x");
     expect(init.method).toBe("POST");
@@ -99,6 +114,26 @@ describe("the webhook's request", () => {
     const body = JSON.parse(init.body as string) as { text: string; content: string };
     expect(body.text).toBe(message(notices, ZONE));
     expect(body.content).toBe(body.text);
+  });
+
+  /** A summary carrying what each service reads as a mention or a markup. */
+  const loud = [notice("down", "unit:shop.service", "critical", "shop.service <!channel> @everyone <@U0123> & <users/all> is failed (failed)")];
+
+  test("Slack: text alone, with <, > and & escaped, so that nothing in a summary pings a channel", () => {
+    const body = JSON.parse(webhookRequest("https://hooks.slack.com/services/x", "slack", loud, ZONE).init.body as string) as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(["text"]);
+    expect(body.text).toContain("shop.service &lt;!channel&gt; @everyone &lt;@U0123&gt; &amp; &lt;users/all&gt; is failed");
+    expect(body.text).not.toContain("<");
+  });
+
+  test("Discord: content alone, with every mention disabled", () => {
+    const body = JSON.parse(webhookRequest("https://discord.com/api/webhooks/1/x", "discord", loud, ZONE).init.body as string) as Record<string, unknown>;
+    expect(body).toEqual({ content: message(loud, ZONE), allowed_mentions: { parse: [] } });
+  });
+
+  test("Google Chat: text alone, the only field it accepts", () => {
+    const body = JSON.parse(webhookRequest("https://chat.googleapis.com/v1/spaces/A/messages", "googlechat", notices, ZONE).init.body as string) as Record<string, unknown>;
+    expect(body).toEqual({ text: message(notices, ZONE) });
   });
 
   test("text, for ntfy: the raw message, a title, a high priority when something critical went down", () => {
@@ -223,17 +258,17 @@ describe("delivery", () => {
   const base = `http://127.0.0.1:${server.port}`;
   afterAll(() => server.stop(true));
 
-  test("the heartbeat arrives on /fail with its body, the webhook as JSON", async () => {
+  test("the heartbeat arrives on /fail with its body, the webhook as Discord's JSON", async () => {
     received.length = 0;
     const checks = { caddy: { ...tracked("down", "critical", "Caddy is inactive (dead), result success"), kind: "caddy" as const } };
     expect(await deliver(heartbeatRequest(`${base}/ping/5a7f`, checks, ZONE), 5000)).toEqual({ ok: true });
     const notices = [notice("down", "caddy", "critical", "Caddy is inactive (dead), result success")];
-    expect(await deliver(webhookRequest(`${base}/hooks/discord`, "json", notices, ZONE), 5000)).toEqual({ ok: true });
+    expect(await deliver(webhookRequest(`${base}/hooks/discord`, "discord", notices, ZONE), 5000)).toEqual({ ok: true });
 
     expect(received.map((request) => request.path)).toEqual(["/ping/5a7f/fail", "/hooks/discord"]);
     expect(received[0]!.body).toBe("down: 1 of 1 checks\nDOWN Caddy is inactive (dead), result success");
     expect(received[1]!.type).toBe("application/json");
-    expect(JSON.parse(received[1]!.body)).toEqual({ text: message(notices, ZONE), content: message(notices, ZONE) });
+    expect(JSON.parse(received[1]!.body)).toEqual({ content: message(notices, ZONE), allowed_mentions: { parse: [] } });
   });
 
   test("a refusal, a closed port and a timeout are reasons, never the address", async () => {

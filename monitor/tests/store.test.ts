@@ -97,7 +97,7 @@ describe("the configuration", () => {
     if (!("config" in read)) throw new Error("expected a configuration");
     expect(read.config.heartbeatUrl).toBeNull();
     expect(read.config.webhookUrl).toBe("https://hooks.test-zone.invalid/T000/B000/secret");
-    expect(read.config.problems).toEqual(["HEARTBEAT_URL is not a URL", "ALERT_WEBHOOK_FORMAT must be json or text"]);
+    expect(read.config.problems).toEqual(["HEARTBEAT_URL is not a URL", "ALERT_WEBHOOK_FORMAT must be slack, discord, googlechat, text or json"]);
     expect(read.config.problems.join(" ")).not.toContain("secret");
   });
 });
