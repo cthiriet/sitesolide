@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   EMPTY_CONNECTORS,
   EMPTY_GRANTS,
+  connectorNamed,
   connectorViews,
   headerNameError,
   headerValueError,
@@ -158,6 +159,41 @@ describe("changing a connector", () => {
     expect(removed.connectors.connectors).toEqual({});
     expect(removed.grants.grants).toEqual([]);
     expect(removeConnector(EMPTY_CONNECTORS, EMPTY_GRANTS, "chat", LATER, "owner")).toEqual({ error: "no connector named chat" });
+  });
+});
+
+describe("a name every object inherits", () => {
+  const INHERITED = ["constructor", "__proto__", "toString"];
+
+  test("refuses the whole file that holds one, and a grant of one", () => {
+    const record = JSON.parse(serializeConnectors(withChat())).connectors.chat;
+    for (const name of INHERITED) {
+      // Written as text: `{ __proto__: ... }` in a literal would set the
+      // prototype rather than a key, and prove nothing.
+      const text = `{"version":1,"connectors":{${JSON.stringify(name)}:${JSON.stringify(record)}}}`;
+      expect({ name, parsed: parseConnectors(text) }).toEqual({ name, parsed: { error: `connectors.json: "${name}" is not a connector name` } });
+      const grant = JSON.stringify({ version: 1, grants: [{ slug: "shop", connector: name, at: NOW, by: "owner" }] });
+      expect({ name, parsed: parseGrants(grant) }).toEqual({ name, parsed: { error: "grants.json: a grant is unreadable" } });
+    }
+  });
+
+  test("is refused as a connector to create, change, grant or remove", () => {
+    const file = withChat();
+    for (const name of INHERITED) {
+      // With a value, and without one: the second used to take the inherited
+      // property for an existing connector, and write a record with no value.
+      for (const value of [VALUE, null]) {
+        const put = putConnector(file, { name, baseUrl: "https://chat.example.com", header: "Authorization", value }, LATER, "owner");
+        expect({ name, value, put: "error" in put }).toEqual({ name, value, put: true });
+      }
+      expect(setGrant(EMPTY_GRANTS, file, "shop", name, true, NOW, "owner")).toEqual({ error: "connector: not a connector name" });
+      expect(removeConnector(file, EMPTY_GRANTS, name, LATER, "owner")).toEqual({ error: `no connector named ${name}` });
+      expect(connectorNamed(file, name)).toBeUndefined();
+    }
+    expect(putConnector(file, { name: "constructor", baseUrl: "https://chat.example.com", header: "Authorization", value: null }, LATER, "owner")).toEqual({
+      error: "name: constructor is reserved, every JavaScript object already carries that name",
+    });
+    expect(connectorNamed(file, "chat")).toMatchObject({ value: VALUE });
   });
 });
 

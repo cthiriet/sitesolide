@@ -170,11 +170,24 @@ export function matchesEgress(patterns: readonly HostPattern[], host: string, po
 }
 
 /**
+ * A name every JavaScript object already answers to: `constructor`,
+ * `toString`, `__proto__`. The connectors live in an object keyed by name, and
+ * `connectors["constructor"]` is never undefined: a connector so named would
+ * read as present before it exists, and a change without a value would then
+ * write a record with none, a file the proxy refuses whole.
+ */
+export function isInheritedName(name: string): boolean {
+  return Object.hasOwn(Object.prototype, name);
+}
+
+/**
  * A connector's name: what the manifest lists, what the dashboard grants, and a
- * segment of `/connectors/<name>/`. Same shape as a service's name.
+ * segment of `/connectors/<name>/`. Same shape as a service's name, and never
+ * a name every object inherits. Only `constructor` has the shape today; the
+ * others are refused by name as well, should the shape widen one day.
  */
 export function isValidConnectorName(name: unknown): name is string {
-  return typeof name === "string" && name.length <= 32 && /^[a-z]([a-z0-9-]*[a-z0-9])?$/.test(name);
+  return typeof name === "string" && name.length <= 32 && /^[a-z]([a-z0-9-]*[a-z0-9])?$/.test(name) && !isInheritedName(name);
 }
 
 /** Does the project list hosts to reach through the proxy? */
@@ -244,7 +257,9 @@ export function egressErrors(manifest: Manifest, isApplication: boolean): string
       if (names.length > MAX_CONNECTORS) errors.push(`connectors: ${MAX_CONNECTORS} at most`);
       const seen = new Set<string>();
       for (const name of names) {
-        if (!isValidConnectorName(name)) {
+        if (typeof name === "string" && isInheritedName(name)) {
+          errors.push(`connectors: ${name} is reserved, every JavaScript object already carries that name`);
+        } else if (!isValidConnectorName(name)) {
           errors.push(`connectors: "${String(name)}" should start with a letter, then lowercase letters, digits and dashes, 32 characters at most`);
         } else if (seen.has(name)) {
           errors.push(`connectors: ${name} is listed twice`);

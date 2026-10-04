@@ -181,6 +181,30 @@ describe("writing a connector", () => {
     expect(refusals[0]!.body!.message).toBe("value: required to create a connector");
   });
 
+  test("a name every object inherits is refused, and leaves the files writable", async () => {
+    const bench = await mount();
+    const token = await bench.unlock();
+    await bench.call("PUT", "/connector", chat(token));
+    const file = join(bench.egress, "connectors.json");
+    const before = readFileSync(file, "utf8");
+    for (const name of ["constructor", "__proto__", "toString"]) {
+      // With a value and without: the second used to find `constructor` on
+      // every object, take it for an existing connector, and write a record
+      // with no value, a file the proxy and the steward then refused whole.
+      for (const value of [VALUE, null]) {
+        const refused = await bench.call("PUT", "/connector", { ...chat(token, value), name });
+        expect({ name, value, status: refused.status }).toEqual({ name, value, status: 400 });
+      }
+      expect((await bench.call("PUT", "/grant", { token, slug: "shop", connector: name, granted: true })).status).toBe(400);
+      expect((await bench.call("DELETE", "/connector", { token, name, confirmation: name })).status).toBe(404);
+    }
+    expect(readFileSync(file, "utf8")).toBe(before);
+    expect(existsSync(join(bench.egress, "grants.json"))).toBe(false);
+    // Still managed: the next write goes through.
+    expect(((await bench.call("GET", "/connectors")).body as unknown as ConnectorsView).state).toBe("managed");
+    expect((await bench.call("PUT", "/grant", { token, slug: "shop", connector: "chat", granted: true })).status).toBe(200);
+  });
+
   test("a removal needs the name retyped, and takes its grants with it", async () => {
     const bench = await mount();
     const token = await bench.unlock();

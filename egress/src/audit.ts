@@ -154,10 +154,13 @@ export function createAudit(db: Database, now: () => Date = () => new Date()): A
       const rows: [string, string, string, string | null, string | null][] = [];
 
       const before = seen<Record<string, SeenConnector>>("connectors");
-      const after: Record<string, SeenConnector> = {};
+      // Without a prototype: a name is only ever an own key here.
+      const after: Record<string, SeenConnector> = Object.create(null);
       for (const [name, record] of Object.entries(connectors.connectors)) {
         after[name] = { baseUrl: record.baseUrl, header: record.header, updatedAt: record.updatedAt, secretUpdatedAt: record.secretUpdatedAt };
-        const previous = before?.[name];
+        // Own properties alone: what the previous state read back from JSON
+        // inherits `constructor` and `toString` like any object.
+        const previous = before !== null && Object.hasOwn(before, name) ? before[name] : undefined;
         const actor = record.updatedBy;
         if (previous === undefined) {
           rows.push([at, actor, "connector.update", name, JSON.stringify({ change: "created", baseUrl: record.baseUrl, header: record.header })]);
@@ -179,7 +182,7 @@ export function createAudit(db: Database, now: () => Date = () => new Date()): A
         }
       }
       for (const name of Object.keys(before ?? {})) {
-        if (after[name] !== undefined) continue;
+        if (Object.hasOwn(after, name)) continue;
         rows.push([at, connectors.updatedBy ?? SYSTEM_ACTOR, "connector.update", name, JSON.stringify({ change: "removed" })]);
       }
 

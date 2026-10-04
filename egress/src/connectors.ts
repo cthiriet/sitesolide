@@ -23,7 +23,7 @@
  */
 import type { Server } from "bun";
 import { isValidConnectorName } from "../../bin/cli/egress";
-import { isGranted, readBaseUrl } from "../../bin/cli/connectors";
+import { connectorNamed, isGranted, readBaseUrl } from "../../bin/cli/connectors";
 import { urlHost } from "./addresses";
 import type { Audit } from "./audit";
 import { HOP_BY_HOP } from "./decide";
@@ -159,7 +159,7 @@ export function startConnectors(options: ConnectorsOptions): Server<undefined> {
     }
     const { slug } = who;
     const lending = options.policy.lending();
-    const connector = lending.connectors.connectors[name];
+    const connector = connectorNamed(lending.connectors, name);
     if (connector === undefined) {
       const why = lending.errors.length > 0 ? `the connectors file on the server does not read (${lending.errors.join("; ")})` : `no connector named ${name} on this server`;
       return denied(404, "unknown connector", `connectors: ${why}`, slug);

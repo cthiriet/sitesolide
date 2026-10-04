@@ -18,7 +18,7 @@
  *
  * Pure: parses, checks, rewrites text.
  */
-import { isValidConnectorName, normalizeHost } from "./egress";
+import { isInheritedName, isValidConnectorName, normalizeHost } from "./egress";
 import { isValidSlug } from "./manifest";
 
 /** Where the two files live, readable by the proxy's account alone. */
@@ -286,6 +286,16 @@ export function connectorViews(file: ConnectorsFile): ConnectorView[] {
     });
 }
 
+/**
+ * The connector of that name, or undefined. Every lookup by name goes through
+ * here rather than `file.connectors[name]`, which answers for `constructor`
+ * or `toString` with what every object inherits. The names are refused at
+ * validation too; this holds should one ever slip past it.
+ */
+export function connectorNamed(file: ConnectorsFile, name: string): ConnectorRecord | undefined {
+  return Object.hasOwn(file.connectors, name) ? file.connectors[name] : undefined;
+}
+
 export function isGranted(grants: GrantsFile, slug: string, connector: string): boolean {
   return grants.grants.some((grant) => grant.slug === slug && grant.connector === connector);
 }
@@ -304,6 +314,9 @@ export function putConnector(
   now: string,
   actor: string,
 ): { file: ConnectorsFile; created: boolean } | { error: string } {
+  if (typeof input.name === "string" && isInheritedName(input.name)) {
+    return { error: `name: ${input.name} is reserved, every JavaScript object already carries that name` };
+  }
   if (!isValidConnectorName(input.name)) {
     return { error: "name: a letter, then lowercase letters, digits and dashes, 32 characters at most, such as slack" };
   }
@@ -311,7 +324,7 @@ export function putConnector(
   if ("error" in base) return base;
   const headerError = headerNameError(input.header);
   if (headerError !== null) return { error: headerError };
-  const existing = file.connectors[input.name];
+  const existing = connectorNamed(file, input.name);
   if (input.value === null && existing === undefined) return { error: "value: required to create a connector" };
   if (input.value !== null) {
     const valueError = headerValueError(input.value);
@@ -343,7 +356,7 @@ export function removeConnector(
   now: string,
   actor: string,
 ): { connectors: ConnectorsFile; grants: GrantsFile } | { error: string } {
-  if (connectors.connectors[name] === undefined) return { error: `no connector named ${name}` };
+  if (connectorNamed(connectors, name) === undefined) return { error: `no connector named ${name}` };
   const { [name]: _removed, ...rest } = connectors.connectors;
   const kept = grants.grants.filter((grant) => grant.connector !== name);
   return {
@@ -366,7 +379,7 @@ export function setGrant(
   if (!isValidConnectorName(connector)) return { error: "connector: not a connector name" };
   const present = isGranted(grants, slug, connector);
   if (granted) {
-    if (connectors.connectors[connector] === undefined) return { error: `no connector named ${connector}` };
+    if (connectorNamed(connectors, connector) === undefined) return { error: `no connector named ${connector}` };
     if (present) return { file: grants, changed: false };
     if (grants.grants.length >= MAX_GRANT_COUNT) return { error: `${MAX_GRANT_COUNT} grants at most` };
     return {

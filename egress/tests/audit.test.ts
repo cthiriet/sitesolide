@@ -126,6 +126,28 @@ describe("changes to the connectors and their grants", () => {
     ]);
   });
 
+  test("a name every object inherits is created and removed like any other, should one slip past validation", () => {
+    for (const name of ["constructor", "__proto__", "toString"]) {
+      const { audit } = bench();
+      const chat = connectors();
+      audit.observe(chat, EMPTY_GRANTS);
+      // Built by hand: validation refuses these names, which is the point of
+      // checking that the diff does not lean on it.
+      const record = chat.connectors.chat!;
+      const twice: ConnectorsFile = { ...chat, connectors: Object.fromEntries([["chat", record], [name, record]]) };
+      expect(audit.observe(twice, EMPTY_GRANTS)).toBe(1);
+      expect(audit.observe(chat, EMPTY_GRANTS)).toBe(1);
+      const rows = audit.recent(2).reverse();
+      expect({ name, rows: rows.map((row) => [row.target, JSON.parse(row.detail!).change]) }).toEqual({
+        name,
+        rows: [
+          [name, "created"],
+          [name, "removed"],
+        ],
+      });
+    }
+  });
+
   test("no row, no state kept, ever carries a credential's value", () => {
     const { db, audit } = bench();
     audit.observe(connectors(), EMPTY_GRANTS);

@@ -312,7 +312,8 @@ environment.
 
 **Both are needed**: this key, which says the app asks, and the grant, which
 says the administrator agrees. Either alone is refused. Names are lowercase
-letters, digits and dashes, starting with a letter. Works with either
+letters, digits and dashes, starting with a letter, and never `constructor`,
+which every JavaScript object already carries. Works with either
 `network`; refused on a static site. `SITESOLIDE_CONNECTORS` belongs to the
 deployment.
 

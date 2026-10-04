@@ -234,7 +234,7 @@ describe("the pieces of a forwarded request", () => {
   test("the path under a connector", () => {
     expect(connectorPath("/connectors/chat")).toEqual({ name: "chat", rest: "" });
     expect(connectorPath("/connectors/chat/a/b")).toEqual({ name: "chat", rest: "/a/b" });
-    for (const path of ["/connectors/", "/connectors/Chat/x", "/connectors/chat/a%2fb", "/connectors/chat/a%5Cb", "/other/chat"]) {
+    for (const path of ["/connectors/", "/connectors/Chat/x", "/connectors/chat/a%2fb", "/connectors/chat/a%5Cb", "/other/chat", "/connectors/constructor/x"]) {
       expect(connectorPath(path)).toBeNull();
     }
   });

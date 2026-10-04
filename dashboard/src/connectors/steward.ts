@@ -16,6 +16,7 @@
  */
 import {
   OWNER_ACTOR,
+  connectorNamed,
   connectorViews,
   putConnector,
   removeConnector,
@@ -117,7 +118,7 @@ export function createConnectorRoutes(store: ConnectorStore, tools: StewardTools
       const files = managed();
       if (files instanceof Response) return files;
       const name = body.name as string;
-      if (files.connectors.connectors[name] === undefined) return error("not-found", `no connector named ${name.slice(0, 40)}`);
+      if (connectorNamed(files.connectors, name) === undefined) return error("not-found", `no connector named ${name.slice(0, 40)}`);
       // Every project using it loses it at once: the name is retyped.
       if (body.confirmation !== name) return error("invalid", `type ${name} to confirm removing the connector`);
       const result = removeConnector(files.connectors, files.grants, name, stamp(), OWNER_ACTOR);

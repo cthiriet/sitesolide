@@ -120,6 +120,14 @@ describe("connector names", () => {
       expect(isValidConnectorName(name)).toBe(false);
     }
   });
+
+  test("never a name every object inherits, which a lookup by name would find before it exists", () => {
+    for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
+      expect({ name, valid: isValidConnectorName(name) }).toEqual({ name, valid: false });
+    }
+    expect(validate({ ...APP, connectors: ["constructor"] })).toContainEqual("connectors: constructor is reserved, every JavaScript object already carries that name");
+    expect(requestedConnectors({ ...APP, connectors: ["constructor", "slack"] })).toEqual(["slack"]);
+  });
 });
 
 describe("the manifest's keys", () => {
