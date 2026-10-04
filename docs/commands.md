@@ -17,6 +17,7 @@ sitesolide deploy               prepare, build, push, install, restart, verify
 sitesolide status               what the server actually runs
 sitesolide logs [--follow]      journalctl for this project
    --lines <n>                  how many lines back, 50 by default
+sitesolide backups              this project's data snapshots, read only
 sitesolide lock   [--dry-run]   close the preview behind a code, or show it
    --status                     wanted / installed / measured, without touching
    --new-code                   replace the code in force by a fresh one
@@ -92,3 +93,9 @@ gets one chosen on the machine.
 The other commands need the owner's SSH access and say so. The owner, whose
 configuration has a `server`, keeps SSH for every command; `--api` makes one
 go through the dashboard instead, to see what a team member sees.
+
+`sitesolide backups` lists the snapshots the machine keeps of the project's
+data folder, on the server and in the bucket, and its last run. It reads and
+changes nothing: a restore is made from the dashboard's *Backups* section, which
+saves the current data first. See
+[dashboard/src/backup/README.md](../dashboard/src/backup/README.md).

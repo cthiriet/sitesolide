@@ -7,7 +7,8 @@ does, the only part of the dashboard that teaches you something, and the list
 of sites; *Activity*, the latest operations on secrets and portals; *Team*, the
 tokens that deploy without SSH; *Connectors*, the credentials the egress proxy
 lends to projects. **A site**: *Overview*, *Audience*, *Secrets*, *Guests*,
-*Sharing* and *Access*, everything that concerns that site and only it.
+*Sharing*, *Access* and *Backups*, everything that concerns that site and only
+it.
 
 **Few writes, and each one is a decision.** No button sets a preview lock. One
 machine serves every site, with no staging and no automatic recovery: what
@@ -32,6 +33,10 @@ relays to a component that judges for itself what it accepts:
   *Team* page. The steward judges every token and starts the installer, a root
   one-shot that deploys one project as `sitesolide deploy` would. See
   [The control API](#the-control-api).
+- **a project's data, put back as a snapshot had it**, the *Backups* section.
+  The steward starts a restore one-shot, which saves the current data first,
+  swaps the folders and puts them back if the service does not come back. See
+  [src/backup/README.md](src/backup/README.md).
 
 ## The web service does not read the machine
 
@@ -227,8 +232,12 @@ steward.js         root, hardened sitesolide-steward.service
    |-- writes /var/lib/sitesolide-steward/journal.jsonl  with no values at all
    |-- reads  /etc/caddy/sites/<slug>.caddy              whether the door is on
    |-- writes /etc/sitesolide-egress/*.json              the connectors, see Connectors
+   |-- reads  /var/backups/sitesolide/<slug>/            the snapshots, by name
+   |-- reads  /var/lib/sitesolide-backup/backup.db       the bucket's index, the audit
+   |-- writes /var/lib/sitesolide-backup/requests/       a restore request, consumed by the one-shot
    `-- runs   systemctl reset-failed | restart | show <unit>
               systemctl start sitesolide-gatekeeper-<on|off>@<slug>
+              systemctl start --no-block sitesolide-restore@<slug>
 ```
 
 **The dashboard judges no secret rule.** It checks the origin, the session and
@@ -636,9 +645,11 @@ Revoking every token closes the API without touching anything else: *Team*,
 
 ```bash
 cd dashboard && sitesolide deploy   # user, layout, unit, relay and page
+bin/deploy-backup.sh install        # the backup component, before the steward; starts nothing
 bin/deploy-steward.sh               # builds, installs and checks the steward
 bin/deploy-gatekeeper.sh            # builds, installs both unit templates, starts nothing
 bin/deploy-installer.sh             # builds, installs the installer's template, starts nothing
+bin/deploy-backup.sh enable         # a first snapshot of every project, then the hourly timer
 ADMIN_MODE=observe bin/deploy-loopback.sh close
 bin/deploy-loopback.sh state        # hours later: who would have reached the admin API
 bin/deploy-loopback.sh close        # then closed to all but root and caddy
@@ -684,6 +695,8 @@ ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
 | `gatekeeper.ts`, `src/gatekeeper/`, `infra/gatekeeper/`, `bin/cli/fragment.ts`, `bin/cli/portal.ts` | `bin/deploy-gatekeeper.sh` |
 | `src/control/steward.ts`, `src/control/system.ts`, `src/control/tokens.ts`, `src/control/policy.ts` | `bin/deploy-steward.sh` |
 | `installer.ts`, `src/installer/`, `src/control/policy.ts`, `infra/installer/`, `bin/cli/` generators | `bin/deploy-installer.sh` |
+| `backup.ts`, `src/backup/` (but its steward routes), `infra/backup/` | `bin/deploy-backup.sh install` |
+| `src/backup/routes.ts`, `src/backup/reader.ts` | `bin/deploy-steward.sh` |
 | anything else | `sitesolide deploy` |
 
 ## Local development

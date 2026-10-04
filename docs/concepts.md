@@ -76,6 +76,9 @@ more.
 | The collector | root, on a timer | read the machine, drop a snapshot where the dashboard can read it |
 | The monitor | a dynamic account, on a timer | read what any account reads, ask Caddy for every site over HTTPS, alert |
 | The egress proxy | `sitesolide-egress` | let each project reach the hosts its manifest lists, lend it the connectors granted to it |
+| The backup run | root, on a timer | list the projects, store the archives their own accounts hand it, prune, upload |
+| A backup copy or extraction | `site-<slug>`, one-shot | read or write that project's data, nothing else, no network |
+| A restore | root, one-shot | swap one project's data folder, restart its services, put the data back if they fail |
 
 **The dashboard reads nothing itself.** Its unit replaces `/srv` with an empty
 mount, so it cannot open another project's files, and the loopback rule stops it
@@ -188,6 +191,22 @@ through *Change password*: the hash is never read back and never restored. And
 `dashboard.env` is owned by root, so the dashboard's own service cannot rewrite
 the hash that unlocks the secrets.
 
+## Backups
+
+Once installed, the machine snapshots every app's data folder every hour, keeps
+a day of hourly snapshots, a week of daily ones and a month of weekly ones, and
+can copy them, encrypted on the machine, to a bucket elsewhere. A snapshot is
+restored one project at a time from the dashboard's *Backups* section, which
+saves the current data first so that a restore can itself be undone, and puts
+it back if the service does not come back on the restored data.
+
+The boundary is the same as everywhere: **root never opens a project's file.**
+The copy and the extraction run as the project's own account, in a transient
+unit with its service's walls and no network; root only stores what they hand
+it, as archives no project can read. A manifest opts out with
+`"backup": false`. See
+[dashboard/src/backup/README.md](../dashboard/src/backup/README.md).
+
 ## Previews and the portal
 
 Two different things, often confused.
@@ -257,6 +276,7 @@ the machine, in the installer, with the same decisions: see
 - [docs/commands.md](commands.md), what the CLI does
 - [infra/README.md](../infra/README.md), the machine itself
 - [dashboard/README.md](../dashboard/README.md), the dashboard, the steward and the gatekeeper
+- [dashboard/src/backup/README.md](../dashboard/src/backup/README.md), the data snapshots and their restore
 - [portal/README.md](../portal/README.md), the shared door, guest access, signing in with a company account, sharing and the identity headers
 - [analytics/README.md](../analytics/README.md), how a visit is counted, and why it is anonymous
 - [monitor/README.md](../monitor/README.md), what is checked every minute, and who hears of it
