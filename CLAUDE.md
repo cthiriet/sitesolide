@@ -30,9 +30,18 @@ the shutdown was orderly.
 | Stop a test instance | `pkill -f` on its command line |
 | Check a configuration | `bin/deploy-caddy.sh`, which loads the environment the way systemd does |
 
-**A clean shutdown is not a failure to systemd.** The service exits with
-`Result=success`, so `Restart=always` never fires and the machine stays silent
-until someone intervenes. No external monitoring is in place to notice.
+**What brings Caddy back, and what does not.** The unit of the Caddy package
+sets no `Restart=`, and systemd's default is `no`: on 11 August Caddy exited
+cleanly, with `Result=success`, and nothing was configured to start it again.
+`Restart=always` restarts a service however it ended, a clean exit included;
+only a stop asked of systemd (`systemctl stop`, a restart, a shutdown) prevents
+it. The drop-in `infra/caddy/caddy.service.d/override.conf` sets it, so a
+`caddy stop` costs a blip of a few seconds on every site rather than an outage.
+The ban stands all the same: the blip is real, and the admin API can do worse
+than stop Caddy, it can load a configuration that serves nothing while the
+process stays alive, which no restart policy notices.
+
+No external monitoring is in place to notice that it had to.
 
 **`caddy validate` run by hand fails with nothing broken.** It does not load
 `/etc/caddy/cloudflare.env` or `/etc/caddy/sitesolide.env`, which systemd
