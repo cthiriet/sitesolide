@@ -253,7 +253,7 @@ any caller.
 | Open connections, all projects | 1024, then 503 |
 | Open connections per project, counted once the kernel names the caller, before its head | 128, then 503 |
 | Request head | 16 KiB, 10 s to arrive |
-| Idle tunnel | closed after 10 min with no byte either way |
+| Idle tunnel | closed after 10 min with no byte delivered either way; a byte sent to a side already gone does not count |
 | Connection, resolution | 10 s, 5 s |
 | Connector request body | 10 MiB, streamed through, not held |
 | Connector calls waiting for an answer, per project | 32, then 503 |

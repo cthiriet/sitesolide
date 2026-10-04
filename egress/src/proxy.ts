@@ -49,7 +49,7 @@ export type Limits = {
   headBytes: number;
   /** Time left to the head to arrive whole. */
   headTimeoutMs: number;
-  /** A tunnel with no byte in either direction for this long is closed. */
+  /** A tunnel that delivers no byte in either direction for this long is closed. */
   idleMs: number;
   connectTimeoutMs: number;
   lookupTimeoutMs: number;
@@ -93,7 +93,7 @@ type Side = {
   /** Bytes waiting for this side to drain. */
   queue: Uint8Array[];
   queued: number;
-  /** Ended by its peer: close once the queue is written. */
+  /** Its peer is gone: the connection closes once this queue is written. */
   ending: boolean;
 };
 
@@ -168,21 +168,45 @@ export function startProxy(options: ProxyOptions): Proxy {
     if (to.queued > limits.bufferBytes) from.socket?.pause();
   }
 
-  function flush(to: Side, from: Side): void {
+  function flush(connection: Connection, to: Side, from: Side): void {
     if (to.socket === null) return;
     while (to.queue.length > 0) {
       const chunk = to.queue[0]!;
-      const written = to.socket.write(chunk);
+      const written = Math.max(to.socket.write(chunk), 0);
+      // A byte delivered is activity: a slow reader catching up is no idle
+      // tunnel.
+      if (written > 0) connection.lastActivity = Date.now();
       if (written < chunk.length) {
-        to.queue[0] = chunk.subarray(Math.max(written, 0));
-        to.queued -= Math.max(written, 0);
+        to.queue[0] = chunk.subarray(written);
+        to.queued -= written;
         return;
       }
       to.queue.shift();
       to.queued -= chunk.length;
     }
+    if (to.ending) return close(connection);
     from.socket?.resume();
-    if (to.ending) to.socket.end();
+  }
+
+  /**
+   * One side is gone, whichever goes first. What waited for it can never be
+   * delivered, and is dropped. What waits for the other side is delivered
+   * first, an answer cut at the end being worse than a late close, and the
+   * connection closes once it is written; with nothing waiting, it closes
+   * now. Until then the other side is read again, so that its own close is
+   * seen at once, and what it sends, which reaches nobody, is dropped without
+   * counting as activity: a peer that trickles bytes it knows go nowhere is
+   * swept like an idle tunnel. Left as they were, two queues holding bytes at
+   * the close kept the connection, and its place in the project's share,
+   * until the idle sweep, or for ever behind such a trickle.
+   */
+  function sideClosed(connection: Connection, gone: Side, other: Side): void {
+    if (isClosed(connection)) return;
+    gone.queue = [];
+    gone.queued = 0;
+    if (other.socket === null || other.queue.length === 0) return close(connection);
+    other.ending = true;
+    other.socket.resume();
   }
 
   function close(connection: Connection): void {
@@ -260,20 +284,19 @@ export function startProxy(options: ProxyOptions): Proxy {
               data(socket, chunk) {
                 if (!isUpstream(socket)) return;
                 const owner = socket.data;
+                // The client gone, this reaches nobody: see sideClosed().
+                if (owner.client.socket === null) return;
                 owner.lastActivity = Date.now();
                 send(owner.client, owner.upstream, chunk);
               },
               drain(socket) {
-                if (isUpstream(socket)) flush(socket.data.upstream, socket.data.client);
+                if (isUpstream(socket)) flush(socket.data, socket.data.upstream, socket.data.client);
               },
               close(socket) {
                 if (!isUpstream(socket)) return;
                 const owner = socket.data;
                 owner.upstream.socket = null;
-                // What the origin sent is delivered before the client's side
-                // closes: an answer cut at the end is worse than a late close.
-                if (owner.client.queue.length === 0) close(owner);
-                else owner.client.ending = true;
+                sideClosed(owner, owner.upstream, owner.client);
               },
               error() {
                 // close follows.
@@ -405,7 +428,6 @@ export function startProxy(options: ProxyOptions): Proxy {
 
       data(socket, chunk) {
         const connection = socket.data;
-        connection.lastActivity = Date.now();
         switch (connection.phase) {
           case "head": {
             connection.head = concat(connection.head, chunk);
@@ -434,6 +456,9 @@ export function startProxy(options: ProxyOptions): Proxy {
             if (connection.head.length > limits.bufferBytes) refuse(connection, 400, "egress: too much sent before the tunnel opened");
             return;
           case "open":
+            // The upstream gone, this reaches nobody: see sideClosed().
+            if (connection.upstream.socket === null) return;
+            connection.lastActivity = Date.now();
             send(connection.upstream, connection.client, chunk);
             return;
           case "closed":
@@ -443,15 +468,14 @@ export function startProxy(options: ProxyOptions): Proxy {
 
       drain(socket) {
         const connection = socket.data;
-        flush(connection.client, connection.upstream);
+        flush(connection, connection.client, connection.upstream);
       },
 
       close(socket) {
         const connection = socket.data;
         if (connection === undefined) return;
         connection.client.socket = null;
-        if (connection.upstream.queue.length === 0) close(connection);
-        else connection.upstream.ending = true;
+        sideClosed(connection, connection.client, connection.upstream);
       },
 
       error() {
@@ -462,7 +486,7 @@ export function startProxy(options: ProxyOptions): Proxy {
 
   // One sweep for every tunnel, rather than a timer per socket: a tunnel
   // carrying a download has one silent side, and a per-socket idle timeout
-  // would cut it.
+  // would cut it. Activity is a byte delivered, never one dropped.
   const sweep = setInterval(() => {
     const now = Date.now();
     for (const connection of connections) {

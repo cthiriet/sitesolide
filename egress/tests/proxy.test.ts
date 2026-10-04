@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { Server } from "bun";
+import type { Server, Socket } from "bun";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EGRESS_PROXY_PORT, egressUnitLines, parseEgressEntry, type HostPattern } from "../../bin/cli/egress";
@@ -374,6 +374,200 @@ function identifyByPort(owners: Map<number, Caller>) {
     return owners.get(peer.remotePort) ?? { kind: "unknown", reason: "no owner in the test" };
   };
 }
+
+/** What a flooding end writes at a time: big enough to fill every buffer on the way quickly. */
+const BLOCK = new Uint8Array(1024 * 1024).fill(9);
+
+/**
+ * One end of a tunnel that writes as fast as the other lets it and reads
+ * nothing: what makes the proxy hold bytes for it in both directions.
+ */
+type Flood = { socket: Socket<undefined> | null; written: number; on: boolean };
+
+/**
+ * Writes until the socket takes no more. A short write turns a paused Bun
+ * socket's reading back on (see `keepPaused` in src/proxy.ts): resume() then
+ * pause() puts it back, or this end would read after all.
+ */
+function pump(flood: Flood): void {
+  while (flood.on && flood.socket !== null) {
+    const written = flood.socket.write(BLOCK);
+    if (written > 0) flood.written += written;
+    if (written < BLOCK.length) {
+      flood.socket.resume();
+      flood.socket.pause();
+      return;
+    }
+  }
+}
+
+/** An origin that floods whoever connects, and reads nothing. */
+function floodingOrigin() {
+  const flood: Flood = { socket: null, written: 0, on: true };
+  const listener = Bun.listen({
+    hostname: "127.0.0.1",
+    port: 0,
+    socket: {
+      open(socket) {
+        flood.socket = socket;
+        socket.pause();
+        pump(flood);
+      },
+      drain: () => pump(flood),
+      data() {},
+      close() {
+        flood.socket = null;
+      },
+    },
+  });
+  return { flood, port: listener.port, stop: () => listener.stop(true) };
+}
+
+/** A client that opens a tunnel, then reads nothing until told to, and floods it unless told not to. */
+async function floodingClient(port: number, floods = true) {
+  const flood: Flood = { socket: null, written: 0, on: false };
+  const answer = Promise.withResolvers<void>();
+  let received = 0;
+  let head = "";
+  const closed = Promise.withResolvers<void>();
+  const socket = await Bun.connect({
+    hostname: "127.0.0.1",
+    port,
+    socket: {
+      data(_socket, chunk) {
+        if (head.includes("\r\n\r\n")) received += chunk.length;
+        else {
+          head += new TextDecoder("latin1").decode(chunk);
+          if (head.includes("\r\n\r\n")) answer.resolve();
+        }
+      },
+      drain: () => pump(flood),
+      close: () => closed.resolve(),
+      error: () => closed.resolve(),
+    },
+  });
+  flood.socket = socket;
+  socket.write(`CONNECT ${API}:443 HTTP/1.1\r\n\r\n`);
+  await answer.promise;
+  socket.pause();
+  flood.on = floods;
+  pump(flood);
+  return {
+    flood,
+    socket,
+    head: () => head,
+    received: () => received,
+    closed: closed.promise,
+    /** Reads again, and floods no more. */
+    read: () => {
+      flood.on = false;
+      socket.resume();
+    },
+  };
+}
+
+describe("closing a tunnel whose both ends hold bytes", () => {
+  function bench(idleMs = 60_000) {
+    const origin = floodingOrigin();
+    const proxy = startProxy({
+      hostname: "127.0.0.1",
+      port: 0,
+      identify: () => ({ kind: "project", slug: "shop", account: "site-shop" }),
+      egressOf: () => [parseEgressEntry(API)!],
+      lookup: stubLookup({ [API]: [PUBLIC_V4] }),
+      audit: recordingAudit().audit,
+      route: () => ({ hostname: "127.0.0.1", port: origin.port }),
+      limits: { idleMs },
+      log: () => undefined,
+    });
+    return { origin, proxy, stop: () => (proxy.stop(), origin.stop()) };
+  }
+
+  /**
+   * Both ends flood and neither reads, until the proxy holds bytes for both;
+   * then both stop sending, so that what follows is only the closes. (Bun
+   * 1.3 on macOS sometimes never reports the close of a peer it is reading
+   * flat out while a write to it waits: a close in the middle of a flood
+   * would test that, not the proxy.)
+   */
+  async function stalled(proxy: Proxy, origin: ReturnType<typeof floodingOrigin>, clientFloods = true) {
+    const client = await floodingClient(proxy.port, clientFloods);
+    await Bun.sleep(300);
+    client.flood.on = false;
+    origin.flood.on = false;
+    await Bun.sleep(100);
+    expect(proxy.open()).toBe(1);
+    return client;
+  }
+
+  test("the client gone first: the connection is released once the origin goes too, not ten minutes later", async () => {
+    const { origin, proxy, stop } = bench();
+    try {
+      const client = await stalled(proxy, origin);
+      // Gone as a killed process goes.
+      client.socket.terminate();
+      await Bun.sleep(100);
+      // The origin then ends its side, as a server does.
+      origin.flood.socket?.end();
+      await Bun.sleep(300);
+      expect(proxy.open()).toBe(0);
+    } finally {
+      stop();
+    }
+  });
+
+  test("the origin gone first: what it sent is delivered to a client that reads, then the connection closes", async () => {
+    const { origin, proxy, stop } = bench();
+    try {
+      const client = await stalled(proxy, origin);
+      origin.flood.socket?.terminate();
+      await Bun.sleep(100);
+      expect(proxy.open()).toBe(1);
+      // The client reads at last: what the proxy held for it reaches it,
+      // then the proxy closes.
+      client.read();
+      await Promise.race([client.closed, Bun.sleep(3000)]);
+      expect(proxy.open()).toBe(0);
+      expect(client.received()).toBeGreaterThan(0);
+    } finally {
+      stop();
+    }
+  });
+
+  test("the origin gone first, the client gone too without reading: released at once", async () => {
+    const { origin, proxy, stop } = bench();
+    try {
+      const client = await stalled(proxy, origin);
+      origin.flood.socket?.terminate();
+      await Bun.sleep(100);
+      client.socket.end();
+      await Bun.sleep(300);
+      expect(proxy.open()).toBe(0);
+    } finally {
+      stop();
+    }
+  });
+
+  test("the origin gone, a client that trickles bytes and never reads is swept like an idle tunnel", async () => {
+    const { origin, proxy, stop } = bench(400);
+    try {
+      // A client that sends nothing and reads nothing: the origin's bytes
+      // wait for it, and the proxy keeps reading it.
+      const client = await stalled(proxy, origin, false);
+      origin.flood.socket?.terminate();
+      // A byte every 50 ms: it reaches nobody, and must not count as life.
+      const trickle = setInterval(() => client.socket.write("x"), 50);
+      try {
+        await Bun.sleep(1500);
+        expect(proxy.open()).toBe(0);
+      } finally {
+        clearInterval(trickle);
+      }
+    } finally {
+      stop();
+    }
+  });
+});
 
 describe("the per-project limit", () => {
   test("refuses a project's connection beyond its share, and frees the share on close", async () => {
