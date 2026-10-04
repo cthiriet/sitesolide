@@ -57,6 +57,8 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^no free port left on the server/, "the owner has to free a port by removing a project the server no longer needs; deploy cannot pick one"],
   [/^the loopback rule in service predates the project set/, "the owner has to lay the current loopback rule first (the command is in `details`); an agent must not run it"],
   [/^\/etc\/sitesolide-loopback-projects\.nft refused/, "tell the owner: the loopback rule on the server refused this project's ports; nothing more can be done from here"],
+  [/^the egress proxy is installed on the server but not running/, "tell the owner: the egress proxy has stopped (`journalctl -u sitesolide-egress` on the server says why); deploy nothing that declares egress or connectors until it runs again, and never start it by hand"],
+  [/the egress proxy is not installed on the server/, "the owner has to install the egress proxy first (bin/deploy-egress.sh, egress/README.md); until then, remove `egress` and `connectors` from sitesolide.json, or ask for `network: outbound`"],
   [/^cannot read the manifests on the server/, READ_FAILED],
   [/^cannot read the status of the server/, READ_FAILED],
   [/^cannot read the system users/, READ_FAILED],
