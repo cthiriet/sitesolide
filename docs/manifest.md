@@ -50,7 +50,9 @@ serves the bare domain.
 ### `description`
 
 One line, shown by `systemctl status` and in the dashboard. Without it, the unit
-says `Project <slug>`.
+says `Project <slug>`. No control character, and no backslash at the end, which
+systemd would read as a line continuation; a `%` is written as `%%`, so systemd
+shows it as it is.
 
 ### `source`
 
@@ -99,6 +101,13 @@ to search.
 "start": "/usr/local/bin/bun run server.ts"
 ```
 
+It is written into the unit's `ExecStart=`, and must start with the program
+itself: a letter, a digit, `/`, `.` or `_` first. systemd reads a leading `+`,
+`!`, `@`, `-`, `:` or `|` as an instruction, `+` and `!` as "run as root", and
+these are refused, as a line break or a trailing backslash is. Quotes and
+`$PORT` keep their systemd meaning; a `%` is written as `%%`, so it reaches the
+program as it is.
+
 ### `port`
 
 The loopback port the service listens on, between 3000 and 3099. Caddy
@@ -123,6 +132,9 @@ without waking it.
 ```json
 "routes": ["/api/*", "/webhook/*"]
 ```
+
+Each one goes into a Caddy `path` matcher: a path starting with `/`, made of
+letters, digits and `._~/*%-`, never under `/_portal`, which the portal owns.
 
 Without this key, everything that is not a file on disk goes to the service.
 With it, only these paths do. Use it when most of the site is static and only a
@@ -186,6 +198,11 @@ and validation refuses names that announce one.
 Three markers are replaced at deploy time: `{slug}`, `{zone}` and `{contact}`.
 They are what let a committed manifest avoid naming your machine.
 
+A value is one word for systemd: no space, quote, backslash or line break.
+`Environment=` splits on spaces and unquotes, so `"x DATA_DIR=/elsewhere"`
+would set a second variable; such a value is refused rather than half applied.
+A `%` is written as `%%` and reaches the service as it is.
+
 ### `headers`
 
 HTTP headers added by Caddy for this project.
@@ -196,6 +213,19 @@ HTTP headers added by Caddy for this project.
 
 A project under the zone carries `noindex` by default until it moves to its own
 domain, so that a preview never competes with the real site in search results.
+
+Each value is written between double quotes in the project's Caddy block, so
+it is printable ASCII without `"`, `\`, `{`, `}`, `$` or a backtick: Caddy
+reads those as syntax, and `{$NAME}` or `{env.NAME}` as its own environment,
+which would serve its secrets to every visitor. What real headers use stays
+allowed: the single quotes, semicolons, colons, slashes and spaces of a
+`Content-Security-Policy`, the parentheses of a `Permissions-Policy`, the angle
+brackets of a `Link`. A name is letters, digits and dashes, starting with a
+letter.
+
+```json
+"headers": { "Content-Security-Policy": "default-src 'self'; img-src 'self' data:" }
+```
 
 ### `exclude`
 
@@ -294,7 +324,8 @@ The environment files the service reads, from `/etc/sitesolide`.
 "secrets": ["api.env"]
 ```
 
-Plain file names, no path. systemd reads them as root before dropping
+Plain file names, no path: letters, digits, `.`, `_` and `-`, starting with a
+letter or a digit. systemd reads them as root before dropping
 privileges, so the service receives the variables without ever being able to
 read the files. A project that declares none has the whole directory made
 inaccessible, which hides even the file names.

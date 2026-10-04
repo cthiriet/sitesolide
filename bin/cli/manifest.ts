@@ -281,6 +281,10 @@ export function mainPort(manifest: Manifest): number | null {
  * A route goes as is into a Caddy `path` matcher: a path, with no space, quote
  * or brace that would cut the line. `/_portal` belongs to the portal, which
  * Caddy routes before the site.
+ *
+ * The top-level `routes` are judged by this rule too. They were only asked to
+ * start with a slash, which let `/x\n\theader Leak "{$CLOUDFLARE_API_TOKEN}"`
+ * through: a line break and a placeholder of its choosing in the site's block.
  */
 export function isValidRoute(route: unknown): route is string {
   return typeof route === "string" && /^\/[A-Za-z0-9._~\/*%-]*$/.test(route) && !route.startsWith("/_portal");
@@ -321,6 +325,123 @@ export function isValidExemption(path: unknown): path is string {
   if (["/", "/*", "*"].includes(path)) return false;
   // Those paths belong to the portal, which Caddy routes before the site.
   return !path.startsWith("/_portal");
+}
+
+/**
+ * A header's name, written bare after `header` in the site's Caddy block.
+ *
+ * A subset of the token characters of RFC 7230, on purpose: the full set holds
+ * `+`, `-`, `?` and `>`, which Caddy reads at the head of a name as "add",
+ * "delete", "default" and "defer", and `$`, `*` or `|`, which no real header
+ * needs. A letter first, then letters, digits and dashes: every header in use.
+ */
+export function isValidHeaderName(name: unknown): name is string {
+  return typeof name === "string" && name.length <= 128 && /^[A-Za-z][A-Za-z0-9-]*$/.test(name);
+}
+
+/**
+ * A header's value, written between double quotes in the site's Caddy block,
+ * and served to every visitor.
+ *
+ * **Since the control API, whoever holds a team token writes it.** Caddy
+ * substitutes `{$NAME}` with its own environment while it reads the
+ * configuration, and `{env.NAME}` at each request: a value of
+ * `{$CLOUDFLARE_API_TOKEN}` was the zone's DNS token, in a response header, to
+ * anyone who asked. Measured on Caddy 2.11.4, both forms. A `"` ends the
+ * quoted value and lets the rest of the line become directives, a `\` escapes
+ * the closing quote, a backtick opens Caddy's other quoting.
+ *
+ * Printable ASCII, then, without `"`, `\`, `{`, `}`, `$` and the backtick: the
+ * characters Caddy reads as syntax or as a placeholder, and `$`, which no
+ * header needs, refused with them so that no spelling of a placeholder is left.
+ * What real headers use all stays: the single quotes, semicolons, colons,
+ * slashes, commas, parentheses and spaces of a Content-Security-Policy or a
+ * Permissions-Policy, the angle brackets of a Link. A Permissions-Policy that
+ * names an origin between double quotes is the one casualty: the service
+ * sends that header itself.
+ */
+export function isValidHeaderValue(value: unknown): value is string {
+  return typeof value === "string" && /^[\x20-\x7e]*$/.test(value) && !/["\\{}$`]/.test(value);
+}
+
+/**
+ * C0 and C1 control characters, and DEL. A line break in a value written into
+ * the unit would add a directive of its own choosing to it, a `User=root` after
+ * the generated one; the others have no business in a one-line setting.
+ */
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/;
+
+/**
+ * Does this text end with a backslash systemd would take for a line
+ * continuation? It then glues the next line of the unit onto the value: the
+ * `Restart=always` after `ExecStart=` becomes an argument of the command.
+ */
+function endsWithContinuation(text: string): boolean {
+  return /\\\s*$/.test(text);
+}
+
+/**
+ * The refusals of a command systemd runs, the project's `start` or a
+ * service's, `label` naming which.
+ *
+ * systemd reads a prefix on `ExecStart=` as an instruction: `+` and `!` run the
+ * command with full privileges, that is as root, whatever `User=` says; `@`,
+ * `-`, `:` and `|` change what is run or how. A manifest written by a team
+ * token must never reach any of them, so the command starts with the program
+ * itself: an absolute path, or a name systemd looks up, its first character a
+ * letter, a digit, a slash, a dot or an underscore. A lone `;` separates
+ * a second command, whose own prefix is judged the same way. `$NAME` stays
+ * allowed: systemd expands it from the service's own environment, which the
+ * service holds anyway, and `--port $PORT` is a common way to write a start.
+ * A `%` is escaped by the generator, see unit.ts.
+ */
+export function commandErrors(command: string, label: string): string[] {
+  if (CONTROL_CHARACTERS.test(command)) return [`${label}: a single line, no line break`];
+  const errors: string[] = [];
+  const words = command.split(/\s+/);
+  const programs = [words[0] ?? "", ...words.flatMap((word, rank) => (word === ";" ? [words[rank + 1] ?? ""] : []))];
+  if (!programs.every((program) => /^[A-Za-z0-9/._]/.test(program))) {
+    errors.push(
+      `${label}: must start with the program to run, such as /usr/local/bin/bun; systemd reads a leading + ! @ - : or | as an instruction, + and ! as "run as root"`,
+    );
+  }
+  if (endsWithContinuation(command)) {
+    errors.push(`${label}: must not end with a backslash, which systemd reads as a line continuation`);
+  }
+  return errors;
+}
+
+/** A one-line text for the unit's Description=, see validate(). */
+export function isValidDescription(description: unknown): description is string {
+  return typeof description === "string" && !CONTROL_CHARACTERS.test(description) && !endsWithContinuation(description);
+}
+
+/** An environment variable's name, as `Environment=` and every shell expect one. */
+export function isValidEnvName(name: string): boolean {
+  return /^[A-Z][A-Z0-9_]*$/.test(name);
+}
+
+/**
+ * An environment variable's value, written as `Environment=KEY=value`, which
+ * systemd splits on spaces and unquotes: `"x DATA_DIR=/elsewhere"` would set a
+ * second variable, past every rule on names, and a backslash would escape a
+ * character or continue the line. One line, then, without spaces, quotes or
+ * backslashes. Such a value never worked as written; it is refused rather than
+ * quoted, which keeps every unit in service byte for byte. `$` has no meaning
+ * there for systemd, and a `%` is escaped by the generator, see unit.ts.
+ */
+export function isValidEnvValue(value: unknown): value is string {
+  return typeof value === "string" && !CONTROL_CHARACTERS.test(value) && !/[\s"'\\]/.test(value);
+}
+
+/**
+ * The name of a secret file, written into the unit as
+ * `EnvironmentFile=-/etc/sitesolide/<name>` and read there as root. A plain
+ * file name: no path, no space, no `%` systemd would expand, no line break
+ * that would add a directive of its own after it.
+ */
+export function isValidSecretName(name: unknown): name is string {
+  return typeof name === "string" && name.length <= 255 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name);
 }
 
 /**
@@ -391,8 +512,10 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
   }
 
   if (manifest.description !== undefined) {
-    if (typeof manifest.description !== "string" || /[\r\n]/.test(manifest.description)) {
-      errors.push("description: a single line of text, no line break");
+    // Written into the unit's Description=: a trailing backslash would glue the
+    // next line onto it, and a `%` is escaped by the generator.
+    if (!isValidDescription(manifest.description)) {
+      errors.push("description: a single line of text, no line break, not ending with a backslash");
     }
   }
 
@@ -412,10 +535,9 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     errors.push("a project without `start` must declare `publicDir`");
   }
 
-  // A line break in a value written into the unit would add a directive of its
-  // own choosing to it, a `User=root` after the generated one.
-  if (typeof manifest.start === "string" && /[\r\n]/.test(manifest.start)) {
-    errors.push("start: a single line, no line break");
+  // Written into the unit's ExecStart=: see commandErrors.
+  if (typeof manifest.start === "string" && manifest.start.length > 0) {
+    errors.push(...commandErrors(manifest.start, "start"));
   }
 
   if (manifest.services !== undefined) {
@@ -440,9 +562,14 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
 
   errors.push(...egressErrors(manifest, isApplication));
 
-  for (const route of manifest.routes ?? []) {
-    if (typeof route !== "string" || !route.startsWith("/")) {
-      errors.push(`routes: "${String(route)}" should start with /`);
+  // Joined into the `path` matcher of the site's Caddy block, like a service's.
+  if (manifest.routes !== undefined && !Array.isArray(manifest.routes)) {
+    errors.push("routes: a list of paths, such as [\"/api/*\"]");
+  } else {
+    for (const route of manifest.routes ?? []) {
+      if (!isValidRoute(route)) {
+        errors.push(`routes: "${String(route)}" should start with / and be a path such as /api/*, not under /_portal`);
+      }
     }
   }
   if (manifest.routes !== undefined && !isApplication) {
@@ -454,12 +581,21 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     errors.push("env: without `start`, no service would read these variables");
   }
 
-  for (const [name, value] of Object.entries(manifest.headers ?? {})) {
-    if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(name)) {
+  // Written into the site's Caddy block, see isValidHeaderName and
+  // isValidHeaderValue.
+  const headers = manifest.headers as unknown;
+  const headersObject = typeof headers === "object" && headers !== null && !Array.isArray(headers);
+  if (headers !== undefined && !headersObject) {
+    errors.push('headers: an object naming each header, such as { "X-Robots-Tag": "noindex" }');
+  }
+  for (const [name, value] of headersObject ? Object.entries(headers) : []) {
+    if (!isValidHeaderName(name)) {
       errors.push(`headers: "${name}" is not a header name`);
     }
-    if (typeof value !== "string" || /[\r\n]/.test(value)) {
-      errors.push(`headers: the value of ${name} must be a string with no line break`);
+    if (!isValidHeaderValue(value)) {
+      errors.push(
+        `headers: the value of ${name} must be printable ASCII with no line break, and none of " \\ { } $ or a backtick, which Caddy reads as syntax or placeholders`,
+      );
     }
     // The headers are placed in the routes snippet, therefore on ALL of the
     // site's blocks. A noindex there would also hold for the customer's final
@@ -471,14 +607,23 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     }
   }
 
-  for (const secret of manifest.secrets ?? []) {
-    if (typeof secret !== "string" || !isInternalPath(secret) || secret.includes("/")) {
-      errors.push(`secrets: "${String(secret)}" must be a plain file name under /etc/sitesolide`);
+  if (manifest.secrets !== undefined && !Array.isArray(manifest.secrets)) {
+    errors.push('secrets: a list of file names, such as ["api.env"]');
+  } else {
+    for (const secret of manifest.secrets ?? []) {
+      if (!isValidSecretName(secret)) {
+        errors.push(`secrets: "${String(secret)}" must be a plain file name under /etc/sitesolide`);
+      }
     }
   }
 
-  const domain = manifest.domain;
-  if (domain !== undefined) {
+  const declared = manifest.domain as unknown;
+  if (declared !== undefined && (typeof declared !== "object" || declared === null || Array.isArray(declared))) {
+    // A `null` here, or an `aliases` that is no list, used to throw from
+    // validate() itself, and the installer with it.
+    errors.push('domain: an object such as { "name": "example.com" }');
+  } else if (manifest.domain !== undefined) {
+    const domain = manifest.domain;
     if (typeof domain.name !== "string" || !isValidDomain(domain.name)) {
       errors.push("domain.name: invalid domain name");
     } else if (zone !== "" && (domain.name === zone || domain.name.endsWith(`.${zone}`))) {
@@ -486,9 +631,13 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
       // apex cover them, and a manifest declaring them would get nothing.
       errors.push(`domain.name: the ${zone} zone is already covered by the wildcard`);
     }
-    for (const alias of domain.aliases ?? []) {
-      if (typeof alias !== "string" || !isValidDomain(alias)) {
-        errors.push(`domain.aliases: "${String(alias)}" is invalid`);
+    if (domain.aliases !== undefined && !Array.isArray(domain.aliases)) {
+      errors.push('domain.aliases: a list of domain names, such as ["www.example.com"]');
+    } else {
+      for (const alias of domain.aliases ?? []) {
+        if (typeof alias !== "string" || !isValidDomain(alias)) {
+          errors.push(`domain.aliases: "${String(alias)}" is invalid`);
+        }
       }
     }
   }
@@ -562,7 +711,7 @@ function backupErrors(manifest: Manifest, isApplication: boolean): string[] {
 function envErrors(env: Record<string, string> | undefined, label: string): string[] {
   const errors: string[] = [];
   for (const [key, value] of Object.entries(env ?? {})) {
-    if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
+    if (!isValidEnvName(key)) {
       errors.push(`${label}: "${key}" is not an environment variable name`);
     } else if (RESERVED_ENV.includes(key)) {
       errors.push(`${label}: ${key} is set by the deployment and cannot be redefined`);
@@ -573,8 +722,10 @@ function envErrors(env: Record<string, string> | undefined, label: string): stri
     }
     if (typeof value !== "string") {
       errors.push(`${label}: the value of ${key} must be a string`);
-    } else if (/[\r\n]/.test(value)) {
+    } else if (CONTROL_CHARACTERS.test(value)) {
       errors.push(`${label}: the value of ${key} must hold on one line`);
+    } else if (!isValidEnvValue(value)) {
+      errors.push(`${label}: the value of ${key} must hold no space, quote or backslash, which systemd would split or unquote`);
     }
   }
   return errors;
@@ -626,8 +777,8 @@ function serviceErrors(manifest: Manifest): string[] {
 
     if (typeof service.start !== "string" || service.start.length === 0) {
       errors.push(`${label}.start: required, the command systemd runs`);
-    } else if (/[\r\n]/.test(service.start)) {
-      errors.push(`${label}.start: a single line, no line break`);
+    } else {
+      errors.push(...commandErrors(service.start, `${label}.start`));
     }
 
     const port = service.port;

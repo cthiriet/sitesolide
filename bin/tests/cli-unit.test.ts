@@ -7,6 +7,7 @@ import {
   projectPaths,
   decideUnit,
   generateUnit,
+  generateUnits,
   readUnitAnswer,
   MARKER_ABSENT,
   MARKER_PRESENT,
@@ -165,6 +166,39 @@ describe("declared variables and description", () => {
       "Description=Booking tool",
     );
     expect(generateUnit(APP)).toInclude("Description=Project budget");
+  });
+});
+
+describe("what a manifest can no longer write into its unit", () => {
+  test("a % is the percent sign itself, never a specifier systemd expands", () => {
+    const unit = generateUnit({ ...APP, description: "100% %h", start: "/bin/date +%s", env: { FORMAT: "%Y-%m-%d" } });
+    expect(unit).toInclude("Description=100%% %%h");
+    expect(unit).toInclude("ExecStart=/bin/date +%%s");
+    expect(unit).toInclude("Environment=FORMAT=%%Y-%%m-%%d");
+  });
+
+  test("a text without % comes out as it always did", () => {
+    // Every unit in service: escaping must not make one of them diverge.
+    for (const manifest of knownManifests().filter(isApp)) {
+      for (const { text } of generateUnits(manifest)) expect(text).not.toInclude("%%");
+    }
+  });
+
+  test("what validate() refuses is never written, even past validate()", () => {
+    // The second barrier, for a manifest that reached the generator without
+    // the validation: a start run as root, a variable set past the rules on
+    // names, a directive added after a secret's name or a description.
+    for (const manifest of [
+      { ...APP, start: "+/bin/sh -c id" },
+      { ...APP, start: "!/bin/sh -c id" },
+      { ...APP, start: "/bin/app\nUser=root" },
+      { ...APP, env: { NODE_ENV: "x DATA_DIR=/srv/sites/other/data" } },
+      { ...APP, secrets: ["budget.env\nExecStartPre=+/bin/sh -c id"] },
+      { ...APP, description: "notes\\" },
+      { slug: "budget", services: { web: { start: "/bin/web", port: 3040 }, api: { start: "+/bin/api", port: 3041, routes: ["/api/*"] } } },
+    ] as Manifest[]) {
+      expect(() => generateUnits(manifest)).toThrow("never written into a unit");
+    }
   });
 });
 

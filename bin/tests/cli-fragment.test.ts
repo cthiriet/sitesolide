@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { decideBlock, generateFragment, isEarlierGeneration, ZONE_HOST, IMPORT_LOCKS, matcher } from "../cli/fragment";
-import type { Manifest } from "../cli/manifest";
+import { validate, type Manifest } from "../cli/manifest";
 import { fragmentPassesIdentity, PORTAL_GENERATIONS, PORTAL_PORT, portalStanza } from "../cli/portal";
 
 const MIXED: Manifest = {
@@ -166,6 +166,55 @@ describe("headers specific to the site", () => {
     const fragment = generateFragment(MIXED) ?? "";
     const preview = block(fragment, `budget.${ZONE_HOST} {`);
     expect(preview).toInclude('header X-Robots-Tag "noindex, nofollow"');
+  });
+
+  test("a value validate() refuses is never written, even past validate()", () => {
+    // The second barrier: a manifest that reached the generator without the
+    // validation, the token's placeholder or a quote that ends the value.
+    for (const value of ["{$CLOUDFLARE_API_TOKEN}", "{env.CLOUDFLARE_API_TOKEN}", 'x"\n\trespond "owned', "x\\"]) {
+      expect(() => generateFragment({ ...MIXED, headers: { "X-Leak": value } })).toThrow("never written into a Caddy block");
+    }
+    expect(() => generateFragment({ ...MIXED, headers: { "+X-Leak": "x" } })).toThrow("never written into a Caddy block");
+  });
+
+  test("whatever validate() accepts, no placeholder can reach a header line", () => {
+    // Values drawn from every printable character, the ones Caddy reads as
+    // syntax included, with a fixed seed: the validation keeps some, refuses
+    // the others, and the generated lines of the ones it keeps carry no brace,
+    // no dollar, and no quote but the two around the value.
+    let seed = 20261004;
+    const next = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 2 ** 32;
+    const alphabet = [...Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i)), "{$", "{env.", "\n", "\t", "é"];
+    let kept = 0;
+    for (let round = 0; round < 2000; round++) {
+      const value = Array.from({ length: 1 + Math.floor(next() * 24) }, () => alphabet[Math.floor(next() * alphabet.length)]).join("");
+      const manifest = { ...MIXED, headers: { "X-Fuzz": value } };
+      if (validate(manifest).length > 0) {
+        expect(() => generateFragment(manifest)).toThrow();
+        continue;
+      }
+      kept++;
+      const line = (generateFragment(manifest) ?? "").split("\n").find((l) => l.startsWith("\theader X-Fuzz "))!;
+      const inside = line.slice('\theader X-Fuzz "'.length, -1);
+      expect(line.endsWith('"')).toBe(true);
+      expect(inside).toBe(value);
+      expect(inside).not.toMatch(/[{}$"\\`\n\t]/);
+    }
+    expect(kept).toBeGreaterThan(100);
+  });
+});
+
+describe("routes", () => {
+  test("a top-level route validate() refuses is never written into the matcher", () => {
+    for (const route of ['/x\n\theader Leak "{$CLOUDFLARE_API_TOKEN}"', "/x{env.A}", "/a b"]) {
+      expect(() => generateFragment({ ...MIXED, routes: [route] })).toThrow("never written into a Caddy block");
+    }
+    const services = { web: { start: "/bin/web", port: 3040 }, api: { start: "/bin/api", port: 3041, routes: ["/api/*\n}"] } };
+    expect(() => generateFragment({ slug: "budget", publicDir: "public", services })).toThrow("never written into a Caddy block");
+  });
+
+  test("an exemption validate() refuses is never written into the portal's matcher", () => {
+    expect(() => generateFragment({ ...MIXED, portal: true, portalExempt: ["/hook {$A}"] })).toThrow("never written into a Caddy block");
   });
 });
 

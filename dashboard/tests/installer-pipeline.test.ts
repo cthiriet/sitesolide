@@ -191,6 +191,27 @@ describe("refusals, before anything served changes", () => {
     expect(bench.events).toContain("release");
   });
 
+  test("a manifest that would write Caddy or systemd syntax is refused on the machine, before any account or block", async () => {
+    // The installer is root and the last judge: whatever the dashboard and the
+    // steward let through, a token's placeholder never reaches a block, nor
+    // its `+` an ExecStart run as root.
+    for (const manifest of [
+      { ...APP, headers: { "X-Leak": "{$CLOUDFLARE_API_TOKEN}" } },
+      { ...APP, headers: { "X-Leak": "{env.CLOUDFLARE_API_TOKEN}" } },
+      { ...APP, routes: ['/x\n\theader Leak "{$CLOUDFLARE_API_TOKEN}"'] },
+      { ...APP, start: "+/bin/sh -c id" },
+      { ...APP, env: { NODE_ENV: "x DATA_DIR=/srv/sites/dashboard/data" } },
+    ]) {
+      const bench = createBench();
+      stageBundle(bench, APP_FILES);
+      const outcome = await run(bench, request(manifest, { ...PUBLIC, outbound: true }));
+      expect(outcome).toMatchObject({ ok: false, code: "invalid-manifest" });
+      expect(readdirSync(bench.sites)).toEqual([]);
+      expect(readdirSync(bench.blocks)).toEqual([]);
+      expect(bench.events.some((event) => event.startsWith("useradd"))).toBe(false);
+    }
+  });
+
   test("the portal not ready: a site behind it would be closed to everyone", async () => {
     const bench = createBench({ probe: (host, path) => (path === "/sante" ? { code: 502, door: false, body: "" } : null) });
     stageBundle(bench, APP_FILES);

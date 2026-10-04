@@ -21,7 +21,16 @@
  * bin/deploy-caddy.sh, which backs up, validates and restores.
  */
 import { sameDirectives } from "./comparison";
-import { hasServices, isApp, isProtected, servicesOf, type Manifest } from "./manifest";
+import {
+  hasServices,
+  isApp,
+  isProtected,
+  isValidHeaderName,
+  isValidHeaderValue,
+  isValidRoute,
+  servicesOf,
+  type Manifest,
+} from "./manifest";
 import { portalStanza, PORTAL_GENERATIONS, type PortalGeneration } from "./portal";
 import { projectPaths } from "./unit";
 
@@ -39,7 +48,28 @@ export const IMPORT_LOCKS = "import /etc/caddy/locks/*.caddy";
 export function matcher(manifest: Manifest): string | null {
   if (manifest.publicDir === undefined) return null;
   const routes = manifest.routes ?? [];
-  return routes.length > 0 ? `path ${routes.join(" ")}` : "not file";
+  return routes.length > 0 ? `path ${routes.map(writableRoute).join(" ")}` : "not file";
+}
+
+/**
+ * The text this generator writes from a manifest is Caddy syntax, and since
+ * the control API a team token writes the manifest. validate() refuses what
+ * would break out of a line or name a placeholder, at every entry: the CLI,
+ * the dashboard, the steward, the installer. These guards are the second
+ * barrier, for a manifest that reached a generator without it: they throw
+ * rather than write, so that nothing is deposited, and they refuse only what
+ * validate() refuses, so that no valid manifest ever meets them.
+ */
+function writableRoute(route: string): string {
+  if (!isValidRoute(route)) throw new Error(`routes: ${JSON.stringify(route)} is not a path validate() accepts, it is never written into a Caddy block`);
+  return route;
+}
+
+function writableHeader(name: string, value: unknown): string {
+  if (!isValidHeaderName(name) || !isValidHeaderValue(value)) {
+    throw new Error(`headers: ${JSON.stringify(name)} is not a header validate() accepts, it is never written into a Caddy block`);
+  }
+  return `\theader ${name} "${value}"`;
 }
 
 /** The routes snippet, shared by the preview and the customer domain. */
@@ -57,9 +87,12 @@ export function generateRoutes(manifest: Manifest): string {
   // would silently cut off what that fragment allowed: a site that uses the
   // microphone declares Permissions-Policy there, precisely so that a
   // hardening pass does not cut its audio off.
+  //
+  // Between double quotes, never escaped: isValidHeaderValue leaves nothing
+  // there that Caddy would read as syntax or as a placeholder.
   const headers = Object.entries(manifest.headers ?? {});
   if (headers.length > 0) {
-    for (const [name, value] of headers) lines.push(`\theader ${name} "${value}"`);
+    for (const [name, value] of headers) lines.push(writableHeader(name, value));
     lines.push("");
   }
 
@@ -118,7 +151,7 @@ function servicesRoutes(manifest: Manifest): string[] {
   for (const service of routed) {
     lines.push(
       `\t# Service ${service.name}: the paths sitesolide.json declares for it.`,
-      `\t@service-${service.name} path ${service.routes!.join(" ")}`,
+      `\t@service-${service.name} path ${service.routes!.map(writableRoute).join(" ")}`,
       `\treverse_proxy @service-${service.name} 127.0.0.1:${service.port}`,
       "",
     );
@@ -137,7 +170,7 @@ function servicesRoutes(manifest: Manifest): string[] {
       "\t# of another service.",
       `\t@service-${rest.name} {`,
       "\t\tnot file",
-      ...(claimed.length > 0 ? [`\t\tnot path ${claimed.join(" ")}`] : []),
+      ...(claimed.length > 0 ? [`\t\tnot path ${claimed.map(writableRoute).join(" ")}`] : []),
       "\t}",
       `\treverse_proxy @service-${rest.name} 127.0.0.1:${rest.port}`,
     );

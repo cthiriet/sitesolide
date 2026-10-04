@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { knownManifests } from "./manifests";
 import {
   isInternalPath,
   isApp,
@@ -411,6 +414,54 @@ describe("the site's headers", () => {
     );
   });
 
+  test("refuses a Caddy placeholder, which Caddy would fill with its own secrets", () => {
+    // Since the control API, whoever holds a team token writes this. Caddy
+    // substitutes {$NAME} while reading the configuration and {env.NAME} at
+    // each request: either one served the Cloudflare token to anyone.
+    for (const value of [
+      "{$CLOUDFLARE_API_TOKEN}",
+      "{env.CLOUDFLARE_API_TOKEN}",
+      "x {http.request.header.Cookie} y",
+      "$CLOUDFLARE_API_TOKEN",
+      "{",
+      "}",
+    ]) {
+      expect(validate({ ...APP, headers: { "X-Leak": value } })).toContainEqual(expect.stringContaining("placeholders"));
+    }
+  });
+
+  test("refuses what would end the quoted value and write directives", () => {
+    for (const value of ['a" \n\trespond "owned', 'a"', "a\\", "`a`", "a\tb", "a\u007fb", "café", "a\u0000b"]) {
+      expect(validate({ ...APP, headers: { "X-Test": value } })).toContainEqual(expect.stringContaining("headers"));
+    }
+  });
+
+  test("keeps what real headers use: quotes of a CSP, semicolons, colons, slashes, commas", () => {
+    const headers = {
+      "Content-Security-Policy": "default-src 'self'; script-src 'self' https://cdn.example.com 'sha256-AbC+/9=='; img-src data: blob: *; frame-ancestors 'none'",
+      "Permissions-Policy": "microphone=(self), camera=(), geolocation=()",
+      Link: "</style.css>; rel=preload; as=style",
+      "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+      "Cache-Control": "public, max-age=60, stale-while-revalidate=30",
+      "X-Note": "100% #1 & more ~ | ^ [ok] ! ? @ = +",
+      "X-Empty": "",
+    };
+    expect(validate({ ...APP, headers })).toEqual([]);
+  });
+
+  test("a header name is letters, digits and dashes: no operator Caddy would read", () => {
+    for (const name of ["+X-Test", "-Server", "?Cache-Control", ">X", "X{$A}", "X Test", "X:Test", "X_Test", "1X", ""]) {
+      expect(validate({ ...APP, headers: { [name]: "x" } })).toContainEqual(expect.stringContaining("header name"));
+    }
+    expect(validate({ ...APP, headers: { "X-Frame-Options": "DENY" } })).toEqual([]);
+  });
+
+  test("an object, and nothing else", () => {
+    for (const headers of ["X-Test: a", ["X-Test"], null]) {
+      expect(validate({ ...APP, headers } as unknown as Manifest)).toContainEqual(expect.stringContaining("an object naming each header"));
+    }
+  });
+
   test("refuses a noindex on a project that has a domain", () => {
     // The headers are laid in the routes snippet, hence on every block: a
     // noindex would take the client's domain out of Google.
@@ -434,6 +485,109 @@ describe("description", () => {
     expect(validate({ ...APP, description: "a\nb" })).toContainEqual(
       expect.stringContaining("description"),
     );
+  });
+
+  test("refuses a control character, and a backslash that would continue the line", () => {
+    for (const description of ["a\tb", "a\rb", "a\u0085b", "notes\\", "notes\\  "]) {
+      expect(validate({ ...APP, description })).toContainEqual(expect.stringContaining("description"));
+    }
+    expect(validate({ ...APP, description: "Bob's notes, 100% local (beta): a \\ b" })).toEqual([]);
+  });
+});
+
+describe("what reaches a Caddy block or a unit", () => {
+  // Until the control API, only the machine's owner wrote manifests. A team
+  // token writes them now, and every string below lands in a generated Caddy
+  // block or systemd unit: these are the refusals that keep it a string.
+
+  test("a top-level route is a path, as a service's: no line break, quote, brace or space", () => {
+    for (const route of ['/x\n\theader Leak "{$CLOUDFLARE_API_TOKEN}"', "/x{env.CLOUDFLARE_API_TOKEN}", "/a b", '/a"', "/a}", "/_portal/x", "api"]) {
+      expect(validate({ ...APP, publicDir: "public", routes: [route] })).toContainEqual(expect.stringContaining("routes"));
+    }
+    expect(validate({ ...APP, publicDir: "public", routes: "/api/*" } as unknown as Manifest)).toContainEqual(
+      expect.stringContaining("a list of paths"),
+    );
+    expect(validate({ ...APP, publicDir: "public", routes: ["/", "/api/*", "/rapports/*", "/%7Euser"] })).toEqual([]);
+  });
+
+  test("a start never runs as root: no prefix systemd reads as an instruction", () => {
+    // `+` and `!` run ExecStart with full privileges whatever User= says.
+    for (const start of [
+      "+/bin/sh -c id",
+      "!/bin/sh -c id",
+      "!!/bin/sh -c id",
+      "@/bin/sh sh -c id",
+      "-/bin/sh -c id",
+      ":/bin/sh -c id",
+      "|/bin/sh -c id",
+      " +/bin/sh -c id",
+      "/usr/local/bin/bun run server.ts ; +/bin/sh -c id",
+      '"/opt/my app/run"',
+    ]) {
+      expect(validate({ ...APP, start })).toContainEqual(expect.stringContaining("run as root"));
+      const services = { web: { start, port: 3040 } };
+      expect(validate({ slug: "budget", services })).toContainEqual(expect.stringContaining("services.web.start"));
+    }
+  });
+
+  test("a start holds on one line, and never ends with a continuation", () => {
+    for (const start of ["/bin/app\nUser=root", "/bin/app\tx", "/bin/app\\", "/bin/app \\ "]) {
+      expect(validate({ ...APP, start })).toContainEqual(expect.stringContaining("start"));
+    }
+  });
+
+  test("a start keeps what systemd's command line means: quotes, $VAR, a % escaped by the generator", () => {
+    for (const start of [
+      "/usr/local/bin/bun run server.ts --port $PORT",
+      "/bin/sh -c 'cd sub; exec /usr/local/bin/bun run a.ts'",
+      "bun run server.ts",
+      ".venv/bin/python -m uvicorn app:api",
+      "/bin/date +%s",
+    ]) {
+      expect(validate({ ...APP, start })).toEqual([]);
+    }
+  });
+
+  test("an env value is one word for systemd: no space, quote or backslash", () => {
+    // `Environment=A=x DATA_DIR=/elsewhere` sets DATA_DIR, past the rule on
+    // names that refuses it.
+    for (const value of ["x DATA_DIR=/srv/sites/other/data", 'a"b', "a'b", "a\\b", "a\tb", "a b"]) {
+      expect(validate({ ...APP, env: { NODE_ENV: value } })).toContainEqual(expect.stringContaining("NODE_ENV"));
+      const services = { web: { start: "/bin/app", port: 3040, env: { NODE_ENV: value } } };
+      expect(validate({ slug: "budget", services })).toContainEqual(expect.stringContaining("services.web.env"));
+    }
+    for (const value of ["https://{slug}.{zone}", "fake,hetzner,vultr", "100%", "$HOME", "a=b", "/srv/sites/{slug}/data/x.db"]) {
+      expect(validate({ ...APP, env: { NODE_ENV: value } })).toEqual([]);
+    }
+  });
+
+  test("a secret is a plain file name: nothing that adds a directive or expands", () => {
+    for (const secret of ["budget.env\nExecStartPre=+/bin/sh -c id", "a b.env", "%h.env", ".env", "-budget.env", "budget.env\\"]) {
+      expect(validate({ ...APP, secrets: [secret] })).toContainEqual(expect.stringContaining("secrets"));
+    }
+    expect(validate({ ...APP, secrets: "budget.env" } as unknown as Manifest)).toContainEqual(expect.stringContaining("a list of file names"));
+    expect(validate({ ...APP, secrets: ["budget.env", "Budget_2.env"] })).toEqual([]);
+  });
+
+  test("a domain that is no object is refused, never thrown", () => {
+    for (const domain of [null, "example.com", ["example.com"]]) {
+      expect(validate({ ...APP, domain } as unknown as Manifest)).toContainEqual(expect.stringContaining("domain"));
+    }
+    expect(validate({ ...APP, domain: { name: "example.com", aliases: 5 } } as unknown as Manifest)).toContainEqual(
+      expect.stringContaining("domain.aliases"),
+    );
+  });
+
+  test("every manifest of the repository and of the sites repository still passes", () => {
+    const repo = join(import.meta.dir, "..", "..");
+    const folders = ["portal", "dashboard", "analytics", "examples/bun-app", "examples/static-site"];
+    const projects = join(repo, "bin", "tests", "e2e", "projects");
+    folders.push(...readdirSync(projects).map((name) => join("bin", "tests", "e2e", "projects", name)));
+    for (const folder of folders) {
+      const { errors } = readManifest(readFileSync(join(repo, folder, "sitesolide.json"), "utf8"));
+      expect({ folder, errors }).toEqual({ folder, errors: [] });
+    }
+    for (const manifest of knownManifests()) expect({ slug: manifest.slug, errors: validate(manifest) }).toEqual({ slug: manifest.slug, errors: [] });
   });
 });
 

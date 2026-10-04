@@ -106,6 +106,13 @@ it in `sitesolide.json` to make it explicit.
 A project that already exists keeps the door the machine carries: the portal
 of a deployed site changes from the dashboard, never from a deployment.
 
+Every string of the manifest that lands in the project's Caddy block or systemd
+unit is judged for that, the same way for the owner and for a token: header
+values without `"`, `\`, `{`, `}`, `$` or a backtick, routes that are plain
+paths, a `start` that begins with the program itself, environment values with
+no space or quote, secret names that are plain file names. See
+[docs/manifest.md](manifest.md).
+
 **Secrets** live on the machine and nowhere else. A project that declares
 `<slug>.env` deploys only once the owner has created the file in the
 dashboard's *Secrets* section; the deployment says so and stops before the

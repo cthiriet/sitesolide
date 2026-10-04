@@ -5,7 +5,7 @@
  * Pure: returns text, touches nothing. The service itself lives in `portal/`,
  * and its README says what surprises people.
  */
-import { isProtected, type Manifest } from "./manifest";
+import { isProtected, isValidExemption, type Manifest } from "./manifest";
 
 /**
  * The portal's local port, written out in full in every protected site's
@@ -101,6 +101,11 @@ export function portalStanza(manifest: Manifest, generation: PortalGeneration = 
   if (!isProtected(manifest)) return [];
 
   const upstream = `127.0.0.1:${PORTAL_PORT}`;
+  // The second barrier behind validate(), as for the routes in fragment.ts:
+  // an exemption that would break the matcher is never written.
+  for (const path of manifest.portalExempt ?? []) {
+    if (!isValidExemption(path)) throw new Error(`portalExempt: ${JSON.stringify(path)} is not a path validate() accepts, it is never written into a Caddy block`);
+  }
   const open = ["/_portal/*", ...(manifest.portalExempt ?? [])].join(" ");
   const guard = [
     `forward_auth @portal_guard ${upstream} {`,
