@@ -60,6 +60,7 @@ export const SWITCHES = {
   unitWithoutZone: "unit-without-zone",
   loopbackState: "loopback-state",
   egressState: "egress-state",
+  firstInstall: "first-install",
 } as const;
 
 /**
@@ -73,6 +74,8 @@ export const LIST_BLOCKS =
 const READ_BLOCK = new RegExp(
   `^if sudo test -f (/etc/caddy/sites/([a-z0-9-]+)\\.caddy); then echo ${MARKER_PRESENT}; sudo cat \\1; else echo ${MARKER_ABSENT}; fi$`,
 );
+/** What bin/deploy-caddy.sh reads to tell a first install, before its guard. */
+export const FIRST_INSTALL_FILES = "test -f /etc/caddy/sitesolide.env && test -f /etc/caddy/domaines.map";
 /** The guard of bin/deploy-caddy.sh, which checks that the unit loads the zone variables. */
 export const CADDY_ENV_UNIT = "systemctl show caddy --property=EnvironmentFiles --value";
 const FINGERPRINT = /^sudo shasum -a 256 (\/etc\/caddy\/[A-Za-z0-9._\/-]+) 2>\/dev\/null$/;
@@ -204,6 +207,13 @@ if (import.meta.main) {
       process.stdout.write(`${digest}  ${fingerprint[1]}\n`);
     }
     process.exit(0);
+  }
+  // Whether the zone file and the domain table are laid, which bin/deploy-caddy.sh
+  // reads before its guard to tell a first install. A reading, hence always
+  // answered: a machine already installed, unless the test lays the switch.
+  if (command === FIRST_INSTALL_FILES) {
+    record("FIRST_INSTALL");
+    process.exit(existsSync(join(vm, SWITCHES.firstInstall)) ? 1 : 0);
   }
   // The guard of bin/deploy-caddy.sh: does Caddy's unit load the zone
   // variables? A reading, hence always accepted. The simulated VM answers like

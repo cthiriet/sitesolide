@@ -16,6 +16,16 @@ SOURCE="$REPO_ROOT/api"
 RELEASE="$(date +%Y-%m-%d-%H%M%S)-$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
 TARGET="/srv/api/releases/$RELEASE"
 
+# On a fresh machine nothing has made the account the unit runs as, and
+# cloud-init leaves /srv/api to root while the releases below are written by
+# the deployment account: the first run failed on both, with 217/USER and a
+# refused mkdir. Both are made here when missing, and nothing changes on a
+# machine that already has them.
+echo "-> account and directory"
+ssh "$SITESOLIDE_SERVER" "id -u sitesolide-api >/dev/null 2>&1 \
+  || sudo useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin sitesolide-api; \
+  test -w /srv/api || sudo install -d -m 755 -o $DEPLOY_USER -g $DEPLOY_USER /srv/api"
+
 echo "-> release $RELEASE"
 ssh "$SITESOLIDE_SERVER" "mkdir -p $TARGET"
 

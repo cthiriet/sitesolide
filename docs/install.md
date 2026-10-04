@@ -93,47 +93,67 @@ the machine.
 
 ## 3. Install the base system
 
-These run once, in this order. Each one is idempotent.
+These run once, in this order. Each one is idempotent. The order is the one a
+fresh machine accepts: every step leans on the one before it.
 
 ```bash
-# Bun, Caddy and the directory layout
-ssh you@203.0.113.10 'curl -fsSL https://bun.com/install | sudo -u root bash'
+# Caddy from its own repository, then the Cloudflare DNS module the wildcard
+# certificate needs, which the standard build lacks
+ssh you@203.0.113.10 'curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | sudo tee /etc/apt/sources.list.d/caddy-stable.list && sudo apt-get update && sudo apt-get install -y caddy && sudo caddy add-package github.com/caddy-dns/cloudflare'
+
+# Bun, at /usr/local/bin/bun, where every unit looks for it
+ssh you@203.0.113.10 'curl -fsSL https://bun.com/install | sudo BUN_INSTALL=/usr/local bash'
 
 # The Cloudflare token Caddy reads for its certificates
 ssh you@203.0.113.10 'sudo install -m 0640 -o root -g caddy /dev/stdin /etc/caddy/cloudflare.env' <<< 'CLOUDFLARE_API_TOKEN=your-token'
+```
 
-# The zone variables the Caddyfile substitutes
+`caddy add-package` replaces the package's binary, and an upgrade of the
+package puts the standard one back: run it again after every `apt upgrade`
+that touches Caddy, or the next reload refuses the configuration for want of
+the DNS module.
+
+Then Caddy's configuration, in three moves:
+
+```bash
+# Lays the zone file and an empty domain table, then stops: Caddy's unit does
+# not load the zone variables yet
+bin/deploy-caddy.sh
+
+# The drop-in that loads them, and restarts Caddy whatever the way it stopped
+ssh you@203.0.113.10 'sudo mkdir -p /etc/systemd/system/caddy.service.d && sudo install -m 644 /dev/stdin /etc/systemd/system/caddy.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart caddy' < infra/caddy/caddy.service.d/override.conf
+
+# The Caddyfile itself; the first certificates take about a minute
 bin/deploy-caddy.sh
 ```
 
-`deploy-caddy.sh` refuses to run until Caddy's unit loads
-`/etc/caddy/sitesolide.env`, and tells you the three commands that fix it. That
-guard is not decorative: the Caddyfile reads `$SITESOLIDE_ZONE`, and reloading
-Caddy without it would serve empty addresses on every site at once.
+That stop is not decorative: the Caddyfile reads `$SITESOLIDE_ZONE`, and
+reloading Caddy without it would serve empty addresses on every site at once.
+On a first install the script waits up to two minutes per address for the
+authority to issue the certificates; on a machine already serving it does not
+wait, since a silent address there is an outage. The drop-in also sets
+`Restart=always`, see
+[infra/README.md](../infra/README.md#caddys-restart-policy).
 
-Then the services that serve the others:
+Then the two services that need nothing else:
 
 ```bash
-bin/deploy-api.sh        # on-demand TLS and preview locks
-bin/deploy-loopback.sh close   # the nftables rule that isolates the services
-bin/deploy-steward.sh    # the root daemon that writes secrets
+bin/deploy-api.sh        # on-demand TLS and preview locks, and its account
 bin/deploy-gatekeeper.sh # the only thing that touches Caddy from the machine
-bin/deploy-collector.sh  # the timer that snapshots the machine for the dashboard
-bin/deploy-monitor.sh    # the timer that checks every site each minute, and alerts
 ```
-
-Caddy's own unit restarts it if it ever stops: the drop-in `deploy-caddy.sh`
-asks you to install sets `Restart=always`, see
-[infra/README.md](../infra/README.md#caddys-restart-policy).
 
 ## 4. Deploy the dashboard and the portal
 
 The dashboard first, with its password: it is the one secret the dashboard
-cannot create for itself, since it is what opens it.
+cannot create for itself, since it is what opens it. The steward and the
+collector come right after, because both need the dashboard's account and
+code to exist.
 
 ```bash
 bin/dashboard-password.sh    # shows the password once, puts its hash on the machine
 cd dashboard && sitesolide deploy
+bin/deploy-steward.sh        # the root daemon that writes secrets
+bin/deploy-collector.sh      # the timer that snapshots the machine for the dashboard
 ```
 
 The dashboard is then at `https://dashboard.your-zone.tld`. Every other secret
@@ -146,6 +166,15 @@ cd portal && sitesolide deploy
 It stops on `portal.env`, missing on the machine, and says where to create it:
 in the dashboard, *Secrets*, the portal's `portal.env`, then *Change password*,
 which shows the portal's password once. Run the deploy again.
+
+Last, the rule that isolates the services from one another, and the monitor.
+The rule checks that the dashboard reaches the portal, so it comes once both
+are deployed:
+
+```bash
+bin/deploy-loopback.sh close   # the nftables rule that isolates the services
+bin/deploy-monitor.sh          # the timer that checks every site each minute, and alerts
+```
 
 ## 5. Deploy something of your own
 
