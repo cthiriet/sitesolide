@@ -264,6 +264,7 @@ any caller.
 | Bytes waiting in all of one project's connections | 8 MiB, then none of them is read until half has drained |
 | Bytes waiting in the whole proxy | 32 MiB, then no connection is read until half has drained |
 | Bytes sent before a tunnel opens | 2 MiB per connection, then 400 |
+| A refused connection, once answered | read and dropped until the client closes, 1 s and 64 KiB at most, then cut; 1024 at a time, then closed at once |
 | Connector request body | 10 MiB, streamed through, not held |
 | Connector calls waiting for an answer, per project | 32, then 503 |
 | Connector answer headers | 30 s; the body then streams as long as it needs |
@@ -280,6 +281,16 @@ reading a paused socket again whenever a write to it comes up short, and a
 single tunnel whose two ends both sent without reading took the proxy past
 3 GiB in under a second until the proxy put the pause back after every such
 write. `/status` gives `buffered`, the bytes waiting now.
+
+**A refusal lingers.** A client refused while it is still sending, a body
+behind its head or a head too large, would get a reset if the proxy closed
+with its bytes unread, and a reset makes the client's kernel throw away the
+answer it had not read yet: "connection reset" instead of the sentence that
+says why, 2 attempts in 40 on a loaded test machine. So the proxy answers,
+sends a FIN behind the answer, and reads and drops what still comes until the
+client closes, as nginx's lingering close does. Bun 1.3.11 needs care there:
+`end()` closes the descriptor at once, and a socket shut down while paused is
+closed too; see `linger()` in [src/proxy.ts](src/proxy.ts).
 
 ## Deployment
 
@@ -397,7 +408,9 @@ private resolution, a refused resolution to the machine's own address, read
 from interfaces the test injects, plain HTTP forwarding, large transfers in
 both directions, a slow reader stopping the proxy from reading the other side,
 both ends flooding included, a project's budget and the proxy's, the bytes
-sent before a tunnel opens capped, a tunnel closed whichever end goes first,
+sent before a tunnel opens capped, a refusal read by a client still sending
+its request, and the linger that follows cut by time and by bytes, a tunnel
+closed whichever end goes first,
 the per-project limit counted before any head, a connector forwarded with its
 header set and the app's removed, an ungranted or unrequested connector
 refused, a connector's host presenting a valid certificate for another name

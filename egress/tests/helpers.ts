@@ -169,6 +169,47 @@ export async function rawExchange(port: number, request: string | Uint8Array, ti
   return new TextDecoder().decode(Bun.concatArrayBuffers(chunks));
 }
 
+/**
+ * A client that sends and reads nothing until told to, as one that writes its
+ * whole request before looking at the answer does: whatever reaches it in the
+ * meantime waits in its kernel, where a reset would throw it away unread.
+ * `read` reads again, then everything until the proxy closes, or until the
+ * delay.
+ */
+export async function lateReader(port: number) {
+  const chunks: Uint8Array[] = [];
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const socket = await Bun.connect({
+    hostname: "127.0.0.1",
+    port,
+    socket: {
+      data(_socket, chunk) {
+        chunks.push(new Uint8Array(chunk));
+      },
+      close() {
+        resolve();
+      },
+      error() {
+        resolve();
+      },
+    },
+  });
+  socket.pause();
+  return {
+    socket,
+    async read(timeoutMs = 3000): Promise<string> {
+      socket.resume();
+      const timer = setTimeout(() => {
+        socket.end();
+        resolve();
+      }, timeoutMs);
+      await promise;
+      clearTimeout(timer);
+      return new TextDecoder().decode(Bun.concatArrayBuffers(chunks));
+    },
+  };
+}
+
 /** An audit that only remembers what it was told. */
 export function recordingAudit() {
   const denied: { target: string | null; destination: string | null; reason: string; account?: string | null }[] = [];

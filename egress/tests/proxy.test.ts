@@ -6,7 +6,7 @@ import { EGRESS_PROXY_PORT, egressUnitLines, parseEgressEntry, type HostPattern 
 import { DATA_DIR } from "../src/config";
 import type { Caller } from "../src/proc-net";
 import { startProxy, type Limits, type Proxy, type ProxyOptions } from "../src/proxy";
-import { certificate, OPENSSL, rawExchange, recordingAudit, stubLookup, stubRoute } from "./helpers";
+import { certificate, lateReader, OPENSSL, rawExchange, recordingAudit, stubLookup, stubRoute } from "./helpers";
 
 /**
  * The proxy on a random port, in front of real local servers: a TLS one that
@@ -19,6 +19,8 @@ const PLAIN = "plain.test-zone.invalid";
 const PUBLIC_V4 = "203.0.114.10";
 const PUBLIC_V6 = "2a01:4f8:ffff::10";
 const PLAIN_ADDRESS = "203.0.114.20";
+/** A host no manifest of these tests lists. */
+const UNLISTED = "evil.test-zone.invalid";
 /** Public to the classification, routed to a closed local port by the test. */
 const UNROUTED = "203.0.114.99";
 /** Bigger than the proxy's buffer, so that both directions have to wait for each other. */
@@ -608,17 +610,84 @@ describe("what the proxy holds for a slow reader", () => {
   });
 
   test("what a client sends before its tunnel opens is counted, and capped", async () => {
-    const { proxy, stop } = bench({ pendingBytes: 64 * 1024 });
+    const { proxy, stop } = bench({ pendingBytes: 4 * 1024 });
     try {
       // A plain HTTP request whose body follows its head at once: held while
       // the proxy decides, and refused past the cap rather than held whole.
-      const body = "x".repeat(256 * 1024);
+      // Head and 12 KiB of body in one write go as one segment, under the
+      // loopback's MTU (16 KiB on macOS, 64 KiB on Linux), and are read
+      // together. 256 KiB in one write came in several, and when the first
+      // read brought less than the cap, the tunnel opened, the origin
+      // flooded the client, and the test timed out: 3 runs in 300.
+      const body = "x".repeat(12 * 1024);
       const answer = await rawExchange(proxy.port, `POST http://${PLAIN}/upload HTTP/1.1\r\nHost: ${PLAIN}\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
       expect(answer).toStartWith("HTTP/1.1 400");
       expect(answer).toContain("too much sent before the tunnel opened");
       expect(proxy.buffered()).toBe(0);
     } finally {
       stop();
+    }
+  });
+
+  test("a refusal reaches a client still sending its request, and reading only once it has", async () => {
+    // The caller is known a moment late, which keeps the head waiting for
+    // its verdict while the client sends on.
+    const late = async (): Promise<Caller> => {
+      await Bun.sleep(150);
+      return { kind: "project", slug: "shop", account: "site-shop" };
+    };
+    const { proxy, stop } = bench({}, late);
+    try {
+      const rest = new Uint8Array(32 * 1024).fill(120);
+      const client = await lateReader(proxy.port);
+      client.socket.write(`POST http://${UNLISTED}/upload HTTP/1.1\r\nHost: ${UNLISTED}\r\nContent-Length: ${1024 + rest.length}\r\n\r\n${"x".repeat(1024)}`);
+      // The rest of the body arrives while the proxy, paused, judges the
+      // head: it waits in the proxy's kernel, unread, when the 403 goes.
+      // Closed on the spot, with those bytes unread, the socket sent a reset
+      // rather than a FIN, and the reset made the client's kernel throw away
+      // the answer it had not read yet: the client saw "connection reset",
+      // never the sentence naming the host.
+      await Bun.sleep(50);
+      expect(client.socket.write(rest)).toBe(rest.length);
+      await Bun.sleep(250);
+      const answer = await client.read();
+      expect(answer).toStartWith("HTTP/1.1 403");
+      expect(answer).toContain(UNLISTED);
+      await Bun.sleep(50);
+      expect(proxy.lingering()).toBe(0);
+      expect(proxy.buffered()).toBe(0);
+    } finally {
+      stop();
+    }
+  });
+
+  test("a refused client is read for a moment only: past lingerBytes, or past lingerMs, its socket is cut", async () => {
+    const head = `POST http://${PLAIN}/upload HTTP/1.1\r\nHost: ${PLAIN}\r\nContent-Length: 999999999\r\n\r\n${"x".repeat(12 * 1024)}`;
+    const bytes = bench({ pendingBytes: 4 * 1024, lingerMs: 60_000, lingerBytes: 64 * 1024 });
+    try {
+      // A client that sends on and on after its answer, reading nothing.
+      const flooding = await lateReader(bytes.proxy.port);
+      flooding.socket.write(head);
+      await Bun.sleep(100);
+      expect(bytes.proxy.open()).toBe(0);
+      expect(bytes.proxy.lingering()).toBe(1);
+      for (let i = 0; i < 8; i++) flooding.socket.write(new Uint8Array(32 * 1024).fill(120));
+      await Bun.sleep(100);
+      expect(bytes.proxy.lingering()).toBe(0);
+    } finally {
+      bytes.stop();
+    }
+    const time = bench({ pendingBytes: 4 * 1024, lingerMs: 300, lingerBytes: 64 * 1024 });
+    try {
+      // A client that neither sends nor reads nor closes.
+      const silent = await lateReader(time.proxy.port);
+      silent.socket.write(head);
+      await Bun.sleep(100);
+      expect(time.proxy.lingering()).toBe(1);
+      await Bun.sleep(500);
+      expect(time.proxy.lingering()).toBe(0);
+    } finally {
+      time.stop();
     }
   });
 });
