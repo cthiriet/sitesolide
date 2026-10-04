@@ -238,6 +238,43 @@ copying the portal's on, so a site can trust them once its block has been
 deployed with them. A site not behind the portal has them taken off too, and
 learns nobody. See [portal/README.md](../portal/README.md).
 
+## Audit
+
+Every component that acts records what it did in its own database, in one
+shape: an ISO date, an actor, a dotted action, a target, and a detail in JSON
+that never carries a secret value. An actor is an email, `owner` for whoever
+holds the dashboard's password, `token:<id>` for a team token, `guest:<id>`,
+`anonymous` before anyone is known, or `system`. Nothing gathers these tables
+on the machine: the dashboard's *Activity* page reads each through the road it
+already takes to that component, and merges them, newest first. How long each
+keeps its rows is in [dashboard/README.md](../dashboard/README.md#the-audit).
+
+| Event | Source | Actor | Target | What it records |
+|---|---|---|---|---|
+| `token.create`, `token.revoke` | dashboard | `owner` | none | a team token created or revoked, its label, email and scope |
+| `deploy.start` | dashboard | `token:<id>` | slug | a token's deployment handed to the installer |
+| `deploy.success`, `deploy.failure` | dashboard | `token:<id>` | slug | how it ended, the error's code for a failure |
+| `portal.signin` | portal | `owner`, `guest:<id>` or an email | host | a sign-in with the shared password, a guest password or a work account, its role; repeats within a minute counted on one row |
+| `portal.signin_failed` | portal | `anonymous` or an email | host | a wrong password, or a work account refused and why |
+| `portal.signout` | portal | as it signed in | host | a sign-out |
+| `sharing.update` | portal | `owner` | host | who gets in changed: the mode, the people and domains added and removed |
+| `egress.denied` | egress | `system` | slug, or none | connections refused, by destination and reason, counted by the minute |
+| `connector.use` | egress | `system` | slug | a connector's calls, counted by the minute, and how many failed |
+| `connector.update` | egress | `owner` | connector | a connector created, changed or removed; a replaced value is said, never shown |
+| `connector.grant` | egress | `owner` | slug | a connector granted to a site, or withdrawn |
+| `backup.run` | backups | `system` | none | an hourly run: snapshots taken and pruned, the offsite copy, the sites that failed |
+| `backup.restore` | backups | `owner` | slug | a restore, its snapshot and how it ended |
+| `secrets.unlock`, `secrets.lock` | steward | `owner` | none | the secrets unlocked, or the password refused, and locked |
+| `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner` | slug | a variable read, set or removed, by its name |
+| `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner` | slug | a secret file created, put back to its previous version, or replaced |
+| `secrets.password` | steward | `owner` | slug | a password hash changed |
+| `door.update` | steward | `owner` | slug | a site's portal turned on or off from *Access* |
+| `service.restart` | steward | `owner` | slug | a service restarted from *Secrets*, with its verdict |
+
+The steward's rows say how each operation ended, `ok`, `rejects` or `failure`,
+in their detail's `result`. Their source is the steward's journal, which has
+no ids: the dashboard gives them the shared shape as it reads them.
+
 ## What the deploy actually does
 
 In order, and the order is the point:

@@ -4,7 +4,8 @@ What the machine actually runs, at `dashboard.<zone>`, behind a password, on two
 levels. **The machine**: *Sites*, the home page, with the state of the machine,
 the discrepancies between what the repositories ask for and what the machine
 does, the only part of the dashboard that teaches you something, and the list
-of sites; *Activity*, the latest operations on secrets and portals; *Team*, the
+of sites; *Activity*, the audit of the whole machine, every component's in one
+log; *Team*, the
 tokens that deploy without SSH; *Connectors*, the credentials the egress proxy
 lends to projects. **A site**: *Overview*, *Audience*, *Secrets*, *Guests*,
 *Sharing*, *Access* and *Backups*, everything that concerns that site and only
@@ -222,8 +223,9 @@ password, for ten minutes:
 - restart the service and read the verdict; *Save & restart* chains the write
   and the restart.
 
-*Activity*, at machine level, lists the last fifty operations across every site,
-unlocks included, with no values at all. A revealed value is masked again after
+*Activity*, at machine level, lists these operations among every other
+component's audit, unlocks included, with no values at all: see
+[The audit](#the-audit). A revealed value is masked again after
 thirty seconds, on locking, when the tab goes to the background, or when the
 page is left.
 
@@ -391,6 +393,98 @@ server.ts  --  GET 127.0.0.1:3129/audit, /status  -->  egress proxy
 
 The steward's unit gains `ReadWritePaths=-/etc/sitesolide-egress`, with the
 dash: the folder exists only once `bin/deploy-egress.sh` has run.
+
+## The audit
+
+The machine-level *Activity* page answers "who did what": who deployed, who
+signed in where, who changed who gets in, what the egress proxy refused or
+lent, which backups ran and who restored one, which secrets were read or
+changed. Every component keeps its own audit, in its own database, in the
+shape they all share: an ISO date, an actor, a dotted action, a target, and a
+JSON detail that never carries a secret. The dashboard reads them all and
+merges them, newest first. Every event, and who records it, is listed in
+[docs/concepts.md](../docs/concepts.md#audit).
+
+```
+page, Activity
+   |  GET /api/audit : session, no unlock
+   v
+server.ts          reads, merges, bounds; writes nothing
+   |-- dashboard.db                       its own: tokens, team deployments
+   |-- 127.0.0.1:3026/admin/audit         the portal, the loopback rule's one exception
+   |-- 127.0.0.1:3129/audit               the egress proxy, answered to site-dashboard alone
+   `-- the steward's socket               /backups/audit, /log
+```
+
+- **No new road, no new privilege.** The same clients as the Sharing,
+  Connectors, Backups and Secrets pages, which already read these routes one
+  at a time ([src/audit/sources.ts](src/audit/sources.ts)).
+- **The session is enough.** No row carries a secret value: each component
+  sees to it where it writes, and a test in each says so, against the values
+  in play (`portal/tests/sso.test.ts`, `egress/tests/audit.test.ts`,
+  `tests/control-api.test.ts` and `control-team.test.ts`,
+  `tests/backup-run.test.ts` and `backup-restore.test.ts`,
+  `tests/secrets-steward.test.ts`).
+- **A source down never empties the log.** Each one answers with its state:
+  `ok`; `unavailable`, for no answer, a refusal or an answer that does not
+  read; `outdated`, for a component older than the route it is read by, with
+  what to run; `not-installed`, decided from what the dashboard already sees,
+  the egress proxy's folder as the steward reports it, the backups as the
+  steward's view of a site says, the portal when the snapshot lists no such
+  site. The page shows every state once, at the top, and a banner for each
+  source it could not read.
+- **Bounded.** 250 rows asked of a source at a time and four times at most per
+  page; eight seconds for the whole page, under the ten after which Bun cuts a
+  silent connection; 500 rows at most per answer, 100 unless asked; 4 MiB at
+  most read from a component; every detail cut in length, breadth and depth.
+- **A cursor per source.** No two components share an id, a clock or a way to
+  ask for older rows, so each is read as a stream in its own order and the
+  cursor remembers where each one stands: rows recorded between two pages are
+  neither repeated nor allowed to push an older one out. A cursor made under
+  other filters is refused ([src/audit/merge.ts](src/audit/merge.ts)).
+- **Filters**: one source or several, an actor by any part of it, an action by
+  its beginning (`portal.`), a site, which finds the rows naming its hosts too,
+  and a range of days. Filters that rarely match can bring back a short page,
+  or an empty one: a source read to the end of its budget before the page is
+  full holds back the older rows of the others, so the order holds, and the
+  next page goes further.
+- **The exports**, CSV and JSON lines, are made in the browser from the rows
+  already read, under the filters in force. A CSV field a spreadsheet would
+  read as a formula starts with an apostrophe: an actor can be a stranger's
+  email.
+
+### How long each source keeps its audit
+
+Each component keeps its own, for its own reasons. The dashboard keeps no copy
+of the others, and forgets nothing of its own.
+
+| Source | Where | Kept | What the dashboard reads |
+|---|---|---|---|
+| `dashboard` | `audit` in `dashboard.db` | everything, never pruned: a few rows per token and per team deployment | all of it, by pages |
+| `portal` | `audit` in `portal.db` | 180 days; past 100,000 rows the oldest go, those of the last 30 days excepted; sign-ins and sign-outs repeated within a minute make one row | all of it, by pages |
+| `egress` | `audit` in `/var/lib/sitesolide-egress/` | 90 days, pruned every hour; refusals and connector calls counted by the minute | all of it, by pages |
+| `backups` | `audit` in `/var/lib/sitesolide-backup/backup.db` | everything, never pruned: one row per hourly run, some 8,800 a year, and one per restore | the latest 50, which is what `GET /backups/audit` hands over |
+| `steward` | `/var/lib/sitesolide-steward/journal.jsonl` | the last 500 to 1,000 operations: past 1,000 lines, the file keeps its last 500 | the latest 50, which is what `GET /log` hands over |
+
+Once the log reaches the end of the latest 50 of the backups or of the
+steward, the page says so, rather than let that end pass for the beginning of
+time.
+
+### Deployment of the audit
+
+A dashboard deployment, and nothing else: the route reads what every
+component already exposes, and the page replaces the former *Activity*.
+
+```bash
+cd dashboard && sitesolide deploy
+```
+
+Check: *Activity* lists the sources once at the top, each `Read`, or `Not
+installed` for a component the server does not have; the rows of every source
+come merged, newest first, and *Site or host* set to a site's slug finds its
+portal sign-ins on its hosts. A component that does not answer shows its
+banner and leaves the others readable. Roll back: deploy the previous commit
+of `dashboard/`; no table, file or route outside the dashboard changed.
 
 ## The portal, from the dashboard
 
@@ -800,3 +894,12 @@ chain, the API on a real port, the steward on a real socket, the installer
 started by the simulated `systemctl` (tests/control-api.test.ts). What only a
 machine can prove, `useradd`, `systemd-run`'s confinement and the template
 unit, is not covered here.
+
+For the audit: each source's rows in the shared shape, bounded, and garbage
+left out (tests/audit-merge.test.ts); the merge, the filters and a cursor
+followed to the end against simulated sources, every row once and in order
+whatever the page size, a source down, too old, not installed, stalled past
+the deadline or throwing, and a budget that runs out (tests/audit-aggregate.test.ts);
+each reader against the answers its component really gives, and the whole
+route against a portal and an egress proxy on real ports and a steward on a
+real socket (tests/audit-sources.test.ts).
