@@ -258,6 +258,7 @@ keeps its rows is in [dashboard/README.md](../dashboard/README.md#the-audit).
 | `portal.signin_failed` | portal | `anonymous` or an email | host | a wrong password, or a work account refused and why |
 | `portal.signout` | portal | as it signed in | host | a sign-out |
 | `sharing.update` | portal | `owner` | host | who gets in changed: the mode, the people and domains added and removed |
+| `guest.create`, `guest.revoke` | portal | `owner` | host | a guest access given or revoked, the guest's label and expiry, never the password |
 | `egress.denied` | egress | `system` | slug, or none | connections refused, by destination and reason, counted by the minute |
 | `connector.use` | egress | `system` | slug | a connector's calls, counted by the minute, and how many failed |
 | `connector.update` | egress | `owner` | connector | a connector created, changed or removed; a replaced value is said, never shown |

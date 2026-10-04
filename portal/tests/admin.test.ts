@@ -256,3 +256,43 @@ describe("the sharing policies", () => {
     });
   }
 });
+
+describe("the audit of guest accesses", () => {
+  function audited() {
+    const store = memoryStore();
+    const audit = memoryAudit();
+    const routes = createAdmin(
+      store,
+      () => NOW,
+      { drawPassword: () => PASSWORD, drawId: () => "AAAAAAAAAAAAAAA0" },
+      audit,
+    );
+    return { routes, audit };
+  }
+
+  test("giving an access records who it is for and until when, never the password", async () => {
+    const { routes, audit } = audited();
+    expect((await routes.create(creation(VALID))).status).toBe(201);
+    expect(audit.events).toHaveLength(1);
+    const [event] = audit.events;
+    expect(event).toMatchObject({ actor: "owner", action: "guest.create", target: "forum.test-zone.invalid" });
+    expect(event!.detail).toEqual({
+      guest: "AAAAAAAAAAAAAAA0",
+      label: "Alice",
+      expiresAt: NOW + 7 * 24 * 3600 * 1000,
+    });
+    expect(JSON.stringify(audit.events)).not.toContain(PASSWORD);
+    expect(JSON.stringify(audit.events)).not.toContain(guestHash(PASSWORD));
+  });
+
+  test("revoking it records the host it opened, and an unknown access records nothing", async () => {
+    const { routes, audit } = audited();
+    await routes.create(creation(VALID));
+    const del = (id: string) => new Request(`http://127.0.0.1:3026/admin/invites/${id}`, { method: "DELETE" });
+    expect(routes.remove(del("AAAAAAAAAAAAAAA0"), "AAAAAAAAAAAAAAA0").status).toBe(204);
+    expect(audit.events.map((e) => e.action)).toEqual(["guest.create", "guest.revoke"]);
+    expect(audit.events[1]).toMatchObject({ actor: "owner", target: "forum.test-zone.invalid" });
+    expect(routes.remove(del("AAAAAAAAAAAAAAA9"), "AAAAAAAAAAAAAAA9").status).toBe(404);
+    expect(audit.events).toHaveLength(2);
+  });
+});

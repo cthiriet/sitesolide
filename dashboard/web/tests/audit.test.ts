@@ -139,6 +139,8 @@ describe("a row in words", () => {
     expect(
       auditWords(row({ action: "sharing.update", detail: { mode: "domain", previousMode: "domain", peopleAdded: [], peopleRemoved: ["a@x.invalid", "b@x.invalid"], domainsAdded: ["test-zone.invalid"], domainsRemoved: [] } })),
     ).toEqual({ summary: "Changed who gets in", note: "2 people removed, 1 domain added", tone: "neutral" })
+    expect(auditWords(row({ actor: "owner", action: "guest.create", detail: { guest: "AAAAAAAAAAAAAAA0", label: "Alice", expiresAt: null } })).summary).toBe("Gave a guest access to Alice")
+    expect(auditWords(row({ actor: "owner", action: "guest.revoke", detail: { guest: "AAAAAAAAAAAAAAA0", label: "Alice", expiresAt: null } })).summary).toBe("Revoked the guest access of Alice")
   })
 
   test("the egress proxy, in the words of the Connectors page", () => {

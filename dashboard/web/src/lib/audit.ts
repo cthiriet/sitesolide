@@ -321,6 +321,15 @@ export function auditWords(row: AuditRow): AuditWords {
       return { summary, note: note === "" ? null : note, tone: "neutral" }
     }
 
+    case "guest.create": {
+      const label = text(detail.label)
+      return { summary: label === null ? "Gave a guest access" : `Gave a guest access to ${label}`, note: null, tone: "neutral" }
+    }
+    case "guest.revoke": {
+      const label = text(detail.label)
+      return { summary: label === null ? "Revoked a guest access" : `Revoked the guest access of ${label}`, note: null, tone: "neutral" }
+    }
+
     case "egress.denied":
     case "connector.use":
     case "connector.update":

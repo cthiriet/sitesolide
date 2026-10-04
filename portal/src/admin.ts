@@ -54,7 +54,30 @@ export function createAdmin(
   guests: GuestStore,
   clock: () => number = Date.now,
   tools: AdminTools = TOOLS,
+  audit: AuditStore | null = null,
 ): Admin {
+  /**
+   * Who may see a site changes here as much as in the sharing: a guest access
+   * is a door handed to one person. The dashboard is the only caller, from the
+   * owner's session, hence the actor. The label is a name, never the password.
+   */
+  function record(action: "guest.create" | "guest.revoke", guest: Guest, now: number): void {
+    if (audit === null) return;
+    try {
+      audit.record(
+        {
+          actor: "owner",
+          action,
+          target: guest.host,
+          detail: { guest: guest.id, label: guest.label, expiresAt: guest.expiresAt },
+        },
+        now,
+      );
+    } catch (err) {
+      console.error(`audit: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   return {
     list(req) {
       if (isRelayed(req)) return respond({ error: "relayed-request" }, 403);
@@ -97,6 +120,7 @@ export function createAdmin(
         seenAt: null,
       };
       guests.create(guest, guestHash(password));
+      record("guest.create", guest, now);
 
       return respond({ guest, password }, 201);
     },
@@ -104,7 +128,9 @@ export function createAdmin(
     /** Immediate: the gate re-reads the access on every request, the next one is refused. */
     remove(req, id) {
       if (isRelayed(req)) return respond({ error: "relayed-request" }, 403);
-      if (!isValidId(id) || !guests.remove(id)) return respond({ error: "unknown-access" }, 404);
+      const guest = isValidId(id) ? guests.list().find((one) => one.id === id) : undefined;
+      if (guest === undefined || !guests.remove(id)) return respond({ error: "unknown-access" }, 404);
+      record("guest.revoke", guest, clock());
       return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
     },
   };

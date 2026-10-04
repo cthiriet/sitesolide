@@ -66,7 +66,7 @@ const sso = createSso({
   handoffs: handoffStore(),
 });
 
-const admin = createAdmin(guests);
+const admin = createAdmin(guests, Date.now, undefined, audit);
 const sharingAdmin = createSharingAdmin({ sharing, audit, settings });
 
 const server = Bun.serve({
