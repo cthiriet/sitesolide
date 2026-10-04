@@ -68,3 +68,19 @@ export type {
   VerdictKind,
   Verdict as RestartVerdict,
 } from "../../../src/secrets/protocol"
+
+/**
+ * The shapes of the Connectors page, from the same contract as the steward and
+ * the service, `import type` alone like the secrets': a connector's value is
+ * never part of them.
+ */
+export type {
+  ConnectorView,
+  ConnectorsView,
+  ConnectorRequest,
+  GrantRecord,
+  DashboardConnectorsResponse,
+  ConnectorsActivityResponse,
+  EgressAuditRow,
+  EgressStatus,
+} from "../../../src/connectors/protocol"

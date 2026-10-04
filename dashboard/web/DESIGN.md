@@ -130,6 +130,7 @@ Computer (>= 768 px), machine level
 |              +-----------------------------------------------------------+
 | Sites      6 | [Banner: Can't reach the dashboard / collector stale]     |
 | Activity     |                                                           |
+| Connectors   |                                                           |
 |              |   plate, Issues, search and filters, list of sites        |
 | Dark mode    |                                                           |
 | Sign out     |                                                           |
@@ -156,11 +157,11 @@ icon when the indicator is `attention` or `error`. The state lives in
 script. The current page is a white surface, never a colour; on a phone, a 2 px
 rule above the tab.
 
-**Two levels.** On the home page and on Activity, the sidebar carries the
+**Two levels.** On the home page, Activity and Connectors, the sidebar carries the
 machine's pages. Inside a site it becomes that site's: the *All sites* return,
 the current site on a white surface (initial, name, state in one sentence, tone
 dot), which opens the site switcher, then its six sections. Collapsed, the site
-is just its initial and its dot. On a phone the tabs follow the level: two for
+is just its initial and its dot. On a phone the tabs follow the level: three for
 the machine, six for a site, on one row.
 
 Indicators (`lib/sidebar.ts`). Machine: *Sites* the number of discrepancies (error
@@ -322,7 +323,8 @@ or a value never passes. Under the sign-in of an expired session, the page is
 
 | Object | Word | Do not write |
 |---|---|---|
-| Machine pages | Sites (the home page), Activity | Dashboard, Home, Overview |
+| Machine pages | Sites (the home page), Activity, Connectors | Dashboard, Home, Overview |
+| Connectors | Connector, Add connector, Change, Remove connector, Grant, Withdraw, Granted, Asked, not granted, No such connector, Not asked for, Site removed, Write-only | Integration, Secret, Token, Revoke access |
 | Site sections | Overview, Audience, Secrets, Guests, Sharing, Access; the breadcrumb *All sites > cms*; *Switch site* | Settings, Details |
 | The machine | Server | VM, host |
 | Discrepancy | Refusal, issues; Error, Warning | Alert, Critical |
@@ -348,6 +350,7 @@ One page per served file, the site in `?s=`:
 |---|---|---|
 | Sites, the home page | `/` | `index.html` |
 | Activity | `/activity/` | `activity/index.html` |
+| Connectors | `/connectors/` | `connectors/index.html` |
 | A site's Overview | `/site/?s=cms` | `site/index.html` |
 | A site's Secrets | `/site/secrets/?s=cms` | `site/secrets/index.html` |
 | A site's Guests | `/site/guests/?s=cms` | `site/guests/index.html` |
@@ -365,6 +368,17 @@ Size. Summaries live in the rows, not in cards.
 
 **Activity.** The lock in the header, then the steward's latest operations
 across the whole machine, unlocks included, with no values.
+
+**Connectors.** The lock in the header, the same as the secrets'. Then three
+panels. **Connectors**: each one's name, base address, header, how many
+projects have it and when it changed, *Write-only* since its value is never
+shown; *Add connector*, *Change* and *Remove* once unlocked. **Grants**: every
+pair of a site and a connector that matters, what needs a decision first (a
+grant whose site is gone in error, a request not granted in attention), with
+*Grant* or *Withdraw*. **Egress activity**: the proxy's refusals, connector
+calls and changes, read from the proxy itself. The add and change dialog types
+the value in a password field and leaves it empty on a change to keep it; a
+removal retypes the name.
 
 **A site's Overview.** Under the title, the state in one sentence, the
 description and the main address; its discrepancies as banners. Then two

@@ -65,6 +65,16 @@ export type SecretsRoutes = {
    * to stop one from signing out.
    */
   forgetUnlock: (sessionHash: string) => Promise<void>;
+  /**
+   * Not a route either: the origin, session and token checks of every route
+   * above, for the routes of src/connectors/relay.ts, which write under the
+   * same unlock and must not hold a copy of those checks.
+   */
+  withToken: <D extends object>(
+    extract: Extraction<D>,
+    call: (requested: D & WithToken) => Promise<Response>,
+    options?: RouteOptions<D>,
+  ) => Handler;
 };
 
 const NO_CACHE = { "Cache-Control": "no-store" };
@@ -157,14 +167,14 @@ async function readBody(req: Request, max = MAX_BODY_BYTES): Promise<Record<stri
 }
 
 /** What a route keeps from the body: the request without a token, or the response that refuses it. */
-type Extraction<D> = (body: Record<string, unknown> | null) => D | Response;
+export type Extraction<D> = (body: Record<string, unknown> | null) => D | Response;
 
 /**
  * The expected fields, each of them a string, and those alone. An empty string
  * gets through: saying that it will not do is a rule, therefore the steward's
  * business.
  */
-function fields<C extends string>(names: readonly C[]): Extraction<Record<C, string>> {
+export function fields<C extends string>(names: readonly C[]): Extraction<Record<C, string>> {
   return (body) => {
     if (body === null) return unreadableBody();
     const kept = {} as Record<C, string>;
@@ -200,7 +210,7 @@ const extractPortal: Extraction<WithoutToken<PortalRequest>> = (body) => {
   return { ...names, active };
 };
 
-type Received =
+export type Received =
   | { kind: "unreachable" }
   | { kind: "unreadable" }
   | { kind: "received"; status: number; body: Record<string, unknown> | null; retryAfter: string | null };
@@ -212,7 +222,7 @@ type Received =
  * the token sent or a password from the request: unreadable. Neither of the two
  * throws, an exception here would return a mute 500.
  */
-async function reach(call: () => Promise<Response>, token: string | null, secrets: string[] = []): Promise<Received> {
+export async function reach(call: () => Promise<Response>, token: string | null, secrets: string[] = []): Promise<Received> {
   let response: Response;
   let text: string;
   try {
@@ -258,7 +268,7 @@ async function reach(call: () => Promise<Response>, token: string | null, secret
 }
 
 /** The steward's response, returned with its status, with no cache. */
-function relay(received: Received): Response {
+export function relay(received: Received): Response {
   if (received.kind === "unreachable") return unreachable();
   if (received.kind === "unreadable") return unreadable();
   if (received.status === 204) return new Response(null, { status: 204, headers: NO_CACHE });
@@ -275,7 +285,7 @@ function relay(received: Received): Response {
   return json(received.body, received.status, headers);
 }
 
-type RouteOptions<D> = {
+export type RouteOptions<D> = {
   /** The body's cap, `MAX_BODY_BYTES` except for a content. */
   max?: number;
   /** The strings of the request that must never come back out. */
@@ -424,5 +434,6 @@ export function createSecretsRoutes(dependencies: SecretsDependencies, clock: ()
     restart: withToken(fields(PROJECT_FIELDS), (requested) => steward.restart(requested)),
 
     forgetUnlock,
+    withToken,
   };
 }

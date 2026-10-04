@@ -210,7 +210,7 @@ function siteName(slug: string): string {
  * looked at. `O_NONBLOCK` so that a named pipe put in its place does not block
  * the process.
  */
-function readBounded(path: string, max: number): Examination {
+export function readBounded(path: string, max: number): Examination {
   let before: Stats;
   try {
     before = lstatSync(path);
@@ -281,7 +281,7 @@ export function isTemporary(name: string): boolean {
  * `fchmod` would demand CAP_FOWNER. Then the write, `fsync`, rename, `fsync` of
  * the directory so that the rename survives a power cut.
  */
-function writeAtomically(root: string, name: string, bytes: Uint8Array, permissions: Permissions): void {
+export function writeAtomically(root: string, name: string, bytes: Uint8Array, permissions: Permissions): void {
   const final = subState(root, name);
   const folder = dirname(final);
   const temporary = join(folder, `.${basename(final)}.${randomSuffix()}.tmp`);

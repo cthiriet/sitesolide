@@ -7,6 +7,7 @@ import {
   STEWARD_SOCKET,
   PUBLIC_DIR,
   PORTAL_URL,
+  EGRESS_URL,
   PUBLIC_URL,
   missing,
 } from "./src/config";
@@ -27,6 +28,8 @@ import { createSharingRoutes, localSharing } from "./src/sharing";
 import { DEFAULT_TIMEOUTS, localSteward } from "./src/secrets/client";
 import { createTokens } from "./src/secrets/tokens";
 import { createSecretsRoutes } from "./src/secrets/routes";
+import { localConnectorsSteward, localEgress } from "./src/connectors/client";
+import { createConnectorsRoutes } from "./src/connectors/relay";
 
 // The service starts despite an incomplete configuration, and says so. Dying
 // here would make it loop on Restart=always without the log explaining
@@ -56,11 +59,22 @@ const store = {
 
 // The secrets go through the same session check as the rest of the dashboard,
 // and the steward's tokens live only in this process's memory.
+const secretTokens = createTokens();
 const secrets = createSecretsRoutes({
   session: createSessionReader(store, { online: ONLINE, sessionDurationMs: SESSION_DURATION_MS }),
   publicUrl: PUBLIC_URL,
   steward: localSteward(STEWARD_SOCKET),
-  tokens: createTokens(),
+  tokens: secretTokens,
+});
+
+// The egress proxy's connectors: written through the steward under the same
+// unlock as a secret, and their activity read from the proxy itself.
+const connectors = createConnectorsRoutes({
+  session: createSessionReader(store, { online: ONLINE, sessionDurationMs: SESSION_DURATION_MS }),
+  steward: localConnectorsSteward(STEWARD_SOCKET),
+  egress: localEgress(EGRESS_URL),
+  tokens: secretTokens,
+  withToken: secrets.withToken,
 });
 
 const routes = createRoutes(store, {
@@ -145,6 +159,14 @@ const server = Bun.serve({
     "/api/secrets/password": { POST: (req, server) => long(req, server, secrets.changePassword) },
     "/api/secrets/portal": { POST: (req, server) => long(req, server, secrets.togglePortal) },
     "/api/secrets/restart": { POST: (req, server) => long(req, server, secrets.restart) },
+    // The connectors: their writes wait in the steward's lock like a secret's.
+    "/api/connectors": { GET: connectors.list },
+    "/api/connectors/activity": { GET: connectors.activity },
+    "/api/connectors/connector": {
+      PUT: (req, server) => long(req, server, connectors.putConnector),
+      DELETE: (req, server) => long(req, server, connectors.removeConnector),
+    },
+    "/api/connectors/grant": { PUT: (req, server) => long(req, server, connectors.setGrant) },
   },
 
   /**

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { PORTAL_PORT } from "../borrowed/portal";
+import { CONNECTORS_PORT, EGRESS_ADDRESS } from "../borrowed/egress";
 import { DEFAULT_SOCKET } from "./secrets/protocol";
 
 /**
@@ -77,6 +78,13 @@ export const PORTAL_URL = (process.env.PORTAL_URL ?? `http://127.0.0.1:${PORTAL_
  * PLAN-SECRETS.md.
  */
 export const STEWARD_SOCKET = process.env.STEWARD_SOCKET ?? DEFAULT_SOCKET;
+
+/**
+ * The egress proxy's read-only routes, on the loopback, outside the range the
+ * loopback rule closes: it answers them to site-dashboard alone, recognised by
+ * the uid of the connection. See egress/README.md.
+ */
+export const EGRESS_URL = (process.env.EGRESS_URL ?? `http://${EGRESS_ADDRESS}:${CONNECTORS_PORT}`).replace(/\/+$/, "");
 
 /** Seven days: a tool consulted nearly every day does not ask again each morning. */
 export const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000;

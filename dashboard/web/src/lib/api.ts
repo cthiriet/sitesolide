@@ -28,7 +28,7 @@ import type {
 /** `status` is 0 when no answer arrived: network down, service stopped. */
 export type ProbeResponse<T> = { status: number; body: T | null }
 
-async function callApi<T>(path: string, options?: RequestInit): Promise<ProbeResponse<T>> {
+export async function callApi<T>(path: string, options?: RequestInit): Promise<ProbeResponse<T>> {
   let response: Response
   try {
     response = await fetch(path, { credentials: "same-origin", ...options })

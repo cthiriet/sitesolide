@@ -109,7 +109,7 @@ export type BaseUrl = { url: string; host: string; port: number; path: string };
  * The path is a prefix the proxy keeps every forwarded request under.
  */
 export function readBaseUrl(raw: unknown): BaseUrl | { error: string } {
-  const refusal = { error: "base address: https://, a host name and an optional path, such as https://slack.com/api" };
+  const refusal = { error: "base address: must be https://, a host name and an optional path, such as https://slack.com/api" };
   if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_BASE_URL) return refusal;
   if (/[\s?#\\]/.test(raw) || /[\u0000-\u001f\u007f]/.test(raw)) return refusal;
   let url: URL;

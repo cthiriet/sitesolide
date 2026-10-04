@@ -116,6 +116,8 @@ import type {
 import { RESTART_TIMEOUT_MS, MAX_PORTAL_MS } from "./protocol";
 import { showArguments, readShow, restartPending, serviceView, verdict, type ServiceReading } from "./restart";
 import type { Command, Permissions, Examination, System } from "./system";
+import { createConnectorRoutes } from "../connectors/steward";
+import type { ConnectorStore } from "../connectors/store";
 
 export type StewardOptions = {
   secretsFolder: string;
@@ -157,6 +159,8 @@ export type StewardOptions = {
    */
   schedule?: () => Promise<void>;
   random?: RandomSource;
+  /** The egress proxy's connectors files, see src/connectors/store.ts. */
+  connectors?: ConnectorStore;
 };
 
 export type Handler = (req: Request) => Promise<Response>;
@@ -1389,7 +1393,16 @@ export function createSteward(system: System, options: StewardOptions): Handler 
 
   // --- Routing -----------------------------------------------------------------
 
+  // The connectors of the egress proxy, written under the same unlock and the
+  // same lock as a secret: see src/connectors/steward.ts. Without a store, the
+  // routes do not exist, as on a steward that predates them.
+  const connectorRoutes =
+    options.connectors === undefined
+      ? {}
+      : createConnectorRoutes(options.connectors, { bodyWithToken, underLock, sites, now: () => system.now() });
+
   const routes: Record<string, Record<string, (req: Request) => Promise<Response>>> = {
+    ...connectorRoutes,
     "/projects": { GET: listProjects },
     "/log": { GET: readLog },
     "/unlock": { POST: unlock },

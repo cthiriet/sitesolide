@@ -94,6 +94,11 @@ CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH
 # read under this exact unit.
 ProtectSystem=strict
 ReadWritePaths=/etc/sitesolide
+# The egress proxy's connectors and grants, written from the Connectors page,
+# root:sitesolide-egress 0640 in a folder root owns: the same rights as above,
+# nothing more. The dash: the folder only exists once bin/deploy-egress.sh has
+# run, and a missing one must not fail the unit with 226/NAMESPACE.
+ReadWritePaths=-/etc/sitesolide-egress
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true

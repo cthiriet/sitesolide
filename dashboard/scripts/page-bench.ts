@@ -50,6 +50,7 @@
  *   BENCH_NO_STEWARD=1  no steward: Secrets and Access say 502
  *   BENCH_NO_PORTAL=1     no portal: Guests and Sharing say 502
  *   BENCH_NO_SSO=1        a portal with passwords only: Sharing says how to set it up
+ *   BENCH_NO_EGRESS=1     no egress proxy: the Connectors page's activity says so
  *   BENCH_EMPTY=1             no snapshot at all: the "No snapshot" state
  *   BENCH_SHOWCASE=1          the same fleet healed, for the README's screenshots
  *
@@ -64,6 +65,17 @@ import { fixedRefusal } from "../src/gatekeeper/rules";
 import { lockHeldMessage } from "../src/gatekeeper/transaction";
 import { HASH_ONLY, PASSWORD_VARIABLE, MIN_PASSWORD } from "../src/secrets/scope";
 import { INTERRUPTED_TRANSACTION_REASON } from "../src/secrets/portal";
+import {
+  EMPTY_CONNECTORS,
+  EMPTY_GRANTS,
+  OWNER_ACTOR,
+  connectorViews,
+  putConnector,
+  removeConnector,
+  setGrant,
+  type ConnectorsFile,
+  type GrantsFile,
+} from "../borrowed/connectors";
 
 const PASSWORD = "demo";
 
@@ -1179,6 +1191,49 @@ const steward =
               return Response.json({ portal: { ...portalOf(project.slug), modifiable: true, reason: null }, detail });
             },
           },
+          // The egress proxy's connectors, through the real rules of
+          // bin/cli/connectors.ts on files kept in memory.
+          "/connectors": { GET: () => Response.json(connectorsView()) },
+          "/connector": {
+            PUT: async (req) => {
+              const requested = await readBody(req);
+              if (!isValidToken(requested)) return refusal(401, "locked", "Locked.");
+              await Bun.sleep(400);
+              const value = requested.value === null ? null : text(requested.value);
+              const result = putConnector(connectorsFile, { name: requested.name, baseUrl: requested.baseUrl, header: requested.header, value }, new Date().toISOString(), OWNER_ACTOR);
+              if ("error" in result) return refusal(400, "invalid", result.error);
+              connectorsFile = result.file;
+              egressRows.unshift(egressRow("owner", "connector.update", text(requested.name), { change: result.created ? "created" : "updated" }));
+              return Response.json(connectorsView());
+            },
+            DELETE: async (req) => {
+              const requested = await readBody(req);
+              if (!isValidToken(requested)) return refusal(401, "locked", "Locked.");
+              const name = text(requested.name);
+              if (requested.confirmation !== name) return refusal(400, "invalid", `type ${name} to confirm removing the connector`);
+              const result = removeConnector(connectorsFile, grantsFile, name, new Date().toISOString(), OWNER_ACTOR);
+              if ("error" in result) return refusal(404, "not-found", result.error);
+              connectorsFile = result.connectors;
+              grantsFile = result.grants;
+              egressRows.unshift(egressRow("owner", "connector.update", name, { change: "removed" }));
+              return Response.json(connectorsView());
+            },
+          },
+          "/grant": {
+            PUT: async (req) => {
+              const requested = await readBody(req);
+              if (!isValidToken(requested)) return refusal(401, "locked", "Locked.");
+              const granted = requested.granted === true;
+              if (granted && !FOLDERS.some((folder) => folder.slug === requested.slug)) {
+                return refusal(403, "out-of-scope", "not a site deployed under /srv/sites");
+              }
+              const result = setGrant(grantsFile, connectorsFile, requested.slug, requested.connector, granted, new Date().toISOString(), OWNER_ACTOR);
+              if ("error" in result) return refusal(400, "invalid", result.error);
+              grantsFile = result.file;
+              if (result.changed) egressRows.unshift(egressRow("owner", "connector.grant", text(requested.slug), { connector: requested.connector, granted }));
+              return Response.json(connectorsView());
+            },
+          },
           "/restart": {
             POST: async (req) => {
               const requested = await readBody(req);
@@ -1209,6 +1264,74 @@ const steward =
           },
         },
         fetch: () => refusal(404, "not-found", "Unknown route."),
+      });
+
+// --- The fake egress proxy ---------------------------------------------------
+
+/**
+ * The connectors and grants as the steward would find them in
+ * /etc/sitesolide-egress, and the proxy's audit, all in memory. The values are
+ * placeholders made for the bench.
+ */
+let connectorsFile: ConnectorsFile = EMPTY_CONNECTORS;
+for (const [name, baseUrl, header] of [
+  ["slack", "https://slack.com/api", "Authorization"],
+  ["github", "https://api.github.com/repos/example", "Authorization"],
+] as const) {
+  const created = putConnector(connectorsFile, { name, baseUrl, header, value: `Bearer bench-placeholder-${name}` }, new Date(start - 9 * DAY).toISOString(), OWNER_ACTOR);
+  if ("file" in created) connectorsFile = created.file;
+}
+let grantsFile: GrantsFile = EMPTY_GRANTS;
+for (const [slug, name] of [["cms", "slack"], ["roster", "github"], ["retired-tool", "slack"]] as const) {
+  const granted = setGrant(grantsFile, connectorsFile, slug, name, true, new Date(start - 6 * DAY).toISOString(), OWNER_ACTOR);
+  if ("file" in granted) grantsFile = granted.file;
+}
+/** Who asks, as the deployed manifests would say. */
+const CONNECTOR_REQUESTS = [
+  { slug: "cms", connectors: ["slack"] },
+  { slug: "lab", connectors: ["github", "slack"] },
+  { slug: "roster", connectors: ["github", "mail"] },
+];
+
+function connectorsView() {
+  return {
+    installed: true,
+    state: "managed",
+    reason: null,
+    connectors: connectorViews(connectorsFile),
+    grants: grantsFile.grants,
+    requests: CONNECTOR_REQUESTS,
+    sites: FOLDERS.map((folder) => folder.slug).sort(),
+  };
+}
+
+let egressRowId = 0;
+function egressRow(actor: string, action: string, target: string | null, detail: object, at = Date.now()) {
+  egressRowId += 1;
+  return { id: egressRowId, at: new Date(at).toISOString(), actor, action, target, detail: JSON.stringify(detail) };
+}
+const egressRows = [
+  egressRow("system", "connector.use", "cms", { connector: "slack", count: 42, failures: 0, statuses: { "2xx": 42 } }, start - 3 * MINUTE),
+  egressRow("system", "egress.denied", "lab", { destination: "pastebin.com:443", reason: "not in the list", count: 7 }, start - 12 * MINUTE),
+  egressRow("system", "connector.use", "roster", { connector: "github", count: 5, failures: 2, statuses: { "2xx": 3, "5xx": 2 } }, start - 2 * HOUR),
+  egressRow("system", "egress.denied", "roster", { destination: "metadata.example.com:443", reason: "resolves to a cloud metadata address", count: 1 }, start - 5 * HOUR),
+  egressRow("owner", "connector.grant", "roster", { connector: "github", granted: true }, start - 6 * DAY),
+  egressRow("owner", "connector.update", "github", { change: "created", baseUrl: "https://api.github.com/repos/example", header: "Authorization" }, start - 9 * DAY),
+].sort((a, b) => b.id - a.id);
+
+const egress =
+  process.env.BENCH_NO_EGRESS === "1"
+    ? null
+    : Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        routes: {
+          "/audit": { GET: () => Response.json({ rows: [...egressRows].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 100) }) },
+          "/status": {
+            GET: () => Response.json({ connectors: Object.keys(connectorsFile.connectors).length, grants: grantsFile.grants.length, errors: [], started: new Date(start).toISOString(), openTunnels: 3 }),
+          },
+        },
+        fetch: () => new Response("404", { status: 404 }),
       });
 
 // --- The fake portal ---------------------------------------------------------
@@ -1331,6 +1454,8 @@ function startService() {
       STEWARD_SOCKET: socket,
       // A closed port when the portal is cut off: the page must say 502.
       PORTAL_URL: portal === null ? "http://127.0.0.1:9" : `http://127.0.0.1:${portal.port}`,
+      // The same for the egress proxy: a closed port, and the page says it.
+      EGRESS_URL: egress === null ? "http://127.0.0.1:9" : `http://127.0.0.1:${egress.port}`,
     },
     stdout: "inherit",
     stderr: "inherit",

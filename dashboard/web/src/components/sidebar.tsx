@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { ChartNoAxesColumn, ChevronLeft, Gauge, Globe, History, KeyRound, LogOut, PanelLeft, Share2, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react"
+import { ChartNoAxesColumn, ChevronLeft, Gauge, Globe, History, KeyRound, LogOut, PanelLeft, Plug, Share2, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils"
 export const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
   home: Globe,
   activity: History,
+  connectors: Plug,
 }
 
 /** The icon of each section of a site, shared by the sidebar and the tabs. */

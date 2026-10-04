@@ -1,0 +1,12 @@
+---
+import Layout from "@/layouts/main.astro"
+import { Application } from "@/components/application"
+---
+
+<Layout title="Connectors · sitesolide">
+  <!--
+    The same island on every page, with the path of the served file: no data
+    here, the connectors arrive through /api/connectors, behind the session.
+  -->
+  <Application client:load path="/connectors/" />
+</Layout>

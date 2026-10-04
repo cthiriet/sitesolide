@@ -23,6 +23,7 @@ describe("the page for an address", () => {
   test("the machine's pages are read from their path", () => {
     expect(pageFromUrl("/")).toEqual({ name: "home" })
     expect(pageFromUrl("/activity/")).toEqual({ name: "activity" })
+    expect(pageFromUrl("/connectors/")).toEqual({ name: "connectors" })
   })
 
   test("every section of a site is read from its path and ?s=", () => {
@@ -203,6 +204,7 @@ describe("titles", () => {
   test("the page's name, the slug for a site's Overview, the section otherwise", () => {
     expect(pageTitle({ name: "home" })).toBe("Sites")
     expect(pageTitle({ name: "activity" })).toBe("Activity")
+    expect(pageTitle({ name: "connectors" })).toBe("Connectors")
     expect(pageTitle({ name: "site", slug: "cms", section: "overview" })).toBe("cms")
     expect(pageTitle({ name: "site", slug: "cms", section: "access" })).toBe("Access")
   })
@@ -212,6 +214,7 @@ describe("titles", () => {
     expect(documentTitle({ name: "home" }, ok)).toBe("sitesolide")
     expect(documentTitle({ name: "home" }, null)).toBe("sitesolide")
     expect(documentTitle({ name: "activity" }, ok)).toBe("Activity · sitesolide")
+    expect(documentTitle({ name: "connectors" }, ok)).toBe("Connectors · sitesolide")
     expect(documentTitle({ name: "site", slug: "cms", section: "overview" }, null)).toBe("cms · sitesolide")
     expect(documentTitle({ name: "site", slug: "cms", section: "secrets" }, ok)).toBe("Secrets · cms · sitesolide")
   })
@@ -229,6 +232,7 @@ describe("titles", () => {
   test("during the check, a site file has no title yet", () => {
     expect(pendingTitle("/")).toBe("Sites")
     expect(pendingTitle("/activity/")).toBe("Activity")
+    expect(pendingTitle("/connectors/")).toBe("Connectors")
     expect(pendingTitle("/site/")).toBeNull()
     expect(pendingTitle("/site/secrets/")).toBeNull()
     expect(pendingTitle("/sites/")).toBe("Sites")

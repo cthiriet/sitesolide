@@ -4,14 +4,15 @@ What the machine actually runs, at `dashboard.<zone>`, behind a password, on two
 levels. **The machine**: *Sites*, the home page, with the state of the machine,
 the discrepancies between what the repositories ask for and what the machine
 does, the only part of the dashboard that teaches you something, and the list
-of sites; *Activity*, the latest operations on secrets and portals. **A site**:
+of sites; *Activity*, the latest operations on secrets and portals;
+*Connectors*, the credentials the egress proxy lends to projects. **A site**:
 *Overview*, *Audience*, *Secrets*, *Guests*, *Sharing* and *Access*, everything
 that concerns that site and only it.
 
 **Few writes, and each one is a decision.** No button sets a preview lock. One
 machine serves every site, with no staging and no automatic recovery: what
 touches their shared configuration stays in the workstation's scripts, under the
-eyes of whoever runs them. Three exceptions, and in all three the dashboard only
+eyes of whoever runs them. Four exceptions, and in all four the dashboard only
 relays to a component that judges for itself what it accepts:
 
 - **guest access and sharing**, the *Guests* and *Sharing* sections, which
@@ -23,7 +24,10 @@ relays to a component that judges for itself what it accepts:
 - **a project's portal door**, the *Access* section, the only button in the
   dashboard that reloads Caddy. The steward asks the gatekeeper, a root one-shot
   that validates, reloads, probes every site and restores at the slightest
-  discrepancy.
+  discrepancy;
+- **the egress proxy's connectors and their grants**, the *Connectors* page,
+  written by the steward under the same unlock as a secret, see
+  [Connectors](#connectors).
 
 ## The web service does not read the machine
 
@@ -314,6 +318,52 @@ access or sharing a site. It never touches Caddy itself, the
 gatekeeper refuses everything its own rules refuse, and restores. It cannot
 rewrite the hash that unlocks the secrets, which belongs to root.
 
+## Connectors
+
+The machine-level **Connectors** page manages the credentials the egress
+proxy lends to projects without handing them over, see
+[egress/README.md](../egress/README.md). It lists the connectors (name, base
+address, header, never the value), who asks for which in their deployed
+manifest, who has been granted which, and the proxy's activity: refusals,
+connector use, changes.
+
+```
+page, Connectors
+   |  /api/connectors/* : session, Origin, unlocked (the secrets' unlock)
+   v
+server.ts                  relays, with no rule; refuses an answer carrying the value
+   |  /connectors, /connector, /grant on the steward's socket
+   v
+steward.js                 rules of bin/cli/connectors.ts, the exclusion lock
+   `-- writes /etc/sitesolide-egress/connectors.json, grants.json
+              root:sitesolide-egress 0640, atomic, owner and mode set first
+
+server.ts  --  GET 127.0.0.1:3129/audit, /status  -->  egress proxy
+               answered to site-dashboard alone, recognised by its uid
+```
+
+- **The value is write-only.** Typed in the page, sent once to the steward,
+  written into the file, and never returned: no route reads it back, the relay
+  refuses a response that would carry it, as for the passwords of the Secrets
+  section.
+- **Writes use the secrets' unlock** and wait in the steward's exclusion lock
+  with every other write. A removal retypes the name: every project using the
+  connector loses it at once.
+- **A grant needs a deployed site**; a grant whose site is gone can still be
+  withdrawn, and the page flags it, since it would follow the slug to the next
+  project deployed under that name.
+- **The audit is the proxy's**, `connector.update` and `connector.grant`
+  recorded when it sees the files change, with `owner` as the author the steward
+  writes into them. The steward's own journal does not repeat them.
+- **Degrades gracefully.** A steward deployed before these routes answers `no
+  such route`, which the page turns into *run bin/deploy-steward.sh*. Without
+  the proxy's folder the page says the proxy is not installed and writes
+  nothing. A file in another form than the steward's is listed as unmanaged and
+  never rewritten. An unreachable proxy empties the activity panel alone.
+
+The steward's unit gains `ReadWritePaths=-/etc/sitesolide-egress`, with the
+dash: the folder exists only once `bin/deploy-egress.sh` has run.
+
 ## The portal, from the dashboard
 
 A site's *Access* section shows its door as the machine carries it, the deployed
@@ -435,7 +485,7 @@ ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
 
 | What changes | The command |
 |---|---|
-| `steward.ts`, `src/secrets/`, `infra/steward/`, `portal/src/sharing.ts` | `bin/deploy-steward.sh` |
+| `steward.ts`, `src/secrets/`, `src/connectors/` (steward side), `bin/cli/connectors.ts`, `infra/steward/`, `portal/src/sharing.ts` | `bin/deploy-steward.sh` |
 | `gatekeeper.ts`, `src/gatekeeper/`, `infra/gatekeeper/`, `bin/cli/fragment.ts`, `bin/cli/portal.ts` | `bin/deploy-gatekeeper.sh` |
 | anything else | `sitesolide deploy` |
 

@@ -34,6 +34,8 @@ import { prepareFolder, closeSocket, openSocket } from "./src/secrets/socket";
 import { MAX_PORTAL_MS, MAX_RESTART_MS, DEFAULT_SOCKET } from "./src/secrets/protocol";
 import { MAX_CONTENT_BODY_BYTES, createSteward } from "./src/secrets/steward";
 import { createSystem, readGroup } from "./src/secrets/system";
+import { createConnectorStore } from "./src/connectors/store";
+import { EGRESS_ACCOUNT, EGRESS_CONFIG_DIR } from "./borrowed/connectors";
 
 const SITES_DIR = process.env.SITES_DIR ?? "/srv/sites";
 const SECRETS_FOLDER = process.env.SECRETS_FOLDER ?? "/etc/sitesolide";
@@ -48,6 +50,14 @@ const GROUPS_FILE = process.env.GROUPS_FILE ?? "/etc/group";
 /** Read to say whether a site's portal is up, never written. */
 const CADDY_FOLDER = process.env.CADDY_FOLDER ?? "/etc/caddy/sites";
 const GATEKEEPER_RESULTS = process.env.GATEKEEPER_FOLDER ?? GATEKEEPER_FOLDER;
+
+/**
+ * The egress proxy's connectors and grants, and the group that reads them. The
+ * folder is created by bin/deploy-egress.sh; missing, the Connectors page says
+ * the proxy is not installed and nothing is written.
+ */
+const EGRESS_FOLDER = process.env.EGRESS_FOLDER ?? EGRESS_CONFIG_DIR;
+const EGRESS_GROUP = process.env.EGRESS_GROUP ?? EGRESS_ACCOUNT;
 
 /** The only group allowed to open the socket. Empty: no chgrp, for the workstation. */
 const SOCKET_GROUP = process.env.SOCKET_GROUP ?? "site-dashboard";
@@ -92,9 +102,32 @@ const system = createSystem({
 const removed = await system.cleanTemporaries();
 if (removed > 0) console.log(`steward: ${removed} temporary file(s) left by an abrupt stop removed`);
 
+// The egress proxy's connectors, in their own folder, handed to the proxy's
+// group. The group is read on every call: the proxy may be installed after
+// this steward started, and until then the page says it is not.
+const connectors = createConnectorStore({
+  folder: EGRESS_FOLDER,
+  owners:
+    OWNERS === ""
+      ? null
+      : {
+          rootUid: 0,
+          gid: () => {
+            try {
+              return readGroup(readFileSync(GROUPS_FILE, "utf8"), EGRESS_GROUP);
+            } catch {
+              return null;
+            }
+          },
+        },
+});
+const leftovers = connectors.clean();
+if (leftovers > 0) console.log(`steward: ${leftovers} temporary connectors file(s) left by an abrupt stop removed`);
+
 const handler = createSteward(system, {
   secretsFolder: SECRETS_FOLDER,
   checkAccounts: OWNERS !== "",
+  connectors,
 });
 
 /**
