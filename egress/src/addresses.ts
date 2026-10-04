@@ -215,6 +215,33 @@ export function forbiddenReason(address: string): string | null {
   return parsed.family === 4 ? classifyV4(parsed.bytes) : classifyV6(parsed.groups);
 }
 
+/** An address of one of the machine's interfaces, as `os.networkInterfaces()` lists it. */
+export type InterfaceAddress = { address: string };
+
+/**
+ * The machine's own addresses, canonical, from the list of its interfaces.
+ *
+ * The classification above knows the loopback and the private ranges, not the
+ * machine's public address, which no rule can name in advance. Yet a service
+ * listening on 0.0.0.0 or :: answers there too, and a connection from the
+ * machine to its own public address never crosses the provider's firewall: a
+ * listed name whose DNS someone else controls, pointed at it, would reach what
+ * that firewall keeps closed. Those addresses are refused like the loopback,
+ * read from the interfaces since they cannot be written down.
+ */
+export function interfaceAddresses(interfaces: Record<string, readonly InterfaceAddress[] | undefined>): Set<string> {
+  const own = new Set<string>();
+  for (const entries of Object.values(interfaces)) {
+    for (const { address } of entries ?? []) {
+      // A link-local address may carry its zone, `fe80::1%eth0`: refused
+      // anyway, and canonicalAddress would not read it.
+      const canonical = canonicalAddress(address.split("%")[0]!);
+      if (canonical !== null) own.add(canonical);
+    }
+  }
+  return own;
+}
+
 /** The address as a URL writes it: brackets around IPv6. */
 export function urlHost(address: string): string {
   return address.includes(":") ? `[${address}]` : address;

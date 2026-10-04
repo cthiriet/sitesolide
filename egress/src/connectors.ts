@@ -29,7 +29,7 @@ import type { Audit } from "./audit";
 import { HOP_BY_HOP } from "./decide";
 import type { Policy } from "./policy";
 import type { Caller, Peer } from "./proc-net";
-import { resolveChecked, type Lookup } from "./resolve";
+import { machineAddresses, resolveChecked, type Lookup, type OwnAddresses } from "./resolve";
 
 export type ConnectorsOptions = {
   hostname: string;
@@ -37,6 +37,8 @@ export type ConnectorsOptions = {
   identify: (peer: Peer) => Caller | Promise<Caller>;
   policy: Policy;
   lookup: Lookup;
+  /** The machine's own addresses, refused like the loopback; read from its interfaces unless a test says otherwise. */
+  ownAddresses?: OwnAddresses;
   audit: Pick<Audit, "used" | "denied" | "recent">;
   /** The dashboard's account, the only caller of the read-only routes. */
   dashboardAccount: string;
@@ -136,6 +138,7 @@ export function startConnectors(options: ConnectorsOptions): Server<undefined> {
   const route = options.route ?? ((address: string, port: number) => ({ hostname: address, port }));
   const headersTimeoutMs = options.headersTimeoutMs ?? 30_000;
   const lookupTimeoutMs = options.lookupTimeoutMs ?? 5_000;
+  const ownAddresses = options.ownAddresses ?? machineAddresses();
   /** Calls waiting for their upstream's headers, per project. */
   const inFlight = new Map<string, number>();
 
@@ -174,7 +177,7 @@ export function startConnectors(options: ConnectorsOptions): Server<undefined> {
 
     const base = readBaseUrl(connector.baseUrl);
     if ("error" in base) return denied(502, "unusable base address", `connectors: ${name} has an unusable base address`, slug);
-    const resolution = await resolveChecked(base.host, options.lookup, lookupTimeoutMs);
+    const resolution = await resolveChecked(base.host, options.lookup, lookupTimeoutMs, ownAddresses);
     if (!resolution.ok) return denied(resolution.status, resolution.reason, `connectors: ${name}: ${resolution.message.replace(/^egress: /, "")}`, slug);
 
     const open = inFlight.get(slug) ?? 0;

@@ -31,7 +31,7 @@ import { openDatabase } from "./src/database";
 import { createPolicy } from "./src/policy";
 import { hostIsLittleEndian, identify, machineReadings, type Peer } from "./src/proc-net";
 import { startProxy } from "./src/proxy";
-import { systemLookup } from "./src/resolve";
+import { machineAddresses, systemLookup } from "./src/resolve";
 
 const db = openDatabase(join(DATA_DIR, "egress.db"));
 const audit = createAudit(db);
@@ -40,6 +40,8 @@ const readings = machineReadings(PROC_NET, ACCOUNTS_FILE);
 const littleEndian = hostIsLittleEndian();
 const started = new Date().toISOString();
 const who = (peer: Peer) => identify(readings, peer, littleEndian);
+// One reading of the interfaces for both listeners.
+const ownAddresses = machineAddresses();
 
 /**
  * The connectors and grants, compared to what the audit last saw. Not while
@@ -66,6 +68,7 @@ const proxy = startProxy({
   identify: who,
   egressOf: (slug) => policy.project(slug)?.egress ?? null,
   lookup: systemLookup,
+  ownAddresses,
   audit,
 });
 
@@ -75,9 +78,12 @@ const connectors = startConnectors({
   identify: who,
   policy,
   lookup: systemLookup,
+  ownAddresses,
   audit,
   dashboardAccount: DASHBOARD_ACCOUNT,
-  status: () => ({ started, openTunnels: proxy.open() }),
+  // How many of the machine's own addresses it refuses: null says the
+  // interfaces could not be read, and that every egress is refused for it.
+  status: () => ({ started, openTunnels: proxy.open(), ownAddresses: ownAddresses()?.size ?? null }),
 });
 
 watch();

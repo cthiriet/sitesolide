@@ -37,7 +37,7 @@ import {
   type Destination,
 } from "./decide";
 import type { Caller, Peer } from "./proc-net";
-import { resolveChecked, type Lookup } from "./resolve";
+import { machineAddresses, resolveChecked, type Lookup, type OwnAddresses } from "./resolve";
 
 export type Limits = {
   /** Open client connections, all projects together. */
@@ -74,6 +74,8 @@ export type ProxyOptions = {
   /** The hosts a project's manifest lists, null without a manifest that reads. */
   egressOf: (slug: string) => HostPattern[] | null;
   lookup: Lookup;
+  /** The machine's own addresses, refused like the loopback; read from its interfaces unless a test says otherwise. */
+  ownAddresses?: OwnAddresses;
   audit: Pick<Audit, "denied">;
   /**
    * Where to connect for a judged address. Production connects to the address
@@ -142,6 +144,7 @@ export function startProxy(options: ProxyOptions): Proxy {
   const limits = { ...DEFAULT_LIMITS, ...options.limits };
   const log = options.log ?? ((line: string) => console.log(line));
   const route = options.route ?? ((address: string, port: number) => ({ hostname: address, port }));
+  const ownAddresses = options.ownAddresses ?? machineAddresses();
   const connections = new Set<Connection>();
   const perProject = new Map<string, number>();
 
@@ -313,7 +316,7 @@ export function startProxy(options: ProxyOptions): Proxy {
     connection.slug = verdict.slug;
     perProject.set(verdict.slug, open + 1);
 
-    const resolution = await resolveChecked(destination.host, options.lookup, limits.lookupTimeoutMs);
+    const resolution = await resolveChecked(destination.host, options.lookup, limits.lookupTimeoutMs, ownAddresses);
     if (isClosed(connection)) return;
     if (!resolution.ok) {
       options.audit.denied({ target: verdict.slug, destination: written, reason: resolution.reason });

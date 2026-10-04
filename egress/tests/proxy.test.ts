@@ -35,6 +35,8 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
   const seen: { host: string | null; path: string; connection: string | null }[] = [];
   let lookup: ReturnType<typeof stubLookup>;
   let route: ReturnType<typeof stubRoute>;
+  /** What the test says the machine's interfaces carry. */
+  const own = new Set<string>();
 
   beforeAll(() => {
     tls = certificate([API]);
@@ -73,6 +75,7 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
       identify: () => caller,
       egressOf: () => egress,
       lookup,
+      ownAddresses: () => own,
       audit: recorded.audit,
       route,
       limits: { headTimeoutMs: 500, connectTimeoutMs: 1000, lookupTimeoutMs: 1000 },
@@ -244,6 +247,21 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
     expect(metadata).toContain("a cloud metadata address");
     const mapped = await rawExchange(proxy.port, "CONNECT mapped.test-zone.invalid:443 HTTP/1.1\r\n\r\n");
     expect(mapped).toContain("a loopback (IPv4-mapped) address");
+  });
+
+  test("a listed host that resolves to the machine's own public address is refused like the loopback", async () => {
+    // A service listening on every address answers on the public one too, and
+    // from the machine itself no provider firewall stands in between.
+    allow(API);
+    own.add(PUBLIC_V4);
+    try {
+      const answer = await rawExchange(proxy.port, `CONNECT ${API}:443 HTTP/1.1\r\n\r\n`);
+      expect(answer).toStartWith("HTTP/1.1 403");
+      expect(answer).toContain(`${API} resolves to ${PUBLIC_V4}, this machine's own address`);
+      expect(recorded.denied.at(-1)).toMatchObject({ target: "shop", reason: "resolves to this machine's own address" });
+    } finally {
+      own.clear();
+    }
   });
 
   test("a name that does not resolve is a 502, not a hang", async () => {

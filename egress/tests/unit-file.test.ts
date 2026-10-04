@@ -51,6 +51,12 @@ describe("the egress proxy's unit", () => {
     }
   });
 
+  test("keeps netlink, through which the machine's own addresses are read", () => {
+    // Without it the reading fails, and src/resolve.ts refuses every egress
+    // rather than let the machine's public address through unchecked.
+    expect(values("RestrictAddressFamilies").join(" ").split(/\s+/)).toContain("AF_NETLINK");
+  });
+
   test("sees neither the secrets nor Caddy", () => {
     const hidden = values("InaccessiblePaths").join(" ");
     for (const path of ["/etc/sitesolide", "/etc/caddy", "/var/lib/sitesolide-steward"]) expect(hidden).toContain(`-${path}`);

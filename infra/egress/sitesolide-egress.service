@@ -77,6 +77,9 @@ ProtectProc=invisible
 # 127.0.0.53, or a provider's public resolvers, pass. A machine whose
 # /etc/resolv.conf names a private address needs that address allowed here.
 IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 fc00::/7 fe80::/10 multicast
+# The machine's own public addresses cannot be written here: the code reads
+# them from the interfaces, through netlink, and refuses them like the
+# loopback. Without AF_NETLINK that reading fails, and every egress with it.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 ProtectKernelTunables=true

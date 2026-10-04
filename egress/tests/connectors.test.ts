@@ -26,6 +26,8 @@ describe.skipIf(OPENSSL === null)("the connectors", () => {
   let caller: Caller = { kind: "project", slug: "shop", account: "site-shop" };
   const recorded = recordingAudit();
   const base = () => `http://127.0.0.1:${server.port}`;
+  /** What the test says the machine's interfaces carry. */
+  const own = new Set<string>();
 
   beforeAll(() => {
     tls = certificate([CHAT]);
@@ -86,6 +88,7 @@ describe.skipIf(OPENSSL === null)("the connectors", () => {
       identify: () => caller,
       policy: createPolicy(sites, config),
       lookup: stubLookup({ [CHAT]: [ADDRESS], "inner.test-zone.invalid": ["192.168.10.4"] }),
+      ownAddresses: () => own,
       audit: { ...recorded.audit, recent: () => [{ id: 1, at: now, actor: "system", action: "connector.use", target: "shop", detail: "{}" }] },
       dashboardAccount: "site-dashboard",
       route: stubRoute({ [`${ADDRESS}:443`]: upstream.port! }),
@@ -199,6 +202,18 @@ describe.skipIf(OPENSSL === null)("the connectors", () => {
     const response = await fetch(`${base()}/connectors/inner/x`);
     expect(response.status).toBe(403);
     expect(((await response.json()) as { message: string }).message).toContain("a private address");
+  });
+
+  test("a connector whose host resolves to the machine's own address is refused too", async () => {
+    caller = { kind: "project", slug: "shop", account: "site-shop" };
+    own.add(ADDRESS);
+    try {
+      const response = await fetch(`${base()}/connectors/chat/x`);
+      expect(response.status).toBe(403);
+      expect(((await response.json()) as { message: string }).message).toBe(`connectors: chat: refused, ${CHAT} resolves to ${ADDRESS}, this machine's own address`);
+    } finally {
+      own.clear();
+    }
   });
 
   test("the path stays under the connector's prefix", async () => {

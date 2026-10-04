@@ -194,6 +194,17 @@ any caller.
   answer refusing the host, and the connection goes to the address that was
   checked, never to a second resolution. The unit refuses the same ranges at
   the kernel, against a fault in the code.
+- The same through the machine's own public address. A service listening on
+  `0.0.0.0` or `::` answers there too, and a connection from the machine to
+  itself never crosses the provider's firewall. No rule can name that address
+  in advance, so the proxy reads every address of the machine's interfaces,
+  again every 30 seconds, and refuses them like the loopback. A reading that
+  fails keeps the last good one; with none, nothing goes out. The unit cannot
+  refuse them at the kernel, not knowing them; it keeps `AF_NETLINK` open for
+  the reading. A provider that translates the public address rather than
+  setting it on an interface (AWS, GCP) leaves it out of that list, and a
+  connection to it then leaves the machine and comes back through the
+  provider's firewall like anyone else's.
 - A connector's credential handed to whoever answers for its host in DNS.
   The proxy connects to the address it judged and checks the certificate
   against the connector's host name before it writes a byte of the request:
@@ -281,6 +292,18 @@ The commands are the author's to run, in this order.
    `/status` and on a CONNECT. A failure stops there and prints the journal
    command. It touches neither Caddy nor any site.
 
+   Then check the proxy reads the machine's own addresses under its unit,
+   which the script does not:
+
+   ```bash
+   ssh <server> "sudo -u site-dashboard curl -s http://127.0.0.1:3129/status"
+   ```
+
+   `ownAddresses` must be a number, the loopback and the public addresses
+   counted. `null` means the interfaces could not be read, and every egress
+   is refused with a 503 that says so until they are: the unit's
+   `RestrictAddressFamilies` and `SystemCallFilter` are where to look.
+
 3. **Update the steward**, which writes the connectors files:
 
    ```bash
@@ -349,8 +372,9 @@ NAT64 and 6to4 included, the `/proc/net` parser and the identification on
 fixtures, the connectors files and their rules, the policy's re-reading, the
 audit's counting, capping and diffing, and, on real sockets with a TLS server
 of the test's own: an allowed CONNECT end to end, a refused host, a refused
-private resolution, plain HTTP forwarding, large transfers in both directions,
-the per-project limit, a connector forwarded with its header set and the
-app's removed, an ungranted or unrequested connector refused, a connector's
-host presenting a valid certificate for another name refused before the
-request is written, and the dashboard's read-only routes.
+private resolution, a refused resolution to the machine's own address, read
+from interfaces the test injects, plain HTTP forwarding, large transfers in
+both directions, the per-project limit, a connector forwarded with its header
+set and the app's removed, an ungranted or unrequested connector refused, a
+connector's host presenting a valid certificate for another name refused
+before the request is written, and the dashboard's read-only routes.
