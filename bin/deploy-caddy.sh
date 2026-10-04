@@ -405,6 +405,13 @@ while IFS= read -r slug; do
   # skip, https://<zone>.<zone>/ would be queried.
   [ "$slug" = "$SITESOLIDE_ZONE" ] && continue
 
+  # The site whose block this run removes is not checked: `sitesolide remove`
+  # takes an open app's block down first, while its service still runs, and
+  # its address then falls to the wildcard block, which serves a public/ that
+  # is empty or absent. A 404, and the removal undone: measured on the test
+  # machine on 4 October 2026, for an app with no publicDir.
+  [ -n "$SITESOLIDE_REMOVE" ] && [ "$slug.caddy" = "$SITESOLIDE_REMOVE" ] && continue
+
   ADDRESSES+=("https://$slug.$SITESOLIDE_ZONE/")
 done < <(ssh "$SITESOLIDE_SERVER" '
   # A folder is not enough: the project must SERVE something, a public/ that is

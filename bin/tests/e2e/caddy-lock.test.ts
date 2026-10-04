@@ -765,3 +765,42 @@ describe("sitesolide remove of a site behind the portal", () => {
     expect(vm.lock()).toBeNull();
   });
 });
+
+describe("bin/deploy-caddy.sh checks every site but the one whose block it removes", () => {
+  /** The verification's listing of the sites that serve something, as the script sends it. */
+  const SERVED = "for folder in /srv/sites/*/";
+
+  /** A VM carrying the repository's Caddyfile and an open app's block, its service still running. */
+  function vmWithOpenApp(): void {
+    vm = createFakeVm();
+    vm.writeManifest(TOOL.slug, text(TOOL));
+    vm.writeFile("/etc/caddy/Caddyfile", CADDYFILE);
+    vm.writeBlock(TOOL.slug, generateFragment(TOOL)!);
+    // No landing: its addresses would be checked too, and resolve nowhere.
+    vm.acceptWrites([`ls -A /srv/sites/${TEST_ZONE}/public`]);
+    vm.answer("caddy validate", "Valid configuration\n");
+  }
+
+  test("an open app removed with its service still up: its address is not checked, the removal holds", async () => {
+    // `sitesolide remove` takes an open app's block down before stopping it.
+    // Checked, its address fell to the wildcard block and answered 404, and
+    // the script restored the block: measured on the test machine.
+    vmWithOpenApp();
+    vm.answer(SERVED, `${TOOL.slug}\n`);
+    const r = await waitFor(script(testRepo([]), "deploy-caddy.sh", [], { SITESOLIDE_REMOVE: `${TOOL.slug}.caddy` }));
+    expect(r.code).toBe(0);
+    expect(r.output).toContain(`TO REMOVE  /etc/caddy/sites/${TOOL.slug}.caddy`);
+    expect(r.output).toContain("-> in service");
+    expect(r.output).not.toContain(`https://${TOOL.slug}.${TEST_ZONE}/`);
+  });
+
+  test("the other sites are still checked, and one that no longer answers restores the block", async () => {
+    vmWithOpenApp();
+    vm.answer(SERVED, `${TOOL.slug}\n${CMS.slug}\n`);
+    const r = await waitFor(script(testRepo([]), "deploy-caddy.sh", [], { SITESOLIDE_REMOVE: `${TOOL.slug}.caddy` }));
+    expect(r.code).toBe(1);
+    expect(r.output).toContain(`https://${CMS.slug}.${TEST_ZONE}/`);
+    expect(r.output).not.toContain(`https://${TOOL.slug}.${TEST_ZONE}/`);
+    expect(r.error).toContain("1 address(es) no longer answer");
+  });
+});
