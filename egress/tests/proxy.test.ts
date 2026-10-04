@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Server } from "bun";
-import { parseEgressEntry, type HostPattern } from "../../bin/cli/egress";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { EGRESS_PROXY_PORT, egressUnitLines, parseEgressEntry, type HostPattern } from "../../bin/cli/egress";
+import { DATA_DIR } from "../src/config";
 import type { Caller } from "../src/proc-net";
 import { startProxy, type Proxy } from "../src/proxy";
 import { certificate, OPENSSL, rawExchange, recordingAudit, stubLookup, stubRoute } from "./helpers";
@@ -93,6 +96,56 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ host: API, path: "/v1/ping" });
+  });
+
+  test("a Bun app given the unit's environment goes through the proxy by itself", async () => {
+    allow(API);
+    // The variables exactly as the generated unit writes them, the port moved
+    // to this test's proxy: what proves the names and the format are the ones
+    // a client reads.
+    const environment: Record<string, string> = {};
+    for (const line of egressUnitLines({ slug: "shop", port: 3040, start: "/x", egress: [API] })) {
+      const match = /^Environment=([A-Za-z_]+)=(.*)$/.exec(line);
+      if (match !== null) environment[match[1]!] = match[2]!.replace(`:${EGRESS_PROXY_PORT}`, `:${proxy.port}`);
+    }
+    expect(Object.keys(environment).sort()).toEqual(["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]);
+    const ca = join(DATA_DIR, "proxy-test-ca.pem");
+    writeFileSync(ca, tls.cert);
+    const script = [
+      `const allowed = await fetch("https://${API}/v1/app");`,
+      "console.log(allowed.status, JSON.stringify(await allowed.json()));",
+      `const refused = await fetch("https://evil.test-zone.invalid/").then(async (r) => r.status + " " + (await r.text()).trim(), () => "failed");`,
+      "console.log(refused);",
+    ].join("\n");
+    const app = Bun.spawn(["bun", "-e", script], {
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", NODE_EXTRA_CA_CERTS: ca, ...environment },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [output] = await Promise.all([new Response(app.stdout).text(), app.exited]);
+    // Bun hands the proxy's refusal to the app as the answer: a 403 whose
+    // body names the host and the manifest, readable in the app's own log.
+    expect(output.trim().split("\n")).toEqual([
+      `200 {"host":"${API}","path":"/v1/app"}`,
+      "403 egress: refused, evil.test-zone.invalid:443 is not in the egress list of shop's sitesolide.json",
+    ]);
+  });
+
+  test.skipIf(Bun.which("curl") === null)("curl given the unit's environment goes through the proxy by itself", async () => {
+    allow(API);
+    const environment: Record<string, string> = {};
+    for (const line of egressUnitLines({ slug: "shop", port: 3040, start: "/x", egress: [API] })) {
+      const match = /^Environment=([A-Za-z_]+)=(.*)$/.exec(line);
+      if (match !== null) environment[match[1]!] = match[2]!.replace(`:${EGRESS_PROXY_PORT}`, `:${proxy.port}`);
+    }
+    const ca = join(DATA_DIR, "proxy-test-ca-curl.pem");
+    writeFileSync(ca, tls.cert);
+    const curl = Bun.spawn(["curl", "-s", "--max-time", "5", "--cacert", ca, `https://${API}/v1/curl`], {
+      env: { PATH: process.env.PATH ?? "", ...environment },
+      stdout: "pipe",
+    });
+    const [output] = await Promise.all([new Response(curl.stdout).text(), curl.exited]);
+    expect(JSON.parse(output)).toEqual({ host: API, path: "/v1/curl" });
   });
 
   test("the proxy connects to an address it judged, never to the name again", async () => {

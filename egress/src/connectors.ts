@@ -55,6 +55,13 @@ export type ConnectorsOptions = {
 export const MAX_BODY_BYTES = 10 * 1024 * 1024;
 
 /**
+ * Connector calls a project may have waiting for their upstream at once. One
+ * project looping on a slow API must not take every other project's share of
+ * the proxy with it.
+ */
+export const MAX_IN_FLIGHT_PER_PROJECT = 32;
+
+/**
  * Credential headers the app may have sent, removed before forwarding, on top
  * of the connector's own header: the request must carry the connector's
  * credential and no other, never a second identity the upstream might prefer.
@@ -129,6 +136,8 @@ export function startConnectors(options: ConnectorsOptions): Server<undefined> {
   const route = options.route ?? ((address: string, port: number) => ({ hostname: address, port }));
   const headersTimeoutMs = options.headersTimeoutMs ?? 30_000;
   const lookupTimeoutMs = options.lookupTimeoutMs ?? 5_000;
+  /** Calls waiting for their upstream's headers, per project. */
+  const inFlight = new Map<string, number>();
 
   async function caller(req: Request, server: Server<undefined>): Promise<Caller> {
     const ip = server.requestIP(req);
@@ -168,38 +177,52 @@ export function startConnectors(options: ConnectorsOptions): Server<undefined> {
     const resolution = await resolveChecked(base.host, options.lookup, lookupTimeoutMs);
     if (!resolution.ok) return denied(resolution.status, resolution.reason, `connectors: ${name}: ${resolution.message.replace(/^egress: /, "")}`, slug);
 
-    const url = new URL(req.url);
-    const path = `${base.path}${rest}` || "/";
-    const host = base.port === 443 ? base.host : `${base.host}:${base.port}`;
-    const headers = upstreamHeaders(req.headers, connector.header, connector.value, host);
-    const body = req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer();
-
-    let lastError = "no address answered";
-    for (const address of resolution.addresses) {
-      const target = route(address, base.port);
-      const abort = new AbortController();
-      const timer = setTimeout(() => abort.abort(), headersTimeoutMs);
-      try {
-        // The address judged, never the name again; TLS still checks the
-        // certificate against the name, which serverName carries.
-        const response = await fetch(`https://${urlHost(target.hostname)}:${target.port}${path}${url.search}`, {
-          method: req.method,
-          headers,
-          body,
-          redirect: "manual",
-          signal: abort.signal,
-          tls: { serverName: base.host, ...(options.ca === undefined ? {} : { ca: options.ca }) },
-        });
-        clearTimeout(timer);
-        options.audit.used(slug, name, response.status);
-        return new Response(response.body, { status: response.status, statusText: response.statusText, headers: downstreamHeaders(response.headers, name) });
-      } catch (error) {
-        clearTimeout(timer);
-        lastError = error instanceof Error && error.name === "AbortError" ? "no answer in time" : "the connection failed";
-      }
+    const open = inFlight.get(slug) ?? 0;
+    if (open >= MAX_IN_FLIGHT_PER_PROJECT) {
+      return denied(503, "too many calls", `connectors: ${slug} already has ${open} connector calls waiting for an answer`, slug);
     }
-    options.audit.used(slug, name, null);
-    return refuse(502, "upstream", `connectors: ${name}: ${lastError}`);
+    inFlight.set(slug, open + 1);
+    try {
+      const url = new URL(req.url);
+      const path = `${base.path}${rest}` || "/";
+      const host = base.port === 443 ? base.host : `${base.host}:${base.port}`;
+      const headers = upstreamHeaders(req.headers, connector.header, connector.value, host);
+      // The body streams through rather than being held: a stream is read
+      // once, so a call with a body tries the first address alone.
+      const body = req.method === "GET" || req.method === "HEAD" ? null : req.body;
+      const addresses = body === null ? resolution.addresses : resolution.addresses.slice(0, 1);
+
+      let lastError = "no address answered";
+      for (const address of addresses) {
+        const target = route(address, base.port);
+        const abort = new AbortController();
+        const timer = setTimeout(() => abort.abort(), headersTimeoutMs);
+        try {
+          // The address judged, never the name again; TLS still checks the
+          // certificate against the name, which serverName carries.
+          const response = await fetch(`https://${urlHost(target.hostname)}:${target.port}${path}${url.search}`, {
+            method: req.method,
+            headers,
+            body,
+            redirect: "manual",
+            signal: abort.signal,
+            tls: { serverName: base.host, ...(options.ca === undefined ? {} : { ca: options.ca }) },
+          });
+          clearTimeout(timer);
+          options.audit.used(slug, name, response.status);
+          return new Response(response.body, { status: response.status, statusText: response.statusText, headers: downstreamHeaders(response.headers, name) });
+        } catch (error) {
+          clearTimeout(timer);
+          lastError = error instanceof Error && error.name === "AbortError" ? "no answer in time" : "the connection failed";
+        }
+      }
+      options.audit.used(slug, name, null);
+      return refuse(502, "upstream", `connectors: ${name}: ${lastError}`);
+    } finally {
+      const left = (inFlight.get(slug) ?? 1) - 1;
+      if (left <= 0) inFlight.delete(slug);
+      else inFlight.set(slug, left);
+    }
   }
 
   /** The routes the dashboard reads, to it alone. */

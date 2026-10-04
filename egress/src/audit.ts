@@ -51,6 +51,13 @@ export type AuditRow = {
 /** Distinct refused pairs written per flush; the rest fold into one row. */
 export const MAX_DENIED_KEYS = 50;
 
+/**
+ * Distinct refused pairs held in memory between two flushes. A project asking
+ * for a new host on every connection must not grow the proxy's memory without
+ * bound: beyond this, refusals are only counted.
+ */
+export const MAX_TRACKED_KEYS = 10_000;
+
 /** How long rows are kept. */
 export const RETENTION_DAYS = 90;
 
@@ -99,6 +106,8 @@ export function createAudit(db: Database, now: () => Date = () => new Date()): A
 
   let denied = new Map<string, Denied>();
   let used = new Map<string, Used>();
+  /** Refusals beyond MAX_TRACKED_KEYS, counted without their pair. */
+  let untracked = 0;
 
   const stamp = () => now().toISOString();
 
@@ -117,6 +126,10 @@ export function createAudit(db: Database, now: () => Date = () => new Date()): A
       const at = stamp();
       const key = JSON.stringify([target, destination, reason, account]);
       const counter = denied.get(key);
+      if (counter === undefined && denied.size >= MAX_TRACKED_KEYS) {
+        untracked++;
+        return;
+      }
       if (counter === undefined) denied.set(key, { target, destination, reason, account, count: 1, first: at, last: at });
       else {
         counter.count++;
@@ -194,9 +207,11 @@ export function createAudit(db: Database, now: () => Date = () => new Date()): A
     flush() {
       const deniedNow = [...denied.values()];
       const usedNow = [...used.values()];
+      const uncounted = untracked;
       denied = new Map();
       used = new Map();
-      if (deniedNow.length === 0 && usedNow.length === 0) return 0;
+      untracked = 0;
+      if (deniedNow.length === 0 && usedNow.length === 0 && uncounted === 0) return 0;
 
       // The busiest pairs first, so that the cap keeps what matters.
       deniedNow.sort((a, b) => b.count - a.count);
@@ -212,9 +227,11 @@ export function createAudit(db: Database, now: () => Date = () => new Date()): A
           insert.run(at, SYSTEM_ACTOR, "egress.denied", entry.target, JSON.stringify(detail));
           written++;
         }
-        if (dropped.length > 0) {
-          const count = dropped.reduce((sum, entry) => sum + entry.count, 0);
-          insert.run(at, SYSTEM_ACTOR, "egress.denied", null, JSON.stringify({ reason: "rate limited", pairs: dropped.length, count }));
+        if (dropped.length > 0 || uncounted > 0) {
+          const count = dropped.reduce((sum, entry) => sum + entry.count, 0) + uncounted;
+          const detail: Record<string, unknown> = { reason: "rate limited", pairs: dropped.length, count };
+          if (uncounted > 0) detail.untracked = uncounted;
+          insert.run(at, SYSTEM_ACTOR, "egress.denied", null, JSON.stringify(detail));
           written++;
         }
         for (const entry of usedNow) {

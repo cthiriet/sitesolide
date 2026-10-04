@@ -233,8 +233,10 @@ any caller.
 | Request head | 16 KiB, 10 s to arrive |
 | Idle tunnel | closed after 10 min with no byte either way |
 | Connection, resolution | 10 s, 5 s |
-| Connector request body | 10 MiB |
+| Connector request body | 10 MiB, streamed through, not held |
+| Connector calls waiting for an answer, per project | 32, then 503 |
 | Connector answer headers | 30 s; the body then streams as long as it needs |
+| Refused pairs held between two audit writes | 10 000, the rest only counted |
 
 ## Deployment
 

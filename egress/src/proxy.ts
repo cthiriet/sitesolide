@@ -307,7 +307,7 @@ export function startProxy(options: ProxyOptions): Proxy {
     connection.upstream.socket = upstream as unknown as Socket<unknown>;
     connection.phase = "open";
     connection.lastActivity = Date.now();
-    if (forward === null) connection.client.socket?.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    if (forward === null) send(connection.client, connection.upstream, encoder.encode("HTTP/1.1 200 Connection Established\r\n\r\n"));
     else send(connection.upstream, connection.client, encoder.encode(forwardedHead(head, forward)));
     // What came behind the head, in the same read or during the decision,
     // follows it in order.

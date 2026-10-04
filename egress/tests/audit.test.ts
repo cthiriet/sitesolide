@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { EMPTY_CONNECTORS, EMPTY_GRANTS, putConnector, removeConnector, setGrant, type ConnectorsFile, type GrantsFile } from "../../bin/cli/connectors";
-import { createAudit, MAX_DENIED_KEYS, RETENTION_DAYS } from "../src/audit";
+import { createAudit, MAX_DENIED_KEYS, MAX_TRACKED_KEYS, RETENTION_DAYS } from "../src/audit";
 
 /** A clock the test moves by hand, and a database in memory: nothing here needs a file. */
 function bench(start = "2026-10-04T12:00:00.000Z") {
@@ -54,6 +54,16 @@ describe("refusals", () => {
     const folded = audit.recent(1)[0]!;
     expect(folded.target).toBeNull();
     expect(JSON.parse(folded.detail!)).toEqual({ reason: "rate limited", pairs: 10, count: 10 });
+  });
+});
+
+describe("memory", () => {
+  test("a flood of distinct destinations stops growing the counters, and is still counted", () => {
+    const { audit } = bench();
+    for (let i = 0; i < MAX_TRACKED_KEYS + 25; i++) audit.denied({ target: "shop", destination: `h${i}.example.com:443`, reason: "not in the list" });
+    expect(audit.flush()).toBe(MAX_DENIED_KEYS + 1);
+    const folded = JSON.parse(audit.recent(1)[0]!.detail!);
+    expect(folded).toEqual({ reason: "rate limited", pairs: MAX_TRACKED_KEYS - MAX_DENIED_KEYS, count: MAX_TRACKED_KEYS - MAX_DENIED_KEYS + 25, untracked: 25 });
   });
 });
 

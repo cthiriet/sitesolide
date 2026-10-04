@@ -92,6 +92,8 @@ and each one gets its unit, its port and its paths.
   with time-limited access for guests.
 - **Real isolation.** Each project runs as its own user, sees only its own
   folder, and cannot reach its neighbours over the loopback.
+- **Egress you decide.** An app reaches only the hosts its manifest lists, and
+  calls a company API through a connector whose credential it never holds.
 - **Nothing to rent.** No container runtime, no control plane, no per-seat
   pricing. A `cx33` at Hetzner (4 vCPU, 8 GB, about €16 a month) serves a few
   dozen projects.

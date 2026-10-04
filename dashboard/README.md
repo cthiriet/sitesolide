@@ -222,6 +222,7 @@ steward.js         root, hardened sitesolide-steward.service
    |-- keeps  /var/lib/sitesolide-steward/precedents/    the previous version
    |-- writes /var/lib/sitesolide-steward/journal.jsonl  with no values at all
    |-- reads  /etc/caddy/sites/<slug>.caddy              whether the door is on
+   |-- writes /etc/sitesolide-egress/*.json              the connectors, see Connectors
    `-- runs   systemctl reset-failed | restart | show <unit>
               systemctl start sitesolide-gatekeeper-<on|off>@<slug>
 ```

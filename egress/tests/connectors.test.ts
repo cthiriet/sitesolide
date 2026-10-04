@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Server } from "bun";
 import { EMPTY_CONNECTORS, EMPTY_GRANTS, putConnector, serializeConnectors, serializeGrants, setGrant } from "../../bin/cli/connectors";
 import { DATA_DIR } from "../src/config";
-import { connectorPath, startConnectors, upstreamHeaders } from "../src/connectors";
+import { connectorPath, MAX_IN_FLIGHT_PER_PROJECT, startConnectors, upstreamHeaders } from "../src/connectors";
 import { createPolicy } from "../src/policy";
 import type { Caller } from "../src/proc-net";
 import { certificate, OPENSSL, recordingAudit, stubLookup, stubRoute } from "./helpers";
@@ -35,6 +35,11 @@ describe.skipIf(OPENSSL === null)("the connectors", () => {
       tls: { cert: tls.cert, key: tls.key },
       async fetch(req) {
         const url = new URL(req.url);
+        if (url.pathname === "/api/slow") {
+          await Bun.sleep(400);
+          return new Response("slow");
+        }
+        if (url.pathname === "/api/size") return Response.json({ received: (await req.arrayBuffer()).byteLength });
         if (url.pathname === "/api/gzip") {
           return new Response(Bun.gzipSync(new TextEncoder().encode("compressed ".repeat(500))), {
             headers: { "content-encoding": "gzip", "content-type": "text/plain" },
@@ -144,6 +149,25 @@ describe.skipIf(OPENSSL === null)("the connectors", () => {
     const response = await fetch(`${base()}/connectors/chat/gzip`);
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("compressed ".repeat(500));
+  });
+
+  test("a large body streams through whole", async () => {
+    caller = { kind: "project", slug: "shop", account: "site-shop" };
+    const size = 3 * 1024 * 1024;
+    const response = await fetch(`${base()}/connectors/chat/size`, { method: "PUT", body: new Uint8Array(size).fill(5) });
+    expect(await response.json()).toEqual({ received: size });
+  });
+
+  test("one project cannot hold more than its share of calls waiting for an upstream", async () => {
+    caller = { kind: "project", slug: "shop", account: "site-shop" };
+    const responses = await Promise.all(
+      Array.from({ length: MAX_IN_FLIGHT_PER_PROJECT + 4 }, () => fetch(`${base()}/connectors/chat/slow`)),
+    );
+    const statuses = responses.map((response) => response.status);
+    expect(statuses.filter((status) => status === 200).length).toBe(MAX_IN_FLIGHT_PER_PROJECT);
+    expect(statuses.filter((status) => status === 503).length).toBe(4);
+    // The share comes back once the answers are in.
+    expect((await fetch(`${base()}/connectors/chat/slow`)).status).toBe(200);
   });
 
   test("asked for in the manifest but not granted: refused", async () => {
