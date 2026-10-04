@@ -18,8 +18,13 @@ import type { RestartMemory } from "./checks";
 
 export const STATE_VERSION = 1;
 
-/** Beyond that many, the oldest notices waiting for the webhook are dropped. */
-export const MAX_OUTBOX = 50;
+/**
+ * Beyond that many, the oldest notices waiting for the webhook are dropped. A
+ * storm of a hundred sites is two hundred notices at most, down then
+ * recovered, delivered a message at a time over the next runs: the cap is for
+ * a webhook that refuses for hours, not for a storm.
+ */
+export const MAX_OUTBOX = 500;
 
 /** A notice a day old is no longer news worth delivering late. */
 export const OUTBOX_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -101,7 +106,7 @@ export function parseState(text: string | null): { state: State; problem: string
   return { state: { version: STATE_VERSION, checks, restarts: validRestarts, outbox }, problem: null };
 }
 
-/** The notices still worth delivering: a day at most, fifty at most, the newest kept. */
+/** The notices still worth delivering: a day at most, five hundred at most, the newest kept. */
 export function trimOutbox(outbox: readonly Notice[], now: number): Notice[] {
   return outbox.filter((notice) => now - notice.at <= OUTBOX_MAX_AGE_MS).slice(-MAX_OUTBOX);
 }

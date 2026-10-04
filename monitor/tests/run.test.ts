@@ -351,6 +351,32 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     expect(next.webhook[0]).not.toContain("cms.service");
   });
 
+  test("a storm too long for one message: what did not fit arrives in the next, nothing lost", async () => {
+    const storm = Array.from({ length: 40 }, (_, index) => `storm-${String(index).padStart(2, "0")}`);
+    for (const folder of storm) {
+      mkdirSync(join(sites, folder), { recursive: true });
+      answers.set(`${folder}.${ZONE}`, 502);
+    }
+    try {
+      await pass();
+      const first = await pass();
+      expect(first.webhook).toHaveLength(1);
+      expect(first.webhook[0]).toMatch(/\.\.\. and \d+ more in the next message$/);
+      expect(first.status.undelivered).toBeGreaterThan(0);
+      expect(first.journal).toContain(`monitor: ${first.status.undelivered} notice(s) did not fit the message, kept for the next run`);
+
+      const second = await pass();
+      expect(second.webhook).toHaveLength(1);
+      expect(second.status.undelivered).toBe(0);
+      const delivered = [...first.webhook, ...second.webhook].join("\n");
+      for (const folder of storm) expect(delivered).toContain(`DOWN https://${folder}.${ZONE}/ answered 502`);
+
+      expect((await pass()).webhook).toEqual([]);
+    } finally {
+      for (const folder of storm) rmSync(join(sites, folder), { recursive: true, force: true });
+    }
+  });
+
   test("systemctl gone dark: the units keep their state, the monitor says it is half blind", async () => {
     setUnits(["caddy.service loaded active running Caddy", "cms.service loaded failed failed cms"]);
     await pass();

@@ -135,11 +135,13 @@ export function noticeLine(notice: Notice): string {
 
 /**
  * The message of a run: a title naming the machine by its zone and counting,
- * then one line per notice, critical first. Cut at MAX_MESSAGE with a count of
- * what was left out, never in the middle of a line: a storm of a hundred sites
- * still makes one message, and that message still fits.
+ * then one line per notice, critical first. Cut at MAX_MESSAGE, never in the
+ * middle of a line: a storm of a hundred sites still makes one message, and
+ * that message still fits. What did not fit is returned as `kept`, for the
+ * run to hold for its next message, and the last line says how many follow:
+ * cut and dropped, a site that went down in a storm would never be named.
  */
-export function message(notices: readonly Notice[], zone: string): string {
+export function compose(notices: readonly Notice[], zone: string): { text: string; sent: Notice[]; kept: Notice[] } {
   const order = { down: 0, cleared: 1, recovered: 2 };
   const sorted = [...notices].sort(
     (a, b) =>
@@ -160,18 +162,25 @@ export function message(notices: readonly Notice[], zone: string): string {
 
   const lines = [title];
   let length = title.length;
+  let shown = sorted.length;
   for (const [index, notice] of sorted.entries()) {
     const line = noticeLine(notice);
     const left = sorted.length - index;
-    const tail = `... and ${left} more, see the dashboard`;
+    const tail = `... and ${left} more in the next message`;
     if (length + 1 + line.length + 1 + tail.length > MAX_MESSAGE && left > 1) {
       lines.push(tail);
+      shown = index;
       break;
     }
     lines.push(line);
     length += 1 + line.length;
   }
-  return lines.join("\n");
+  return { text: lines.join("\n"), sent: sorted.slice(0, shown), kept: sorted.slice(shown) };
+}
+
+/** The text of `compose`, for what reads only that. */
+export function message(notices: readonly Notice[], zone: string): string {
+  return compose(notices, zone).text;
 }
 
 /**
@@ -197,11 +206,17 @@ export function slackEscape(text: string): string {
  *   text        ntfy's raw body, with a title and a high priority when
  *               something critical went down.
  */
-export function webhookRequest(url: string, format: WebhookFormat, notices: readonly Notice[], zone: string): { url: string; init: RequestInit } {
-  const text = message(notices, zone);
+export function webhookRequest(
+  url: string,
+  format: WebhookFormat,
+  notices: readonly Notice[],
+  zone: string,
+): { url: string; init: RequestInit; sent: Notice[] } {
+  const { text, sent } = compose(notices, zone);
   const json = (body: unknown) => ({
     url,
     init: { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+    sent,
   });
   if (format === "slack") return json({ text: slackEscape(text) });
   if (format === "discord") return json({ content: text, allowed_mentions: { parse: [] } });
@@ -215,6 +230,7 @@ export function webhookRequest(url: string, format: WebhookFormat, notices: read
         headers: { "Content-Type": "text/plain; charset=utf-8", Title: `sitesolide monitor, ${zone}`, Priority: urgent ? "high" : "default" },
         body: text,
       },
+      sent,
     };
   }
   return json({ text, content: text });

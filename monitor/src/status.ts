@@ -49,7 +49,10 @@ export type MonitorStatus = {
   down: StatusProblem[];
   heartbeat: Exclude<ChannelState, "idle">;
   webhook: ChannelState;
-  /** Notices kept for a webhook that did not take them. */
+  /**
+   * Notices waiting for the webhook: refused by it, or left out of a message
+   * cut to fit, for the next run's.
+   */
   undelivered: number;
   /**
    * Probes and certificate readings the run had no time left to make: their

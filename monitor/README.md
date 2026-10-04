@@ -73,7 +73,9 @@ a `systemctl` that did not answer, changes nothing: it is neither a failure nor
 a recovery, and the monitor reports its own blindness as one warning.
 
 **One message per pass**, however many checks changed: a hundred sites going
-down at once is one message, cut to fit with a count of what was left out.
+down at once is one message, cut to fit with a count of what was left out, and
+what was left out follows in the next pass's message, so that no site that went down
+in a storm goes unnamed.
 
 Two channels, both optional, both set in **`/etc/sitesolide/dashboard-monitor.env`**,
 from the dashboard:
@@ -119,8 +121,8 @@ from expiry, must not disarm the switch all that time. Those go to the
 webhook, the dashboard and the journal, one message when they go down and one
 when they recover, and travel in the body of every successful ping.
 
-**A webhook that refuses keeps its notices** for the next pass, a day and fifty
-notices at most, and the dashboard says how many wait. Neither address is ever
+**A webhook that refuses keeps its notices** for the next pass, a day and five
+hundred notices at most, and the dashboard says how many wait. Neither address is ever
 written anywhere: not in the journal, not in the status, not in an error.
 **Both must be `https`**: an address in plain http is refused as a problem of
 the monitor, since it would hand the secret, and every message, to each

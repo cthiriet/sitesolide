@@ -17,7 +17,8 @@
  *      killed while a webhook hangs loses no transition, the next run sends it;
  *   6. ping the heartbeat, send the webhook's one message if there is
  *      anything to say;
- *   7. write the memory again without what was delivered, and the status the
+ *   7. write the memory again without what was delivered, what a message
+ *      cut to fit left out kept for the next run, and the status the
  *      dashboard is handed.
  *
  * Every notice is written to the journal as well, configured alerting or not:
@@ -201,6 +202,7 @@ export async function run(config: Config, machine: Machine, now: number, clock: 
   const written: State = { version: state.version, checks, restarts: restarts.memory, outbox };
   machine.writeState(`${JSON.stringify(written)}\n`);
 
+  let sent: Notice[] = [];
   const [heartbeat, webhook] = await Promise.all([
     (async (): Promise<MonitorStatus["heartbeat"]> => {
       if (config.heartbeatUrl === null) return "unconfigured";
@@ -214,12 +216,18 @@ export async function run(config: Config, machine: Machine, now: number, clock: 
       if (outbox.length === 0) return "idle";
       const request = webhookRequest(config.webhookUrl, config.webhookFormat, outbox, config.zone);
       const delivery = await machine.send(request, SEND_TIMEOUT_MS);
-      if (delivery.ok) return "ok";
+      if (delivery.ok) {
+        sent = request.sent;
+        return "ok";
+      }
       machine.log(`monitor: webhook not delivered (${delivery.reason}), ${outbox.length} notice(s) kept for the next run`);
       return "failed";
     })(),
   ]);
-  if (webhook === "ok") outbox = [];
+  if (webhook === "ok") {
+    outbox = outbox.filter((notice) => !sent.includes(notice));
+    if (outbox.length > 0) machine.log(`monitor: ${outbox.length} notice(s) did not fit the message, kept for the next run`);
+  }
 
   const final: State = { ...written, outbox };
   machine.writeState(`${JSON.stringify(final)}\n`);

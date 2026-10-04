@@ -3,6 +3,7 @@ import type { Notice, Tracked } from "../src/alerts";
 import {
   MAX_MESSAGE,
   alertUrl,
+  compose,
   crashRequest,
   deliver,
   heartbeatFails,
@@ -101,8 +102,20 @@ describe("the message", () => {
     const text = message(notices, ZONE);
     expect(text.length).toBeLessThanOrEqual(MAX_MESSAGE);
     expect(text.split("\n")[0]).toBe("sitesolide monitor, test-zone.invalid: 100 down");
-    expect(text).toMatch(/\.\.\. and \d+ more, see the dashboard$/);
+    expect(text).toMatch(/\.\.\. and \d+ more in the next message$/);
     expect(text).toContain("site-000");
+  });
+
+  test("what a message cut to fit leaves out is kept for the next one, never dropped", () => {
+    const notices = Array.from({ length: 100 }, (_, index) => notice("down", `site:site-${String(index).padStart(3, "0")}.${ZONE}`));
+    const { text, sent, kept } = compose(notices, ZONE);
+    expect(sent.length + kept.length).toBe(100);
+    expect(kept.length).toBeGreaterThan(0);
+    expect(text).toEndWith(`... and ${kept.length} more in the next message`);
+    for (const shown of sent) expect(text).toContain(shown.summary);
+    for (const left of kept) expect(text).not.toContain(left.summary);
+    // A message that fits keeps nothing back.
+    expect(compose(notices.slice(0, 3), ZONE)).toMatchObject({ sent: notices.slice(0, 3), kept: [] });
   });
 
   test("a line says how long a recovery took", () => {
