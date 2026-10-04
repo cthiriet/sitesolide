@@ -18,7 +18,7 @@
  * by `openDatabase` of src/database.ts.
  */
 import type { Database } from "bun:sqlite";
-import type { AuditEntry, DeploymentState } from "./protocol";
+import { MAX_RUNNING, type AuditEntry, type DeploymentState } from "./protocol";
 
 export const CONTROL_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS audit (
@@ -92,9 +92,16 @@ export function createControlStore(db: Database) {
     activeForSlug: db.query<RawRow, [string]>(
       `SELECT ${COLUMNS} FROM deployments WHERE slug = ? AND state IN ('awaiting-bundle', 'running') ORDER BY created_at DESC LIMIT 1`,
     ),
-    countActive: db.query<{ n: number }, []>("SELECT count(*) AS n FROM deployments WHERE state IN ('awaiting-bundle', 'running')"),
-    markRunning: db.query<undefined, [number, string]>(
-      "UPDATE deployments SET state = 'running', started_at = ? WHERE id = ? AND state = 'awaiting-bundle'",
+    // The rowid breaks a tie within one millisecond in the order of creation,
+    // where the random id would pick any of them as the oldest.
+    awaitingForToken: db.query<RawRow, [string]>(
+      `SELECT ${COLUMNS} FROM deployments WHERE token_id = ? AND state = 'awaiting-bundle' ORDER BY created_at, rowid`,
+    ),
+    countRunning: db.query<{ n: number }, []>("SELECT count(*) AS n FROM deployments WHERE state = 'running'"),
+    // One statement, so that the count and the transition cannot be split by
+    // another upload: two archives arriving together never make a fourth.
+    markRunning: db.query<undefined, [number, string, number]>(
+      "UPDATE deployments SET state = 'running', started_at = ? WHERE id = ? AND state = 'awaiting-bundle' AND (SELECT count(*) FROM deployments WHERE state = 'running') < ?",
     ),
     finish: db.query<undefined, [string, number, string | null, string]>(
       "UPDATE deployments SET state = ?, finished_at = ?, message = ? WHERE id = ? AND state IN ('awaiting-bundle', 'running')",
@@ -148,13 +155,31 @@ export function createControlStore(db: Database) {
       return row(queries.activeForSlug.get(slug));
     },
 
-    countActive(): number {
-      return queries.countActive.get()?.n ?? 0;
+    /**
+     * The deployments waiting for their archive that this token opened,
+     * oldest first. They do not count against the machine, see countRunning,
+     * so they are bounded per token instead.
+     */
+    awaitingForToken(tokenId: string): DeploymentRow[] {
+      return queries.awaitingForToken.all(tokenId).map((raw) => row(raw)!);
     },
 
-    /** True when the deployment was waiting for its archive and now runs. */
-    markRunning(id: string, at: number): boolean {
-      return queries.markRunning.run(at, id).changes === 1;
+    /**
+     * The deployments the installer is running. Only these count against
+     * `MAX_RUNNING`: a deployment waiting for its archive costs the machine
+     * nothing, and counting it let three requests that never upload freeze
+     * every team deployment for fifteen minutes, renewable at will.
+     */
+    countRunning(): number {
+      return queries.countRunning.get()?.n ?? 0;
+    },
+
+    /**
+     * True when the deployment was waiting for its archive and now runs:
+     * false when it no longer waits, or when `cap` deployments already run.
+     */
+    markRunning(id: string, at: number, cap: number = MAX_RUNNING): boolean {
+      return queries.markRunning.run(at, id, cap).changes === 1;
     },
 
     /** True only for the transition itself: a final state is never rewritten, so its audit is recorded once. */

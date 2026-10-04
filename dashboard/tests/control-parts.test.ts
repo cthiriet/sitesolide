@@ -114,13 +114,33 @@ describe("the store", () => {
     s.createDeployment({ id: ID, tokenId: "aaaaaaaaaaaa", email: "a@b.c", slug: "shop", creating: true, manifest: "{}", createdAt: 1 });
     expect(s.deployment(ID)).toMatchObject({ state: "awaiting-bundle", creating: true, slug: "shop" });
     expect(s.activeForSlug("shop")?.id).toBe(ID);
-    expect(s.countActive()).toBe(1);
+    expect(s.countRunning()).toBe(0);
     expect(s.markRunning(ID, 2)).toBe(true);
+    expect(s.countRunning()).toBe(1);
     expect(s.markRunning(ID, 3)).toBe(false);
     expect(s.finish(ID, "succeeded", 4, null)).toBe(true);
     expect(s.finish(ID, "failed", 5, "late")).toBe(false);
     expect(s.deployment(ID)).toMatchObject({ state: "succeeded", startedAt: 2, finishedAt: 4, message: null });
     expect(s.activeForSlug("shop")).toBeNull();
+  });
+
+  test("only running deployments count against the machine, and the cap is claimed with the transition", () => {
+    // Three deployments that never upload used to freeze every team
+    // deployment for fifteen minutes.
+    const s = store();
+    const ids = ["a", "b", "c", "d", "e"].map((letter) => letter.repeat(24));
+    ids.forEach((id, rank) => s.createDeployment({ id, tokenId: "aaaaaaaaaaaa", email: "a@b.c", slug: `shop${rank}`, creating: true, manifest: "{}", createdAt: rank }));
+    expect(s.countRunning()).toBe(0);
+    expect(s.awaitingForToken("aaaaaaaaaaaa").map((row) => row.id)).toEqual(ids);
+    expect(s.awaitingForToken("bbbbbbbbbbbb")).toEqual([]);
+    expect(ids.slice(0, 3).map((id) => s.markRunning(id, 10, 3))).toEqual([true, true, true]);
+    // Full: the fourth keeps waiting for its archive, and gets in once one ends.
+    expect(s.markRunning(ids[3]!, 11, 3)).toBe(false);
+    expect(s.deployment(ids[3]!)?.state).toBe("awaiting-bundle");
+    expect(s.finish(ids[0]!, "succeeded", 12, null)).toBe(true);
+    expect(s.markRunning(ids[3]!, 13, 3)).toBe(true);
+    expect(s.countRunning()).toBe(3);
+    expect(s.awaitingForToken("aaaaaaaaaaaa").map((row) => row.id)).toEqual([ids[4]!]);
   });
 
   test("the audit, in the shape every component shares, newest first", () => {

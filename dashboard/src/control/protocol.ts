@@ -169,8 +169,18 @@ export const MAX_ENTRIES = 20_000;
 export const MAX_PATH_BYTES = 1024;
 /** The archive must arrive within this window after the deployment is created. */
 export const UPLOAD_WINDOW_MS = 15 * 60 * 1000;
-/** Deployments running at the same time on the machine, every token together. */
+/**
+ * Deployments running at the same time on the machine, every token together.
+ * Counted when an archive arrives, never when a deployment is opened: one
+ * waiting for its archive runs nothing.
+ */
 export const MAX_RUNNING = 3;
+/**
+ * Deployments one token may hold waiting for their archive; a new one replaces
+ * its oldest. As many as the machine runs, so that an agent deploying a few
+ * projects at once is not cut short, and a token never holds more.
+ */
+export const MAX_AWAITING_PER_TOKEN = 3;
 /** Lines of log the installer keeps, and the length of one. */
 export const MAX_LOG_LINES = 2_000;
 export const MAX_LOG_LINE = 1_000;

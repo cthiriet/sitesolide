@@ -166,7 +166,7 @@ curl -s -H "$AUTH" "$API/api/v1/deployments/<id>?after=0"
 | Route | What it does |
 |---|---|
 | `GET /api/v1/whoami` | the token's holder, scope and projects |
-| `POST /api/v1/deployments` `{ manifest }` | judges the manifest, opens a deployment for 15 minutes |
+| `POST /api/v1/deployments` `{ manifest }` | judges the manifest, opens a deployment for 15 minutes; a token holds three waiting for their archive, a fourth replaces the oldest |
 | `PUT /api/v1/deployments/<id>/bundle` | the archive, 100 MiB compressed at most; starts the installer |
 | `GET /api/v1/deployments/<id>?after=<n>` | state, log lines from `n`, `next`, `error`, `url` |
 | `GET /api/v1/projects` | the projects the token reaches, with their status |
@@ -182,7 +182,7 @@ curl -s -H "$AUTH" "$API/api/v1/deployments/<id>?after=0"
 | `invalid-manifest` | 422 | fix every point of `details` |
 | `invalid` | 400 | the request itself is malformed |
 | `not-found` | 404 | no such deployment or project for this token |
-| `busy` | 409 | a deployment of this project is already running |
+| `busy` | 409 | a deployment of this project is already running, or, when the archive arrives, three deployments already run on the machine: send it again in a minute, the deployment waits for it until its 15 minutes are up |
 | `too-large` | 413 | exclude dependencies and caches |
 | `expired` | 410 | the archive arrived after 15 minutes: start again |
 | `not-available` | 503 | the machine does not carry the control API yet: tell the owner |

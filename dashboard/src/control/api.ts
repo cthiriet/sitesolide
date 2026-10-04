@@ -28,6 +28,7 @@ import {
   CONTROL_STATUSES,
   MAX_BUNDLE_BYTES,
   MAX_JOURNAL_LINES,
+  MAX_AWAITING_PER_TOKEN,
   MAX_MANIFEST_BYTES,
   MAX_RUNNING,
   UPLOAD_WINDOW_MS,
@@ -300,7 +301,15 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
         if (!replaceable) return failure("busy", `a deployment of ${slug} is already ${active.state === "running" ? "running" : "waiting for its archive"}: wait for it to finish, then try again`);
         if (store.finish(active.id, "expired", now, "replaced by a newer deployment before its archive arrived")) spool.remove(active.id);
       }
-      if (store.countActive() >= MAX_RUNNING) return failure("busy", "the machine is already running several deployments: try again in a minute");
+      // A token's waiting deployments are bounded by the token, not by the
+      // machine: the newest replaces its oldest, and no number of them stands
+      // in another token's way.
+      const waiting = store.awaitingForToken(identity.id);
+      for (const stale of waiting.slice(0, Math.max(0, waiting.length - MAX_AWAITING_PER_TOKEN + 1))) {
+        if (store.finish(stale.id, "expired", now, "replaced by a newer deployment of the same token before its archive arrived")) spool.remove(stale.id);
+      }
+      // A courtesy before the build: the archive's arrival is what counts.
+      if (store.countRunning() >= MAX_RUNNING) return failure("busy", "the machine is already running several deployments: try again in a minute");
 
       const id = newDeploymentId(random);
       store.createDeployment({ id, tokenId: identity.id, email: identity.email, slug, creating, manifest: text, createdAt: now });
@@ -334,6 +343,18 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
         return refusals[receipt.kind]();
       }
 
+      // The machine-wide cap, claimed with the transition itself before the
+      // installer starts. Full, the deployment keeps waiting for its archive,
+      // which may be sent again within its window.
+      if (!store.markRunning(row.id, clock(), MAX_RUNNING)) {
+        spool.remove(row.id);
+        const state = store.deployment(row.id)?.state ?? "expired";
+        if (state !== "awaiting-bundle") {
+          return failure("invalid", `this deployment is ${state}: create a new one with POST /api/v1/deployments`, { status: 409 });
+        }
+        return failure("busy", "the machine is already running several deployments: send the archive again in a minute, this deployment waits for it until its 15 minutes are up");
+      }
+
       const reached = await reach(() => steward.deploy({ bearer, deployment: row.id, slug: row.slug, manifest: row.manifest }), [bearer]);
       if (reached.kind !== "received" || reached.status !== 202) {
         const response = relayed(reached);
@@ -341,7 +362,6 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
         tracker.fail(row, answer.message, answer.error);
         return response;
       }
-      store.markRunning(row.id, clock());
       store.recordAudit({
         at: clock(),
         actor: `token:${identity.id}`,

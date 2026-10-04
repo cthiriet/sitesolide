@@ -129,10 +129,10 @@ function api(path: string, init: RequestInit & { token?: string; address?: strin
   });
 }
 
-async function follow(id: string): Promise<DeploymentView> {
+async function follow(id: string, token = secret): Promise<DeploymentView> {
   for (let attempt = 0; attempt < 200; attempt++) {
     await Promise.all(installs);
-    const view = ((await (await api(`/api/v1/deployments/${id}`)).json()) as { deployment: DeploymentView }).deployment;
+    const view = ((await (await api(`/api/v1/deployments/${id}`, { token })).json()) as { deployment: DeploymentView }).deployment;
     if (view.state !== "running") return view;
     await Bun.sleep(25);
   }
@@ -242,6 +242,58 @@ describe("refusals an agent can act on", () => {
     // Even the right token waits, from that address; another address does not.
     expect((await api("/api/v1/whoami", { address })).status).toBe(429);
     expect((await api("/api/v1/whoami", { address: "203.0.113.100" })).status).toBe(200);
+  });
+});
+
+describe("the machine's cap on deployments", () => {
+  const open = async (slug: string, token = secret) => {
+    const response = await api("/api/v1/deployments", { token, method: "POST", body: JSON.stringify({ manifest: { slug, start: "/usr/local/bin/bun run server.ts", publicDir: "public" } }) });
+    return { status: response.status, deployment: ((await response.json()) as { deployment?: DeploymentView }).deployment };
+  };
+  const state = async (id: string, token = secret) => ((await (await api(`/api/v1/deployments/${id}`, { token })).json()) as { deployment: DeploymentView }).deployment.state;
+
+  test("deployments waiting for their archive never stand in another token's way", async () => {
+    // Three requests that never upload used to take the machine's three
+    // places for fifteen minutes, renewable: nobody else could deploy.
+    const waiting = [];
+    for (const slug of ["wait-a", "wait-b", "wait-c"]) {
+      const opened = await open(slug);
+      expect(opened.status).toBe(201);
+      waiting.push(opened.deployment!.id);
+    }
+    expect((await open("wait-other", other)).status).toBe(201);
+
+    // A token holds three at most: a fourth replaces its oldest, which then
+    // refuses its archive.
+    expect((await open("wait-d")).status).toBe(201);
+    expect(await state(waiting[0]!)).toBe("expired");
+    expect(await state(waiting[1]!)).toBe("awaiting-bundle");
+    const late = await api(`/api/v1/deployments/${waiting[0]}/bundle`, { method: "PUT", body: bundle([file("app/server.ts", "x")]) });
+    expect(late.status).toBe(409);
+  });
+
+  test("the cap is claimed when the archive arrives: full, the deployment waits, and takes it again later", async () => {
+    const opened = await open("capped", other);
+    expect(opened.status).toBe(201);
+    const id = opened.deployment!.id;
+
+    // Three deployments the installer is running, every token together.
+    const running = ["1", "2", "3"].map((digit) => "f".repeat(23) + digit);
+    running.forEach((fake, rank) => {
+      store.createDeployment({ id: fake, tokenId: "cccccccccccc", email: "c@test-zone.invalid", slug: `running-${rank}`, creating: true, manifest: "{}", createdAt: Date.now() });
+      expect(store.markRunning(fake, Date.now())).toBe(true);
+    });
+    const archive = bundle([file("app/server.ts", "Bun.serve({})"), file("public/index.html", "<h1>capped</h1>")]);
+    const full = await api(`/api/v1/deployments/${id}/bundle`, { token: other, method: "PUT", body: archive, headers: { "Content-Type": "application/gzip" } });
+    expect(full.status).toBe(409);
+    expect(await full.json()).toMatchObject({ error: "busy", message: expect.stringContaining("send the archive again") });
+    expect(await state(id, other)).toBe("awaiting-bundle");
+    expect(existsSync(join(bench.spool, id))).toBe(false);
+
+    for (const fake of running) store.finish(fake, "succeeded", Date.now(), null);
+    const again = await api(`/api/v1/deployments/${id}/bundle`, { token: other, method: "PUT", body: archive, headers: { "Content-Type": "application/gzip" } });
+    expect(again.status).toBe(202);
+    expect((await follow(id, other)).state).toBe("succeeded");
   });
 });
 
