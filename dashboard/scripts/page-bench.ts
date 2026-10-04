@@ -331,6 +331,57 @@ function counters(unit: FakeUnit): { before: number; now: number } {
 }
 
 /**
+ * The status the monitor would leave, copied by the collector
+ * (monitor/src/status.ts): a customer domain whose certificate no longer
+ * matches, a certificate renewal running late, a failed backup. Healed in the
+ * showcase, where the monitor has nothing to say.
+ */
+function monitorStatus(generatedAt: number): string {
+  const ago = (minutes: number) => generatedAt - minutes * MINUTE;
+  const down = SHOWCASE
+    ? []
+    : [
+        {
+          id: "site:yoga-studio.example",
+          kind: "site",
+          label: "yoga-studio.example",
+          severity: "critical",
+          slug: "yoga-studio",
+          summary: "https://yoga-studio.example/ did not answer: ERR_TLS_CERT_ALTNAME_INVALID",
+          since: ago(14),
+        },
+        {
+          id: "certificate:riverside-cycles.example",
+          kind: "certificate",
+          label: "riverside-cycles.example",
+          severity: "warning",
+          slug: "wheels",
+          summary: `The certificate for riverside-cycles.example expires in 9 days, on ${new Date(generatedAt + 9.5 * 24 * 60 * MINUTE).toISOString().slice(0, 10)}`,
+          since: ago(3 * 60),
+        },
+        {
+          id: "backup",
+          kind: "backup",
+          label: "backups",
+          severity: "warning",
+          slug: null,
+          summary: "The last backup run failed for photos, 5 h ago",
+          since: ago(5 * 60),
+        },
+      ];
+  return JSON.stringify({
+    version: 1,
+    generatedAt: ago(0.5),
+    zone: "example.com",
+    checks: 41,
+    down,
+    heartbeat: "ok",
+    webhook: SHOWCASE ? "idle" : "ok",
+    undelivered: 0,
+  });
+}
+
+/**
  * The snapshot `analytics` would drop, copied by the collector.
  *
  * Three sites: one that receives people, one that is starting out, one that has
@@ -483,6 +534,7 @@ function reading(now: number) {
       "\triverside-cycles.example wheels\n\twww.riverside-cycles.example wheels\n\tyoga-studio.example yoga-studio\n" +
       (SHOWCASE ? "\tcorner-bookshop.example bookshop\n" : ""),
     audience: audience(generatedAt),
+    monitor: monitorStatus(generatedAt),
     // roster (3045) does not listen: it is looping.
     ports: SHOWCASE
       ? [3040, 3041, 3022, 3043, 3044, 3045, 3026, 3047, 3048, 3049]

@@ -18,8 +18,9 @@
  *   files in the dashboard.
  *
  * Either way a file is expected `site-<slug>` in 0600, and root's for the
- * dashboard's hash alone. A registry embedded at build time used to say so
- * line by line; every line but that one repeated the rule, and it was dropped.
+ * dashboard's hash and the monitor's alerting alone (ROOT_FILES). A registry
+ * embedded at build time used to say so line by line; every line but that one
+ * repeated the rule, and it was dropped.
  *
  * A file is attached to a site by its name alone: `<slug>.env`,
  * `<slug>-<something>`, or `<slug>-secrets/<name>` for a subdirectory of a
@@ -29,7 +30,7 @@
  *
  * What is not a site stays outside: a name that no directory of /srv/sites
  * carries (`cloudflare.env`), a path outside /etc/sitesolide, and an owner
- * outside `site-*`, except `dashboard.env`, root's.
+ * outside `site-*`, except the ROOT_FILES, root's.
  *
  * Inside, two more rules: `PASSWORD_HASH` changes only through `/password`, in
  * whatever file it may be, and `dashboard.env` and `portal.env` carry nothing
@@ -57,12 +58,21 @@ export const SUBFOLDER_SUFFIX = "-secrets";
 export const ACCOUNT_PREFIX = "site-";
 
 /**
- * The files allowed to belong to root. The dashboard's hash alone: the
- * dashboard's service receives it through `EnvironmentFile=`, which PID 1 reads
- * as root, but must not be able to rewrite it. Any other file belonging to root
- * is not a site's file.
+ * The files allowed to belong to root, and expected so. Any other file
+ * belonging to root is not a site's file.
+ *
+ * - `dashboard.env`, the dashboard's hash: its service receives it through
+ *   `EnvironmentFile=`, which PID 1 reads as root, but must not be able to
+ *   rewrite it.
+ * - `dashboard-monitor.env`, the monitor's alerting addresses
+ *   (monitor/README.md). Its name attaches it to the dashboard's site, where
+ *   it is managed with the others, but neither the dashboard's service nor the
+ *   monitor's account needs to read it: PID 1 hands it to the monitor. Owned by
+ *   site-dashboard, a compromised dashboard would read the heartbeat's address
+ *   without unlocking anything, and could ping it to hide that the machine is
+ *   down.
  */
-export const ROOT_FILES = ["dashboard.env"];
+export const ROOT_FILES = ["dashboard.env", "dashboard-monitor.env"];
 
 /**
  * The variable that changes only through `/password`, in every managed

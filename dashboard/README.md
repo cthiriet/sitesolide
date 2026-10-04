@@ -85,6 +85,18 @@ snapshot carries only counts, and the bounce rate and average time are computed
 at display time. It carries **no visitor fingerprint**, which `analytics` checks
 on its side.
 
+## The monitor's status, by the same road
+
+The monitor ([../monitor/README.md](../monitor/README.md)) runs every minute
+under a dynamic account and leaves `/var/lib/sitesolide-monitor/status.json`,
+which only root reaches. The collector copies it into the reading as it stands,
+the `monitor` field, and [src/monitor.ts](src/monitor.ts) turns what is down
+into discrepancies: a site that does not answer over HTTPS, a certificate about
+to expire, a failed backup sit among the home page's Issues, linked to their
+site. A project's unit, the disk and the memory are left out, the page judging
+them already; a status older than five minutes shows as "Monitor silent",
+never as the present. No monitor installed, no field, nothing shown.
+
 ## The password
 
 On a new machine, the script draws it, shows it once, and prints its argon2id
@@ -279,8 +291,8 @@ sources together:
   no manifest declares, the landing's or a hand-made service's: managed once
   present, never created from here.
 
-Either way the owner is `site-<slug>`, root for `dashboard.env` alone, and the
-mode follows from the name: `0600` for an environment file, `0400` for a file
+Either way the owner is `site-<slug>`, root for `dashboard.env` and the
+monitor's `dashboard-monitor.env` alone, and the mode follows from the name: `0600` for an environment file, `0400` for a file
 read whole, `0444` for a `.pub`. A file that does not match is listed as
 unmanaged, with the command that repairs it.
 

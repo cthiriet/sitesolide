@@ -221,6 +221,18 @@ describe("what a file is expected to be", () => {
     expect(expectedText(sites.get("cms")!.files[0]!.expected)).toBe("site-cms:site-cms 0600");
   });
 
+  test("the monitor's alerting belongs to the dashboard's site, and to root like its hash", () => {
+    // Present on the machine, declared by no manifest: managed once there, a
+    // variables file, readable from an unlocked session, never site-dashboard's.
+    const sites = sitesFrom(entries, ["dashboard.env", "dashboard-monitor.env"]);
+    const monitor = sites.get("dashboard")!.files.find((file) => file.name === "dashboard-monitor.env");
+    expect(monitor).toMatchObject({ kind: "variables", readable: true, expected: { owner: "root", group: "root", mode: 0o600 } });
+    expect(expectedText(monitor!.expected)).toBe("root:root 0600");
+    // A site's own file with a similar name stays its own.
+    const builder = sitesFrom(entries, ["builder-monitor.env"]).get("builder")!.files.find((file) => file.name === "builder-monitor.env");
+    expect(expectedText(builder!.expected)).toBe("site-builder:site-builder 0600");
+  });
+
   test("the mode follows from the name alone", () => {
     // A registry used to say these line by line, and said nothing else.
     expect(expectedMode("cms.env")).toBe(0o600);

@@ -22,6 +22,7 @@
 import { isApp, isProtected, mainPort, PORTAL_SLUG, servicesOf, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected } from "../borrowed/portal";
 import { isValidCode, previewHost } from "../borrowed/locks";
+import { monitorDiscrepancies } from "./monitor";
 
 /**
  * The landing is not served from `/srv/sites/landing` but from the bare
@@ -120,6 +121,13 @@ export type Raw = {
    * same in the minute that follows a deployment.
    */
   audience?: string | null;
+  /**
+   * The monitor's status, /var/lib/sitesolide-monitor/status.json, as it
+   * stands, copied by the collector like the audience snapshot.
+   * `src/monitor.ts` interprets it. Optional for the same reason: a collector
+   * older than the monitor does not carry it.
+   */
+  monitor?: string | null;
   /** Ports listening on the loopback interface. */
   ports: number[];
   /**
@@ -503,6 +511,7 @@ export function buildSnapshot(raw: Raw): Snapshot {
   }
 
   discrepancies.push(...findDiscrepancies(sites, raw));
+  discrepancies.push(...monitorDiscrepancies(raw.monitor, raw.generated));
   const rank = { error: 0, warning: 1 };
   discrepancies.sort((a, b) => rank[a.severity] - rank[b.severity] || (a.slug ?? "").localeCompare(b.slug ?? ""));
 

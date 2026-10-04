@@ -50,6 +50,16 @@ const AUDIENCE_FILE =
   process.env.AUDIENCE_FILE ?? "/srv/sites/analytics/data/instantane.json";
 const HOSTS_FILE = process.env.HOSTS_FILE ?? "/srv/sites/analytics/data/hotes.json";
 const HOSTS_OWNER = process.env.HOSTS_OWNER ?? "site-analytics:site-analytics";
+
+/**
+ * The status the monitor leaves after each pass (monitor/README.md), copied as
+ * it stands like the audience snapshot. Under its DynamicUser it lives behind
+ * a link into /var/lib/private, which only root traverses: the collector,
+ * already root and already passing every minute, is the one path to the
+ * dashboard. Missing as long as bin/deploy-monitor.sh has not run, which is a
+ * normal state; src/monitor.ts interprets it.
+ */
+const MONITOR_FILE = process.env.MONITOR_FILE ?? "/var/lib/sitesolide-monitor/status.json";
 const ZONE = requiredZone();
 
 /**
@@ -339,6 +349,7 @@ async function collect(): Promise<Raw> {
     // Missing as long as `analytics` has not run once, which is a normal state:
     // the dashboard says so rather than showing an empty page.
     audience: await text(AUDIENCE_FILE),
+    monitor: await text(MONITOR_FILE),
     ports: await ports(),
     blocks: readBlocks(),
     machine: await readMachine(),

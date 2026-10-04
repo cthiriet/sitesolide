@@ -73,10 +73,17 @@ without ambiguity.
 
 ## The dashboard's own password
 
-`dashboard.env` belongs to root, `0600`, not to `site-dashboard` like all the
+`dashboard.env` belongs to root, `0600`, not to `site-dashboard` like the
 others. The dashboard's service still receives it, since `EnvironmentFile=` is
 read by PID 1 as root before the service takes its identity. In exchange, a
 compromised dashboard cannot rewrite the hash that unlocks the secrets.
+
+`dashboard-monitor.env`, the monitor's alerting addresses, is root's `0600` as
+well, and listed under the dashboard's site. PID 1 hands it to the monitor; the
+dashboard's service never reads it, so a compromised dashboard cannot learn the
+heartbeat's address without an unlocked session and ping it to hide that the
+machine is down. Create it empty once, then fill it from the dashboard: see
+[monitor/README.md](../monitor/README.md#alerting-healthchecksio-in-five-minutes).
 
 It is the one secret the dashboard cannot create for itself, being what opens
 it. On a machine that has none yet:
