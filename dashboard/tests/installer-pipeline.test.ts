@@ -242,6 +242,21 @@ describe("a redeployment", () => {
     expect(readFileSync(join(bench.blocks, "shop.caddy"), "utf8")).toContain("/api/*");
   });
 
+  test("a port chosen at the start and deposited by another deployment in the meantime is refused under the lock", async () => {
+    const bench = createBench({
+      onLock: (b) => {
+        mkdirSync(join(b.sites, "other"), { recursive: true });
+        writeFileSync(join(b.sites, "other", "sitesolide.json"), JSON.stringify({ slug: "other", start: "x", port: 3002 }));
+      },
+    });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request(APP));
+    expect(outcome).toMatchObject({ ok: false, code: "port-taken" });
+    expect(outcome.ok === false && outcome.message).toContain("since this deployment started");
+    expect(existsSync(join(bench.sites, "shop", "sitesolide.json"))).toBe(false);
+    expect(bench.events).toContain("release");
+  });
+
   test("a port another project declares is refused, with what to do", async () => {
     const bench = createBench();
     deposit(bench, { slug: "cms", start: "x", port: 3040 } as Manifest);

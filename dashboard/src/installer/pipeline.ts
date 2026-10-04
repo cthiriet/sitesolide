@@ -317,8 +317,10 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     }
     release = taken.release;
     let underLock: DepositedRead = { kind: "absent" };
+    let current: Map<string, string> | null = null;
     try {
-      const raw = (await host.readManifests()).get(slug);
+      current = await host.readManifests();
+      const raw = current.get(slug);
       if (raw !== undefined) {
         const door = portalFromManifest(raw, slug);
         underLock = door.kind === "read" ? { kind: "present", portal: door.portal } : door;
@@ -328,6 +330,13 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     }
     const agreement = confirmDoorUnderLock(slug, behindPortal, underLock);
     if (agreement.kind === "rejects") throw new Stop("door-changed", `${agreement.message}; nothing served was changed`);
+    // The ports again, under the lock every deposit takes: two deployments
+    // running side by side chose theirs from the same reading, and the first
+    // to get here has deposited its own since.
+    const collisions = current === null ? [] : portConflicts(manifest, current);
+    if (collisions.length > 0) {
+      throw new Stop("port-taken", `${collisions.join("; ")}, since this deployment started: nothing served was changed, deploy again`);
+    }
 
     if (block !== null && behindPortal) {
       host.log("-> Caddy block, before the files: the door goes up first");
