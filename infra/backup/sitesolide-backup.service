@@ -41,8 +41,9 @@ EnvironmentFile=-/etc/sitesolide/dashboard-backup.env
 Nice=10
 IOSchedulingClass=idle
 
-# Under the hour of the timer. The offsite catch-up stops itself at 40
-# minutes (OFFSITE_DEADLINE_MS) so that the status file is always written.
+# Under the hour of the timer. No copy starts after 25 minutes and none lasts
+# more than 20, no upload starts after 40 (dashboard/src/backup/run.ts), so that
+# the status file is always written before systemd would kill the run.
 TimeoutStartSec=50min
 
 UMask=0077

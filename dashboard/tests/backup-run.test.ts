@@ -128,6 +128,17 @@ describe("what stops a run, or a project", () => {
     if (lock.ok) lock.release();
   });
 
+  test("a run that has run out of time skips the rest, and still writes its status", async () => {
+    const { config } = machine();
+    let clock = T;
+    // Every reading of the clock moves it forward ten minutes.
+    const status = await runBackups({ config, now: () => (clock += 10 * 60_000), log: silent });
+    expect(status.ok).toBe(false);
+    const skipped = Object.values(status.projects).filter((project) => project.error === "skipped: the run ran out of time before reaching it");
+    expect(skipped.length).toBeGreaterThan(0);
+    expect(status.finishedAt).not.toBe(status.startedAt);
+  });
+
   test("a disk that would be too full: no snapshot, and a reason", async () => {
     const { root, config } = machine({ BACKUP_DISK_RESERVE: String(10 ** 18) });
     const status = await runBackups({ config, now: () => T, log: silent });

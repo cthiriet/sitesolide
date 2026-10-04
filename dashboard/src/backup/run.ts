@@ -42,6 +42,14 @@ export const LOCK_WAIT_MS = 15 * 60 * 1000;
  */
 export const OFFSITE_DEADLINE_MS = 40 * 60 * 1000;
 
+/**
+ * Past this, the projects not reached yet are reported as skipped rather than
+ * started: a copy begun at 45 minutes would have the unit killed before the
+ * status file is written, and a silent run is the one thing the monitor cannot
+ * tell from a healthy one.
+ */
+export const SNAPSHOT_DEADLINE_MS = 25 * 60 * 1000;
+
 export async function runBackups(dependencies: RunDependencies): Promise<RunStatus> {
   const { config, now, log } = dependencies;
   const startedAt = now();
@@ -78,6 +86,10 @@ export async function runBackups(dependencies: RunDependencies): Promise<RunStat
         const { project, excluded } = found;
         if (excluded !== null) {
           projects[project.folder] = { ok: true, snapshot: null, error: null };
+          continue;
+        }
+        if (now() - startedAt > SNAPSHOT_DEADLINE_MS) {
+          fail(project.folder, "skipped: the run ran out of time before reaching it");
           continue;
         }
         const outcome = await takeSnapshot(config, project, "scheduled", now(), log);
@@ -180,7 +192,11 @@ async function offsiteStep(
       const missing = kept.filter((name) => !present.has(objectKey(setting, folder, name)));
       const wanted = round === 0 ? missing.slice(0, 1) : missing;
       for (const name of wanted) {
-        if (round === 1 && now() - startedAt > OFFSITE_DEADLINE_MS) break;
+        if (now() - startedAt > OFFSITE_DEADLINE_MS) {
+          // The older ones wait for the next run; a newest one skipped is a missing copy, said so.
+          if (round === 0) errors.set(folder, "offsite upload skipped: the run ran out of time");
+          break;
+        }
         const key = objectKey(setting, folder, name);
         try {
           const bytes = await bucket.upload(key, join(config.backupFolder, folder, name), master);

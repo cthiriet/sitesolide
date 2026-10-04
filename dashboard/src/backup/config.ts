@@ -58,7 +58,11 @@ export type BackupConfig = {
 };
 
 export const DEFAULT_RESERVE_BYTES = 1024 * 1024 * 1024;
-export const DEFAULT_CHILD_TIMEOUT_MS = 30 * 60 * 1000;
+/**
+ * A copy of several gigabytes takes minutes, not twenty: beyond, the child is
+ * stuck, and the run must still have time for the others and for its status.
+ */
+export const DEFAULT_CHILD_TIMEOUT_MS = 20 * 60 * 1000;
 
 export type Environment = Record<string, string | undefined>;
 

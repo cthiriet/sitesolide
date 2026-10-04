@@ -32,10 +32,12 @@ EnvironmentFile=/etc/caddy/sitesolide.env
 EnvironmentFile=-/etc/sitesolide/dashboard-backup.env
 
 # The steward does not wait: it starts this unit with --no-block and the page
-# follows the result file. The longest restore is the extraction of a large
-# snapshot plus a snapshot of the current data; killed in the middle, it would
-# leave folders that the next restore repairs or refuses (recovery.ts).
-TimeoutStartSec=45min
+# follows the result file. The longest restore waits ten minutes for a run to
+# finish, then extracts and saves, twenty minutes at most each
+# (DEFAULT_CHILD_TIMEOUT_MS), then watches the service: under the hour. Killed
+# in the middle, it would leave folders that the next restore repairs or
+# refuses (recovery.ts).
+TimeoutStartSec=60min
 
 UMask=0077
 StateDirectory=sitesolide-backup

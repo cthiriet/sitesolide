@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { DEFAULT_CHILD_TIMEOUT_MS } from "../src/backup/config";
 import { readRestoreLaunch, restoreUnit } from "../src/backup/request";
+import { RESTORE_LOCK_WAIT_MS } from "../src/backup/restore";
+import { LOCK_WAIT_MS, OFFSITE_DEADLINE_MS, SNAPSHOT_DEADLINE_MS } from "../src/backup/run";
 
 /**
  * The backup component's three units, read the way systemd reads them. Only a
@@ -66,6 +69,11 @@ describe("sitesolide-backup.service", () => {
 
   test("ends before the next hour, and never disputes the disk with a site", () => {
     expect(values(text, "TimeoutStartSec")).toEqual(["50min"]);
+    // The last copy starts by 25 minutes and lasts 20 at most, which leaves the
+    // pruning and the status file time; the uploads stop at 40.
+    expect(SNAPSHOT_DEADLINE_MS + DEFAULT_CHILD_TIMEOUT_MS).toBeLessThan(50 * 60_000);
+    expect(OFFSITE_DEADLINE_MS).toBeLessThan(50 * 60_000);
+    expect(LOCK_WAIT_MS).toBeLessThan(SNAPSHOT_DEADLINE_MS);
     expect(values(text, "Nice")).toEqual(["10"]);
     expect(values(text, "IOSchedulingClass")).toEqual(["idle"]);
   });
@@ -101,6 +109,11 @@ describe("sitesolide-restore@.service", () => {
     expect(values(text, "InaccessiblePaths")).toEqual(["-/var/lib/sitesolide-steward"]);
     // `%I` would turn a slug's dashes into slashes: in no directive.
     expect(directives(text, "Service").some(([, value]) => value.includes("%I"))).toBe(false);
+  });
+
+  test("outlasts its longest path: the lock's wait, an extraction, a snapshot, the watch", () => {
+    expect(values(text, "TimeoutStartSec")).toEqual(["60min"]);
+    expect(RESTORE_LOCK_WAIT_MS + 2 * DEFAULT_CHILD_TIMEOUT_MS + 2 * 60_000).toBeLessThan(60 * 60_000);
   });
 
   test("two capabilities, the ones a folder swap and a chown need", () => {
