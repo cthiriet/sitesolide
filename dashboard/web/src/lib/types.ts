@@ -84,3 +84,10 @@ export type {
   EgressAuditRow,
   EgressStatus,
 } from "../../../src/connectors/protocol"
+
+/**
+ * The control API's shapes, for the Team page: the tokens as the steward shows
+ * them, and what they may do. `import type` as above: the rules of who may
+ * deploy what stay with the steward and the installer.
+ */
+export type { Scope, TokenView, DeploymentState, AuditEntry, TeamDeployment, TeamPageResponse, CreatedTokenResponse } from "../../../src/control/protocol"

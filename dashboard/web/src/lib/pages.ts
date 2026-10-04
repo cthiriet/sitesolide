@@ -4,8 +4,9 @@
  * into an address, and the navigation component uses it both ways.
  *
  * Two levels. The machine's: the home page, where the machine, its
- * discrepancies and the list of sites live, the steward's activity, and the
- * connectors the egress proxy lends. A
+ * discrepancies and the list of sites live, the steward's activity, the
+ * connectors the egress proxy lends, and the team, whose tokens deploy
+ * without SSH. A
  * site's: six sections, Overview, Audience, Secrets, Guests, Sharing and Access, the
  * site as a parameter.
  *
@@ -28,7 +29,7 @@ import type { Verdict } from "./verdict"
 export type Section = "overview" | "audience" | "secrets" | "guests" | "sharing" | "access"
 
 /** The pages of the machine level. */
-export type MachinePage = "home" | "activity" | "connectors"
+export type MachinePage = "home" | "activity" | "team" | "connectors"
 
 export type Page = { name: MachinePage } | { name: "site"; slug: string; section: Section }
 
@@ -39,6 +40,7 @@ export type SectionEntry = { section: Section; title: string; path: string }
 export const MACHINE_PAGES: readonly MachineEntry[] = [
   { name: "home", title: "Sites", path: "/" },
   { name: "activity", title: "Activity", path: "/activity/" },
+  { name: "team", title: "Team", path: "/team/" },
   { name: "connectors", title: "Connectors", path: "/connectors/" },
 ]
 
@@ -179,7 +181,7 @@ export function pageTitle(page: Page): string {
  */
 export function documentTitle(page: Page, verdict: Verdict | null): string {
   const parts: string[] = []
-  if (page.name === "activity" || page.name === "connectors") parts.push(pageTitle(page))
+  if (page.name === "activity" || page.name === "team" || page.name === "connectors") parts.push(pageTitle(page))
   if (page.name === "site") {
     if (page.section !== "overview") parts.push(sectionEntry(page.section).title)
     parts.push(page.slug)

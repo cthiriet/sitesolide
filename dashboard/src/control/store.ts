@@ -18,7 +18,7 @@
  * by `openDatabase` of src/database.ts.
  */
 import type { Database } from "bun:sqlite";
-import type { DeploymentState } from "./protocol";
+import type { AuditEntry, DeploymentState } from "./protocol";
 
 export const CONTROL_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS audit (
@@ -46,14 +46,7 @@ export const CONTROL_SCHEMA = [
   `CREATE INDEX IF NOT EXISTS deployments_state ON deployments (state)`,
 ] as const;
 
-export type AuditEntry = {
-  id: number;
-  at: string;
-  actor: string;
-  action: string;
-  target: string | null;
-  detail: Record<string, unknown> | null;
-};
+export type { AuditEntry };
 
 export type DeploymentRow = {
   id: string;
@@ -89,7 +82,7 @@ export function createControlStore(db: Database) {
       "INSERT INTO audit (at, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)",
     ),
     listAudit: db.query<{ id: number; at: string; actor: string; action: string; target: string | null; detail: string | null }, [string, number]>(
-      "SELECT id, at, actor, action, target, detail FROM audit WHERE action LIKE ? ORDER BY id DESC LIMIT ?",
+      "SELECT id, at, actor, action, target, detail FROM audit WHERE action LIKE ? ORDER BY at DESC, id DESC LIMIT ?",
     ),
     create: db.query<undefined, [string, string, string, string, string, number, string, number]>(
       "INSERT INTO deployments (id, token_id, email, slug, state, creating, manifest, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

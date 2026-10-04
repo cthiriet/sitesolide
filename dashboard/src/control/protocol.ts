@@ -263,6 +263,47 @@ export type DeployResponse = { deployment: string; slug: string; creating: boole
 export type LogsRequest = { bearer: string; slug: string; lines: number; cursor: string | null };
 export type LogsResponse = { lines: string[]; cursor: string | null };
 
+// --- The Team page's routes, under /api/team, behind the session ----------------
+//
+//   GET    /api/team                               -> TeamPageResponse
+//   POST   /api/team/tokens   { label, email, expiresAt, scope }  -> CreatedTokenResponse   (unlocked)
+//   POST   /api/team/revoke   { id }               -> { token: TokenView }
+
+/** One line of the dashboard's audit, in the shape every component shares. */
+export type AuditEntry = {
+  id: number;
+  at: string;
+  actor: string;
+  action: string;
+  target: string | null;
+  detail: Record<string, unknown> | null;
+};
+
+/** A deployment as the Team page lists it. */
+export type TeamDeployment = {
+  id: string;
+  tokenId: string;
+  email: string;
+  slug: string;
+  state: DeploymentState;
+  creating: boolean;
+  createdAt: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+  message: string | null;
+};
+
+export type TeamPageResponse = {
+  /** False when the steward does not carry the control routes yet; `reason` says what to run. */
+  available: boolean;
+  reason: string | null;
+  tokens: TokenView[];
+  /** End of this session's unlock, null if locked. */
+  until: number | null;
+  deployments: TeamDeployment[];
+  audit: AuditEntry[];
+};
+
 // --- The dashboard's public API, under /api/v1, with `Authorization: Bearer` ---
 //
 //   GET    /api/v1/whoami                          -> { identity }

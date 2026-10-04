@@ -959,6 +959,54 @@ try {
   unlinkSync(socket);
 } catch {}
 
+// --- The team's tokens, as the steward's control routes keep them -----------
+
+type BenchToken = {
+  id: string;
+  label: string;
+  email: string;
+  createdAt: number;
+  expiresAt: number | null;
+  revokedAt: number | null;
+  lastUsedAt: number | null;
+  scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean };
+  owned: string[];
+};
+
+const teamTokens: BenchToken[] = [
+  { id: "a1b2c3d4e5f6", label: "Alice's laptop", email: "alice@example.com", createdAt: start - 12 * DAY, expiresAt: start + 78 * DAY, revokedAt: null, lastUsedAt: start - 3 * HOUR, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false }, owned: ["notes"] },
+  { id: "0f1e2d3c4b5a", label: "Release agent", email: "agent@example.com", createdAt: start - 40 * DAY, expiresAt: start + 4 * DAY, revokedAt: null, lastUsedAt: start - DAY, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: true }, owned: [] },
+  { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com", createdAt: start - 90 * DAY, expiresAt: null, revokedAt: start - 20 * DAY, lastUsedAt: start - 21 * DAY, scope: { slugs: [], create: true, outbound: false, domain: false, public: false }, owned: ["mockups"] },
+];
+
+// The control API's history, written by the service's own store in its data
+// directory before it starts: a child process, so that DATA_DIR is the
+// bench's when src/config.ts freezes it.
+Bun.spawnSync(
+  [
+    "bun",
+    "-e",
+    `const { openDatabase } = await import("./src/database");
+     const { createControlStore } = await import("./src/control/store");
+     const store = createControlStore(openDatabase(process.env.DATA_DIR + "/dashboard.db"));
+     const start = ${start};
+     const rows = [
+       ["0123456789abcdef00000001", "a1b2c3d4e5f6", "alice@example.com", "notes", "succeeded", 1, start - 3 * 3600000, null],
+       ["0123456789abcdef00000002", "0f1e2d3c4b5a", "agent@example.com", "calendar", "failed", 0, start - 26 * 3600000, "install-failed: bun install --production failed (exit 1): nothing served was changed"],
+       ["0123456789abcdef00000003", "a1b2c3d4e5f6", "alice@example.com", "cms", "succeeded", 0, start - 50 * 3600000, null],
+     ];
+     for (const [id, tokenId, email, slug, state, creating, at, message] of rows) {
+       store.createDeployment({ id, tokenId, email, slug, creating: creating === 1, manifest: "{}", createdAt: at });
+       store.markRunning(id, at + 2000);
+       store.finish(id, state, at + 60000, message);
+       store.recordAudit({ at: at + 2000, actor: "token:" + tokenId, action: "deploy.start", target: slug, detail: { email, deployment: id } });
+       store.recordAudit({ at: at + 60000, actor: "token:" + tokenId, action: state === "succeeded" ? "deploy.success" : "deploy.failure", target: slug, detail: { email, deployment: id, error: message === null ? undefined : "install-failed" } });
+     }
+     store.recordAudit({ at: start - 20 * 86400000, actor: "owner", action: "token.revoke", target: null, detail: { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com" } });`,
+  ],
+  { cwd: PROJECT_ROOT, env: { ...process.env, DATA_DIR: folder }, stdout: "inherit", stderr: "inherit" },
+);
+
 const steward =
   process.env.BENCH_NO_STEWARD === "1"
     ? null
@@ -966,6 +1014,37 @@ const steward =
         unix: socket,
         routes: {
           "/projects": { GET: () => Response.json({ projects: PROJECTS.map(projectView) }) },
+          "/team/tokens": {
+            GET: () => Response.json({ tokens: [...teamTokens].sort((a, b) => b.createdAt - a.createdAt) }),
+            POST: async (req) => {
+              const requested = await readBody(req);
+              if (!isValidToken(requested)) return refusal(401, "locked", "locked, unlock again");
+              const scope = requested.scope as BenchToken["scope"];
+              if (scope.slugs.includes("dashboard")) return refusal(400, "invalid", "scope.slugs: dashboard is reserved for the platform: pick another slug");
+              const created: BenchToken = {
+                id: draw(12, "0123456789abcdef"),
+                label: text(requested.label),
+                email: text(requested.email).toLowerCase(),
+                createdAt: Date.now(),
+                expiresAt: typeof requested.expiresAt === "number" ? requested.expiresAt : null,
+                revokedAt: null,
+                lastUsedAt: null,
+                scope,
+                owned: [],
+              };
+              teamTokens.push(created);
+              return Response.json({ token: created, secret: `sst_${draw(43, ALPHABET)}` }, { status: 201 });
+            },
+          },
+          "/team/revoke": {
+            POST: async (req) => {
+              const requested = await readBody(req);
+              const found = teamTokens.find((candidate) => candidate.id === requested.id);
+              if (found === undefined) return refusal(404, "not-found", "no such token");
+              found.revokedAt ??= Date.now();
+              return Response.json({ token: found });
+            },
+          },
           "/log": {
             GET: (req) => {
               const slug = new URL(req.url).searchParams.get("slug");

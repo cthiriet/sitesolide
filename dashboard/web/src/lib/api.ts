@@ -23,6 +23,10 @@ import type {
   DashboardResponse,
   ValueResponse,
   WithoutToken,
+  Scope,
+  TeamPageResponse,
+  CreatedTokenResponse,
+  TokenView,
 } from "./types"
 
 /** `status` is 0 when no answer arrived: network down, service stopped. */
@@ -198,4 +202,30 @@ export function togglePortal({ slug, active, confirmation }: WithoutToken<Portal
  */
 export function restartService({ slug }: WithoutToken<ProjectRequest>) {
   return sendSecrets<RestartResponse>("POST", "/restart", { slug })
+}
+
+// --- The team ------------------------------------------------------------------
+//
+// The routes of `src/control/team.ts`. Creating a token needs the same unlock
+// as the secrets, which the service holds: a 423 asks for the password. The
+// token's value comes back once, in the creation's answer, and nowhere else.
+
+export function readTeam() {
+  return callApi<TeamPageResponse & SecretsRefusal>("/api/team")
+}
+
+export function createTeamToken(request: { label: string; email: string; expiresAt: number | null; scope: Scope }) {
+  return callApi<CreatedTokenResponse & SecretsRefusal>("/api/team/tokens", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label: request.label, email: request.email, expiresAt: request.expiresAt, scope: request.scope }),
+  })
+}
+
+export function revokeTeamToken(id: string) {
+  return callApi<{ token: TokenView } & SecretsRefusal>("/api/team/revoke", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  })
 }

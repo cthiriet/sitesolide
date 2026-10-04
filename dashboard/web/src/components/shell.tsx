@@ -9,6 +9,7 @@ import { CONTAINER, HeaderSkeleton, PanelSkeleton } from "@/components/page"
 import { HomePage } from "@/components/pages/home"
 import { ActivityPage } from "@/components/pages/activity"
 import { ConnectorsPage } from "@/components/pages/connectors"
+import { TeamPage } from "@/components/pages/team"
 import { AccessSection } from "@/components/pages/site-access"
 import { OverviewSection } from "@/components/pages/site-overview"
 import { AudienceSection } from "@/components/pages/site-audience"
@@ -53,7 +54,7 @@ function CurrentPage({ page }: { page: Page }) {
   }
   return (
     <SecretsActionsProvider key={page.name}>
-      {page.name === "home" ? <HomePage /> : page.name === "connectors" ? <ConnectorsPage /> : <ActivityPage />}
+      {page.name === "home" ? <HomePage /> : page.name === "connectors" ? <ConnectorsPage /> : page.name === "team" ? <TeamPage /> : <ActivityPage />}
     </SecretsActionsProvider>
   )
 }

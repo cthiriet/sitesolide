@@ -18,7 +18,7 @@ import type { SessionReader } from "../routes";
 import { isAcceptableOrigin, type Session } from "../sessions";
 import type { Tokens } from "../secrets/tokens";
 import { reach, type ControlSteward } from "./client";
-import type { TokenView } from "./protocol";
+import type { TeamPageResponse, TokenView } from "./protocol";
 import type { ControlStore } from "./store";
 
 export type TeamDependencies = {
@@ -87,11 +87,11 @@ export function createTeamRoutes(dependencies: TeamDependencies, clock: () => nu
       const audit = store.listAudit(50).filter((entry) => entry.action.startsWith("token.") || entry.action.startsWith("deploy."));
       const until = tokens.read(open.hash)?.expiresAt ?? null;
       if (reached.kind === "unavailable") {
-        return json({ available: false, reason: NOT_AVAILABLE_REASON, tokens: [], until, deployments, audit });
+        return json({ available: false, reason: NOT_AVAILABLE_REASON, tokens: [], until, deployments, audit } satisfies TeamPageResponse);
       }
       if (reached.kind !== "received" || reached.status !== 200) return relayRefusal(reached);
       if (!Array.isArray(reached.body.tokens)) return error(502, "failure", "The steward sent an unreadable answer.");
-      return json({ available: true, reason: null, tokens: reached.body.tokens, until, deployments, audit });
+      return json({ available: true, reason: null, tokens: reached.body.tokens as TokenView[], until, deployments, audit } satisfies TeamPageResponse);
     },
 
     async createToken(req) {

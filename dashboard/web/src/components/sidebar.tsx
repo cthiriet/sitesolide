@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { ChartNoAxesColumn, ChevronLeft, Gauge, Globe, History, KeyRound, LogOut, PanelLeft, Plug, Share2, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react"
+import { ChartNoAxesColumn, ChevronLeft, Gauge, Globe, History, KeyRound, LogOut, PanelLeft, Plug, Share2, ShieldCheck, Users, UsersRound, type LucideIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils"
 export const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
   home: Globe,
   activity: History,
+  team: Users,
   connectors: Plug,
 }
 
