@@ -28,7 +28,7 @@ import type { Site } from "../state";
 import { readManifest } from "../../borrowed/manifest";
 import { reach, type ControlSteward, type Reached } from "./client";
 import { clientAddress, type Limiter } from "./limiter";
-import { allocatePorts, decideDoor, scopeRefusals } from "./policy";
+import { allocatePorts, decideManifest } from "./policy";
 import {
   CONTROL_STATUSES,
   MAX_BUNDLE_BYTES,
@@ -353,14 +353,13 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
         return failure("invalid-manifest", "sitesolide.json is refused: fix every point in details, then deploy again", { details: errors });
       }
       const slug = manifest.slug;
-      const refusals = scopeRefusals(manifest, identity.scope, slug);
       const { sites } = await snapshotSites();
       const site = sites.get(slug);
-      const door = decideDoor(manifest, identity.scope, site === undefined ? null : site.portal.wanted);
-      if ("refusal" in door) refusals.push(door.refusal);
-      if (refusals.length > 0) {
+      const decision = decideManifest(manifest, identity.scope, site === undefined ? null : site.portal.wanted, dependencies.zone);
+      if (decision.kind === "refused") {
+        if (decision.error === "reserved") return failure("reserved", decision.message);
         return failure("invalid-manifest", "your token may not deploy this manifest: fix every point in details, or ask the owner of the machine", {
-          details: refusals,
+          details: decision.details,
         });
       }
 

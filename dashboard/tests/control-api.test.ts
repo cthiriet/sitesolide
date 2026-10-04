@@ -13,6 +13,7 @@ import { createControlSteward } from "../src/control/steward";
 import { createControlStore, type ControlStore } from "../src/control/store";
 import { createControlSystem, type ControlSystem } from "../src/control/system";
 import { createTracker } from "../src/control/tracker";
+import type { Raw } from "../src/state";
 import { readRequest } from "../src/installer/instance";
 import { createReporter } from "../src/installer/main";
 import { runPipeline } from "../src/installer/pipeline";
@@ -209,6 +210,36 @@ describe("refusals an agent can act on", () => {
     const response = await api("/api/v1/deployments", { method: "POST", body: JSON.stringify({ manifest: { slug: "dashboard", start: "x", publicDir: "public" } }) });
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ error: "reserved" });
+  });
+
+  test("a reserved slug the machine serves in the open is still reserved, not a door to ask for", async () => {
+    // The snapshot shows the dashboard public, as on a real machine: judged on
+    // its door first, a private token got 422 "this site is public on the
+    // machine", and was told to ask the owner for what nobody can grant.
+    const snapshot: Raw = {
+      generated: Date.now(),
+      zone: ZONE,
+      folders: [{ slug: "dashboard", manifest: JSON.stringify({ slug: "dashboard", port: 3022, start: "/usr/local/bin/bun server.ts" }), unit: null, bytes: 1024, deployed: Date.now() }],
+      codes: "{}",
+      domains: null,
+      ports: [],
+      blocks: { dashboard: "reverse_proxy 127.0.0.1:3022" },
+      machine: null,
+      previous: null,
+    };
+    writeFileSync(join(root, "state.json"), JSON.stringify(snapshot));
+    try {
+      for (const manifest of [
+        { slug: "dashboard", start: "x", publicDir: "public" },
+        { slug: "dashboard", publicDir: "public", secrets: ["dashboard.env"] },
+      ]) {
+        const response = await api("/api/v1/deployments", { method: "POST", body: JSON.stringify({ manifest }) });
+        expect(response.status).toBe(403);
+        expect(await response.json()).toMatchObject({ error: "reserved", message: expect.stringContaining("pick another slug") });
+      }
+    } finally {
+      rmSync(join(root, "state.json"), { force: true });
+    }
   });
 
   test("an upload that is not gzip, and a deployment that is another token's", async () => {

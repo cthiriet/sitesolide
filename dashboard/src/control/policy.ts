@@ -163,6 +163,32 @@ export function decideDoor(manifest: Manifest, scope: Scope, onMachine: boolean 
   return { portal };
 }
 
+export type ManifestDecision =
+  | { kind: "allowed"; portal: boolean }
+  | { kind: "refused"; error: "reserved"; message: string }
+  | { kind: "refused"; error: "invalid-manifest"; details: string[] };
+
+/**
+ * What the dashboard answers a manifest before any upload: the slug, the
+ * scope, then the door.
+ *
+ * **The reserved slugs come first.** A platform project is refused `reserved`
+ * whatever else the manifest says, as the steward refuses it in decideSlug:
+ * judged after the door, `dashboard`, public on the machine, came back to a
+ * private token as "this site is public on the machine", a 422 telling it to
+ * ask the owner, when docs/team.md promises a 403 that says to pick another
+ * slug, and nothing the owner could grant would ever change the answer.
+ */
+export function decideManifest(manifest: Manifest, scope: Scope, onMachine: boolean | null, zone: string): ManifestDecision {
+  const reserved = reservedReason(manifest.slug, zone);
+  if (reserved !== null) return { kind: "refused", error: "reserved", message: reserved };
+  const refusals = scopeRefusals(manifest, scope, manifest.slug);
+  const door = decideDoor(manifest, scope, onMachine);
+  if ("refusal" in door) refusals.push(door.refusal);
+  if (refusals.length > 0 || "refusal" in door) return { kind: "refused", error: "invalid-manifest", details: refusals };
+  return { kind: "allowed", portal: door.portal };
+}
+
 // --- ports ----------------------------------------------------------------------------
 
 /**

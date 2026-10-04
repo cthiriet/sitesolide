@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Manifest } from "../borrowed/manifest";
-import { allocatePorts, decideDoor, decideSlug, leavesPorts, memoryBytes, reservedReason, scopeRefusals, takenPorts } from "../src/control/policy";
+import { allocatePorts, decideDoor, decideManifest, decideSlug, leavesPorts, memoryBytes, reservedReason, scopeRefusals, takenPorts } from "../src/control/policy";
 import type { Identity, Scope } from "../src/control/protocol";
 
 const ZONE = "test-zone.invalid";
@@ -24,6 +24,32 @@ describe("reserved slugs", () => {
     expect(reservedReason(ZONE, ZONE)).toContain("reserved");
     expect(decideSlug(identity({ create: true }), ZONE, { exists: true, owner: null, zone: ZONE })).toMatchObject({ kind: "refused" });
     expect(reservedReason("shop", ZONE)).toBeNull();
+  });
+
+  test("a manifest naming one is refused reserved before its door or its scope is judged", () => {
+    // `dashboard` is public on the machine: judged on its door first, a
+    // private token was told "this site is public on the machine", a 422.
+    for (const slug of ["dashboard", "portal", "api", "analytics", "landing", "www", ZONE]) {
+      for (const onMachine of [false, true, null]) {
+        expect(decideManifest(app({ slug }), NONE, onMachine, ZONE)).toMatchObject({ kind: "refused", error: "reserved" });
+        expect(decideManifest(site({ slug, secrets: ["dashboard.env"] }), NONE, onMachine, ZONE)).toMatchObject({ kind: "refused", error: "reserved" });
+      }
+    }
+    const refused = decideManifest(app({ slug: "dashboard" }), NONE, false, ZONE);
+    expect(refused.kind === "refused" && refused.error === "reserved" && refused.message).toContain("pick another slug");
+  });
+});
+
+describe("decideManifest", () => {
+  test("every refusal of the scope and the door at once, or the door to apply", () => {
+    expect(decideManifest(app(), NONE, null, ZONE)).toEqual({ kind: "allowed", portal: true });
+    expect(decideManifest(app(), { ...NONE, public: true }, null, ZONE)).toEqual({ kind: "allowed", portal: false });
+    const refused = decideManifest(app({ network: "outbound" }), NONE, false, ZONE);
+    expect(refused).toMatchObject({ kind: "refused", error: "invalid-manifest" });
+    const details = refused.kind === "refused" && refused.error === "invalid-manifest" ? refused.details : [];
+    expect(details).toHaveLength(2);
+    expect(details[0]).toContain("network");
+    expect(details[1]).toContain("public on the machine");
   });
 });
 
