@@ -31,7 +31,10 @@
  *   messages are those of the real gatekeeper and of the real steward,
  *   imported from src/;
  * - a fake portal on the loopback, which answers `/admin/guests` like
- *   `portal/src/admin.ts`;
+ *   `portal/src/admin.ts`, and `/admin/audit` with sign-ins of every kind;
+ * - with the dashboard's own audit of tokens and deployments, written below,
+ *   the egress proxy's, the backups' and the steward's, every source of the
+ *   Activity page has rows;
  * - a front end playing Caddy: `/api/*` to the service, the rest served from
  *   `public/` as `file_server` does, a directory's `index.html` included and a
  *   redirect from `/site` to `/site/`. It keeps production's order, where the
@@ -48,9 +51,9 @@
  *   BENCH_PORT=4322          the front end's port, the service takes the next one
  *   BENCH_STALE=1           a snapshot ten minutes old, never rewritten
  *   BENCH_NO_STEWARD=1  no steward: Secrets and Access say 502
- *   BENCH_NO_PORTAL=1     no portal: Guests and Sharing say 502
+ *   BENCH_NO_PORTAL=1     no portal: Guests and Sharing say 502, Activity can't read it
  *   BENCH_NO_SSO=1        a portal with passwords only: Sharing says how to set it up
- *   BENCH_NO_EGRESS=1     no egress proxy: the Connectors page's activity says so
+ *   BENCH_NO_EGRESS=1     no egress proxy: the Connectors page's activity says so, and Activity
  *   BENCH_EMPTY=1             no snapshot at all: the "No snapshot" state
  *   BENCH_SHOWCASE=1          the same fleet healed, for the README's screenshots
  *   BENCH_NO_BACKUPS=1        the backup component not installed
@@ -999,14 +1002,19 @@ Bun.spawnSync(
        ["0123456789abcdef00000002", "0f1e2d3c4b5a", "agent@example.com", "calendar", "failed", 0, start - 26 * 3600000, "install-failed: bun install --production failed (exit 1): nothing served was changed"],
        ["0123456789abcdef00000003", "a1b2c3d4e5f6", "alice@example.com", "cms", "succeeded", 0, start - 50 * 3600000, null],
      ];
+     const audit = [
+       { at: start - 20 * 86400000, actor: "owner", action: "token.revoke", target: null, detail: { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com" } },
+       { at: start - 12 * 86400000, actor: "owner", action: "token.create", target: null, detail: { id: "a1b2c3d4e5f6", label: "Alice's laptop", email: "alice@example.com", expiresAt: start + 78 * 86400000, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false } } },
+     ];
      for (const [id, tokenId, email, slug, state, creating, at, message] of rows) {
        store.createDeployment({ id, tokenId, email, slug, creating: creating === 1, manifest: "{}", createdAt: at });
        store.markRunning(id, at + 2000);
        store.finish(id, state, at + 60000, message);
-       store.recordAudit({ at: at + 2000, actor: "token:" + tokenId, action: "deploy.start", target: slug, detail: { email, deployment: id } });
-       store.recordAudit({ at: at + 60000, actor: "token:" + tokenId, action: state === "succeeded" ? "deploy.success" : "deploy.failure", target: slug, detail: { email, deployment: id, error: message === null ? undefined : "install-failed" } });
+       audit.push({ at: at + 2000, actor: "token:" + tokenId, action: "deploy.start", target: slug, detail: { email, deployment: id } });
+       audit.push({ at: at + 60000, actor: "token:" + tokenId, action: state === "succeeded" ? "deploy.success" : "deploy.failure", target: slug, detail: { email, deployment: id, error: message === null ? undefined : "install-failed" } });
      }
-     store.recordAudit({ at: start - 20 * 86400000, actor: "owner", action: "token.revoke", target: null, detail: { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com" } });`,
+     // In the order of time, as the service writes them: the ids grow with it.
+     for (const entry of audit.sort((a, b) => a.at - b.at)) store.recordAudit(entry);`,
   ],
   { cwd: PROJECT_ROOT, env: { ...process.env, DATA_DIR: folder }, stdout: "inherit", stderr: "inherit" },
 );
@@ -1351,6 +1359,41 @@ const steward =
         fetch: () => refusal(404, "not-found", "Unknown route."),
       });
 
+// --- The audits --------------------------------------------------------------
+
+/**
+ * A page of an audit read by id, newest first, as the portal and the egress
+ * proxy answer `?limit=&before=`: the rows older than `before`, `limit` at most.
+ */
+function page<T extends { id: number }>(rows: readonly T[], params: URLSearchParams): T[] {
+  const limit = Math.min(500, Number(params.get("limit") ?? 100));
+  const before = Number(params.get("before") ?? Number.MAX_SAFE_INTEGER);
+  return rows.filter((row) => row.id < before).slice(0, limit);
+}
+
+/**
+ * The portal's audit: sign-ins of every kind, one refused, guests, sharing
+ * changes, in the shape of portal/src/database.ts. Never a password, as there.
+ */
+let portalEventId = 0;
+function portalEvent(actor: string, action: string, target: string | null, detail: object | null, at: number) {
+  portalEventId += 1;
+  return { id: portalEventId, at: new Date(at).toISOString(), actor, action, target, detail };
+}
+const portalEvents = [
+  portalEvent("owner", "sharing.update", "calendar.example.com", { mode: "domain", previousMode: "admins", peopleAdded: [], peopleRemoved: [], domainsAdded: ["example.com"], domainsRemoved: [] }, start - 9 * DAY),
+  portalEvent("owner", "sharing.update", "cms.example.com", { mode: "people", previousMode: "people", peopleAdded: ["editor@example.org"], peopleRemoved: [], domainsAdded: [], domainsRemoved: [] }, start - 2 * DAY),
+  portalEvent("guest:benchGuest000001", "portal.signin", "cms.example.com", { method: "guest" }, start - 2 * HOUR),
+  portalEvent("owner", "portal.signin", "photos.example.com", { method: "password", count: 3 }, start - 90 * MINUTE),
+  portalEvent("eve@elsewhere.example.net", "portal.signin_failed", "cms.example.com", { method: "oidc", reason: "not-shared" }, start - 50 * MINUTE),
+  portalEvent("anonymous", "portal.signin_failed", "library.example.com", { method: "password" }, start - 30 * MINUTE),
+  portalEvent("alice@example.com", "portal.signin", "cms.example.com", { method: "oidc", role: "member" }, start - 18 * MINUTE),
+  portalEvent("owner@example.com", "portal.signin", "calendar.example.com", { method: "oidc", role: "admin" }, start - 6 * MINUTE),
+  portalEvent("alice@example.com", "portal.signout", "cms.example.com", null, start - 4 * MINUTE),
+]
+  .filter((event) => !SHOWCASE || event.action !== "portal.signin_failed")
+  .reverse();
+
 // --- The fake egress proxy ---------------------------------------------------
 
 /**
@@ -1395,13 +1438,14 @@ function egressRow(actor: string, action: string, target: string | null, detail:
   egressRowId += 1;
   return { id: egressRowId, at: new Date(at).toISOString(), actor, action, target, detail: JSON.stringify(detail) };
 }
+// Oldest first, so that ids grow with time as the proxy's own do.
 const egressRows = [
-  egressRow("system", "connector.use", "cms", { connector: "slack", count: 42, failures: 0, statuses: { "2xx": 42 } }, start - 3 * MINUTE),
-  egressRow("system", "egress.denied", "lab", { destination: "pastebin.com:443", reason: "not in the list", count: 7 }, start - 12 * MINUTE),
-  egressRow("system", "connector.use", "roster", { connector: "github", count: 5, failures: 2, statuses: { "2xx": 3, "5xx": 2 } }, start - 2 * HOUR),
-  egressRow("system", "egress.denied", "roster", { destination: "metadata.example.com:443", reason: "resolves to a cloud metadata address", count: 1 }, start - 5 * HOUR),
-  egressRow("owner", "connector.grant", "roster", { connector: "github", granted: true }, start - 6 * DAY),
   egressRow("owner", "connector.update", "github", { change: "created", baseUrl: "https://api.github.com/repos/example", header: "Authorization" }, start - 9 * DAY),
+  egressRow("owner", "connector.grant", "roster", { connector: "github", granted: true }, start - 6 * DAY),
+  egressRow("system", "egress.denied", "roster", { destination: "metadata.example.com:443", reason: "resolves to a cloud metadata address", count: 1 }, start - 5 * HOUR),
+  egressRow("system", "connector.use", "roster", { connector: "github", count: 5, failures: 2, statuses: { "2xx": 3, "5xx": 2 } }, start - 2 * HOUR),
+  egressRow("system", "egress.denied", "lab", { destination: "pastebin.com:443", reason: "not in the list", count: 7 }, start - 12 * MINUTE),
+  egressRow("system", "connector.use", "cms", { connector: "slack", count: 42, failures: 0, statuses: { "2xx": 42 } }, start - 3 * MINUTE),
 ].sort((a, b) => b.id - a.id);
 
 const egress =
@@ -1411,7 +1455,8 @@ const egress =
         hostname: "127.0.0.1",
         port: 0,
         routes: {
-          "/audit": { GET: () => Response.json({ rows: [...egressRows].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 100) }) },
+          // Newest first, by pages, like egress/src/connectors.ts: the Activity page goes back with `before`.
+          "/audit": { GET: (req) => Response.json({ rows: page([...egressRows].sort((a, b) => b.id - a.id), new URL(req.url).searchParams) }) },
           "/status": {
             GET: () => Response.json({ connectors: Object.keys(connectorsFile.connectors).length, grants: grantsFile.grants.length, errors: [], started: new Date(start).toISOString(), openTunnels: 3 }),
           },
@@ -1513,7 +1558,7 @@ const portal =
               return Response.json(entry);
             },
           },
-          "/admin/audit": { GET: () => Response.json({ events: [] }) },
+          "/admin/audit": { GET: (req) => Response.json({ events: page(portalEvents, new URL(req.url).searchParams) }) },
         },
         fetch: () => new Response("404", { status: 404 }),
       });

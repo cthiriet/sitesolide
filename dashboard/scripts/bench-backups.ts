@@ -155,6 +155,8 @@ export function benchBackupRoutes(options: { start: number; folders: Folder[]; i
       GET: (req) => {
         if (outdated) return unknownRoute();
         const slug = new URL(req.url).searchParams.get("slug");
+        // Not installed, there is no database, and so no audit to read.
+        if (!installed) return Response.json({ entries: [] });
         return Response.json({ entries: audit.filter((entry) => slug === null || entry.target === slug || entry.target === null).slice(0, 50) });
       },
     },

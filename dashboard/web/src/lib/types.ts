@@ -93,6 +93,12 @@ export type {
 export type { Scope, TokenView, DeploymentState, AuditEntry, TeamDeployment, TeamPageResponse, CreatedTokenResponse } from "../../../src/control/protocol"
 
 /**
+ * The machine's audit, every component's in one shape (src/audit/protocol.ts).
+ * Types only: which rows exist and what they hold is the components' to say.
+ */
+export type { AuditResponse, AuditRow, AuditSource, SourceState, SourceStatus } from "../../../src/audit/protocol"
+
+/**
  * The backups, from the contract the steward and the service share
  * (src/backup/protocol.ts). Types only: what may be restored is the steward's
  * to say, and the page shows its reason.

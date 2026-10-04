@@ -184,7 +184,9 @@ gutters, bottom margin, touch target size.
 |---|---|---|
 | `@container/body` | `@4xl/body:` (56 rem) | two columns: a site's Overview, Access |
 | list of sites on the home page | `@4xl:` | table, otherwise list |
-| Guests panel, Activity panel | `@2xl:` (42 rem) | table, otherwise list |
+| Guests panel, a site's Activity panel | `@2xl:` (42 rem) | table, otherwise list |
+| the machine's Activity log, five columns | `@3xl:` (48 rem) | table, otherwise list |
+| Activity filters | `@4xl/body:` (56 rem) | five fields on one row, otherwise two columns |
 | machine plate | `@2xl:` | four columns, otherwise three rows |
 | Issues panel | `@lg:` (32 rem) | messages aligned behind the slugs |
 | `@container/file` | `@xl/file:` (36 rem) | Name, Value and action columns |
@@ -337,6 +339,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Guests | Guest, access, Create access, Revoke, Remove, Expires, Last visit, No expiry | New access, User, guest link |
 | Sharing | Who gets in, Only admins, Specific people, Everyone at a domain, People, Domains, Add people, Add a domain, Remove, Always let in, Send them the link, Make it public, work account | Permissions, ACL, Invite, Public mode |
 | Backups | Snapshot, Scheduled, Before restore, Server, Offsite only, Restore, Restoring..., Restored, Offsite copy, Show all | Backup file, Revert, Rollback, Recover |
+| Activity | Event, Actor, Action, Target, Source, Site or host, From, To, Details, Load older, Export, CSV, JSON lines, Clear filters; a source is Read, Latest 50, Can't read, Needs updating, Not installed | Log entry, Audit trail, Download, Reset |
 | Unreachable | Can't reach the dashboard., Can't reach the portal., Can't reach the steward. | is not answering |
 | Common actions | Refresh, Retry, Sign in, Sign out, Copy, Copied, Cancel, Close, Manage | Reload, Try again, Log out, Submit |
 | Empty states | No issues, No sites match "x", No guest access to cms yet, cms has no secret files, cms isn't behind the portal | Nothing here! |
@@ -368,8 +371,20 @@ filters (All, Issues, Apps, Static, Portal, each with its count) and the
 inventory, sites in discrepancy at the top: Site, Address, Access, Service,
 Size. Summaries live in the rows, not in cards.
 
-**Activity.** The lock in the header, then the steward's latest operations
-across the whole machine, unlocks included, with no values.
+**Activity.** The machine's audit, every component's in one log, newest first,
+read with the session alone since no row holds a value. *Export* in the header,
+CSV or JSON lines of the rows read, once something has been read. Then the
+sources once, each with its state in a word (*Read*, *Latest 50*, *Can't
+read*, *Needs updating*, *Not installed*), and a banner for each source that
+could not be read, saying what to do. Then the filters: the source as chips
+like the home page's, then *Actor*, *Action*, *Site or host*, *From* and *To*;
+typed fields apply once typing pauses, the count on the right. The log: Actor,
+Action (what happened in words, its tone when it went wrong, the dotted action
+and a note below), Target (the site linked, the host below), Source, When,
+and *Details*, which opens every field and the detail as key and value, text
+only. *Load older* at the foot while a source has more; a page that finds
+nothing goes on by itself a few times before handing the choice back. Under
+the panel, which sources only hand over their latest entries.
 
 **Connectors.** The lock in the header, the same as the secrets'. Then three
 panels. **Connectors**: each one's name, base address, header, how many

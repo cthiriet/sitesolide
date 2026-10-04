@@ -4,7 +4,7 @@
  * into an address, and the navigation component uses it both ways.
  *
  * Two levels. The machine's: the home page, where the machine, its
- * discrepancies and the list of sites live, the steward's activity, the
+ * discrepancies and the list of sites live, the machine's audit, the
  * connectors the egress proxy lends, and the team, whose tokens deploy
  * without SSH. A
  * site's: seven sections, Overview, Audience, Secrets, Guests, Sharing, Access
