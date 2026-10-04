@@ -4,10 +4,10 @@ What the machine actually runs, at `dashboard.<zone>`, behind a password, on two
 levels. **The machine**: *Sites*, the home page, with the state of the machine,
 the discrepancies between what the repositories ask for and what the machine
 does, the only part of the dashboard that teaches you something, and the list
-of sites; *Activity*, the latest operations on secrets and portals;
-*Connectors*, the credentials the egress proxy lends to projects. **A site**:
-*Overview*, *Audience*, *Secrets*, *Guests*, *Sharing* and *Access*, everything
-that concerns that site and only it.
+of sites; *Activity*, the latest operations on secrets and portals; *Team*, the
+tokens that deploy without SSH; *Connectors*, the credentials the egress proxy
+lends to projects. **A site**: *Overview*, *Audience*, *Secrets*, *Guests*,
+*Sharing* and *Access*, everything that concerns that site and only it.
 
 **Few writes, and each one is a decision.** No button sets a preview lock. One
 machine serves every site, with no staging and no automatic recovery: what
@@ -28,6 +28,10 @@ relays to a component that judges for itself what it accepts:
 - **the egress proxy's connectors and their grants**, the *Connectors* page,
   written by the steward under the same unlock as a secret, see
   [Connectors](#connectors).
+- **a deployment by a team token**, the control API under `/api/v1/` and the
+  *Team* page. The steward judges every token and starts the installer, a root
+  one-shot that deploys one project as `sitesolide deploy` would. See
+  [The control API](#the-control-api).
 
 ## The web service does not read the machine
 
@@ -439,12 +443,199 @@ served in the clear again.
   holds it receives its line in `CADDY_LOCK_HELD`, checks on the machine that
   it is really in place, and neither takes nor releases anything.
 
+## The control API
+
+Deploying over SSH means holding root on the machine: `sitesolide deploy`
+drives `sudo`. That cannot be handed to a colleague, nor to an agent in a
+sandbox with no key. A **team token** deploys over HTTPS instead, through this
+dashboard, and its holder never holds root. The owner's SSH path does not
+change. The holder's side is in [docs/team.md](../docs/team.md); this is the
+machine's side.
+
+```
+sitesolide deploy (team member, agent)          Authorization: Bearer sst_...
+   |  HTTPS, dashboard.<zone>/api/v1/
+   v
+server.ts          site-dashboard, confined: checks, stages the archive in data/control/<id>/
+   |  HTTP over the steward's socket, the bearer relayed untouched
+   v
+steward.js         root: the token registry, the scope, the slug, the request
+   |-- reads/writes /var/lib/sitesolide-steward/team.json             hashes only, 0600
+   |-- writes       /var/lib/sitesolide-steward/installs/<slug>.json  the request, scope copied
+   |-- runs         systemctl start --no-block sitesolide-installer@<slug>
+   `-- reads        /run/sitesolide-installer/<id>.json               the progress, relayed
+   v
+installer.js       root, one-shot, one project: the pipeline of `sitesolide deploy`
+   |-- systemd-run as site-<slug>, no network: installer.js --extract, the archive on stdin
+   |-- systemd-run as site-<slug>, network but not the loopback: the manifest's `install`
+   |-- useradd, the units, the trees moved into place, the manifest, the loopback's set
+   |-- the Caddy block through the gatekeeper's machine: lock, validate, reload, probe, restore
+   `-- writes /run/sitesolide-installer/<id>.json, 0600, after every step
+```
+
+### Who runs as whom
+
+| Piece | Runs as | Reads | Writes |
+|---|---|---|---|
+| The CLI | the holder | the project's folder, the token | nothing on the machine directly |
+| `server.ts` | `site-dashboard` | its database, the snapshot | `data/control/<id>/bundle.tar.gz`, `deployments` and `audit` in `dashboard.db` |
+| The steward | root, the socket | `team.json`, the installer's results, the journal | `team.json`, `installs/<slug>.json` |
+| The installer | root, one-shot | the request, the staged archive's descriptor, the manifests | `/srv/sites/<slug>`, its units, its block, `/etc/passwd` through `useradd` |
+| The extractor | `site-<slug>`, transient unit | the archive on stdin | the staging directory, nothing else |
+| `install` | `site-<slug>`, transient unit | the staged `app/` | the staged `app/`, mounted at its final path |
+
+**The registry is the steward's, not the dashboard's.** The dashboard is
+assumed compromised everywhere else in this README: a registry it could write
+would let it deploy code into any project, at any time, without the password.
+Held by root, a token is judged where the decision is enforced. The dashboard
+still checks the shape of what it receives, refuses early what the steward
+would refuse (a manifest that does not validate, a scope it reads in the
+identity the steward returns), and keeps what is its own: the deployments it
+was asked for and the audit.
+
+**Root never parses an archive.** The extraction is the project's own account,
+in a unit that sees nothing of `/srv` but the staging directory, with no
+network, 256 MiB and five minutes. Root opens the staged file with
+`O_NOFOLLOW`, checks it is a regular file with one link that belongs to
+`site-dashboard`, and hands the descriptor over: whatever path led there, the
+file read is one the dashboard could already read. The reader
+([src/installer/tar.ts](src/installer/tar.ts)) refuses absolute paths, `..`,
+links of either kind, devices, pipes, duplicates, anything outside `app/` and
+`public/`, and caps the data at 512 MiB and 20,000 entries as it reads.
+
+**The same deployment as over SSH.** The installer does not run
+`bin/sitesolide.ts` with a local executor: that file's executor only runs or
+prints a command, and the pipeline around it is the workstation's (a local
+build, rsync, `bin/deploy-caddy.sh`, which redeploys the Caddyfile and the
+zone's variables from the workstation's copy, a rewrite of the local
+manifest). It runs the same order ([src/installer/pipeline.ts](src/installer/pipeline.ts)
+lists it step by step) with the same decisions, borrowed from `bin/cli/`
+unchanged: the manifest's validation, the unit and block generators, the
+block and unit decisions, the port conflicts, the units no longer declared,
+the loopback's project set, the door confirmed under the lock. Two things
+differ, both on purpose:
+
+- `install` runs before the files are put in place, in the staging directory,
+  because the project's account may write there and not in `app/`. A failing
+  install changes nothing served.
+- A block or a unit that is exactly what the previous deposited manifest
+  generates is replaced without `--force`: the machine can tell a manifest
+  that changed from a hand edit, which the workstation cannot. A real hand
+  edit still stops the deployment, and the owner settles it over SSH.
+
+### Tokens
+
+- **Created on the *Team* page, unlocked.** A token can run code on the
+  machine: it asks for the same ten-minute unlock as the Secrets section,
+  checked by the steward. **Revoked without the unlock**, so that closing a
+  stolen token never waits on the password; the worst a compromised dashboard
+  does with that route is revoke every token.
+- **Shown once, kept as a SHA-256**, for the reason
+  [portal/README.md](../portal/README.md) gives for guest passwords: 256 random
+  bits leave nothing to guess, and a fast hash finds the token by lookup. The
+  value is `sst_` and 43 characters of base64url.
+- **One per person**: a label, an email, an optional expiry, and a scope, all
+  off by default: existing slugs it may deploy; whether it may create projects,
+  deploy public sites, use `network: outbound`, declare a domain.
+- **Ownership**: a project a token creates is recorded as its own at the start
+  of its first deployment, before anything is written, so that a first
+  deployment that fails half way stays its creator's, and nobody else's.
+- **Failed authentications** are rate limited per address, three tolerated,
+  then five seconds doubling up to an hour. Per address and not global, unlike
+  the sign-in: there are as many holders as tokens, and a global counter would
+  let anyone lock the whole team out.
+
+### What a token's project may not do
+
+Judged by the installer on the manifest it received, after `validate()`, and
+earlier by the steward and the dashboard: see
+[src/control/policy.ts](src/control/policy.ts).
+
+- **Reserved slugs**: `dashboard`, `portal`, `api`, `analytics`, `landing`,
+  `www` and the landing's directory, whatever the scope; a slug another token
+  created; an existing slug the token was not granted.
+- **Private by default**: a new project goes behind the portal unless the token
+  may deploy public sites and the manifest asks for it; an existing project
+  keeps the door the machine carries. `portalExempt`, which opens paths, needs
+  the public permission; a static site cannot sit behind the portal yet, so a
+  private token cannot deploy one.
+- **Secrets**: `<slug>.env` and no other name. The unit hands a declared file to
+  the service through `EnvironmentFile=`, read as root: a manifest naming
+  `dashboard.env` or another project's file would read it.
+- **No `lock`**: the preview lock is the owner's, and the installer keeps the
+  one the machine carries.
+- **Bounds**: 1G of memory per service, six services, `install` fifteen minutes
+  and 1G, the archive 100 MiB compressed.
+- **Ports**: a service with no port gets the lowest free one of 3000 to 3099,
+  or the one it had; one another project declares is refused.
+
+### Threat model
+
+| Threat | What stops it |
+|---|---|
+| A stolen token | Its scope: the projects granted and its own, private sites unless allowed. Every deployment is in the audit with the token's id and email. Revoking takes one click and no password; an expiry ends it anyway. |
+| A malicious archive | Read by the project's account in a confined unit, never by root; links, devices, `..`, absolute paths and duplicates refused, data and entries capped while reading; nothing served changes until the whole archive extracted. |
+| A malicious manifest | Re-validated on the machine with the CLI's `validate()`, then the scope; the unit and block are generated from it by the same generators as over SSH, which escape nothing because `validate()` refuses line breaks and unknown keys. Secrets limited to its own file, memory capped. |
+| Path traversal | The tar reader's refusals, the extraction's `O_EXCL` and `O_NOFOLLOW`, the unit that sees only the staging directory; on root's side, slugs and deployment ids checked against their shape before they enter a path. |
+| Resource exhaustion | Upload counted while it streams (Bun's own cap does not hold for a chunked body), 100 MiB; extraction 512 MiB, 20,000 entries, 256 MiB of memory, five minutes; `install` 1G and fifteen minutes; three deployments at a time on the machine, one per project; an archive that does not arrive in fifteen minutes expires. |
+| A token reaching another project | The slug decision on the steward, again on the installer; secrets limited to `<slug>.env`; `install` runs without the loopback, where the other projects listen, and the extraction without any network. |
+| A replayed request | The installer refuses a request older than ten minutes or for another slug, and writes nothing for it. |
+| A compromised dashboard | It sees the bearers that pass and can use them within their scope, and read deployment logs; it cannot mint a token without the password, nor deploy without one, nor hand root a file it could not read. |
+| A compromised project | Its service's unit binds `app/`, `public/` and `data/` alone, so it never sees the staging directory its next deployment is extracted into; once in place, the trees are handed to the deployment account and bound read-only, as over SSH. |
+
+### Where the installer is the weak point
+
+It is root with most of the system writable (`/etc` for `useradd`, the units,
+`/srv/sites`, the Caddy blocks). It has to be: deploying a project is root on
+the machine whichever way it is done. Its confinement bounds what a bug in its
+own code would reach, not what it may legitimately do; what keeps a token from
+using it as root is that it never interprets the archive, that every file it
+writes is generated by the repository's generators, and that each decision is
+the one `sitesolide deploy` already takes.
+
+### Deployment of the control API
+
+Opt-in, and in this order. Nothing happens on the machine until the third
+step; each step degrades gracefully without the next.
+
+```bash
+cd dashboard && sitesolide deploy   # 1. the API and the Team page
+bin/deploy-steward.sh               # 2. the token registry and the control routes
+bin/deploy-installer.sh             # 3. the installer's code, its template, its environment file
+```
+
+1. **The dashboard.** `/api/v1/` answers `not-available`, and the *Team* page
+   says to run the steward's script: the steward in place answers
+   `404 no such route` to the control routes, which the dashboard reads as
+   "not yet". Check: `curl -s https://dashboard.<zone>/api/v1/whoami -H 'Authorization: Bearer sst_x'`
+   answers 401, unknown token, or 503, not available. Roll back: deploy the
+   previous commit of `dashboard/`.
+2. **The steward.** The *Team* page lists tokens and creates them; a deployment
+   answers `not-available` until the installer is there. The steward's script
+   checks itself as before. Check, on the machine:
+   `sudo -u site-dashboard curl -s --unix-socket /run/sitesolide-steward/secretaire.sock http://steward/team/tokens`
+   answers `{"tokens":[]}`. Roll back: `bin/deploy-steward.sh` from the previous
+   commit; `team.json` stays, unread, and the tokens come back with the steward.
+3. **The installer.** `bin/deploy-installer.sh` writes
+   `/etc/sitesolide-installer.env` with `DEPLOY_ACCOUNT`, the account of your
+   `server`, and verifies the template with `systemd-analyze verify`. It starts
+   nothing. Check: create a token on the *Team* page for yourself, with "May
+   create projects", and deploy `examples/bun-app` with it from a workstation
+   with no server (`SITESOLIDE_API=... SITESOLIDE_TOKEN=... sitesolide deploy`);
+   then `journalctl -u sitesolide-installer@bun-app`. Roll back:
+   `sudo rm /etc/systemd/system/sitesolide-installer@.service /etc/sitesolide-installer.env /usr/local/lib/sitesolide/installer.js && sudo systemctl daemon-reload`;
+   deployments then answer `not-available` again.
+
+Revoking every token closes the API without touching anything else: *Team*,
+*Revoke* on each.
+
 ## Deployment, in this order
 
 ```bash
 cd dashboard && sitesolide deploy   # user, layout, unit, relay and page
 bin/deploy-steward.sh               # builds, installs and checks the steward
 bin/deploy-gatekeeper.sh            # builds, installs both unit templates, starts nothing
+bin/deploy-installer.sh             # builds, installs the installer's template, starts nothing
 ADMIN_MODE=observe bin/deploy-loopback.sh close
 bin/deploy-loopback.sh state        # hours later: who would have reached the admin API
 bin/deploy-loopback.sh close        # then closed to all but root and caddy
@@ -488,6 +679,8 @@ ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
 |---|---|
 | `steward.ts`, `src/secrets/`, `src/connectors/` (steward side), `bin/cli/connectors.ts`, `infra/steward/`, `portal/src/sharing.ts` | `bin/deploy-steward.sh` |
 | `gatekeeper.ts`, `src/gatekeeper/`, `infra/gatekeeper/`, `bin/cli/fragment.ts`, `bin/cli/portal.ts` | `bin/deploy-gatekeeper.sh` |
+| `src/control/steward.ts`, `src/control/system.ts`, `src/control/tokens.ts`, `src/control/policy.ts` | `bin/deploy-steward.sh` |
+| `installer.ts`, `src/installer/`, `src/control/policy.ts`, `infra/installer/`, `bin/cli/` generators | `bin/deploy-installer.sh` |
 | anything else | `sitesolide deploy` |
 
 ## Local development
@@ -515,3 +708,14 @@ session and its rate limiting, the password draw against a fixed byte sequence,
 the secrets scope and its three guard rails, the steward's protocol on a real
 Unix socket, the gatekeeper's transaction including its rollbacks, and the
 gatekeeper in front of a real Caddy started on a free port with `admin off`.
+
+For the control API: the tokens and every scope decision; the tar reader
+against hand-made malicious archives (traversal, links of both kinds, devices,
+duplicates, a compression bomb, too many entries, a corrupt or truncated
+archive); the installer's pipeline on a throwaway tree with a real extraction
+in a child process, a real `install`, and every refusal, before and after the
+files are in place; the steward's control routes on real files; and the whole
+chain, the API on a real port, the steward on a real socket, the installer
+started by the simulated `systemctl` (tests/control-api.test.ts). What only a
+machine can prove, `useradd`, `systemd-run`'s confinement and the template
+unit, is not covered here.

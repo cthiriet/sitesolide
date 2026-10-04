@@ -179,6 +179,21 @@ machine itself dying, and optionally a Slack, Discord or ntfy webhook: five
 minutes, described in [monitor/README.md](../monitor/README.md#alerting-healthchecksio-in-five-minutes).
 What the monitor finds down also shows among the dashboard's Issues.
 
+## 7. Let others deploy, without SSH
+
+Colleagues and agents deploy with a personal token instead of root SSH. Install
+the control API once (the order and the checks are in
+[dashboard/README.md](../dashboard/README.md), "The control API"):
+
+```bash
+cd dashboard && sitesolide deploy   # the API and the Team page
+bin/deploy-steward.sh               # the token registry
+bin/deploy-installer.sh             # what installs a project for a token
+```
+
+Then create a token on the dashboard's *Team* page, and send its holder to
+[team.md](team.md), "Deploying as a team member".
+
 ## Another host, another DNS
 
 **Another VPS.** Ignore `infra/*.tf` entirely. Create a Debian 13 machine any

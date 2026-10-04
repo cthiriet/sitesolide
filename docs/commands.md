@@ -61,3 +61,30 @@ never decided for you: secrets and the network.
 ends with a `result` or an `error` carrying a `hint`. `sitesolide mcp` serves
 `detect`, `deploy`, `status`, `logs` and `lock --status` as tools to an MCP
 client. Both are described in [agents.md](agents.md).
+
+## With a team token
+
+A workstation with no `server`, but the dashboard's address and a token, is a
+team member's: it never touches SSH. See [team.md](team.md).
+
+```text
+sitesolide login --url <https://dashboard.zone>   keep the token, check it
+   --token-stdin                                  read it from standard input
+sitesolide deploy                                 build here, upload, follow the machine's log
+sitesolide status                                 the projects this token may deploy
+sitesolide logs [--follow]                        the journal of this folder's project
+```
+
+`login` keeps the token in `~/.config/sitesolide/secrets/team-token`, 0600, and
+the address in `config.json` under `api`. `SITESOLIDE_API` and
+`SITESOLIDE_TOKEN` in the environment win over both, for an agent's sandbox.
+
+`deploy` sends the manifest first, so that a refusal arrives before the build,
+then a gzip-compressed tar holding `app/` and `public/`, exactly what rsync
+would have sent, and follows the machine's log until the end; it exits
+non-zero when the deployment fails. A manifest with a `start` and no `port`
+gets one chosen on the machine.
+
+The other commands need the owner's SSH access and say so. The owner, whose
+configuration has a `server`, keeps SSH for every command; `--api` makes one
+go through the dashboard instead, to see what a team member sees.

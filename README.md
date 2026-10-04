@@ -118,6 +118,7 @@ deployed project in about half an hour, Terraform included.
 - [How it works](docs/concepts.md), the parts and who may touch what
 - [The manifest](docs/manifest.md), every key of `sitesolide.json`
 - [Commands](docs/commands.md), everything the CLI does
+- [Deploying as a team member](docs/team.md), with a token instead of SSH
 - [Secrets](docs/secrets.md), where they live and why
 - [Agents](docs/agents.md), for Claude Code, Codex or Cursor: `--json`, an MCP server, a skill
 

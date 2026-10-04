@@ -72,6 +72,7 @@ more.
 | The dashboard | `site-dashboard` | read a snapshot file, relay to the steward, call the portal |
 | The steward | root | write `/etc/sitesolide`, restart services, command the gatekeeper |
 | The gatekeeper | root, one-shot | rewrite one project's block, reload Caddy, probe, roll back |
+| The installer | root, one-shot | deploy one project for a team token, the archive read by the project's own account |
 | The collector | root, on a timer | read the machine, drop a snapshot where the dashboard can read it |
 | The monitor | a dynamic account, on a timer | read what any account reads, ask Caddy for every site over HTTPS, alert |
 | The egress proxy | `sitesolide-egress` | let each project reach the hosts its manifest lists, lend it the connectors granted to it |
@@ -243,6 +244,11 @@ indefinitely if the command was interrupted.
 
 `--dry-run` prints the generated unit and block, and every command it would run,
 without touching anything.
+
+A team member deploys with a token instead of SSH, and the same order runs on
+the machine, in the installer, with the same decisions: see
+[dashboard/README.md](../dashboard/README.md), "The control API", and
+[team.md](team.md).
 
 ## Reading further
 
