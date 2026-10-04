@@ -1,0 +1,100 @@
+# The egress proxy: lets each project reach the hosts its sitesolide.json lists
+# under `egress`, refuses the rest, and lends it the connectors the dashboard
+# granted it. See egress/README.md.
+#
+# It runs as its own account, sitesolide-egress, never root: it holds the
+# connectors' credentials and talks to the outside on behalf of every project
+# that asks, and a compromise must yield that and no more. All its judgement
+# lives in egress/src/, tested without a machine.
+#
+# Placed by bin/deploy-egress.sh, never by `sitesolide deploy`: a component
+# every restricted project's traffic goes through changes only by a deliberate
+# action.
+
+[Unit]
+Description=Egress proxy: each project's listed hosts, and the connectors lent to it
+# It reads the deployed manifests: no point starting before they are mounted.
+RequiresMountsFor=/srv/sites
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sitesolide-egress
+Group=sitesolide-egress
+ExecStart=/usr/local/bin/bun /usr/local/lib/sitesolide/egress.js
+Restart=always
+RestartSec=2
+
+# /var/lib/sitesolide-egress: the audit database, egress.db, its own alone.
+# StateDirectory makes it writable despite ProtectSystem=strict. The connectors
+# live in /etc/sitesolide-egress, 0750 root:sitesolide-egress, written by the
+# steward as root:sitesolide-egress 0640: read here, never written.
+UMask=0077
+StateDirectory=sitesolide-egress
+StateDirectoryMode=0700
+
+# Two sockets per tunnel, and up to 1024 connections: systemd's default soft
+# limit of 1024 descriptors would refuse well before that.
+LimitNOFILE=16384
+
+# No capability at all: it binds ports above 1024 and reads what its account
+# and its group may read.
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# The whole system read-only. What it reads, and why it may:
+#   /srv/sites/<slug>/sitesolide.json   0644 in 0755 folders, the deployed manifests
+#   /etc/sitesolide-egress/             its group's, the connectors and grants
+#   /etc/passwd                         the account of a uid
+#   /proc/net/tcp, /proc/net/tcp6       the uid of the caller's socket
+# The projects' data folders are 0750 to their own accounts and stay closed.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+# What it has no business seeing: the projects' secrets and their names, Caddy
+# and the lock codes, the steward's and the gatekeeper's state. The dashes keep
+# a path that is missing from failing the unit.
+InaccessiblePaths=-/etc/sitesolide -/etc/caddy -/var/lib/sitesolide-steward -/run/sitesolide-steward -/run/sitesolide-gatekeeper
+
+# WHAT MUST NOT BE ADDED HERE: PrivateNetwork, which would put the proxy in a
+# network namespace of its own where no project could reach it and where
+# /proc/net lists none of their sockets; and ProcSubset=pid, which hides
+# /proc/net. Either one makes the proxy refuse every caller, failing closed.
+# ProtectProc=invisible hides the other accounts' processes and leaves
+# /proc/net, a view of the namespace, alone: to be confirmed on the machine by
+# the identification check of bin/deploy-egress.sh.
+ProtectProc=invisible
+
+# The network: the outside, for the hosts the projects list, and the loopback,
+# where the projects call it. The private ranges and link-local, the cloud's
+# metadata service included, are refused here as well as in the code: a fault
+# in the classification of addresses (src/addresses.ts) would still hit this.
+# THE RESOLVER MUST NOT LIVE IN ONE OF THESE RANGES: systemd-resolved's
+# 127.0.0.53, or a provider's public resolvers, pass. A machine whose
+# /etc/resolv.conf names a private address needs that address allowed here.
+IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 fc00::/7 fe80::/10 multicast
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+# @system-service and nothing stricter, the steward's measurement: a stricter
+# filter kills Bun at start. MemoryDenyWriteExecute stays out for the JIT.
+SystemCallFilter=@system-service
+
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

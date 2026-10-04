@@ -50,6 +50,10 @@ const BORROWINGS = [
   "bin/cli/fragment.ts",
   "bin/cli/unit.ts",
   "bin/cli/comparison.ts",
+  // Imported by the manifest's validation and by the unit generator: what a
+  // project may reach, and the connectors it asks for. The steward reads the
+  // latter from the manifests to show which project asks for which.
+  "bin/cli/egress.ts",
 ];
 
 /** The header of every copied module. */

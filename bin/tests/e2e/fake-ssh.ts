@@ -45,6 +45,7 @@ import {
 } from "../../cli/caddy-lock";
 import { MARKER_ABSENT, MARKER_PRESENT } from "../../cli/unit";
 import { loopbackStateCommand, MARKER_DONE } from "../../cli/services";
+import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
 
 export const TEST_HOST = "sample@invalid.local";
 
@@ -58,6 +59,7 @@ export const SWITCHES = {
   answers: "answers.json",
   unitWithoutZone: "unit-without-zone",
   loopbackState: "loopback-state",
+  egressState: "egress-state",
 } as const;
 
 /**
@@ -178,6 +180,16 @@ if (import.meta.main) {
     const laid = join(vm, SWITCHES.loopbackState);
     const state = existsSync(laid) ? readFileSync(laid, "utf8").trim() : "set";
     process.stdout.write(`${state}\n${MARKER_DONE}\n`);
+    process.exit(0);
+  }
+  // Where the egress proxy stands, read before a project that declares
+  // `egress` or `connectors` pushes anything. Running, unless the test lays
+  // the state it wants.
+  if (command === egressStateCommand()) {
+    record("EGRESS");
+    const laid = join(vm, SWITCHES.egressState);
+    const state = existsSync(laid) ? readFileSync(laid, "utf8").trim() : "active";
+    process.stdout.write(`${state}\n${EGRESS_MARKER}\n`);
     process.exit(0);
   }
   const fingerprint = FINGERPRINT.exec(command);

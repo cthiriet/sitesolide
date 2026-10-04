@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # Runs the tests, the typing and the deprecation check of the platform's
-# services, api/, dashboard/, portal/, analytics/ and monitor/, and of every
-# project of the neighbouring repository if there is one.
+# services, api/, dashboard/, portal/, analytics/, monitor/ and egress/, and of
+# every project of the neighbouring repository if there is one.
 #
 #   bin/test.sh
 #
@@ -26,7 +26,7 @@ else
   SITES=()
 fi
 
-for site in "$REPO_ROOT/api" "$REPO_ROOT/dashboard" "$REPO_ROOT/portal" "$REPO_ROOT/analytics" "$REPO_ROOT/monitor" ${SITES[@]+"${SITES[@]}"}; do
+for site in "$REPO_ROOT/api" "$REPO_ROOT/dashboard" "$REPO_ROOT/portal" "$REPO_ROOT/analytics" "$REPO_ROOT/monitor" "$REPO_ROOT/egress" ${SITES[@]+"${SITES[@]}"}; do
   [ -f "$site/package.json" ] || continue
   name="$(basename "$site")"
 

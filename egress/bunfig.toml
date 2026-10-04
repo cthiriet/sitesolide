@@ -1,0 +1,5 @@
+[test]
+# Diverts DATA_DIR before src/config.ts freezes it on first import. See
+# tests/setup.ts: without this preload, a test run on the machine would write
+# into the proxy's audit database.
+preload = ["./tests/setup.ts"]

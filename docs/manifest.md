@@ -162,8 +162,8 @@ a single service, and optionally `routes`, `internal`, `memory` and `env`.
   wins over the project's on a shared name. `PORT` is each service's own.
 
 `start`, `port` and `routes` are then refused at the top level. `install`,
-`secrets`, `network`, `exclude` and the directories stay the project's, shared
-by every service.
+`secrets`, `network`, `egress`, `connectors`, `exclude` and the directories
+stay the project's, shared by every service.
 
 A Python project installs its virtualenv on the machine with `install`. Tell
 `uv` to use the system's Python: one it downloads lives under the deployment
@@ -221,7 +221,70 @@ The memory ceiling, as systemd's `MemoryMax` takes it: `256M`, `1G`. Defaults to
 - `outbound`: the service can reach the network.
 
 The blocking also cuts DNS, whose resolvers are external. A service that needs
-to call an API, a mail provider, a payment processor, needs `outbound`.
+to call an API, a mail provider, a payment processor, needs `outbound`, or,
+better, [`egress`](#egress) with the hosts it calls.
+
+### `egress`
+
+The hosts the service may reach, and no others.
+
+```json
+"egress": ["api.anthropic.com", "*.slack.com", "db.example.com:8443"]
+```
+
+The unit keeps the default network, the loopback alone, and points the
+service's HTTP clients at the egress proxy (`HTTPS_PROXY`, `HTTP_PROXY`, in
+both cases, and `NO_PROXY` for the loopback), which lets these hosts through
+and refuses the rest with a sentence naming the host. Bun's `fetch`, curl, Go
+and Python read those variables by themselves; Node's built-in `fetch` does
+not, see [egress/README.md](../egress/README.md#which-clients-go-through-it).
+
+- **Host names, never addresses.** Lowercase or not, with or without the final
+  dot, international names in either form: they are compared in their ASCII
+  form.
+- **`*.example.com`** matches every subdomain, never `example.com` itself,
+  which is listed on its own when wanted. A wildcard needs two labels after it.
+  Over a domain where anyone gets a subdomain, `*.github.io`, it opens
+  everything hosted there.
+- **Ports**: 443 and 80 without one; any other is written in the entry, and
+  then that port alone.
+- **Every address a host resolves to is checked** by the proxy: one that points
+  inside the machine or a private network, or at the cloud's metadata service,
+  is refused.
+
+Refused next to `"network": "outbound"`, which already reaches everything, and
+on a static site, where nothing runs. The deployment refuses a project that
+declares it, before pushing anything, while the egress proxy is not installed
+on the machine. A change to the list applies at the service's next connection.
+`HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` then belong to the deployment, and
+`env` may not set them.
+
+### `connectors`
+
+Credentials the machine lends the service without handing them over.
+
+```json
+"connectors": ["slack"]
+```
+
+An administrator defines `slack` on the dashboard's Connectors page, its base
+address and the header that carries the credential, and grants it to the
+project. The service calls
+
+```
+$SITESOLIDE_CONNECTORS/slack/chat.postMessage
+```
+
+in plain HTTP on the loopback, `http://127.0.0.1:3129/connectors/slack/...`,
+and the egress proxy forwards it over HTTPS with the header set. The
+credential appears in neither the repository, nor the unit, nor the service's
+environment.
+
+**Both are needed**: this key, which says the app asks, and the grant, which
+says the administrator agrees. Either alone is refused. Names are lowercase
+letters, digits and dashes, starting with a letter. Works with either
+`network`; refused on a static site. `SITESOLIDE_CONNECTORS` belongs to the
+deployment.
 
 ### `secrets`
 

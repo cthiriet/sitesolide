@@ -14,6 +14,7 @@
  * This whole file is pure: nothing in it touches the disk or the network, so
  * that every refusal from `validate()` is checkable without a server.
  */
+import { egressErrors } from "./egress";
 
 /**
  * One process of a project that runs several, declared under `services`: a web
@@ -59,6 +60,10 @@ export type Manifest = {
   portal?: boolean;
   /** The paths the portal lets through: signed webhooks, above all. */
   portalExempt?: string[];
+  /** The hosts reachable through the egress proxy, see bin/cli/egress.ts. */
+  egress?: string[];
+  /** The connectors asked for; a grant on the machine allows them, see bin/cli/egress.ts. */
+  connectors?: string[];
 };
 
 /**
@@ -87,6 +92,8 @@ export const KNOWN_KEYS = [
   "lock",
   "portal",
   "portalExempt",
+  "egress",
+  "connectors",
 ];
 
 /** The keys of one entry of `services`, refused beyond these for the same reason. */
@@ -427,6 +434,8 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
   if (manifest.network !== undefined && !["localhost", "outbound"].includes(manifest.network)) {
     errors.push("network: `localhost` or `outbound`");
   }
+
+  errors.push(...egressErrors(manifest, isApplication));
 
   for (const route of manifest.routes ?? []) {
     if (typeof route !== "string" || !route.startsWith("/")) {

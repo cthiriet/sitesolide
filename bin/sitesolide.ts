@@ -164,6 +164,7 @@ import {
   type Execution,
 } from "./cli/caddy-lock";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, type ProjectAccount } from "./cli/loopback";
+import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import {
   listUnitsCommand,
   loopbackStateCommand,
@@ -769,6 +770,7 @@ async function deploy(
   if (isApplication) await checkRemoteBlock(manifest, config, executor, replace, doorConfirmed);
   if (isApplication) await checkPorts(manifest, config, executor);
   if (hasServices(manifest)) await requireProjectSet(config, executor);
+  if (declaresEgress(manifest) || declaresConnectors(manifest)) await requireEgress(config, executor);
   const behindPortal = isProtected(manifest);
   if (behindPortal) await requirePortal(config, executor);
 
@@ -1399,6 +1401,39 @@ async function requireProjectSet(config: Config, executor: Executor): Promise<vo
       die("the loopback rule in service predates the project set", [
         "this project's services could not reach each other; lay the current rule first:",
         `  ${join(REPO_ROOT, "bin", "deploy-loopback.sh")} close`,
+        "then run sitesolide deploy again. Nothing was pushed.",
+      ]);
+  }
+}
+
+/**
+ * Refuses, before anything is pushed, a project that declares `egress` or
+ * `connectors` on a machine where the egress proxy does not run. Deployed
+ * there, its service would start with its proxy variables pointing at nothing,
+ * every outbound call would fail, and nothing would say why. A read, hence
+ * done in a dry run too.
+ */
+async function requireEgress(config: Config, executor: Executor): Promise<void> {
+  const state = readEgressState(await executor.read(config, egressStateCommand()));
+  const install = join(REPO_ROOT, "bin", "deploy-egress.sh");
+  switch (state) {
+    case "active":
+      return;
+    case "unreadable":
+      die("cannot tell whether the egress proxy runs on the server", [
+        "nothing was pushed: this project's outbound calls and connectors go through it",
+      ]);
+    case "inactive":
+      die("the egress proxy is installed on the server but not running", [
+        "this project's outbound calls and connectors go through it; read its journal, then lay it again:",
+        `  sudo journalctl -u sitesolide-egress -n 50   (on the server)`,
+        `  ${install}`,
+        "then run sitesolide deploy again. Nothing was pushed.",
+      ]);
+    case "absent":
+      die("this project declares egress or connectors, and the egress proxy is not installed on the server", [
+        "install it first, see egress/README.md:",
+        `  ${install}`,
         "then run sitesolide deploy again. Nothing was pushed.",
       ]);
   }

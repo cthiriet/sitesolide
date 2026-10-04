@@ -1,0 +1,8 @@
+{
+  "slug": "sample-egress",
+  "description": "Calls one outside API, and posts through a connector",
+  "port": 3034,
+  "start": "/usr/local/bin/bun run server.ts",
+  "egress": ["api.example.com", "*.files.example.com"],
+  "connectors": ["chat"]
+}

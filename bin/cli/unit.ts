@@ -9,6 +9,7 @@
  * Pure: returns text, touches nothing.
  */
 import { sameDirectives } from "./comparison";
+import { egressUnitLines } from "./egress";
 import { servedContact, servedZone, servicesOf, type Manifest, type ServiceView } from "./manifest";
 
 export type ProjectPaths = {
@@ -169,6 +170,10 @@ function renderUnit(
     `Environment=DATA_DIR=${paths.dataDir}`,
     `Environment=PUBLIC_DIR=${paths.publicDir}`,
   );
+
+  // The proxy and the connectors, only for a project that asks for them: the
+  // unit of every other project is unchanged, line for line.
+  lines.push(...egressUnitLines(manifest));
 
   // The variables declared by the project. They never carry a secret, this file
   // being versioned: validate() refuses the names that announce one. What does

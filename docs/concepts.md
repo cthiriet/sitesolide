@@ -74,6 +74,7 @@ more.
 | The gatekeeper | root, one-shot | rewrite one project's block, reload Caddy, probe, roll back |
 | The collector | root, on a timer | read the machine, drop a snapshot where the dashboard can read it |
 | The monitor | a dynamic account, on a timer | read what any account reads, ask Caddy for every site over HTTPS, alert |
+| The egress proxy | `sitesolide-egress` | let each project reach the hosts its manifest lists, lend it the connectors granted to it |
 
 **The dashboard reads nothing itself.** Its unit replaces `/srv` with an empty
 mount, so it cannot open another project's files, and the loopback rule stops it
@@ -113,6 +114,37 @@ still reaches none of them. The set holds `port . uid` pairs, rebuilt by
 `/etc/sitesolide-loopback-projects.nft`, and replayed after the table at boot.
 A project with a single service does not appear in it: it has nothing of its
 own to call.
+
+## Egress
+
+A service reaches the loopback and nothing else, DNS included, unless its
+manifest says otherwise. `"network": "outbound"` lifts that for everything;
+`egress` lists the hosts it may reach instead, and keeps the rest closed.
+
+The unit of a project with `egress` still refuses every address but the
+loopback. Its HTTP clients are pointed at the egress proxy, on 127.0.0.1:3128,
+outside the range the loopback rule closes, which lets the listed hosts
+through. The proxy runs as its own account and decides on three readings:
+
+- **who calls**, from the kernel: the uid of the caller's socket in
+  `/proc/net/tcp`, turned into `site-<slug>`. Nothing the caller sends can say
+  otherwise;
+- **what that project may reach**, from its manifest on the machine, which the
+  project's own service cannot rewrite;
+- **where the host really points**: every address it resolves to is checked,
+  and one inside the machine, a private network or the cloud's metadata
+  service refuses it.
+
+**Connectors** go one step further: credentials an administrator defines in
+the dashboard, `slack`, `github`, and grants to a project. The app calls the
+proxy in plain HTTP on the loopback, and the proxy forwards over HTTPS with the
+credential added. A project gets one only when its manifest asks for it and
+the dashboard granted it: the manifest is written by whoever wrote the app, and
+must not be able to grant itself a company's credential.
+
+What it does not stop matters as much: a project can still send whatever it
+likes to a host on its own list. The list is the boundary. See
+[egress/README.md](../egress/README.md) for the threat model.
 
 ## Certificates
 
@@ -191,7 +223,8 @@ In order, and the order is the point:
    Is the block in service one the generator would write, or one edited by hand
    there, which stops everything without `--force`? Does another project already
    declare one of its ports? For a project with several services, does the
-   loopback rule have room for its own ports?
+   loopback rule have room for its own ports? For a project with `egress` or
+   `connectors`, does the egress proxy run?
 3. Build locally.
 4. Create the system account and the directories.
 5. Install the systemd units that are missing, remove those of services the
@@ -221,3 +254,4 @@ without touching anything.
 - [portal/README.md](../portal/README.md), the shared door, guest access, signing in with a company account, sharing and the identity headers
 - [analytics/README.md](../analytics/README.md), how a visit is counted, and why it is anonymous
 - [monitor/README.md](../monitor/README.md), what is checked every minute, and who hears of it
+- [egress/README.md](../egress/README.md), the hosts a project may reach, and the credentials it is lent

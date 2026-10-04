@@ -318,6 +318,69 @@ describe("a project with several services", () => {
   });
 });
 
+describe("a project that reaches outside through the egress proxy", () => {
+  test("its unit keeps the loopback only, and points its clients at the proxy", async () => {
+    const r = await run("projects/egress-app", ["deploy", "--dry-run"]);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("IPAddressDeny=any");
+    expect(r.output).toContain("IPAddressAllow=localhost");
+    expect(r.output).toContain("Environment=HTTPS_PROXY=http://127.0.0.1:3128");
+    expect(r.output).toContain("Environment=http_proxy=http://127.0.0.1:3128");
+    expect(r.output).toContain("Environment=NO_PROXY=localhost,127.0.0.1,::1");
+    expect(r.output).toContain("Environment=SITESOLIDE_CONNECTORS=http://127.0.0.1:3129/connectors");
+  });
+
+  test("the proxy's state is read before anything is built or pushed", async () => {
+    const vm = createFakeVm();
+    try {
+      const r = await run("projects/egress-app", ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(0);
+      expect(vm.logs()).toContain("EGRESS");
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("a machine without the proxy stops everything, in a dry run too", async () => {
+    const vm = createFakeVm();
+    try {
+      writeFileSync(join(vm.root, SWITCHES.egressState), "absent\n");
+      const r = await run("projects/egress-app", ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(1);
+      expect(r.error).toContain("the egress proxy is not installed on the server");
+      expect(r.error).toContain("deploy-egress.sh");
+      expect(r.output).not.toContain("system user and directories");
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("a proxy installed but stopped stops everything too", async () => {
+    const vm = createFakeVm();
+    try {
+      writeFileSync(join(vm.root, SWITCHES.egressState), "inactive\n");
+      const r = await run("projects/egress-app", ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(1);
+      expect(r.error).toContain("installed on the server but not running");
+      expect(r.output).not.toContain("system user and directories");
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("a project without egress never asks", async () => {
+    const vm = createFakeVm();
+    try {
+      writeFileSync(join(vm.root, SWITCHES.egressState), "absent\n");
+      const r = await run("projects/bun-mixed", ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(0);
+      expect(vm.logs()).not.toContain("EGRESS");
+    } finally {
+      vm.cleanup();
+    }
+  });
+});
+
 describe("a manifest whose code lives elsewhere", () => {
   test("the code leaves from the folder source names, the manifest from its own", async () => {
     const r = await run("projects/sourced", ["deploy", "--dry-run"]);
