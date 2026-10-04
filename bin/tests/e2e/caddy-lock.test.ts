@@ -662,7 +662,7 @@ describe("sitesolide deploy leaves the other sites' blocks alone", () => {
     vm.writeManifest("tool", text({ ...TOOL, portal: true }));
     const repo = testRepo([TOOL]);
     const folder = project(APP, "touch built");
-    const r = await run(folder, ["deploy", "--dry-run"], { vm, cli: join(repo, "bin", "sitesolide.ts") });
+    const r = await run(folder, ["deploy", "--dry-run", "--build"], { vm, cli: join(repo, "bin", "sitesolide.ts") });
     expect(r.code).toBe(0);
     expect(r.all).not.toContain("portal of tool");
     expect(existsSync(join(folder, "built"))).toBe(true);
@@ -678,7 +678,7 @@ describe("sitesolide deploy leaves the other sites' blocks alone", () => {
     vm.writeManifest("tool", text(TOOL));
     const repo = testRepo([APP, TOOL]);
     const folder = project(APP, "touch built");
-    const r = await run(folder, ["deploy", "--dry-run"], { vm, cli: join(repo, "bin", "sitesolide.ts") });
+    const r = await run(folder, ["deploy", "--dry-run", "--build"], { vm, cli: join(repo, "bin", "sitesolide.ts") });
     expect(r.code).toBe(0);
     expect(r.output).toContain("portal was turned on from the dashboard");
     expect(existsSync(join(folder, "built"))).toBe(true);

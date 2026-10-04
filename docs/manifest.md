@@ -79,6 +79,11 @@ the upload all start from `source`; a door changed from the dashboard is still
 written back into the manifest, where it lives. Never absolute, which would name
 the workstation that wrote it.
 
+From your sites repository, the one `sites` names in `config.json`, `source` may
+lead anywhere. A manifest found anywhere else, a repository you just cloned, may
+only point inside the repository that holds it, links resolved: a `source` of
+`../../.ssh` would otherwise have its build run there and the folder uploaded.
+
 ### `publicDir`
 
 The directory whose contents Caddy serves directly, relative to the project.
@@ -94,6 +99,10 @@ A command run on your workstation before anything is sent. Typically
 
 It runs locally on purpose: the machine has no toolchain, no `node_modules` and
 no compiler, and does not need any.
+
+`deploy --dry-run` shows it and does not run it: it is the folder's own code, and
+a dry run is what an agent tries first on a folder it may have just cloned.
+`--dry-run --build` runs it too, to check what it produces.
 
 ### `install`
 

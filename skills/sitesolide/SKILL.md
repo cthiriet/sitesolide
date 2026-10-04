@@ -31,7 +31,9 @@ standard output is one JSON event, the last one a `result` or an `error`.
    Write `sitesolide.json` (`detect --write`, or by hand) and edit it there.
 3. **Dry run.** `deploy` with `dry_run: true` (`sitesolide deploy --dry-run
    --json`). It reads the server, shows the generated unit and block and every
-   step, and changes nothing. Show the user what it plans.
+   step, and changes nothing; it does not run the project's build either, which
+   is the folder's own code. Show the user what it plans. With a team token
+   instead of SSH, a dry run is refused: review `sitesolide.json` with the user.
 4. **Deploy**, once the user agrees: `deploy` (`sitesolide deploy --json`). A
    folder still without a manifest needs `accept_inferred: true` (`--yes`).
 5. **Read the result.** On success, give the user the `url`. When

@@ -123,7 +123,12 @@ export const TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         folder: FOLDER,
-        dry_run: { type: "boolean", description: "Show every step and the generated files, change nothing. Default false.", default: false },
+        dry_run: {
+          type: "boolean",
+          description:
+            "Show every step and the generated files, change nothing, and run nothing of the folder: the project's build is shown, not run, since it is the folder's own code. Default false.",
+          default: false,
+        },
         accept_inferred: {
           type: "boolean",
           description: "When the folder has no sitesolide.json, write the inferred one and deploy it. Default false: the inferred manifest is returned and nothing is deployed.",

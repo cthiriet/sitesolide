@@ -94,6 +94,16 @@ later deploy, from any workstation, keeps it. A dry run says which port it
 would take and writes nothing. A project of several `services` declares its
 ports itself, since its services name each other's in their `env`.
 
+**A dry run runs nothing of the folder.** The manifest's `build` is the
+folder's own code, and a dry run is what an agent tries first, on a folder it
+may have just cloned, from the workstation that holds root SSH to the machine:
+it shows the build as a `planned` event, and does not run it. Only a person
+typing `sitesolide deploy --dry-run --build` runs it in a dry run; the MCP
+tool never does. Likewise, a name inference would put into a command, a folder
+under `cmd/` or a server file, is declined unless it is made of letters,
+digits, dots, dashes and underscores, and a manifest outside your sites
+repository may only point `source` inside its own repository.
+
 ## The CLI with `--json`
 
 Every command but `init` and `run` takes `--json`: standard output then
@@ -162,7 +172,7 @@ by each command.
 | Tool | Arguments | Changes anything |
 |---|---|---|
 | `detect` | `folder`, `slug` | no, and reads no machine |
-| `deploy` | `folder`, `dry_run`, `accept_inferred`, `slug` | **yes**, the live site, unless `dry_run` |
+| `deploy` | `folder`, `dry_run`, `accept_inferred`, `slug` | **yes**, the live site, unless `dry_run`, which runs not even the build |
 | `status` | | no |
 | `logs` | `folder`, `lines` | no |
 | `lock_status` | `folder` | no |

@@ -413,6 +413,22 @@ function declined(...reasons: string[]): Inference {
   return { kind: "none", reasons, notes: [] };
 }
 
+/**
+ * A path the inference may put into a command: every component letters,
+ * digits, dots, dashes and underscores, none a climb nor an option. A folder
+ * or a file name is the folder's own text, and it lands in `build`, which a
+ * shell runs on the workstation that holds root SSH to the machine, or in
+ * `start`: a folder named `cmd/$(curl ... | sh)/` would have put a command
+ * substitution into the Go build. Anything else is declined, never quoted.
+ */
+function isSafePath(path: string): boolean {
+  return path.split("/").every((part) => /^[A-Za-z0-9._-]+$/.test(part) && part !== ".." && !part.startsWith("-"));
+}
+
+function unsafe(path: string): string {
+  return `${JSON.stringify(path).slice(0, 80)} would go into a command, and holds characters outside letters, digits, dots, dashes and underscores: rename it, or write the manifest by hand (docs/manifest.md)`;
+}
+
 /** Files and secrets that stay on the workstation, added to an app's exclusions. */
 function exclusions(folder: Folder, always: string[]): { exclude: string[]; notes: string[] } {
   const exclude = [...always];
@@ -443,6 +459,7 @@ function detectGo(folder: Folder): Detection {
       .filter((name) => folder.isFolder(join("cmd", name)))
       .filter((name) => readdirSync(join(folder.path, "cmd", name)).some((file) => file.endsWith(".go") && isMain(folder.text(join("cmd", name, file)))));
     const chosen = commands.length === 1 ? commands[0] : commands.find((name) => name === folder.slug);
+    if (chosen !== undefined && !isSafePath(chosen)) return declined(unsafe(`cmd/${chosen}`));
     if (chosen !== undefined) target = `./cmd/${chosen}`;
   }
   if (target === null) {
@@ -498,6 +515,7 @@ function detectPython(folder: Folder): Detection {
   if (found === null) {
     return declined(`${framework} in ${source}, but no \`app = ${framework}(...)\` in the code: write start by hand (docs/manifest.md)`);
   }
+  if (!isSafePath(found.file)) return declined(unsafe(found.file));
 
   const slug = folder.slug;
   const python = `${projectPaths(slug).app}/.venv/bin/python`;
@@ -627,6 +645,7 @@ function detectJavaScript(folder: Folder): Detection {
     // is, with nothing to install.
     const entry = serverEntry(folder, null, undefined, false);
     if (entry === null) return null;
+    if (!isSafePath(entry.path)) return declined(unsafe(entry.path));
     return javascriptApp(folder, { entry, start: null, manager: "bun", build: null, install: false, servesPublic: true });
   }
   let pkg: PackageJson;
@@ -653,6 +672,7 @@ function detectJavaScript(folder: Folder): Detection {
       : GENERATORS.find(({ dependency }) => dependency in all);
 
   const entry = serverEntry(folder, start, pkg.main, hasBuild);
+  if (entry !== null && !isSafePath(entry.path)) return declined(unsafe(entry.path));
   const startsApp = start !== null && !DEVELOPMENT_SERVER.test(start) && !(generator !== undefined && entry === null);
 
   if (entry !== null || startsApp) {

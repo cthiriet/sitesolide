@@ -93,10 +93,12 @@ import {
   deploymentAccount,
   IncompleteConfig,
   legacyKeysWarning,
+  projectsRepo,
   readConfig,
   type Config,
 } from "./cli/config";
 import { backupsReport } from "./cli/backups";
+import { sourceRefusal } from "./cli/source";
 import { decideBlock, generateFragment } from "./cli/fragment";
 import { hintFor } from "./cli/hints";
 import { inferManifest, renderManifest, slugFromFolder, type Inference } from "./cli/infer";
@@ -583,6 +585,15 @@ function readProject(folder: string, options: { raw?: string; portLater?: boolea
       "the path is relative to the folder holding sitesolide.json",
     ]);
   }
+  // Outside the owner's sites repository, a manifest is someone else's text:
+  // its source stays inside its own repository. See bin/cli/source.ts.
+  const escape = manifest.source === undefined ? null : sourceRefusal(folder, code, projectsRepo());
+  if (escape !== null) {
+    die(escape, [
+      "a manifest outside your sites repository may only point inside its own repository",
+      "nothing was built nor sent: the build would have run there, and the folder been uploaded",
+    ]);
+  }
 
   const missing = isApp(manifest)
     ? missingExclusions(manifest, readdirSync(code))
@@ -689,12 +700,32 @@ async function checkRemoteBlock(
 
 // --- deploy ------------------------------------------------------------------
 
+/**
+ * `--build`: a dry run runs the build too. Off by default.
+ *
+ * The build is the folder's own code, run by a shell on the workstation that
+ * holds root SSH to the machine. A dry run is what an agent is told to try
+ * first, through the MCP tool or `--json`, on a folder it may have just
+ * cloned, before anyone has read it: running the build there turned "show me
+ * what would happen" into "run this repository's code here". A dry run
+ * therefore shows the step and skips it; whoever wants what it produces
+ * checked asks for it, by typing `--build`.
+ */
+let buildInDryRun = false;
+
+/** Whether this run executes the build: always for real, in a dry run only with --build. */
+function buildRuns(project: Project, executor: Executor): boolean {
+  return project.manifest.build !== undefined && (!executor.simulated || buildInDryRun);
+}
+
 async function runBuild(project: Project, executor: Executor): Promise<void> {
   const { build } = project.manifest;
   if (build === undefined) return;
+  if (!buildRuns(project, executor)) {
+    say(`   [dry-run] build (${build}), not run: it is this folder's code, run here only for real or with --dry-run --build`);
+    return;
+  }
   step(`build (${build})`);
-  // The build runs on the workstation, even in a dry run: it is what produces
-  // what would leave, and a test that skips it verifies nothing.
   const proc = Bun.spawn(["sh", "-c", build], {
     cwd: project.code,
     stdout: childOutput(),
@@ -709,9 +740,14 @@ function publicFolder(project: Project): string | null {
   return publicDir === undefined ? null : join(project.code, publicDir);
 }
 
-function checkPublicFolder(project: Project): void {
+function checkPublicFolder(project: Project, executor?: Executor): void {
   const folder = publicFolder(project);
   if (folder === null) return;
+  // A dry run that skipped the build cannot judge what the build produces.
+  if (executor !== undefined && project.manifest.build !== undefined && !buildRuns(project, executor)) {
+    say(`   [dry-run] check that the build fills ${project.manifest.publicDir}`);
+    return;
+  }
   if (!existsSync(folder)) {
     die(`publicDir not found: ${project.manifest.publicDir}`, ["did the build run?"]);
   }
@@ -791,7 +827,7 @@ async function deploy(
   if (behindPortal) await requirePortal(config, executor);
 
   await runBuild(project, executor);
-  checkPublicFolder(project);
+  checkPublicFolder(project, executor);
 
   // The lock shared with the gatekeeper, taken just before the first deposit of
   // the manifest or of the block, and the door read again under it: it is that
@@ -2497,6 +2533,7 @@ if (import.meta.main) {
   const executor = new Executor(dryRun);
   const folder = process.cwd();
   chooseOutput(arguments_);
+  buildInDryRun = arguments_.includes("--build");
 
   // `init` prompts and `run` hands the terminal to the command it launches:
   // neither has events to print.
@@ -2649,7 +2686,8 @@ if (import.meta.main) {
           "     --write                      write it, never over an existing one",
           "     --slug <name>                name the project, rather than after its folder",
           "  sitesolide deploy               prepare, build, push, install, restart, verify",
-          "     --dry-run                    show the unit and the fragment, install nothing",
+          "     --dry-run                    show the unit and the fragment, install nothing, build nothing",
+          "     --build                      with --dry-run: run the build too, the folder's own code, here",
           "     --force                      switch a hand-written unit to the generated one",
           "     --yes [--slug <name>]        no sitesolide.json: write the inferred one, then deploy",
           "  sitesolide status               what the server actually runs",

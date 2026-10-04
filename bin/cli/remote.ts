@@ -39,10 +39,11 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync,
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { bundle, excludedBy, type BundleEntry } from "./bundle";
-import { configPath, defaultPaths, expandHome, readConfigFile } from "./config";
+import { configPath, defaultPaths, expandHome, projectsRepo, readConfigFile } from "./config";
 import { hintForFailure } from "./hints";
 import { hasServices, isApp, mainPort, missingExclusions, NEVER_SENT, readManifest, type Manifest } from "./manifest";
 import { eventFor, formatEvent, type OutputEvent } from "./output";
+import { sourceRefusal } from "./source";
 
 /** Where the token is kept in the vault. */
 export const TOKEN_FILE = "team-token";
@@ -260,6 +261,15 @@ export function readRemoteProject(folder: string): RemoteProject | { errors: str
   if (manifest === undefined || errors.length > 0) return { errors: ["sitesolide.json rejected", ...errors] };
   const code = manifest.source === undefined ? folder : resolve(folder, manifest.source);
   if (!existsSync(code) || !lstatSync(code).isDirectory()) return { errors: [`source not found: ${manifest.source} (${code})`] };
+  // As over SSH: outside the sites repository, source stays inside its own, see source.ts.
+  let sitesRepo: string | null = null;
+  try {
+    sitesRepo = projectsRepo();
+  } catch {
+    sitesRepo = null;
+  }
+  const escape = manifest.source === undefined ? null : sourceRefusal(folder, code, sitesRepo);
+  if (escape !== null) return { errors: [escape, "a manifest outside your sites repository may only point inside its own repository: nothing was built nor sent"] };
   const missing = isApp(manifest) ? missingExclusions(manifest, readdirSync(code)) : [];
   if (missing.length > 0) {
     return { errors: [`exclude: ${missing.join(", ")} present on disk and not excluded`, `add "exclude": [${missing.map((name) => `"${name}"`).join(", ")}] to the manifest`] };

@@ -11,7 +11,8 @@ sitesolide detect               the sitesolide.json this folder implies, written
    --write                      write it, never over an existing one
    --slug <name>                name the project, rather than after its folder
 sitesolide deploy               prepare, build, push, install, restart, verify
-   --dry-run                    show the unit and the fragment, install nothing
+   --dry-run                    show the unit and the fragment, install nothing, build nothing
+   --build                      with --dry-run: run the build too, the folder's own code, here
    --force                      switch a hand-written unit to the generated one
    --yes [--slug <name>]        no sitesolide.json: write the inferred one, then deploy
 sitesolide status               what the server actually runs

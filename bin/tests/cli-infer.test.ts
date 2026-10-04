@@ -309,6 +309,40 @@ describe("a Go app", () => {
   });
 });
 
+describe("a name that would go into a command", () => {
+  // A folder or a file name is the folder's own text, and the build runs in a
+  // shell on the workstation that holds root SSH to the machine.
+  const unsafe = "$(touch pwned)";
+
+  test("a Go command under cmd/ is declined, never put into go build", () => {
+    const folder = copy(join(FIXTURES, "go-cmd"));
+    cpSync(join(folder, "cmd", "server"), join(folder, "cmd", unsafe), { recursive: true });
+    rmSync(join(folder, "cmd", "server"), { recursive: true });
+    const inference = inferManifest(folder, "go-cmd");
+    expect(inference.kind).toBe("none");
+    expect(inference.reasons.join(" ")).toContain("would go into a command");
+    expect(JSON.stringify(inference)).not.toContain("go build");
+  });
+
+  test("a Python module in such a folder, and a server file named so, likewise", () => {
+    const python = copy(join(FIXTURES, "flask-app"));
+    mkdirSync(join(python, unsafe));
+    cpSync(join(python, "app.py"), join(python, unsafe, "app.py"));
+    rmSync(join(python, "app.py"));
+    expect(inferManifest(python, "flask-app")).toMatchObject({ kind: "none", reasons: [expect.stringContaining("would go into a command")] });
+
+    const javascript = copy(join(FIXTURES, "bun-app"));
+    const pkg = JSON.parse(readFileSync(join(javascript, "package.json"), "utf8"));
+    cpSync(join(javascript, "server.ts"), join(javascript, "a;b.ts"));
+    rmSync(join(javascript, "server.ts"));
+    writeFileSync(join(javascript, "package.json"), JSON.stringify({ ...pkg, main: "a;b.ts" }));
+    // With its public/, the folder still reads as the files it serves; without, as nothing.
+    expect(inferManifest(javascript, "bun-app")).toMatchObject({ kind: "static", manifest: { publicDir: "public" } });
+    rmSync(join(javascript, "public"), { recursive: true });
+    expect(inferManifest(javascript, "bun-app")).toMatchObject({ kind: "none", reasons: [expect.stringContaining("would go into a command")] });
+  });
+});
+
 describe("every inferred manifest", () => {
   const folders = [
     ...["static-public", "static-dist", "vite-site", "astro-site", "bun-app", "node-express", "flask-app", "go-service", "go-cmd"].map((name) =>

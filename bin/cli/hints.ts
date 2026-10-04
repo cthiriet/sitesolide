@@ -38,6 +38,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^sitesolide\.json not found in /, "run `sitesolide detect` in this folder to see the manifest it implies; `sitesolide deploy --yes` writes it and deploys"],
   [/^sitesolide\.json rejected once the portal/, "fix the keys listed in `details` in sitesolide.json, keeping `portal` as the server has it, then run the same command again"],
   [/^sitesolide\.json rejected/, "fix the keys listed in `details` in sitesolide.json (docs/manifest.md describes every key), then run the same command again"],
+  [/^source leads outside the repository/, "point `source` inside the repository that holds sitesolide.json, or let the owner deploy it from their sites repository; never point it at another folder of this workstation"],
   [/^source not found/, "fix `source` in sitesolide.json: a path relative to the folder holding it, to a folder that exists"],
   [/^exclude: .* present on disk and not excluded/, "add the names listed in `details` to `exclude` in sitesolide.json, then run deploy again"],
   [/^port: required, and only deploy chooses one/, "run `sitesolide deploy`: it picks a free port on the server and writes it into sitesolide.json"],

@@ -96,14 +96,20 @@ describe("deploy --json", () => {
     });
   });
 
-  test("the generated unit and block are files, the commands not run are planned, the build's own output is relayed", async () => {
+  test("the generated unit and block are files, the commands not run are planned, the build among them", async () => {
     const r = await run("projects/bun-mixed", ["deploy", "--json", "--dry-run"], { vm: fakeVm() });
     const list = events(r);
     const files = list.filter((event) => event.type === "file").map((event) => event.name);
     expect(files).toEqual(["sample-bun.service", "sample-bun.caddy"]);
     expect(String(list.find((event) => event.name === "sample-bun.service")?.content)).toContain("User=site-sample-bun");
     expect(list.some((event) => event.type === "planned" && String(event.message).startsWith("rsync -a --delete"))).toBe(true);
-    expect(list.some((event) => event.type === "step" && event.message === "build (bun run build.ts)")).toBe(true);
+    // A dry run never runs the folder's own code: the build is planned, not run.
+    expect(list.some((event) => event.type === "planned" && String(event.message).startsWith("build (bun run build.ts), not run"))).toBe(true);
+    expect(list.some((event) => event.type === "step" && String(event.message).startsWith("build"))).toBe(false);
+    // --build asks for it, and its own output is relayed.
+    const built = events(await run("projects/bun-mixed", ["deploy", "--json", "--dry-run", "--build"], { vm: fakeVm() }));
+    expect(built.some((event) => event.type === "step" && event.message === "build (bun run build.ts)")).toBe(true);
+    expect(built.some((event) => event.type === "output")).toBe(true);
     // The same run without --json: the human output, not one event.
     const human = await run("projects/bun-mixed", ["deploy", "--dry-run"], { vm: fakeVm() });
     expect(human.output).toContain("-> project sample-bun, service");
@@ -185,6 +191,18 @@ describe("deploy --json", () => {
     expect(logs[logs.indexOf(ran) + 1]).toBe(`STDIN ${install}`);
     // Never again as the deployment account, in app/.
     expect(logs.some((line) => line.includes(`cd /srv/sites/agent-shop/app && ${install}`))).toBe(false);
+  });
+
+  test("a cloned manifest whose source climbs out of its repository is refused before the machine is read", async () => {
+    const folder = project({ ...APP, port: 3040, source: "../../..", build: "touch ran-outside" });
+    mkdirSync(join(folder, ".git"));
+    const machine = fakeVm();
+    const r = await run(folder, ["deploy", "--json", "--dry-run", "--build"], { vm: machine });
+    expect(r.code).toBe(1);
+    const error = ended(r, "error");
+    expect(error.message).toStartWith("source leads outside the repository holding sitesolide.json");
+    expect(error.hint).toContain("never point it at another folder");
+    expect(machine.logs()).toEqual([]);
   });
 
   test("an unknown command and --json on run are refused as events too", async () => {

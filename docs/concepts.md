@@ -268,7 +268,8 @@ in the clear by the wildcard block for the length of the deployment, and
 indefinitely if the command was interrupted.
 
 `--dry-run` prints the generated unit and block, and every command it would run,
-without touching anything.
+without touching anything, nor running the build, which is the folder's own
+code; `--dry-run --build` runs it too.
 
 A team member deploys with a token instead of SSH, and the same order runs on
 the machine, in the installer, with the same decisions: see

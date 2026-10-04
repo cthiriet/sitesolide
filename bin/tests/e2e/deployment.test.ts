@@ -36,13 +36,27 @@ describe("showcase without a build", () => {
 });
 
 describe("built documentation", () => {
-  test("the build runs and produces what leaves", async () => {
+  test("a dry run shows the build and runs nothing of the folder", async () => {
+    // The build is the folder's own code, on the workstation that holds root
+    // SSH to the machine: a dry run, the first thing an agent is told to try
+    // on a folder it may have just cloned, never runs it.
     const dist = join(TESTS_ROOT, "projects/static-docs/dist");
     rmSync(dist, { recursive: true, force: true });
 
     const r = await run("projects/static-docs", ["deploy", "--dry-run"]);
     expect(r.code).toBe(0);
-    expect(r.output).toContain("build (bun run build.ts)");
+    expect(r.output).toContain("[dry-run] build (bun run build.ts), not run");
+    expect(r.output).toContain("[dry-run] check that the build fills dist");
+    expect(existsSync(dist)).toBe(false);
+  });
+
+  test("with --build, the build runs and produces what leaves", async () => {
+    const dist = join(TESTS_ROOT, "projects/static-docs/dist");
+    rmSync(dist, { recursive: true, force: true });
+
+    const r = await run("projects/static-docs", ["deploy", "--dry-run", "--build"]);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("-> build (bun run build.ts)");
 
     // The build really ran: it is what produces what would leave, and a test
     // that skips it checks nothing.
