@@ -4,7 +4,7 @@
 
 A project is a folder with a `sitesolide.json`. The CLI builds on the workstation, uploads over SSH, installs a confined systemd unit and a Caddy block, restarts the service and checks the site answers. The machine is the source of truth for secrets and for the portal door.
 
-For agents: every command but `init` and `run` takes `--json` and prints one JSON event per line, ending with one `result` or one `error` that carries a `hint`. `sitesolide detect` infers a manifest for a folder that has none, and `deploy` chooses a free port when the manifest declares none. `sitesolide mcp` serves `detect`, `deploy`, `status`, `logs` and `lock_status` as MCP tools over stdio. Secrets never go in the repository: the user sets them in the dashboard. Never change the server by hand.
+For agents: every command but `init` and `run` takes `--json` and prints one JSON event per line, ending with one `result` or one `error` that carries a `hint`. `sitesolide detect` infers a manifest for a folder that has none, and `deploy` chooses a free port when the manifest declares none. `sitesolide mcp` serves `detect`, `deploy`, `status`, `logs`, `sharing`, `share` and `lock_status` as MCP tools over stdio. `sitesolide share alice@acme.com` shares a project behind the portal with people or a domain, like a Google Doc: it gives real people access, so only with the addresses the user names. Secrets never go in the repository: the user sets them in the dashboard. Never change the server by hand.
 
 ## Docs
 

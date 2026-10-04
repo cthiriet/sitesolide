@@ -19,6 +19,11 @@ sitesolide status               what the server actually runs
 sitesolide logs [--follow]      journalctl for this project
    --lines <n>                  how many lines back, 50 by default
 sitesolide backups              this project's data snapshots, read only
+sitesolide share                who may open this project with their work account, and the line to send
+   <email>...                   share it with these people
+   --domain <domain>            with everyone at this domain
+   --remove <email|domain>      take a person or a domain off
+   --only-admins                back to the admins alone
 sitesolide lock   [--dry-run]   close the preview behind a code, or show it
    --status                     wanted / installed / measured, without touching
    --new-code                   replace the code in force by a fresh one
@@ -47,6 +52,44 @@ to production itself, then runs the command. See [secrets.md](secrets.md).
 
 `sitesolide logs` shows every service of a project, interleaved by time.
 
+## Sharing a project
+
+A project behind the portal opens to the admins alone until it is shared:
+the owner's password, the admin emails, and guests with a password. `sitesolide
+share`, in its folder, shares it the way a Google Doc is shared, with people by
+their work email or with everyone at a domain, once the portal lets people sign
+in with a company account ([portal/README.md](../portal/README.md#signing-in-with-a-work-account)).
+
+```console
+$ sitesolide share alice@acme.com bob@acme.com
+-> sharing of notes, https://notes.example.com/, over SSH, as the owner
+-> replace the policy: the admins alone -> the people listed, and the admins
+   who gets in: the people listed, and the admins
+   people: alice@acme.com, bob@acme.com
+   the admins: the owner's password, the admin emails, and guests with a password
+   send: Open https://notes.example.com/ and sign in with your Google work account.
+   holds from their next request; the portal records the change in its audit
+```
+
+With no argument it shows who gets in and the line to send. Adding people to a
+site open to the admins alone switches it to those people; `--domain` opens it
+to everyone at the domain, subdomains not included; `--remove` takes a person
+or a domain off; `--only-admins` closes it back. The portal keeps both lists
+whatever the mode, as the dashboard's *Sharing* section does: someone shared
+with earlier is let in again by a switch back, and the command says who before
+it changes anything. A change holds from the next request, and the portal
+records it in its audit.
+
+Two things are never done here: making a site public, which is turning its
+portal off, from the dashboard's *Access* section; and guest passwords, from
+its *Guests* section, which shows a password once.
+
+The owner's `share` runs over SSH: root on the machine asks the portal's admin
+API on the loopback, after reading there that the site's manifest asks for the
+portal and that its block carries it. It touches nothing else, Caddy least of
+all. With a team token, it goes through the dashboard, which may refuse a
+domain: see [team.md](team.md#sharing-what-you-deployed).
+
 ## A folder without a manifest
 
 `sitesolide detect` reads the folder and prints the manifest it implies: a Go
@@ -65,8 +108,9 @@ never decided for you: secrets and the network.
 
 `--json` prints one JSON event per line on standard output, nothing else, and
 ends with a `result` or an `error` carrying a `hint`. `sitesolide mcp` serves
-`detect`, `deploy`, `status`, `logs` and `lock --status` as tools to an MCP
-client. Both are described in [agents.md](agents.md).
+`detect`, `deploy`, `status`, `logs`, `share` (and `sharing`, its read alone)
+and `lock --status` as tools to an MCP client. Both are described in
+[agents.md](agents.md).
 
 ## With a team token
 
@@ -80,8 +124,14 @@ sitesolide deploy                                 build here, upload, follow the
 sitesolide status                                 the projects this token may deploy
 sitesolide logs [--follow]                        the journal of this folder's project
    --lines <n>                                    how many lines back, 50 by default, 500 at most
+sitesolide share                                  who may open this folder's project, and the line to send
+   <email>...                                     share it with these people
+   --domain <domain>                              with everyone at a domain the portal admits
+   --remove <email|domain>                        take a person or a domain off
+   --only-admins                                  back to the admins alone
 
 --json, on every one of them: one JSON event per line, see docs/agents.md
+SITESOLIDE_API and SITESOLIDE_TOKEN in the environment win over the files.
 ```
 
 `login` keeps the token in `~/.config/sitesolide/secrets/team-token`, 0600, and

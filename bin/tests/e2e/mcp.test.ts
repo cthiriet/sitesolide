@@ -86,7 +86,7 @@ describe("sitesolide mcp over stdio", () => {
     mcp.send({ jsonrpc: "2.0", method: "notifications/initialized" });
     mcp.send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const list = await mcp.answer(2);
-    expect(list.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["detect", "deploy", "status", "logs", "lock_status"]);
+    expect(list.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["detect", "deploy", "status", "logs", "sharing", "share", "lock_status"]);
 
     mcp.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "detect", arguments: { folder: join(TESTS_ROOT, "..", "infer", "bun-app") } } });
     const detected = await mcp.answer(3);

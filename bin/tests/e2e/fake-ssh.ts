@@ -31,7 +31,10 @@
  *   contains the pattern prints the output, like a unit of the gatekeeper in
  *   progress;
  * - `system-units.json`: `{ <unit>: <file> }`, the units systemd knows from
- *   elsewhere than /etc/systemd/system, as a package's own.
+ *   elsewhere than /etc/systemd/system, as a package's own;
+ * - `portal.json`: the portal's sharing, which `share` asks on the loopback,
+ *   see `PortalState`: answered from there, and changed there by an accepted
+ *   write.
  */
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -48,6 +51,7 @@ import {
 import { MARKER_ABSENT, MARKER_PRESENT } from "../../cli/unit";
 import { GENERATOR_MARK, loopbackStateCommand, MARKER_DONE, unitOriginsCommand } from "../../cli/services";
 import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
+import { sharingReadCommand, sharingWriteCommand } from "../../cli/sharing";
 
 export const TEST_HOST = "sample@invalid.local";
 
@@ -64,7 +68,25 @@ export const SWITCHES = {
   egressState: "egress-state",
   firstInstall: "first-install",
   systemUnits: "system-units.json",
+  portal: "portal.json",
 } as const;
+
+/**
+ * The portal as `share` finds it on the loopback: answering with this
+ * release's sharing, from before sharing (`old`, a 404), or not at all
+ * (`down`, curl's connection refused).
+ */
+export type PortalState = {
+  state: "current" | "old" | "down";
+  sso: { configured: boolean; providerName: string | null; portalUrl: string | null; admins: string[]; allowedDomains: string[] };
+  sites: { host: string; policy: { mode: string; people: string[]; domains: string[] }; updatedAt: number }[];
+};
+
+export const DEFAULT_PORTAL: PortalState = {
+  state: "current",
+  sso: { configured: true, providerName: "Google", portalUrl: null, admins: [], allowedDomains: [] },
+  sites: [],
+};
 
 /**
  * The commands the simulated VM accepts, besides the reading of the manifests.
@@ -265,6 +287,51 @@ if (import.meta.main) {
     process.stdout.write(orphans.map((name) => `${name}\n`).join(""));
     process.exit(0);
   }
+  // The portal's sharing, asked as root on the loopback. A reading is always
+  // answered, from the state the test lays; a change is a write, refused
+  // unless the test accepts writes, then applied to that state as the portal
+  // would, and recorded with the body that came on standard input, never in
+  // the arguments.
+  const portalFile = join(vm, SWITCHES.portal);
+  const portal = (): PortalState => (existsSync(portalFile) ? (JSON.parse(readFileSync(portalFile, "utf8")) as PortalState) : DEFAULT_PORTAL);
+  const answerPortal = (state: PortalState["state"]): void => {
+    if (state === "down") {
+      console.error("curl: (7) Failed to connect to 127.0.0.1 port 3026 after 0 ms: Couldn't connect to server");
+      process.exit(7);
+    }
+    if (state === "old") {
+      process.stdout.write("404: unknown route\n404\n");
+      process.exit(0);
+    }
+  };
+  if (command === sharingReadCommand()) {
+    record("SHARING GET");
+    const current = portal();
+    answerPortal(current.state);
+    process.stdout.write(`${JSON.stringify({ sso: current.sso, sites: current.sites })}\n200\n`);
+    process.exit(0);
+  }
+  const sharingHost = /^sudo curl .* -X PUT .*\/admin\/sharing\/([a-z0-9.-]+)$/.exec(command)?.[1];
+  let sharingWrite = false;
+  try {
+    sharingWrite = sharingHost !== undefined && command === sharingWriteCommand(sharingHost);
+  } catch {
+    sharingWrite = false;
+  }
+  if (sharingWrite) {
+    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
+    const body = await Bun.stdin.text();
+    record(`SHARING PUT ${sharingHost} ${body}`);
+    const current = portal();
+    answerPortal(current.state);
+    const policy = JSON.parse(body) as PortalState["sites"][number]["policy"];
+    const updatedAt = 1_791_000_000_000;
+    current.sites = [...current.sites.filter((site) => site.host !== sharingHost), { host: sharingHost!, policy, updatedAt }];
+    writeFileSync(portalFile, JSON.stringify(current));
+    process.stdout.write(`${JSON.stringify({ host: sharingHost, policy, updatedAt })}\n200\n`);
+    process.exit(0);
+  }
+
   const block = READ_BLOCK.exec(command);
   if (block !== null) {
     record(`BLOCK ${block[2]}`);

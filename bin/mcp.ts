@@ -21,6 +21,12 @@
  * what visitors see; `--force`, which replaces a file someone edited by hand
  * on the machine. Those stay the owner's, typed by them.
  *
+ * `share` is a tool, the one besides `deploy` that changes something: it lets
+ * real people into an app and its data, which is what an agent is asked for
+ * once a tool is built ("share it with the team"), and its description says so
+ * first, for the client to ask its user. It only ever shares a site already
+ * behind the portal, and never makes one public.
+ *
  * THE PROTOCOL, written here rather than borrowed: a dependency for a few
  * hundred lines of JSON-RPC would be the largest thing in bin/. Both eras of
  * MCP are spoken, since the clients in use speak one or the other:
@@ -71,6 +77,8 @@ export const INSTRUCTIONS = [
   "Workflow: call detect on a folder without sitesolide.json and show the user the manifest and its notes;",
   "call deploy with dry_run true and show what would happen; deploy for real only once the user agrees,",
   "then give them the url from the result. When a call fails, its error carries a hint: follow it.",
+  "Once a project behind the portal is deployed, share it with the people who need it: call share with",
+  "the addresses or the domain the user gave, never others, and give them the message from the result.",
   "Secrets never go in the repository nor in sitesolide.json: the user sets them in the dashboard's",
   "Secrets section, whose address a deploy stopped by a missing secret gives. Read logs when a service fails.",
   "Never change the server by any other means than these tools, and never retry a refusal with a workaround.",
@@ -169,6 +177,43 @@ export const TOOLS: ToolDefinition[] = [
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
   {
+    name: "sharing",
+    title: "Who may open a project",
+    description:
+      "Who may open a deployed project behind the portal with their work account: the mode (the admins alone, a list of people, or everyone at a domain), the people and domains listed, " +
+      "and the message to send to the people it is shared with. Read-only. Sharing gives real people access to the app and to the data it holds: " +
+      "read it before and after share, and show the user who has access.",
+    inputSchema: { type: "object", properties: { folder: FOLDER }, required: ["folder"], additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: "share",
+    title: "Share a project",
+    description:
+      "Share a deployed project behind the portal with people, by their work email, or with everyone at a domain, the way a Google Doc is shared. " +
+      "THIS GIVES REAL PEOPLE ACCESS to the app and to the data it holds or shows, from their next request: ask the user before every call, naming the exact addresses and domains, " +
+      "and never add anyone the user did not name. remove takes people or domains off; only_admins closes it back to the admins alone, the lists kept for later. " +
+      "Adding people to a site open to the admins alone also lets back in anyone kept from an earlier sharing: the result says who, as a warning. " +
+      "With a team token, a domain is accepted only among those the portal admits at sign-in. Never public: turning the portal off stays the owner's, from the dashboard. " +
+      "On success the result carries the policy in effect and the message to send to the people added.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folder: FOLDER,
+        people: { type: "array", items: { type: "string" }, description: "Work email addresses to share it with, exactly as the user gave them." },
+        domain: { type: "string", description: "A domain, like acme.com: everyone whose work email is at it gets in. Subdomains are not included." },
+        remove: { type: "array", items: { type: "string" }, description: "Email addresses or domains to take off." },
+        only_admins: { type: "boolean", description: "Back to the admins alone: the owner's password, the admin emails and guests with a password. Default false.", default: false },
+      },
+      required: ["folder"],
+      additionalProperties: false,
+    },
+    // Destructive: taking people off is a change of its own, and a client
+    // should ask before either. Idempotent: the same call twice changes
+    // nothing the second time.
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  },
+  {
     name: "lock_status",
     title: "Preview lock status",
     description:
@@ -222,6 +267,33 @@ export function planCall(name: string, args: Record<string, unknown>, cwd = proc
     }
     case "status":
       return { argv: ["status"], cwd: folder };
+    case "sharing":
+      return { argv: ["share"], cwd: folder };
+    case "share": {
+      const list = (key: string): string[] | string => {
+        const value = args[key] ?? [];
+        // A leading dash would read as an option of the command, never as an address.
+        if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry === "" || entry.startsWith("-") || entry.length > 254)) {
+          return `${key}: a list of ${key === "people" ? "email addresses" : "email addresses or domains"}`;
+        }
+        return value as string[];
+      };
+      const people = list("people");
+      const remove = list("remove");
+      const onlyAdmins = flag("only_admins");
+      if (typeof people === "string") return { error: people };
+      if (typeof remove === "string") return { error: remove };
+      if (typeof onlyAdmins === "string") return { error: onlyAdmins };
+      const domain = args.domain;
+      if (domain !== undefined && (typeof domain !== "string" || domain === "" || domain.startsWith("-") || domain.length > 253)) return { error: "domain: a domain, like acme.com" };
+      if (people.length === 0 && remove.length === 0 && domain === undefined && !onlyAdmins) {
+        return { error: "share: give people, domain, remove or only_admins; call sharing to read who may open it" };
+      }
+      return {
+        argv: ["share", ...people, ...(domain === undefined ? [] : ["--domain", domain as string]), ...remove.flatMap((entry) => ["--remove", entry]), ...(onlyAdmins ? ["--only-admins"] : [])],
+        cwd: folder,
+      };
+    }
     case "logs": {
       const lines = args.lines ?? 50;
       if (typeof lines !== "number" || !Number.isInteger(lines) || lines < 1 || lines > 1000) {

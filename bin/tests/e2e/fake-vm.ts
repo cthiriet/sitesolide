@@ -26,7 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HOLDER_NAME, LOCK_NAME } from "../../cli/caddy-lock";
-import { SWITCHES, TEST_HOST } from "./fake-ssh";
+import { DEFAULT_PORTAL, SWITCHES, TEST_HOST, type PortalState } from "./fake-ssh";
 
 export type FakeVm = {
   /** The folder that stands in for the machine. */
@@ -59,6 +59,10 @@ export type FakeVm = {
   answer(pattern: string, output: string): void;
   /** A unit systemd reads from `file`, a package's own: `caddy`, `/lib/systemd/system/caddy.service`. */
   systemUnit(unit: string, file: string, content?: string): void;
+  /** Lays the portal `share` finds on the loopback, over the default: this release's, Google configured, nothing shared. */
+  setPortal(state: Partial<PortalState>): void;
+  /** The portal's sharing as it stands, after the writes accepted. */
+  portal(): PortalState;
   /** The commands received, one per line: CONNECT, READ <pattern>, REFUSED <command>... */
   logs(): string[];
   cleanup(): void;
@@ -147,6 +151,13 @@ export function createFakeVm(): FakeVm {
       const laid = existsSync(switchFile) ? (JSON.parse(readFileSync(switchFile, "utf8")) as Record<string, string>) : {};
       writeFileSync(switchFile, JSON.stringify({ ...laid, [unit]: file }));
       put(file, content);
+    },
+    setPortal(state) {
+      writeFileSync(join(root, SWITCHES.portal), JSON.stringify({ ...DEFAULT_PORTAL, ...state }));
+    },
+    portal() {
+      const file = join(root, SWITCHES.portal);
+      return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as PortalState) : DEFAULT_PORTAL;
     },
     logs() {
       return existsSync(logs) ? readFileSync(logs, "utf8").split("\n").filter((line) => line !== "") : [];

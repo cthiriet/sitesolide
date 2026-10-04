@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { TOOLS } from "../mcp";
+import { REMOTE_USAGE } from "../cli/remote";
 
 /**
  * What an agent reads before it acts: the skill, llms.txt, and the usage the
@@ -55,6 +56,13 @@ describe("the documented usage", () => {
     for (const line of lines.filter((candidate) => candidate !== "usage:" && candidate !== "")) {
       expect({ line, documented: documented.includes(line) }).toEqual({ line, documented: true });
     }
+  });
+
+  test("docs/commands.md quotes every line the CLI prints for its usage with a team token", () => {
+    const documented = read("docs/commands.md");
+    const lines = REMOTE_USAGE.filter((line) => line !== "" && !line.startsWith("usage")).map((line) => line.replace(/^ {2}/, ""));
+    expect(lines.length).toBeGreaterThan(10);
+    for (const line of lines) expect({ line, documented: documented.includes(line) }).toEqual({ line, documented: true });
   });
 
   test("the documents an agent is pointed at exist", () => {

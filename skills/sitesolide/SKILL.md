@@ -13,8 +13,9 @@ answers over HTTPS. There is no staging: **what you deploy is live, for every
 visitor, at once.**
 
 Use the MCP tools when they are available (`detect`, `deploy`, `status`,
-`logs`, `lock_status`). Otherwise run the CLI with `--json`: every line of
-standard output is one JSON event, the last one a `result` or an `error`.
+`logs`, `sharing`, `share`, `lock_status`). Otherwise run the CLI with
+`--json`: every line of standard output is one JSON event, the last one a
+`result` or an `error`.
 
 ## The workflow
 
@@ -39,6 +40,14 @@ standard output is one JSON event, the last one a `result` or an `error`.
 5. **Read the result.** On success, give the user the `url`. When
    `manifestWritten` is true, `sitesolide.json` changed on disk (a port chosen,
    an inferred manifest, a door set from the dashboard): commit it.
+6. **Share it with the people who need it.** A site behind the portal opens to
+   the admins alone. Ask the user who should get in, then `share` with exactly
+   those addresses (`people`) or that domain (`domain`), and nobody else
+   (`sitesolide share alice@acme.com --json`, `--domain acme.com`). Sharing
+   gives real people access to the app and to its data: read `sharing` first,
+   tell the user who will get in, and wait for their yes. Give them the
+   `message` of the result to send. A warning saying someone is let in again,
+   kept from an earlier sharing, goes to the user too; `remove` takes them off.
 
 ## When it fails
 
@@ -61,6 +70,11 @@ Every error carries a `hint`: follow it. The usual ones:
   one and writes it back.
 - **The name already exists on the server.** Another project uses it: pick
   another with `slug` (`--slug`), never deploy over it.
+- **Sharing refused.** `no-portal`: the site is public or not deployed, and
+  only the user puts a site behind the portal, from the dashboard's *Access*
+  section. `out-of-scope` on a domain: a team token opens a site only to the
+  domains the portal admits; share with people by email instead, or ask the
+  owner.
 
 ## Never
 
@@ -70,12 +84,15 @@ Every error carries a `hint`: follow it. The usual ones:
 - Never retry a refusal with `--force` or a workaround on your own.
 - Never remove a project, lock or unlock a preview, or switch a domain unless
   the user asked for exactly that: those are their commands, not tools.
+- Never share with anyone the user did not name, and never make a site public:
+  turning the portal off is theirs, from the dashboard.
 - Never read, print or guess a secret, nor ask the user to paste one.
 
 ## Status and other reads
 
 `status` lists every project on the machine with its service state and
-memory. `lock_status` (`sitesolide lock --status --json`) says whether a
+memory. `sharing` (`sitesolide share --json`) says who may open a project
+behind the portal, and the message to send them. `lock_status` (`sitesolide lock --status --json`) says whether a
 preview is closed behind an access code, without revealing the code.
 
 The full reference: `docs/agents.md` in the sitesolide repository, and

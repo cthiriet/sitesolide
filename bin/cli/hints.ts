@@ -109,17 +109,20 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
  * deployment that failed on the machine, and the CLI's for what it refuses
  * before a request leaves. Their messages are worded on the machine, where no
  * pattern of HINTS reads them; a code this table lacks falls back to them.
+ * `share` reports by code whichever way it runs, over the owner's SSH too:
+ * bin/tests/cli-hints.test.ts fails on a code of bin/cli/sharing.ts this
+ * table lacks.
  */
 export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   // --- refused before a request leaves
   "no-dry-run": "review sitesolide.json with the user, then run `sitesolide deploy` without --dry-run once they agree: the machine judges the manifest before anything is built or uploaded",
   "unknown-option": "run the command without that option; `details` lists the ones it takes with a team token",
-  "needs-ssh": "this command is the owner's: ask the owner of the machine to run it; with a team token, only deploy, status, logs and login run",
+  "needs-ssh": "this command is the owner's: ask the owner of the machine to run it; with a team token, only deploy, status, logs, share and login run",
   usage: "run one of the commands `details` lists",
   // --- the control API
   unauthenticated: "the token is missing, unknown, expired or revoked: ask the owner of the machine for one, then run `sitesolide login`; never guess a token or borrow another one",
   "too-many-attempts": "wait the seconds `details` names, then run the same command once; never retry in a loop",
-  "out-of-scope": "the token may not do this: change what `details` names in sitesolide.json, or ask the owner of the machine to widen the token; never pick another slug to get around it",
+  "out-of-scope": "the token may not do this: change what `details` names (in sitesolide.json for a deployment, in the command for sharing), or ask the owner of the machine, who may widen the token or do it themselves; never pick another slug or another token to get around it",
   reserved: "the slug belongs to the platform: pick another one in sitesolide.json",
   "invalid-manifest": "fix every point of `details` in sitesolide.json (docs/manifest.md), then deploy again",
   invalid: "fix what the message names, then run the same command again",
@@ -127,10 +130,14 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   busy: "a deployment of this project is already running: wait for it to finish, then deploy again",
   "too-large": "exclude dependencies, caches and build leftovers in sitesolide.json: the machine installs the dependencies itself",
   expired: "the archive arrived too late: run `sitesolide deploy` again",
-  "not-available": "the machine does not carry the control API yet: tell the owner of the machine; nothing deploys with a token until it does",
+  "not-available": "the machine does not carry what this needs yet, the control API or a portal that knows sharing: tell the owner of the machine, with the message, which names what to update; nothing more can be done from here until then",
   failure: "something broke on the machine: tell the owner of the machine, with the message; do not retry in a loop",
   unreachable: "the dashboard did not answer: check the network and the address (`sitesolide login --url`), then run the same command again",
   unreadable: "the address answered with something that is not the control API: check it with `sitesolide login --url https://dashboard.<zone>`",
+  // --- sharing, with a token or over the owner's SSH
+  "no-portal": "sharing applies only to a site behind the portal: deploy it first if it is not deployed, or deploy it again if its block lags behind; putting a site behind the portal, or making it public, is the owner's, from the dashboard's Access section",
+  "portal-unreachable": "the portal did not answer on the server, nothing was changed: tell the owner of the machine (`systemctl status portal` on the server); never restart it yourself",
+  "ssh-failed": "a command over SSH failed, nothing was changed: run the same command again; if it fails twice, check that `ssh <server> true` connects without a prompt (load the key with ssh-add)",
   // --- a deployment that failed on the machine
   "install-failed": "run the install command from the message in the project folder, fix what it reports, then deploy again",
   "secret-missing": "ask the owner of the machine to create that file in the dashboard's Secrets section, then deploy again; never put secret values in the repository or in sitesolide.json",

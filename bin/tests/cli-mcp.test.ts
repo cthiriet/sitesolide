@@ -80,7 +80,7 @@ describe("the legacy handshake", () => {
     await h.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } });
     expect(await h.send({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeUndefined();
     const list = await h.send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    expect(list!.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["detect", "deploy", "status", "logs", "lock_status"]);
+    expect(list!.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["detect", "deploy", "status", "logs", "sharing", "share", "lock_status"]);
     expect(list!.result.resultType).toBeUndefined();
   });
 
@@ -241,16 +241,36 @@ describe("tools/call", () => {
 });
 
 describe("the tools", () => {
-  test("deploy says first that it changes the live server, and is the only one not read-only", () => {
+  test("deploy and share say first what they change, and are the only ones not read-only", () => {
     const deploy = TOOLS.find((tool) => tool.name === "deploy")!;
     expect(deploy.description).toContain("THIS CHANGES THE LIVE SERVER");
     expect(deploy.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
-    for (const tool of TOOLS.filter((candidate) => candidate.name !== "deploy")) expect(tool.annotations.readOnlyHint).toBe(true);
+    const share = TOOLS.find((tool) => tool.name === "share")!;
+    expect(share.description).toContain("THIS GIVES REAL PEOPLE ACCESS to the app and to the data");
+    expect(share.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    expect(TOOLS.find((tool) => tool.name === "sharing")!.description).toContain("real people access to the app and to the data");
+    for (const tool of TOOLS.filter((candidate) => !["deploy", "share"].includes(candidate.name))) expect(tool.annotations.readOnlyHint).toBe(true);
   });
 
-  test("no tool removes, locks, switches a domain or forces", () => {
-    const words = TOOLS.flatMap((tool) => [tool.name, ...Object.keys(tool.inputSchema.properties)]);
-    for (const forbidden of ["remove", "unlock", "force", "activate", "confirm"]) expect(words.join(" ")).not.toContain(forbidden);
+  test("no tool removes a project, locks, switches a domain or forces", () => {
+    // share's `remove` takes a person or a domain off a site's sharing, which
+    // only ever narrows who gets in: the one use of the word allowed.
+    const words = TOOLS.flatMap((tool) => [tool.name, ...Object.keys(tool.inputSchema.properties).filter((key) => !(tool.name === "share" && key === "remove"))]);
+    for (const forbidden of ["remove", "unlock", "force", "activate", "confirm", "public"]) expect(words.join(" ")).not.toContain(forbidden);
+  });
+
+  test("share's command line: the addresses as arguments, never as options", () => {
+    expect(planCall("sharing", { folder: FOLDER })).toEqual({ argv: ["share"], cwd: FOLDER });
+    expect(planCall("share", { folder: FOLDER, people: ["a@acme.test", "b@acme.test"], domain: "acme.test", remove: ["old.test", "c@acme.test"] })).toEqual({
+      argv: ["share", "a@acme.test", "b@acme.test", "--domain", "acme.test", "--remove", "old.test", "--remove", "c@acme.test"],
+      cwd: FOLDER,
+    });
+    expect(planCall("share", { folder: FOLDER, only_admins: true })).toEqual({ argv: ["share", "--only-admins"], cwd: FOLDER });
+    expect(planCall("share", { folder: FOLDER })).toHaveProperty("error");
+    expect(planCall("share", { folder: FOLDER, people: ["--only-admins"] })).toEqual({ error: "people: a list of email addresses" });
+    expect(planCall("share", { folder: FOLDER, people: "a@acme.test" })).toHaveProperty("error");
+    expect(planCall("share", { folder: FOLDER, domain: "--remove" })).toEqual({ error: "domain: a domain, like acme.com" });
+    expect(planCall("share", { folder: FOLDER, public: true })).toHaveProperty("error");
   });
 
   test("each tool's command line", () => {

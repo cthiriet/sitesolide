@@ -20,6 +20,7 @@ would.
 | infer a manifest for a folder (`detect`) | remove a project, which the machine keeps no backup of |
 | dry-run a deploy, and deploy | lock or unlock a preview, switch a domain |
 | read the server's status, a project's logs, its lock state | `--force` over a file someone edited on the machine |
+| share a project behind the portal with people or a domain, and read who may open it | make a site public, which is turning its portal off |
 | | read, set or guess a secret |
 
 Secrets are set in the dashboard's *Secrets* section, by you. A deploy that
@@ -27,6 +28,31 @@ needs one the machine lacks stops and names the page where to create it; the
 agent tells you, and runs the deploy again once you have. Nothing an agent
 writes into the repository or the manifest ever carries a secret value: the
 manifest validation refuses an `env` key that looks like one.
+
+## Sharing what was deployed
+
+A project behind the portal opens to the admins alone until someone shares
+it. Building a small tool ends with "share it with the people who need it":
+`share` adds people by their work email, or everyone at a domain, the way a
+Google Doc is shared, and `sharing` reads who may open it and the message to
+send them. **Sharing gives real people access to the app and to the data it
+holds**: the tool's description says so first, and an agent shares with the
+addresses the user named, and nobody else.
+
+```console
+$ sitesolide share alice@acme.com --json
+{"type":"step","message":"sharing of notes, https://notes.example.com/, through https://dashboard.example.com"}
+{"type":"step","message":"replace the policy: the admins alone -> the people listed, and the admins"}
+...
+{"type":"result","ok":true,"command":"share","slug":"notes","url":"https://notes.example.com/","policy":{"mode":"people","people":["alice@acme.com"],"domains":[]},"inEffect":{"people":["alice@acme.com"],"domains":[]},"updatedAt":1791000000000,"signIn":{"configured":true,"providerName":"Google"},"allowedDomains":["acme.com"],"message":"Open https://notes.example.com/ and sign in with your Google work account.","changed":true,"previous":{"mode":"admins","people":[],"domains":[]}}
+```
+
+A switch of mode can let back in someone shared with earlier, whom the portal
+kept in its list: a `warning` names them before the change, for the user to
+hear. Nothing is ever made public this way: turning a portal off stays the
+owner's, from the dashboard's *Access* section. A team token may open a site
+only to the domains the portal admits at sign-in, see
+[team.md](team.md#sharing-what-you-deployed).
 
 ## Zero configuration
 
@@ -151,6 +177,7 @@ What `result` carries:
 | `lock --status` | `slug`, `lock`: `wanted`, `installed`, `withoutCode`, `withCode`, `domain` |
 | `domain` | `slug`, `domain`: `name`, `aliases`, `active`, `table`, `dns`, `https` |
 | `remove` | `slug`, `dryRun` |
+| `share` | `slug`, `url`, `policy` (`mode`, `people`, `domains`), `inEffect`, `updatedAt`, `signIn`, `allowedDomains`, `message` (null until signing in with a work account is set up), `changed`, `previous` when changed |
 
 **`manifestWritten: true` means `sitesolide.json` changed on disk**: an
 inferred manifest, a port chosen, or a door the dashboard set. Commit it.
@@ -182,11 +209,14 @@ by each command.
 | `deploy` | `folder`, `dry_run`, `accept_inferred`, `slug` | **yes**, the live site, unless `dry_run`, which runs not even the build |
 | `status` | | no |
 | `logs` | `folder`, `lines` | no |
+| `sharing` | `folder` | no |
+| `share` | `folder`, `people`, `domain`, `remove`, `only_admins` | **yes**, who may open the app and its data |
 | `lock_status` | `folder` | no |
 
 `folder` is an absolute path. `deploy`'s description says first that it
-changes the live server: leave it on "ask" in your client rather than allowing
-it once and for all, so that every real deploy is yours to approve.
+changes the live server, and `share`'s that it gives real people access: leave
+both on "ask" in your client rather than allowing them once and for all, so
+that every real deploy, and every person let in, is yours to approve.
 
 It speaks both eras of the protocol: 2026-07-28, with no handshake and the
 version on every request, and 2025-11-25 back to 2024-11-05, with `initialize`.
@@ -237,8 +267,8 @@ the argument `mcp`. Without the link on the `PATH`, give the full path:
 ## The skill
 
 `skills/sitesolide/SKILL.md` teaches an agent the workflow: detect, review the
-manifest with you, dry-run, deploy, read the result, read the logs when
-something fails, and where secrets go. Claude Code finds it in
+manifest with you, dry-run, deploy, read the result, share it with the people
+who need it, read the logs when something fails, and where secrets go. Claude Code finds it in
 `~/.claude/skills/`:
 
 ```bash
@@ -273,6 +303,11 @@ and remove the `~/.claude/skills/sitesolide` link.
 One behaviour changed: an app whose manifest has no `port` used to be refused,
 and is now given one by `deploy`. Every manifest already deployed declares its
 port and is untouched.
+
+`share` and the `sharing` tool need the machine's side: over the owner's SSH,
+a portal that knows sharing; with a team token, the dashboard from the same
+release. See [dashboard/README.md](../dashboard/README.md), "Upgrading:
+sharing by token".
 
 A later release hardened what an agent, a token or a cloned folder can make
 `deploy` do: a dry run no longer runs the build, `install` runs as the project's

@@ -7,6 +7,7 @@
  *   sitesolide status               what the VM actually carries
  *   sitesolide logs [--follow]      journalctl for the service
  *   sitesolide backups              the project's data snapshots, read only
+ *   sitesolide share [<email>...]   who may open it with a work account
  *   sitesolide remove --confirm <slug>  take the project off the machine
  *   sitesolide run -- <command>     load the vault secret and run
  *   sitesolide mcp                  the same commands, as tools for an agent
@@ -17,8 +18,8 @@
  * and docs/agents.md.
  *
  * A workstation with no `server`, but a dashboard address and a token, is a
- * team member's: `deploy`, `status` and `logs` then go through the dashboard's
- * control API, and nothing below runs. See bin/cli/remote.ts.
+ * team member's: `deploy`, `status`, `logs` and `share` then go through the
+ * dashboard's control API, and nothing below runs. See bin/cli/remote.ts.
  *
  * The interface is in English, options and messages alike: a CLI is a technical
  * identifier, like the manifest keys.
@@ -181,6 +182,7 @@ import {
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, type ProjectAccount } from "./cli/loopback";
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { eventOutput, humanOutput, login, remoteMode, runRemote } from "./cli/remote";
+import { share, sshSharing } from "./cli/sharing";
 import {
   foreignUnit,
   listUnitsCommand,
@@ -510,11 +512,17 @@ class Executor {
 
   /**
    * A command on the VM whose code and outputs are returned as they are, for
-   * the lock that reads them itself. Never short-circuited by the dry-run
-   * mode: it is only called outside it.
+   * the lock and for `share`, which read them themselves. Never
+   * short-circuited by the dry-run mode: it is only called outside it.
+   * `input` goes to the command's standard input, never into its arguments.
    */
-  async execute(config: Config, command: string): Promise<Execution> {
-    const proc = Bun.spawn(["ssh", config.server, command], { env: childEnvironment(), stdout: "pipe", stderr: "pipe" });
+  async execute(config: Config, command: string, input?: string): Promise<Execution> {
+    const proc = Bun.spawn(["ssh", config.server, command], {
+      env: childEnvironment(),
+      ...(input === undefined ? {} : { stdin: new TextEncoder().encode(input) }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
     running++;
     try {
       const [output, error] = await Promise.all([
@@ -2648,6 +2656,12 @@ if (import.meta.main) {
       if (!report.ok) process.exit(1);
       break;
     }
+    case "share":
+      // The portal's admin API on the loopback, as root over SSH, after reading
+      // that the site carries the portal: see bin/cli/sharing.ts.
+      process.exit(
+        await share(arguments_, readProject(folder).manifest.slug, sshSharing((remote, input) => executor.execute(config, remote, input), config.zone), remoteOutput),
+      );
     case "secrets":
       pointToDashboard(config);
     case "lock": {
@@ -2712,6 +2726,11 @@ if (import.meta.main) {
           "  sitesolide logs [--follow]      journalctl for this project",
           "     --lines <n>                  how many lines back, 50 by default",
           "  sitesolide backups              this project's data snapshots, read only",
+          "  sitesolide share                who may open this project with their work account, and the line to send",
+          "     <email>...                   share it with these people",
+          "     --domain <domain>            with everyone at this domain",
+          "     --remove <email|domain>      take a person or a domain off",
+          "     --only-admins                back to the admins alone",
           "  sitesolide lock   [--dry-run]   close the preview behind a code, or show it",
           "     --status                     wanted / installed / measured, without touching",
           "     --new-code                   replace the code in force by a fresh one",

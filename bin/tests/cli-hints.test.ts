@@ -109,6 +109,17 @@ describe("the hints", () => {
     }
   });
 
+  test("every refusal of share has its code's hint, whichever way it runs, and so has every code the API's sharing answers", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "cli", "sharing.ts"), "utf8");
+    const codes = new Set([...source.matchAll(/error: "([a-z-]+)"/g)].map((match) => match[1]!));
+    // Enough to be sure the scan reads the file.
+    expect(codes.size).toBeGreaterThan(6);
+    // What dashboard/src/control/api.ts answers on /api/v1/projects/<slug>/sharing, before and after the portal.
+    for (const code of ["unauthenticated", "too-many-attempts", "not-found", "invalid", "too-large", "out-of-scope", "no-portal", "not-available", "failure", "unreachable", "unreadable"]) codes.add(code);
+    expect([...codes].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
+    expect(hintForFailure("no-portal", "kanban is not behind the portal")).toContain("Access section");
+  });
+
   test("a refusal nobody foresaw gets the default, which forbids the workarounds", () => {
     expect(hintFor("something new went wrong")).toBe(DEFAULT_HINT);
   });

@@ -226,9 +226,11 @@ dashboard can also mint per-person guest access, one password per person and per
 site; and once an identity provider is configured, people sign in with their
 company account, Google Workspace, Microsoft Entra or any OpenID Connect
 provider, and the dashboard's *Sharing* section decides per site who gets in:
-the admins only, a list of people, or everyone at a domain. A change of sharing
-touches only the portal's database, never Caddy, and holds from the next
-request.
+the admins only, a list of people, or everyone at a domain. `sitesolide share`
+does the same from a project's folder, over the owner's SSH, or with a team
+token through the dashboard, which lets a token open a site only to the
+domains the portal admits. A change of sharing touches only the portal's
+database, never Caddy, and holds from the next request.
 
 A project behind the portal writes no door of its own. It trusts Caddy, which is
 sound only because of the loopback rule. It also learns who came in, from three
