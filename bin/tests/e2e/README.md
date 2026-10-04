@@ -57,6 +57,21 @@ anything), suspend a chosen command long enough to send a signal (`pause`), or
 make the gatekeeper act on the first write (`onFirstAccepted`). The CLI's zone
 then points at a `.invalid` name, so that the final verification reaches nobody.
 
+## Agents
+
+`agents.test.ts` drives the CLI as an agent does: `--json`, whose standard
+output must hold nothing but events and end with one `result` or one `error`;
+a folder without a manifest, through `detect` and `deploy --yes`; an app
+without a port, which `deploy` gives one. A deployment run without --dry-run
+goes as far as the first write the fake ssh refuses, which is how the port
+written into `sitesolide.json` before anything leaves is checked for real. The
+folders it copies are the fixtures of `bin/tests/infer/`, which
+`cli-infer.test.ts` reads too.
+
+`mcp.test.ts` spawns `sitesolide mcp` and speaks the protocol to it over
+standard input and output, both eras of it. Its tools run the real CLI, in
+front of the fake VM, and the deploy tool only ever with `dry_run`.
+
 ## The projects
 
 | Directory | What it covers |
@@ -80,7 +95,7 @@ that refuses wrongly costs a minute.
 | Directory | What has to be refused |
 |---|---|
 | `landing-slug` | the landing project, reserved for the site on the bare domain, which `deploy` does not handle |
-| `port-missing` | a service with no port, which Caddy could not reach |
+| `port-missing` | one of several services with no port, which Caddy could not reach: `deploy` picks a port only for a project with a single service, see `agents.test.ts` |
 | `path-escapes` | a `publicDir` of `../..`, which would send anything at all |
 | `public-empty` | an empty directory, whose `rsync --delete` would erase the site |
 | `deps-not-excluded` | a `node_modules` from the workstation, poured onto a Linux machine |

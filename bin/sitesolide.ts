@@ -2,15 +2,20 @@
 /**
  * Deploys a project onto the machine from any repository.
  *
+ *   sitesolide detect [--write]     the manifest a folder without one implies
  *   sitesolide deploy [--dry-run]   prepare, build, push, install, verify
  *   sitesolide status               what the VM actually carries
  *   sitesolide logs [--follow]      journalctl for the service
  *   sitesolide remove --confirm <slug>  take the project off the machine
  *   sitesolide run -- <command>     load the vault secret and run
+ *   sitesolide mcp                  the same commands, as tools for an agent
+ *
+ * `--json` turns the output of every command but `init` and `run` into one
+ * event per line, for agents: see the output section below, bin/cli/output.ts
+ * and docs/agents.md.
  *
  * The interface is in English, options and messages alike: a CLI is a technical
- * identifier, like the manifest keys. The code and the comments stay in French,
- * a rule of the repository.
+ * identifier, like the manifest keys.
  *
  * ONE COMMAND IS ENOUGH, including on the first run: `deploy` creates the
  * system user, puts the unit in place and pushes from the vault a secret the VM
@@ -86,18 +91,34 @@ import {
   type Config,
 } from "./cli/config";
 import { decideBlock, generateFragment } from "./cli/fragment";
+import { hintFor } from "./cli/hints";
+import { inferManifest, renderManifest, slugFromFolder, type Inference } from "./cli/infer";
 import {
   hasServices,
   isApp,
   isProtected,
+  isValidSlug,
+  mainPort,
   missingExclusions,
   readManifest,
   servicesOf,
   setDomainActive,
   setPortal,
+  validate,
   PORTAL_SLUG,
+  SERVICE_PORTS,
   type Manifest,
 } from "./cli/manifest";
+import {
+  eventFor,
+  forEachLine,
+  formatEvent,
+  readJournalEntry,
+  readLockState,
+  readStatus,
+  type OutputEvent,
+} from "./cli/output";
+import { choosePort, needsPort, setPort } from "./cli/ports";
 import {
   switchAnnouncement,
   depositedManifestPath,
@@ -182,18 +203,109 @@ type Project = {
 
 // --- output ------------------------------------------------------------------
 
+/**
+ * `--json`: every line printed below becomes one event on standard output,
+ * and the run ends with one `result` or one `error`, which carries a hint an
+ * agent can act on. See bin/cli/output.ts and bin/cli/hints.ts.
+ *
+ * The choice is made here and nowhere else: the call sites keep saying what
+ * they always said, and the human output is what it was. The few commands
+ * that hand over data rather than lines, status, logs, `lock --status` and
+ * `domain`, add it to the final event with `note`. What the commands launched
+ * print goes through `relayOutput`, so that nothing but events reaches
+ * standard output.
+ */
+let jsonOutput = false;
+
+/** What the run concluded, gathered on the way for the `result` event. */
+const outcome: Record<string, unknown> = {};
+
+function emit(event: OutputEvent): void {
+  console.log(formatEvent(event));
+}
+
 function say(message: string): void {
-  console.log(message);
+  if (!jsonOutput) return console.log(message);
+  const event = eventFor(message);
+  if (event !== null) emit(event);
 }
 
 function step(message: string): void {
+  if (jsonOutput) return emit({ type: "step", message });
   console.log(`-> ${message}`);
 }
 
+/** Something wrong that stops nothing. */
+function warn(message: string, details: string[] = []): void {
+  if (jsonOutput) return emit({ type: "warning", message, details });
+  console.error(`!! ${message}`);
+  for (const line of details) console.error(`   ${line}`);
+}
+
 function die(message: string, details: string[] = []): never {
+  if (jsonOutput) {
+    emit({ type: "error", message, details: details.filter((line) => line.trim() !== ""), hint: hintFor(message) });
+    process.exit(1);
+  }
   console.error(`!! ${message}`);
   for (const line of details) console.error(`   ${line}`);
   process.exit(1);
+}
+
+/** Adds to what the `result` event carries. Prints nothing, in either mode. */
+function note(fields: Record<string, unknown>): void {
+  Object.assign(outcome, fields);
+}
+
+/** A generated file shown before anything leaves: a `file` event, or its text under a title. */
+function showFile(name: string, content: string, spaced = true): void {
+  if (jsonOutput) return emit({ type: "file", name, content });
+  if (spaced) say("");
+  say(`--- ${name} ---`);
+  say(content);
+}
+
+/**
+ * What a launched command writes, as `output` events under --json. In human
+ * mode the stream is the terminal's, `"inherit"`, and there is nothing to
+ * relay.
+ */
+function relayOutput(stream: unknown, name: "stdout" | "stderr"): Promise<void> {
+  if (!(stream instanceof ReadableStream)) return Promise.resolve();
+  return forEachLine(stream, (line) => emit({ type: "output", stream: name, line }));
+}
+
+/** Where a launched command writes: the terminal, or a pipe whose lines become events. */
+function childOutput(): "inherit" | "pipe" {
+  return jsonOutput ? "pipe" : "inherit";
+}
+
+/** Turns --json on for this run. Only the options before `--` count: what follows belongs to the command `run` launches. */
+function chooseOutput(arguments_: string[]): void {
+  const separator = arguments_.indexOf("--");
+  jsonOutput = (separator === -1 ? arguments_ : arguments_.slice(0, separator)).includes("--json");
+}
+
+/**
+ * The environment of a launched command: this process's, `extra` on top.
+ * Undefined in human mode without `extra`, which leaves Bun.spawn as it was.
+ *
+ * Under --json, ssh never waits for a keyboard: a passphrase or a host key to
+ * confirm fails the connection at once, through an askpass that answers
+ * nothing, instead of hanging an agent that has no terminal to type in. The
+ * scripts of bin/ inherit it. It is passed at every spawn because Bun.spawn,
+ * given no `env`, hands down the environment the process started with, not
+ * what was assigned to process.env since.
+ */
+function childEnvironment(extra?: Record<string, string>): Record<string, string | undefined> | undefined {
+  if (!jsonOutput && extra === undefined) return undefined;
+  const silent = jsonOutput ? { SSH_ASKPASS_REQUIRE: "force", SSH_ASKPASS: Bun.which("false") ?? "/usr/bin/false" } : {};
+  return { ...process.env, ...silent, ...extra };
+}
+
+/** The final event of a run that succeeded, under --json. */
+function finish(command: string): void {
+  if (jsonOutput) emit({ type: "result", ok: true, command, ...outcome });
 }
 
 // --- Caddy lock --------------------------------------------------------------
@@ -231,6 +343,7 @@ export function releaseCaddyLock(): void {
     const proc = Bun.spawnSync(
       ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", server, lockCommand(releaseScript(line))],
       {
+        env: childEnvironment(),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -244,10 +357,7 @@ export function releaseCaddyLock(): void {
     execution = { code: 1, output: "", error: (error as Error).message };
   }
   const release = readRelease(line, execution);
-  if (release.kind === "warning") {
-    console.error(`!! ${release.message}`);
-    for (const detail of release.details) console.error(`   ${detail}`);
-  }
+  if (release.kind === "warning") warn(release.message, release.details);
 }
 
 /**
@@ -303,12 +413,14 @@ function envUnderLock(config: Config): Record<string, string> {
 function interrupt(signal: string, code: number): void {
   if (interruption !== null || running === 0) process.exit(code);
   interruption = { signal, code };
-  console.error(`!! ${signal}: the running step finishes first, then everything stops`);
+  warn(`${signal}: the running step finishes first, then everything stops`);
 }
 
 function stopIfInterrupted(): void {
   if (interruption === null) return;
-  console.error(`!! interrupted by ${interruption.signal}`);
+  const message = `interrupted by ${interruption.signal}`;
+  if (jsonOutput) emit({ type: "error", message, details: [], hint: hintFor(message) });
+  else console.error(`!! ${message}`);
   process.exit(interruption.code);
 }
 
@@ -340,15 +452,17 @@ class Executor {
       // without this line, a workstation aiming at another machine through its
       // configuration file would see deploy-caddy.sh and deploy-secrets.sh talk
       // to the default one, that is to say to production.
-      env: options.env === undefined ? undefined : { ...process.env, ...options.env },
-      stdout: options.quiet ? "pipe" : "inherit",
-      stderr: "inherit",
+      env: childEnvironment(options.env),
+      stdout: options.quiet ? "pipe" : childOutput(),
+      stderr: childOutput(),
     });
     running++;
     let output = "";
     let code: number;
     try {
+      const relayed = Promise.all([options.quiet ? null : relayOutput(proc.stdout, "stdout"), relayOutput(proc.stderr, "stderr")]);
       output = options.quiet ? await new Response(proc.stdout).text() : "";
+      await relayed;
       code = await proc.exited;
     } finally {
       running--;
@@ -364,7 +478,7 @@ class Executor {
    * mode: it is only called outside it.
    */
   async execute(config: Config, command: string): Promise<Execution> {
-    const proc = Bun.spawn(["ssh", config.server, command], { stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn(["ssh", config.server, command], { env: childEnvironment(), stdout: "pipe", stderr: "pipe" });
     running++;
     try {
       const [output, error] = await Promise.all([
@@ -390,6 +504,7 @@ class Executor {
    */
   async read(config: Config, command: string): Promise<string> {
     const proc = Bun.spawn(["ssh", config.server, command], {
+      env: childEnvironment(),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -397,26 +512,40 @@ class Executor {
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
     ]);
-    if ((await proc.exited) !== 0) {
-      console.error(`!! read refused by the server: ${error.trim() || "no message"}`);
-    }
+    if ((await proc.exited) !== 0) warn(`read refused by the server: ${error.trim() || "no message"}`);
     return output;
   }
 }
 
 // --- reading the project -----------------------------------------------------
 
-function readProject(folder: string): Project {
+/**
+ * `raw` stands for a manifest not on disk: the one inferred for a dry run,
+ * which writes nothing. `portLater` is `deploy`'s: an app without a port is
+ * judged as if it had the one `deploy` is about to give it, see allocatePort.
+ */
+function readProject(folder: string, options: { raw?: string; portLater?: boolean } = {}): Project {
   const path = join(folder, MANIFEST_NAME);
-  if (!existsSync(path)) {
+  if (options.raw === undefined && !existsSync(path)) {
     die(`${MANIFEST_NAME} not found in ${folder}`, [
       "a deployable project declares its slug and what to do with it,",
       "with the keys listed in bin/cli/manifest.ts of the platform",
     ]);
   }
 
-  const raw = readFileSync(path, "utf8");
-  const { manifest, errors } = readManifest(raw);
+  const raw = options.raw ?? readFileSync(path, "utf8");
+  const read = readManifest(raw);
+  const manifest = read.manifest;
+  let errors = read.errors;
+  if (manifest !== undefined && needsPort(manifest)) {
+    const others = validate({ ...manifest, port: SERVICE_PORTS.last });
+    if (options.portLater) errors = others;
+    else if (others.length === 0) {
+      die("port: required, and only deploy chooses one", [
+        "this manifest declares no port yet: `sitesolide deploy` picks a free one on the server and writes it here",
+      ]);
+    }
+  }
   if (manifest === undefined || errors.length > 0) {
     die(`${MANIFEST_NAME} rejected`, errors);
   }
@@ -549,9 +678,10 @@ async function runBuild(project: Project, executor: Executor): Promise<void> {
   // what would leave, and a test that skips it verifies nothing.
   const proc = Bun.spawn(["sh", "-c", build], {
     cwd: project.code,
-    stdout: "inherit",
-    stderr: "inherit",
+    stdout: childOutput(),
+    stderr: childOutput(),
   });
+  await Promise.all([relayOutput(proc.stdout, "stdout"), relayOutput(proc.stderr, "stderr")]);
   if ((await proc.exited) !== 0) die(`build failed: ${build}`);
 }
 
@@ -611,13 +741,22 @@ async function deploy(
   const serviceCount = servicesOf(rawProject.manifest).length;
   say(`-> project ${slug}, ${isApplication ? (serviceCount > 1 ? `${serviceCount} services` : "service") : "static"}`);
   if (rawProject.code !== rawProject.folder) say(`   code from ${rawProject.code}`);
+  note({
+    slug,
+    kind: isApplication ? (serviceCount > 1 ? "services" : "service") : "static",
+    dryRun: executor.simulated,
+    manifestWritten: outcome.manifestWritten === true,
+  });
 
   // The door before everything else, in a dry run as for real: the block shown,
   // the block checked, the order of the steps and the deposited manifest all
   // depend on it. From here on, `project` carries the value the VM makes
-  // authoritative, and `rawProject` is of no further use.
-  const { project, switched, doorConfirmed } = await reconcilePortal(rawProject, config, executor);
+  // authoritative, and `rawProject` is of no further use. An app that declares
+  // no port gets one first: every read of the manifest after this needs it.
+  const { project, switched, doorConfirmed } = await reconcilePortal(await allocatePort(rawProject, config, executor), config, executor);
   const { manifest } = project;
+  note({ port: mainPort(manifest), portal: isProtected(manifest) });
+  if (switched) note({ manifestWritten: !executor.simulated });
   if (isApplication && executor.simulated) showGeneratedFiles(manifest);
 
   // Before the build and before anything is pushed: a refusal that falls after
@@ -997,13 +1136,15 @@ async function depositText(
   }
   const command = `sudo install -m ${mode} -o ${owner.split(":")[0]} -g ${owner.split(":")[1]} /dev/stdin ${destination}`;
   const proc = Bun.spawn(["ssh", config.server, command], {
+    env: childEnvironment(),
     stdin: new TextEncoder().encode(content),
-    stdout: "inherit",
-    stderr: "inherit",
+    stdout: childOutput(),
+    stderr: childOutput(),
   });
   running++;
   let code: number;
   try {
+    await Promise.all([relayOutput(proc.stdout, "stdout"), relayOutput(proc.stderr, "stderr")]);
     code = await proc.exited;
   } finally {
     running--;
@@ -1018,6 +1159,7 @@ async function depositText(
  */
 async function verify(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
   const address = `https://${manifest.slug}.${config.zone}/`;
+  note({ url: address, status: null });
   if (executor.simulated) {
     say(`   [dry-run] verify ${address}`);
     return;
@@ -1036,6 +1178,7 @@ async function verify(manifest: Manifest, config: Config, executor: Executor): P
     die(`${address} unreachable: ${(err as Error).message}`);
   }
   say(`   ${address} ${code}`);
+  note({ status: code });
 
   // A protected site that answers 200 to a stranger is not a success: it is the
   // worst possible state, a site its owner believes closed. Only the portal's
@@ -1182,9 +1325,7 @@ async function prepareService(
         continue;
     }
 
-    say("");
-    say(`--- ${unit}.service ---`);
-    say(text);
+    showFile(`${unit}.service`, text);
 
     step(units.length > 1 ? `install ${unit}.service` : "install the unit");
     await depositText(executor, config, text, path, "root:root", "644");
@@ -1367,14 +1508,9 @@ async function rebuildProjectPorts(config: Config, executor: Executor, mode: "se
 function showGeneratedFiles(manifest: Manifest): void {
   const slug = manifest.slug;
   const fragment = generateFragment(manifest);
-  for (const { unit, text } of generateUnits(manifest)) {
-    say("");
-    say(`--- ${unit}.service ---`);
-    say(text);
-  }
+  for (const { unit, text } of generateUnits(manifest)) showFile(`${unit}.service`, text);
   if (fragment !== null) {
-    say(`--- ${slug}.caddy ---`);
-    say(fragment);
+    showFile(`${slug}.caddy`, fragment, false);
     say("   installed by deploy, once the service is up");
   }
 }
@@ -1440,7 +1576,11 @@ echo "=== memory ==="
 free -m | head -2
 `;
   const output = await executor.read(config, script);
-  say(output.trimEnd());
+  if (!jsonOutput) return say(output.trimEnd());
+  // An empty answer is a read that failed, already warned about: data that
+  // said "no project" would be a lie.
+  if (!output.includes("=== projects served ===")) die("cannot read the status of the server", ["the server answered nothing readable"]);
+  note(readStatus(output));
 }
 
 async function logs(
@@ -1448,17 +1588,55 @@ async function logs(
   config: Config,
   follow: boolean,
   executor: Executor,
+  lines = 50,
 ): Promise<void> {
   // Every unit of the project, interleaved by time: a request that fails in
   // the front often says why only in the log of the service it called.
   const units = servicesOf(project.manifest).map((service) => `-u ${unitArgument(service.unit)}`);
   const selection = units.length > 0 ? units.join(" ") : `-u ${project.manifest.slug}`;
+  if (jsonOutput) return journalEvents(project.manifest.slug, selection, config, follow, lines, executor);
   await executor.run([
     "ssh",
     ...(follow ? ["-t"] : []),
     config.server,
-    `journalctl ${selection} -n 50 --no-pager${follow ? " -f" : ""}`,
+    `journalctl ${selection} -n ${lines} --no-pager${follow ? " -f" : ""}`,
   ]);
+}
+
+/**
+ * `logs --json`: the journal as entries, from journalctl's own JSON rather
+ * than its lines, each one a `log` event with its time, unit and priority.
+ * `--follow` keeps the stream open, one event per entry, for as long as the
+ * connection lasts; without it, the run ends with a `result`. No `-t`: there
+ * is no terminal at the other end of a pipe.
+ */
+async function journalEvents(
+  slug: string,
+  selection: string,
+  config: Config,
+  follow: boolean,
+  lines: number,
+  executor: Executor,
+): Promise<void> {
+  const command = `journalctl ${selection} -n ${lines} --no-pager -o json --output-fields=MESSAGE,PRIORITY,_SYSTEMD_UNIT${follow ? " -f" : ""}`;
+  note({ slug, units: selection.split(" ").filter((word) => word !== "-u") });
+  if (executor.simulated) {
+    say(`   [dry-run] ssh ${config.server} ${command}`);
+    return;
+  }
+  const proc = Bun.spawn(["ssh", config.server, command], { env: childEnvironment(), stdout: "pipe", stderr: "pipe" });
+  let entries = 0;
+  await Promise.all([
+    forEachLine(proc.stdout, (line) => {
+      if (line.trim() === "") return;
+      entries++;
+      emit(readJournalEntry(line));
+    }),
+    relayOutput(proc.stderr, "stderr"),
+  ]);
+  const code = await proc.exited;
+  if (code !== 0) die(`failed (${code}): ssh ${config.server} ${command}`);
+  note({ entries });
 }
 
 /**
@@ -1596,9 +1774,15 @@ async function lockPreview(
   subcommand: "enable" | "code" | "disable" | "state",
 ): Promise<void> {
   const slug = project.manifest.slug;
-  await executor.run([join(REPO_ROOT, "bin", "lock.sh"), subcommand, slug], {
-    env: { SITESOLIDE_SERVER: config.server, SITESOLIDE_PROJECT_DIR: project.folder },
-  });
+  const command = [join(REPO_ROOT, "bin", "lock.sh"), subcommand, slug];
+  const env = { SITESOLIDE_SERVER: config.server, SITESOLIDE_PROJECT_DIR: project.folder };
+  note({ slug });
+  // `--status --json` hands the table over as data, this project's row of it.
+  if (subcommand === "state" && jsonOutput) {
+    note({ lock: readLockState(await executor.run(command, { env, quiet: true }), slug) });
+    return;
+  }
+  await executor.run(command, { env });
 }
 
 // --- domain ------------------------------------------------------------------
@@ -1691,6 +1875,17 @@ async function showDomain(
     code = `unreachable: ${(err as Error).message}`;
   }
   say(`   https      ${code}`);
+  note({
+    slug: manifest.slug,
+    domain: {
+      name: domain.name,
+      aliases: (domain as { aliases?: string[] }).aliases ?? [],
+      active,
+      table: table.trim() !== "0",
+      dns: pointsHere,
+      https: /^[0-9]+$/.test(code) ? Number(code) : code,
+    },
+  });
 }
 
 /**
@@ -1709,6 +1904,7 @@ async function switchDomain(
   force: boolean,
 ): Promise<void> {
   const domain = requireDomain(project.manifest);
+  note({ slug: project.manifest.slug, domain: domain.name, active, dryRun: executor.simulated });
 
   if (active && domain.active === true) {
     say(`-> ${domain.name} is already active, nothing was touched`);
@@ -1818,6 +2014,7 @@ async function remove(
     ]);
   }
 
+  note({ slug, dryRun: executor.simulated });
   say(`-> removing ${slug}, ${isApplication ? "service" : "static"}`);
   say("   this deletes the served directory and its data. The VM has no backup.");
 
@@ -1904,6 +2101,188 @@ async function remove(
   for (const line of leftToDo(slug, project.folder)) say(`   ${line}`);
 }
 
+// --- a folder without a manifest, an app without a port ----------------------
+
+/** How the human output names what a folder was recognised as. */
+const KIND_LABEL: Record<Exclude<Inference["kind"], "none">, string> = {
+  static: "a folder of files",
+  "static-build": "a site built into a folder of files",
+  bun: "a Bun app",
+  node: "a Node app, run by Bun",
+  python: "a Python app",
+  go: "a Go app",
+};
+
+/**
+ * The manifest a folder implies, or the stop that says why there is none.
+ * `chosen` is `--slug`; without it, the folder's name gives the slug. For
+ * `deploy`, which asked for a manifest and found none, the stop says that
+ * first.
+ */
+function inferOrDie(
+  folder: string,
+  chosen: string | undefined,
+  forDeploy = false,
+): { inference: Exclude<Inference, { kind: "none" }>; raw: string } {
+  if (chosen !== undefined && (!isValidSlug(chosen) || chosen === "landing")) {
+    die(`--slug: ${chosen} is not a usable slug`, ["lowercase letters, digits and dashes, no dot, not landing"]);
+  }
+  const slug = chosen ?? slugFromFolder(basename(folder));
+  if (slug === null) die(`no usable slug in the folder name: ${basename(folder)}`, ["pass one with --slug <name>"]);
+  const inference = inferManifest(folder, slug);
+  if (inference.kind === "none") {
+    die(
+      forDeploy ? `${MANIFEST_NAME} not found in ${folder}, and none can be inferred` : `nothing deployable recognised in ${folder}`,
+      inference.reasons,
+    );
+  }
+  return { inference, raw: renderManifest(inference.manifest) };
+}
+
+/** The inferred manifest, with what it was inferred from and what to check before deploying it. */
+function showInference(inference: Exclude<Inference, { kind: "none" }>, raw: string, title: string): void {
+  if (jsonOutput) {
+    emit({ type: "inferred", kind: inference.kind, manifest: JSON.parse(raw), reasons: inference.reasons, notes: inference.notes });
+    return;
+  }
+  step(title);
+  say(`   from: ${inference.reasons.join("; ")}`);
+  say(raw.trimEnd());
+  for (const line of inference.notes) say(`   note: ${line}`);
+}
+
+/**
+ * `sitesolide detect`: what the folder implies, written nowhere unless
+ * `--write` asks, and never over a manifest already there. Reads nothing on
+ * the machine, needs no configuration: an agent can ask before anything is
+ * set up.
+ */
+function detect(folder: string, write: boolean, chosen: string | undefined): void {
+  const { inference, raw } = inferOrDie(folder, chosen);
+  const path = join(folder, MANIFEST_NAME);
+  const present = existsSync(path);
+  if (write && present) {
+    die(`${MANIFEST_NAME} already exists in ${folder}`, ["detect --write never replaces a manifest"]);
+  }
+  note({
+    kind: inference.kind,
+    manifest: inference.manifest,
+    reasons: inference.reasons,
+    notes: inference.notes,
+    written: write ? path : null,
+  });
+  if (!jsonOutput) showInference(inference, raw, `this folder reads as ${KIND_LABEL[inference.kind]}`);
+  if (write) {
+    writeFileSync(path, raw);
+    say(`   written: ${path}`);
+    say("   review it, commit it, then: sitesolide deploy");
+  } else if (present) {
+    say(`   ${MANIFEST_NAME} already exists here: this is what the folder alone implies, nothing was written`);
+  } else {
+    say("   nothing was written; to write it: sitesolide detect --write");
+  }
+}
+
+/**
+ * The project `deploy` works on: the folder's manifest, or, in a folder that
+ * has none, the inferred one, shown and refused unless `--yes` accepts it.
+ *
+ * An inferred manifest names the project after its folder, and folders called
+ * `api` or `site` are not rare: the machine may already serve a project of
+ * that name, deployed from somewhere else, which this deployment would
+ * replace. It is refused before anything is written. A manifest written by
+ * hand is its author's decision, and is not second-guessed here.
+ *
+ * In a dry run, the accepted manifest stays in memory: a dry run writes nothing.
+ */
+async function projectToDeploy(
+  folder: string,
+  config: Config,
+  executor: Executor,
+  accept: boolean,
+  chosen: string | undefined,
+): Promise<Project> {
+  const path = join(folder, MANIFEST_NAME);
+  if (existsSync(path)) {
+    if (chosen !== undefined) warn(`--slug ${chosen} ignored: ${MANIFEST_NAME} names the project`);
+    return readProject(folder, { portLater: true });
+  }
+
+  const { inference, raw } = inferOrDie(folder, chosen, true);
+  const slug = inference.manifest.slug;
+  showInference(inference, raw, `no ${MANIFEST_NAME}: this folder reads as ${KIND_LABEL[inference.kind]}`);
+  note({ inferred: inference.kind });
+
+  const reading = readDepositedManifests(await executor.read(config, readManifestsCommand(slug)));
+  if (reading.kind === "unreadable") {
+    die(`cannot tell whether ${slug} already exists on the server`, [reading.reason, "nothing was written nor pushed"]);
+  }
+  if (reading.manifests.has(slug)) {
+    die(`${slug} already exists on the server, and this folder has no ${MANIFEST_NAME}`, [
+      "deploying the inferred manifest under that name would replace the project the server carries",
+      "pick another name:  sitesolide deploy --yes --slug <name>",
+    ]);
+  }
+  if (!accept) {
+    die(`no ${MANIFEST_NAME} in ${folder}: inferred one shown above, not written`, [
+      "to write it and deploy:            sitesolide deploy --yes",
+      "to write it and review it first:   sitesolide detect --write",
+    ]);
+  }
+  if (executor.simulated) {
+    say(`   [dry-run] write ${path}`);
+  } else {
+    writeFileSync(path, raw);
+    say(`   written: ${path}, commit it`);
+  }
+  note({ manifestWritten: !executor.simulated });
+  return readProject(folder, { raw, portLater: true });
+}
+
+/**
+ * Gives a port to an app whose manifest declares none, and writes it into the
+ * local sitesolide.json, which then has to be committed: the next deployment,
+ * from this workstation or another, keeps it. See bin/cli/ports.ts for the
+ * choice. A read, hence done in a dry run too, which only skips the write.
+ */
+async function allocatePort(project: Project, config: Config, executor: Executor): Promise<Project> {
+  if (!needsPort(project.manifest)) return project;
+  const slug = project.manifest.slug;
+  const reading = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
+  if (reading.kind === "unreadable") {
+    die("cannot read the manifests on the server to choose a port", [reading.reason, "nothing was pushed"]);
+  }
+  const choice = choosePort(slug, reading.manifests);
+  if (choice.kind === "full") {
+    die("no free port left on the server", [
+      `every port from ${SERVICE_PORTS.first} to ${SERVICE_PORTS.last} is declared by a project or reserved`,
+    ]);
+  }
+  step(
+    choice.kind === "kept"
+      ? `port ${choice.port}, the one the server already gives ${slug}`
+      : `port ${choice.port}, the lowest free one on the server`,
+  );
+  const raw = setPort(project.raw, choice.port);
+  const { manifest, errors } = readManifest(raw);
+  if (manifest === undefined || errors.length > 0) die(`${MANIFEST_NAME} rejected`, errors);
+  const path = join(project.folder, MANIFEST_NAME);
+  if (executor.simulated) {
+    say(`   [dry-run] write ${path} with "port": ${choice.port}`);
+  } else {
+    writeFileSync(path, raw);
+    say(`   written into ${path}: commit it, so that the next deploy keeps this port`);
+  }
+  note({ portChosen: choice.kind, manifestWritten: !executor.simulated });
+  return { ...project, manifest, raw };
+}
+
+/** The value given to an option, `--slug shop`, or undefined. */
+function optionValue(arguments_: string[], name: string): string | undefined {
+  const marker = arguments_.indexOf(name);
+  return marker === -1 ? undefined : arguments_[marker + 1];
+}
+
 // --- entry point -------------------------------------------------------------
 
 /**
@@ -1968,6 +2347,25 @@ if (import.meta.main) {
   const replace = arguments_.includes("--force");
   const executor = new Executor(dryRun);
   const folder = process.cwd();
+  chooseOutput(arguments_);
+
+  // `init` prompts and `run` hands the terminal to the command it launches:
+  // neither has events to print.
+  if (jsonOutput && (command === "init" || command === "run")) {
+    die(`--json is not available for ${command}`, ["its output is for a person, or for the command it runs"]);
+  }
+
+  // Neither reads the configuration: `detect` reads the folder alone, and
+  // `mcp` runs every tool call as a command of its own, which reads it then.
+  if (command === "detect") {
+    detect(folder, arguments_.includes("--write"), optionValue(arguments_, "--slug"));
+    finish(command);
+    process.exit(0);
+  }
+  if (command === "mcp") {
+    await (await import("./mcp")).serve();
+    process.exit(0);
+  }
 
   // `init` writes the configuration: reading it first would refuse it for being
   // missing, and there would then be no way to set it.
@@ -1998,14 +2396,24 @@ if (import.meta.main) {
 
   switch (command) {
     case "deploy":
-      await deploy(readProject(folder), config, executor, replace);
+      await deploy(
+        await projectToDeploy(folder, config, executor, arguments_.includes("--yes"), optionValue(arguments_, "--slug")),
+        config,
+        executor,
+        replace,
+      );
       break;
     case "status":
       await showStatus(config, executor);
       break;
-    case "logs":
-      await logs(readProject(folder), config, arguments_.includes("--follow"), executor);
+    case "logs": {
+      const lines = optionValue(arguments_, "--lines") ?? "50";
+      if (!/^[0-9]+$/.test(lines) || Number(lines) < 1 || Number(lines) > 1000) {
+        die(`--lines: ${lines} is not a number of lines between 1 and 1000`);
+      }
+      await logs(readProject(folder), config, arguments_.includes("--follow"), executor, Number(lines));
       break;
+    }
     case "secrets":
       pointToDashboard(config);
     case "lock": {
@@ -2051,17 +2459,23 @@ if (import.meta.main) {
       break;
     }
     default:
+      if (jsonOutput) die(`unknown command: ${command === "" ? "none given" : command}`);
       console.error(
         [
           "usage:",
           "  sitesolide init                 write ~/.config/sitesolide/config.json",
           "     --server <user@host> --zone <dns.zone> --email <you@example.com>",
           "     --contact <you@example.com>   shown on a locked preview's door",
+          "  sitesolide detect               the sitesolide.json this folder implies, written nowhere",
+          "     --write                      write it, never over an existing one",
+          "     --slug <name>                name the project, rather than after its folder",
           "  sitesolide deploy               prepare, build, push, install, restart, verify",
           "     --dry-run                    show the unit and the fragment, install nothing",
           "     --force                      switch a hand-written unit to the generated one",
+          "     --yes [--slug <name>]        no sitesolide.json: write the inferred one, then deploy",
           "  sitesolide status               what the server actually runs",
           "  sitesolide logs [--follow]      journalctl for this project",
+          "     --lines <n>                  how many lines back, 50 by default",
           "  sitesolide lock   [--dry-run]   close the preview behind a code, or show it",
           "     --status                     wanted / installed / measured, without touching",
           "     --new-code                   replace the code in force by a fresh one",
@@ -2073,11 +2487,14 @@ if (import.meta.main) {
           "                                  take the project off the machine, for good",
           "     --dry-run                    show every step, remove nothing",
           "  sitesolide run -- <command>     load the secret from the vault and run",
+          "  sitesolide mcp                  serve these commands to an agent, over MCP on stdio",
           "",
+          "--json, on every command but init and run: one JSON event per line, see docs/agents.md",
           `secrets live on the server: manage them in the Secrets section of ${dashboardAddress(config.zone)}`,
           "the portal of a deployed site is set from the dashboard too: deploy follows the server",
         ].join("\n"),
       );
       process.exit(1);
   }
+  finish(command);
 }

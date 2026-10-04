@@ -1,0 +1,25 @@
+# sitesolide
+
+> Deploy every project you have to one server you own. `sitesolide deploy` in a folder puts it live on HTTPS: static sites and apps in any language, with private previews, a password portal, secrets held on the server and managed from a dashboard, and cookieless analytics. One machine serves everything; there is no staging.
+
+A project is a folder with a `sitesolide.json`. The CLI builds on the workstation, uploads over SSH, installs a confined systemd unit and a Caddy block, restarts the service and checks the site answers. The machine is the source of truth for secrets and for the portal door.
+
+For agents: every command but `init` and `run` takes `--json` and prints one JSON event per line, ending with one `result` or one `error` that carries a `hint`. `sitesolide detect` infers a manifest for a folder that has none, and `deploy` chooses a free port when the manifest declares none. `sitesolide mcp` serves `detect`, `deploy`, `status`, `logs` and `lock_status` as MCP tools over stdio. Secrets never go in the repository: the user sets them in the dashboard. Never change the server by hand.
+
+## Docs
+
+- [Agents](docs/agents.md): the CLI with --json, zero configuration, the MCP server, the skill, and what stays the owner's
+- [The manifest](docs/manifest.md): every key of sitesolide.json and what it changes
+- [Commands](docs/commands.md): everything the CLI does
+- [Secrets](docs/secrets.md): where they live, and why never in git
+- [How it works](docs/concepts.md): the parts, and who may touch what
+
+## Skills
+
+- [sitesolide skill](skills/sitesolide/SKILL.md): the deploy workflow for Claude Code
+
+## Optional
+
+- [Install](docs/install.md): from a blank account to a first deployment
+- [README](README.md): what sitesolide is
+- [Examples](examples/): a static site and a Bun app, deployable as they are

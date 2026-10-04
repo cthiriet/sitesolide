@@ -1,0 +1,13 @@
+{
+  "name": "node-express",
+  "version": "1.0.0",
+  "description": "An Express server that charges cards",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.0.0",
+    "stripe": "^18.0.0"
+  }
+}

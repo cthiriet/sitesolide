@@ -101,8 +101,14 @@ to search.
 
 ### `port`
 
-The loopback port the service listens on, required as soon as `start` is
-declared, between 3000 and 3099. Caddy reverse-proxies to it.
+The loopback port the service listens on, between 3000 and 3099. Caddy
+reverse-proxies to it, and the unit hands it to the service as `PORT`.
+
+Leave it out and `deploy` picks one: the lowest the machine's other projects
+leave free, or the one the machine already gives this project. It writes it
+into `sitesolide.json` and says so; commit it, so that every later deployment
+keeps it. Only a project with a single `start` gets one this way; the other
+commands refuse a manifest without a port until `deploy` has written it.
 
 That range is not arbitrary: a nftables rule reserves it to Caddy and root, so
 no service can reach another one. Outside it, a service would be reachable by

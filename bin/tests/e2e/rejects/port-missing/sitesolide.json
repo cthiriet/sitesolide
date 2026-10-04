@@ -1,1 +1,1 @@
-{ "slug": "sample-no-port", "start": "bun run server.ts" }
+{ "slug": "sample-no-port", "services": { "web": { "start": "bun run server.ts" } } }

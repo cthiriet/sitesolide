@@ -7,11 +7,16 @@ Every command runs from a project's folder, the one holding its
 sitesolide init                 write ~/.config/sitesolide/config.json
    --server <user@host> --zone <dns.zone> --email <you@example.com>
    --contact <you@example.com>   shown on a locked preview's door
+sitesolide detect               the sitesolide.json this folder implies, written nowhere
+   --write                      write it, never over an existing one
+   --slug <name>                name the project, rather than after its folder
 sitesolide deploy               prepare, build, push, install, restart, verify
    --dry-run                    show the unit and the fragment, install nothing
    --force                      switch a hand-written unit to the generated one
+   --yes [--slug <name>]        no sitesolide.json: write the inferred one, then deploy
 sitesolide status               what the server actually runs
-sitesolide logs [--follow]      journalctl for this project, every service of it
+sitesolide logs [--follow]      journalctl for this project
+   --lines <n>                  how many lines back, 50 by default
 sitesolide lock   [--dry-run]   close the preview behind a code, or show it
    --status                     wanted / installed / measured, without touching
    --new-code                   replace the code in force by a fresh one
@@ -23,8 +28,36 @@ sitesolide remove --confirm <slug>
                                 take the project off the machine, for good
    --dry-run                    show every step, remove nothing
 sitesolide run -- <command>     load the secret from the vault and run
+sitesolide mcp                  serve these commands to an agent, over MCP on stdio
+
+--json, on every command but init and run: one JSON event per line, see docs/agents.md
+secrets live on the server: manage them in the Secrets section of https://dashboard.<zone>
+the portal of a deployed site is set from the dashboard too: deploy follows the server
 ```
 
 `sitesolide run` loads the files the manifest declares from
 `~/.config/sitesolide/secrets/`, the few credentials your workstation presents
 to production itself, then runs the command. See [secrets.md](secrets.md).
+
+`sitesolide logs` shows every service of a project, interleaved by time.
+
+## A folder without a manifest
+
+`sitesolide detect` reads the folder and prints the manifest it implies: a Go
+module, a FastAPI or Flask app, a package.json app or generated site, a folder
+of files. It reads no machine and needs no configuration. `--write` writes the
+manifest, never over an existing one.
+
+`sitesolide deploy` in such a folder prints the same manifest and stops; `--yes`
+writes it and deploys, unless the machine already serves a project of that
+name. An app whose manifest declares no `port` gets a free one from `deploy`,
+written back into `sitesolide.json` to be committed. See
+[agents.md](agents.md#zero-configuration) for what is recognised, and what is
+never decided for you: secrets and the network.
+
+## For agents
+
+`--json` prints one JSON event per line on standard output, nothing else, and
+ends with a `result` or an `error` carrying a `hint`. `sitesolide mcp` serves
+`detect`, `deploy`, `status`, `logs` and `lock --status` as tools to an MCP
+client. Both are described in [agents.md](agents.md).
