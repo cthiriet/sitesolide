@@ -101,6 +101,16 @@ A command run on the machine after the code arrives, typically
 `bun install --production`. Only for dependencies that cannot be built
 elsewhere; anything platform-independent belongs in `build`.
 
+It runs in `app/` as the project's own account, `site-<slug>`, in a transient
+unit with the walls of its service: the network but not the loopback, nothing
+of `/srv` but `app/`, nothing of `/etc/sitesolide`, a throwaway `HOME`, 1G of
+memory and fifteen minutes at most. That holds for a deployment over SSH as for
+one through a team token. A package manager runs lifecycle scripts, the
+package's own and those of the dependencies it trusts, and they run there too,
+never with the rights of the account that deploys. A step that writes outside
+`app/`, needs root, or relies on a tool installed into `HOME` fails: it belongs
+in `build`, or the tool on the machine.
+
 ### `start`
 
 What systemd runs. An absolute path: the unit has a minimal `PATH` and nothing

@@ -280,6 +280,9 @@ if (import.meta.main) {
     if (!refused.some((refusedPattern) => command.includes(refusedPattern))) {
       await receive(`ACCEPTED ${command}`);
       if (command.includes("/dev/stdin")) await Bun.stdin.text();
+      // A script handed to `sh -s` on standard input, an install's: recorded,
+      // so that a test sees it travelled there and not in the arguments.
+      if (command.includes('"/bin/sh" "-s"')) record(`STDIN ${(await Bun.stdin.text()).trimEnd()}`);
       const answers = join(vm, SWITCHES.answers);
       if (existsSync(answers)) {
         const pairs = JSON.parse(readFileSync(answers, "utf8")) as Array<[string, string]>;

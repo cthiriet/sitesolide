@@ -158,6 +158,7 @@ import {
   decideUnit,
   generateUnits,
   readUnitAnswer,
+  sandboxedInstallCommand,
   type UnitRead,
   MARKER_ABSENT,
   MARKER_PRESENT,
@@ -887,8 +888,8 @@ async function deploy(
     await ensureSecrets(manifest, config, executor);
 
     if (manifest.install !== undefined) {
-      step(`dependencies (${manifest.install})`);
-      await executor.ssh(config, `cd ${paths.app} && ${manifest.install}`);
+      step(`dependencies (${manifest.install}), as ${systemUser(slug)} in its service's walls`);
+      await installAsProject(manifest, config, executor);
     }
 
     // Every unit named, rather than the main one alone and its PartOf: a
@@ -1160,6 +1161,44 @@ async function ensureSecrets(
     ]);
   }
   for (const { name } of actions) say(`   present  ${secretPath(name)}`);
+}
+
+/**
+ * The manifest's `install`, run on the machine as the project's own account,
+ * in a transient unit with its service's walls, as the installer runs it for
+ * a token: see sandboxedInstallCommand in bin/cli/unit.ts, which says why it
+ * no longer runs as the deployment account. The command leaves on standard
+ * input, never in the arguments.
+ */
+async function installAsProject(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
+  const install = manifest.install!;
+  const account = systemUser(manifest.slug);
+  if (executor.simulated) {
+    say(`   [dry-run] run ${install} in ${projectPaths(manifest.slug).app} as ${account}, in a transient unit with the service's walls`);
+    return;
+  }
+  const proc = Bun.spawn(["ssh", config.server, sandboxedInstallCommand(manifest.slug, deploymentAccount(config.server))], {
+    env: childEnvironment(),
+    stdin: new TextEncoder().encode(`${install}\n`),
+    stdout: childOutput(),
+    stderr: childOutput(),
+  });
+  running++;
+  let code: number;
+  try {
+    await Promise.all([relayOutput(proc.stdout, "stdout"), relayOutput(proc.stderr, "stderr")]);
+    code = await proc.exited;
+  } finally {
+    running--;
+  }
+  stopIfInterrupted();
+  if (code !== 0) {
+    die(`install failed (${code}): ${install}`, [
+      `it ran as ${account}, with the network but not the loopback, a throwaway HOME and only app/ writable`,
+      "a step that writes outside app/ or needs root fails there: move it into build, which runs on this workstation",
+      "the code is in place, the service was not restarted",
+    ]);
+  }
 }
 
 /** The file leaves through standard input: nothing is written in /tmp on the way. */

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { knownManifests } from "./manifests";
 import { isApp, type Manifest } from "../cli/manifest";
@@ -11,7 +12,9 @@ import {
   readUnitAnswer,
   MARKER_ABSENT,
   MARKER_PRESENT,
+  sandboxedInstallCommand,
   substitute,
+  systemdRunArguments,
   systemUser,
 } from "../cli/unit";
 
@@ -319,5 +322,77 @@ describe("placeholders", () => {
     );
     expect(unit).toContain("Environment=SITESOLIDE_CONTACT=\n");
     expect(unit).not.toContain("{contact}");
+  });
+});
+
+describe("install over SSH, in the service's walls", () => {
+  const command = sandboxedInstallCommand("budget", "deploy");
+
+  test("as the project's account, through systemd-run, with the walls the installer gives a token", () => {
+    expect(command).toStartWith("sudo sh -c 'chown -hR site-budget:site-budget /srv/sites/budget/app && \"/usr/bin/systemd-run\"");
+    for (const property of [
+      '"-p" "User=site-budget"',
+      '"-p" "NoNewPrivileges=yes"',
+      '"-p" "ProtectSystem=strict"',
+      '"-p" "TemporaryFileSystem=/srv:ro"',
+      '"-p" "BindPaths=/srv/sites/budget/app:/srv/sites/budget/app" "-p" "ReadWritePaths=/srv/sites/budget/app"',
+      '"-p" "InaccessiblePaths=-/etc/sitesolide"',
+      '"-p" "IPAddressDeny=localhost"',
+      '"-p" "WorkingDirectory=/srv/sites/budget/app"',
+      '"-p" "RuntimeMaxSec=900"',
+      '"--expand-environment=no"',
+      '"-E" "HOME=/tmp"',
+    ]) {
+      expect(command).toContain(property);
+    }
+    // The same line the installer builds, word for word.
+    const line = systemdRunArguments({
+      slug: "budget",
+      purpose: "install",
+      command: ["/bin/sh", "-s"],
+      stdin: null,
+      binds: [{ source: "/srv/sites/budget/app", target: "/srv/sites/budget/app" }],
+      workingDirectory: "/srv/sites/budget/app",
+      network: true,
+      timeoutS: 900,
+      memory: "1G",
+    });
+    expect(command).toContain(line.map((argument) => `"${argument}"`).join(" "));
+  });
+
+  test("the install command is never in it: it travels on standard input, to sh -s", () => {
+    expect(command).toContain('"/bin/sh" "-s";');
+  });
+
+  test("app/ goes back to the deployment account whatever the install's outcome, links never followed", () => {
+    expect(command).toEndWith("; code=$?; chown -hR deploy:deploy /srv/sites/budget/app; exit $code'");
+  });
+
+  test("the shell runs it as written: against a fake sudo, chown and systemd-run, an install that fails", () => {
+    const root = mkdtempSync(join(tmpdir(), "sitesolide-install-"));
+    try {
+      mkdirSync(join(root, "bin"));
+      writeFileSync(join(root, "bin", "sudo"), `#!/bin/sh\nexec "$@"\n`, { mode: 0o755 });
+      writeFileSync(join(root, "bin", "chown"), `#!/bin/sh\necho "chown $*" >> "${root}/calls"\n`, { mode: 0o755 });
+      // systemd-run stands for itself: it runs the script it reads on
+      // standard input, then fails the way a failing install does.
+      const fake = join(root, "systemd-run");
+      writeFileSync(fake, `#!/bin/sh\nsh -s >> "${root}/calls"\nexit 3\n`, { mode: 0o755 });
+      const script = command.replace(/^sudo sh -c '/, "").replace(/'$/, "").replace('"/usr/bin/systemd-run"', `"${fake}"`);
+      const proc = Bun.spawnSync(["sh", "-c", script], { stdin: new TextEncoder().encode("echo installed\n"), env: { PATH: `${join(root, "bin")}:/usr/bin:/bin` } });
+      expect(proc.exitCode).toBe(3);
+      expect(readFileSync(join(root, "calls"), "utf8").split("\n").filter((line) => line !== "")).toEqual([
+        "chown -hR site-budget:site-budget /srv/sites/budget/app",
+        "installed",
+        "chown -hR deploy:deploy /srv/sites/budget/app",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses an account or a slug that could leave the quotes", () => {
+    expect(() => sandboxedInstallCommand("budget", "deploy'; reboot")).toThrow();
+    expect(() => sandboxedInstallCommand("budget; reboot", "deploy")).toThrow();
   });
 });

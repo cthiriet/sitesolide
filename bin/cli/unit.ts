@@ -16,6 +16,7 @@ import {
   isValidEnvName,
   isValidEnvValue,
   isValidSecretName,
+  isValidSlug,
   servedContact,
   servedZone,
   servicesOf,
@@ -341,6 +342,128 @@ function renderUnit(
   }
 
   return lines.join("\n");
+}
+
+// --- a project's program, run outside its service --------------------------------
+
+/** One program run as the project's account, in a transient unit. */
+export type ProjectRun = {
+  slug: string;
+  purpose: "extract" | "install";
+  /** Fixed paths only: nothing a manifest or an archive wrote ever goes into the arguments. */
+  command: string[];
+  /** Its standard input: the archive's descriptor, the install command's text, or none. */
+  stdin: number | Uint8Array | null;
+  /** The only directories of /srv it sees: `source` mounted at `target`, writable. */
+  binds: { source: string; target: string }[];
+  workingDirectory: string | null;
+  /** Outbound network, never the loopback. Off for the extraction. */
+  network: boolean;
+  timeoutS: number;
+  memory: string;
+};
+
+/**
+ * The `systemd-run` line for a project's program: the generated unit's
+ * confinement, the binds alone visible under /srv, and the limits. The
+ * installer runs the extraction and `install` with it for a token
+ * (dashboard/src/installer/real.ts), and `deploy` its `install` over SSH, see
+ * sandboxedInstallCommand: one writing of the walls for both paths.
+ */
+export function systemdRunArguments(run: ProjectRun, systemdRun = "/usr/bin/systemd-run"): string[] {
+  const account = systemUser(run.slug);
+  const properties = [
+    `User=${account}`,
+    `Group=${account}`,
+    "NoNewPrivileges=yes",
+    "PrivateTmp=yes",
+    "PrivateDevices=yes",
+    "ProtectSystem=strict",
+    "ProtectHome=yes",
+    "ProtectKernelTunables=yes",
+    "ProtectKernelModules=yes",
+    "ProtectControlGroups=yes",
+    "RestrictNamespaces=yes",
+    "RestrictSUIDSGID=yes",
+    "LockPersonality=yes",
+    "UMask=0022",
+    // The generated unit's own pattern for its data folder: /srv emptied, the
+    // directory bound back in, and declared writable for ProtectSystem=strict.
+    "TemporaryFileSystem=/srv:ro",
+    ...run.binds.flatMap(({ source, target }) => [`BindPaths=${source}:${target}`, `ReadWritePaths=${target}`]),
+    "InaccessiblePaths=-/etc/sitesolide",
+    `MemoryMax=${run.memory}`,
+    `RuntimeMaxSec=${run.timeoutS}`,
+    "TasksMax=256",
+    // The extraction needs no network at all; an install fetches packages, but
+    // never reaches the loopback, where every other project listens.
+    ...(run.network ? ["IPAddressDeny=localhost"] : ["PrivateNetwork=yes", "IPAddressDeny=any"]),
+    ...(run.workingDirectory === null ? [] : [`WorkingDirectory=${run.workingDirectory}`]),
+  ];
+  return [
+    systemdRun,
+    "--quiet",
+    "--wait",
+    "--pipe",
+    "--collect",
+    "--service-type=exec",
+    // Nothing expanded in the command line (systemd 254 and later), which only
+    // carries fixed paths anyway.
+    "--expand-environment=no",
+    `--description=sitesolide ${run.purpose} for ${run.slug}`,
+    ...properties.flatMap((property) => ["-p", property]),
+    "-E",
+    "HOME=/tmp",
+    "-E",
+    "PATH=/usr/local/bin:/usr/bin:/bin",
+    "-E",
+    "CI=1",
+    ...run.command,
+  ];
+}
+
+/**
+ * The remote command `deploy` runs a manifest's `install` with over SSH: as
+ * the project's own account, in the walls the installer gives it for a token,
+ * the network but never the loopback, /srv hidden but `app/`, nothing of
+ * /etc/sitesolide, a throwaway HOME, fifteen minutes and 1G at most. The
+ * install command itself travels on standard input, to `sh -s`: systemd
+ * expands `$VAR` and `%` in a unit's command line, and the manifest's text
+ * must reach the shell exactly as it was written.
+ *
+ * It used to run as the deployment account, which holds sudo without a
+ * password (infra/cloud-init.yaml), outside any sandbox; and `bun install`
+ * and `uv sync` run the lifecycle scripts of what they fetch. Any package one
+ * of them pulled had root on the machine that serves every site.
+ *
+ * `app/` belongs to the deployment account, so that the service cannot
+ * rewrite its own code. It is handed to the project's account for the length
+ * of the install, then back, whatever the install's outcome: a failed one
+ * leaving `app/` to the project would refuse the next rsync. `-h` never
+ * follows a link the install laid, and the service keeps seeing `app/`
+ * read-only meanwhile, through its own unit.
+ */
+export function sandboxedInstallCommand(slug: string, owner: string): string {
+  if (!isValidSlug(slug)) throw new Error(`invalid slug: ${slug}`);
+  if (!/^[a-z_][a-z0-9_.-]*$/.test(owner)) throw new Error(`unexpected account: ${owner}`);
+  const app = projectPaths(slug).app;
+  const account = systemUser(slug);
+  const run = systemdRunArguments({
+    slug,
+    purpose: "install",
+    command: ["/bin/sh", "-s"],
+    stdin: null,
+    binds: [{ source: app, target: app }],
+    workingDirectory: app,
+    network: true,
+    timeoutS: 900,
+    memory: "1G",
+  });
+  // Every argument is fixed or built from the slug; a quote among them would
+  // break out of the double quotes below.
+  if (run.some((argument) => /["'$`\\]/.test(argument))) throw new Error("unexpected character in the systemd-run line");
+  const line = run.map((argument) => `"${argument}"`).join(" ");
+  return `sudo sh -c 'chown -hR ${account}:${account} ${app} && ${line}; code=$?; chown -hR ${owner}:${owner} ${app}; exit $code'`;
 }
 
 /**

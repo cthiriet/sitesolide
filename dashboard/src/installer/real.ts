@@ -42,27 +42,17 @@ import { readAccount, readBounded, writeAtomically } from "../secrets/system";
 import { LOOPBACK_TABLE, PROJECT_PORTS_SET } from "../../borrowed/loopback";
 import { isValidSlug } from "../../borrowed/manifest";
 import { GENERATOR_MARK, MARKER_DONE, readCurrentPairs } from "../../borrowed/services";
-import { systemUser, unitArgument } from "../../borrowed/unit";
+import { systemdRunArguments, systemUser, unitArgument, type ProjectRun } from "../../borrowed/unit";
 import { BUNDLE_NAME, DEPLOYMENT_ID_SHAPE, MAX_BUNDLE_BYTES } from "../control/protocol";
 import type { ExtractOutcome } from "./extract";
 import type { Execution, Host, Part } from "./host";
 
-/** One program run as the project's account, in a transient unit. */
-export type ProjectRun = {
-  slug: string;
-  purpose: "extract" | "install";
-  /** Fixed paths only: nothing a manifest or an archive wrote ever goes into the arguments. */
-  command: string[];
-  /** Its standard input: the archive's descriptor, the install command's text, or none. */
-  stdin: number | Uint8Array | null;
-  /** The only directories of /srv it sees: `source` mounted at `target`, writable. */
-  binds: { source: string; target: string }[];
-  workingDirectory: string | null;
-  /** Outbound network, never the loopback. Off for the extraction. */
-  network: boolean;
-  timeoutS: number;
-  memory: string;
-};
+/**
+ * One program run as the project's account, and the `systemd-run` line that
+ * confines it: in bin/cli/unit.ts, which `sitesolide deploy` runs its
+ * `install` with over SSH too, so that both paths build the same walls.
+ */
+export { systemdRunArguments, type ProjectRun };
 
 export type Commands = {
   systemctl: (arguments_: string[], timeoutMs: number) => Promise<Execution>;
@@ -129,62 +119,6 @@ export async function spawn(command: string[], timeoutMs: number, options: { std
   } catch (error) {
     return { code: 127, output: `cannot run ${command[0]}: ${(error as Error).message}` };
   }
-}
-
-/**
- * The `systemd-run` line for a project's program: the generated unit's
- * confinement, the binds alone visible under /srv, and the limits. Pure.
- */
-export function systemdRunArguments(run: ProjectRun, systemdRun = "/usr/bin/systemd-run"): string[] {
-  const account = systemUser(run.slug);
-  const properties = [
-    `User=${account}`,
-    `Group=${account}`,
-    "NoNewPrivileges=yes",
-    "PrivateTmp=yes",
-    "PrivateDevices=yes",
-    "ProtectSystem=strict",
-    "ProtectHome=yes",
-    "ProtectKernelTunables=yes",
-    "ProtectKernelModules=yes",
-    "ProtectControlGroups=yes",
-    "RestrictNamespaces=yes",
-    "RestrictSUIDSGID=yes",
-    "LockPersonality=yes",
-    "UMask=0022",
-    // The generated unit's own pattern for its data folder: /srv emptied, the
-    // directory bound back in, and declared writable for ProtectSystem=strict.
-    "TemporaryFileSystem=/srv:ro",
-    ...run.binds.flatMap(({ source, target }) => [`BindPaths=${source}:${target}`, `ReadWritePaths=${target}`]),
-    "InaccessiblePaths=-/etc/sitesolide",
-    `MemoryMax=${run.memory}`,
-    `RuntimeMaxSec=${run.timeoutS}`,
-    "TasksMax=256",
-    // The extraction needs no network at all; an install fetches packages, but
-    // never reaches the loopback, where every other project listens.
-    ...(run.network ? ["IPAddressDeny=localhost"] : ["PrivateNetwork=yes", "IPAddressDeny=any"]),
-    ...(run.workingDirectory === null ? [] : [`WorkingDirectory=${run.workingDirectory}`]),
-  ];
-  return [
-    systemdRun,
-    "--quiet",
-    "--wait",
-    "--pipe",
-    "--collect",
-    "--service-type=exec",
-    // Nothing expanded in the command line (systemd 254 and later), which only
-    // carries fixed paths anyway.
-    "--expand-environment=no",
-    `--description=sitesolide ${run.purpose} for ${run.slug}`,
-    ...properties.flatMap((property) => ["-p", property]),
-    "-E",
-    "HOME=/tmp",
-    "-E",
-    "PATH=/usr/local/bin:/usr/bin:/bin",
-    "-E",
-    "CI=1",
-    ...run.command,
-  ];
 }
 
 export function realCommands(paths: { systemctl: string; useradd: string; systemdRun: string; nft: string }): Commands {

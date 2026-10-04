@@ -245,7 +245,8 @@ In order, and the order is the point:
 1. Read the manifest, refuse it if anything is wrong. Nothing has been sent yet.
 2. Read the machine: does the dashboard say this project is behind the portal?
    Is the block in service one the generator would write, or one edited by hand
-   there, which stops everything without `--force`? Does another project already
+   there, which stops everything without `--force`? Does systemd already run a
+   service of that name that deploy did not write? Does another project already
    declare one of its ports? For a project with several services, does the
    loopback rule have room for its own ports? For a project with `egress` or
    `connectors`, does the egress proxy run?
@@ -253,11 +254,12 @@ In order, and the order is the point:
 4. Create the system account and the directories.
 5. Install the systemd units that are missing, remove those of services the
    manifest no longer declares.
-6. Take the Caddy lock, read the door again under it, write the block.
-7. Upload the code, then the public files.
-8. Put down the manifest, and rebuild the loopback's project set when the
+6. Upload the code, then the public files.
+7. Take the Caddy lock, read the door and every port again under it, then put
+   down the manifest, and rebuild the loopback's project set when the
    manifests say something other than what it carries.
-9. Restart every service, check each one is active.
+8. Run `install` as the project's account, in its service's walls.
+9. Restart every service, check each one is active, and write the block.
 10. Verify over HTTPS that the site answers.
 
 For a project behind the portal, the door goes down **before** its files, and

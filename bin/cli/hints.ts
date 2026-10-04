@@ -85,6 +85,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^missing from the vault/, "only the owner can put that file in the workstation's vault, at the path in the message; never write a secret yourself"],
 
   // --- after the push
+  [/^install failed/, "read the `output` events just before this error: install runs as the project's account, in the walls `details` describe; run the command in the project folder to reproduce it, move a step that writes outside app/ into build, then deploy again"],
   [/^write refused/, "the server refused a write over SSH: check that the deployment account still has sudo, then run the same command again"],
   [/should answer the portal's 401/, "the site is served in the clear although declared behind the portal: tell the owner at once, and deploy nothing else until it is fixed"],
   [/unreachable: /, "the deployment is installed but the address did not answer: read `sitesolide logs --json`, then `sitesolide status --json`, and fix the service before deploying again"],

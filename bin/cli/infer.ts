@@ -516,6 +516,36 @@ function detectPython(folder: Folder): Detection {
   };
 }
 
+/** The scripts a package manager runs on its own while it installs the root package. */
+const LIFECYCLE_SCRIPTS = ["preinstall", "install", "postinstall", "preprepare", "prepare", "postprepare"];
+
+/**
+ * What `bun install --production` will run on the machine beyond fetching
+ * files: the package's own lifecycle scripts, and the install scripts of the
+ * dependencies it trusts. They run as the project's account, in its service's
+ * walls, with the network: said, so that whoever reviews the manifest knows
+ * code runs there before the service does.
+ */
+function installNotes(folder: Folder): string[] {
+  let pkg: { scripts?: unknown; trustedDependencies?: unknown };
+  try {
+    pkg = record(JSON.parse(folder.text("package.json") ?? "{}"));
+  } catch {
+    return [];
+  }
+  const scripts = record(pkg.scripts);
+  const lifecycle = LIFECYCLE_SCRIPTS.filter((name) => typeof scripts[name] === "string");
+  const trusted = Array.isArray(pkg.trustedDependencies) ? pkg.trustedDependencies.filter((name): name is string => typeof name === "string") : [];
+  return [
+    ...(lifecycle.length > 0
+      ? [`package.json declares ${lifecycle.join(", ")}: the install runs ${lifecycle.length === 1 ? "it" : "them"} on the server, as the project's account, with the network`]
+      : []),
+    ...(trusted.length > 0
+      ? [`trustedDependencies lets ${trusted.slice(0, 5).join(", ")}${trusted.length > 5 ? "..." : ""} run their install scripts on the server, as the project's account, with the network: check these are the packages meant`]
+      : []),
+  ];
+}
+
 /**
  * An app run by the machine's Bun: from the file that starts the server when
  * one is known, through the start script otherwise.
@@ -550,7 +580,7 @@ function javascriptApp(
     notes: [
       ...notes,
       ...(runtime === "node" ? ["it runs under Bun, the runtime the server carries, which runs most Node servers as they are"] : []),
-      ...(found.install ? ["the dependencies are installed on the server, by bun install --production"] : []),
+      ...(found.install ? ["the dependencies are installed on the server, by bun install --production", ...installNotes(folder)] : []),
       ...appNotes(readCode(folder, folder.code([".ts", ".js", ".mjs", ".cjs", ".tsx", ".jsx"])), folder.slug, true),
     ],
   };

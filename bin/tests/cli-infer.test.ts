@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUN, inferManifest, renderManifest, slugFromFolder, UV, type Inference } from "../cli/infer";
@@ -141,6 +141,16 @@ describe("an app run by Bun", () => {
       env: { NODE_ENV: "production" },
       exclude: ["node_modules"],
     });
+  });
+
+  test("scripts the install runs on the server, the package's own and its trusted dependencies', are said", () => {
+    expect(inferred(join(FIXTURES, "bun-app"), "bun-app").notes.join(" ")).not.toContain("on the server, as the project's account");
+    const folder = copy(join(FIXTURES, "bun-app"));
+    const pkg = JSON.parse(readFileSync(join(folder, "package.json"), "utf8"));
+    writeFileSync(join(folder, "package.json"), JSON.stringify({ ...pkg, scripts: { ...pkg.scripts, postinstall: "node fetch.js", prepare: "husky" }, trustedDependencies: ["sharp"] }));
+    const notes = inferred(folder, "bun-app").notes.join("\n");
+    expect(notes).toContain("package.json declares postinstall, prepare: the install runs them on the server, as the project's account, with the network");
+    expect(notes).toContain("trustedDependencies lets sharp run their install scripts on the server");
   });
 
   test("no port: deploy chooses it on the server", () => {

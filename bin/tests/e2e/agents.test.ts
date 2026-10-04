@@ -164,6 +164,29 @@ describe("deploy --json", () => {
     expect((ended(refused, "error").details as string[]).join(" ")).toContain(`${unit} is a unit deploy did not write`);
   });
 
+  test("install runs as the project's account in its service's walls, the command on standard input", async () => {
+    const machine = fakeVm();
+    machine.acceptWrites();
+    machine.answer("test -f /etc/systemd/system/agent-shop.service", "ABSENT\n");
+    const install = "/usr/local/bin/bun install --production";
+    // No --dry-run: the run goes past the install, as far as the Caddy step,
+    // which the simulated machine cannot carry.
+    const r = await run(project({ ...APP, port: 3040, install }), ["deploy", "--json"], { vm: machine });
+    ended(r, "error");
+    const logs = machine.logs();
+    const ran = logs.find((line) => line.includes("systemd-run"))!;
+    expect(ran).toStartWith("ACCEPTED sudo sh -c 'chown -hR site-agent-shop:site-agent-shop /srv/sites/agent-shop/app && \"/usr/bin/systemd-run\"");
+    for (const property of ['"User=site-agent-shop"', '"BindPaths=/srv/sites/agent-shop/app:/srv/sites/agent-shop/app"', '"IPAddressDeny=localhost"', '"InaccessiblePaths=-/etc/sitesolide"', '"/bin/sh" "-s"']) {
+      expect(ran).toContain(property);
+    }
+    // app/ back to the deployment account, whatever the outcome.
+    expect(ran).toEndWith("; code=$?; chown -hR sample:sample /srv/sites/agent-shop/app; exit $code'");
+    expect(ran).not.toContain("bun install");
+    expect(logs[logs.indexOf(ran) + 1]).toBe(`STDIN ${install}`);
+    // Never again as the deployment account, in app/.
+    expect(logs.some((line) => line.includes(`cd /srv/sites/agent-shop/app && ${install}`))).toBe(false);
+  });
+
   test("an unknown command and --json on run are refused as events too", async () => {
     const unknown = await run("projects/simple-site", ["dance", "--json"], { vm: fakeVm() });
     expect(unknown.code).toBe(1);
