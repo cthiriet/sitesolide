@@ -36,6 +36,9 @@ import { MAX_CONTENT_BODY_BYTES, createSteward } from "./src/secrets/steward";
 import { createSystem, readGroup } from "./src/secrets/system";
 import { createConnectorStore } from "./src/connectors/store";
 import { EGRESS_ACCOUNT, EGRESS_CONFIG_DIR } from "./borrowed/connectors";
+import { createControlSteward, isControlPath } from "./src/control/steward";
+import { createControlSystem } from "./src/control/system";
+import { INSTALLER_RUN_FOLDER } from "./src/control/protocol";
 
 const SITES_DIR = process.env.SITES_DIR ?? "/srv/sites";
 const SECRETS_FOLDER = process.env.SECRETS_FOLDER ?? "/etc/sitesolide";
@@ -50,6 +53,9 @@ const GROUPS_FILE = process.env.GROUPS_FILE ?? "/etc/group";
 /** Read to say whether a site's portal is up, never written. */
 const CADDY_FOLDER = process.env.CADDY_FOLDER ?? "/etc/caddy/sites";
 const GATEKEEPER_RESULTS = process.env.GATEKEEPER_FOLDER ?? GATEKEEPER_FOLDER;
+/** Where the installer leaves its results, read to relay a deployment's progress. */
+const INSTALLER_FOLDER = process.env.INSTALLER_FOLDER ?? INSTALLER_RUN_FOLDER;
+const JOURNALCTL = process.env.JOURNALCTL ?? "/usr/bin/journalctl";
 
 /**
  * The egress proxy's connectors and grants, and the group that reads them. The
@@ -130,6 +136,26 @@ const handler = createSteward(system, {
   connectors,
 });
 
+// The control API's routes, under /team/ and /control/: the token registry and
+// the start of the installer. They share the socket and its permissions, and
+// ask the secrets routes one thing only, whether a token is the live unlock.
+// See src/control/steward.ts.
+const control = createControlSteward(
+  createControlSystem({
+    stateFolder: STATE_FOLDER,
+    sitesDir: SITES_DIR,
+    unitsFolder: UNITS_FOLDER,
+    installerFolder: INSTALLER_FOLDER,
+    systemctl: SYSTEMCTL,
+    journalctl: JOURNALCTL,
+  }),
+  {
+    zone: process.env.SITESOLIDE_ZONE ?? "",
+    isUnlocked: handler.isUnlocked,
+    uidRoot: OWNERS === "" ? null : 0,
+  },
+);
+
 /**
  * A restart is observed for eight seconds, a portal takes up to ninety, and a
  * write can wait behind either one: Bun.serve's default ten seconds of
@@ -143,7 +169,7 @@ const server = openSocket(SOCKET, gid, (path) =>
     unix: path,
     fetch(req, server) {
       server.timeout(req, IDLE_S);
-      return handler(req);
+      return isControlPath(new URL(req.url).pathname) ? control(req) : handler(req);
     },
     // Never the detailed error page of development mode: it would quote a
     // stack, and the handler already catches everything.

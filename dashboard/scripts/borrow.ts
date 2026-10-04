@@ -57,6 +57,16 @@ const BORROWINGS = [
   // The connectors' files and their rules: the steward writes them, the egress
   // proxy reads them, and both run this one copy of what is allowed there.
   "bin/cli/connectors.ts",
+  // What the installer decides exactly like `sitesolide deploy`: the ports
+  // other projects already declare, the units a manifest no longer names, the
+  // loopback's project set, and the door the machine carries. A second
+  // writing of those rules would deploy differently from the API and from SSH.
+  "bin/cli/services.ts",
+  "bin/cli/loopback.ts",
+  "bin/cli/portal-vm.ts",
+  // The archive format the CLI writes for the control API, and that the
+  // installer's tests write too, malicious archives included.
+  "bin/cli/bundle.ts",
 ];
 
 /** The header of every copied module. */

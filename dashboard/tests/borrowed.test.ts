@@ -34,6 +34,7 @@ function deployedFiles(): string[] {
     join(PROJECT, "collector.ts"),
     join(PROJECT, "steward.ts"),
     join(PROJECT, "gatekeeper.ts"),
+    join(PROJECT, "installer.ts"),
     ...sources,
   ];
 }

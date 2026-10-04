@@ -166,6 +166,13 @@ export type StewardOptions = {
 export type Handler = (req: Request) => Promise<Response>;
 
 /**
+ * The handler, and the one thing the control routes need to know of this one's
+ * state: whether a token is the live unlock token. Creating a deployment token
+ * demands the dashboard unlocked, and the unlock lives here alone.
+ */
+export type StewardHandler = Handler & { isUnlocked: (token: unknown) => Promise<boolean> };
+
+/**
  * The biggest legitimate body outside a content is a set: a name, a value of
  * 8 KiB at most in UTF-8, which JSON can swell with escapes.
  */
@@ -336,7 +343,7 @@ type TargetState =
   | { kind: "unmanaged"; reason: string; info: FileInfo | null }
   | { kind: "managed"; managed: Managed };
 
-export function createSteward(system: System, options: StewardOptions): Handler {
+export function createSteward(system: System, options: StewardOptions): StewardHandler {
   const observationMs = options.observationMs ?? OBSERVATION_MS;
   const stepMs = options.stepMs ?? STEP_MS;
   const restartTimeoutMs = options.restartTimeoutMs ?? RESTART_TIMEOUT_MS;
@@ -1419,7 +1426,7 @@ export function createSteward(system: System, options: StewardOptions): Handler 
 
   let inFlight = 0;
 
-  return async (req) => {
+  const handle: Handler = async (req) => {
     if (inFlight >= maxInFlight) return busy();
     inFlight++;
     try {
@@ -1442,6 +1449,7 @@ export function createSteward(system: System, options: StewardOptions): Handler 
       inFlight--;
     }
   };
+  return Object.assign(handle, { isUnlocked: (token: unknown) => isValidToken(state, token, system.now()) });
 }
 
 function errorName(e: unknown): string {

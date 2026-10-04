@@ -1,0 +1,273 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { entryBlocks, header } from "../borrowed/bundle";
+import { generateFragment } from "../borrowed/fragment";
+import { readManifest, type Manifest } from "../borrowed/manifest";
+import { fragmentIsProtected } from "../borrowed/portal";
+import type { InstallRequest, Scope } from "../src/control/protocol";
+import { finalManifest, replaceable, runPipeline, type Outcome } from "../src/installer/pipeline";
+import { createBench as newBench, file, hostOf, stageBundle as stage, ZONE, type Bench, type BenchOptions } from "./installer-bench";
+
+/**
+ * The installer's pipeline on a throwaway tree, with the real host: real
+ * files, a real extraction by `installer.ts --extract` in a child process, a
+ * real `install` command, and the real staging and swap. What needs root or a
+ * machine is simulated, see installer-bench.ts.
+ */
+
+const DEPLOYMENT = "0123456789abcdef01234567";
+const NOW = Date.now();
+const PRIVATE: Scope = { slugs: [], create: true, outbound: false, domain: false, public: false };
+const PUBLIC: Scope = { ...PRIVATE, public: true };
+
+const benches: Bench[] = [];
+afterEach(() => {
+  for (const bench of benches.splice(0)) bench.cleanup();
+});
+
+function createBench(options: BenchOptions = {}): Bench {
+  const bench = newBench(options);
+  benches.push(bench);
+  return bench;
+}
+
+const stageBundle = (bench: Bench, entries: Parameters<typeof stage>[2]) => stage(bench, DEPLOYMENT, entries);
+
+function request(manifest: object, scope: Scope = PRIVATE, slug = "shop"): InstallRequest {
+  return {
+    deployment: DEPLOYMENT,
+    slug,
+    requestedAt: NOW,
+    token: { id: "aaaaaaaaaaaa", email: "ada@test-zone.invalid" },
+    scope,
+    creating: true,
+    manifest: JSON.stringify(manifest),
+  };
+}
+
+function deposit(bench: Bench, manifest: Manifest): void {
+  mkdirSync(join(bench.sites, manifest.slug, "app"), { recursive: true });
+  mkdirSync(join(bench.sites, manifest.slug, "public"), { recursive: true });
+  writeFileSync(join(bench.sites, manifest.slug, "sitesolide.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+async function run(bench: Bench, requested: InstallRequest): Promise<Outcome> {
+  return runPipeline(hostOf(bench), requested, { zone: ZONE, runFolder: bench.run });
+}
+
+const APP = { slug: "shop", start: "/usr/local/bin/bun run server.ts", publicDir: "public" };
+const APP_FILES = [file("app/server.ts", "Bun.serve({})"), file("public/index.html", "<h1>shop</h1>")];
+
+function deposited(bench: Bench, slug = "shop"): Manifest {
+  return readManifest(readFileSync(join(bench.sites, slug, "sitesolide.json"), "utf8")).manifest!;
+}
+
+const order = (bench: Bench, first: string, second: string) => bench.events.indexOf(first) < bench.events.indexOf(second);
+
+describe("a new project, private by default", () => {
+  test("behind the portal, its port chosen, its door up before its files", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request(APP));
+    expect(outcome).toEqual({ ok: true, url: `https://shop.${ZONE}/`, allocated: [{ service: null, port: 3002 }] });
+
+    const manifest = deposited(bench);
+    expect(manifest.portal).toBe(true);
+    expect(manifest.port).toBe(3002);
+    expect(readFileSync(join(bench.sites, "shop", "app", "server.ts"), "utf8")).toBe("Bun.serve({})");
+    expect(readFileSync(join(bench.sites, "shop", "public", "index.html"), "utf8")).toBe("<h1>shop</h1>");
+    expect(existsSync(join(bench.sites, "shop", "app", "sitesolide.json"))).toBe(false);
+    expect(readFileSync(join(bench.units, "shop.service"), "utf8")).toContain("ExecStart=/usr/local/bin/bun run server.ts");
+    expect(fragmentIsProtected(readFileSync(join(bench.blocks, "shop.caddy"), "utf8"))).toBe(true);
+
+    // The door before the files, as `deploy` does for a protected site.
+    expect(order(bench, "block protected", "log -> app and public, put in place")).toBe(true);
+    expect(bench.events).toContain("useradd site-shop");
+    expect(bench.events).toContain("as shop extract");
+    expect(bench.events).toContain("systemctl restart shop");
+    // The staging directory and the trees set aside are gone.
+    expect(readdirSync(join(bench.sites, "shop")).sort()).toEqual(["app", "data", "public", "sitesolide.json"]);
+  });
+
+  test("a token that may go public deploys in the open, its block after the restart", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request(APP, PUBLIC));
+    expect(outcome.ok).toBe(true);
+    expect(deposited(bench).portal).toBeUndefined();
+    expect(order(bench, "log -> app and public, put in place", "block open")).toBe(true);
+    expect(order(bench, "systemctl restart shop", "block open")).toBe(true);
+  });
+
+  test("a static site, for a token that may go public: no unit, no block", async () => {
+    const bench = createBench();
+    stageBundle(bench, [file("public/index.html", "static")]);
+    const outcome = await run(bench, request({ slug: "shop", publicDir: "public" }, PUBLIC));
+    expect(outcome.ok).toBe(true);
+    expect(readFileSync(join(bench.sites, "shop", "public", "index.html"), "utf8")).toBe("static");
+    expect(readdirSync(bench.units)).toEqual([]);
+    expect(existsSync(join(bench.blocks, "shop.caddy"))).toBe(false);
+  });
+
+  test("install runs as the project's account, in the staging directory, before anything served changes", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, install: "echo installed > installed.txt && echo ok" }));
+    expect(outcome.ok).toBe(true);
+    expect(readFileSync(join(bench.sites, "shop", "app", "installed.txt"), "utf8")).toBe("installed\n");
+    expect(bench.events).toContain("log    ok");
+    expect(order(bench, "as shop install", "log -> app and public, put in place")).toBe(true);
+  });
+});
+
+describe("refusals, before anything served changes", () => {
+  test("a static site for a private token: refused before any account or directory", async () => {
+    const bench = createBench();
+    stageBundle(bench, [file("public/index.html")]);
+    const outcome = await run(bench, request({ slug: "shop", publicDir: "public" }));
+    expect(outcome).toMatchObject({ ok: false, code: "out-of-scope" });
+    expect(readdirSync(bench.sites)).toEqual([]);
+    expect(bench.events.some((event) => event.startsWith("useradd"))).toBe(false);
+  });
+
+  test("a failing install leaves the served code as it was", async () => {
+    const bench = createBench();
+    deposit(bench, { ...APP, port: 3040, portal: true });
+    writeFileSync(join(bench.sites, "shop", "app", "server.ts"), "the previous version");
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, install: "echo broken >&2; exit 3" }));
+    expect(outcome).toMatchObject({ ok: false, code: "install-failed" });
+    expect(readFileSync(join(bench.sites, "shop", "app", "server.ts"), "utf8")).toBe("the previous version");
+    expect(bench.events).toContain("log    broken");
+    expect(existsSync(join(bench.sites, "shop", ".incoming"))).toBe(false);
+  });
+
+  test("an archive carrying a link is refused, and nothing is put in place", async () => {
+    const bench = createBench();
+    const link = header("app/escape", { type: "2", mode: 0o777, size: 0, mtime: 1 });
+    const tar = new Uint8Array([...entryBlocks(file("app/a"))[0]!, ...entryBlocks(file("app/a"))[1]!, ...link, ...new Uint8Array(1024)]);
+    stageBundle(bench, Bun.gzipSync(tar));
+    const outcome = await run(bench, request(APP));
+    expect(outcome).toMatchObject({ ok: false, code: "bundle-refused" });
+    expect(outcome.ok === false && outcome.message).toContain("symbolic link");
+    expect(existsSync(join(bench.sites, "shop", "sitesolide.json"))).toBe(false);
+  });
+
+  test("a public directory that arrives empty would wipe the site", async () => {
+    const bench = createBench();
+    stageBundle(bench, [file("app/server.ts")]);
+    expect(await run(bench, request(APP))).toMatchObject({ ok: false, code: "public-empty" });
+  });
+
+  test("a block edited by hand on the machine stops everything", async () => {
+    const bench = createBench();
+    const previous = { ...APP, port: 3040, portal: true } as Manifest;
+    deposit(bench, previous);
+    writeFileSync(join(bench.blocks, "shop.caddy"), `${generateFragment(previous)}\n# a hand-made header\nheader X-Hand "made"\n`);
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, port: 3040 }));
+    expect(outcome).toMatchObject({ ok: false, code: "edited-by-hand" });
+    expect(outcome.ok === false && outcome.message).toContain("--force");
+    expect(bench.events).not.toContain("lock");
+  });
+
+  test("Caddy being changed elsewhere: nothing served changes, deploy again later", async () => {
+    const bench = createBench({ lockHeld: true });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request(APP));
+    expect(outcome).toMatchObject({ ok: false, code: "caddy-busy" });
+    expect(existsSync(join(bench.sites, "shop", "app", "server.ts"))).toBe(false);
+  });
+
+  test("the door changed from the dashboard while the deployment ran", async () => {
+    const bench = createBench({
+      onLock: (b) => writeFileSync(join(b.sites, "shop", "sitesolide.json"), JSON.stringify({ ...APP, port: 3040 })),
+    });
+    deposit(bench, { ...APP, port: 3040, portal: true });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, port: 3040 }, PUBLIC));
+    expect(outcome).toMatchObject({ ok: false, code: "door-changed" });
+    expect(bench.events).toContain("release");
+  });
+
+  test("the portal not ready: a site behind it would be closed to everyone", async () => {
+    const bench = createBench({ probe: (host, path) => (path === "/sante" ? { code: 502, door: false, body: "" } : null) });
+    stageBundle(bench, APP_FILES);
+    expect(await run(bench, request(APP))).toMatchObject({ ok: false, code: "portal-not-ready" });
+  });
+});
+
+describe("after the files are in place", () => {
+  test("a missing secret: the files are there, the service is not restarted, the owner is told where to create it", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, secrets: ["shop.env"] }));
+    expect(outcome).toMatchObject({ ok: false, code: "secret-missing" });
+    expect(outcome.ok === false && outcome.message).toContain(`https://dashboard.${ZONE}/`);
+    expect(bench.events.some((event) => event.startsWith("systemctl restart"))).toBe(false);
+    writeFileSync(join(bench.secrets, "shop.env"), "TOKEN=x\n");
+    stageBundle(bench, APP_FILES);
+    expect((await run(bench, request({ ...APP, secrets: ["shop.env"] }))).ok).toBe(true);
+  });
+
+  test("a service that does not come back is a failure that says where to look", async () => {
+    const bench = createBench({ restartFails: true });
+    stageBundle(bench, APP_FILES);
+    expect(await run(bench, request(APP))).toMatchObject({ ok: false, code: "service-failed" });
+  });
+
+  test("a block that Caddy refuses is put back, and the deployment fails", async () => {
+    const bench = createBench({ validate: (b) => (existsSync(join(b.blocks, "shop.caddy")) ? { ok: false, output: "Error: bad block" } : { ok: true, output: "Valid configuration" }) });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request(APP));
+    expect(outcome).toMatchObject({ ok: false, code: "caddy-refused" });
+    expect(existsSync(join(bench.blocks, "shop.caddy"))).toBe(false);
+  });
+});
+
+describe("a redeployment", () => {
+  test("keeps its port, follows a manifest that changed, and keeps the preview lock the owner set", async () => {
+    const bench = createBench();
+    const previous = { ...APP, port: 3040, lock: true } as Manifest;
+    deposit(bench, previous);
+    writeFileSync(join(bench.blocks, "shop.caddy"), generateFragment(previous)!);
+    stageBundle(bench, APP_FILES);
+    // A new route changes the block: it was the generator's, so it is replaced.
+    const outcome = await run(bench, request({ ...APP, routes: ["/api/*"] }, PUBLIC));
+    expect(outcome).toMatchObject({ ok: true, allocated: [{ service: null, port: 3040 }] });
+    const manifest = deposited(bench);
+    expect(manifest.lock).toBe(true);
+    expect(manifest.routes).toEqual(["/api/*"]);
+    expect(readFileSync(join(bench.blocks, "shop.caddy"), "utf8")).toContain("/api/*");
+  });
+
+  test("a port another project declares is refused, with what to do", async () => {
+    const bench = createBench();
+    deposit(bench, { slug: "cms", start: "x", port: 3040 } as Manifest);
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, port: 3040 }));
+    expect(outcome).toMatchObject({ ok: false, code: "port-taken" });
+  });
+});
+
+describe("finalManifest and replaceable, pure", () => {
+  test("the scope is judged on the manifest the machine would carry", () => {
+    expect(() => finalManifest(request({ ...APP, network: "outbound" }), new Map())).toThrow("network");
+    expect(() => finalManifest(request({ ...APP, secrets: ["dashboard.env"] }), new Map())).toThrow("secrets");
+    expect(() => finalManifest(request({ slug: "shop" }), new Map())).toThrow("publicDir");
+    expect(() => finalManifest(request({ ...APP, slug: "cms" }), new Map())).toThrow("slug");
+  });
+
+  test("an unreadable manifest on the machine decides nothing", () => {
+    expect(() => finalManifest(request(APP), new Map([["shop", "{"]]))).toThrow("does not read");
+  });
+
+  test("a file is replaceable when absent, identical, or the previous manifest's own", () => {
+    expect(replaceable(null, "a b", null)).toBe(true);
+    expect(replaceable("x 1\n", "x 1", null)).toBe(true);
+    expect(replaceable("x 1", "x 2", "x 1")).toBe(true);
+    expect(replaceable("x 1\ny 2", "x 2", "x 1")).toBe(false);
+    expect(replaceable("x 1", "x 2", null)).toBe(false);
+  });
+});

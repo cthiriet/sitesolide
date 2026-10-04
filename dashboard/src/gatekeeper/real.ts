@@ -107,6 +107,12 @@ export type MachineConfig = {
   collectorUnit: string;
   systemctl: Systemctl;
   log: (line: string) => void;
+  /**
+   * The name written in Caddy's lock: `gatekeeper` when absent. The installer
+   * (src/installer/) mounts this same machine and signs `installer`, so that a
+   * refusal says who really holds the lock.
+   */
+  holder?: "gatekeeper" | "installer";
 };
 
 /** A manifest or a block has no reason to be any bigger. */
@@ -474,7 +480,7 @@ export function createMachine(config: MachineConfig): Machine {
           continue;
         }
 
-        const mine = holderText({ who: "gatekeeper", pid: process.pid, a: Date.now() });
+        const mine = holderText({ who: config.holder ?? "gatekeeper", pid: process.pid, a: Date.now() });
         try {
           writeAtomically(lockPath, HOLDER_NAME, mine, 0o644, null);
         } catch (error) {

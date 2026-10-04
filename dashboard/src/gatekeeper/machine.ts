@@ -86,7 +86,7 @@ export type Machine = {
 export const STALE_LOCK_MS = 15 * 60 * 1000;
 
 /** Who may hold the lock: the gatekeeper and the workstation's tools. */
-export const HOLDERS = ["gatekeeper", "deploy-caddy", "lock", "deploy", "generate-domains", "deploy-gatekeeper"] as const;
+export const HOLDERS = ["gatekeeper", "installer", "deploy-caddy", "lock", "deploy", "generate-domains", "deploy-gatekeeper"] as const;
 
 /**
  * The content of `caddy.lock/holder`, one line:
@@ -130,11 +130,12 @@ export type LockJudgement = {
  *     author may still be writing, and it is only taken over once stale by the
  *     directory's date;
  *   - stale beyond `STALE_LOCK_MS`;
- *   - a gatekeeper's lock whose process is dead is taken over straight away:
- *     killed by systemd, it gave nothing back. `alive` returns true when in
- *     doubt, and a reused pid delays the takeover without ever hastening it.
- *     Not for the workstation's tools: their pid is that of one ssh command
- *     among others, dead well before the end of their action.
+ *   - a gatekeeper's or an installer's lock whose process is dead is taken
+ *     over straight away: killed by systemd, it gave nothing back. Both run on
+ *     the machine, so their pid is theirs. `alive` returns true when in doubt,
+ *     and a reused pid delays the takeover without ever hastening it. Not for
+ *     the workstation's tools: their pid is that of one ssh command among
+ *     others, dead well before the end of their action.
  *
  * Pure.
  */
@@ -149,8 +150,8 @@ export function judgeLock(
   if (now - since > STALE_LOCK_MS) {
     return { kind: "stale", holder, since, reason: "older than 15 minutes" };
   }
-  if (holder?.who === "gatekeeper" && !alive(holder.pid)) {
-    return { kind: "stale", holder, since, reason: `gatekeeper ${holder.pid} is gone` };
+  if ((holder?.who === "gatekeeper" || holder?.who === "installer") && !alive(holder.pid)) {
+    return { kind: "stale", holder, since, reason: `${holder.who} ${holder.pid} is gone` };
   }
   return { kind: "held", holder, since, reason: "" };
 }

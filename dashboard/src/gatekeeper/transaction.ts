@@ -169,6 +169,7 @@ function utcTime(ms: number): string {
 /** The refusal when another holds Caddy's lock. */
 export function lockHeldMessage(who: string | null, since: number): string {
   if (who === "gatekeeper") return `another portal change is in progress (since ${utcTime(since)}): try again in a moment`;
+  if (who === "installer") return `a deployment is being installed on the machine (since ${utcTime(since)}): try again in a moment`;
   return `Caddy is being changed from the workstation (${who ?? "unknown holder"}, since ${utcTime(since)}): try again in a moment`;
 }
 

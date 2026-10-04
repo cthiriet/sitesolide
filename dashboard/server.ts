@@ -9,6 +9,8 @@ import {
   PORTAL_URL,
   EGRESS_URL,
   PUBLIC_URL,
+  DATA_DIR,
+  ZONE,
   missing,
 } from "./src/config";
 import { localPortal } from "./src/guests";
@@ -30,6 +32,16 @@ import { createTokens } from "./src/secrets/tokens";
 import { createSecretsRoutes } from "./src/secrets/routes";
 import { localConnectorsSteward, localEgress } from "./src/connectors/client";
 import { createConnectorsRoutes } from "./src/connectors/relay";
+import { join } from "node:path";
+import { openDatabase } from "./src/database";
+import { createApiRoutes, failure } from "./src/control/api";
+import { localControlSteward } from "./src/control/client";
+import { createLimiter } from "./src/control/limiter";
+import { SPOOL_NAME } from "./src/control/protocol";
+import { createSpool } from "./src/control/spool";
+import { createControlStore } from "./src/control/store";
+import { createTeamRoutes } from "./src/control/team";
+import { createTracker } from "./src/control/tracker";
 
 // The service starts despite an incomplete configuration, and says so. Dying
 // here would make it loop on Restart=always without the log explaining
@@ -58,24 +70,47 @@ const store = {
 };
 
 // The secrets go through the same session check as the rest of the dashboard,
-// and the steward's tokens live only in this process's memory.
-const secretTokens = createTokens();
+// and the steward's tokens live only in this process's memory. The Team page
+// shares them: one unlock opens both.
+const sessionReader = createSessionReader(store, { online: ONLINE, sessionDurationMs: SESSION_DURATION_MS });
+const unlockTokens = createTokens();
 const secrets = createSecretsRoutes({
-  session: createSessionReader(store, { online: ONLINE, sessionDurationMs: SESSION_DURATION_MS }),
+  session: sessionReader,
   publicUrl: PUBLIC_URL,
   steward: localSteward(STEWARD_SOCKET),
-  tokens: secretTokens,
+  tokens: unlockTokens,
 });
 
 // The egress proxy's connectors: written through the steward under the same
 // unlock as a secret, and their activity read from the proxy itself.
 const connectors = createConnectorsRoutes({
-  session: createSessionReader(store, { online: ONLINE, sessionDurationMs: SESSION_DURATION_MS }),
+  session: sessionReader,
   steward: localConnectorsSteward(STEWARD_SOCKET),
   egress: localEgress(EGRESS_URL),
-  tokens: secretTokens,
+  tokens: unlockTokens,
   withToken: secrets.withToken,
 });
+
+// The control API: deployments by token, under /api/v1/, and the Team page that
+// creates and revokes the tokens. The registry is the steward's; this process
+// keeps the deployments it was asked for, the audit, and the archives waiting
+// for the installer in its own data directory. See src/control/.
+const controlSteward = localControlSteward(STEWARD_SOCKET);
+const controlStore = createControlStore(openDatabase(join(DATA_DIR, "dashboard.db")));
+const spool = createSpool(join(DATA_DIR, SPOOL_NAME));
+const tracker = createTracker({ store: controlStore, steward: controlSteward, spool });
+const api = createApiRoutes({
+  steward: controlSteward,
+  store: controlStore,
+  spool,
+  limiter: createLimiter(),
+  tracker,
+  stateFile: STATE_FILE,
+  publicUrl: PUBLIC_URL,
+  zone: ZONE,
+});
+const team = createTeamRoutes({ session: sessionReader, publicUrl: PUBLIC_URL, steward: controlSteward, tokens: unlockTokens, store: controlStore });
+setInterval(() => void tracker.tick(), 3_000);
 
 const routes = createRoutes(store, {
   hash: PASSWORD_HASH,
@@ -167,6 +202,26 @@ const server = Bun.serve({
       DELETE: (req, server) => long(req, server, connectors.removeConnector),
     },
     "/api/connectors/grant": { PUT: (req, server) => long(req, server, connectors.setGrant) },
+
+    "/api/team": { GET: team.team },
+    "/api/team/tokens": { POST: team.createToken },
+    "/api/team/revoke": { POST: team.revokeToken },
+
+    // The control API. The archive streams for as long as it takes to arrive:
+    // Bun's ten seconds of silence would cut a slow upload in the middle.
+    "/api/v1/whoami": { GET: api.whoami },
+    "/api/v1/deployments": { POST: api.createDeployment },
+    "/api/v1/deployments/:id": { GET: (req) => api.readDeployment(req, req.params.id) },
+    "/api/v1/deployments/:id/bundle": {
+      PUT: (req, server) => {
+        server.timeout(req, 255);
+        return api.uploadBundle(req, req.params.id);
+      },
+    },
+    "/api/v1/projects": { GET: api.projects },
+    "/api/v1/projects/:slug": { GET: (req) => api.project(req, req.params.slug) },
+    "/api/v1/projects/:slug/logs": { GET: (req) => api.projectLogs(req, req.params.slug) },
+    "/api/v1/*": () => failure("not-found", "no such route: see docs/team.md for the control API's routes"),
   },
 
   /**

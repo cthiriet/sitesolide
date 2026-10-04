@@ -26,6 +26,7 @@ const UNITS: ReadonlyArray<readonly [unit: string, entryPoint: string]> = [
   ["infra/gatekeeper/sitesolide-gatekeeper-off@.service", "dashboard/src/gatekeeper/main.ts"],
   ["infra/collector/sitesolide-collector.service", "dashboard/collector.ts"],
   ["infra/steward/sitesolide-steward.service", "dashboard/steward.ts"],
+  ["infra/installer/sitesolide-installer@.service", "dashboard/src/installer/main.ts"],
   ["api/deploy/sitesolide-api.service", "api/src/config.ts"],
   ["infra/monitor/sitesolide-monitor.service", "monitor/src/config.ts"],
   ["infra/egress/sitesolide-egress.service", "egress/src/config.ts"],
@@ -83,8 +84,18 @@ function zoneEnvFileVariables(): Set<string> {
   return names;
 }
 
+/**
+ * The settings `/etc/sitesolide-installer.env` carries, read from the script
+ * that writes it, bin/deploy-installer.sh, for the same reason.
+ */
+function installerEnvFileVariables(): Set<string> {
+  const script = readFileSync(join(REPO_ROOT, "bin", "deploy-installer.sh"), "utf8");
+  return new Set([...script.matchAll(/printf '([A-Z][A-Z0-9_]*)=%s/g)].map((match) => match[1]!));
+}
+
 describe("a unit hands over what its service demands", () => {
   const zoneEnvFile = zoneEnvFileVariables();
+  const installerEnvFile = installerEnvFileVariables();
 
   for (const [unitPath, entryPath] of UNITS) {
     test(`${unitPath} starts ${entryPath}`, () => {
@@ -101,6 +112,7 @@ describe("a unit hands over what its service demands", () => {
         // A variable of the zone file counts as handed over as soon as the
         // unit loads that file.
         if (files.includes("/etc/caddy/sitesolide.env") && zoneEnvFile.has(name)) return false;
+        if (files.includes("/etc/sitesolide-installer.env") && installerEnvFile.has(name)) return false;
         return true;
       });
 

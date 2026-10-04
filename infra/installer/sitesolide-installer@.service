@@ -1,0 +1,110 @@
+# The installer: deploys one project on the machine for a team token, one
+# deployment per start. See dashboard/installer.ts and dashboard/src/installer/.
+#
+#   systemctl start --no-block sitesolide-installer@cms.service
+#   cat /run/sitesolide-installer/<deployment>.json
+#
+# One template, the slug alone as the instance. Only the steward starts it,
+# after judging the token and writing the request it reads,
+# /var/lib/sitesolide-steward/installs/<slug>.json. It never activates by
+# itself: no [Install], no timer. Started by hand without a fresh request, it
+# does nothing.
+#
+# This is the most privileged component of the control API, and it cannot be
+# otherwise: deploying a project creates a system account, writes a systemd
+# unit and a Caddy block, and reloads Caddy, any one of which is root on the
+# machine. What makes it acceptable is what it does not do: it never parses the
+# archive (the project's own account does, in a transient unit started with
+# systemd-run, without network, seeing nothing of /srv but the staging
+# directory), it runs `install` the same way, it writes only the generated unit
+# and block, and every decision it takes is the one `sitesolide deploy` takes,
+# from the same modules (dashboard/src/installer/pipeline.ts says which).
+#
+# NEVER `caddy stop` nor `caddy start` in what it launches: only
+# `systemctl reload caddy` applies a configuration (CLAUDE.md, Production).
+#
+# Placed by bin/deploy-installer.sh, never by `sitesolide deploy`.
+
+[Unit]
+Description=Installer, deployment of %i
+# It reads and writes under /srv/sites and /etc/caddy: nothing to do before
+# they are mounted.
+RequiresMountsFor=/srv/sites /etc/caddy
+
+[Service]
+Type=oneshot
+# The served zone and the contact address, which the unit generator writes
+# into units and the probe needs: the same file Caddy is given.
+EnvironmentFile=/etc/caddy/sitesolide.env
+# DEPLOY_ACCOUNT, the account that owns the served trees, as the SSH path
+# leaves them. Written by bin/deploy-installer.sh from the workstation's
+# configuration; without it, the unit refuses to start rather than guess.
+EnvironmentFile=/etc/sitesolide-installer.env
+# `%n`: the full name, from which the installer draws the slug.
+ExecStart=/usr/local/bin/bun /usr/local/lib/sitesolide/installer.js %n
+
+# The extraction may take five minutes, `install` fifteen, the Caddy step a
+# minute and a half with its restore: twenty-five minutes bound the worst.
+# Killed in the middle, the installer leaves a result that says `running`,
+# which the steward reports as interrupted once the unit is gone.
+TimeoutStartSec=25min
+TimeoutStopSec=30s
+
+# /run/sitesolide-installer, 0700: one result per deployment, read by the
+# steward and nobody else. Kept at the end of the unit, without which the
+# result would disappear before being read; tmpfs, it goes away at reboot.
+RuntimeDirectory=sitesolide-installer
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+# It creates served directories, which Caddy and the service must read: 0022,
+# and every file whose mode matters (unit, block, manifest, result) gets it
+# explicitly anyway.
+UMask=0022
+
+# CAP_CHOWN and CAP_FOWNER: the served trees and the manifest are handed to
+# the deployment account, the data directory to site-<slug>, and their mode is
+# set after. CAP_DAC_OVERRIDE: /srv/sites/<slug> belongs to the deployment
+# account, and the trees are moved in and out of it. CAP_DAC_READ_SEARCH: the
+# staged archive is in the dashboard's data directory, 0750 site-dashboard.
+# CAP_NET_ADMIN: the loopback's project set, `nft -f`. CAP_AUDIT_WRITE: useradd
+# reports to the audit subsystem. systemctl and systemd-run ask for none: PID 1
+# judges the caller's uid on its socket.
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_AUDIT_WRITE
+
+# Writing: the sites, /etc (useradd rewrites passwd, group and shadow by
+# renaming in /etc itself; the units; /etc/caddy/sites; the loopback's set
+# file), and the gatekeeper's directory, where the Caddy lock and the backups
+# live. The secrets stay read-only: their presence is checked, never their
+# content. /var/lib/sitesolide-steward, where the request is, stays read-only
+# under ProtectSystem=strict.
+ProtectSystem=strict
+ReadWritePaths=/srv/sites /etc /run/sitesolide-gatekeeper
+ReadOnlyPaths=/etc/sitesolide
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+
+# Network: the loopback alone, for the probes towards 127.0.0.1:443. The
+# transient units it starts for `install` have their own rules (outbound, never
+# the loopback): this one passes nothing on to them. AF_NETLINK for nft.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+# Bun, the probes, `caddy validate`; the archive streams, it is never held whole.
+MemoryMax=512M
