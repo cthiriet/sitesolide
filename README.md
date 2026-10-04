@@ -5,12 +5,15 @@
   </picture>
 </h1>
 
-**Deploy every project you have to one server you own.**
+**A cloud for the small software your team and its agents write.**
 
-Run `sitesolide deploy` in a folder and it is live on HTTPS. Static sites and
-apps in any language, your clients' own domains, private previews, secrets and
-cookieless analytics, with a dashboard that shows all of it. The ease of Vercel, the bill of
-a single VM.
+Internal tools, dashboards, prototypes, a tracker for one team: software that
+will only ever have a handful of users, and that an agent now writes in an
+afternoon. Run `sitesolide deploy` in its folder, or let the agent run it, and
+it is live on HTTPS on a server you own, behind your company's sign-in, shared
+with exactly the people who need it. Static sites and apps in any language,
+secrets, backups and cookieless analytics, with a dashboard that shows all of
+it. The ease of Vercel, the bill of a single VM.
 
 <img alt="The dashboard: every site on the machine, with its address, its door, its service and its size" src="docs/assets/screenshots/dashboard.png">
 
@@ -55,7 +58,36 @@ compiled binary. `start` is simply the command systemd runs. A project made of
 several processes, a front, an API, a worker, declares them under `services`,
 and each one gets its unit, its port and its paths.
 
-## Everything a small fleet needs
+## Made for teams and their agents
+
+- **Sign in with your company account.** Google Workspace, Microsoft Entra,
+  Okta or any OpenID Connect provider in front of every private app, which
+  receives who is signed in in `X-Sitesolide-User` and writes not one line of
+  authentication. See [portal/README.md](portal/README.md).
+- **Share it like a doc.** Per site: only you, specific people, or everyone at
+  your company's domain, from the dashboard or with
+  `sitesolide share alice@acme.com`. Removing someone closes the door at their
+  next request.
+- **Deploy without root.** Colleagues and agents get a personal, scoped,
+  revocable token; the machine installs their project in its own sandbox, and
+  nobody but the owner ever holds SSH. See [docs/team.md](docs/team.md).
+- **Agents welcome.** `sitesolide detect` writes the manifest a folder implies,
+  every command speaks `--json`, and `sitesolide mcp` serves deploy, logs and
+  sharing as tools to Claude Code, Codex or Cursor. See
+  [docs/agents.md](docs/agents.md).
+- **Egress you decide.** An app reaches only the hosts its manifest lists, and
+  calls a company API through a connector whose credential it never holds. See
+  [egress/README.md](egress/README.md).
+- **Data that survives.** Every project's data is snapshotted hourly, SQLite
+  copied consistently, optionally to an encrypted bucket, and restored from the
+  dashboard in one click. See [dashboard/src/backup/README.md](dashboard/src/backup/README.md).
+- **Knows when it breaks.** Caddy restarts itself however it stopped, and a
+  monitor checks every site each minute and pings a heartbeat that notices the
+  machine itself dying. See [monitor/README.md](monitor/README.md).
+- **One audit log.** Who deployed, who shared what with whom, who signed in
+  where, who touched a secret, a connector or a backup, on one page.
+
+## And everything a small fleet needs
 
 <table>
   <tr>
@@ -92,8 +124,6 @@ and each one gets its unit, its port and its paths.
   with time-limited access for guests.
 - **Real isolation.** Each project runs as its own user, sees only its own
   folder, and cannot reach its neighbours over the loopback.
-- **Egress you decide.** An app reaches only the hosts its manifest lists, and
-  calls a company API through a connector whose credential it never holds.
 - **Nothing to rent.** No container runtime, no control plane, no per-seat
   pricing. A `cx33` at Hetzner (4 vCPU, 8 GB, about €16 a month) serves a few
   dozen projects.
@@ -121,6 +151,7 @@ deployed project in about half an hour, Terraform included.
 - [Deploying as a team member](docs/team.md), with a token instead of SSH
 - [Secrets](docs/secrets.md), where they live and why
 - [Agents](docs/agents.md), for Claude Code, Codex or Cursor: `--json`, an MCP server, a skill
+- [Upgrading](docs/upgrading.md), from one release to the next on a running machine
 
 ## License
 

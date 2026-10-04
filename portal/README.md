@@ -621,13 +621,16 @@ PASSWORD_HASH="$(bun -e 'console.log(await Bun.password.hash("test"))')" bun run
 What runs on the machine keeps working at every step below, and each step can
 wait for the next. Every command is run by the author, from the workstation.
 
-1. **The portal.** `cd portal && sitesolide deploy --force`.
-   `--force`, because the unit gains `PUBLIC_URL` and loses its loopback-only
-   confinement (`"network": "outbound"`), and the portal's own block gains
-   `/oidc/start /oidc/callback /oidc/signout` in its `@dynamic` matcher, the
-   two `@portal_ambiguous` lines and the two `request_header -X-Sitesolide*`,
-   `-X_sitesolide*` lines: read the divergence `deploy` prints first, it must be
-   exactly those lines. Check:
+1. **The portal.** `cd portal && sitesolide deploy`, then the same with
+   `--force`. Without it, deploy stops before pushing anything and prints the
+   divergence, cut short after five lines; `--force` is needed because the
+   unit gains `PUBLIC_URL` and loses its loopback-only confinement
+   (`"network": "outbound"`: its `IPAddressDeny` and `IPAddressAllow` lines go),
+   and the portal's own block gains `/oidc/start /oidc/callback /oidc/signout`
+   in its `@dynamic` matcher, the two `@portal_ambiguous` lines, the two
+   `request_header -X-Sitesolide*`, `-X_sitesolide*` lines, and a
+   `file_server { hide .git .env* }` in place of the bare `file_server`. Nothing
+   else may differ. Check:
    `curl -s https://portal.<zone>/sante` answers `{"ok":true,"configure":true}`;
    `curl -s -o /dev/null -w '%{http_code}\n' 'https://portal.<zone>/admin/sharing/..%2f..%2fsante'`
    answers `400`; a protected site still opens with the cookie you already had,
