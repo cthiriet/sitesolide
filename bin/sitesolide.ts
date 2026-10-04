@@ -24,11 +24,13 @@
  * identifier, like the manifest keys.
  *
  * ONE COMMAND IS ENOUGH, including on the first run: `deploy` creates the
- * system user, puts the unit in place and pushes from the vault a secret the VM
- * does not have yet. It never replaces, on the other hand, a unit in service,
- * whose contents may differ from the generated one for good reasons: that case
- * is reported, and `--force` settles it by hand. Nor does it touch a secret
- * already there, for another reason: THE VM IS THE SOURCE OF TRUTH.
+ * system user, puts the unit in place and checks that every declared secret is
+ * on the VM; one that is missing stops it, naming the dashboard's Secrets
+ * section where it is created, and the same command then finishes. It never
+ * replaces, on the other hand, a unit in service, whose contents may differ
+ * from the generated one for good reasons: that case is reported, and
+ * `--force` settles it by hand. Nor does it push or touch a secret, for another
+ * reason: THE VM IS THE SOURCE OF TRUTH.
  * /etc/sitesolide is managed from the Secrets section of the dashboard, and a
  * deployment that measured the machine against the workstation's vault would
  * take every value changed over there for a lag to catch up on. Everything

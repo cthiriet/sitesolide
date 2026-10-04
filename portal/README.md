@@ -567,13 +567,14 @@ another account*, which asks the provider to choose.
 
 ## Password
 
-```bash
-bun run fingerprint
-```
-
-Drawn at random, about 139 bits, shown once; the hash goes into
-`<vault>/portal.env`. That is the path for a new machine: on the first pass,
-`cd portal && sitesolide deploy` puts the file there itself.
+**On a new machine**, the first `cd portal && sitesolide deploy` stops on
+`portal.env`, missing on the machine, and says where to create it: in the
+dashboard, the `portal` site's *Secrets*, create `portal.env`, then *Change
+password*, which draws the password and shows it once. Run the deploy again.
+`deploy` never pushes a secret, see [docs/install.md](../docs/install.md). The
+steward creates the file `site-portal:site-portal 0600`; one written by hand
+with another owner is listed as unmanaged, with the command that repairs it,
+and nothing, *Change password* included, touches it until then.
 
 **After that the password changes from the dashboard**, in the `portal` site's
 *Secrets*: *Change password*, the dashboard's own password retyped, a new one
