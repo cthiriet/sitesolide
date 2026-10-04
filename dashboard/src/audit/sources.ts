@@ -116,9 +116,15 @@ function readRows(source: AuditSource, list: unknown, where: string): SourceRow[
  * A route that only hands over its latest entries: what comes after `after`
  * among them. Read to their end, the source is too; `window` says the end is
  * the route's and not the component's, when it handed over a full window.
+ *
+ * Put in order first. The journal is listed in the order its lines were
+ * appended, and a clock set back between two lines lists a newer one after
+ * an older: the merge, which takes each source as a stream in its own order,
+ * would otherwise take the older one for a row already read and drop it.
  */
 function windowed(rows: SourceRow[], listed: number, after: Position | null, size: number): ReaderResult {
-  const left = after === null ? rows : rows.filter((row) => isAfter(row.position, after));
+  const ordered = [...rows].sort((a, b) => (isAfter(a.position, b.position) ? 1 : isAfter(b.position, a.position) ? -1 : 0));
+  const left = after === null ? ordered : ordered.filter((row) => isAfter(row.position, after));
   return {
     kind: "rows",
     rows: left.slice(0, size),

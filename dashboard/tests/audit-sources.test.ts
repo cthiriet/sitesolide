@@ -209,6 +209,20 @@ describe("the steward's journal", () => {
     ]);
   });
 
+  test("lines appended after the clock was set back are read whole, in the order of time", async () => {
+    const log = [
+      { a: T - 10, operation: "lock", result: "ok", slug: null, file: null, variable: null, detail: null },
+      // Appended after the line above, but the clock had gone back in between.
+      { a: T + 50, operation: "set", result: "ok", slug: "cms", file: "cms.env", variable: "TOKEN", detail: null },
+      { a: T, operation: "unlock", result: "ok", slug: null, file: null, variable: null, detail: null },
+    ];
+    const reader = createReaders(dependencies({ steward: { readLog: () => json({ entries: log }) } })).steward;
+    const all = await reader.read(null, 10);
+    expect(all.kind === "rows" && all.rows.map((row) => row.row.action)).toEqual(["secrets.set", "secrets.unlock", "secrets.lock"]);
+    const rest = await reader.read([T + 50, 0], 10);
+    expect(rest.kind === "rows" && rest.rows.map((row) => row.row.action)).toEqual(["secrets.unlock", "secrets.lock"]);
+  });
+
   test("garbage, or a refusal, is unavailable", async () => {
     for (const readLog of [() => json({ entries: [{ a: "soon" }] }), () => json({ nothing: true }), () => json({ error: "failure", message: "disk full" }, 500)]) {
       expect(failure(await createReaders(dependencies({ steward: { readLog } })).steward.read(null, 10))?.state).toBe("unavailable");
