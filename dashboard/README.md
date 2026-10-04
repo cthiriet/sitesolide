@@ -646,6 +646,42 @@ bin/deploy-installer.sh             # 3. the installer's code, its template, its
 Revoking every token closes the API without touching anything else: *Team*,
 *Revoke* on each.
 
+### Upgrading: the manifest's strings, egress, the deployment cap
+
+A security review of the control API tightened what a manifest may write
+into a Caddy block or a unit (bin/cli/manifest.ts, fragment.ts, unit.ts),
+folded `egress` under the outbound permission, stopped deployments waiting for
+their archive from counting against the machine, and made the rate limiting
+read the address Caddy appends. Nothing changes on the machine until these
+steps run, and each one stands without the next.
+
+Before anything, on the workstation: `bin/test.sh`. Its manifest tests
+validate every manifest of the repository and of the sites repository with
+the new rules, which are the manifests deposited on the machine: a refusal
+there is a manifest to fix before deploying anything. None of them holds a
+`%`, so no unit in service diverges once the generator escapes it.
+
+```bash
+bin/deploy-installer.sh             # 1. the judge that counts: validate(), the scope, the generators
+cd dashboard && sitesolide deploy   # 2. the API's early refusals, the cap, the limiter, the Team page
+bin/deploy-gatekeeper.sh            # 3. the same generator for the portal's door
+```
+
+1. **The installer.** Check: a token deployment whose manifest carries
+   `"headers": { "X-Test": "{$CLOUDFLARE_API_TOKEN}" }` fails with
+   `invalid-manifest` and writes nothing; `examples/bun-app` still deploys.
+   Roll back: `bin/deploy-installer.sh` from the previous commit.
+2. **The dashboard.** Check: the same manifest is refused at
+   `POST /api/v1/deployments` before any upload; a token without outbound
+   network gets `egress: your token may not reach outside hosts`; the *Team*
+   page's outbound permission mentions the hosts a service lists. Roll back:
+   deploy the previous commit of `dashboard/`; no table changed.
+3. **The gatekeeper.** Check: putting a site's portal up and down from the
+   dashboard still works. Roll back: `bin/deploy-gatekeeper.sh` from the
+   previous commit.
+
+The steward needs nothing: it judges tokens and slugs, not manifests.
+
 ## Deployment, in this order
 
 ```bash
