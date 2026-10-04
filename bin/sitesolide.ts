@@ -9,10 +9,15 @@
  *   sitesolide remove --confirm <slug>  take the project off the machine
  *   sitesolide run -- <command>     load the vault secret and run
  *   sitesolide mcp                  the same commands, as tools for an agent
+ *   sitesolide login --url <url>    a team member: a token instead of SSH
  *
  * `--json` turns the output of every command but `init` and `run` into one
  * event per line, for agents: see the output section below, bin/cli/output.ts
  * and docs/agents.md.
+ *
+ * A workstation with no `server`, but a dashboard address and a token, is a
+ * team member's: `deploy`, `status` and `logs` then go through the dashboard's
+ * control API, and nothing below runs. See bin/cli/remote.ts.
  *
  * The interface is in English, options and messages alike: a CLI is a technical
  * identifier, like the manifest keys.
@@ -165,6 +170,7 @@ import {
 } from "./cli/caddy-lock";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, type ProjectAccount } from "./cli/loopback";
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
+import { login, remoteMode, runRemote } from "./cli/remote";
 import {
   listUnitsCommand,
   loopbackStateCommand,
@@ -2367,7 +2373,7 @@ async function initialise(arguments_: string[]): Promise<void> {
   // stays silent about them lets the repository's defaults play, and therefore
   // never lies. The flag and the key carry the same name, so that what is typed
   // is what lands in the file.
-  for (const key of ["contact", "vault", "sites"] as const) {
+  for (const key of ["contact", "vault", "sites", "api"] as const) {
     const given = value(key) ?? previous[key];
     if (given !== undefined && given !== "") config[key] = given;
   }
@@ -2412,6 +2418,21 @@ if (import.meta.main) {
     process.exit(0);
   }
 
+  // A team member's workstation has no server and no root: `login`, and the
+  // commands the dashboard's control API carries, go through it instead of
+  // SSH. The owner's path below is untouched. See bin/cli/remote.ts.
+  if (command === "login") process.exit(await login(arguments_, { environment: process.env }));
+  if (remoteMode(arguments_, process.env)) {
+    process.exit(
+      await runRemote(command, arguments_, {
+        folder,
+        environment: process.env,
+        build: (project) => runBuild(project, executor),
+        checkPublic: (project) => checkPublicFolder(project),
+      }),
+    );
+  }
+
   const config = await (async () => {
     try {
       return await readConfig();
@@ -2420,6 +2441,7 @@ if (import.meta.main) {
         die(`missing settings: ${error.missing.join(", ")}`, [
           "run: sitesolide init",
           `it writes ${configPath()}, which says which machine to serve and under which zone`,
+          "a team member with a token from the owner runs instead: sitesolide login --url https://dashboard.<zone>",
         ]);
       }
       throw error;
@@ -2526,6 +2548,10 @@ if (import.meta.main) {
           "     --dry-run                    show every step, remove nothing",
           "  sitesolide run -- <command>     load the secret from the vault and run",
           "  sitesolide mcp                  serve these commands to an agent, over MCP on stdio",
+          "  sitesolide login --url <https://dashboard.zone>",
+          "                                  a team member: keep a token, deploy without SSH",
+          "     --token-stdin                read the token from standard input",
+          "  any command --api               go through the dashboard's API even with a server",
           "",
           "--json, on every command but init and run: one JSON event per line, see docs/agents.md",
           `secrets live on the server: manage them in the Secrets section of ${dashboardAddress(config.zone)}`,
