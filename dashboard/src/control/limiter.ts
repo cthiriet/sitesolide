@@ -11,8 +11,8 @@
  *
  * The schedule is the sign-in's (`remainingWait`): three failures tolerated,
  * then five seconds doubling up to an hour. The address is the one Caddy puts
- * in `X-Forwarded-For`; Caddy discards what the client sent in that header,
- * and only Caddy reaches this port (the loopback rule).
+ * in `X-Forwarded-For`, and only Caddy reaches this port (the loopback rule):
+ * see clientAddress for which one of its values.
  *
  * In memory, bounded: a restart forgets, which costs an attacker nothing he
  * could not get by waiting, and the table never grows past `MAX_ADDRESSES`.
@@ -48,9 +48,23 @@ export function createLimiter(clock: () => number = Date.now, max = MAX_ADDRESSE
   };
 }
 
-/** The client's address as Caddy gives it, or a fixed key when there is no Caddy in front (development). */
+/**
+ * The client's address as Caddy gives it: **the last** value of
+ * `X-Forwarded-For`, or a fixed key when there is no Caddy in front
+ * (development).
+ *
+ * Measured on Caddy 2.11.4, a client sending `X-Forwarded-For: 192.0.2.1`
+ * through a `reverse_proxy`: with no `trusted_proxies`, the dashboard receives
+ * the peer's address alone, the client's value discarded; with
+ * `trusted_proxies` covering the peer, it receives `192.0.2.1, <peer>`, the
+ * client's value kept in front. The generated dashboard block and the
+ * Caddyfile configure no `trusted_proxies` today, so the first value and the
+ * last are the same. The last is read all the same: it is the one Caddy
+ * itself appends in both configurations, and the first would let anyone
+ * choose their address, and someone else's wait, the day a proxy is trusted.
+ */
 export function clientAddress(req: Request): string {
   const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded === null || forwarded.trim() === "") return "direct";
-  return forwarded.split(",")[0]!.trim().slice(0, 64);
+  const last = forwarded?.split(",").at(-1)?.trim() ?? "";
+  return last === "" ? "direct" : last.slice(0, 64);
 }

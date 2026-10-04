@@ -99,8 +99,19 @@ describe("the limiter", () => {
 
   test("the address Caddy forwards, a fixed key without Caddy", () => {
     expect(clientAddress(new Request("http://x", { headers: { "X-Forwarded-For": "203.0.113.5" } }))).toBe("203.0.113.5");
-    expect(clientAddress(new Request("http://x", { headers: { "X-Forwarded-For": "203.0.113.5, 10.0.0.1" } }))).toBe("203.0.113.5");
     expect(clientAddress(new Request("http://x"))).toBe("direct");
+    expect(clientAddress(new Request("http://x", { headers: { "X-Forwarded-For": " " } }))).toBe("direct");
+  });
+
+  test("the last value, the one Caddy appends: what the client wrote in front never chooses its key", () => {
+    // Caddy 2.11.4 keeps the client's value in front of its own when the peer
+    // is a trusted proxy: the first value would then be anyone's choice.
+    const forwarded = (value: string) => clientAddress(new Request("http://x", { headers: { "X-Forwarded-For": value } }));
+    expect(forwarded("192.0.2.1, 203.0.113.5")).toBe("203.0.113.5");
+    expect(forwarded("192.0.2.1, 198.51.100.7, 203.0.113.5")).toBe("203.0.113.5");
+    const limiter = createLimiter(() => 0);
+    for (let i = 0; i < 5; i++) limiter.failure(forwarded(`192.0.2.${i}, 203.0.113.5`));
+    expect(limiter.wait("203.0.113.5")).toBeGreaterThan(0);
   });
 });
 
