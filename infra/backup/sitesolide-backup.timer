@@ -1,0 +1,21 @@
+# Cadence of the snapshots: every hour, which is what the retention's 24
+# hourly snapshots are counted in. A minute of jitter lets systemd group the
+# wake-ups; up to five of random delay keep the run off the top of the hour,
+# where the other timers of the machine gather.
+#
+# Enabled by `bin/deploy-backup.sh enable`, after a first run by hand has
+# been read: installing the component enables nothing.
+
+[Unit]
+Description=Snapshots of every project's data, every hour
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5min
+AccuracySec=1min
+# A run missed while the machine was off is made at boot: an hour without a
+# snapshot is a gap, and catching it up costs one run.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

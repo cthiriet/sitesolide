@@ -67,6 +67,9 @@ const BORROWINGS = [
   // The archive format the CLI writes for the control API, and that the
   // installer's tests write too, malicious archives included.
   "bin/cli/bundle.ts",
+  // The names of the data snapshots: the backup component writes them, the
+  // steward lists them and `sitesolide backups` reads them, all by this rule.
+  "bin/cli/backups.ts",
 ];
 
 /** The header of every copied module. */

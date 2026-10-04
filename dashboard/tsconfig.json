@@ -14,5 +14,5 @@
     "noUncheckedIndexedAccess": true,
     "types": ["bun"]
   },
-  "include": ["server.ts", "collector.ts", "steward.ts", "gatekeeper.ts", "installer.ts", "src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
+  "include": ["server.ts", "collector.ts", "steward.ts", "gatekeeper.ts", "installer.ts", "backup.ts", "src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
 }

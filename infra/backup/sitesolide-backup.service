@@ -1,0 +1,99 @@
+# The backup component's scheduled run: every project's data folder
+# snapshotted, the old snapshots pruned, the bucket brought up to date if one
+# is configured, and /var/lib/sitesolide-backup/last-run.json written for the
+# monitor. See dashboard/src/backup/README.md.
+#
+#   systemctl start sitesolide-backup.service        a run now, waits for its end
+#   cat /var/lib/sitesolide-backup/last-run.json
+#
+# It runs as root to list the projects and to write archives no project can
+# read; it never opens a project's file itself. The copy of each data folder
+# runs as that project's account, in a transient unit that PID 1 creates on
+# request (`systemd-run`, dashboard/src/backup/runner.ts) and that is confined
+# like the project's own service: what follows bounds the orchestrator alone.
+#
+# Placed by bin/deploy-backup.sh, never by `sitesolide deploy`, and launched by
+# sitesolide-backup.timer once `bin/deploy-backup.sh enable` has been run.
+#
+# NEVER `caddy stop` nor `caddy start`: nothing here touches Caddy.
+
+[Unit]
+Description=Snapshots of every project's data
+# It reads /srv/sites and writes /var/backups: nothing to do before they are mounted.
+RequiresMountsFor=/srv/sites /var/backups
+# Installed, the timer may fire before the code is there: nothing then.
+ConditionPathExists=/usr/local/lib/sitesolide/backup.js
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/bun /usr/local/lib/sitesolide/backup.js run
+# The zone names the landing's folder in /srv/sites; without it the landing
+# would not be recognised as a project, and its data would not be saved.
+EnvironmentFile=/etc/caddy/sitesolide.env
+# The bucket and the encryption passphrase, managed from the dashboard's
+# Secrets section, under the dashboard site. Absent: local snapshots only.
+# Read by PID 1 as root before the process starts: the file stays root's,
+# 0600, and is re-read at every run, so a change applies at the next one.
+EnvironmentFile=-/etc/sitesolide/dashboard-backup.env
+
+# A run must never dispute the disk or the processor with a site answering a
+# visitor; the copies it starts get the same treatment from runner.ts.
+Nice=10
+IOSchedulingClass=idle
+
+# Under the hour of the timer. The offsite catch-up stops itself at 40
+# minutes (OFFSITE_DEADLINE_MS) so that the status file is always written.
+TimeoutStartSec=50min
+
+UMask=0077
+# /var/lib/sitesolide-backup: the database, the status file (0644, for the
+# monitor), the restore requests (0700). 0755 so that the monitor need not
+# be root to read the status; everything sensitive inside is 0600 or 0700.
+StateDirectory=sitesolide-backup
+StateDirectoryMode=0755
+# /run/sitesolide-backup: the lock shared with the restores, and their
+# results. Kept after the unit stops, the restores' results are read there.
+RuntimeDirectory=sitesolide-backup
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+
+# One capability: reading the projects' folders to list them and measure
+# them, never to write there. Everything it writes is in its own folders,
+# which root owns. Starting a transient unit needs none: PID 1 judges the
+# caller by its uid on its socket.
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+
+# The whole system read-only except the archives. /var/backups/sitesolide is
+# created 0700 root by bin/deploy-backup.sh: missing, the unit would fail with
+# 226/NAMESPACE.
+ProtectSystem=strict
+ReadWritePaths=/var/backups/sitesolide
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+
+# The network, for the bucket only: the copies themselves have none at all.
+# AF_UNIX for systemd, which systemd-run reaches through its socket.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+# Like the steward and the gatekeeper: @system-service, nothing stricter
+# (Bun dies with status=31/SYS under `~@privileged @resources`).
+SystemCallFilter=@system-service
+
+# It streams archives from a pipe to a file and reads them back, a chunk at a
+# time, and encrypts in chunks of 1 MiB with two upload parts of 8 MiB in
+# flight.
+MemoryMax=256M

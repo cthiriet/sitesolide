@@ -64,6 +64,8 @@ export type Manifest = {
   egress?: string[];
   /** The connectors asked for; a grant on the machine allows them, see bin/cli/egress.ts. */
   connectors?: string[];
+  /** `false` keeps the data folder out of the machine's snapshots, see isBackedUp. */
+  backup?: boolean;
 };
 
 /**
@@ -94,6 +96,7 @@ export const KNOWN_KEYS = [
   "portalExempt",
   "egress",
   "connectors",
+  "backup",
 ];
 
 /** The keys of one entry of `services`, refused beyond these for the same reason. */
@@ -528,7 +531,31 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     }
   }
 
+  errors.push(...backupErrors(manifest, isApplication));
+
   return errors;
+}
+
+/**
+ * Is the project's data folder in the machine's snapshots? Every app's is,
+ * unless its manifest says `"backup": false`: a folder holding nothing worth
+ * keeping, a cache or a copy of something kept elsewhere, need not take room
+ * on the backups disk every hour. See dashboard/src/backup/README.md.
+ */
+export function isBackedUp(manifest: Manifest): boolean {
+  return manifest.backup !== false;
+}
+
+/**
+ * `backup` opts out, and that is all it can say. Like `portal`, its absence
+ * already has a meaning, the default, and `true` would be a second way of
+ * writing it, which ends up diverging. A static site has no data folder.
+ */
+function backupErrors(manifest: Manifest, isApplication: boolean): string[] {
+  if (manifest.backup === undefined) return [];
+  if (manifest.backup !== false) return ["backup: false to keep the data folder out of the snapshots, or absent"];
+  if (!isApplication) return ["backup: without `start`, there is no data folder to back up"];
+  return [];
 }
 
 /** The refusals of an `env`, the project's or a service's, `label` naming which. */

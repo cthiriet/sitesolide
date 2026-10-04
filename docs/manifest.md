@@ -355,3 +355,20 @@ in the dashboard's *Access* section; `sitesolide deploy` reads what the machine
 carries and rewrites the local manifest, which you then commit. Every command
 refuses to contradict it: a repository that reopened a site the dashboard closed
 would be the worst possible failure.
+
+### `backup`
+
+```json
+"backup": false
+```
+
+Every app's `data/` folder is snapshotted by the machine every hour, once the
+backup component is installed (see
+[dashboard/src/backup/README.md](../dashboard/src/backup/README.md)), and can be
+restored from the dashboard's *Backups* section. `false` keeps it out: a folder
+that only holds a cache, or a copy of something kept elsewhere, need not take
+room on the backups disk every hour.
+
+`false` is the only value: absent already means backed up, and `true` would be
+a second way of writing it. A static site has no data folder, so the key is
+refused there.
