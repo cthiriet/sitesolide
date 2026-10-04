@@ -607,12 +607,15 @@ bin/deploy-installer.sh             # 3. the installer's code, its template, its
 1. **The dashboard.** `/api/v1/` answers `not-available`, and the *Team* page
    says to run the steward's script: the steward in place answers
    `404 no such route` to the control routes, which the dashboard reads as
-   "not yet". Check: `curl -s https://dashboard.<zone>/api/v1/whoami -H 'Authorization: Bearer sst_x'`
-   answers 401, unknown token, or 503, not available. Roll back: deploy the
-   previous commit of `dashboard/`.
-2. **The steward.** The *Team* page lists tokens and creates them; a deployment
-   answers `not-available` until the installer is there. The steward's script
-   checks itself as before. Check, on the machine:
+   "not yet". Check, with a value that has a token's shape and is nobody's:
+   `curl -s https://dashboard.<zone>/api/v1/whoami -H "Authorization: Bearer sst_$(printf '0%.0s' $(seq 43))"`
+   answers 503 `not-available`, and the *Team* page shows the same banner; the
+   other pages are unchanged. Roll back: deploy the previous commit of
+   `dashboard/`; the two new tables of `dashboard.db` stay, unread.
+2. **The steward.** The *Team* page lists tokens and creates them; the same
+   `curl` now answers 401 `unauthenticated`, and a deployment answers
+   `not-available` until the installer is there. The steward's script checks
+   itself as before. Check, on the machine:
    `sudo -u site-dashboard curl -s --unix-socket /run/sitesolide-steward/secretaire.sock http://steward/team/tokens`
    answers `{"tokens":[]}`. Roll back: `bin/deploy-steward.sh` from the previous
    commit; `team.json` stays, unread, and the tokens come back with the steward.
