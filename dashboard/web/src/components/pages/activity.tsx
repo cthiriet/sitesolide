@@ -99,6 +99,9 @@ export function ActivityPage() {
   const [filters, setFilters] = useState<AuditFilters>(NO_FILTERS)
   const [applied, setApplied] = useState<AuditFilters>(NO_FILTERS)
   const [log, setLog] = useState<LogState>({ state: "loading" })
+  // The strip at the top: every source as last read, kept while other filters
+  // load, and for the sources a filter leaves out.
+  const [seen, setSeen] = useState<SourceStatus[]>([])
   const [more, setMore] = useState(false)
   const [retrying, setRetrying] = useState(false)
   // The read that counts: an answer to filters changed since is dropped.
@@ -113,6 +116,7 @@ export function ActivityPage() {
       if (mine !== sequence.current) return
       if (fetched.kind === "session") return sessionExpired()
       if (fetched.kind === "error") return setLog({ state: "error", message: fetched.message })
+      setSeen((before) => mergeStatuses(before, fetched.statuses))
       setLog({ state: "ready", rows: fetched.rows, cursor: fetched.cursor, scanned: fetched.scanned, statuses: fetched.statuses })
     },
     [sessionExpired],
@@ -132,6 +136,7 @@ export function ActivityPage() {
     void (async () => {
       const fetched = await fetchPages(applied, null, 1)
       if (mine !== sequence.current || fetched.kind !== "ok") return
+      setSeen((before) => mergeStatuses(before, fetched.statuses))
       setLog((before) => {
         if (before.state !== "ready") return before
         const newest = { rows: fetched.rows, cursor: fetched.cursor, sources: fetched.statuses, scanned: fetched.scanned }
@@ -164,6 +169,7 @@ export function ActivityPage() {
       if (mine !== sequence.current) return
       if (fetched.kind === "session") return sessionExpired()
       if (fetched.kind === "error") return announce(fetched.message)
+      setSeen((before) => mergeStatuses(before, fetched.statuses))
       setLog((before) => {
         if (before.state !== "ready") return before
         const known = new Set(before.rows.map((row) => row.id))
@@ -230,7 +236,7 @@ export function ActivityPage() {
           egress refusals and connectors, backups and restores, secrets and portal changes. Values never appear here.
         </p>
 
-        {ready !== null && <SourceStates statuses={ready.statuses} />}
+        <SourceStates statuses={seen} />
 
         <AuditFilterBar
           filters={filters}
