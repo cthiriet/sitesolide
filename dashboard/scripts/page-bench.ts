@@ -53,6 +53,8 @@
  *   BENCH_NO_EGRESS=1     no egress proxy: the Connectors page's activity says so
  *   BENCH_EMPTY=1             no snapshot at all: the "No snapshot" state
  *   BENCH_SHOWCASE=1          the same fleet healed, for the README's screenshots
+ *   BENCH_NO_BACKUPS=1        the backup component not installed
+ *   BENCH_OLD_STEWARD=1       a steward from before the backups: `no such route`
  *
  * The password is fixed and obvious, `demo`, since nothing here is real.
  */
@@ -76,6 +78,7 @@ import {
   type ConnectorsFile,
   type GrantsFile,
 } from "../borrowed/connectors";
+import { benchBackupRoutes } from "./bench-backups";
 
 const PASSWORD = "demo";
 
@@ -1013,6 +1016,8 @@ const steward =
     : Bun.serve({
         unix: socket,
         routes: {
+          // The backups, their troubles and a simulated restore: scripts/bench-backups.ts.
+          ...benchBackupRoutes({ start, folders: FOLDERS, isValidToken }),
           "/projects": { GET: () => Response.json({ projects: PROJECTS.map(projectView) }) },
           "/team/tokens": {
             GET: () => Response.json({ tokens: [...teamTokens].sort((a, b) => b.createdAt - a.createdAt) }),

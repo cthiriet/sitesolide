@@ -11,6 +11,7 @@ import { ActivityPage } from "@/components/pages/activity"
 import { ConnectorsPage } from "@/components/pages/connectors"
 import { TeamPage } from "@/components/pages/team"
 import { AccessSection } from "@/components/pages/site-access"
+import { BackupsSection } from "@/components/pages/site-backups"
 import { OverviewSection } from "@/components/pages/site-overview"
 import { AudienceSection } from "@/components/pages/site-audience"
 import { GuestsSection } from "@/components/pages/site-guests"
@@ -35,6 +36,8 @@ function Section({ page }: { page: Extract<Page, { name: "site" }> }) {
       return <SharingSection slug={page.slug} />
     case "access":
       return <AccessSection slug={page.slug} />
+    case "backups":
+      return <BackupsSection slug={page.slug} />
   }
 }
 

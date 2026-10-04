@@ -27,6 +27,9 @@ import type {
   TeamPageResponse,
   CreatedTokenResponse,
   TokenView,
+  BackupAuditResponse,
+  BackupsResponse,
+  RestoreResponse,
 } from "./types"
 
 /** `status` is 0 when no answer arrived: network down, service stopped. */
@@ -227,5 +230,28 @@ export function revokeTeamToken(id: string) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id }),
+  })
+}
+
+// --- The backups ---------------------------------------------------------------
+//
+// Read with the session; a restore goes through the steward with the session's
+// unlocking, like a secret. The restore answers once started, and the page
+// follows it by reading the backups again.
+
+export function readBackups(slug: string) {
+  return callApi<BackupsResponse & SecretsRefusal>(`/api/backups?slug=${encodeURIComponent(slug)}`)
+}
+
+export function readBackupAudit(slug: string) {
+  return callApi<BackupAuditResponse & SecretsRefusal>(`/api/backups/audit?slug=${encodeURIComponent(slug)}`)
+}
+
+/** The slug retyped, as the steward demands: the requester is the service's to name, not the page's. */
+export function restoreBackup({ slug, snapshot, confirmation }: { slug: string; snapshot: string; confirmation: string }) {
+  return callApi<RestoreResponse & SecretsRefusal>("/api/backups/restore", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug, snapshot, confirmation }),
   })
 }

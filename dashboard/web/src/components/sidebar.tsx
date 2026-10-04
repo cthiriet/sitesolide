@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { ChartNoAxesColumn, ChevronLeft, Gauge, Globe, History, KeyRound, LogOut, PanelLeft, Plug, Share2, ShieldCheck, Users, UsersRound, type LucideIcon } from "lucide-react"
+import { ChartNoAxesColumn, ChevronLeft, DatabaseBackup, Gauge, Globe, History, KeyRound, LogOut, PanelLeft, Plug, Share2, ShieldCheck, Users, UsersRound, type LucideIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -38,7 +38,9 @@ export const SECTION_ICONS: Record<Section, LucideIcon> = {
   guests: UsersRound,
   sharing: Share2,
   access: ShieldCheck,
+  backups: DatabaseBackup,
 }
+
 
 /** A navigation entry, whatever the level: where it leads, its name, its icon and what it reports. */
 type NavEntry = { key: string; target: Page; title: string; Icon: LucideIcon; signal: Indicator | null }
@@ -250,6 +252,7 @@ const TAB_COLUMNS: Record<number, string> = {
   4: "grid-cols-4",
   5: "grid-cols-5",
   6: "grid-cols-6",
+  7: "grid-cols-7",
 }
 
 /**

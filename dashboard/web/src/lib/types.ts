@@ -91,3 +91,22 @@ export type {
  * deploy what stay with the steward and the installer.
  */
 export type { Scope, TokenView, DeploymentState, AuditEntry, TeamDeployment, TeamPageResponse, CreatedTokenResponse } from "../../../src/control/protocol"
+
+/**
+ * The backups, from the contract the steward and the service share
+ * (src/backup/protocol.ts). Types only: what may be restored is the steward's
+ * to say, and the page shows its reason.
+ */
+export type {
+  AuditEntry as BackupAuditEntry,
+  BackupAuditResponse,
+  BackupsResponse,
+  BackupsView,
+  LastRunView,
+  RestoreResponse,
+  RestoreState,
+  RestoreView,
+  RetentionPolicy,
+  SnapshotKind,
+  SnapshotView,
+} from "../../../src/backup/protocol"

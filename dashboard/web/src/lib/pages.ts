@@ -7,8 +7,8 @@
  * discrepancies and the list of sites live, the steward's activity, the
  * connectors the egress proxy lends, and the team, whose tokens deploy
  * without SSH. A
- * site's: six sections, Overview, Audience, Secrets, Guests, Sharing and Access, the
- * site as a parameter.
+ * site's: seven sections, Overview, Audience, Secrets, Guests, Sharing, Access
+ * and Backups, the site as a parameter.
  *
  * Every page is a file of the build, `site/secrets/index.html` for
  * `/site/secrets/`: Caddy serves `public/` through `file_server`, with no
@@ -26,7 +26,7 @@
 import type { Verdict } from "./verdict"
 
 /** A site's sections, in the order of the sidebar and the tabs. */
-export type Section = "overview" | "audience" | "secrets" | "guests" | "sharing" | "access"
+export type Section = "overview" | "audience" | "secrets" | "guests" | "sharing" | "access" | "backups"
 
 /** The pages of the machine level. */
 export type MachinePage = "home" | "activity" | "team" | "connectors"
@@ -52,6 +52,7 @@ export const SECTIONS: readonly SectionEntry[] = [
   { section: "guests", title: "Guests", path: "/site/guests/" },
   { section: "sharing", title: "Sharing", path: "/site/sharing/" },
   { section: "access", title: "Access", path: "/site/access/" },
+  { section: "backups", title: "Backups", path: "/site/backups/" },
 ]
 
 /** The parameter that names the site: `/site/secrets/?s=cms`. */

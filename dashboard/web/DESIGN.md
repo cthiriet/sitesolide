@@ -336,6 +336,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Passwords | Change password, Dashboard password, Generate a strong one, Set my own, New password, Copy password | Set hash, Regenerate |
 | Guests | Guest, access, Create access, Revoke, Remove, Expires, Last visit, No expiry | New access, User, guest link |
 | Sharing | Who gets in, Only admins, Specific people, Everyone at a domain, People, Domains, Add people, Add a domain, Remove, Always let in, Send them the link, Make it public, work account | Permissions, ACL, Invite, Public mode |
+| Backups | Snapshot, Scheduled, Before restore, Server, Offsite only, Restore, Restoring..., Restored, Offsite copy, Show all | Backup file, Revert, Rollback, Recover |
 | Unreachable | Can't reach the dashboard., Can't reach the portal., Can't reach the steward. | is not answering |
 | Common actions | Refresh, Retry, Sign in, Sign out, Copy, Copied, Cancel, Close, Manage | Reload, Try again, Log out, Submit |
 | Empty states | No issues, No sites match "x", No guest access to cms yet, cms has no secret files, cms isn't behind the portal | Nothing here! |
@@ -356,6 +357,7 @@ One page per served file, the site in `?s=`:
 | A site's Guests | `/site/guests/?s=cms` | `site/guests/index.html` |
 | A site's Sharing | `/site/sharing/?s=cms` | `site/sharing/index.html` |
 | A site's Access | `/site/access/?s=cms` | `site/access/index.html` |
+| A site's Backups | `/site/backups/?s=cms` | `site/backups/index.html` |
 
 Older addresses keep their file and redirect client-side, with no history entry.
 A section without `?s=` goes to the home page.
@@ -415,6 +417,17 @@ the gatekeeper's three steps and the rollback on failure; a removal warns that
 the site becomes public and makes you retype the slug. **Preview lock**: the
 code and its link, and the `bin/lock.sh` commands that set, change or remove it,
 the dashboard not writing there.
+
+**A site's Backups.** The lock in the header, a restore asking for the dashboard
+password like a secret. **Schedule**: how fresh the last snapshot is (the last
+run's error in red, over two hours in attention), what the retention keeps,
+the offsite copy, the last restore. **Snapshots**: the newest twelve, then *Show
+all*, each with *Restore*, or the steward's reason not to under the title.
+**Activity**: the runs and the restores. The confirmation lists what the server
+does and makes you retype the slug; the wait shows the phase the steward reads
+from the restore and the time elapsed on a five-minute scale, then the result,
+which says how to undo it. A site with nothing to save says why, and what would
+change it.
 
 ## 8. What was set aside
 
