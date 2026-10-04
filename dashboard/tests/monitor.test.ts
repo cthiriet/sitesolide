@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { buildStatus } from "../../monitor/src/status";
 import type { Tracked } from "../../monitor/src/alerts";
-import { MONITOR_STALE_MS, duration, monitorDiscrepancies } from "../src/monitor";
+import {
+  MONITOR_STALE_MS,
+  copyMonitorStatus,
+  duration,
+  monitorDiscrepancies,
+  monitorRefusal,
+  statusFileRefusal,
+} from "../src/monitor";
 import { buildSnapshot, type Raw } from "../src/state";
 
 const NOW = 1_756_400_000_000;
@@ -120,6 +127,57 @@ describe("the monitor among the Issues", () => {
     };
     expect(buildSnapshot(raw).discrepancies).toEqual([
       { slug: null, severity: "error", message: "Caddy is inactive (dead), result success (monitor, for 12 min)" },
+    ]);
+  });
+});
+
+/**
+ * What the collector, as root, lets through from a file the monitor's account
+ * owns: decided here, so that it is tested without root, and run by
+ * collector.ts, whose own test lays the traps on a real tree.
+ */
+describe("the monitor's status as the collector copies it", () => {
+  const file = { link: false, regular: true, links: 1, uid: 61234, size: 400 };
+
+  test("a small regular file of the directory's owner, with a single name, passes", () => {
+    expect(statusFileRefusal(file, 61234, 1024)).toBeNull();
+  });
+
+  test("a link, anything but a regular file, a second name, another owner or too many bytes is refused", () => {
+    expect(statusFileRefusal({ ...file, link: true, regular: false }, 61234, 1024)).toBe("status.json is a symbolic link");
+    expect(statusFileRefusal({ ...file, regular: false }, 61234, 1024)).toBe("status.json is not a regular file");
+    expect(statusFileRefusal({ ...file, links: 2 }, 61234, 1024)).toBe("status.json has more than one name");
+    // A hard link to a file of root's keeps root as its owner.
+    expect(statusFileRefusal({ ...file, uid: 0 }, 61234, 1024)).toBe("status.json does not belong to the owner of its directory");
+    expect(statusFileRefusal({ ...file, size: 1025 }, 61234, 1024)).toBe("status.json is larger than 1024 bytes");
+  });
+
+  test("written anew from the fields the dashboard knows, never byte for byte", () => {
+    const written = status(
+      { "site:shop.test-zone.invalid": tracked("down", "site", "critical", "https://shop.test-zone.invalid/ answered 502", "shop") },
+      { unchecked: 2 },
+    );
+    const original = JSON.parse(written) as { down: unknown[] };
+    const smuggled = JSON.stringify({ ...original, smuggled: "SECRET=value", down: [...original.down, "junk", { kind: 1 }] });
+    expect(JSON.parse(copyMonitorStatus(smuggled))).toEqual(original);
+    expect(monitorDiscrepancies(copyMonitorStatus(written), NOW)).toEqual(monitorDiscrepancies(written, NOW));
+  });
+
+  test("strings are cut, unknown words dropped, and a status with no date is refused", () => {
+    const long = "x".repeat(5000);
+    const raw = { generatedAt: NOW, zone: long, heartbeat: "exfiltrated", down: [{ kind: "site", summary: long, severity: "loud", slug: 3 }] };
+    const copy = JSON.parse(copyMonitorStatus(JSON.stringify(raw))) as { zone: string; heartbeat?: string; down: unknown[] };
+    expect(copy.zone).toHaveLength(1000);
+    expect(copy.heartbeat).toBeUndefined();
+    expect(copy.down).toEqual([{ kind: "site", summary: "x".repeat(1000), slug: null }]);
+    expect(copyMonitorStatus("{")).toBe(monitorRefusal("status.json is not valid JSON"));
+    expect(copyMonitorStatus("[]")).toBe(monitorRefusal("status.json is not an object"));
+    expect(copyMonitorStatus("{}")).toBe(monitorRefusal("status.json has no date"));
+  });
+
+  test("a refusal shows among the Issues, as a warning", () => {
+    expect(monitorDiscrepancies(monitorRefusal("status.json is a symbolic link"), NOW)).toEqual([
+      { slug: null, severity: "warning", message: "Monitor status refused by the collector: status.json is a symbolic link" },
     ]);
   });
 });

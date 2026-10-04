@@ -81,8 +81,8 @@ Caddy and root. The collector, already privileged and already passing every
 minute, is therefore the only path, and it carries two files in both directions:
 
 ```
-/srv/sites/analytics/data/snapshot.json  ->  state.json, `audience` field
-/srv/sites/analytics/data/hosts.json     <-  host to served directory
+/srv/sites/analytics/data/instantane.json  ->  state.json, `audience` field
+/srv/sites/analytics/data/hotes.json       <-  host to served directory
 ```
 
 The downward one is the more interesting: `analytics` does not know which hosts
@@ -94,6 +94,15 @@ collector's only write outside that directory, declared in its unit, and it
 carries no secret: that correspondence is already readable in the Caddyfile and
 in DNS.
 
+**Root writes there, in a directory site-analytics owns**, and in its own,
+which site-dashboard owns: a link put at the name it writes would have root
+overwrite, and hand over to that account, any file it can write. Both files go
+through the steward's `writeAtomically`: a temporary file of an unguessable
+name created by `O_EXCL | O_NOFOLLOW`, its mode and owner set on the open
+descriptor, then a rename onto `hotes.json` or `state.json`, which replaces a
+link without following it. A `data` directory that is itself a link gets no
+host table at all.
+
 The interpretation lives here, in [src/audience.ts](src/audience.ts): the
 snapshot carries only counts, and the bounce rate and average time are computed
 at display time. It carries **no visitor fingerprint**, which `analytics` checks
@@ -103,8 +112,13 @@ on its side.
 
 The monitor ([../monitor/README.md](../monitor/README.md)) runs every minute
 under a dynamic account and leaves `/var/lib/sitesolide-monitor/status.json`,
-which only root reaches. The collector copies it into the reading as it stands,
-the `monitor` field, and [src/monitor.ts](src/monitor.ts) turns what is down
+which only root reaches. The collector carries it into the reading, the
+`monitor` field, but not as it stands: the directory belongs to the monitor's
+account, so the file is opened without following a link, only if it is a small
+regular file with a single name owned by the directory's owner, then parsed and
+written anew from the fields [src/monitor.ts](src/monitor.ts) knows; anything
+else takes its place as the reason it was refused, shown as a warning. That
+module then turns what is down
 into discrepancies: a site that does not answer over HTTPS, a certificate about
 to expire, a failed backup sit among the home page's Issues, linked to their
 site. A project's unit, the disk and the memory are left out, the page judging

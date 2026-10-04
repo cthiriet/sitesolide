@@ -23,10 +23,12 @@
  *
  *   SITES_DIR=/tmp/attempt/srv STATE_FILE=/tmp/state.json OWNER= bun collector.ts
  */
-import { existsSync, readFileSync, readdirSync, renameSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { lstatSync, readFileSync, readdirSync, statSync, type Stats } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { $ } from "bun";
 import { hostTable } from "./src/audience";
+import { copyMonitorStatus, monitorRefusal, statusFileRefusal } from "./src/monitor";
+import { readAccount, readBounded, readGroup, writeAtomically, type Examination } from "./src/secrets/system";
 import { unitOf, type Raw, type RawFolder, type RawMachine, type RawUnit } from "./src/state";
 import { readManifest, servicesOf } from "./borrowed/manifest";
 
@@ -52,14 +54,19 @@ const HOSTS_FILE = process.env.HOSTS_FILE ?? "/srv/sites/analytics/data/hotes.js
 const HOSTS_OWNER = process.env.HOSTS_OWNER ?? "site-analytics:site-analytics";
 
 /**
- * The status the monitor leaves after each pass (monitor/README.md), copied as
- * it stands like the audience snapshot. Under its DynamicUser it lives behind
- * a link into /var/lib/private, which only root traverses: the collector,
- * already root and already passing every minute, is the one path to the
- * dashboard. Missing as long as bin/deploy-monitor.sh has not run, which is a
- * normal state; src/monitor.ts interprets it.
+ * The status the monitor leaves after each pass (monitor/README.md). Under its
+ * DynamicUser it lives behind a link into /var/lib/private, which only root
+ * traverses: the collector, already root and already passing every minute, is
+ * the one path to the dashboard. Missing as long as bin/deploy-monitor.sh has
+ * not run, which is a normal state; src/monitor.ts interprets it.
+ *
+ * Unlike every other file read here, it is NOT copied as it stands: the
+ * directory belongs to the monitor's account, see readMonitorStatus.
  */
 const MONITOR_FILE = process.env.MONITOR_FILE ?? "/var/lib/sitesolide-monitor/status.json";
+
+/** A status lists what is down, a few hundred bytes a check: a megabyte is thousands. */
+const MONITOR_MAX_BYTES = 1024 * 1024;
 const ZONE = requiredZone();
 
 /**
@@ -126,6 +133,47 @@ async function text(path: string, incomplete: string | null = null): Promise<str
   } catch {
     return null;
   }
+}
+
+/**
+ * The monitor's status, as the dashboard may see it, or null when there is
+ * none.
+ *
+ * Read as root from a directory the monitor's dynamic account owns, which
+ * makes it a door: whatever that account puts at status.json, root opens. A
+ * symbolic link to /etc/sitesolide/dashboard-*.env would have the secret
+ * copied into a reading site-dashboard reads. So the file is looked at without
+ * following a link, opened only if src/monitor.ts finds nothing to refuse in
+ * it, its owner compared to its directory's, and parsed then written anew
+ * rather than copied. The directory itself is reached through
+ * /var/lib/sitesolide-monitor, a link systemd keeps and root owns, which the
+ * monitor cannot move.
+ *
+ * A refusal takes the place of the status and says why, so that the page shows
+ * it rather than "no monitor".
+ */
+function readMonitorStatus(): string | null {
+  let folder: Stats;
+  try {
+    folder = statSync(dirname(MONITOR_FILE));
+  } catch {
+    return null;
+  }
+
+  let examination: Examination;
+  try {
+    examination = readBounded(MONITOR_FILE, MONITOR_MAX_BYTES);
+  } catch (error) {
+    // Replaced between the look and the opening, or an error of the disk.
+    return monitorRefusal(`status.json could not be read (${(error as { code?: string }).code ?? (error as Error).message})`);
+  }
+  if (examination.kind === "absent") return null;
+
+  const refusal = statusFileRefusal(examination.info, folder.uid, MONITOR_MAX_BYTES);
+  if (refusal !== null) return monitorRefusal(refusal);
+  // Grown past the cap between the look and the reading.
+  if (examination.bytes === null) return monitorRefusal(`status.json is larger than ${MONITOR_MAX_BYTES} bytes`);
+  return copyMonitorStatus(new TextDecoder().decode(examination.bytes));
 }
 
 /**
@@ -349,7 +397,7 @@ async function collect(): Promise<Raw> {
     // Missing as long as `analytics` has not run once, which is a normal state:
     // the dashboard says so rather than showing an empty page.
     audience: await text(AUDIENCE_FILE),
-    monitor: await text(MONITOR_FILE),
+    monitor: readMonitorStatus(),
     ports: await ports(),
     blocks: readBlocks(),
     machine: await readMachine(),
@@ -358,17 +406,46 @@ async function collect(): Promise<Raw> {
 }
 
 /**
- * Writing through a temporary file then a rename, in the same directory: the
- * service reads this file on every request, and must never see half of it. The
- * permissions are set before the rename, so that there is no instant at which
- * the file is readable by others.
+ * The account `user:group` names, as numbers for an `fchown`, or null when it
+ * is empty, a test on the workstation having no such account. An account that
+ * does not exist is said, and the file stays root's, as the `chown` that came
+ * before this did when it failed.
  */
-async function writeSnapshot(raw: Raw): Promise<void> {
-  const temp = `${STATE_FILE}.tmp`;
-  await Bun.write(temp, `${JSON.stringify(raw)}\n`);
-  await $`chmod 600 ${temp}`.nothrow().quiet();
-  if (OWNER !== "") await $`chown ${OWNER} ${temp}`.nothrow().quiet();
-  renameSync(temp, STATE_FILE);
+function ownerIds(owner: string): { uid: number; gid: number } | null {
+  if (owner === "") return null;
+  const [user = "", group = user] = owner.split(":");
+  try {
+    const account = readAccount(readFileSync("/etc/passwd", "utf8"), user);
+    const gid = readGroup(readFileSync("/etc/group", "utf8"), group);
+    if (account !== null && gid !== null) return { uid: account.uid, gid };
+  } catch {
+    // Unreadable: said below like a missing account.
+  }
+  console.error(`collector: no account ${owner}, the file written stays root's`);
+  return null;
+}
+
+/**
+ * Writing as root into a directory another account owns, the dashboard's or
+ * analytics', both `site-<slug>` 0750.
+ *
+ * That account may put anything at any name there, and a path-based write
+ * follows what it finds: a link at the temporary name had `Bun.write`
+ * overwrite, `chmod` open and `chown` hand over to that account whatever file
+ * root can write, another project's database among them. So the write goes
+ * through the steward's writeAtomically: a temporary file of a name nobody can
+ * guess, created by `O_EXCL | O_NOFOLLOW`, its mode then its owner set on the
+ * descriptor already open, written, then renamed onto the final name, which
+ * replaces whatever stood there, a link included, without following it. The
+ * service reads the final file on every request and never sees half of it,
+ * nor a moment where it is readable by others.
+ */
+function writeOwned(path: string, content: string, mode: number, owner: string): void {
+  writeAtomically(dirname(path), basename(path), new TextEncoder().encode(content), { owner: ownerIds(owner), mode });
+}
+
+function writeSnapshot(raw: Raw): void {
+  writeOwned(STATE_FILE, `${JSON.stringify(raw)}\n`, 0o600, OWNER);
 }
 
 /**
@@ -382,22 +459,29 @@ async function writeSnapshot(raw: Raw): Promise<void> {
  *
  * The directory is not created if it is missing: `analytics` may not be
  * deployed on this machine, and putting a directory in its place would mask
- * that it is missing.
+ * that it is missing. Nor is it written through a link: `O_NOFOLLOW` guards
+ * the last name only, and a `data` that pointed elsewhere would carry the
+ * table there.
  */
-async function writeHosts(raw: Raw): Promise<void> {
+function writeHosts(raw: Raw): void {
   const folder = dirname(HOSTS_FILE);
-  if (!existsSync(folder)) return;
+  let isFolder = false;
+  try {
+    isFolder = lstatSync(folder).isDirectory();
+  } catch {
+    return;
+  }
+  if (!isFolder) {
+    console.error(`collector: ${folder} is not a plain directory, the host table is not written`);
+    return;
+  }
 
   const content = `${JSON.stringify({ generated: raw.generated, hosts: hostTable(raw) })}\n`;
-  const temp = `${HOSTS_FILE}.tmp`;
-  await Bun.write(temp, content);
-  await $`chmod 640 ${temp}`.nothrow().quiet();
-  if (HOSTS_OWNER !== "") await $`chown ${HOSTS_OWNER} ${temp}`.nothrow().quiet();
-  renameSync(temp, HOSTS_FILE);
+  writeOwned(HOSTS_FILE, content, 0o640, HOSTS_OWNER);
 }
 
 const raw = await collect();
 await $`mkdir -p ${dirname(STATE_FILE)}`.nothrow().quiet();
-await writeSnapshot(raw);
-await writeHosts(raw);
+writeSnapshot(raw);
+writeHosts(raw);
 console.log(`${raw.folders.length} folders collected → ${STATE_FILE}`);

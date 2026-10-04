@@ -31,8 +31,9 @@ DynamicUser=yes
 # /var/lib/sitesolide-monitor: the memory of the previous runs and the status
 # the dashboard's collector copies. Under DynamicUser it really lives in
 # /var/lib/private/sitesolide-monitor, behind a link systemd keeps; the
-# collector runs as root and follows it. UMask=0077: what it writes belongs to
-# it alone, the collector reading as root regardless.
+# collector runs as root and follows that link, never one at status.json, and
+# copies the file only if it belongs to this directory's owner. UMask=0077:
+# what it writes belongs to it alone, the collector reading as root regardless.
 StateDirectory=sitesolide-monitor
 StateDirectoryMode=0700
 UMask=0077

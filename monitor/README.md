@@ -238,8 +238,16 @@ unlocked session, like every secret.
 ```
 
 Fields are added, never renamed: the dashboard and the monitor are deployed
-separately, and each reads the other defensively. The collector copies the
-file as it stands into its snapshot, as it copies the audience measurement
+separately, and each reads the other defensively.
+
+**The collector does not copy the file as it stands.** It reads it as root,
+in a directory the monitor's account owns, so a link put at `status.json`
+would have root copy any file it can read into the dashboard's snapshot. It
+opens the file without following a link, only if it is a regular file with a
+single name, under a megabyte, owned by the owner of its directory, and it
+parses it and writes anew the fields `dashboard/src/monitor.ts` knows; anything
+else is replaced by the reason it was refused, which the dashboard shows. A new
+field reaches the page once that module names it
 ([dashboard/README.md](../dashboard/README.md)).
 
 ## Code

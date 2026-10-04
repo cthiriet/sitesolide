@@ -2,10 +2,11 @@
  * What the dashboard is handed: /var/lib/sitesolide-monitor/status.json.
  *
  * The dashboard cannot read the machine, by design (dashboard/README.md): its
- * collector, under root, copies this file into the snapshot it already drops
- * every minute, the way it copies the audience measurement. The dashboard then
- * judges it in dashboard/src/monitor.ts and shows what is down among its
- * Issues.
+ * collector, under root, carries this file into the snapshot it already drops
+ * every minute, parsed and written anew from the fields the dashboard knows,
+ * never as it stands, since root reads it in a directory this monitor's
+ * account owns. The dashboard then judges it in dashboard/src/monitor.ts and
+ * shows what is down among its Issues.
  *
  * It is the contract between the two, kept small and additive: a field is
  * added, never renamed, and the dashboard reads each one defensively, since
