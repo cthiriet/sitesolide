@@ -75,7 +75,7 @@ import {
   type Machine,
 } from "./harden";
 import { hintFor } from "./hints";
-import { kitEnv, kitRoot } from "./kit";
+import { isCompiled, kitEnv, kitRoot } from "./kit";
 import { eventFor, forEachLine, formatEvent, type OutputEvent } from "./output";
 import { runSteps, StepFailure, type Check, type Step, type StepReport } from "./steps";
 
@@ -1358,21 +1358,24 @@ function sshMachine(host: string, environment: Record<string, string>, output: S
 
 /**
  * The folder `sitesolide deploy` runs in for one of the platform's own
- * components, the one place setup names it. Today the kit's own folder. A
- * deploy writes into the folder it runs in, the build's output and a manifest
- * the machine corrects, and a compiled binary's kit is read only: integrated
- * there, this points at a writable copy, and nothing else in setup changes.
+ * components, the one place setup names it: the kit's own folder. A deploy
+ * writes into the folder it runs in, a manifest the machine corrects, and a
+ * compiled binary's kit is read only; the child's `workingFolder` (kit.ts)
+ * moves it onto a writable copy, so nothing here has to.
  */
 export function componentFolder(name: "dashboard" | "portal"): string {
   return join(kitRoot(), name);
 }
 
 /**
- * This CLI, run again as a child: `sitesolide deploy` for a component. Bun on
- * the kit's own entry point today; a compiled binary runs itself.
+ * This CLI, run again as a child: `sitesolide deploy` for a component. A
+ * compiled binary runs itself, its kit holding no bin/sitesolide.ts: naming
+ * that file stopped the first install from the binary at the dashboard. A
+ * checkout runs its entry point with the Bun running this one.
  */
 export function selfCommand(...arguments_: string[]): string[] {
-  return ["bun", join(kitRoot(), "bin", "sitesolide.ts"), ...arguments_];
+  if (isCompiled()) return [process.execPath, ...arguments_];
+  return [process.execPath, join(kitRoot(), "bin", "sitesolide.ts"), ...arguments_];
 }
 
 /**
