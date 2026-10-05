@@ -7,10 +7,10 @@
 # To be run after any deployment that changes the `domain` of a manifest: it is
 # that file, deposited at the project's root on the VM, that this table reads.
 # "sitesolide domain --activate" runs it itself, that is the ordinary way of
-# switching over, described in README.md; this script stays here for the global
-# gesture. The table governs both the routing by Caddy and the authorisation by
-# the `ask` endpoint: as long as it is not regenerated, the client's domain gets
-# no certificate.
+# switching over, described in docs/install.md; this script stays here for the
+# global gesture. The table governs both the routing by Caddy and the
+# authorisation by the `ask` endpoint: as long as it is not regenerated, the
+# client's domain gets no certificate.
 #
 # The script holds the lock it shares with the dashboard's gatekeeper and the
 # other gestures of the workstation, /run/sitesolide-gatekeeper/caddy.lock, from

@@ -75,8 +75,8 @@
  * copy of them. Before the build, it confronts the block it will generate with
  * the one in service, so that a refusal never falls after the code was pushed.
  *
- * Instructions in README.md. This file carries only the orchestration: what
- * decides lives in bin/cli/, as pure functions tested by
+ * Instructions in docs/commands.md. This file carries only the orchestration:
+ * what decides lives in bin/cli/, as pure functions tested by
  * bin/tests/cli-*.test.ts.
  *
  * TWO PROHIBITIONS, each paid for with an incident:

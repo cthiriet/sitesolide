@@ -1,27 +1,88 @@
 # sitesolide
 
-> Deploy every project you have to one server you own. `sitesolide deploy` in a folder puts it live on HTTPS: static sites and apps in any language, with private previews, a password portal, secrets held on the server and managed from a dashboard, and cookieless analytics. One machine serves everything; there is no staging.
+> sitesolide deploys a team's small software, static sites and apps in any language, to one Debian server its owner runs: `sitesolide deploy` in a folder puts it live on HTTPS, behind a sign-in portal when private, with secrets held on the server and set from its dashboard. There is no staging: a real deploy is live for every visitor at once.
 
-A project is a folder with a `sitesolide.json`. The CLI builds on the workstation, uploads over SSH, installs a confined systemd unit and a Caddy block, restarts the service and checks the site answers. The machine is the source of truth for secrets and for the portal door.
+This file is for an agent (Claude Code, Codex, Cursor) that uses the `sitesolide` CLI or its MCP server on a user's behalf. `sitesolide --help` prints every command; the links below are the reference.
 
-For agents: every command but `init` and `run` takes `--json` and prints one JSON event per line, ending with one `result` or one `error` that carries a `hint`. `sitesolide detect` infers a manifest for a folder that has none, and `deploy` chooses a free port when the manifest declares none. `sitesolide mcp` serves `detect`, `deploy`, `status`, `logs`, `sharing`, `share` and `lock_status` as MCP tools over stdio. `sitesolide share alice@acme.com` shares a project behind the portal with people or a domain, like a Google Doc: it gives real people access, so only with the addresses the user names. Secrets never go in the repository: the user sets them in the dashboard. Never change the server by hand.
+**Is it installed and set up?**
+
+- `sitesolide --version --json` ends with a `result` carrying `version`. If the command is missing, the user installs it: `curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/install.sh | sh` (one binary in `~/.local/bin`, no Bun needed).
+- `sitesolide status --json`, from any folder, says which mode the workstation is in and whether it works:
+  - a `result` with `projects`, `ports` and `memory`: the owner's workstation, which reaches the server over SSH;
+  - a `result` with `api`, `identity` and `projects`: a team member's, which goes through the dashboard's API with a token;
+  - an `error` whose message starts `missing settings:`: nothing is configured. A new server is `machine` then `setup` (below); a server already installed is `sitesolide init --server <user@host> --zone <dns.zone> --email <address>`; a team member runs `sitesolide login`. Never guess a server or a zone;
+  - any other `error`: follow its `hint`.
+- The configuration is `~/.config/sitesolide/config.json` (`server`, `zone`, `email`; `api` for a team member), or `$SITESOLIDE_CONFIG_DIR/config.json` for a second installation. The `secrets/` folder beside it holds the workstation's credentials: never read it.
+
+**Deploying a folder.**
+
+1. `sitesolide detect --json` (MCP `detect`): an `inferred` event, then a `result` with `kind`, `manifest`, `reasons`, `notes`, `written`. It reads no server and writes nothing. The `notes` name the secrets the code reads and the network calls it makes.
+2. Review the manifest and the notes with the user, who decides `"network": "outbound"` (without it a service reaches only the loopback, DNS included), `"secrets": ["<slug>.env"]`, and the slug, which is the address `https://<slug>.<zone>/`. `sitesolide detect --write` writes `sitesolide.json`, never over an existing one; `--slug <name>` names the project otherwise than after its folder. Every key: docs/manifest.md.
+3. `sitesolide deploy --dry-run --json` (MCP `deploy` with `dry_run: true`): reads the server, shows the systemd unit and Caddy block an app would get as `file` events and every action as `planned`, changes nothing, and does not run the build. Show the user what it plans.
+4. Once the user agrees: `sitesolide deploy --json`. In a folder still without a manifest, `sitesolide deploy --yes --json` (MCP `accept_inferred: true`) writes the inferred one and deploys; it is refused when the server already has a project of that name: pick another `--slug`, never deploy over it.
+5. Read the last line. A `result` carries `slug`, `kind` (`static`, `service`, `services`), `port`, `url` and, over SSH, `status`, the HTTP status of the final check: give the user the `url`. `manifestWritten: true` means `sitesolide.json` changed on disk (an inferred manifest, a port chosen, a door set from the dashboard): commit it. An `error` carries a `hint`: follow it.
+6. A failed restart, or a site answering 500 or 502: `sitesolide logs --json --lines 100` (MCP `logs`), one `log` event per entry with `at`, `unit`, `priority`, `message`; priority 3 and below are errors. Fix the code, deploy again.
+
+An app without `port` gets the lowest free one between 3000 and 3099 from `deploy`, written back into `sitesolide.json`. A port taken: delete `port` and deploy again.
+
+**The `--json` contract.** Every command but `init` and `run` takes `--json`. Standard output then carries one JSON object per line and nothing else, and the run ends with exactly one `result` (`ok: true`, `command`, the command's data) or one `error` (`message`, `details`, `hint`), always the last line; a failure exits non-zero. Before it: `step`, `info`, `planned` (`message`); `warning` (`message`, `details`), to relay to the user; `output` (`stream`, `line`), a line of the build, rsync or a script; `file` (`name`, `content`); `inferred`; `log`; `check` (`step`, `status` among `done`, `ok`, `skip`, `todo`, `fail`, `title`, `detail`), one line of setup's checklist. Under `--json` nothing prompts and ssh never asks: the key must be loaded (`ssh-add`) and the host key already known, or the connection fails at once. Every command's `result` fields: docs/agents.md.
+
+**MCP.** `sitesolide mcp` serves the CLI as tools over stdio, with no configuration of its own; each tool runs the command with `--json` in the folder named, an absolute path, and returns its events.
+
+| Tool | Arguments | Changes |
+|---|---|---|
+| `detect` | `folder`, `slug` | nothing, reads no server |
+| `deploy` | `folder`, `dry_run`, `accept_inferred`, `slug` | the live site, unless `dry_run` |
+| `status` | | nothing |
+| `logs` | `folder`, `lines` | nothing |
+| `sharing` | `folder` | nothing |
+| `share` | `folder`, `people`, `domain`, `remove`, `only_admins` | who may open the app and its data |
+| `lock_status` | `folder` | nothing, never shows the code |
+
+Register it in Claude Code with `claude mcp add --scope user --transport stdio sitesolide -- sitesolide mcp`; any other client launches the command `sitesolide` with the argument `mcp`. Keep `deploy` and `share` on "ask". `remove`, `lock`, `unlock`, `domain --activate` and `--force` are not tools, on purpose: they stay the owner's.
+
+**With a team token.** A workstation or sandbox without SSH to the server deploys with a personal token, `sst_` then 43 characters, which the owner creates on the dashboard's Team page. The user hands it over without pasting it into the conversation: `SITESOLIDE_API=https://dashboard.<zone>` and `SITESOLIDE_TOKEN` in the agent's environment, which win over the files and need nothing kept on disk, or `sitesolide login --url https://dashboard.<zone> --token-stdin` with the token piped in, which checks it and keeps it in `~/.config/sitesolide/secrets/team-token`, 0600. Then `deploy`, `status`, `logs` (`--lines` up to 500) and `share` run through the dashboard, and `detect` as anywhere; the owner's commands (`lock`, `unlock`, `domain`, `remove`, `run`) are refused with `needs-ssh`. `deploy` takes no option there: no `--dry-run` (review `sitesolide.json` with the user instead; the dashboard judges the manifest before anything is built or sent) and no `--yes` (write the manifest first with `sitesolide detect --write`). A token's projects sit behind the portal unless the token may deploy public sites, and what its scope does not allow is refused with `out-of-scope`: never work around it with another slug or token. `--api` sends an owner's command through the API too.
+
+**Sharing.** A site behind the portal opens to the admins alone until it is shared, the way a Google Doc is.
+
+- `sitesolide share --json` (MCP `sharing`) reads who gets in and the `message` to send them.
+- `sitesolide share alice@example.com --json` adds people by work email; `--domain example.com` opens it to everyone at that domain, subdomains not included; `--remove <email|domain>` takes one off; `--only-admins` closes it back, the lists kept.
+- Sharing gives real people access to the app and its data. Ask the user who should get in, share with exactly the addresses or the domain they named and nobody else, tell them who will get in and wait for their yes. Give them the result's `message` to send. A `warning` naming someone let back in from an earlier sharing goes to the user.
+- Never make a site public: turning its portal off is the owner's, from the dashboard's Access section. `no-portal` means the site is public or not deployed. With a team token, a domain is accepted only among those the portal admits at sign-in.
+
+**A new server.** Run these only when the user asked for a server; the tokens are theirs.
+
+- `sitesolide machine create --provider hetzner --name <name> --json` orders a Debian 13 VM at Hetzner (`cx23` at `fsn1` unless `--type`, `--location`) with a firewall opening 22, 80, 443 and ICMP and the workstation's SSH key for root, then waits for SSH. The `result` carries `machine` and `next`, the `setup` command to run. The token comes from `HCLOUD_TOKEN` or standard input with `--token-stdin`, never an option. `sitesolide machine list --provider hetzner --json` lists what sitesolide created. An interrupted run is finished by running the same command again.
+- `sitesolide setup root@<ipv4> --zone <dns.zone> --email <address> --json` hardens the machine, creates the DNS records at Cloudflare, installs every component and writes the configuration. It is idempotent and resumable: on an installed machine it changes nothing, after a failure it resumes at the failed step. `--dry-run` checks every step and changes nothing. The Cloudflare token comes from `CLOUDFLARE_API_TOKEN` or standard input with `--cloudflare-token-stdin`; under `--json` it never prompts. `--skip-dns` is for another DNS provider.
+- The run that draws the dashboard's and the portal's passwords prints them once on standard error, for the user, never in an event: never repeat, store or use them.
+- A configuration that names another server, zone or account stops setup; it may point at a machine in service. A second installation gets `--config-dir <dir>` on setup, then `SITESOLIDE_CONFIG_DIR=<dir>` before every command.
+
+**Rules an agent never breaks.**
+
+- Secrets never go into the repository, `sitesolide.json`, `env`, a command-line argument or the conversation. The user sets them in the dashboard's Secrets section, `https://dashboard.<zone>`. A deploy missing one stops before the restart and names the page: tell the user, deploy again once they have. Never read, print or guess a secret, nor ask the user to paste one. Tokens, Hetzner's, Cloudflare's or a team token, reach the CLI through environment variables or standard input only.
+- Never change the server by hand: no `ssh`, `sudo`, `systemctl` or file edits there; everything goes through the CLI or the MCP tools. Never `caddy stop` or `caddy start`: they talk to the Caddy in service whatever `--config` says, and a stop takes every site down.
+- Only on the user's explicit decision, never on your own: `--force` over a file edited on the machine, `setup --dns-replace` over records that point elsewhere, `setup --any-os`, `machine destroy --confirm <name>` (the disk and the provider's backups go with it), `remove --confirm <slug>` (no backup), `lock`, `unlock`, `domain --activate` or `--deactivate`, and sharing with anyone the user did not name.
+- Every `error` carries a `hint`: follow it, and never answer a refusal with `--force` or a workaround. A refused or dropped SSH connection during setup is most likely a fail2ban ban of this workstation: never retry in a loop; wait the 10 minutes it lasts, then run the same command once.
+- What is deployed is live at once: dry-run first, show the user, and deploy on their yes.
 
 ## Docs
 
-- [Agents](docs/agents.md): the CLI with --json, zero configuration, the MCP server, the skill, and what stays the owner's
+- [Agents](docs/agents.md): the `--json` events and every command's `result`, zero configuration, the MCP server and how to register it, the skill
+- [Commands](docs/commands.md): everything the CLI does, with SSH and with a team token
 - [The manifest](docs/manifest.md): every key of sitesolide.json and what it changes
-- [Commands](docs/commands.md): everything the CLI does
+- [Deploying as a team member](docs/team.md): login, what a token may deploy and share, the control API and its error codes
 - [Secrets](docs/secrets.md): where they live, and why never in git
-- [How it works](docs/concepts.md): the parts, and who may touch what
+- [Setup](docs/setup.md): every step of `sitesolide setup`, what it refuses, the token and the passwords
+- [A machine from a cloud provider](docs/machine.md): `sitesolide machine create`, `list` and `destroy`, and the token they need
 
 ## Skills
 
-- [sitesolide skill](skills/sitesolide/SKILL.md): the deploy workflow for Claude Code
+- [sitesolide skill](skills/sitesolide/SKILL.md): the deploy workflow, for Claude Code
 
 ## Optional
 
-- [Install](docs/install.md): from a blank account to a first deployment
-- [Setup](docs/setup.md): `sitesolide setup`, the whole base install of a fresh machine in one resumable command
-- [A machine from a cloud provider](docs/machine.md): sitesolide machine create, list and destroy, and the token they need
+- [Install](docs/install.md): from nothing to a first deployment, for a person
+- [How it works](docs/concepts.md): the parts, and who may touch what
+- [Upgrading](docs/upgrading.md): from one release to the next on a running machine
 - [README](README.md): what sitesolide is
 - [Examples](examples/): a static site and a Bun app, deployable as they are

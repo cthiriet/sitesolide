@@ -36,7 +36,8 @@ Use the MCP tools when they are available (`detect`, `deploy`, `status`,
    is the folder's own code. Show the user what it plans. With a team token
    instead of SSH, a dry run is refused: review `sitesolide.json` with the user.
 4. **Deploy**, once the user agrees: `deploy` (`sitesolide deploy --json`). A
-   folder still without a manifest needs `accept_inferred: true` (`--yes`).
+   folder still without a manifest needs `accept_inferred: true` (`--yes`);
+   with a team token, write it first with `sitesolide detect --write`.
 5. **Read the result.** On success, give the user the `url`. When
    `manifestWritten` is true, `sitesolide.json` changed on disk (a port chosen,
    an inferred manifest, a door set from the dashboard): commit it.
@@ -53,6 +54,11 @@ Use the MCP tools when they are available (`detect`, `deploy`, `status`,
 
 Every error carries a `hint`: follow it. The usual ones:
 
+- **`missing settings`.** Nothing is configured on this workstation. A new
+  server is `sitesolide machine create`, then `sitesolide setup`, run only when
+  the user asks, with their own tokens from the environment; a server already
+  installed is `sitesolide init`; a team member runs `sitesolide login`. Never
+  guess a server or a zone.
 - **A secret is missing on the server.** The deploy stopped before restarting
   anything. Tell the user to create the file and its values in the dashboard's
   *Secrets* section, at the address the error gives, then deploy again. Never
@@ -82,8 +88,11 @@ Every error carries a `hint`: follow it. The usual ones:
   editing files there, and never `caddy stop` or `caddy start`, which stop every
   site at once. Everything goes through the CLI or the tools.
 - Never retry a refusal with `--force` or a workaround on your own.
-- Never remove a project, lock or unlock a preview, or switch a domain unless
-  the user asked for exactly that: those are their commands, not tools.
+- Never remove a project, lock or unlock a preview, switch a domain, destroy a
+  machine or replace DNS records with `setup --dns-replace` unless the user
+  asked for exactly that: those are their commands, not tools.
+- Never retry `setup` in a loop on a refused connection: most likely fail2ban
+  banned this workstation, for 10 minutes.
 - Never share with anyone the user did not name, and never make a site public:
   turning the portal off is theirs, from the dashboard.
 - Never read, print or guess a secret, nor ask the user to paste one.

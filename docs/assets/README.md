@@ -6,7 +6,7 @@
 | `logo-dark.svg` | The same on a dark background, where the mark's red is lifted so it does not sink into the page. |
 | `mark.svg` | The mark alone, square, for an avatar or an icon. |
 | `social-preview.png` | The repository's social card, 1280 × 640, set under *Settings → Social preview*. |
-| `screenshots/` | The README's screenshots: the real dashboard, run by its page bench in showcase mode (`BENCH_SHOWCASE=1 bun scripts/page-bench.ts` in `dashboard/`), with fictitious sites, framed on the brand's midnight blue. |
+| `screenshots/` | Screenshots, `dashboard.png` in the README: the real dashboard, run by its page bench in showcase mode (`BENCH_SHOWCASE=1 bun scripts/page-bench.ts` in `dashboard/`), with fictitious sites, framed on the brand's midnight blue. |
 
 **The mark** is a solid block with two slits cut in from opposite sides: the S
 of sitesolide, left standing in the material. The slits are holes rather than

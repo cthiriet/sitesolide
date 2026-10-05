@@ -22,11 +22,10 @@ the portal, the shared sign-in, unless your token may deploy public sites.
 
 ## Sign in
 
-You need [Bun](https://bun.com) and the CLI:
+You need the CLI, one executable that needs neither Bun nor a clone:
 
 ```bash
-git clone https://github.com/cthiriet/sitesolide && cd sitesolide
-ln -sf "$PWD/bin/sitesolide.ts" ~/.local/bin/sitesolide
+curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/install.sh | sh
 sitesolide login --url https://dashboard.<zone>
 ```
 

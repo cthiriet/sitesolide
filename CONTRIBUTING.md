@@ -15,8 +15,8 @@
 | `docs/` | Install guide, concepts, manifest reference, commands, secrets. |
 | `examples/` | Two projects to deploy as they are: a static site and a Bun app. |
 
-The README's screenshots come from the dashboard's page bench, in its showcase
-mode, with fictitious sites:
+The screenshots in `docs/assets/screenshots/`, the README's among them, come
+from the dashboard's page bench, in its showcase mode, with fictitious sites:
 
 ```bash
 cd dashboard && bun run build
