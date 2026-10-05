@@ -52,6 +52,14 @@ export class FakeMachine implements Machine {
   readonly failing = new Set<string>();
   /** The deploy account's login fails even once it is made: a key the account did not get. */
   breakProof = false;
+  /**
+   * The logins sshd refused: what fail2ban counts. An account that does not
+   * exist, or root once closed, lands here.
+   */
+  readonly refusedLogins: string[] = [];
+  /** Every connection refused from the call after this tag's on: fail2ban banning the workstation. */
+  banAfter: string | null = null;
+  private banned = false;
   readonly deployUser: string;
   facts: Record<string, string>;
 
@@ -96,7 +104,13 @@ export class FakeMachine implements Machine {
     const tag = scriptTag(input) ?? command;
     this.calls.push({ account, command, tag, input });
     this.timeline.push(`${account} ${tag}`);
-    if (!this.logins.has(account)) return this.answer(255, "", `${account}@${HOST}: Permission denied (publickey).`);
+    if (this.banned) return this.answer(255, "", `ssh: connect to host ${HOST} port 22: Connection refused`);
+    if (this.banAfter === tag) this.banned = true;
+    if (!this.logins.has(account)) {
+      this.refusedLogins.push(account);
+      return this.answer(255, "", `${account}@${HOST}: Permission denied (publickey).`);
+    }
+    if (command === "true") return this.answer(0);
     if (command === "sudo -n true") return this.answer(this.sudo.has(account) ? 0 : 1, "", "sudo: a password is required");
 
     const match = /^(sudo -n )?sh -s (setup:[a-z0-9-]+:[a-z]+)$/.exec(command);
@@ -116,7 +130,7 @@ export class FakeMachine implements Machine {
       const missing = labels.filter((label) => !this.labels.has(label));
       return this.answer(0, missing.length === 0 ? "check: done\n" : `check: missing ${missing.join(" ")}\n`);
     }
-    if (verb === "disarm") return this.answer(0);
+    if (verb === "disarm" || verb === "release") return this.answer(0);
     if (verb !== "run") return this.answer(127, "", `fake machine: unexpected verb ${verb}`);
 
     if (this.failing.has(match[2])) {
