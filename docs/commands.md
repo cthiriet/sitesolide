@@ -1,10 +1,21 @@
 # Commands
 
 Every command runs from a project's folder, the one holding its
-`sitesolide.json`, except `init`, `machine`, `help` and `--version`. This is
-what `sitesolide --help` prints.
+`sitesolide.json`, except `setup`, `init`, `machine`, `help` and
+`--version`. This is what `sitesolide --help` prints.
 
 ```text
+sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a no-op once done
+   --zone <dns.zone> --email <you@example.com>
+   --contact <you@example.com>   shown on a locked preview's door
+   --user <name>                the account that deploys, deploy by default as root
+   --skip-dns                   create the DNS records by hand: setup lists them and waits
+   --dns-replace                replace records that point elsewhere, on your decision alone
+   --cloudflare-token-stdin     read the Cloudflare token from standard input
+   --minimal                    leave out backups, the team installer and the egress proxy
+   --any-os                     go on with a system other than Debian 13, at your own risk
+   --config-dir <dir>           another installation's own configuration folder
+   --dry-run                    check every step, change nothing
 sitesolide help                 this list, with or without a configuration; --help after any command
 sitesolide --version            the release this binary was built from, dev from a checkout
 sitesolide init                 write ~/.config/sitesolide/config.json
@@ -45,11 +56,18 @@ sitesolide login --url <https://dashboard.zone>
 sitesolide machine create|list|destroy --provider hetzner
                                 a VM ordered by API, before setup: sitesolide machine lists the options
 any command --api               go through the dashboard's API even with a server
+SITESOLIDE_CONFIG_DIR=<dir>     before any command: read that installation's configuration
 
 --json, on every command but init and run: one JSON event per line, see docs/agents.md
 secrets live on the server: manage them in the Secrets section of https://dashboard.<zone>
 the portal of a deployed site is set from the dashboard too: deploy follows the server
 ```
+
+`sitesolide setup` is the whole base install of [install.md](install.md),
+hardening and DNS records included, in one command that can be run again at
+any time: see [setup.md](setup.md). `SITESOLIDE_CONFIG_DIR` points every
+command at another configuration folder than `~/.config/sitesolide`, for a
+second installation driven from the same workstation.
 
 `sitesolide run` loads the files the manifest declares from
 `~/.config/sitesolide/secrets/`, the few credentials your workstation presents

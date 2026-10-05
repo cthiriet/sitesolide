@@ -1,13 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   adoptLegacyKeys,
+  composeConfig,
   configPath,
   defaultPaths,
   deploymentAccount,
   expandHome,
   IncompleteConfig,
   mergeConfig,
+  privateFolder,
 } from "../cli/config";
 import { printSettings, settings } from "../cli/settings";
 
@@ -16,7 +20,41 @@ const MINIMUM = { server: "me@elsewhere", zone: "test.invalid", email: "me@test.
 
 describe("paths", () => {
   test("the configuration lives in ~/.config/sitesolide", () => {
-    expect(configPath(HOME)).toBe(join(HOME, ".config", "sitesolide", "config.json"));
+    expect(configPath(HOME, {})).toBe(join(HOME, ".config", "sitesolide", "config.json"));
+  });
+
+  test("SITESOLIDE_CONFIG_DIR moves the whole folder: configuration, vault and Terraform's", () => {
+    // A second installation driven from the same workstation, whose folder in
+    // its usual place may point at a machine in service: every path of the
+    // CLI and of the scripts comes from here, so none of them can miss it.
+    const environment = { SITESOLIDE_CONFIG_DIR: "~/second" };
+    expect(privateFolder(HOME, environment)).toBe("/Users/test/second");
+    expect(configPath(HOME, environment)).toBe("/Users/test/second/config.json");
+    expect(defaultPaths(HOME, environment)).toEqual({ vault: "/Users/test/second/secrets", terraform: "/Users/test/second/terraform" });
+    expect(mergeConfig(MINIMUM, environment, HOME).vault).toBe("/Users/test/second/secrets");
+    expect(settings(MINIMUM, environment, HOME).SITESOLIDE_TERRAFORM_DIR).toBe("/Users/test/second/terraform");
+    expect(privateFolder(HOME, { SITESOLIDE_CONFIG_DIR: "" })).toBe(join(HOME, ".config", "sitesolide"));
+  });
+
+  test("the scripts under bin/ read the folder SITESOLIDE_CONFIG_DIR names", () => {
+    const folder = mkdtempSync(join(tmpdir(), "config-dir-"));
+    try {
+      writeFileSync(join(folder, "config.json"), JSON.stringify({ server: "me@second.invalid", zone: "second.invalid", email: "me@second.invalid" }));
+      const environment: Record<string, string> = {};
+      for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !key.startsWith("SITESOLIDE_")) environment[key] = value;
+      const printed = Bun.spawnSync(["bun", join(import.meta.dir, "..", "cli", "settings.ts")], {
+        env: { ...environment, HOME: folder, SITESOLIDE_CONFIG_DIR: folder },
+      });
+      expect(printed.stdout.toString()).toContain("SITESOLIDE_SERVER='me@second.invalid'");
+      expect(printed.stdout.toString()).toContain(`SITESOLIDE_VAULT='${join(folder, "secrets")}'`);
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  test("init and setup write the same file: the required settings, then the optional ones given or already there", () => {
+    const written = composeConfig(MINIMUM, { contact: "door@test.invalid" }, { vault: "~/vault", projects: "dropped", api: "" });
+    expect(written).toEqual({ ...MINIMUM, contact: "door@test.invalid", vault: "~/vault" });
   });
 
   test("the tilde is expanded, never left to a shell", () => {
@@ -177,7 +215,7 @@ describe("the scripts under bin/ read the same configuration", () => {
   });
 
   test("the default paths are the CLI's, not a second list", () => {
-    const defaults = defaultPaths(HOME);
+    const defaults = defaultPaths(HOME, {});
     const values = settings(MINIMUM, {}, HOME);
     expect(values.SITESOLIDE_VAULT).toBe(defaults.vault);
     expect(values.SITESOLIDE_TERRAFORM_DIR).toBe(defaults.terraform);

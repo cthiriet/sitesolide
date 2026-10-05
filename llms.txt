@@ -21,6 +21,7 @@ For agents: every command but `init` and `run` takes `--json` and prints one JSO
 ## Optional
 
 - [Install](docs/install.md): from a blank account to a first deployment
+- [Setup](docs/setup.md): `sitesolide setup`, the whole base install of a fresh machine in one resumable command
 - [A machine from a cloud provider](docs/machine.md): sitesolide machine create, list and destroy, and the token they need
 - [README](README.md): what sitesolide is
 - [Examples](examples/): a static site and a Bun app, deployable as they are

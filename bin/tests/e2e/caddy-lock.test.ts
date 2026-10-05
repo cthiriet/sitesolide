@@ -74,7 +74,9 @@ function offlineHome(): Record<string, string> {
     // test fail on that refusal rather than on what it measures.
     JSON.stringify({ zone: TEST_ZONE, email: TEST_EMAIL }),
   );
-  return { HOME: home };
+  // Named as well as implied by HOME: a SITESOLIDE_CONFIG_DIR in the test
+  // runner's environment would otherwise win over it.
+  return { HOME: home, SITESOLIDE_CONFIG_DIR: join(home, ".config", "sitesolide") };
 }
 
 /**

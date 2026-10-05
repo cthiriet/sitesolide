@@ -28,6 +28,27 @@ const READ_FAILED =
 const LOCK_BUSY = "someone else is changing Caddy right now: wait a minute, then run the same command again";
 
 export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
+  // --- setup: first, since a step's failure may quote a message of the
+  // patterns below, a domain that does not resolve for one
+  [/^usage: sitesolide setup|^setup: .* is not valid: /, "pass the machine as user@host and the options it needs: sitesolide setup root@<address> --zone <dns.zone> --email <address>; docs/setup.md lists them all"],
+  [/^the configuration names another (server|zone|account)/, "do not edit, move or delete that configuration: it may point at a machine in service; a second installation gets its own folder, --config-dir <dir> on setup and SITESOLIDE_CONFIG_DIR=<dir> for every command after it; ask the owner when unsure"],
+  [/is the configured server, installed without setup/, "this machine is in service: do not run setup on it, and never remove the configuration to get past this; the steps in `details` are the owner's to run by hand, following docs/upgrading.md"],
+  [/^cannot reach .* over SSH/, "check the address and that the machine is up, then that `ssh <user@host> true` connects without a prompt (load the key with ssh-add); then run the same command again"],
+  [/^cannot read .*: the preflight/, "the machine answered something setup does not recognise: check that `ssh <user@host> true` gives a plain shell, then run the same command again"],
+  [/, not Debian 13$/, "create a Debian 13 machine and run setup on it; going on with --any-os is the owner's decision alone"],
+  [/has no sudo without a password$/, "connect as root, or give that account passwordless sudo first; setup never types a password"],
+  [/^unsupported architecture/, "create an amd64 or arm64 machine: Caddy and Bun are installed for those"],
+  [/free on \/ of .*, setup needs/, "free some disk on the machine, or create one with a larger disk, then run the same command again"],
+  [/already serves the zone /, "check --zone: never set up a machine over the zone it already serves; ask the owner"],
+  [/IPv4 is private/, "give the machine's public IPv4 as the host, sitesolide setup root@<public address>, or create the records by hand with --skip-dns"],
+  [/no Cloudflare token|Cloudflare token given is not one/, "the owner sets CLOUDFLARE_API_TOKEN in the environment, or pipes the token to --cloudflare-token-stdin; never pass it as an argument nor print it; with another DNS provider, --skip-dns and docs/setup.md"],
+  [/Cloudflare token is not/, "the owner creates a token at dash.cloudflare.com/profile/api-tokens with Zone / Zone / Read and Zone / DNS / Edit on the zone, then runs setup again with it; never print it"],
+  [/no Cloudflare zone the token can read/, "check --zone, and that the token covers that zone; then run the same command again"],
+  [/^setup stopped at dns: records that point elsewhere/, "do not re-run with --dns-replace on your own: show the records in `details` to the owner, who decides whether they may be replaced"],
+  [/^setup stopped at resolution: /, "the records exist but this workstation does not see them yet: wait a few minutes, then run the same command again; it resumes there"],
+  [/^setup stopped at ssh: /, "sshd was not left half changed, `details` say how it stands: check that `ssh <deploy user>@<host> sudo -n true` works, then run the same command again; never edit sshd's configuration by hand to get past this"],
+  [/^setup stopped at /, "read `details`: they name what failed and the command that shows more; fix that cause, then run the same setup command again, which resumes at that step; never change the machine by hand to get past a check"],
+
   // --- the project folder and its manifest
   [/^no sitesolide\.json in .*: inferred one shown above/, "review the manifest shown in the `inferred` event, then run `sitesolide deploy --yes` to write it and deploy, or `sitesolide detect --write` to write it without deploying"],
   [/already exists on the server, and this folder has no sitesolide\.json/, "pick another name with --slug <name>; never deploy over a project you did not create"],
