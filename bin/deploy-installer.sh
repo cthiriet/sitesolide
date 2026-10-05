@@ -54,7 +54,7 @@ LOCAL="$(mktemp -d)"
 trap 'rm -rf "$LOCAL"' EXIT
 # The borrowings first: the bundle embeds the CLI's generators and decisions,
 # and a borrowing that lags behind would deploy differently from SSH.
-(cd "$REPO_ROOT/dashboard" && bun run borrow > /dev/null)
+sitesolide_borrow dashboard
 (cd "$REPO_ROOT/dashboard" && bun build installer.ts --target=bun --outfile "$LOCAL/installer.js" > /dev/null)
 [ -s "$LOCAL/installer.js" ] || fail "bun build produced nothing"
 FINGERPRINT="$(shasum -a 256 < "$LOCAL/installer.js" | cut -d' ' -f1)"

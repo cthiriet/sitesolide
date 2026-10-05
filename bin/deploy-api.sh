@@ -28,6 +28,18 @@ fi
 RELEASE="$(date +%Y-%m-%d-%H%M%S)-$REVISION"
 TARGET="/srv/api/releases/$RELEASE"
 
+# A kit is read-only, and rsync -a carries modes: from there, the release
+# would land read-only on the machine, where bun install writes into it and
+# the cleanup below removes it. A writable copy leaves instead. A checkout's
+# api/ is writable, and leaves as it is.
+if [ ! -w "$SOURCE" ]; then
+  STAGED="$(mktemp -d)"
+  trap 'chmod -R u+w "$STAGED" 2>/dev/null; rm -rf "$STAGED"' EXIT
+  cp -R "$SOURCE/." "$STAGED/"
+  chmod -R u+w "$STAGED"
+  SOURCE="$STAGED"
+fi
+
 # On a fresh machine nothing has made the account the unit runs as, and
 # cloud-init leaves /srv/api to root while the releases below are written by
 # the deployment account: the first run failed on both, with 217/USER and a

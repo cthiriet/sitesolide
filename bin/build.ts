@@ -23,8 +23,9 @@
  * binaries are signed again, ad hoc, before their sums are written: see
  * signAdHoc.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { packKit, shims, type KitEntry } from "./cli/kit";
 
 const REPOSITORY = resolve(import.meta.dir, "..");
@@ -92,12 +93,118 @@ export function kitFiles(root = REPOSITORY): string[] {
  * the shims that play bun.
  */
 export function kitEntries(root = REPOSITORY): KitEntry[] {
-  const files = kitFiles(root).map((path) => ({
+  return [...kitFiles(root).map((path) => entry(root, path)), ...shims()];
+}
+
+/** One file as the kit packs it, its mode reduced to what git keeps: executable or not. */
+function entry(base: string, path: string): KitEntry {
+  return {
     path,
-    mode: statSync(join(root, path)).mode & 0o100 ? 0o755 : 0o644,
-    content: new Uint8Array(readFileSync(join(root, path))),
-  }));
-  return [...files, ...shims()];
+    mode: statSync(join(base, path)).mode & 0o100 ? 0o755 : 0o644,
+    content: new Uint8Array(readFileSync(join(base, path))),
+  };
+}
+
+/**
+ * The sources a release's kit leaves out once their component is built, its
+ * output standing in for them: nothing reads them any more.
+ */
+export const BUILT_FROM: ReadonlyArray<readonly [RegExp, string]> = [
+  [/^dashboard\/web\//, "the dashboard's interface, which the kit carries built, as dashboard/public"],
+];
+
+/** A component built at release time: its command, and the files it produced that the kit carries. */
+export type Prebuilt = { component: string; command: string; files: string[] };
+
+/** Every file under `folder`, relative to it, but what a node_modules holds: a build's tools, never its output. */
+function walk(folder: string, prefix = ""): string[] {
+  return readdirSync(join(folder, prefix), { withFileTypes: true }).flatMap((item) => {
+    const path = prefix === "" ? item.name : `${prefix}/${item.name}`;
+    if (item.name === "node_modules") return [];
+    if (item.isDirectory()) return walk(folder, path);
+    return item.isFile() ? [path] : [];
+  });
+}
+
+/**
+ * The release's kit: its sources, every component whose manifest has a
+ * `build` built, and the shims.
+ *
+ * THE BUILDS RUN AT RELEASE TIME, NOT ON THE WORKSTATION. The dashboard's
+ * fetches Astro and some fifteen packages from npm, then compiles its
+ * interface: run by `sitesolide setup` on every workstation, that was a
+ * network and a toolchain each install needed, for an output that is the same
+ * everywhere. Each runs once, here, in a copy of the kit's sources laid out as
+ * the repository, since a borrow script reaches above its folder: nothing of
+ * the checkout is touched, and nothing but the kit's sources goes in.
+ *
+ * What a build produced is packed, but a node_modules, the build's tools, and
+ * what the manifest excludes, which a deployment never sends anyway. The
+ * manifest packed loses `build`: deployed from the kit, the component sends
+ * what was built and runs nothing. A checkout keeps its manifest whole, and
+ * builds as it always did. The same sources and the same lockfiles build the
+ * same bytes, so the release stays reproducible.
+ */
+export function releaseKit(root = REPOSITORY): { entries: KitEntry[]; prebuilt: Prebuilt[] } {
+  const sources = kitFiles(root);
+  const stage = mkdtempSync(join(tmpdir(), "sitesolide-stage-"));
+  try {
+    for (const path of sources) {
+      mkdirSync(dirname(join(stage, path)), { recursive: true });
+      copyFileSync(join(root, path), join(stage, path));
+    }
+    const known = new Set(sources);
+    const built = new Map<string, KitEntry>();
+    const prebuilt: Prebuilt[] = [];
+    for (const component of KIT_FOLDERS) {
+      const manifestPath = join(stage, component, "sitesolide.json");
+      if (!existsSync(manifestPath)) continue;
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+      if (typeof manifest.build !== "string") continue;
+      const command = manifest.build;
+      // The Bun running this build first on the PATH: the one the release
+      // embeds, whatever else the machine has. Without NODE_ENV, which the
+      // build sets itself: `bun test` sets it to `test`, and the dashboard's
+      // interface then builds differently from one run to the next.
+      const { NODE_ENV: _, ...environment } = process.env;
+      const run = Bun.spawnSync(["sh", "-c", command], {
+        cwd: join(stage, component),
+        env: { ...environment, PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}` },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (run.exitCode !== 0) {
+        const tail = `${run.stdout.toString()}${run.stderr.toString()}`.trim().split("\n").slice(-20).join("\n");
+        throw new Error(`the build of ${component} failed (${command}):\n${tail}`);
+      }
+      const excluded = new Set(Array.isArray(manifest.exclude) ? manifest.exclude.filter((name): name is string => typeof name === "string") : []);
+      const files: string[] = [];
+      for (const inside of walk(join(stage, component))) {
+        if (excluded.has(inside.split("/")[0]!)) continue;
+        const path = `${component}/${inside}`;
+        const produced = entry(stage, path);
+        // A source the build left as it was is packed from the checkout, below.
+        if (known.has(path) && Buffer.from(produced.content).equals(readFileSync(join(root, path)))) continue;
+        if (NEVER_PACKED.test(path)) throw new Error(`refusing to pack what may carry a secret: ${path}, made by the build of ${component}`);
+        files.push(path);
+        built.set(path, produced);
+      }
+      delete manifest.build;
+      const path = `${component}/sitesolide.json`;
+      built.set(path, { path, mode: 0o644, content: new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`) });
+      prebuilt.push({ component, command, files: files.sort() });
+    }
+    const entries = new Map<string, KitEntry>();
+    for (const path of sources) {
+      const component = path.split("/")[0]!;
+      const replacedByOutput = prebuilt.some((done) => done.component === component) && BUILT_FROM.some(([pattern]) => pattern.test(path));
+      if (!replacedByOutput) entries.set(path, entry(root, path));
+    }
+    for (const [path, produced] of built) entries.set(path, produced);
+    return { entries: [...entries.values(), ...shims()], prebuilt };
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
 }
 
 /** A version a release may carry: `dev`, or a tag such as v0.3.0 or v0.3.0-rc.1. It names a folder and a release. */
@@ -148,7 +255,7 @@ function embedKit(archive: Uint8Array, hash: string): Bun.BunPlugin {
 }
 
 export type Built = {
-  kit: { files: number; size: number; packed: number; hash: string };
+  kit: { files: number; size: number; packed: number; hash: string; prebuilt: Prebuilt[] };
   binaries: { name: string; path: string; size: number; sha256: string; signed: boolean }[];
 };
 
@@ -160,7 +267,8 @@ export async function build(options: { version: string; targets: readonly Target
   const root = options.root ?? REPOSITORY;
   const out = resolve(options.out);
   if (!isValidVersion(options.version)) throw new Error(`--version: ${options.version} is neither dev nor a tag like v0.3.0`);
-  const kit = packKit(kitEntries(root));
+  const release = releaseKit(root);
+  const kit = packKit(release.entries);
   // The embedded source map names each module relative to the working
   // directory: from the root, it says bin/cli/kit.ts, and never where the
   // builder keeps the repository. The same tree then builds the same bytes.
@@ -208,7 +316,7 @@ export async function build(options: { version: string; targets: readonly Target
     }
     // The format of `shasum -a 256` and `sha256sum`: two spaces, then the name.
     await Bun.write(join(out, "SHA256SUMS"), binaries.map((binary) => `${binary.sha256}  ${binary.name}\n`).join(""));
-    return { kit: { files: kit.files.length, size: kit.size, packed: kit.archive.byteLength, hash: kit.hash }, binaries };
+    return { kit: { files: kit.files.length, size: kit.size, packed: kit.archive.byteLength, hash: kit.hash, prebuilt: release.prebuilt }, binaries };
   } finally {
     process.chdir(before);
   }
@@ -233,6 +341,7 @@ if (import.meta.main) {
   const targets = asked.length === 0 ? TARGETS : (asked as Target[]);
   try {
     const built = await build({ version, targets, out });
+    for (const done of built.kit.prebuilt) console.log(`built at release time: ${done.component} (${done.command}), ${done.files.length} files packed`);
     console.log(`kit: ${built.kit.files} files, ${megabytes(built.kit.size)}, ${megabytes(built.kit.packed)} packed, ${built.kit.hash.slice(0, 16)}`);
     for (const binary of built.binaries) console.log(`${binary.name}: ${megabytes(binary.size)}  ${binary.sha256}${binary.signed ? "  signed ad hoc" : ""}`);
     const unsigned = built.binaries.filter((binary) => binary.name.includes("darwin") && !binary.signed);

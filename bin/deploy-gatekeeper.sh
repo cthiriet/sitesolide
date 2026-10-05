@@ -69,7 +69,7 @@ trap 'exit 143' TERM
 # The borrowings first: they are not versioned, and the bundle embeds the CLI's
 # block generator. A borrowing that lags behind would write a block the next
 # `sitesolide deploy` would contradict.
-(cd "$REPO_ROOT/dashboard" && bun run borrow > /dev/null)
+sitesolide_borrow dashboard
 (cd "$REPO_ROOT/dashboard" && bun build gatekeeper.ts --target=bun --outfile "$LOCAL/gatekeeper.js" > /dev/null)
 [ -s "$LOCAL/gatekeeper.js" ] || fail "bun build produced nothing"
 FINGERPRINT="$(shasum -a 256 < "$LOCAL/gatekeeper.js" | cut -d' ' -f1)"

@@ -1,13 +1,14 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { KIT_FOLDERS, kitEntries, kitFiles, NEVER_PACKED, isValidVersion, binaryName, TARGETS } from "../build";
+import { KIT_FOLDERS, kitEntries, kitFiles, NEVER_PACKED, isValidVersion, binaryName, releaseKit, TARGETS } from "../build";
 import { DEFAULT_HINT, hintFor } from "../cli/hints";
 import {
   isCompiled,
   isWholeKit,
   KIT_MARKER,
+  kitComponent,
   kitDirectory,
   kitEnv,
   isKitPath,
@@ -15,10 +16,13 @@ import {
   kitRoot,
   packKit,
   projectEnv,
+  readOnly,
+  removeTree,
   shims,
   SHIM_FOLDER,
   unpackKit,
   VERSION,
+  workingFolder,
   type KitEntry,
 } from "../cli/kit";
 
@@ -35,7 +39,9 @@ import {
 const REPO_ROOT = resolve(import.meta.dir, "..", "..");
 const KIT_SOURCE = join(import.meta.dir, "..", "cli", "kit.ts");
 const WORK = mkdtempSync(join(tmpdir(), "kit-test-"));
-afterAll(() => rmSync(WORK, { recursive: true, force: true }));
+// The kits unpacked here are read-only, as on a workstation: removeTree gives
+// their folders the write bit back first.
+afterAll(() => removeTree(WORK));
 
 let counter = 0;
 function scratch(): string {
@@ -57,7 +63,7 @@ function sampleEntries(): KitEntry[] {
 }
 
 describe("packing and unpacking", () => {
-  test("every file comes back with its bytes and its mode, the scripts executable", () => {
+  test("every file comes back with its bytes and its mode, executable or not, and none writable", () => {
     const { archive, hash, files } = packKit(sampleEntries());
     const destination = join(scratch(), "kit");
     unpackKit(archive, hash, destination, "v0.0.0-test");
@@ -65,7 +71,7 @@ describe("packing and unpacking", () => {
     for (const entry of sampleEntries()) {
       const path = join(destination, entry.path);
       expect(readFileSync(path, "utf8")).toBe(new TextDecoder().decode(entry.content));
-      expect(statSync(path).mode & 0o777).toBe(entry.mode);
+      expect(statSync(path).mode & 0o777).toBe(readOnly(entry.mode));
     }
     const run = Bun.spawnSync([join(destination, "bin", "hello.sh")], { stdout: "pipe" });
     expect(run.stdout.toString()).toBe("hello from the kit\n");
@@ -88,8 +94,8 @@ describe("packing and unpacking", () => {
     );
     expect(child.stderr.toString()).toBe("");
     expect(child.exitCode).toBe(0);
-    expect(statSync(join(destination, "bin", "hello.sh")).mode & 0o777).toBe(0o755);
-    expect(statSync(join(destination, "infra", "unit.service")).mode & 0o777).toBe(0o644);
+    expect(statSync(join(destination, "bin", "hello.sh")).mode & 0o777).toBe(0o555);
+    expect(statSync(join(destination, "infra", "unit.service")).mode & 0o777).toBe(0o444);
   });
 
   test("the hash depends on the contents, not on the order they were given in", () => {
@@ -99,30 +105,48 @@ describe("packing and unpacking", () => {
     expect(packKit(changed).hash).not.toBe(packKit(entries).hash);
   });
 
+  test("the kit is read-only, folders included: a stray write fails instead of changing the cache", () => {
+    const { archive, hash } = packKit(sampleEntries());
+    const destination = join(scratch(), "kit");
+    unpackKit(archive, hash, destination);
+    for (const folder of [destination, join(destination, "bin"), join(destination, "dashboard", "src", "deep"), join(destination, SHIM_FOLDER)]) {
+      expect({ folder, mode: statSync(folder).mode & 0o777 }).toEqual({ folder, mode: 0o555 });
+    }
+    expect(statSync(join(destination, KIT_MARKER)).mode & 0o777).toBe(0o444);
+    expect(() => writeFileSync(join(destination, "bin", "hello.sh"), "changed")).toThrow();
+    expect(() => writeFileSync(join(destination, "dashboard", "new-file"), "")).toThrow();
+    expect(() => rmSync(join(destination, "bin", "hello.sh"))).toThrow();
+    // And yet removable, by whoever means it.
+    removeTree(destination);
+    expect(existsSync(destination)).toBe(false);
+  });
+
   test("a kit already unpacked is used as it is, not unpacked again", () => {
     const { archive, hash } = packKit(sampleEntries());
     const destination = join(scratch(), "kit");
     unpackKit(archive, hash, destination);
-    // A file only the first unpacking could have left: a second one that
-    // rewrote the folder would lose it.
-    writeFileSync(join(destination, "left-by-the-first"), "");
-    const marker = statSync(join(destination, KIT_MARKER)).mtimeMs;
+    // Rewritten, the folder and its files would be new ones.
+    const before = [statSync(destination).ino, statSync(join(destination, "bin", "hello.sh")).ino, statSync(join(destination, KIT_MARKER)).mtimeMs];
     unpackKit(archive, hash, destination);
-    expect(existsSync(join(destination, "left-by-the-first"))).toBe(true);
-    expect(statSync(join(destination, KIT_MARKER)).mtimeMs).toBe(marker);
+    expect([statSync(destination).ino, statSync(join(destination, "bin", "hello.sh")).ino, statSync(join(destination, KIT_MARKER)).mtimeMs]).toEqual(before);
   });
 
-  test("a folder without its marker is not trusted: it is set aside and replaced", () => {
-    const { archive, hash } = packKit(sampleEntries());
-    const parent = scratch();
-    const destination = join(parent, "kit");
-    mkdirSync(join(destination, "bin"), { recursive: true });
-    writeFileSync(join(destination, "bin", "hello.sh"), "half a file");
-    unpackKit(archive, hash, destination);
-    expect(readFileSync(join(destination, "bin", "hello.sh"), "utf8")).toBe("#!/bin/sh\necho hello from the kit\n");
-    expect(isWholeKit(destination, hash)).toBe(true);
-    // Nothing left beside it: neither the temporary copy nor the folder set aside.
-    expect(readdirSync(parent)).toEqual(["kit"]);
+  test("a folder without its marker is not trusted: it is set aside and replaced, read-only or not", () => {
+    for (const closed of [false, true]) {
+      const { archive, hash } = packKit(sampleEntries());
+      const parent = scratch();
+      const destination = join(parent, "kit");
+      mkdirSync(join(destination, "bin"), { recursive: true });
+      writeFileSync(join(destination, "bin", "hello.sh"), "half a file");
+      // A kit cut short after its folders were closed: the set-aside folder
+      // must still go.
+      if (closed) for (const folder of [join(destination, "bin"), destination]) chmodSync(folder, 0o555);
+      unpackKit(archive, hash, destination);
+      expect(readFileSync(join(destination, "bin", "hello.sh"), "utf8")).toBe("#!/bin/sh\necho hello from the kit\n");
+      expect(isWholeKit(destination, hash)).toBe(true);
+      // Nothing left beside it: neither the temporary copy nor the folder set aside.
+      expect({ closed, left: readdirSync(parent) }).toEqual({ closed, left: ["kit"] });
+    }
   });
 
   test("a damaged archive is refused, and nothing is put in place", () => {
@@ -157,13 +181,21 @@ describe("packing and unpacking", () => {
     const { archive, hash } = packKit(sampleEntries());
     const parent = scratch();
     const stale = join(parent, ".kit.1234.abc.tmp");
+    const staleAside = join(parent, ".kit.4321.cba.aside");
     const young = join(parent, ".kit.5678.def.tmp");
-    mkdirSync(stale);
-    mkdirSync(young);
+    // Left read-only, as a run that died after closing its folders leaves them.
+    for (const folder of [stale, staleAside, young]) {
+      mkdirSync(join(folder, "bin"), { recursive: true });
+      writeFileSync(join(folder, "bin", "left"), "");
+      chmodSync(join(folder, "bin"), 0o555);
+      chmodSync(folder, 0o555);
+    }
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
     utimesSync(stale, twoHoursAgo, twoHoursAgo);
+    utimesSync(staleAside, twoHoursAgo, twoHoursAgo);
     unpackKit(archive, hash, join(parent, "kit"));
     expect(existsSync(stale)).toBe(false);
+    expect(existsSync(staleAside)).toBe(false);
     expect(existsSync(young)).toBe(true);
   });
 });
@@ -208,12 +240,15 @@ describe("where the kit lives", () => {
     expect(kitDirectory("dev", hash, { XDG_CACHE_HOME: "cache" }, "/home/someone")).toBe("/home/someone/.cache/sitesolide/dev-abababababababab");
   });
 
-  test("in the repository, the repository is the kit and nothing is added to the environment", () => {
+  test("in the repository, the repository is the kit, nothing is added to the environment, and nothing is copied", () => {
     expect(isCompiled()).toBe(false);
     expect(VERSION).toBe("dev");
     expect(kitRoot()).toBe(REPO_ROOT);
     expect(kitEnv()).toEqual({});
     expect(projectEnv()).toEqual({});
+    // A checkout is writable, and a manifest rewritten there is one to commit.
+    expect(kitComponent("dashboard")).toBe(join(REPO_ROOT, "dashboard"));
+    expect(workingFolder(join(REPO_ROOT, "dashboard"))).toBe(join(REPO_ROOT, "dashboard"));
   });
 
   test("a kit that cannot be had is a refusal with a hint, never the default one", () => {
@@ -221,6 +256,7 @@ describe("where the kit lives", () => {
       "cannot unpack the kit into /home/someone/.cache/sitesolide/v0.3.0-abababababababab",
       "the kit embedded in this binary is damaged: its hash does not match",
       "this binary carries no kit",
+      "the kit has no component named \"bin\"",
     ]) {
       expect({ message, hint: hintFor(message) === DEFAULT_HINT }).toEqual({ message, hint: false });
     }
@@ -378,11 +414,106 @@ describe("what the kit carries", () => {
     expect(entries.find((entry) => entry.path === "bin/lock.sh")?.mode).toBe(0o755);
     expect(entries.find((entry) => entry.path === "bin/config.sh")?.mode).toBe(0o644);
   });
+});
+
+describe("the release's kit, its components built", () => {
+  // Built once for the block, as bin/build.ts builds it: the dashboard's
+  // interface compiled, its packages installed from the lockfile.
+  let release: ReturnType<typeof releaseKit>;
+  let kit = "";
+  beforeAll(() => {
+    release = releaseKit();
+    const { archive, hash } = packKit(release.entries);
+    kit = join(scratch(), "kit");
+    unpackKit(archive, hash, kit, "v0.0.0-release.1");
+  }, 180_000);
+  const scripts = kitFiles().filter((file) => /^bin\/[^/]+\.sh$/.test(file));
+  const manifest = (component: string): Record<string, unknown> => JSON.parse(readFileSync(join(kit, component, "sitesolide.json"), "utf8"));
+
+  test("every component whose manifest builds arrives built, and its manifest builds no more", () => {
+    expect(release.prebuilt.map((done) => [done.component, done.command])).toEqual([
+      ["dashboard", "bun run build"],
+      ["portal", "bun scripts/borrow.ts"],
+    ]);
+    for (const path of ["dashboard/public/index.html", "dashboard/borrowed/manifest.ts", "dashboard/borrowed/locks.ts", "portal/borrowed/auth.ts", "portal/borrowed/password.ts"]) {
+      expect({ path, there: existsSync(join(kit, path)) }).toEqual({ path, there: true });
+    }
+    expect(manifest("dashboard").build).toBeUndefined();
+    expect(manifest("portal").build).toBeUndefined();
+    // Nothing else of the manifests changed: what the repository says is what is deployed.
+    const source = JSON.parse(readFileSync(join(REPO_ROOT, "dashboard", "sitesolide.json"), "utf8")) as Record<string, unknown>;
+    delete source.build;
+    expect(manifest("dashboard")).toEqual(source);
+    expect(readFileSync(join(REPO_ROOT, "analytics", "sitesolide.json"), "utf8")).toBe(readFileSync(join(kit, "analytics", "sitesolide.json"), "utf8"));
+  });
+
+  test("what a build needed stays behind: its tools, the interface's sources, what the manifest never sends", () => {
+    const paths = release.entries.map((entry) => entry.path);
+    expect(paths.filter((path) => path.split("/").includes("node_modules"))).toEqual([]);
+    expect(paths.filter((path) => path.startsWith("dashboard/web/"))).toEqual([]);
+    // Built from scratch: nothing in the checkout's own dashboard/public or borrowed/ went in.
+    for (const done of release.prebuilt) {
+      for (const path of done.files) expect({ path, built: /^(dashboard\/(public|borrowed)|portal\/borrowed)\//.test(path) }).toEqual({ path, built: true });
+    }
+  });
+
+  test("unpacked and read-only, the kit bundles every component the scripts bundle, borrowing nothing", () => {
+    // The scripts' borrow step does nothing in a kit, whose copies came built.
+    const borrow = Bun.spawnSync(["bash", "-c", '. "$REPO_ROOT/bin/config.sh"; sitesolide_borrow dashboard; echo done'], {
+      env: { PATH: "/usr/bin:/bin", HOME: scratch(), REPO_ROOT: kit, SITESOLIDE_BINARY: process.execPath },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect({ output: borrow.stdout.toString(), error: borrow.stderr.toString() }).toEqual({ output: "done\n", error: "" });
+    const bundles: [string, string][] = [];
+    for (const script of scripts) {
+      const text = readFileSync(join(kit, script), "utf8");
+      for (const match of text.matchAll(/cd "\$REPO_ROOT\/([a-z]+)" && bun build ([a-z-]+\.ts) --target=bun/g)) bundles.push([match[1]!, match[2]!]);
+    }
+    expect(bundles.length).toBeGreaterThanOrEqual(6);
+    for (const [folder, entry] of bundles) {
+      const out = join(WORK, `bundle-${folder}-${entry}.js`);
+      const run = Bun.spawnSync([process.execPath, "build", entry, "--target=bun", "--outfile", out], { cwd: join(kit, folder), stdout: "pipe", stderr: "pipe" });
+      expect({ folder, entry, code: run.exitCode, error: run.exitCode === 0 ? "" : run.stderr.toString() }).toEqual({ folder, entry, code: 0, error: "" });
+    }
+  });
+
+  test("deploy-api.sh sends a writable copy of api/, never the kit's read-only modes", () => {
+    // rsync -a carries modes, and the machine writes node_modules into the
+    // release it receives. A fake ssh accepts everything and runs nothing; a
+    // fake rsync says what it was handed, and whether it is writable.
+    const fakes = scratch();
+    const log = join(fakes, "rsync.log");
+    writeFileSync(join(fakes, "ssh"), "#!/bin/sh\nexit 0\n");
+    writeFileSync(
+      join(fakes, "rsync"),
+      `#!/bin/sh\nfor a in "$@"; do source="$previous"; previous="$a"; done\nif [ -w "$source" ] && [ -w "$source/server.ts" ] && [ -w "$source/src" ]; then w=writable; else w=read-only; fi\necho "$source $w" >> "${log}"\n`,
+    );
+    chmodSync(join(fakes, "ssh"), 0o755);
+    chmodSync(join(fakes, "rsync"), 0o755);
+    const run = Bun.spawnSync(["bash", join(kit, "bin", "deploy-api.sh")], {
+      env: {
+        PATH: `${fakes}:/usr/bin:/bin`,
+        HOME: scratch(),
+        SITESOLIDE_BINARY: process.execPath,
+        SITESOLIDE_SERVER: "sample@invalid.local",
+        SITESOLIDE_ZONE: "test-zone.invalid",
+        SITESOLIDE_EMAIL: "sample@test-zone.invalid",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect({ code: run.exitCode, error: run.stderr.toString() }).toEqual({ code: 0, error: "" });
+    expect(run.stdout.toString()).toContain("-> release ");
+    expect(run.stdout.toString()).toContain("-v0.0.0-release.1");
+    const [sent, writable] = readFileSync(log, "utf8").trim().split(" ");
+    expect(writable).toBe("writable");
+    expect(sent!.startsWith(kit)).toBe(false);
+    // The copy goes with the script.
+    expect(existsSync(sent!)).toBe(false);
+  });
 
   test("a script started by hand from an unpacked kit finds its bun and its release, without the CLI", () => {
-    const { archive, hash } = packKit(kitEntries());
-    const kit = join(scratch(), "kit");
-    unpackKit(archive, hash, kit, "v0.0.0-hand.1");
     // As bin/deploy-api.sh and its siblings begin, with no Bun on the PATH:
     // config.sh puts the kit's shims first, and reads the release from the
     // marker. The shim is handed the Bun running these tests to play.
@@ -392,33 +523,7 @@ describe("what the kit carries", () => {
       stderr: "pipe",
     });
     expect(run.stderr.toString()).toBe("");
-    expect(run.stdout.toString()).toBe(`v0.0.0-hand.1\n${join(kit, SHIM_FOLDER, "bun")}\n`);
-  });
-
-  test("unpacked, the kit builds every component the scripts bundle, with no repository beside it", () => {
-    const { archive, hash } = packKit(kitEntries());
-    const kit = join(scratch(), "kit");
-    unpackKit(archive, hash, kit);
-    const bundles: [string, string][] = [];
-    for (const script of scripts) {
-      const text = readFileSync(join(kit, script), "utf8");
-      for (const match of text.matchAll(/cd "\$REPO_ROOT\/([a-z]+)" && bun build ([a-z-]+\.ts) --target=bun/g)) bundles.push([match[1]!, match[2]!]);
-    }
-    expect(bundles.length).toBeGreaterThanOrEqual(6);
-    // The copies the dashboard's bundles import, made as the scripts make them.
-    const borrow = Bun.spawnSync([process.execPath, "run", "borrow"], { cwd: join(kit, "dashboard"), stdout: "pipe", stderr: "pipe" });
-    expect(borrow.stderr.toString().replace(/^\$ .*\n/gm, "")).toBe("");
-    for (const [folder, entry] of bundles) {
-      const out = join(WORK, `bundle-${folder}-${entry}.js`);
-      const run = Bun.spawnSync([process.execPath, "build", entry, "--target=bun", "--outfile", out], { cwd: join(kit, folder), stdout: "pipe", stderr: "pipe" });
-      expect({ folder, entry, code: run.exitCode, error: run.exitCode === 0 ? "" : run.stderr.toString() }).toEqual({ folder, entry, code: 0, error: "" });
-    }
-    const settings = Bun.spawnSync([process.execPath, join(kit, "bin", "cli", "settings.ts")], {
-      env: { PATH: "/usr/bin:/bin", HOME: scratch() },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    expect(settings.stdout.toString()).toContain("SITESOLIDE_SERVER=''");
+    expect(run.stdout.toString()).toBe(`v0.0.0-release.1\n${join(kit, SHIM_FOLDER, "bun")}\n`);
   });
 });
 
