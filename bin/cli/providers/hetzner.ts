@@ -17,7 +17,11 @@
  * refusal leaves nothing behind: the server, by name (one sitesolide did not
  * create is never touched), the type and the location against what Hetzner
  * sells there (a refusal that lists the cheapest types of the location says
- * more than the API's 422), and the firewall's name.
+ * more than the API's 422), and the firewall's name. The one refusal that
+ * cannot be read beforehand is the order's own: the list's `available` flag
+ * has been seen false for a type Hetzner then created (see typeOffer). When
+ * the order is refused, the key and the firewall this run created for it are
+ * deleted again, and the refusal lists the types to try instead.
  *
  * Every call carries the token in the Authorization header and nowhere else,
  * follows no redirect, and fails with a ProviderError whose code
@@ -137,6 +141,8 @@ export class HetznerError extends ProviderError {
     failure: Failure,
     readonly status: number,
     readonly code: string,
+    /** What the API said, in its own words, without what the CLI added around it. */
+    readonly said = "",
   ) {
     super(failure);
   }
@@ -168,7 +174,7 @@ export function failureFrom(status: number, body: unknown, headers: Headers, wha
   const said = typeof error?.message === "string" ? error.message : `answered ${status}`;
   const fields = fieldDetails(error?.details);
   const answer = `${status}${code === "" ? "" : ` ${code}`}`;
-  const make = (failure: Failure) => new HetznerError(failure, status, code);
+  const make = (failure: Failure) => new HetznerError(failure, status, code, said);
 
   if (status === 401) {
     return make({
@@ -269,19 +275,45 @@ export function toMachine(server: HetznerServer, currency: string | null): Machi
   };
 }
 
-/** Whether a type can be ordered at a location, and a warning when it can but is on its way out. */
-export function typeOffer(type: HetznerServerType, location: string, now: number): { orderable: boolean; reason: string; warning: string | null } {
+export type Offer = {
+  /** False only for what Hetzner cannot sell there: not listed at the location, or past its end of sale. */
+  orderable: boolean;
+  reason: string;
+  /** What Hetzner's `available` flag says, which does not decide: see typeOffer. */
+  listedAvailable: boolean;
+  /** Set while the type is deprecated but still sold there. */
+  deprecatedUntil: string | null;
+};
+
+/**
+ * Whether a type can be ordered at a location, as far as the list of types
+ * can say. Not listed there, or past its `unavailable_after`, it cannot.
+ *
+ * `locations[].available` does not decide: on 5 October 2026 it read false
+ * for cx23 at fsn1, nbg1 and hel1 while POST /servers created a cx23 at
+ * fsn1 at once. A type listed as unavailable is therefore tried, with a
+ * warning, and only the order itself refuses it (see `create`).
+ */
+export function typeOffer(type: HetznerServerType, location: string, now: number): Offer {
   const entry = type.locations?.find((candidate) => candidate.name === location);
   const sold = type.locations === undefined ? type.prices.some((price) => price.location === location) : entry !== undefined;
-  if (!sold) return { orderable: false, reason: `${type.name} is not sold at ${location}`, warning: null };
-  if (entry?.available === false) return { orderable: false, reason: `${type.name} is temporarily unavailable at ${location}`, warning: null };
+  const listedAvailable = entry?.available !== false;
+  if (!sold) return { orderable: false, reason: `${type.name} is not sold at ${location}`, listedAvailable: false, deprecatedUntil: null };
   const deprecation = entry?.deprecation ?? type.deprecation ?? null;
   if (deprecation !== null) {
     const until = Date.parse(deprecation.unavailable_after);
-    if (Number.isFinite(until) && until <= now) return { orderable: false, reason: `${type.name} is no longer sold at ${location}`, warning: null };
-    return { orderable: true, reason: "", warning: `${type.name} is deprecated at ${location}, sold until ${deprecation.unavailable_after.slice(0, 10)}` };
+    if (Number.isFinite(until) && until <= now) return { orderable: false, reason: `${type.name} is no longer sold at ${location}`, listedAvailable, deprecatedUntil: null };
+    return { orderable: true, reason: "", listedAvailable, deprecatedUntil: deprecation.unavailable_after.slice(0, 10) };
   }
-  return { orderable: true, reason: "", warning: null };
+  return { orderable: true, reason: "", listedAvailable, deprecatedUntil: null };
+}
+
+/** What is said before ordering a type the list sells there with reservations. */
+export function offerWarnings(type: string, location: string, offer: Offer): string[] {
+  return [
+    ...(offer.listedAvailable ? [] : [`Hetzner lists ${type} as unavailable at ${location}; trying anyway`]),
+    ...(offer.deprecatedUntil === null ? [] : [`${type} is deprecated at ${location}, sold until ${offer.deprecatedUntil}`]),
+  ];
 }
 
 function monthlyNet(type: HetznerServerType, location: string): number {
@@ -289,20 +321,54 @@ function monthlyNet(type: HetznerServerType, location: string): number {
   return price === undefined ? Number.POSITIVE_INFINITY : Number(price);
 }
 
-/** The cheapest types one can order at a location, not deprecated, one line each, cheapest first. */
-export function cheapestTypes(types: HetznerServerType[], location: string, now: number, currency: string | null, count = 6): string[] {
+/**
+ * The cheapest types sold at a location, not deprecated, one line each,
+ * cheapest first; with `availableOnly`, only those Hetzner lists as available.
+ */
+export function cheapestTypes(
+  types: HetznerServerType[],
+  location: string,
+  now: number,
+  currency: string | null,
+  options: { availableOnly?: boolean; except?: string; count?: number } = {},
+): string[] {
   return types
     .filter((type) => {
       const offer = typeOffer(type, location, now);
-      return offer.orderable && offer.warning === null;
+      return offer.orderable && offer.deprecatedUntil === null && (!options.availableOnly || offer.listedAvailable) && type.name !== options.except;
     })
     .sort((a, b) => monthlyNet(a, location) - monthlyNet(b, location) || a.name.localeCompare(b.name))
-    .slice(0, count)
+    .slice(0, options.count ?? 6)
     .map((type) => {
       const price = monthlyNet(type, location);
       const cost = Number.isFinite(price) ? `, ${formatPrice(price, currency)}` : "";
       return `${type.name.padEnd(8)} ${type.cores} vCPU, ${type.memory} GB RAM, ${type.disk} GB disk${type.architecture === undefined ? "" : `, ${type.architecture}`}${cost}`;
     });
+}
+
+/**
+ * The types to suggest instead, for a refusal: those Hetzner lists as
+ * available there; when it lists none, which its flag may well say of
+ * orderable types, the cheapest it sells there all the same.
+ */
+export function suggestedTypes(types: HetznerServerType[], location: string, now: number, currency: string | null, except?: string): string[] {
+  const available = cheapestTypes(types, location, now, currency, { availableOnly: true, except });
+  if (available.length > 0) return [`the cheapest types Hetzner lists as available at ${location}:`, ...available];
+  const sold = cheapestTypes(types, location, now, currency, { except });
+  if (sold.length > 0) return [`Hetzner lists no type as available at ${location}; the cheapest it sells there:`, ...sold];
+  return [`Hetzner sells no other type at ${location}`];
+}
+
+/**
+ * Whether a refused order says the type cannot be had there right now,
+ * rather than that the request was wrong: the codes of Hetzner's error table
+ * for a product not available for order, and an `invalid_input` that names
+ * the type or the location, which were checked against the list just before.
+ */
+export function refusesTheOffer(error: HetznerError): boolean {
+  if (error.code === "resource_unavailable" || error.code === "placement_error" || error.code === "unavailable") return true;
+  if (error.code !== "invalid_input") return false;
+  return (error.failure.details ?? []).some((line) => /^(server_type|location)\b/.test(line));
 }
 
 /** The key itself, without its comment: two copies of a key compare equal through it. */
@@ -470,7 +536,8 @@ export function hetzner(context: ProviderContext): Provider {
     }
   }
 
-  async function checkOffer(request: CreateRequest, report: Report): Promise<void> {
+  /** Refuses what cannot be ordered; returns the types, for the suggestions of a refused order. */
+  async function checkOffer(request: CreateRequest, report: Report): Promise<HetznerServerType[]> {
     report(`-> ${request.type} at ${request.location}, what Hetzner sells there`);
     const locations = await listAll<HetznerLocation>("/locations", "locations", "read the locations");
     if (!locations.some((location) => location.name === request.location)) {
@@ -482,18 +549,44 @@ export function hetzner(context: ProviderContext): Provider {
     }
     const types = await listAll<HetznerServerType>("/server_types", "server_types", "read the server types");
     const chosen = types.find((type) => type.name === request.type);
-    const offer = chosen === undefined ? { orderable: false, reason: `${request.type} is not a Hetzner server type`, warning: null } : typeOffer(chosen, request.location, clock.now());
-    if (chosen === undefined || !offer.orderable) {
-      const cheapest = cheapestTypes(types, request.location, clock.now(), await currency());
+    const offer = chosen === undefined ? null : typeOffer(chosen, request.location, clock.now());
+    if (chosen === undefined || offer === null || !offer.orderable) {
       throw new ProviderError({
         error: "invalid-server-type",
-        message: offer.reason,
-        details: cheapest.length === 0 ? [`no type can be ordered at ${request.location} right now`] : [`the cheapest types sold at ${request.location}:`, ...cheapest],
+        message: offer?.reason ?? `${request.type} is not a Hetzner server type`,
+        details: suggestedTypes(types, request.location, clock.now(), await currency()),
       });
     }
-    if (offer.warning !== null) report(`!! ${offer.warning}`);
     const price = monthlyNet(chosen, request.location);
     report(`   ${chosen.cores} vCPU, ${chosen.memory} GB RAM, ${chosen.disk} GB disk${Number.isFinite(price) ? `, ${formatPrice(price, await currency())}` : ""}`);
+    for (const warning of offerWarnings(request.type, request.location, offer)) report(`!! ${warning}`);
+    return types;
+  }
+
+  /**
+   * Deletes what this run created before an order Hetzner refused: the key
+   * and the firewall were made for a server that does not exist, and nothing
+   * else in sitesolide would ever list or remove them, since `list` and
+   * `destroy` start from a server. What an earlier run made, or the project
+   * already held, is left as it was. A deletion that fails leaves the
+   * resource labelled, where the next run finds and reuses it. Returns what
+   * happened, one line each, for the refusal's details.
+   */
+  async function undo(made: { kind: string; name: string; path: string }[], report: Report): Promise<string[]> {
+    if (made.length === 0) return ["nothing had been created yet"];
+    report("-> undo what this run created");
+    const said: string[] = [];
+    // The firewall first: it was created last.
+    for (const resource of [...made].reverse()) {
+      try {
+        await call("DELETE", resource.path, `delete the ${resource.kind} ${resource.name}`);
+        said.push(`deleted the ${resource.kind} ${resource.name} this run had created`);
+      } catch {
+        said.push(`left the ${resource.kind} ${resource.name}: the next run finds it and reuses it`);
+      }
+      report(`   ${said.at(-1)}`);
+    }
+    return said;
   }
 
   async function ensureKey(request: CreateRequest, report: Report): Promise<HetznerKey & { reused: boolean }> {
@@ -591,25 +684,49 @@ export function hetzner(context: ProviderContext): Provider {
         resources.push({ kind: "server", name: existing.name, id: String(existing.id), reused: true });
       } else {
         report("   none of that name yet");
-        await checkOffer(request, report);
+        const types = await checkOffer(request, report);
         const existingFirewall = await findFirewall(request.name);
-        const key = await ensureKey(request, report);
-        resources.push({ kind: "ssh key", name: key.name, id: String(key.id), reused: key.reused });
-        const firewall = await ensureFirewall(request.name, existingFirewall, report);
-        resources.push({ kind: "firewall", name: firewall.name, id: String(firewall.id), reused: firewall.reused });
 
-        report(`-> server ${request.name}: ${request.type} at ${request.location}, ${request.image}`);
-        const answer = await call<{ server: HetznerServer; action: HetznerAction; next_actions?: HetznerAction[] }>("POST", "/servers", `create the server ${request.name}`, {
-          name: request.name,
-          server_type: request.type,
-          location: request.location,
-          image: request.image,
-          ssh_keys: [key.id],
-          firewalls: [{ firewall: firewall.id }],
-          public_net: { enable_ipv4: true, enable_ipv6: true },
-          labels: labelsFor(request.name),
-          start_after_create: true,
-        });
+        // What this run creates before the server, undone if the order fails.
+        const made: { kind: string; name: string; path: string }[] = [];
+        let ordering = false;
+        let answer: { server: HetznerServer; action: HetznerAction; next_actions?: HetznerAction[] };
+        try {
+          const key = await ensureKey(request, report);
+          resources.push({ kind: "ssh key", name: key.name, id: String(key.id), reused: key.reused });
+          if (!key.reused) made.push({ kind: "SSH key", name: key.name, path: `/ssh_keys/${key.id}` });
+          const firewall = await ensureFirewall(request.name, existingFirewall, report);
+          resources.push({ kind: "firewall", name: firewall.name, id: String(firewall.id), reused: firewall.reused });
+          if (!firewall.reused) made.push({ kind: "firewall", name: firewall.name, path: `/firewalls/${firewall.id}` });
+
+          report(`-> server ${request.name}: ${request.type} at ${request.location}, ${request.image}`);
+          ordering = true;
+          answer = await call("POST", "/servers", `create the server ${request.name}`, {
+            name: request.name,
+            server_type: request.type,
+            location: request.location,
+            image: request.image,
+            ssh_keys: [key.id],
+            firewalls: [{ firewall: firewall.id }],
+            public_net: { enable_ipv4: true, enable_ipv6: true },
+            labels: labelsFor(request.name),
+            start_after_create: true,
+          });
+        } catch (error) {
+          if (!(error instanceof ProviderError)) throw error;
+          const undone = await undo(made, report);
+          if (ordering && error instanceof HetznerError && refusesTheOffer(error)) {
+            // The list of types may call a type available that is not, and
+            // the reverse: the order is what decides, and its refusal still
+            // says what to try instead.
+            throw new ProviderError({
+              error: "type-unavailable",
+              message: `Hetzner would not create ${request.type} at ${request.location} (${error.status} ${error.code}): ${error.said}`,
+              details: [...suggestedTypes(types, request.location, clock.now(), await currency(), request.type), "or try another --location", ...undone],
+            });
+          }
+          throw new ProviderError({ ...error.failure, details: [...(error.failure.details ?? []), ...undone] });
+        }
         server = answer.server;
         created = true;
         resources.push({ kind: "server", name: server.name, id: String(server.id), reused: false });
@@ -636,8 +753,10 @@ export function hetzner(context: ProviderContext): Provider {
       const addresses = [machine.ipv4, machine.ipv6].filter(Boolean).join(", ");
 
       report(`-> server ${machine.name}`);
-      // Its addresses are Primary IPs of their own, billed while they exist:
-      // created with the server, they go with it, which is checked after.
+      // Its addresses are Primary IPs of their own, billed while they exist.
+      // Created with the server, they carry auto_delete and go with it, as
+      // seen on the real API on 5 October 2026; checked after all the same,
+      // since one that stayed would be billed without anyone knowing.
       const before = await call<{ server: HetznerServer }>("GET", `/servers/${id}`, `read the server ${machine.name}`);
       const primaryIps = [before.server.public_net?.ipv4, before.server.public_net?.ipv6].filter((ip): ip is { id: number; ip: string } => typeof ip?.id === "number");
       const deletion = await call<{ action?: HetznerAction }>("DELETE", `/servers/${id}`, `delete the server ${machine.name}`);

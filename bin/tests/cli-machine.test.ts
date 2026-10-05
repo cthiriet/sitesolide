@@ -15,7 +15,7 @@ import {
   tcpProbe,
   type MachineDependencies,
 } from "../cli/machine";
-import { apiBase, cheapestTypes, failureFrom, hostAddress, typeOffer, WAITS, type HetznerServerType } from "../cli/providers/hetzner";
+import { apiBase, cheapestTypes, failureFrom, hostAddress, offerWarnings, suggestedTypes, typeOffer, WAITS, type HetznerServerType } from "../cli/providers/hetzner";
 import type { OutputEvent } from "../cli/output";
 import { eventOutput, humanOutput, type Output } from "../cli/remote";
 import { createFakeVm, type FakeVm } from "./e2e/fake-vm";
@@ -274,12 +274,19 @@ describe("what Hetzner sells", () => {
   const types = SERVER_TYPES as unknown as HetznerServerType[];
   const type = (name: string) => types.find((candidate) => candidate.name === name)!;
 
-  test("a type is orderable where it is sold, available, and not past its end", () => {
-    expect(typeOffer(type("cx23"), "fsn1", now)).toEqual({ orderable: true, reason: "", warning: null });
+  test("a type is orderable where it is sold and not past its end", () => {
+    expect(typeOffer(type("cx23"), "fsn1", now)).toEqual({ orderable: true, reason: "", listedAvailable: true, deprecatedUntil: null });
     expect(typeOffer(type("cpx11"), "fsn1", now)).toMatchObject({ orderable: false, reason: "cpx11 is not sold at fsn1" });
-    expect(typeOffer(type("cx43"), "hel1", now)).toMatchObject({ orderable: false, reason: "cx43 is temporarily unavailable at hel1" });
     expect(typeOffer(type("cx22"), "fsn1", now)).toMatchObject({ orderable: false, reason: "cx22 is no longer sold at fsn1" });
-    expect(typeOffer(type("cx22"), "fsn1", Date.parse("2025-11-01T00:00:00Z"))).toMatchObject({ orderable: true, warning: "cx22 is deprecated at fsn1, sold until 2026-01-01" });
+    const late = typeOffer(type("cx22"), "fsn1", Date.parse("2025-11-01T00:00:00Z"));
+    expect(late).toMatchObject({ orderable: true, deprecatedUntil: "2026-01-01" });
+    expect(offerWarnings("cx22", "fsn1", late)).toEqual(["cx22 is deprecated at fsn1, sold until 2026-01-01"]);
+  });
+
+  test("a type Hetzner lists as unavailable is still orderable, with a warning: the flag was seen false for a type it then created", () => {
+    const offer = typeOffer(type("cx43"), "hel1", now);
+    expect(offer).toEqual({ orderable: true, reason: "", listedAvailable: false, deprecatedUntil: null });
+    expect(offerWarnings("cx43", "hel1", offer)).toEqual(["Hetzner lists cx43 as unavailable at hel1; trying anyway"]);
   });
 
   test("an answer without per-location details falls back on where the type has a price", () => {
@@ -292,6 +299,16 @@ describe("what Hetzner sells", () => {
     const lines = cheapestTypes(types, "fsn1", now, "EUR");
     expect(lines.map((line) => line.split(" ")[0])).toEqual(["cx23", "cax11", "cx33", "cx43", "ccx13"]);
     expect(lines[0]).toBe("cx23     2 vCPU, 4 GB RAM, 40 GB disk, x86, 3.49 EUR a month before VAT");
+    expect(cheapestTypes(types, "hel1", now, "EUR", { availableOnly: true, except: "cx23" }).map((line) => line.split(" ")[0])).toEqual(["cax11", "cx33", "ccx13"]);
+  });
+
+  test("the suggestions are the types listed as available, else the cheapest sold all the same", () => {
+    expect(suggestedTypes(types, "hel1", now, null)[0]).toBe("the cheapest types Hetzner lists as available at hel1:");
+    const flagged = types.map((candidate) => ({ ...candidate, locations: candidate.locations?.map((entry) => ({ ...entry, available: false })) }));
+    const fallback = suggestedTypes(flagged, "fsn1", now, null, "cx23");
+    expect(fallback[0]).toBe("Hetzner lists no type as available at fsn1; the cheapest it sells there:");
+    expect(fallback[1]).toStartWith("cax11 ");
+    expect(suggestedTypes(types, "par1", now, null)).toEqual(["Hetzner sells no other type at par1"]);
   });
 
   test("the IPv6 address is the network's first, as Hetzner's images configure it", () => {
@@ -465,19 +482,103 @@ describe("machine create", () => {
   test("an unknown type is refused with the cheapest the location sells, before anything is created", async () => {
     const refusal = errorOf(await run([...CREATE, "--type", "cx99"]));
     expect(refusal.message).toBe("cx99 is not a Hetzner server type");
-    expect(refusal.details[0]).toBe("the cheapest types sold at fsn1:");
+    expect(refusal.details[0]).toBe("the cheapest types Hetzner lists as available at fsn1:");
     expect(refusal.details[1]).toStartWith("cx23 ");
     expect(refusal.details.join("\n")).not.toContain("cx22");
     expect(refusal.hint).toBe(REMOTE_HINTS["invalid-server-type"]!);
     expect(writes()).toEqual([]);
   });
 
-  test("a type not sold, unavailable or retired at the location is refused the same way", async () => {
+  test("a type not sold or retired at the location is refused the same way", async () => {
     expect(errorOf(await run([...CREATE, "--type", "cpx11"])).message).toBe("cpx11 is not sold at fsn1");
-    expect(errorOf(await run([...CREATE, "--type", "cx43", "--location", "hel1"])).message).toBe("cx43 is temporarily unavailable at hel1");
     expect(errorOf(await run([...CREATE, "--type", "cx22"])).message).toBe("cx22 is no longer sold at fsn1");
-    expect(errorOf(await run([...CREATE, "--type", "cx23", "--location", "ash"])).details).toEqual(["the cheapest types sold at ash:", "cpx11    2 vCPU, 2 GB RAM, 40 GB disk, x86, 4.99 EUR a month before VAT", "ccx13    2 vCPU, 8 GB RAM, 80 GB disk, x86, 12.49 EUR a month before VAT"]);
+    expect(errorOf(await run([...CREATE, "--type", "cx23", "--location", "ash"])).details).toEqual([
+      "the cheapest types Hetzner lists as available at ash:",
+      "cpx11    2 vCPU, 2 GB RAM, 40 GB disk, x86, 4.99 EUR a month before VAT",
+      "ccx13    2 vCPU, 8 GB RAM, 80 GB disk, x86, 12.49 EUR a month before VAT",
+    ]);
     expect(writes()).toEqual([]);
+  });
+
+  test("a type Hetzner lists as unavailable is ordered all the same, after a warning", async () => {
+    const result = await run([...CREATE, "--type", "cx43", "--location", "hel1"]);
+    expect(resultOf(result)).toMatchObject({ created: true, machine: { type: "cx43", location: "hel1" } });
+    expect(result.events).toContainEqual({ type: "warning", message: "Hetzner lists cx43 as unavailable at hel1; trying anyway", details: [] });
+    expect(writes()).toContain("POST /servers");
+  });
+
+  test("an order Hetzner refuses for the type lists what to try instead, and undoes what the run created", async () => {
+    for (const seed of [1, 2]) fake.addKey({ name: `laptop-${seed}`, public_key: otherKey(seed) });
+    fake.fail("POST", /^\/servers$/, 412, "resource_unavailable", "server type cx43 is not available in location hel1");
+    const result = await run([...CREATE, "--type", "cx43", "--location", "hel1"]);
+    const refusal = errorOf(result);
+    expect(refusal.message).toBe("Hetzner would not create cx43 at hel1 (412 resource_unavailable): server type cx43 is not available in location hel1");
+    expect(refusal.details).toEqual([
+      "the cheapest types Hetzner lists as available at hel1:",
+      "cx23     2 vCPU, 4 GB RAM, 40 GB disk, x86, 3.49 EUR a month before VAT",
+      "cax11    2 vCPU, 4 GB RAM, 40 GB disk, arm, 3.79 EUR a month before VAT",
+      "cx33     4 vCPU, 8 GB RAM, 80 GB disk, x86, 5.49 EUR a month before VAT",
+      "ccx13    2 vCPU, 8 GB RAM, 80 GB disk, x86, 12.49 EUR a month before VAT",
+      "or try another --location",
+      "deleted the firewall web this run had created",
+      "deleted the SSH key sitesolide-web this run had created",
+    ]);
+    expect(refusal.hint).toBe(REMOTE_HINTS["type-unavailable"]!);
+    expect(writes().map((write) => write.replace(/[0-9]+/g, ":id"))).toEqual(["POST /ssh_keys", "POST /firewalls", "POST /servers", "DELETE /firewalls/:id", "DELETE /ssh_keys/:id"]);
+    expect(fake.firewalls).toEqual([]);
+    expect(fake.keys.map((key) => key.name)).toEqual(["laptop-1", "laptop-2"]);
+  });
+
+  test("the other refusals of the order count as the type's: a placement, a product unavailable, the type or location named invalid", async () => {
+    const cases: [number, string, unknown][] = [
+      [422, "placement_error", null],
+      [503, "unavailable", null],
+      [422, "invalid_input", { fields: [{ name: "server_type", messages: ["server type not available in this location"] }] }],
+      [422, "invalid_input", { fields: [{ name: "location", messages: ["unsupported location for server type"] }] }],
+    ];
+    for (const [status, code, details] of cases) {
+      fake.reset();
+      fake.fail("POST", /^\/servers$/, status, code, "refused", { details });
+      expect({ code, error: errorOf(await run(CREATE)).hint }).toEqual({ code, error: REMOTE_HINTS["type-unavailable"]! });
+      expect(fake.firewalls).toEqual([]);
+    }
+    // An invalid image is the request's fault, not the offer's: no suggestion of types, but nothing left behind either.
+    fake.reset();
+    fake.fail("POST", /^\/servers$/, 422, "invalid_input", "invalid input in field 'image'", { details: { fields: [{ name: "image", messages: ["image not found"] }] } });
+    const image = errorOf(await run(CREATE));
+    expect(image.hint).toBe(REMOTE_HINTS["provider-invalid"]!);
+    expect(image.details).toEqual(["image: image not found", "deleted the firewall web this run had created", "deleted the SSH key sitesolide-web this run had created"]);
+  });
+
+  test("what an earlier run made, or the project held, is never undone", async () => {
+    fake.addKey({ name: "laptop", public_key: ED25519 });
+    const firewall = fake.addFirewall({ name: "web", labels: { "managed-by": "sitesolide", "sitesolide-machine": "web" } });
+    fake.fail("POST", /^\/servers$/, 412, "resource_unavailable", "not available");
+    const refusal = errorOf(await run(CREATE));
+    expect(refusal.details.at(-1)).toBe("nothing had been created yet");
+    expect(writes()).toEqual(["POST /servers"]);
+    expect(fake.firewalls.map((candidate) => candidate.id)).toEqual([firewall.id]);
+    expect(fake.keys).toHaveLength(1);
+  });
+
+  test("a deletion that fails while undoing leaves the resource for the next run to reuse", async () => {
+    fake.fail("POST", /^\/servers$/, 412, "resource_unavailable", "not available");
+    fake.fail("DELETE", /^\/firewalls\//, 500, "server_error", "internal error");
+    const refusal = errorOf(await run(CREATE));
+    expect(refusal.details.slice(-2)).toEqual(["left the firewall web: the next run finds it and reuses it", "deleted the SSH key sitesolide-web this run had created"]);
+    expect(fake.firewalls).toHaveLength(1);
+
+    // The next run, with a type that can be had, reuses it.
+    resultOf(await run([...CREATE, "--type", "cx33"]));
+    expect(fake.firewalls).toHaveLength(1);
+    expect(writes().filter((write) => write === "POST /firewalls")).toHaveLength(1);
+  });
+
+  test("a key upload refused undoes nothing it did not make", async () => {
+    fake.fail("POST", /^\/ssh_keys$/, 403, "forbidden", "insufficient permissions");
+    const refusal = errorOf(await run(CREATE));
+    expect(refusal.hint).toBe(REMOTE_HINTS["provider-forbidden"]!);
+    expect(refusal.details.at(-1)).toBe("nothing had been created yet");
   });
 
   test("an unknown location is refused with the locations", async () => {
@@ -523,7 +624,8 @@ describe("machine create", () => {
   test("a placement Hetzner refuses is said in its words", async () => {
     fake.fail("POST", /^\/servers$/, 422, "placement_error", "no host available for this server type");
     const refusal = errorOf(await run(CREATE));
-    expect(refusal.message).toBe("Hetzner refused to create the server web (422 placement_error): no host available for this server type");
+    expect(refusal.message).toBe("Hetzner would not create cx23 at fsn1 (422 placement_error): no host available for this server type");
+    expect(refusal.hint).toBe(REMOTE_HINTS["type-unavailable"]!);
   });
 
   test("the waits are bounded", async () => {
@@ -566,7 +668,7 @@ describe("the API's refusals, as the command reports them", () => {
     ["POST", /^\/ssh_keys$/, 403, "forbidden", "insufficient permissions", "provider-forbidden"],
     ["POST", /^\/servers$/, 403, "resource_limit_exceeded", "server limit exceeded", "provider-limit"],
     ["POST", /^\/servers$/, 409, "uniqueness_error", "server name is already used", "provider-name-taken"],
-    ["POST", /^\/servers$/, 412, "resource_unavailable", "server type not available", "provider-unavailable"],
+    ["POST", /^\/servers$/, 412, "resource_unavailable", "server type not available", "type-unavailable"],
     ["POST", /^\/servers$/, 422, "invalid_input", "invalid input in field 'image'", "provider-invalid"],
     ["POST", /^\/servers$/, 423, "locked", "resource is locked", "provider-busy"],
     ["GET", /^\/servers$/, 500, "server_error", "internal error", "provider-failure"],

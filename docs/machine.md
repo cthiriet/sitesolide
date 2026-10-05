@@ -57,9 +57,20 @@ Three resources, each labelled `managed-by=sitesolide` and
 
 Before anything is created, `create` reads what could refuse it: a server of
 that name sitesolide did not create (it is never touched: pick another name), a
-type the location does not sell (the refusal lists the cheapest ones it does,
-with their price), a firewall of that name that is not sitesolide's. A refusal
-leaves nothing behind.
+type the location does not sell or no longer sells (the refusal lists the
+cheapest ones it does, with their price), a firewall of that name that is not
+sitesolide's. A refusal leaves nothing behind.
+
+Hetzner's list of types also says whether a type is *available* at a location,
+and that flag does not decide: it has been seen false for a type Hetzner then
+created at once. A type listed as unavailable is ordered all the same, after a
+warning (`Hetzner lists cx23 as unavailable at fsn1; trying anyway`). If
+Hetzner refuses the order itself, the refusal lists the cheapest types it lists
+as available there, or suggests another `--location`, and the SSH key and the
+firewall this run had created for the server are deleted again: without a
+server, nothing in sitesolide would ever list or remove them. What an earlier
+run made, or the project already held, is left as it was; a deletion that
+fails leaves the resource for the next run, which reuses it.
 
 It then waits for Hetzner to finish creating and starting the server, then for
 port 22 to accept a connection, each wait bounded, and prints the `setup`

@@ -166,6 +166,7 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "no-ssh-key": "pass --ssh-key with the path of a public key, the .pub file; if this workstation has none, its owner creates one with ssh-keygen -t ed25519; never pass a private key",
   "invalid-server-type": "pick one of the types `details` lists, sold at that location, and pass it with --type; the cheapest come first",
   "invalid-location": "pick one of the locations `details` lists and pass it with --location",
+  "type-unavailable": "the provider would not sell that type there right now: run the same command with one of the types `details` lists as --type, or with another --location; `details` also says what this run had created, deleted again or left for the next run to reuse",
   "machine-exists": "pick another --name: a machine of that name exists in the project and sitesolide did not create it; never delete or rename it to make room",
   "firewall-taken": "pick another --name: a firewall of that name exists and sitesolide did not create it; never delete or rename it to make room",
   "machine-not-found": "check the name with `sitesolide machine list --provider <provider>`: nothing was destroyed",
