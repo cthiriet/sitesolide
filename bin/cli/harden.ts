@@ -104,6 +104,23 @@ export const BAN_ADVICE = [
 ];
 
 /**
+ * What ssh says when the machine at an address is not the one this
+ * workstation met there before. Providers hand a released address to the next
+ * machine: a VM destroyed and created again often comes back on the same IPv4,
+ * with a new host key. Met on Hetzner on 5 October 2026.
+ */
+export const HOST_KEY_CHANGED = /Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/;
+
+/** What to tell whoever meets a changed host key, for the host it names. */
+export function hostKeyAdvice(host: string): string[] {
+  return [
+    `the machine at ${host} is not the one this workstation knew there: ssh refuses it until its old key is removed`,
+    `if you have just created this machine, on an address a previous one had: ssh-keygen -R ${host}, then run the same command again`,
+    "if you have not, stop: something else answers at that address",
+  ];
+}
+
+/**
  * The PATH of every script: root's, whatever the account and the sudo
  * configuration hand down. ufw, sshd, useradd and nft live in /usr/sbin.
  */

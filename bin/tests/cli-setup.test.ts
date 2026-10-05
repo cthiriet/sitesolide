@@ -935,6 +935,15 @@ describe("the logins fail2ban counts", () => {
     expect(REFUSALS.unreachable(`root@${HOST}`, "root@host: Permission denied (publickey).").details.join("\n")).not.toContain("fail2ban");
   });
 
+  test("a new machine on an address an old one had: the old host key is named, with the command that removes it", () => {
+    // A destroyed VM's IPv4 often goes to the next one created: ssh then
+    // refuses the new host key, and only a generic "cannot reach" said so.
+    const refusal = REFUSALS.unreachable(`root@${HOST}`, "Host key verification failed.");
+    expect(refusal.details.join("\n")).toContain(`ssh-keygen -R ${HOST}`);
+    expect(refusal.details.join("\n")).not.toContain("fail2ban");
+    expect(REFUSALS.unreachable(`root@${HOST}`, "ssh: connect to host x port 22: Connection refused").details.join("\n")).not.toContain("ssh-keygen -R");
+  });
+
   test("the preflight tries a second account only when it exists, and only after the machine refused the first", () => {
     const marker = { server: `deploy@${HOST}`, zone: ZONE, startedAt: "" };
     expect(preflightAccounts("root", "deploy", { kind: "fresh" }, null)).toEqual({ first: "root", then: null });

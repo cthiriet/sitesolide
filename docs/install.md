@@ -266,6 +266,11 @@ bin/deploy-egress.sh && bin/deploy-steward.sh
 
 ## Troubleshooting
 
+**"Host key verification failed" on a machine you just created.** The provider
+gave it the address of a machine you used before, and ssh remembers the old
+one's key: `ssh-keygen -R 203.0.113.10`, then run the same command again. On a
+machine you did not just create, stop instead: something else answers there.
+
 **ssh suddenly answers "connection refused".** fail2ban banned your address
 after failed logins, for ten minutes by default: wait, or from the provider's
 console run `fail2ban-client status sshd` and `fail2ban-client unban <address>`.

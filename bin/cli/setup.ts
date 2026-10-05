@@ -63,6 +63,8 @@ import {
   APT,
   BAN_ADVICE,
   CONNECTION_LOST,
+  HOST_KEY_CHANGED,
+  hostKeyAdvice,
   fail2banRelease,
   asRoot,
   hardeningSteps,
@@ -148,6 +150,7 @@ export const REFUSALS = {
     details: [
       said,
       ...(CONNECTION_LOST.test(said) ? BAN_ADVICE : []),
+      ...(HOST_KEY_CHANGED.test(said) ? hostKeyAdvice(server.slice(server.indexOf("@") + 1)) : []),
       "setup connects without a prompt: the key loaded in the agent (ssh-add), the machine up and its port 22 open",
       ...(server.startsWith("root@") ? ["once an earlier run has closed root login, connect as the deploy account instead: sitesolide setup deploy@<host> ..."] : []),
     ],
