@@ -16,6 +16,7 @@ packages:
   - rsync
   - git
   - curl
+  - unzip
 
 users:
   - name: ${user}

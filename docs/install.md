@@ -101,8 +101,9 @@ fresh machine accepts: every step leans on the one before it.
 # certificate needs, which the standard build lacks
 ssh you@203.0.113.10 'curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | sudo tee /etc/apt/sources.list.d/caddy-stable.list && sudo apt-get update && sudo apt-get install -y caddy && sudo caddy add-package github.com/caddy-dns/cloudflare'
 
-# Bun, at /usr/local/bin/bun, where every unit looks for it
-ssh you@203.0.113.10 'curl -fsSL https://bun.com/install | sudo BUN_INSTALL=/usr/local bash'
+# Bun, at /usr/local/bin/bun, where every unit looks for it. Its installer
+# needs unzip, which cloud-init installs and a bare Debian image lacks
+ssh you@203.0.113.10 'sudo apt-get install -y unzip && curl -fsSL https://bun.com/install | sudo BUN_INSTALL=/usr/local bash'
 
 # The Cloudflare token Caddy reads for its certificates
 ssh you@203.0.113.10 'sudo install -m 0640 -o root -g caddy /dev/stdin /etc/caddy/cloudflare.env' <<< 'CLOUDFLARE_API_TOKEN=your-token'
