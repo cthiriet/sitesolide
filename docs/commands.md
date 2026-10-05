@@ -1,9 +1,12 @@
 # Commands
 
 Every command runs from a project's folder, the one holding its
-`sitesolide.json`, except `init`. This is what `sitesolide --help` prints.
+`sitesolide.json`, except `init`, `help` and `--version`. This is what
+`sitesolide --help` prints.
 
 ```text
+sitesolide help                 this list, with or without a configuration; --help after any command
+sitesolide --version            the release this binary was built from, dev from a checkout
 sitesolide init                 write ~/.config/sitesolide/config.json
    --server <user@host> --zone <dns.zone> --email <you@example.com>
    --contact <you@example.com>   shown on a locked preview's door

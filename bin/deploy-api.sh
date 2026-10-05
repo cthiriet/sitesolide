@@ -13,7 +13,19 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$REPO_ROOT/bin/config.sh"
 sitesolide_require_config
 SOURCE="$REPO_ROOT/api"
-RELEASE="$(date +%Y-%m-%d-%H%M%S)-$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+# The release names what its code came from: the version of the binary that
+# unpacked this kit, or the commit of the checkout it runs from. A kit is no
+# git checkout, and asking git there would answer for whatever repository
+# happens to hold the cache, or fail; the test on .git keeps git to the
+# checkout that is REPO_ROOT itself.
+if [ -n "${SITESOLIDE_KIT_VERSION:-}" ]; then
+  REVISION="$SITESOLIDE_KIT_VERSION"
+elif [ -e "$REPO_ROOT/.git" ]; then
+  REVISION="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+else
+  REVISION="unknown"
+fi
+RELEASE="$(date +%Y-%m-%d-%H%M%S)-$REVISION"
 TARGET="/srv/api/releases/$RELEASE"
 
 # On a fresh machine nothing has made the account the unit runs as, and

@@ -12,6 +12,10 @@
  *   sitesolide run -- <command>     load the vault secret and run
  *   sitesolide mcp                  the same commands, as tools for an agent
  *   sitesolide login --url <url>    a team member: a token instead of SSH
+ *   sitesolide help, --version      without any configuration
+ *
+ * The scripts this file runs live in the kit, the repository or what a
+ * compiled binary unpacks: see bin/cli/kit.ts and bin/build.ts.
  *
  * `--json` turns the output of every command but `init` and `run` into one
  * event per line, for agents: see the output section below, bin/cli/output.ts
@@ -98,6 +102,7 @@ import {
   legacyKeysWarning,
   projectsRepo,
   readConfig,
+  readConfigFile,
   type Config,
 } from "./cli/config";
 import { backupsReport } from "./cli/backups";
@@ -181,7 +186,8 @@ import {
 } from "./cli/caddy-lock";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, type ProjectAccount } from "./cli/loopback";
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
-import { eventOutput, humanOutput, login, remoteMode, runRemote } from "./cli/remote";
+import { eventOutput, humanOutput, login, remoteMode, REMOTE_USAGE, runRemote } from "./cli/remote";
+import { KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION } from "./cli/kit";
 import { share, sshSharing } from "./cli/sharing";
 import {
   foreignUnit,
@@ -202,7 +208,6 @@ import {
   unitPath,
 } from "./cli/services";
 
-const REPO_ROOT = resolve(import.meta.dir, "..");
 const MANIFEST_NAME = "sitesolide.json";
 
 type Project = {
@@ -331,9 +336,46 @@ function chooseOutput(arguments_: string[]): void {
  * what was assigned to process.env since.
  */
 function childEnvironment(extra?: Record<string, string>): Record<string, string | undefined> | undefined {
-  if (!jsonOutput && extra === undefined) return undefined;
+  if (!jsonOutput && (extra === undefined || Object.keys(extra).length === 0)) return undefined;
   const silent = jsonOutput ? { SSH_ASKPASS_REQUIRE: "force", SSH_ASKPASS: Bun.which("false") ?? "/usr/bin/false" } : {};
   return { ...process.env, ...silent, ...extra };
+}
+
+// --- the kit -----------------------------------------------------------------
+
+/**
+ * The scripts of bin/ and the files they read live in the kit: the
+ * repository, or the folder a compiled binary unpacks them into. Every path
+ * to one of them goes through here, never through this file's own location,
+ * which inside a binary is a file system nothing else can read. See
+ * bin/cli/kit.ts.
+ *
+ * A kit that cannot be unpacked is a refusal like any other, with its hint
+ * under --json, and never a stack trace.
+ */
+function fromKit<T>(read: () => T): T {
+  try {
+    return read();
+  } catch (error) {
+    if (error instanceof KitUnavailable) die(error.message, error.details);
+    throw error;
+  }
+}
+
+/** A script of bin/, in the kit. */
+function script(name: string): string {
+  return join(fromKit(kitRoot), "bin", name);
+}
+
+/**
+ * The environment of the project's own build, and of the command `run`
+ * starts: undefined, which leaves Bun.spawn as it was, unless a compiled
+ * binary on a workstation without Bun lends its own, last on the PATH. See
+ * projectEnv in bin/cli/kit.ts.
+ */
+function projectEnvironment(): Record<string, string | undefined> | undefined {
+  const extra = fromKit(projectEnv);
+  return Object.keys(extra).length === 0 ? undefined : { ...process.env, ...extra };
 }
 
 /** The final event of a run that succeeded, under --json. */
@@ -490,7 +532,11 @@ class Executor {
       // without this line, a workstation aiming at another machine through its
       // configuration file would see deploy-caddy.sh and deploy-secrets.sh talk
       // to the default one, that is to say to production.
-      env: childEnvironment(options.env),
+      //
+      // The kit's environment comes first, its own `bun` on the PATH when this
+      // is a compiled binary: the scripts call it, and the workstation may have
+      // none.
+      env: childEnvironment({ ...fromKit(kitEnv), ...options.env }),
       stdout: options.quiet ? "pipe" : childOutput(),
       stderr: childOutput(),
     });
@@ -754,6 +800,7 @@ async function runBuild(project: Project, executor: Executor): Promise<void> {
   step(`build (${build})`);
   const proc = Bun.spawn(["sh", "-c", build], {
     cwd: project.code,
+    env: projectEnvironment(),
     stdout: childOutput(),
     stderr: childOutput(),
   });
@@ -1151,7 +1198,7 @@ async function installFragment(manifest: Manifest, config: Config, executor: Exe
     await Bun.write(path, fragment);
     // Under the lock this deployment holds: the script checks it and does not
     // take it again.
-    await executor.run([join(REPO_ROOT, "bin", "deploy-caddy.sh"), path], {
+    await executor.run([script("deploy-caddy.sh"), path], {
       env: envUnderLock(config),
     });
   } finally {
@@ -1584,7 +1631,7 @@ async function requireProjectSet(config: Config, executor: Executor): Promise<vo
     case "table":
       die("the loopback rule in service predates the project set", [
         "this project's services could not reach each other; lay the current rule first:",
-        `  ${join(REPO_ROOT, "bin", "deploy-loopback.sh")} close`,
+        `  ${script("deploy-loopback.sh")} close`,
         "then run sitesolide deploy again. Nothing was pushed.",
       ]);
   }
@@ -1599,7 +1646,9 @@ async function requireProjectSet(config: Config, executor: Executor): Promise<vo
  */
 async function requireEgress(config: Config, executor: Executor): Promise<void> {
   const state = readEgressState(await executor.read(config, egressStateCommand()));
-  const install = join(REPO_ROOT, "bin", "deploy-egress.sh");
+  // Named in the refusals only: unpacking a kit to print a path nobody reads
+  // would be a write for nothing.
+  const install = (): string => script("deploy-egress.sh");
   switch (state) {
     case "active":
       return;
@@ -1611,13 +1660,13 @@ async function requireEgress(config: Config, executor: Executor): Promise<void> 
       die("the egress proxy is installed on the server but not running", [
         "this project's outbound calls and connectors go through it; read its journal, then lay it again:",
         `  sudo journalctl -u sitesolide-egress -n 50   (on the server)`,
-        `  ${install}`,
+        `  ${install()}`,
         "then run sitesolide deploy again. Nothing was pushed.",
       ]);
     case "absent":
       die("this project declares egress or connectors, and the egress proxy is not installed on the server", [
         "install it first, see egress/README.md:",
-        `  ${install}`,
+        `  ${install()}`,
         "then run sitesolide deploy again. Nothing was pushed.",
       ]);
   }
@@ -1658,7 +1707,7 @@ async function rebuildProjectPorts(config: Config, executor: Executor, mode: "se
   if (state === "unreadable") return fail("cannot tell whether the loopback rule is in place");
   if (state === "table" && strict) {
     return fail("the loopback rule in service predates the project set", [
-      `lay the current rule first: ${join(REPO_ROOT, "bin", "deploy-loopback.sh")} close`,
+      `lay the current rule first: ${script("deploy-loopback.sh")} close`,
     ]);
   }
 
@@ -1887,7 +1936,7 @@ function pointToDashboard(config: Config): never {
     "every site's file is managed there, the dashboard, the portal and the landing included",
     "",
     "the dashboard's own password, on a machine that has none yet:",
-    `  ${join(REPO_ROOT, "bin", "dashboard-password.sh")}`,
+    `  ${script("dashboard-password.sh")}`,
   ]);
 }
 
@@ -1928,7 +1977,7 @@ async function runWithSecret(
       "bash",
       ...command,
     ],
-    { cwd: project.code, stdout: "inherit", stderr: "inherit", stdin: "inherit" },
+    { cwd: project.code, env: projectEnvironment(), stdout: "inherit", stderr: "inherit", stdin: "inherit" },
   );
   process.exit(await proc.exited);
 }
@@ -1996,7 +2045,7 @@ async function lockPreview(
   subcommand: "enable" | "code" | "disable" | "state",
 ): Promise<void> {
   const slug = project.manifest.slug;
-  const command = [join(REPO_ROOT, "bin", "lock.sh"), subcommand, slug];
+  const command = [script("lock.sh"), subcommand, slug];
   const env = { SITESOLIDE_SERVER: config.server, SITESOLIDE_PROJECT_DIR: project.folder };
   note({ slug });
   // `--status --json` hands the table over as data, this project's row of it.
@@ -2175,7 +2224,7 @@ async function switchDomain(
   step("domains table, through the validated path");
   // Under the lock this gesture holds: the script checks it and does not take
   // it again.
-  await executor.run([join(REPO_ROOT, "bin", "generate-domains.sh")], {
+  await executor.run([script("generate-domains.sh")], {
     env: envUnderLock(config),
   });
   releaseCaddyLock();
@@ -2261,7 +2310,7 @@ async function remove(
   // stay set on the VM with nothing to remove it.
   if (manifest.lock === true) {
     step("preview lock");
-    await executor.run([join(REPO_ROOT, "bin", "lock.sh"), "disable", slug], {
+    await executor.run([script("lock.sh"), "disable", slug], {
       env: { ...envUnderLock(config), SITESOLIDE_PROJECT_DIR: project.folder },
     });
   }
@@ -2291,7 +2340,7 @@ async function remove(
     } else {
       // SITESOLIDE_REMOVE: without it, the block stays loaded in front of a
       // stopped service. Measured on 15 September 2026 while removing a project.
-      await executor.run([join(REPO_ROOT, "bin", "deploy-caddy.sh")], {
+      await executor.run([script("deploy-caddy.sh")], {
         env: { ...envUnderLock(config), SITESOLIDE_REMOVE: `${slug}.caddy` },
       });
     }
@@ -2303,7 +2352,7 @@ async function remove(
   // certificate for a site that no longer exists.
   if (manifest.domain !== undefined) {
     step("domains table, through the validated path");
-    await executor.run([join(REPO_ROOT, "bin", "generate-domains.sh")], {
+    await executor.run([script("generate-domains.sh")], {
       env: envUnderLock(config),
     });
   }
@@ -2564,6 +2613,81 @@ async function initialise(arguments_: string[]): Promise<void> {
   for (const [key, given] of Object.entries(config)) console.log(`  ${key}: ${given}`);
 }
 
+/**
+ * The list `help` prints, and an unknown command. `zone` names the dashboard
+ * when the configuration knows it; `help` runs without one.
+ */
+function usage(zone: string | null): string {
+  return [
+    "usage:",
+    "  sitesolide help                 this list, with or without a configuration; --help after any command",
+    "  sitesolide --version            the release this binary was built from, dev from a checkout",
+    "  sitesolide init                 write ~/.config/sitesolide/config.json",
+    "     --server <user@host> --zone <dns.zone> --email <you@example.com>",
+    "     --contact <you@example.com>   shown on a locked preview's door",
+    "  sitesolide detect               the sitesolide.json this folder implies, written nowhere",
+    "     --write                      write it, never over an existing one",
+    "     --slug <name>                name the project, rather than after its folder",
+    "  sitesolide deploy               prepare, build, push, install, restart, verify",
+    "     --dry-run                    show the unit and the fragment, install nothing, build nothing",
+    "     --build                      with --dry-run: run the build too, the folder's own code, here",
+    "     --force                      switch a hand-written unit to the generated one",
+    "     --yes [--slug <name>]        no sitesolide.json: write the inferred one, then deploy",
+    "  sitesolide status               what the server actually runs",
+    "  sitesolide logs [--follow]      journalctl for this project",
+    "     --lines <n>                  how many lines back, 50 by default",
+    "  sitesolide backups              this project's data snapshots, read only",
+    "  sitesolide share                who may open this project with their work account, and the line to send",
+    "     <email>...                   share it with these people",
+    "     --domain <domain>            with everyone at this domain",
+    "     --remove <email|domain>      take a person or a domain off",
+    "     --only-admins                back to the admins alone",
+    "  sitesolide lock   [--dry-run]   close the preview behind a code, or show it",
+    "     --status                     wanted / installed / measured, without touching",
+    "     --new-code                   replace the code in force by a fresh one",
+    "  sitesolide unlock [--dry-run]   reopen the preview and drop its code",
+    "  sitesolide domain               where this project's own domain stands",
+    "     --activate [--force]         switch the site onto it, then rebuild the table",
+    "     --deactivate                 back to the preview subdomain",
+    "  sitesolide remove --confirm <slug>",
+    "                                  take the project off the machine, for good",
+    "     --dry-run                    show every step, remove nothing",
+    "  sitesolide run -- <command>     load the secret from the vault and run",
+    "  sitesolide mcp                  serve these commands to an agent, over MCP on stdio",
+    "  sitesolide login --url <https://dashboard.zone>",
+    "                                  a team member: keep a token, deploy without SSH",
+    "     --token-stdin                read the token from standard input",
+    "  any command --api               go through the dashboard's API even with a server",
+    "",
+    "--json, on every command but init and run: one JSON event per line, see docs/agents.md",
+    `secrets live on the server: manage them in the Secrets section of ${zone === null ? "https://dashboard.<zone>" : dashboardAddress(zone)}`,
+    "the portal of a deployed site is set from the dashboard too: deploy follows the server",
+  ].join("\n");
+}
+
+/** `help`, `--help` or `-h`, as the command or among its options; never what follows `--`, which `run` hands on. */
+function asksForHelp(arguments_: string[]): boolean {
+  const separator = arguments_.indexOf("--");
+  const own = separator === -1 ? arguments_ : arguments_.slice(0, separator);
+  return own[0] === "help" || own.includes("--help") || own.includes("-h");
+}
+
+/**
+ * The list for this workstation: a team member's, with a token and no
+ * server, gets the commands the token runs. Neither reads more than the
+ * configuration file, and an unreadable one only loses the zone.
+ */
+function helpText(arguments_: string[]): string {
+  if (remoteMode(arguments_, process.env)) return REMOTE_USAGE.join("\n");
+  let zone: string | null = process.env.SITESOLIDE_ZONE ?? null;
+  try {
+    zone ??= readConfigFile().zone ?? null;
+  } catch {
+    // Unreadable: the list stays generic.
+  }
+  return usage(zone === "" ? null : zone);
+}
+
 if (import.meta.main) {
   const arguments_ = process.argv.slice(2);
   const command = arguments_[0] ?? "";
@@ -2578,6 +2702,35 @@ if (import.meta.main) {
   // neither has events to print.
   if (jsonOutput && (command === "init" || command === "run")) {
     die(`--json is not available for ${command}`, ["its output is for a person, or for the command it runs"]);
+  }
+
+  // Neither reads the configuration: they are what someone types first, on a
+  // workstation where `init` has not run yet, and a "missing settings" in
+  // answer to --help explained nothing. `--help` after any command asks for
+  // the list too, rather than running the command: `deploy --help` is a
+  // question, and deploying in answer would be the worst one.
+  if (command === "--version" || command === "version") {
+    if (jsonOutput) {
+      note({ version: VERSION, bun: Bun.version });
+      finish("version");
+    } else console.log(`sitesolide ${VERSION}`);
+    process.exit(0);
+  }
+  if ((command === "" && !jsonOutput) || asksForHelp(arguments_)) {
+    const text = helpText(arguments_);
+    if (jsonOutput) {
+      note({ usage: text.split("\n") });
+      finish("help");
+      process.exit(0);
+    }
+    // Bare, the command is a mistake as much as a question: the list goes to
+    // standard error, and the exit code says nothing was done.
+    if (command === "") {
+      console.error(text);
+      process.exit(1);
+    }
+    console.log(text);
+    process.exit(0);
   }
 
   // Neither reads the configuration: `detect` reads the folder alone, and
@@ -2721,51 +2874,7 @@ if (import.meta.main) {
     }
     default:
       if (jsonOutput) die(`unknown command: ${command === "" ? "none given" : command}`);
-      console.error(
-        [
-          "usage:",
-          "  sitesolide init                 write ~/.config/sitesolide/config.json",
-          "     --server <user@host> --zone <dns.zone> --email <you@example.com>",
-          "     --contact <you@example.com>   shown on a locked preview's door",
-          "  sitesolide detect               the sitesolide.json this folder implies, written nowhere",
-          "     --write                      write it, never over an existing one",
-          "     --slug <name>                name the project, rather than after its folder",
-          "  sitesolide deploy               prepare, build, push, install, restart, verify",
-          "     --dry-run                    show the unit and the fragment, install nothing, build nothing",
-          "     --build                      with --dry-run: run the build too, the folder's own code, here",
-          "     --force                      switch a hand-written unit to the generated one",
-          "     --yes [--slug <name>]        no sitesolide.json: write the inferred one, then deploy",
-          "  sitesolide status               what the server actually runs",
-          "  sitesolide logs [--follow]      journalctl for this project",
-          "     --lines <n>                  how many lines back, 50 by default",
-          "  sitesolide backups              this project's data snapshots, read only",
-          "  sitesolide share                who may open this project with their work account, and the line to send",
-          "     <email>...                   share it with these people",
-          "     --domain <domain>            with everyone at this domain",
-          "     --remove <email|domain>      take a person or a domain off",
-          "     --only-admins                back to the admins alone",
-          "  sitesolide lock   [--dry-run]   close the preview behind a code, or show it",
-          "     --status                     wanted / installed / measured, without touching",
-          "     --new-code                   replace the code in force by a fresh one",
-          "  sitesolide unlock [--dry-run]   reopen the preview and drop its code",
-          "  sitesolide domain               where this project's own domain stands",
-          "     --activate [--force]         switch the site onto it, then rebuild the table",
-          "     --deactivate                 back to the preview subdomain",
-          "  sitesolide remove --confirm <slug>",
-          "                                  take the project off the machine, for good",
-          "     --dry-run                    show every step, remove nothing",
-          "  sitesolide run -- <command>     load the secret from the vault and run",
-          "  sitesolide mcp                  serve these commands to an agent, over MCP on stdio",
-          "  sitesolide login --url <https://dashboard.zone>",
-          "                                  a team member: keep a token, deploy without SSH",
-          "     --token-stdin                read the token from standard input",
-          "  any command --api               go through the dashboard's API even with a server",
-          "",
-          "--json, on every command but init and run: one JSON event per line, see docs/agents.md",
-          `secrets live on the server: manage them in the Secrets section of ${dashboardAddress(config.zone)}`,
-          "the portal of a deployed site is set from the dashboard too: deploy follows the server",
-        ].join("\n"),
-      );
+      console.error(usage(config.zone));
       process.exit(1);
   }
   finish(command);

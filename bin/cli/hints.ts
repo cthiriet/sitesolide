@@ -99,6 +99,11 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/does not resolve to /, "point the domain's DNS record at the server, wait for it to propagate, then run this again; --force only on the owner's explicit decision"],
   [/^removal needs the slug typed back/, "re-run with --confirm <slug>, and only if the owner asked for this project to be removed: the server keeps no backup"],
 
+  // --- the binary's kit, see bin/cli/kit.ts
+  [/^cannot unpack the kit into /, "the binary could not write its scripts into the folder the message names: free some disk space or fix that folder's permissions, or set XDG_CACHE_HOME to a writable folder, then run the same command again"],
+  [/^the kit embedded in this binary /, "the binary is damaged: install the release again with install.sh, then run the same command again"],
+  [/^this binary carries no kit/, "this binary was compiled without bin/build.ts: install a release with install.sh, or build one with `bun bin/build.ts`"],
+
   // --- the workstation's configuration
   [/^missing settings: /, "the owner has to run `sitesolide init` once on this workstation; never guess the server or the zone"],
   [/ is required$/, "pass every setting: sitesolide init --server <user@host> --zone <dns.zone> --email <address>"],

@@ -78,6 +78,17 @@ folders it copies are the fixtures of `bin/tests/infer/`, which
 standard input and output, both eras of it. Its tools run the real CLI, in
 front of the fake VM, and the deploy tool only ever with `dry_run`.
 
+## The binary
+
+`binary.test.ts` builds the binary this machine runs with `bin/build.ts`, then
+runs it as a workstation without Bun would: a fresh HOME and cache, a PATH
+with the system's tools and the fake ssh alone. It checks that the binary
+names no path of the repository, that two builds of the same tree give the
+same bytes, that `--version` and `--help` need nothing, that a command running
+a script unpacks the kit once and that the script finds `bun` in it, and that
+`mcp` runs its tools with the binary itself. `help.test.ts` holds `help` and
+`--version` to the same promise from a checkout. See `bin/cli/kit.ts`.
+
 ## The projects
 
 | Directory | What it covers |
