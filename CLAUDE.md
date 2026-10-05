@@ -79,8 +79,9 @@ present, and points to the dashboard when it is not. The detail is in
 **No key in a committed file**, nor anywhere inside a repository, ignored or
 not. What is private to the workstation lives in `~/.config/sitesolide/`: the
 configuration, `secrets/` for the credentials the workstation itself presents to
-production, and `terraform/` for Terraform's values and state, which
-`bin/terraform.sh` hands to it.
+production, and possibly `terraform/`, Terraform's values and state from before
+0.3, which nothing reads any more and which still holds tokens and the
+machine's address.
 
 `.claude/settings.json` denies Claude Code both reading and writing any `*.env`,
 any `*.tfvars`, and the two private folders of `~/.config/sitesolide/`,

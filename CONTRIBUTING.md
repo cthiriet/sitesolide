@@ -5,7 +5,7 @@
 | Path | What it holds |
 |---|---|
 | `bin/` | The CLI and the deployment scripts. Runs from any directory, on any project. |
-| `infra/` | Terraform for the machine, the Caddy configuration, and the systemd units of the services that serve the others. |
+| `infra/` | The Caddy configuration and the systemd units of the services that serve the others. |
 | `api/` | The shared service, deliberately tiny: the `ask` endpoint for on-demand TLS, and preview locks. |
 | `dashboard/` | The dashboard, the steward that writes secrets as root, and the gatekeeper that touches Caddy. |
 | `portal/` | The shared password for personal projects, and their guest access. |
@@ -66,8 +66,8 @@ bun bin/build.ts --target bun-darwin-arm64 --out /tmp/out
 Each binary embeds the Bun runtime and the kit: the scripts of `bin/`, the
 sources of the components they build and upload, and `infra/`, packed into one
 archive it unpacks on first use into `~/.cache/sitesolide/<version>-<hash>/`.
-The kit is what git knows in those folders, minus the tests, the documentation
-and Terraform; `LEFT_OUT` in `bin/build.ts` says why each stays out. A script
+The kit is what git knows in those folders, minus the tests and the
+documentation; `LEFT_OUT` in `bin/build.ts` says why each stays out. A script
 that starts reading a new file only needs that file committed, and
 `bin/tests/cli-kit.test.ts` fails when a path a script names is missing from
 the kit.

@@ -1,105 +1,178 @@
 # Installing sitesolide
 
-From a blank account to a first deployed project. Budget half an hour, most of
-it waiting for DNS.
+From nothing to a first deployed project in four commands. Budget a quarter of
+an hour, most of it the machine installing packages while you wait.
 
-**The tested path is Hetzner Cloud plus Cloudflare.** That is what the Terraform
-in `infra/` creates and what the author runs in production. Neither is
-load-bearing: [Another host, another DNS](#another-host-another-dns) at the end
-says exactly what to change.
+```bash
+curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/install.sh | sh
+```
+
+```bash
+sitesolide machine create --provider hetzner --name web
+```
+
+```bash
+sitesolide setup root@203.0.113.10 --zone example.com --email you@example.com
+```
+
+```bash
+cd your-project && sitesolide deploy
+```
 
 ## What you need first
 
-- **A domain.** Every project gets a subdomain of it, and the machine serves the
-  bare domain too.
-- **Its DNS on a provider Caddy can solve DNS-01 against.** The wildcard
-  certificate that covers `*.your-zone.tld` cannot be issued any other way.
-  Cloudflare is what this guide uses; Caddy has modules for around thirty
-  others.
-- **Bun** on your workstation: `curl -fsSL https://bun.com/install | bash`.
-- **Terraform**, if you want the machine created for you rather than by hand.
+- **A domain whose DNS is at Cloudflare.** Every project gets a subdomain of
+  it, and the machine serves the bare domain too. Another DNS provider works
+  with a few more steps: see [Another DNS provider](#another-dns-provider).
+- **One Cloudflare token**, created at
+  [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens)
+  with **Create Custom Token**, restricted to that zone, with `Zone / Zone /
+  Read` and `Zone / DNS / Edit`. Setup uses it from your workstation to create
+  the records, and lays it on the machine, where Caddy uses it for the wildcard
+  certificate.
+- **An SSH key** on your workstation, `~/.ssh/id_ed25519` or another.
+- **A machine**: either a Hetzner Cloud API token, and `sitesolide machine`
+  orders one, or any fresh Debian 13 VM, from any provider, that you reach as
+  `root` with that key.
 
-## 1. Create the machine
-
-```bash
-mkdir -p ~/.config/sitesolide/terraform
-cp infra/terraform.tfvars.example ~/.config/sitesolide/terraform/terraform.tfvars
-```
-
-Fill it in: the Hetzner API token, the Cloudflare token, your domain, the name
-of your SSH key as it appears in the Hetzner console, and the non-root account
-to create. It lives outside the repository, beside the CLI's configuration, and
-so does Terraform's state: nothing private sits in the tree you cloned.
-
-The two Cloudflare tokens are created at
-[dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens)
-with **Create Custom Token**, both restricted to the single zone:
-
-| Token | Used by | Lives in |
-|---|---|---|
-| Terraform | the DNS records in `dns.tf` | `~/.config/sitesolide/terraform/terraform.tfvars`, on your workstation |
-| Caddy | the DNS-01 challenge for the wildcard | `/etc/caddy/cloudflare.env`, on the machine |
-
-Both need `Zone / DNS / Edit` and `Zone / Zone / Read`. Keeping them separate
-means you can revoke the one that lives on the exposed machine without touching
-your own.
+## 1. Install the CLI
 
 ```bash
-bin/terraform.sh init
-bin/terraform.sh plan      # always read the plan
-bin/terraform.sh apply
+curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/install.sh | sh
 ```
 
-This creates the VM, a firewall that opens 22, 80, 443 and ICMP, and the DNS
-records. cloud-init sets up the non-root account, key-only SSH, ufw, fail2ban
-and automatic security updates.
+One executable for your system and processor, macOS or Linux, checked against
+the release's checksums and put in `~/.local/bin`. It needs neither Bun nor a
+clone of this repository: everything the CLI runs is inside it. Your
+workstation needs only what it already has, `bash`, `ssh`, `rsync` and `curl`.
 
-Check that the zone resolves to the new machine before going on:
+From a checkout instead, for development: `ln -sf "$PWD/bin/sitesolide.ts"
+~/.local/bin/sitesolide`, with [Bun](https://bun.com) installed.
+
+## 2. A machine
+
+At Hetzner, with a token of a project of its own (*Security*, *API tokens*,
+**Read & Write**):
 
 ```bash
-dig +short your-zone.tld
-dig +short anything.your-zone.tld
+read -rs HCLOUD_TOKEN && export HCLOUD_TOKEN
 ```
-
-Both must answer with the IPv4 that `terraform output` printed.
-
-## 2. Point the CLI at it
 
 ```bash
-cd ..
-ln -sf "$PWD/bin/sitesolide.ts" ~/.local/bin/sitesolide
-sitesolide init \
-  --server you@203.0.113.10 \
-  --zone your-zone.tld \
-  --email you@your-zone.tld \
-  --contact you@your-zone.tld
+sitesolide machine create --provider hetzner --name web
 ```
 
-This writes `~/.config/sitesolide/config.json`. Nothing in the repository knows
-your machine; everything reads that file.
+It uploads your public key, creates a firewall that opens 22, 80, 443 and ICMP,
+orders a `cx23` (2 vCPU, 4 GB) running Debian 13, and waits until SSH answers,
+under a minute. `--type`, `--location` and `--backups` change the defaults;
+`sitesolide machine list` and `sitesolide machine destroy` do the rest. See
+[machine.md](machine.md).
 
-| Setting | What it is |
-|---|---|
-| `server` | `user@host`, as ssh takes it. The user owns the files the machine serves. |
-| `zone` | The DNS zone. Each project gets `<slug>.<zone>`. |
-| `email` | The address the certificate authority warns about expiry. |
-| `contact` | Optional. Shown to a visitor who lands on a locked preview. |
-| `vault` | Optional. What your workstation itself presents to production, read by `sitesolide run`. Defaults to `~/.config/sitesolide/secrets/`. See [secrets.md](secrets.md). |
-| `sites` | Optional. A repository holding several of your projects, for the checks that read them all. |
+Anywhere else, create a Debian 13 VM with your key for `root`, and go on.
 
-Nothing else is kept on the workstation. Each project's systemd unit and Caddy
-block are generated from its manifest when it deploys, and its secrets live on
-the machine.
+## 3. Install it
 
-## 3. Install the base system
+```bash
+read -rs CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN
+```
 
-`sitesolide setup` runs everything in this section and the next, the hardening
-of `cloud-init.yaml` and the DNS records included, in one command that can be
-run again at any time: see [setup.md](setup.md). What follows is what it does,
-by hand.
+```bash
+sitesolide setup root@203.0.113.10 --zone example.com --email you@example.com
+```
 
-These run once, in this order. Each one is idempotent. The order is the one a
-fresh machine accepts: every step leans on the one before it.
+`--email` is the address the certificate authority warns about expiry;
+`--contact`, optional, is shown to a visitor who lands on a locked preview.
+
+Setup hardens the machine (a `deploy` account with sudo, ssh by key only and
+closed to root, ufw, fail2ban, automatic security updates), creates the four
+DNS records, installs Caddy with its DNS module and Bun, then deploys every
+service of the platform in the order a fresh machine accepts: the shared API,
+the dashboard and the root daemon behind it, the portal, the rule that isolates
+services on the loopback, the monitor, backups, the team installer and the
+egress proxy. It writes `~/.config/sitesolide/config.json`, which every other
+command reads.
+
+It shows two passwords, once each: the dashboard's and the portal's. Store
+them in a password manager before the terminal scrolls them away; both are
+changed from the dashboard afterwards.
+
+It can be run again at any time. On a machine already installed it reads
+everything and changes nothing; after a failure it resumes at the step that
+failed. Every step, what it checks and what it changes, is in
+[setup.md](setup.md).
+
+The dashboard is then at `https://dashboard.example.com`.
+
+## 4. Deploy something of your own
+
+```bash
+cd your-project && sitesolide deploy
+```
+
+A folder without `sitesolide.json` gets one inferred from what it holds:
+`sitesolide detect` shows it, `sitesolide deploy --yes` writes it and deploys.
+The repository's `examples/static-site` and `examples/bun-app` deploy as they
+are. Each answers at `https://<slug>.example.com`.
+
+To put it on its own domain, add it to the manifest, point its DNS at the
+machine, and:
+
+```bash
+sitesolide domain --activate
+```
+
+That writes `domain.active`, puts the manifest on the machine and rebuilds the
+domain table, the last step being the one that authorises the certificate.
+
+## 5. Know when something breaks
+
+One machine serves everything, so its failures are everyone's. The monitor
+setup installed checks every minute that Caddy runs, that every site
+answers over HTTPS, that no service failed, and that disk, memory,
+certificates and backups are fine. Out of the box it only writes to the
+journal. Give it a heartbeat, a free [healthchecks.io](https://healthchecks.io)
+check that alerts when the pings stop, which is the only thing that notices the
+machine itself dying, and optionally a Slack, Discord or ntfy webhook: five
+minutes, described in [monitor/README.md](../monitor/README.md#alerting-healthchecksio-in-five-minutes).
+What the monitor finds down also shows among the dashboard's Issues.
+
+## 6. Let others deploy, without SSH
+
+Colleagues and agents deploy with a personal token instead of root SSH: create
+one on the dashboard's *Team* page, and send its holder to [team.md](team.md),
+"Deploying as a team member". Setup installed what it needs, unless it ran
+with `--minimal`.
+
+## Another DNS provider
+
+Cloudflare is named in two places: setup's records, and the Caddyfile's
+`(tls-zone)` snippet, `dns cloudflare {env.CLOUDFLARE_API_TOKEN}`, which
+obtains the wildcard certificate.
+
+- Run setup with `--skip-dns`: it prints the four records to create, `<zone>`
+  and `*.<zone>`, A and AAAA, and waits for them to resolve.
+- In `infra/caddy/Caddyfile`, replace `cloudflare` with your provider's Caddy
+  module and the variable with whatever it wants, add that module on the
+  machine with `caddy add-package`, and lay `/etc/caddy/cloudflare.env`,
+  root:caddy 0640, with its variables before running setup. This needs a
+  checkout: the binary carries the Caddyfile as released.
+
+## No wildcard at all
+
+Possible but poorer: each project then gets its own
+certificate over HTTP-01, which works, costs an issuance per subdomain, and
+makes previews visible in certificate transparency logs. Remove the
+`import tls-zone` lines and let Caddy do its default thing.
+
+## Installing by hand
+
+What setup runs, from a checkout, for whoever wants every step in front of
+them. The hardening setup does first is described in [setup.md](setup.md);
+on another machine, do its equivalent by hand. These run once, in this order,
+each one idempotent: the order is the one a fresh machine accepts, every step
+leaning on the one before it. `sitesolide
+init --server deploy@203.0.113.10 --zone example.com --email you@example.com`
+first, so that the scripts know the machine.
 
 ```bash
 # Caddy from its own repository, then the Cloudflare DNS module the wildcard
@@ -107,7 +180,7 @@ fresh machine accepts: every step leans on the one before it.
 ssh you@203.0.113.10 'curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | sudo tee /etc/apt/sources.list.d/caddy-stable.list && sudo apt-get update && sudo apt-get install -y caddy && sudo caddy add-package github.com/caddy-dns/cloudflare'
 
 # Bun, at /usr/local/bin/bun, where every unit looks for it. Its installer
-# needs unzip, which cloud-init installs and a bare Debian image lacks
+# needs unzip, which a bare Debian image lacks
 ssh you@203.0.113.10 'sudo apt-get install -y unzip && curl -fsSL https://bun.com/install | sudo BUN_INSTALL=/usr/local bash'
 
 # The Cloudflare token Caddy reads for its certificates
@@ -148,7 +221,7 @@ bin/deploy-api.sh        # on-demand TLS and preview locks, and its account
 bin/deploy-gatekeeper.sh # the only thing that touches Caddy from the machine
 ```
 
-## 4. Deploy the dashboard and the portal
+### The dashboard and the portal
 
 The dashboard first, with its password: it is the one secret the dashboard
 cannot create for itself, since it is what opens it. The steward and the
@@ -182,78 +255,20 @@ bin/deploy-loopback.sh close   # the nftables rule that isolates the services
 bin/deploy-monitor.sh          # the timer that checks every site each minute, and alerts
 ```
 
-## 5. Deploy something of your own
+Then the optional components, in this order: the steward runs again after
+each one that lays something it reads.
 
 ```bash
-cd examples/static-site
-sitesolide deploy
+bin/deploy-backup.sh install && bin/deploy-steward.sh && bin/deploy-backup.sh enable
+bin/deploy-installer.sh        # deploys with a team token
+bin/deploy-egress.sh && bin/deploy-steward.sh
 ```
-
-It answers at `https://static-site.your-zone.tld`. `examples/bun-app` does the
-same for an app with a port, a service and a secret.
-
-To put it on its own domain, add it to the manifest, point its DNS at the
-machine, and:
-
-```bash
-sitesolide domain --activate
-```
-
-That writes `domain.active`, puts the manifest on the machine and rebuilds the
-domain table, the last step being the one that authorises the certificate.
-
-## 6. Know when something breaks
-
-One machine serves everything, so its failures are everyone's. The monitor
-installed in step 3 checks every minute that Caddy runs, that every site
-answers over HTTPS, that no service failed, and that disk, memory,
-certificates and backups are fine. Out of the box it only writes to the
-journal. Give it a heartbeat, a free [healthchecks.io](https://healthchecks.io)
-check that alerts when the pings stop, which is the only thing that notices the
-machine itself dying, and optionally a Slack, Discord or ntfy webhook: five
-minutes, described in [monitor/README.md](../monitor/README.md#alerting-healthchecksio-in-five-minutes).
-What the monitor finds down also shows among the dashboard's Issues.
-
-## 7. Let others deploy, without SSH
-
-Colleagues and agents deploy with a personal token instead of root SSH. Install
-the control API once (the order and the checks are in
-[dashboard/README.md](../dashboard/README.md), "The control API"):
-
-```bash
-cd dashboard && sitesolide deploy   # the API and the Team page
-bin/deploy-steward.sh               # the token registry
-bin/deploy-installer.sh             # what installs a project for a token
-```
-
-Then create a token on the dashboard's *Team* page, and send its holder to
-[team.md](team.md), "Deploying as a team member".
-
-## Another host, another DNS
-
-**Another VPS.** Ignore `infra/*.tf` entirely. Create a Debian 13 machine any
-way you like, then follow `infra/cloud-init.yaml` by hand: it is a short file,
-and everything in it is standard. The rest of the install is unchanged; the CLI
-only ever speaks ssh.
-
-**Another DNS provider.** Two places name Cloudflare:
-
-- `infra/caddy/Caddyfile`, in the `(tls-zone)` snippet:
-  `dns cloudflare {env.CLOUDFLARE_API_TOKEN}`. Replace `cloudflare` with your
-  provider's Caddy module and the variable with whatever it wants.
-- `infra/dns.tf`, which creates the records. Drop it and create them by hand, or
-  rewrite it for your provider.
-
-Caddy's DNS modules are not in the standard binary: build one with
-[xcaddy](https://github.com/caddyserver/xcaddy), or take a build that includes
-your provider.
-
-**No wildcard at all.** Possible but poorer: each project then gets its own
-certificate over HTTP-01, which works, costs an issuance per subdomain, and
-makes previews visible in certificate transparency logs. Remove the
-`import tls-zone` lines and let Caddy do its default thing.
 
 ## Troubleshooting
+
+**ssh suddenly answers "connection refused".** fail2ban banned your address
+after failed logins, for ten minutes by default: wait, or from the provider's
+console run `fail2ban-client status sshd` and `fail2ban-client unban <address>`.
 
 **`caddy validate` refuses a configuration that looks fine.** Run by hand it
 does not load `/etc/caddy/cloudflare.env` or `/etc/caddy/sitesolide.env`, so the

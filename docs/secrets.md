@@ -118,10 +118,19 @@ The folder is outside every repository, beside the configuration file, so no
 `git add` can ever publish it. Claude Code is denied reading and writing there,
 see `.claude/settings.json`.
 
-## Terraform's tokens
+## The tokens that create the machine
 
-The Hetzner and Cloudflare tokens that create the machine and its DNS records
-are not the machine's secrets but your workstation's, and they live in
-`~/.config/sitesolide/terraform/terraform.tfvars`, beside Terraform's state. See
-[infra/README.md](../infra/README.md). The Cloudflare token Terraform uses is
-distinct from the one Caddy reads on the machine for its certificates.
+The Hetzner token `sitesolide machine` uses and the Cloudflare token
+`sitesolide setup` uses are not the machine's secrets but yours, and sitesolide
+keeps neither on your workstation: each is read from an environment variable or
+from standard input for the length of one command, never from an option, which
+the shell's history and `ps` would show. Keep them in your password manager.
+
+The Cloudflare token also lives on the machine, in `/etc/caddy/cloudflare.env`,
+root:caddy 0640, where Caddy reads it for the wildcard certificate: setup lays
+it there. Restrict it to the one zone, `Zone / Zone / Read` and `Zone / DNS /
+Edit`, so that the machine holds no more than it needs. See
+[machine.md](machine.md) and [setup.md](setup.md).
+
+Up to 0.2 both lived in `~/.config/sitesolide/terraform/terraform.tfvars`;
+[upgrading.md](upgrading.md) says what to do with that folder.

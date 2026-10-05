@@ -125,22 +125,33 @@ and each one gets its unit, its port and its paths.
 - **Real isolation.** Each project runs as its own user, sees only its own
   folder, and cannot reach its neighbours over the loopback.
 - **Nothing to rent.** No container runtime, no control plane, no per-seat
-  pricing. A `cx33` at Hetzner (4 vCPU, 8 GB, about €16 a month) serves a few
+  pricing. A `cx33` at Hetzner (4 vCPU, 8 GB, about €8.50 a month) serves a few
   dozen projects.
 
 ## Get started
 
-You need a domain, a VM with SSH, and [Bun](https://bun.com) on your laptop to
-run the CLI.
+You need a domain on Cloudflare and a machine: any Debian 13 VM you reach as
+root, or a Hetzner token and sitesolide orders one.
 
 ```bash
-git clone https://github.com/cthiriet/sitesolide && cd sitesolide
-ln -sf "$PWD/bin/sitesolide.ts" ~/.local/bin/sitesolide
-sitesolide init --server you@203.0.113.10 --zone example.com --email you@example.com
+curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/install.sh | sh
 ```
 
-[docs/install.md](docs/install.md) takes you from a blank account to a first
-deployed project in about half an hour, Terraform included.
+```bash
+sitesolide machine create --provider hetzner --name web
+```
+
+```bash
+sitesolide setup root@203.0.113.10 --zone example.com --email you@example.com
+```
+
+```bash
+cd your-project && sitesolide deploy
+```
+
+One executable, no Bun and no clone needed. `setup` hardens the machine,
+creates the DNS records and installs everything in one command you can run
+again at any time. [docs/install.md](docs/install.md) explains each step.
 
 ## Documentation
 

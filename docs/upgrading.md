@@ -1,4 +1,44 @@
-# Upgrading a running installation to 0.2
+# Upgrading a running installation
+
+A machine upgrades one release at a time: from 0.1, follow
+[From 0.1 to 0.2](#from-01-to-02) first, then [From 0.2 to 0.3](#from-02-to-03).
+
+## From 0.2 to 0.3
+
+0.3 changes how you install and drive sitesolide, not what runs on the
+machine. Nothing there needs to be redeployed, and no site reloads.
+
+1. **The CLI.** Install the binary, or keep a checkout and `git pull`: both
+   read the same `~/.config/sitesolide/config.json`.
+
+   ```bash
+   curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/install.sh | sh
+   ```
+
+   From a checkout, `bin/test.sh` first, as always. The binary deploys
+   `dashboard/` and `portal/` from the copies it carries, built at release
+   time; a checkout builds them as before.
+2. **Terraform is gone.** Your machine, its firewall, its DNS records and its
+   Hetzner backups stay exactly as they are. `~/.config/sitesolide/terraform/`
+   is no longer read: copy its two tokens into your password manager, then
+   keep the folder as a record or delete it. **Never run `terraform apply` or
+   `terraform destroy` against that state from a 0.3 checkout**: with the
+   `.tf` files gone, Terraform plans the destruction of everything it created,
+   the server first. Whoever wants Terraform to keep managing the machine keeps
+   a 0.2 checkout for it.
+3. **`sitesolide setup` on this machine.** It recognises a machine it did not
+   install (no `setup.json` beside your configuration) and only reads it: it
+   reports when every step is done and refuses otherwise, changing nothing.
+   `--dry-run` shows what it finds:
+
+   ```bash
+   sitesolide setup deploy@203.0.113.10 --zone example.com --email you@example.com --dry-run
+   ```
+
+New machines are made with `sitesolide machine create` and `sitesolide setup`:
+see [install.md](install.md).
+
+## From 0.1 to 0.2
 
 How to bring a machine that runs 0.1 to 0.2 without any site going down. Every
 command runs from the workstation, by the person who owns the machine, in this
@@ -18,7 +58,7 @@ requests. Upgrade when traffic is lowest.
 The components each have a longer section of their own, linked at each step,
 with every check and every rollback in detail. This page is the order.
 
-## What 0.2 changes for you before you touch the machine
+### What 0.2 changes for you before you touch the machine
 
 The CLI is stricter, and some deployments that passed in 0.1 are refused or
 behave differently. `bin/test.sh` validates every manifest of this repository
@@ -40,7 +80,7 @@ manifest it refuses before deploying anything.
 The whole list, and why each changed: [commands.md](commands.md#upgrading-to-the-hardened-deploy)
 and [dashboard/README.md](../dashboard/README.md#upgrading-the-manifests-strings-egress-the-deployment-cap).
 
-## 0. On the workstation
+### 0. On the workstation
 
 ```bash
 git pull
@@ -54,7 +94,7 @@ fail for want of a project to read (`no folder of the sites repository is
 forgotten`, `at least one application site is covered`, and the one that reads
 the sites repository's manifests): that is the folder, not your manifests.
 
-## 1. Caddy's restart policy
+### 1. Caddy's restart policy
 
 The drop-in gains `Restart=always`: a Caddy stopped through its admin API
 comes back in two seconds instead of staying down. Applying it needs a
@@ -69,7 +109,7 @@ Check: `Restart=always`, `StartLimitIntervalUSec=0`, and the same `MainPID` as
 before the command. Back: install the previous file, `daemon-reload`.
 Details: [infra/README.md](../infra/README.md#caddys-restart-policy).
 
-## 2. The root components that only listen
+### 2. The root components that only listen
 
 They accept the old dashboard and the new one, and change nothing served.
 
@@ -83,7 +123,7 @@ folder writable only if it exists when the steward starts. Check: the
 steward's script verifies itself; the dashboard still shows every site's
 secrets. Back: the same scripts from 0.1.
 
-## 3. The dashboard, then the gatekeeper
+### 3. The dashboard, then the gatekeeper
 
 ```bash
 cd dashboard && sitesolide deploy && cd ..
@@ -107,7 +147,7 @@ analytics does, which is a correct refusal and no sign of trouble. Back:
 deploy the previous `dashboard/`, run the previous gatekeeper script; the new
 tables of `dashboard.db` stay, unread.
 
-## 4. The Caddyfile and the portal
+### 4. The Caddyfile and the portal
 
 ```bash
 bin/deploy-caddy.sh
@@ -125,7 +165,7 @@ run it with `--force`. Check: `curl -s -o /dev/null -w '%{http_code}\n' 'https:/
 answers `400`; a protected site still opens with the cookie you already had; a
 guest still gets in.
 
-## 5. What you choose to turn on
+### 5. What you choose to turn on
 
 Each of these is independent and opt-in. None changes a site until you use it.
 
@@ -137,7 +177,7 @@ Each of these is independent and opt-in. None changes a site until you use it.
 | deploys by colleagues and agents with a token | `bin/deploy-installer.sh` | a token on the *Team* page | [dashboard/README.md](../dashboard/README.md#deployment-of-the-control-api) |
 | projects that reach only listed hosts, connectors | `bin/deploy-egress.sh`, then `bin/deploy-steward.sh` again: the steward started before `/etc/sitesolide-egress` existed, and only a restart makes it writable for it | `egress` or `connectors` in a manifest | [egress/README.md](../egress/README.md#deployment) |
 
-## 6. Each site, when you next deploy it
+### 6. Each site, when you next deploy it
 
 Nothing forces a redeploy. When you next run `sitesolide deploy` in an app's
 folder, its block is replaced without `--force` (a static site has no block,
@@ -148,7 +188,7 @@ behaviour of 0.1, which includes an open app receiving whatever
 `X-Sitesolide-*` header a visitor sends: an app that starts reading those
 headers is redeployed before it trusts them.
 
-## Going back to 0.1 entirely
+### Going back to 0.1 entirely
 
 Check out 0.1 and run steps 3 and 4 from it, then step 2. Sites already
 redeployed with 0.2 keep working; their next deploy from 0.1 needs `--force`
