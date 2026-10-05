@@ -35,6 +35,24 @@ if [ -z "${REPO_ROOT:-}" ]; then
   exit 1
 fi
 
+# In a kit a compiled binary unpacked, REPO_ROOT is that kit, and `bun` is the
+# binary itself: .bin/ holds the two shims that play it, first on the PATH so
+# that a script started by hand from the kit needs no Bun either, and
+# .kit.json names the release, which bin/deploy-api.sh names its releases
+# after, a kit being no git checkout. The CLI sets both already; a checkout of
+# the repository has neither file, and keeps the bun of its PATH. See
+# bin/cli/kit.ts.
+if [ -x "$REPO_ROOT/.bin/bun" ]; then
+  case ":$PATH:" in
+    *":$REPO_ROOT/.bin:"*) ;;
+    *) PATH="$REPO_ROOT/.bin:$PATH" ;;
+  esac
+  if [ -z "${SITESOLIDE_KIT_VERSION:-}" ] && [ -f "$REPO_ROOT/.kit.json" ]; then
+    SITESOLIDE_KIT_VERSION="$(sed -n 's/^{"version":"\([0-9A-Za-z.-]*\)".*/\1/p' "$REPO_ROOT/.kit.json")"
+    export SITESOLIDE_KIT_VERSION
+  fi
+fi
+
 eval "$(bun "$REPO_ROOT/bin/cli/settings.ts")"
 
 sitesolide_require_config() {

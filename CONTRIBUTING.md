@@ -51,6 +51,39 @@ it recognises and refuses everything else, and a hostname that resolves nowhere.
 Two barriers, on purpose, a forgotten write is refused, and it would have been
 aimed at a name that does not exist.
 
+## Building the binary
+
+`sitesolide` ships as one executable per platform, which needs neither Bun nor
+a clone on the workstation. `bin/build.ts` builds them with
+`bun build --compile`:
+
+```bash
+bun bin/build.ts                          # every platform into dist/, version dev
+bun bin/build.ts --version v0.3.0         # what the release workflow runs for a tag
+bun bin/build.ts --target bun-darwin-arm64 --out /tmp/out
+```
+
+Each binary embeds the Bun runtime and the kit: the scripts of `bin/`, the
+sources of the components they build and upload, and `infra/`, packed into one
+archive it unpacks on first use into `~/.cache/sitesolide/<version>-<hash>/`.
+The kit is what git knows in those folders, minus the tests, the documentation
+and Terraform; `LEFT_OUT` in `bin/build.ts` says why each stays out. A script
+that starts reading a new file only needs that file committed, and
+`bin/tests/cli-kit.test.ts` fails when a path a script names is missing from
+the kit.
+
+The CLI never finds a script from its own location, which inside a binary is a
+file system nothing else can read: `kitRoot()` and `kitEnv()` from
+`bin/cli/kit.ts` give the folder and the environment, the repository and
+nothing in a checkout. The scripts keep calling `bun`: in a binary, the kit's
+`.bin/bun` is the binary itself, run with `BUN_BE_BUN=1`.
+
+On macOS the build signs the darwin binaries again, ad hoc, which is why the
+release workflow, `.github/workflows/release.yml`, runs there. On every `v*`
+tag it runs `bin/test.sh`, builds, and publishes the four binaries,
+`SHA256SUMS` and `install.sh` on the tag's release. Cross-compiling fetches the
+Bun runtime of each target once, so the first build needs the network.
+
 ## What has to be tested
 
 What decides, what validates, what refuses:

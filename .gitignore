@@ -71,3 +71,7 @@ portal/borrowed/
 # Egress proxy: the directory its tests rewrite at each pass. Its audit
 # database lives in /var/lib/sitesolide-egress on the machine, never here.
 egress/.test-data/
+
+# The binaries bin/build.ts writes, with their SHA256SUMS: a release carries
+# them, the repository never does.
+dist/

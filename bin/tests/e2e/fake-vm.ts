@@ -80,7 +80,9 @@ export function createFakeVm(): FakeVm {
   const lockDir = join(root, "run", "sitesolide-gatekeeper", LOCK_NAME);
 
   const ssh = join(bin, "ssh");
-  writeFileSync(ssh, `#!/bin/sh\nexec bun "${join(import.meta.dir, "fake-ssh.ts")}" "$@"\n`);
+  // The Bun running the tests, by its path: a test may hand the CLI a PATH
+  // without Bun on it, as a compiled binary meets on a workstation.
+  writeFileSync(ssh, `#!/bin/sh\nexec "${process.execPath}" "${join(import.meta.dir, "fake-ssh.ts")}" "$@"\n`);
   const rsync = join(bin, "rsync");
   writeFileSync(
     rsync,

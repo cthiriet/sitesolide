@@ -45,12 +45,18 @@
  * closing does the same to every command still running, then the server
  * exits. Nothing but protocol messages is ever written to standard output.
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { isCompiled, VERSION } from "./cli/kit";
 import { isValidSlug } from "./cli/manifest";
 import { forEachLine } from "./cli/output";
 
-const CLI = join(import.meta.dir, "sitesolide.ts");
+/**
+ * How this server starts the CLI: Bun and bin/sitesolide.ts from the
+ * repository, the binary alone once compiled, whose entry point is the CLI and
+ * whose own directory is a file system nothing else reads.
+ */
+const CLI = isCompiled() ? [process.execPath] : [process.execPath, join(import.meta.dir, "sitesolide.ts")];
 
 export const MODERN_VERSIONS = ["2026-07-28"];
 export const LEGACY_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -65,7 +71,8 @@ const META = {
 export const SERVER_INFO = {
   name: "sitesolide",
   title: "sitesolide",
-  version: (JSON.parse(readFileSync(join(import.meta.dir, "package.json"), "utf8")) as { version: string }).version,
+  // The release's, `dev` from a checkout: bin/package.json is not in a binary.
+  version: VERSION,
 };
 
 /** The tool list changes only with a new version of this file: an hour of cache is safe. */
@@ -349,7 +356,7 @@ export type Runner = (argv: string[], cwd: string) => Running;
  * would eat them.
  */
 export function runCli(argv: string[], cwd: string): Running {
-  const proc = Bun.spawn([process.execPath, CLI, ...argv, "--json"], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn([...CLI, ...argv, "--json"], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const events: Record<string, unknown>[] = [];
   const done = (async (): Promise<RunOutcome> => {
     const [, stderr] = await Promise.all([
