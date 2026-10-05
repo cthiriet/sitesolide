@@ -12,6 +12,7 @@
  *   sitesolide run -- <command>     load the vault secret and run
  *   sitesolide mcp                  the same commands, as tools for an agent
  *   sitesolide login --url <url>    a team member: a token instead of SSH
+ *   sitesolide machine create       a VM from a cloud provider's API, see cli/machine.ts
  *
  * `--json` turns the output of every command but `init` and `run` into one
  * event per line, for agents: see the output section below, bin/cli/output.ts
@@ -181,6 +182,7 @@ import {
 } from "./cli/caddy-lock";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, type ProjectAccount } from "./cli/loopback";
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
+import { machine } from "./cli/machine";
 import { eventOutput, humanOutput, login, remoteMode, runRemote } from "./cli/remote";
 import { share, sshSharing } from "./cli/sharing";
 import {
@@ -2606,6 +2608,11 @@ if (import.meta.main) {
   // `--json` reaches them too: the same events, and one final `result` or
   // `error` with its hint, whichever way the command runs.
   const remoteOutput = jsonOutput ? eventOutput() : humanOutput;
+
+  // `machine` orders the VM the configuration will name: it comes before
+  // there is one to read, and talks to the provider's API, never over SSH.
+  // See bin/cli/machine.ts.
+  if (command === "machine") process.exit(await machine(arguments_, { environment: process.env, output: remoteOutput }));
   if (command === "login") process.exit(await login(arguments_, { environment: process.env, output: remoteOutput }));
   if (remoteMode(arguments_, process.env)) {
     process.exit(
@@ -2759,6 +2766,8 @@ if (import.meta.main) {
           "  sitesolide login --url <https://dashboard.zone>",
           "                                  a team member: keep a token, deploy without SSH",
           "     --token-stdin                read the token from standard input",
+          "  sitesolide machine create|list|destroy --provider hetzner",
+          "                                  a VM ordered by API, before setup: sitesolide machine lists the options",
           "  any command --api               go through the dashboard's API even with a server",
           "",
           "--json, on every command but init and run: one JSON event per line, see docs/agents.md",
