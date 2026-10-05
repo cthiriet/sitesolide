@@ -98,8 +98,10 @@ runs it as a workstation without Bun would: a fresh HOME and cache, a PATH
 with the system's tools and the fake ssh alone. It checks that the binary
 names no path of the repository, that two builds of the same tree give the
 same bytes, that `--version` and `--help` need nothing, that a command running
-a script unpacks the kit once and that the script finds `bun` in it, and that
-`mcp` runs its tools with the binary itself. `help.test.ts` holds `help` and
+a script unpacks the kit once, read-only, and that the script finds `bun` in
+it, that the dashboard deploys from the kit as built at release time, from a
+writable copy that leaves the kit untouched, and that `mcp` runs its tools
+with the binary itself. `help.test.ts` holds `help` and
 `--version` to the same promise from a checkout. See `bin/cli/kit.ts`.
 
 ## The projects

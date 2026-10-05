@@ -43,7 +43,7 @@ echo "-> local build"
 LOCAL="$(mktemp -d)"
 trap 'rm -rf "$LOCAL"' EXIT
 # The borrowings first: they are not versioned, and the bundle embeds them.
-(cd "$REPO_ROOT/dashboard" && bun run borrow > /dev/null)
+sitesolide_borrow dashboard
 (cd "$REPO_ROOT/dashboard" && bun build steward.ts --target=bun --outfile "$LOCAL/steward.js" > /dev/null)
 [ -s "$LOCAL/steward.js" ] || { echo "!! bun build produced nothing" >&2; exit 1; }
 FINGERPRINT="$(shasum -a 256 < "$LOCAL/steward.js" | cut -d' ' -f1)"

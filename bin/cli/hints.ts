@@ -124,6 +124,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^cannot unpack the kit into /, "the binary could not write its scripts into the folder the message names: free some disk space or fix that folder's permissions, or set XDG_CACHE_HOME to a writable folder, then run the same command again"],
   [/^the kit embedded in this binary /, "the binary is damaged: install the release again with install.sh, then run the same command again"],
   [/^this binary carries no kit/, "this binary was compiled without bin/build.ts: install a release with install.sh, or build one with `bun bin/build.ts`"],
+  [/^the kit has no component named /, "name one of the kit's components, a folder holding a sitesolide.json: dashboard, portal, analytics"],
 
   // --- the workstation's configuration
   [/^missing settings: /, "the owner has to run `sitesolide init` once on this workstation; never guess the server or the zone"],

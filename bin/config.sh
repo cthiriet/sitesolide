@@ -55,6 +55,16 @@ fi
 
 eval "$(bun "$REPO_ROOT/bin/cli/settings.ts")"
 
+# The copies a component's bundles import, <component>/borrowed/, made by its
+# `borrow` script from the modules it shares with the rest of the repository.
+# A checkout makes them before each bundle. A kit carries them made at release
+# time by bin/build.ts, and is read-only: making them again there would fail,
+# and could only rewrite what is already there.
+sitesolide_borrow() {
+  [ -f "$REPO_ROOT/.kit.json" ] && return 0
+  (cd "$REPO_ROOT/$1" && bun run borrow > /dev/null)
+}
+
 sitesolide_require_config() {
   local missing=()
   [ -n "${SITESOLIDE_SERVER:-}" ] || missing+=("server")

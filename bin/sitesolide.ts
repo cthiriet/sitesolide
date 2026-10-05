@@ -193,7 +193,7 @@ import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, type ProjectAcc
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { machine } from "./cli/machine";
 import { eventOutput, humanOutput, login, remoteMode, REMOTE_USAGE, runRemote } from "./cli/remote";
-import { KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION } from "./cli/kit";
+import { KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
 import { share, sshSharing } from "./cli/sharing";
 import {
   foreignUnit,
@@ -2711,7 +2711,6 @@ if (import.meta.main) {
   const dryRun = arguments_.includes("--dry-run");
   const replace = arguments_.includes("--force");
   const executor = new Executor(dryRun);
-  const folder = process.cwd();
   chooseOutput(arguments_);
   buildInDryRun = arguments_.includes("--build");
 
@@ -2749,6 +2748,13 @@ if (import.meta.main) {
     console.log(text);
     process.exit(0);
   }
+
+  // A component of the unpacked kit, the dashboard that `setup` deploys, is
+  // worked on in a writable copy: the kit is a read-only cache, and what a
+  // command writes into the folder, a manifest that follows the server, must
+  // not land there. Elsewhere, the folder itself. See bin/cli/kit.ts.
+  const folder = fromKit(() => workingFolder(process.cwd()));
+  if (folder !== process.cwd()) say(`   the kit is read-only: working on a copy of this folder, ${folder}`);
 
   // Neither reads the configuration: `detect` reads the folder alone, and
   // `mcp` runs every tool call as a command of its own, which reads it then.

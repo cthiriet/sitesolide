@@ -32,6 +32,21 @@
  * loses the race throws its copy away and uses the winner's. A folder without
  * its marker was not made here, and is set aside rather than trusted.
  *
+ * READ-ONLY, A CACHE. Every run of a release shares its kit, and nothing may
+ * change it under the next one: its files and its folders lose their write
+ * bits once checked, so that a stray write fails at once instead of altering
+ * the cache. What writes into a component's folder, a deployment that follows
+ * the door the dashboard set, `lock` rewriting the manifest, works on a
+ * writable copy of that component instead (`kitComponent`, `workingFolder`),
+ * thrown away when the process ends. Removing a kit, or what a dead run left,
+ * gives the write bits back first (`removeTree`); so must whoever deletes the
+ * cache by hand: `chmod -R u+w ~/.cache/sitesolide` before `rm -rf`.
+ *
+ * Its components arrive built: bin/build.ts ran, at release time, the build
+ * of every component whose manifest has one, packed what it produced, and
+ * dropped `build` from the manifest it packed. Deploying the dashboard from
+ * the kit fetches no package and runs no Astro.
+ *
  * BUN WITHOUT BUN. The scripts call `bun` some seventy times on the
  * workstation, to read the configuration, to bundle the components, to draw a
  * code. The binary is Bun: started with BUN_BE_BUN=1, it skips its own entry
@@ -42,13 +57,31 @@
  * Bun they were released with, whatever the workstation has. bin/config.sh
  * puts it first as well, for a script of an unpacked kit started by hand.
  *
- * BUN_BE_BUN stays in the environment of what that bun starts, as any
- * variable does. A `sitesolide` started from there would behave as Bun too:
- * nothing in the kit does that, and a build that did would have to unset it.
+ * BUN_BE_BUN stays in the environment of what that bun starts, and nothing
+ * here can take it out. Bun reads it from the environment it was started
+ * with, and hands that same environment down whatever the script does to
+ * process.env; started as `bun` without the variable, through argv[0], the
+ * binary is sitesolide again. A `sitesolide` started by such a bun would
+ * behave as Bun too: nothing in the kit does that, and a project's build that
+ * did would have to unset it.
  */
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { EMBEDDED_KIT } from "./kit-archive";
 
 /** Replaced by bin/build.ts with the release's tag; undeclared, hence `dev`, everywhere else. */
@@ -156,6 +189,33 @@ export function isWholeKit(folder: string, hash: string): boolean {
   }
 }
 
+/** The mode a kit's file has once unpacked: the archive's, without any write bit. */
+export function readOnly(mode: number): number {
+  return mode & 0o555;
+}
+
+/**
+ * Removes a folder, read-only as a kit is: a folder without its write bit
+ * keeps its entries, so every folder below gets it back first. Nothing there,
+ * nothing done.
+ */
+export function removeTree(path: string): void {
+  const reopen = (folder: string): void => {
+    try {
+      chmodSync(folder, 0o700);
+    } catch {
+      return;
+    }
+    for (const entry of readdirSync(folder, { withFileTypes: true })) if (entry.isDirectory()) reopen(join(folder, entry.name));
+  };
+  try {
+    if (lstatSync(path).isDirectory()) reopen(path);
+  } catch {
+    return;
+  }
+  rmSync(path, { recursive: true, force: true });
+}
+
 /**
  * Removes what earlier runs left beside the kits when they died: temporary
  * folders and folders set aside, all older than an hour. A younger one may
@@ -166,7 +226,7 @@ function sweep(parent: string, now: number): void {
     if (!name.startsWith(".") || !/\.(tmp|aside)$/.test(name)) continue;
     const path = join(parent, name);
     try {
-      if (now - statSync(path).mtimeMs > STALE_MS) rmSync(path, { recursive: true, force: true });
+      if (now - statSync(path).mtimeMs > STALE_MS) removeTree(path);
     } catch {
       // Gone already: another run swept it.
     }
@@ -209,15 +269,17 @@ export function unpackKit(archive: Uint8Array<ArrayBuffer>, hash: string, destin
   mkdirSync(parent, { recursive: true });
   sweep(parent, Date.now());
   const temporary = sibling(destination, "tmp");
+  const folders = new Set<string>([temporary]);
   try {
     let offset = newline + 1;
     for (const file of header.files) {
       const target = join(temporary, file.path);
       mkdirSync(dirname(target), { recursive: true });
+      for (let folder = dirname(target); folder !== temporary; folder = dirname(folder)) folders.add(folder);
       writeFileSync(target, payload.subarray(offset, offset + file.size));
-      // After the write, so that the umask has no say: a script must stay
-      // executable, and a file its own mode.
-      chmodSync(target, file.mode);
+      // After the write, so that the umask has no say: a script stays
+      // executable, and nothing keeps a write bit.
+      chmodSync(target, readOnly(file.mode));
       offset += file.size;
     }
     // Read back, not trusted: a disk that filled up or a write cut short
@@ -225,14 +287,19 @@ export function unpackKit(archive: Uint8Array<ArrayBuffer>, hash: string, destin
     for (const file of header.files) {
       const target = join(temporary, file.path);
       const stat = statSync(target);
-      if ((stat.mode & 0o777) !== file.mode || stat.size !== file.size || sha256(readFileSync(target)) !== file.sha256) {
+      if ((stat.mode & 0o777) !== readOnly(file.mode) || stat.size !== file.size || sha256(readFileSync(target)) !== file.sha256) {
         throw new KitUnavailable(`cannot unpack the kit into ${destination}`, [`${file.path} did not read back as it was written`]);
       }
     }
-    writeFileSync(join(temporary, KIT_MARKER), `${JSON.stringify({ version, hash, files: header.files.length })}\n`);
+    const marker = join(temporary, KIT_MARKER);
+    writeFileSync(marker, `${JSON.stringify({ version, hash, files: header.files.length })}\n`);
+    chmodSync(marker, 0o444);
+    // The folders last, the deepest first: each one closed once nothing is
+    // left to write in it.
+    for (const folder of [...folders].sort((a, b) => b.length - a.length)) chmodSync(folder, 0o555);
     place(temporary, destination, hash);
   } finally {
-    rmSync(temporary, { recursive: true, force: true });
+    removeTree(temporary);
   }
 }
 
@@ -256,10 +323,10 @@ function place(temporary: string, destination: string, hash: string): void {
       const aside = sibling(destination, "aside");
       try {
         renameSync(destination, aside);
-        rmSync(aside, { recursive: true, force: true });
       } catch {
         // Another run set it aside first.
       }
+      removeTree(aside);
     }
   }
   throw new KitUnavailable(`cannot unpack the kit into ${destination}`, [
@@ -301,6 +368,76 @@ export function kitRoot(): string {
   }
   unpacked = destination;
   return destination;
+}
+
+/**
+ * Copies `source` into `destination` with the write bits a checkout has: the
+ * owner may write every file and folder, and nothing else changes. rsync -a
+ * carries modes to the machine, and a release uploaded read-only could not
+ * take its node_modules, nor be replaced by the next one.
+ */
+function copyWritable(source: string, destination: string): void {
+  mkdirSync(destination, { recursive: true, mode: 0o755 });
+  chmodSync(destination, 0o755);
+  for (const entry of readdirSync(source, { withFileTypes: true })) {
+    const from = join(source, entry.name);
+    const to = join(destination, entry.name);
+    if (entry.isDirectory()) {
+      copyWritable(from, to);
+    } else if (entry.isFile()) {
+      copyFileSync(from, to);
+      chmodSync(to, (statSync(from).mode & 0o777) | 0o200);
+    }
+  }
+}
+
+/**
+ * One component of the kit, `dashboard` or `portal`, where a command may
+ * write into it and upload it. In the repository, the component itself: a
+ * checkout is writable, and a manifest rewritten there is one to commit. From
+ * a compiled binary, a writable copy in a temporary folder of its own, thrown
+ * away when the process ends: the kit is read-only, and what a deployment
+ * writes there, the door the dashboard set, a port, belongs to no repository.
+ */
+export function kitComponent(name: string): string {
+  const source = join(kitRoot(), name);
+  if (!isCompiled()) return source;
+  if (!isKitPath(name) || name.includes("/") || !existsSync(join(source, "sitesolide.json"))) {
+    throw new KitUnavailable(`the kit has no component named ${JSON.stringify(name)}`, [
+      "a component is a folder of the kit that holds a sitesolide.json: dashboard, portal, analytics",
+    ]);
+  }
+  const copy = mkdtempSync(join(tmpdir(), `sitesolide-${name}-`));
+  process.on("exit", () => removeTree(copy));
+  copyWritable(source, copy);
+  return copy;
+}
+
+/** A path with its symbolic links resolved, or as it is when it does not exist. */
+function real(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/**
+ * The folder a command works in: `folder` itself, unless it lies inside the
+ * unpacked kit, read-only; then the same place in a writable copy of its
+ * component, see `kitComponent`. Unpacks nothing: a folder can only be inside
+ * a kit that is already there.
+ */
+export function workingFolder(folder: string): string {
+  if (!isCompiled() || EMBEDDED_KIT === null) return folder;
+  const kit = real(kitDirectory(VERSION, EMBEDDED_KIT.hash, process.env));
+  const inside = relative(kit, real(folder));
+  if (inside === "" || inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return folder;
+  const [component, ...rest] = inside.split(sep);
+  // Elsewhere in the kit, bin/ or infra/, nothing is deployed: the folder is
+  // read as it is, and a write there fails, as it should.
+  if (!existsSync(join(kit, component!, "sitesolide.json"))) return folder;
+  return join(kitComponent(component!), ...rest);
 }
 
 /**

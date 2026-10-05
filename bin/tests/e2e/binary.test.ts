@@ -1,9 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { binaryName, build, type Target } from "../../build";
-import { KIT_MARKER, SHIM_FOLDER } from "../../cli/kit";
+import { KIT_MARKER, removeTree, SHIM_FOLDER } from "../../cli/kit";
 import { forEachLine } from "../../cli/output";
 import { createFakeVm, type FakeVm } from "./fake-vm";
 import { REPO, TEST_EMAIL, TEST_ZONE, TESTS_ROOT } from "./run";
@@ -36,7 +36,8 @@ afterEach(() => {
   vm = null;
 });
 
-afterAll(() => rmSync(WORK, { recursive: true, force: true }));
+// The kits unpacked here are read-only, as on a workstation.
+afterAll(() => removeTree(WORK));
 
 let counter = 0;
 /** A HOME, a cache and a project folder of its own, outside the repository. */
@@ -116,7 +117,9 @@ describe("a binary on a workstation that has never run it", () => {
     expect(kits).toEqual([expect.stringMatching(new RegExp(`^${VERSION.replaceAll(".", "\\.")}-[0-9a-f]{16}$`))]);
     const kit = join(station.cache, "sitesolide", kits[0]!);
     expect(JSON.parse(readFileSync(join(kit, KIT_MARKER), "utf8")).version).toBe(VERSION);
-    expect(statSync(join(kit, "bin", "lock.sh")).mode & 0o111).not.toBe(0);
+    // Executable, and read-only, as every file of the kit.
+    expect(statSync(join(kit, "bin", "lock.sh")).mode & 0o777).toBe(0o555);
+    expect(statSync(join(kit, "bin")).mode & 0o777).toBe(0o555);
     const marker = statSync(join(kit, KIT_MARKER)).mtimeMs;
 
     // Run again: the same kit, not unpacked a second time.
@@ -128,6 +131,46 @@ describe("a binary on a workstation that has never run it", () => {
     // The shim, as the scripts call it: the binary itself, answering as Bun.
     const shim = Bun.spawnSync([join(kit, SHIM_FOLDER, "bun"), "--version"], { env: { PATH: SYSTEM_PATH, SITESOLIDE_BINARY: binary }, stdout: "pipe" });
     expect(shim.stdout.toString().trim()).toBe(Bun.version);
+  });
+
+  test("the dashboard deploys from the kit as it was built at release time, from a copy, leaving the kit as it was", () => {
+    vm = createFakeVm();
+    vm.acceptWrites();
+    const station = workstation(join(TESTS_ROOT, "projects", "simple-site"));
+    const env = {
+      HOME: station.home,
+      XDG_CACHE_HOME: station.cache,
+      PATH: `${vm.env.PATH!.split(":")[0]}:${SYSTEM_PATH}`,
+      SITESOLIDE_SERVER: vm.env.SITESOLIDE_SERVER!,
+      FAKE_VM: vm.env.FAKE_VM!,
+      SITESOLIDE_ZONE: TEST_ZONE,
+      SITESOLIDE_EMAIL: TEST_EMAIL,
+    };
+    // A command that runs a script unpacks the kit.
+    expect(runBinary(["lock", "--status", "--json"], { cwd: station.folder, env }).code).toBe(0);
+    const kit = join(station.cache, "sitesolide", readdirSync(join(station.cache, "sitesolide"))[0]!);
+    const snapshot = (): string[] =>
+      [...new Bun.Glob("**").scanSync({ cwd: kit, dot: true, onlyFiles: false })].sort().map((path) => {
+        const stat = statSync(join(kit, path));
+        return `${path} ${(stat.mode & 0o777).toString(8)} ${stat.size} ${stat.mtimeMs}`;
+      });
+    const before = snapshot();
+    const temporaries = (): string[] => readdirSync(tmpdir()).filter((name) => name.startsWith("sitesolide-dashboard-"));
+    const copiesBefore = temporaries();
+
+    const run = runBinary(["deploy", "--dry-run", "--json"], { cwd: join(kit, "dashboard"), env });
+    const events = run.output.trim().split("\n").map((line) => JSON.parse(line) as Record<string, any>);
+    const last = events.at(-1)!;
+    expect({ type: last.type, message: last.message, error: run.error }).toMatchObject({ type: "result", error: "" });
+    const said = events.map((event) => `${event.message ?? ""} ${event.command ?? ""} ${(event.details ?? []).join(" ")}`).join("\n");
+    // Built at release time: no build to run, and the files built leave from a copy.
+    expect(said).not.toContain("build (");
+    expect(said).toContain("the kit is read-only: working on a copy of this folder");
+    expect(said).toMatch(/rsync .*sitesolide-dashboard-[^/ ]+\/public\//);
+    expect(said).not.toContain(`${kit}/dashboard/`);
+    // The kit is as it was, and the copy went with the process.
+    expect(snapshot()).toEqual(before);
+    expect(temporaries()).toEqual(copiesBefore);
   });
 
   test("mcp runs its tools with the binary itself, and says the release", async () => {

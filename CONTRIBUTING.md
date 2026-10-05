@@ -78,11 +78,26 @@ file system nothing else can read: `kitRoot()` and `kitEnv()` from
 nothing in a checkout. The scripts keep calling `bun`: in a binary, the kit's
 `.bin/bun` is the binary itself, run with `BUN_BE_BUN=1`.
 
+The components arrive built. `bin/build.ts` runs, in a copy of the kit's
+sources, the `build` of every manifest that has one (the dashboard's Astro
+interface and its borrowed modules, the portal's borrowed modules), packs what
+it produced, and drops `build` from the manifests it packs, so that deploying
+them from the kit needs neither the network nor Astro. The dashboard's `web/`
+stays out, its output standing in for it.
+
+The unpacked kit is read-only, a cache every run of the release shares. A
+command run in one of its components works on a writable copy
+(`kitComponent()`, `workingFolder()`), a script that uploads from it sends a
+writable copy (rsync carries modes), and the scripts skip the borrow step a
+kit has already done (`sitesolide_borrow` in `bin/config.sh`). To delete the
+cache by hand: `chmod -R u+w ~/.cache/sitesolide`, then `rm -rf` it.
+
 On macOS the build signs the darwin binaries again, ad hoc, which is why the
 release workflow, `.github/workflows/release.yml`, runs there. On every `v*`
 tag it runs `bin/test.sh`, builds, and publishes the four binaries,
 `SHA256SUMS` and `install.sh` on the tag's release. Cross-compiling fetches the
-Bun runtime of each target once, so the first build needs the network.
+Bun runtime of each target once, and the dashboard's build its packages, so a
+build needs the network.
 
 ## What has to be tested
 

@@ -45,6 +45,8 @@ jobs:
       - name: Tests
         run: bin/test.sh
 
+      # Builds the dashboard's interface too, once, for the kit every binary
+      # carries: its packages come from npm, hence the network this needs.
       - name: Build
         run: bun bin/build.ts --version "$GITHUB_REF_NAME"
 
