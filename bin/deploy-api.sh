@@ -32,11 +32,16 @@ TARGET="/srv/api/releases/$RELEASE"
 # would land read-only on the machine, where bun install writes into it and
 # the cleanup below removes it. A writable copy leaves instead. A checkout's
 # api/ is writable, and leaves as it is.
+#
+# Readable by all as well: mktemp -d makes its folder 0700, rsync -a gave
+# that mode to the release itself, and sitesolide-api, which is not its
+# owner, failed every start with 200/CHDIR. Measured on a blank test machine
+# installed from the binary on 5 October 2026.
 if [ ! -w "$SOURCE" ]; then
   STAGED="$(mktemp -d)"
   trap 'chmod -R u+w "$STAGED" 2>/dev/null; rm -rf "$STAGED"' EXIT
   cp -R "$SOURCE/." "$STAGED/"
-  chmod -R u+w "$STAGED"
+  chmod -R u+w,go+rX,go-w "$STAGED"
   SOURCE="$STAGED"
 fi
 

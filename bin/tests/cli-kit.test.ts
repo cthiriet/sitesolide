@@ -487,7 +487,7 @@ describe("the release's kit, its components built", () => {
     writeFileSync(join(fakes, "ssh"), "#!/bin/sh\nexit 0\n");
     writeFileSync(
       join(fakes, "rsync"),
-      `#!/bin/sh\nfor a in "$@"; do source="$previous"; previous="$a"; done\nif [ -w "$source" ] && [ -w "$source/server.ts" ] && [ -w "$source/src" ]; then w=writable; else w=read-only; fi\necho "$source $w" >> "${log}"\n`,
+      `#!/bin/sh\nfor a in "$@"; do source="$previous"; previous="$a"; done\nif [ -w "$source" ] && [ -w "$source/server.ts" ] && [ -w "$source/src" ]; then w=writable; else w=read-only; fi\necho "$source $w $(ls -ld "$source" | cut -c1-10) $(ls -ld "$source/src" | cut -c1-10) $(ls -l "$source/server.ts" | cut -c1-10)" >> "${log}"\n`,
     );
     chmodSync(join(fakes, "ssh"), 0o755);
     chmodSync(join(fakes, "rsync"), 0o755);
@@ -506,8 +506,11 @@ describe("the release's kit, its components built", () => {
     expect({ code: run.exitCode, error: run.stderr.toString() }).toEqual({ code: 0, error: "" });
     expect(run.stdout.toString()).toContain("-> release ");
     expect(run.stdout.toString()).toContain("-v0.0.0-release.1");
-    const [sent, writable] = readFileSync(log, "utf8").trim().split(" ");
+    const [sent, writable, root, folder, file] = readFileSync(log, "utf8").trim().split(" ");
     expect(writable).toBe("writable");
+    // Readable by the service's account too: rsync -a gives the release the
+    // mode of the copy's root, and mktemp -d makes it 0700.
+    expect({ root, folder, file }).toEqual({ root: "drwxr-xr-x", folder: "drwxr-xr-x", file: "-rw-r--r--" });
     expect(sent!.startsWith(kit)).toBe(false);
     // The copy goes with the script.
     expect(existsSync(sent!)).toBe(false);
