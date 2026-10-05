@@ -21,7 +21,8 @@ would.
 | dry-run a deploy, and deploy | lock or unlock a preview, switch a domain |
 | read the server's status, a project's logs, its lock state | `--force` over a file someone edited on the machine |
 | share a project behind the portal with people or a domain, and read who may open it | make a site public, which is turning its portal off |
-| | read, set or guess a secret |
+| list the machines sitesolide created at a cloud provider | destroy one, unless you asked for that machine to be destroyed |
+| | read, set or guess a secret, a provider's token included |
 
 Secrets are set in the dashboard's *Secrets* section, by you. A deploy that
 needs one the machine lacks stops and names the page where to create it; the
@@ -178,6 +179,9 @@ What `result` carries:
 | `domain` | `slug`, `domain`: `name`, `aliases`, `active`, `table`, `dns`, `https` |
 | `remove` | `slug`, `dryRun` |
 | `share` | `slug`, `url`, `policy` (`mode`, `people`, `domains`), `inEffect`, `updatedAt`, `signIn`, `allowedDomains`, `message` (null until signing in with a work account is set up), `changed`, `previous` when changed |
+| `machine create` | `provider`, `created` (false when an earlier run had), `machine`, `resources` (each `kind`, `name`, `id`, `reused`), `next`, the `setup` command to run |
+| `machine list` | `provider`, `machines`, each with `name`, `type`, `location`, `status`, `ipv4`, `ipv6`, `ipv6Network`, `monthlyPrice` (`net`, `gross`, `currency`), `backups`, `managed` |
+| `machine destroy` | `provider`, `name`, `removed`, `kept`, `dns` |
 
 **`manifestWritten: true` means `sitesolide.json` changed on disk**: an
 inferred manifest, a port chosen, or a door the dashboard set. Commit it.

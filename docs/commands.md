@@ -1,8 +1,8 @@
 # Commands
 
 Every command runs from a project's folder, the one holding its
-`sitesolide.json`, except `init`, `help` and `--version`. This is what
-`sitesolide --help` prints.
+`sitesolide.json`, except `init`, `machine`, `help` and `--version`. This is
+what `sitesolide --help` prints.
 
 ```text
 sitesolide help                 this list, with or without a configuration; --help after any command
@@ -42,6 +42,8 @@ sitesolide mcp                  serve these commands to an agent, over MCP on st
 sitesolide login --url <https://dashboard.zone>
                                 a team member: keep a token, deploy without SSH
    --token-stdin                read the token from standard input
+sitesolide machine create|list|destroy --provider hetzner
+                                a VM ordered by API, before setup: sitesolide machine lists the options
 any command --api               go through the dashboard's API even with a server
 
 --json, on every command but init and run: one JSON event per line, see docs/agents.md
@@ -106,6 +108,37 @@ name. An app whose manifest declares no `port` gets a free one from `deploy`,
 written back into `sitesolide.json` to be committed. See
 [agents.md](agents.md#zero-configuration) for what is recognised, and what is
 never decided for you: secrets and the network.
+
+## A machine from a cloud provider
+
+`sitesolide machine` orders the VM itself, before there is a configuration to
+read: it talks to the provider's API, never over SSH. See
+[machine.md](machine.md) for what it creates, what it costs and what the token
+needs.
+
+```text
+sitesolide machine create --provider hetzner --name <name>
+                                order a VM, its firewall and your SSH key, ready for setup
+   --type <type>                cx23 by default; a refusal lists what the location sells
+   --location <location>        fsn1 by default
+   --image <image>              debian-13 by default
+   --backups                    the provider's daily backups, about 20 % on the price
+   --ssh-key <path.pub>         ~/.ssh/id_ed25519.pub, id_ecdsa.pub or id_rsa.pub by default
+sitesolide machine list --provider hetzner
+                                the machines sitesolide created, their addresses and price
+sitesolide machine destroy <name> --provider hetzner
+                                delete the machine and its firewall, for good
+   --confirm <name>             the name typed back, where no terminal can ask for it
+   --delete-key                 delete the SSH key uploaded for it too
+any machine command --token-stdin
+                                read the token from standard input rather than HCLOUD_TOKEN
+
+--json, on every one of them: one JSON event per line, see docs/agents.md
+the token is never an option, where ps would show it: see docs/machine.md
+```
+
+`create` ends on the command that comes next, `sitesolide setup
+root@<ipv4> --zone <your zone> --email <you>`, once port 22 answers.
 
 ## For agents
 

@@ -117,7 +117,9 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
  * pattern of HINTS reads them; a code this table lacks falls back to them.
  * `share` reports by code whichever way it runs, over the owner's SSH too:
  * bin/tests/cli-hints.test.ts fails on a code of bin/cli/sharing.ts this
- * table lacks.
+ * table lacks. So does `machine`, which talks to a cloud provider's API rather
+ * than to the dashboard: bin/tests/cli-machine.test.ts fails on a code of
+ * bin/cli/machine.ts or bin/cli/providers/ this table lacks.
  */
 export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   // --- refused before a request leaves
@@ -159,6 +161,40 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "service-failed": "read `sitesolide logs --json` to see why the service did not start, fix the code, then deploy again",
   "verify-failed": "a 404 means nothing answers at /: make it answer 200, from the app, which receives / unless the manifest has routes, or from an index.html in publicDir (docs/manifest.md, under start); otherwise read `sitesolide logs --json`; a site declared behind the portal that answers in the clear must be reported to the owner of the machine at once",
   "machine-unreadable": "the machine could not be read, nothing was changed: deploy again in a minute, then tell the owner of the machine if it persists",
+  // --- `machine`: a VM ordered from a cloud provider's API, see bin/cli/machine.ts
+  "machine-usage": "run one of the commands `details` lists: sitesolide machine create, list or destroy, each with --provider",
+  "machine-option": "run the command again without that option, with the options `details` lists; a token is never an option, only an environment variable or --token-stdin",
+  "unknown-provider": "pass --provider with one of the names `details` lists; no other provider is supported yet",
+  "machine-name": "name the machine with lowercase letters, digits and dashes, 63 characters at most, starting and ending with a letter or a digit",
+  "no-provider-token": "the owner creates a token as `details` says, then sets the variable the message names or pipes the token to --token-stdin; never put a token in a command line, a file of the repository or a message, and never guess or borrow one",
+  "provider-endpoint": "unset SITESOLIDE_HETZNER_API: it only serves tests, and the token only leaves over https, or over http to the loopback",
+  "no-ssh-key": "pass --ssh-key with the path of a public key, the .pub file; if this workstation has none, its owner creates one with ssh-keygen -t ed25519; never pass a private key",
+  "invalid-server-type": "pick one of the types `details` lists, sold at that location, and pass it with --type; the cheapest come first",
+  "invalid-location": "pick one of the locations `details` lists and pass it with --location",
+  "type-unavailable": "the provider would not sell that type there right now: run the same command with one of the types `details` lists as --type, or with another --location; `details` also says what this run had created, deleted again or left for the next run to reuse",
+  "machine-exists": "pick another --name: a machine of that name exists in the project and sitesolide did not create it; never delete or rename it to make room",
+  "firewall-taken": "pick another --name: a firewall of that name exists and sitesolide did not create it; never delete or rename it to make room",
+  "machine-not-found": "check the name with `sitesolide machine list --provider <provider>`: nothing was destroyed",
+  "machine-not-managed": "sitesolide only destroys the machines it created: if this one has to go, its owner deletes it from the provider's console",
+  "confirm-mismatch": "pass --confirm with the machine's exact name, and only if the owner asked for this machine to be destroyed: every site it serves goes with it",
+  "needs-confirm": "re-run with --confirm <name>, and only if the owner asked for this machine to be destroyed: its disk and the provider's backups of it go for good",
+  "machine-timeout": "the provider is still working on it: run the same command again in a few minutes, it picks the machine up where it stands; `sitesolide machine list --provider <provider>` shows its status",
+  "machine-off": "the machine exists but is powered off: its owner powers it on from the provider's console, then runs the same command again",
+  "ssh-timeout": "the machine runs but port 22 did not answer yet: run the same create command again in a minute, it resumes at this wait; if it persists, look at the machine's console at the provider",
+  "action-failed": "the provider says why in `message`: fix what it names, or run the same command again if it says to retry; the provider's console shows the project as it stands",
+  "provider-unauthenticated": "the provider refused the token: the owner creates a new one with Read & Write permission in the project (Security, API tokens), then sets its variable, HCLOUD_TOKEN for Hetzner, or pipes it to --token-stdin; never guess or borrow a token",
+  "provider-forbidden": "the token may read but not change: the owner creates a token with Read & Write permission in the project, then runs the same command with it",
+  "provider-limit": "the provider's project reached one of its limits: its owner removes what it no longer needs, or asks the provider to raise the limit",
+  "provider-name-taken": "a resource of that name already exists at the provider: pick another --name, or run `sitesolide machine list --provider <provider>` to see the machines sitesolide created",
+  "provider-busy": "the resource was busy or changed during the request: run the same command again in a minute",
+  "provider-unavailable": "the provider cannot do it at that location right now: pick another --type or --location, or run the same command again later",
+  "provider-invalid": "the provider refused the request: fix what `message` and `details` name, then run the same command again",
+  "provider-rate-limited": "wait the seconds `details` names, then run the same command once; never retry in a loop",
+  "provider-failure": "the provider failed on its side: run the same command again in a few minutes, it resumes where it stopped; the provider's status page says whether it is down",
+  "provider-unreachable": "the provider's API did not answer: check this workstation's network, then run the same command again",
+  "provider-unreadable": "the address answered with something that is not the provider's API: unset SITESOLIDE_HETZNER_API, which only serves tests",
+  "provider-not-found": "a resource disappeared during the run: run `sitesolide machine list --provider <provider>`, then the same command again",
+  "machine-unexpected": "an unexpected failure: run the same command again; if it persists, report it with the message; never work around it by changing the provider's project by hand",
 };
 
 /** The hint of a refusal through the API: its code's, or what its message says. */
