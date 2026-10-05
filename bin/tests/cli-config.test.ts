@@ -244,6 +244,25 @@ describe("the scripts under bin/ read the same configuration", () => {
     );
   });
 
+  test("every caddy validate a script runs loads the environment systemd gives Caddy", async () => {
+    // Run by hand, caddy validate reads neither the Cloudflare token nor the
+    // zone, both of which systemd hands Caddy through EnvironmentFile: without
+    // the zone every address is empty and the validation fails whatever was
+    // changed. generate-domains.sh and lock.sh loaded the token alone, and no
+    // domain could be activated on 5 October 2026.
+    const root = join(import.meta.dir, "..");
+    const calls: string[] = [];
+    for await (const name of new Bun.Glob("*.sh").scan({ cwd: root })) {
+      const script = await Bun.file(join(root, name)).text();
+      for (const line of script.split("\n")) {
+        if (line.trimStart().startsWith("#") || !line.includes("caddy validate --config")) continue;
+        calls.push(name);
+        expect({ name, token: line.includes(". /etc/caddy/cloudflare.env"), zone: line.includes(". /etc/caddy/sitesolide.env") }).toEqual({ name, token: true, zone: true });
+      }
+    }
+    expect(calls.sort()).toEqual(["deploy-caddy.sh", "generate-domains.sh", "lock.sh"]);
+  });
+
   test("every deployment script requires the configuration before acting", async () => {
     // Without that call, a script run with no configuration would set off with
     // an empty SITESOLIDE_SERVER: ssh would see a missing hostname, and the message would

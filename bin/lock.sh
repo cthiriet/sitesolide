@@ -416,11 +416,13 @@ install_fragment() {
 
     sudo install -m 644 -o root -g root $WORK_VM/verrous.caddy $LOCKS_DIR/verrous.caddy
 
-    # caddy validate launched by hand does not load /etc/caddy/cloudflare.env,
-    # which systemd injects through EnvironmentFile: without the token, the DNS
-    # module refuses the configuration and the failure would say nothing about
-    # the Caddyfile.
-    if ! sudo bash -c 'set -a; . /etc/caddy/cloudflare.env; set +a; caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile' >/dev/null 2>&1; then
+    # caddy validate launched by hand loads neither /etc/caddy/cloudflare.env
+    # nor /etc/caddy/sitesolide.env, which systemd injects through
+    # EnvironmentFile: without the token the DNS module refuses the
+    # configuration, and without the zone every address is empty. Either way
+    # the failure would say nothing about the Caddyfile. Both are loaded here,
+    # as bin/deploy-caddy.sh does.
+    if ! sudo bash -c 'set -a; . /etc/caddy/cloudflare.env; . /etc/caddy/sitesolide.env; set +a; caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile' >/dev/null 2>&1; then
       restore
       echo 'invalid configuration, previous fragment restored, Caddy never reloaded' >&2
       exit 1

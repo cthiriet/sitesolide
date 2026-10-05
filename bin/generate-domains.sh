@@ -62,11 +62,17 @@ sed 's/^/   /' "$TABLE"
 # The table is installed before the validation: Caddy must see it in its final
 # place to resolve the import of the `map` block. On failure, the old one is put
 # back and Caddy has never been reloaded.
+#
+# The validation loads both files systemd hands Caddy, the token and the zone,
+# as bin/deploy-caddy.sh does. It used to load the token alone: every address
+# of the Caddyfile was then empty, the validation failed whatever the table,
+# and no domain could be activated on a machine that keeps its zone in
+# /etc/caddy/sitesolide.env. Met activating a domain on 5 October 2026.
 ssh "$SITESOLIDE_SERVER" '
   set -e
   sudo cp /etc/caddy/domaines.map /tmp/domaines.map.before 2>/dev/null || true
   sudo install -m 644 -o root -g root /tmp/domaines.map /etc/caddy/domaines.map
-  if ! sudo bash -c "set -a; . /etc/caddy/cloudflare.env; set +a; caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile" >/dev/null 2>&1; then
+  if ! sudo bash -c "set -a; . /etc/caddy/cloudflare.env; . /etc/caddy/sitesolide.env; set +a; caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile" >/dev/null 2>&1; then
     [ -f /tmp/domaines.map.before ] && sudo install -m 644 -o root -g root /tmp/domaines.map.before /etc/caddy/domaines.map
     echo "invalid configuration, previous table restored" >&2
     exit 1
