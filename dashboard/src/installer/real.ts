@@ -451,6 +451,10 @@ export function createHost(config: HostConfig): Host {
     },
 
     async restart(units) {
+      // A release that crash-looped past the start limit leaves its unit
+      // refusing any start, this restart included, until it is reset. A unit
+      // that is not failed is left as it is, so the answer does not matter.
+      await config.commands.systemctl(["reset-failed", ...units], 10_000);
       const restarted = await config.commands.systemctl(["restart", ...units], 120_000);
       if (restarted.code !== 0) return restarted;
       return config.commands.systemctl(["is-active", ...units], 10_000);

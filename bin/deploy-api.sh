@@ -83,7 +83,10 @@ echo "-> service restart"
 # enable, so that the service comes back after a reboot: installed and
 # restarted but never enabled, it answered until the machine restarted and
 # then stayed down, and with it every certificate issued on demand.
-ssh "$SITESOLIDE_SERVER" "sudo systemctl enable --quiet sitesolide-api && sudo systemctl restart sitesolide-api && systemctl is-active sitesolide-api"
+# reset-failed first: a release that crash-looped past the start limit left
+# the unit refusing any start, the restart of the fix included. Met resuming a
+# first install whose release had failed every start.
+ssh "$SITESOLIDE_SERVER" "sudo systemctl enable --quiet sitesolide-api && sudo systemctl reset-failed sitesolide-api 2>/dev/null; sudo systemctl restart sitesolide-api && systemctl is-active sitesolide-api"
 
 echo "-> verification"
 # As root: the loopback rule lets only Caddy and root reach the ports of the

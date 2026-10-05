@@ -78,6 +78,7 @@ ssh -n "$SITESOLIDE_SERVER" "
   rm -rf $REMOTE
   sudo systemctl daemon-reload
   sudo systemctl enable $UNIT.service
+  sudo systemctl reset-failed $UNIT.service 2>/dev/null || true
   sudo systemctl restart $UNIT.service
 "
 

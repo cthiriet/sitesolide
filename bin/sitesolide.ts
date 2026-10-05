@@ -1016,10 +1016,12 @@ async function deploy(
 
     // Every unit named, rather than the main one alone and its PartOf: a
     // service that was never started would not be restarted by it, and
-    // is-active must answer for each of them.
+    // is-active must answer for each of them. reset-failed first: a release
+    // that crash-looped past the start limit left its unit refusing any
+    // start, the restart of the fix that follows included, until it is reset.
     const units = servicesOf(manifest).map((service) => unitArgument(service.unit)).join(" ");
     step(serviceCount > 1 ? "services restart" : "service restart");
-    await executor.ssh(config, `sudo systemctl restart ${units} && systemctl is-active ${units}`);
+    await executor.ssh(config, `sudo systemctl reset-failed ${units} 2>/dev/null; sudo systemctl restart ${units} && systemctl is-active ${units}`);
 
     if (!behindPortal) await installFragment(manifest, config, executor);
   }
