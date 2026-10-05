@@ -7,6 +7,7 @@ import {
   accountRun,
   closeSsh,
   directoriesRun,
+  fail2banRelease,
   fail2banRun,
   firewallRun,
   packagesRun,
@@ -24,6 +25,7 @@ import {
   MARKER_NAME,
   parseSetupArguments,
   portalPasswordRun,
+  preflightAccounts,
   preflightScript,
   readFacts,
   REFUSALS,
@@ -89,10 +91,10 @@ const ORDER = [
   "packages",
   "account",
   "firewall",
-  "fail2ban",
   "updates",
   "directories",
   "ssh",
+  "fail2ban",
   "caddy",
   "bun",
   "cloudflare-token",
@@ -193,8 +195,11 @@ describe("a blank machine", () => {
 
     const again = await setup(b);
     expect(again.code).toBe(0);
-    // root may no longer log in: the second run goes through the deploy account.
+    // root may no longer log in: setup's marker says so, and the second run
+    // goes through the deploy account without knocking as root first.
     expect(again.print.lines).toContain("   root may no longer log in: going on as deploy");
+    expect(again.print.errors).toEqual([]);
+    expect(b.machine.refusedLogins).toEqual([]);
     expect(again.statuses).toEqual(["preflight:ok", ...ORDER.slice(1).map((step) => `${step}:done`)]);
     expect(b.machine.runs().length).toBe(runs);
     expect(b.kit.tasks.length).toBe(tasks);
@@ -303,6 +308,9 @@ describe("closing ssh to root", () => {
       operator: "root",
       deployUser: "deploy",
       sshPort: 22,
+      accountReady: true,
+      clientAddress: null,
+      ignoredAddress: null,
       machine: {
         exec: async (account, command, given = {}) => {
           calls.push(`${account} ${command}`);
@@ -478,7 +486,7 @@ describe("the preflight", () => {
   });
 
   test("an account without passwordless sudo, too little disk, another zone: refused before any step", () => {
-    const facts: Facts = { os: "debian", version: "13", system: "Debian", architecture: "amd64", uid: 1000, freeKb: 40 * 1024 * 1024, sshPort: 22, sudo: "yes", zone: null, ipv4: HOST, ipv6: null };
+    const facts: Facts = { os: "debian", version: "13", system: "Debian", architecture: "amd64", uid: 1000, freeKb: 40 * 1024 * 1024, sshPort: 22, clientAddress: null, sudo: "yes", zone: null, ipv4: HOST, ipv6: null };
     const given = { host: HOST, zone: ZONE, anyOs: false };
     expect(judgeFacts(facts, given, "admin")).toBeNull();
     expect(judgeFacts({ ...facts, sudo: "no" }, given, "admin")?.message).toBe(`admin@${HOST} has no sudo without a password`);
@@ -494,7 +502,8 @@ describe("the preflight", () => {
     expect(r.code).toBe(1);
     expect(r.print.errors[0]!.message).toBe(`cannot reach root@${HOST} over SSH`);
     expect(r.print.errors[0]!.details[0]).toContain("Permission denied (publickey)");
-    expect(b.machine.calls.map((call) => `${call.account} ${call.tag}`)).toEqual(["root setup:preflight:read", "deploy setup:preflight:read"]);
+    // A fresh install knows no other account: it never tries one that may not exist.
+    expect(b.machine.calls.map((call) => `${call.account} ${call.tag}`)).toEqual(["root setup:preflight:read"]);
   });
 
   test("the machine's addresses: the default route's interface, public, stable", () => {
@@ -717,7 +726,9 @@ describe("what setup runs", () => {
       packagesRun(),
       accountRun("deploy", "root"),
       firewallRun(22),
-      fail2banRun(),
+      fail2banRun("198.51.100.2"),
+      fail2banRun(null),
+      fail2banRelease("198.51.100.2"),
       updatesRun(),
       directoriesRun(),
       sshRun(),
@@ -736,7 +747,9 @@ describe("what setup runs", () => {
       accountRun("deploy", "root"),
       accountRun("admin", "admin"),
       firewallRun(22),
-      fail2banRun(),
+      fail2banRun("198.51.100.2"),
+      fail2banRun(null),
+      fail2banRelease("198.51.100.2"),
       updatesRun(),
       directoriesRun(),
       sshRun(),
@@ -830,5 +843,110 @@ describe("the command line", () => {
     }
     // The resolution's own hint, not the one of a project's domain.
     expect(hintFor(failures[4]!)).not.toContain("--force");
+  });
+});
+
+/**
+ * What a first run on a real Debian 13 machine taught: twenty logins as a
+ * deploy account that did not exist yet, a fail2ban started by its package
+ * that read them, and the workstation banned in the middle of the install.
+ */
+describe("the logins fail2ban counts", () => {
+  test("no login as the deploy account before the account step made it, and not one refused in a whole run", async () => {
+    const { b } = world();
+    expect((await setup(b)).code).toBe(0);
+    const tags = b.machine.calls.map((call) => `${call.account} ${call.tag}`);
+    const firstAsDeploy = b.machine.calls.findIndex((call) => call.account === "deploy");
+    expect(firstAsDeploy).toBeGreaterThan(tags.indexOf("root setup:account:run"));
+    expect(tags[firstAsDeploy]).toBe("deploy sudo -n true");
+    expect(b.machine.refusedLogins).toEqual([]);
+  });
+
+  test("a dry run on a fresh machine reads every step through root: everything to do, nothing unreadable, no login refused", async () => {
+    const { b } = world();
+    const r = await setup(b, options("--dry-run"));
+    expect(r.code).toBe(0);
+    expect(r.print.checks.filter((report) => report.detail?.startsWith("unreadable"))).toEqual([]);
+    expect(r.statuses.slice(1).every((status) => status.endsWith(":todo"))).toBe(true);
+    expect(b.machine.calls.every((call) => call.account === "root")).toBe(true);
+    expect(b.machine.refusedLogins).toEqual([]);
+  });
+
+  test("fail2ban is installed stopped, and started only once ssh is closed, the workstation spared until the end of the run", async () => {
+    const { b } = world();
+    expect((await setup(b)).code).toBe(0);
+    const tags = b.machine.calls.map((call) => call.tag);
+    expect(tags.indexOf("setup:fail2ban:run")).toBeGreaterThan(tags.indexOf("setup:ssh:disarm"));
+    expect(tags.at(-1)).toBe("setup:fail2ban:release");
+
+    const packages = b.machine.calls.find((call) => call.tag === "setup:packages:run")!.input;
+    const policy = packages.indexOf("printf '#!/bin/sh\\nexit 101\\n' > \"$policy\"");
+    expect(policy).toBeGreaterThan(0);
+    expect(packages.indexOf("install -y -q fail2ban")).toBeGreaterThan(policy);
+    expect(packages).toContain("systemctl disable --now fail2ban");
+    // Everything else is installed before, its services free to start.
+    expect(packages.indexOf("install -y -q sudo ufw unattended-upgrades rsync git curl unzip")).toBeLessThan(policy);
+
+    const start = b.machine.calls.find((call) => call.tag === "setup:fail2ban:run")!.input;
+    expect(start).toContain("ignoreip = 127.0.0.1/8 ::1 198.51.100.2");
+    // The address is spared before the start, and the file gone once the jail answers.
+    expect(start.indexOf("ignoreip")).toBeLessThan(start.indexOf("systemctl restart fail2ban"));
+    expect(start.indexOf("rm -f /etc/fail2ban/jail.d/00-sitesolide-setup.conf")).toBeGreaterThan(start.indexOf("fail2ban-client status sshd"));
+    expect(b.machine.calls.at(-1)!.input).toContain("fail2ban-client set sshd delignoreip '198.51.100.2'");
+    // Never an unban.
+    expect(b.machine.calls.map((call) => call.input).join("\n")).not.toContain("unbanip");
+  });
+
+  test("a run that fails after fail2ban started still withdraws the spared address", async () => {
+    const { b } = world();
+    b.kit.failing.add("deploy-api.sh");
+    expect((await setup(b)).code).toBe(1);
+    const tags = b.machine.calls.map((call) => call.tag);
+    expect(tags.lastIndexOf("setup:fail2ban:release")).toBeGreaterThan(tags.lastIndexOf("setup:api:check"));
+  });
+
+  test("a machine that starts refusing connections mid-run: the report says fail2ban, how long, and how to check", async () => {
+    const { b } = world();
+    b.machine.banAfter = "setup:packages:run";
+    const r = await setup(b);
+    expect(r.code).toBe(1);
+    const error = r.print.errors[0]!;
+    expect(error.message).toBe("setup stopped at packages: the connection to the machine was refused or dropped");
+    expect(error.details[0]).toBe(`ran, but could not be checked afterwards: ssh: connect to host ${HOST} port 22: Connection refused`);
+    expect(error.details.join("\n")).toContain("10 minutes by default");
+    expect(error.details.join("\n")).toContain("sudo fail2ban-client status sshd");
+    expect(hintFor(error.message)).toContain("fail2ban");
+    expect(hintFor(error.message)).toContain("never retry in a loop");
+  });
+
+  test("a script that fails because the machine stopped answering is recognised by asking once more", async () => {
+    const { b } = world();
+    b.kit.failing.add("deploy-api.sh");
+    b.machine.banAfter = "setup:api:check";
+    const r = await setup(b);
+    expect(r.print.errors[0]!.message).toBe("setup stopped at api: the connection to the machine was refused or dropped");
+    expect(r.print.errors[0]!.details[0]).toBe("bin/deploy-api.sh failed (exit code 1)");
+    expect(b.machine.calls.some((call) => call.command === "true")).toBe(true);
+  });
+
+  test("a machine refusing the very first connection: the same advice", async () => {
+    const refusal = REFUSALS.unreachable(`root@${HOST}`, `ssh: connect to host ${HOST} port 22: Connection refused`);
+    expect(refusal.details.join("\n")).toContain("sudo fail2ban-client status sshd");
+    expect(REFUSALS.unreachable(`root@${HOST}`, "root@host: Permission denied (publickey).").details.join("\n")).not.toContain("fail2ban");
+  });
+
+  test("the preflight tries a second account only when it exists, and only after the machine refused the first", () => {
+    const marker = { server: `deploy@${HOST}`, zone: ZONE, startedAt: "" };
+    expect(preflightAccounts("root", "deploy", { kind: "fresh" }, null)).toEqual({ first: "root", then: null });
+    expect(preflightAccounts("root", "deploy", { kind: "ours", server: `deploy@${HOST}` }, marker)).toEqual({ first: "root", then: "deploy" });
+    expect(preflightAccounts("root", "deploy", { kind: "ours", server: `deploy@${HOST}` }, { ...marker, rootClosed: true })).toEqual({ first: "deploy", then: null });
+    expect(preflightAccounts("root", "deploy", { kind: "installed", server: `ops@${HOST}` }, null)).toEqual({ first: "root", then: "ops" });
+  });
+
+  test("setup's marker records that root is closed, once the ssh step is done", async () => {
+    const { b, home: folder } = world();
+    b.kit.failing.add("deploy-api.sh");
+    await setup(b);
+    expect(JSON.parse(readFileSync(join(folder, ".config", "sitesolide", MARKER_NAME), "utf8")).rootClosed).toBe(true);
   });
 });

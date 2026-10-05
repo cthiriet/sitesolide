@@ -4,7 +4,7 @@
  *
  *   configuration      ~/.config/sitesolide/config.json, as `init` writes it
  *   dns                the zone and its wildcard at the machine, through Cloudflare's API
- *   packages ... ssh   the hardening of infra/cloud-init.yaml, see bin/cli/harden.ts
+ *   packages ... fail2ban   the hardening of infra/cloud-init.yaml, see bin/cli/harden.ts
  *   caddy, bun         from their own repositories, Caddy with the Cloudflare module
  *   cloudflare-token   /etc/caddy/cloudflare.env, root:caddy 0640
  *   resolution         this workstation resolves the zone to the machine
@@ -52,7 +52,7 @@
  * and an API they fake.
  */
 import { lookup, resolve6 } from "node:dns/promises";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isIP } from "node:net";
 import { join, resolve } from "node:path";
@@ -61,6 +61,9 @@ import { canonicalAddress, CloudflareError, cloudflareBase, describePlan, ensure
 import { adoptLegacyKeys, composeConfig, CONFIG_DIR_VARIABLE, privateFolder, writeConfig } from "./config";
 import {
   APT,
+  BAN_ADVICE,
+  CONNECTION_LOST,
+  fail2banRelease,
   asRoot,
   hardeningSteps,
   machineCheck,
@@ -142,7 +145,12 @@ export const REFUSALS = {
   }),
   unreachable: (server: string, said: string): Refusal => ({
     message: `cannot reach ${server} over SSH`,
-    details: [said, "setup connects without a prompt: the key loaded in the agent (ssh-add), the machine up and its port 22 open"],
+    details: [
+      said,
+      ...(CONNECTION_LOST.test(said) ? BAN_ADVICE : []),
+      "setup connects without a prompt: the key loaded in the agent (ssh-add), the machine up and its port 22 open",
+      ...(server.startsWith("root@") ? ["once an earlier run has closed root login, connect as the deploy account instead: sitesolide setup deploy@<host> ..."] : []),
+    ],
   }),
   unreadable: (server: string, said: string): Refusal => ({
     message: `cannot read ${server}: the preflight gave no answer setup recognises`,
@@ -237,8 +245,13 @@ export function parseSetupArguments(arguments_: readonly string[]): SetupOptions
 
 // --- the configuration on the workstation --------------------------------------
 
-/** What setup records beside the configuration when it starts installing a machine. */
-export type Marker = { server: string; zone: string; startedAt: string };
+/**
+ * What setup records beside the configuration when it starts installing a
+ * machine. `rootClosed`: the ssh step is done there, so that a later run given
+ * `root@` connects as the deploy account at once, rather than knocking with a
+ * refused root login that fail2ban would count.
+ */
+export type Marker = { server: string; zone: string; startedAt: string; rootClosed?: boolean };
 
 export const MARKER_NAME = "setup.json";
 
@@ -301,7 +314,29 @@ function readJson(path: string): Record<string, unknown> | null {
 function readMarker(folder: string): Marker | null {
   const raw = readJson(join(folder, MARKER_NAME));
   if (raw === null || typeof raw.server !== "string" || typeof raw.zone !== "string") return null;
-  return { server: raw.server, zone: raw.zone, startedAt: typeof raw.startedAt === "string" ? raw.startedAt : "" };
+  return { server: raw.server, zone: raw.zone, startedAt: typeof raw.startedAt === "string" ? raw.startedAt : "", rootClosed: raw.rootClosed === true };
+}
+
+/** The marker says root login is closed now: written once, when the ssh step is done. */
+function noteRootClosed(folder: string): void {
+  const marker = readMarker(folder);
+  if (marker === null || marker.rootClosed === true) return;
+  writeFileSync(join(folder, MARKER_NAME), `${JSON.stringify({ ...marker, rootClosed: true }, null, 2)}\n`);
+}
+
+/**
+ * The accounts the preflight tries, in order. A fresh install knows only the
+ * one given. Setup's own install, once it has closed root, goes straight to
+ * the deploy account. Otherwise a second account is tried only after the
+ * first was refused by the machine itself, and only one that exists: the
+ * deploy account of setup's own install, or the one the configuration names.
+ */
+export function preflightAccounts(login: string, user: string, guard: Guard, marker: Marker | null): { first: string; then: string | null } {
+  if (guard.kind === "fresh" || guard.kind === "refuse") return { first: login, then: null };
+  if (guard.kind === "ours" && login === "root" && marker?.rootClosed === true) return { first: user, then: null };
+  const configured = guard.server.slice(0, Math.max(0, guard.server.lastIndexOf("@")));
+  const then = guard.kind === "ours" ? user : configured;
+  return { first: login, then: then === "" || then === login ? null : then };
 }
 
 // --- the preflight -------------------------------------------------------------
@@ -315,6 +350,8 @@ export type Facts = {
   uid: number;
   freeKb: number;
   sshPort: number;
+  /** The workstation's address as the machine sees it, from $SSH_CONNECTION; null when not an address. */
+  clientAddress: string | null;
   sudo: "root" | "yes" | "no";
   /** The zone the machine already serves, from /etc/caddy/sitesolide.env; null on a fresh one. */
   zone: string | null;
@@ -407,7 +444,9 @@ export function readFacts(output: string): Facts | null {
     if (equal > 0) values.set(line.slice(0, equal), line.slice(equal + 1).trim());
   }
   if (values.get("end") !== "preflight") return null;
-  const port = Number((values.get("ssh") ?? "").split(" ")[3]);
+  const connection = (values.get("ssh") ?? "").split(" ");
+  const port = Number(connection[3]);
+  const client = connection[0] ?? "";
   const sudo = values.get("sudo");
   const { ipv4, ipv6 } = machineAddresses(values.get("route4") ?? "", values.get("route6") ?? "", values.get("addresses") ?? "");
   return {
@@ -418,6 +457,9 @@ export function readFacts(output: string): Facts | null {
     uid: Number(values.get("uid") ?? "-1"),
     freeKb: Number(values.get("free") ?? "0") || 0,
     sshPort: Number.isInteger(port) && port > 0 && port < 65536 ? port : 22,
+    // Only an address goes into fail2ban's configuration: nothing else this
+    // field could carry is written into a script.
+    clientAddress: isIP(client) === 0 ? null : client,
     sudo: sudo === "root" || sudo === "yes" ? sudo : "no",
     zone: values.get("zone") || null,
     ipv4,
@@ -549,9 +591,14 @@ const TOKEN = /^[A-Za-z0-9_-]{20,200}$/;
 const LIB = "/usr/local/lib/sitesolide";
 const UNITS = "/etc/systemd/system";
 
-/** A check run as root through the deploy account, every step after the hardening. */
-function deployCheck(tag: string, conditions: Parameters<typeof machineCheck>[1], prelude = "") {
-  return (context: SetupContext): Promise<Check> => rootCheck(context.machine, context.deployUser, tag, machineCheck(tag, conditions, prelude));
+/**
+ * A check run as root through the operator: the deploy account once the ssh
+ * step has proven its login, the account setup connected as until then. A dry
+ * run on a fresh machine therefore reads every step through root, and never
+ * tries to log in as an account that does not exist yet.
+ */
+function installCheck(tag: string, conditions: Parameters<typeof machineCheck>[1], prelude = "") {
+  return (context: SetupContext): Promise<Check> => rootCheck(context.machine, context.operator, tag, machineCheck(tag, conditions, prelude));
 }
 
 function active(label: string, unit: string) {
@@ -753,18 +800,18 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "caddy",
       title: "Caddy, with the Cloudflare module",
-      check: deployCheck("setup:caddy:check", [
+      check: installCheck("setup:caddy:check", [
         { label: "caddy-package", test: "dpkg-query -W -f='${Status}' caddy | grep -q 'ok installed'" },
         { label: "cloudflare-module", test: "caddy list-modules | grep -q '^dns.providers.cloudflare'" },
       ]),
-      run: (context) => rootRun(context.machine, context.deployUser, "setup:caddy:run", caddyRun(), "Caddy could not be installed"),
+      run: (context) => rootRun(context.machine, context.operator, "setup:caddy:run", caddyRun(), "Caddy could not be installed"),
       inspect: (context) => `ssh ${context.server} 'caddy list-modules | grep dns.providers'`,
     },
     {
       id: "bun",
       title: "Bun, at /usr/local/bin/bun",
-      check: deployCheck("setup:bun:check", [{ label: "bun", test: "test -x /usr/local/bin/bun" }]),
-      run: (context) => rootRun(context.machine, context.deployUser, "setup:bun:run", bunRun(), "Bun could not be installed"),
+      check: installCheck("setup:bun:check", [{ label: "bun", test: "test -x /usr/local/bin/bun" }]),
+      run: (context) => rootRun(context.machine, context.operator, "setup:bun:run", bunRun(), "Bun could not be installed"),
       inspect: (context) => `ssh ${context.server} '/usr/local/bin/bun --version'`,
     },
     {
@@ -772,15 +819,15 @@ export function installSteps(): Step<SetupContext>[] {
       title: "Caddy's Cloudflare token",
       check: async (context) => {
         const token = await knownToken(context);
-        return rootCheck(context.machine, context.deployUser, "setup:cloudflare-token:check", tokenCheck(token === null ? null : tokenFingerprint(token)));
+        return rootCheck(context.machine, context.operator, "setup:cloudflare-token:check", tokenCheck(token === null ? null : tokenFingerprint(token)));
       },
       run: async (context, missing) => {
         if (missing.every((label) => label === "token-permissions")) {
-          await rootRun(context.machine, context.deployUser, "setup:cloudflare-token:run", tokenPermissionsRun(), `${TOKEN_FILE} could not be given to root:caddy 0640`);
+          await rootRun(context.machine, context.operator, "setup:cloudflare-token:run", tokenPermissionsRun(), `${TOKEN_FILE} could not be given to root:caddy 0640`);
           return "root:caddy 0640 again";
         }
         const token = await requireToken(context);
-        const execution = await asRoot(context.machine, context.deployUser, "setup:cloudflare-token:run", tokenRun(token));
+        const execution = await asRoot(context.machine, context.operator, "setup:cloudflare-token:run", tokenRun(token));
         if (execution.code !== 0) throw new StepFailure(`${TOKEN_FILE} could not be written (exit code ${execution.code})`, []);
         return missing.includes("token-file")
           ? `${TOKEN_FILE} in place, root:caddy 0640`
@@ -798,13 +845,13 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "caddy-zone",
       title: "zone file and domain table",
-      check: deployCheck("setup:caddy-zone:check", [present("zone-file", "/etc/caddy/sitesolide.env"), present("domain-table", "/etc/caddy/domaines.map")]),
+      check: installCheck("setup:caddy-zone:check", [present("zone-file", "/etc/caddy/sitesolide.env"), present("domain-table", "/etc/caddy/domaines.map")]),
       // On a first install bin/deploy-caddy.sh lays the two files, then stops:
       // Caddy's unit does not load the zone variables yet. That stop is
       // expected, and printed only if the files are not there afterwards.
       run: async (context) => {
         const { output } = await context.deps.kit({ kind: "script", name: "deploy-caddy.sh", args: [], quiet: true }, context.childEnvironment);
-        const after = await deployCheck("setup:caddy-zone:check", [present("zone-file", "/etc/caddy/sitesolide.env"), present("domain-table", "/etc/caddy/domaines.map")])(context);
+        const after = await installCheck("setup:caddy-zone:check", [present("zone-file", "/etc/caddy/sitesolide.env"), present("domain-table", "/etc/caddy/domaines.map")])(context);
         if (after.state !== "done") {
           throw new StepFailure("bin/deploy-caddy.sh did not lay the zone file and the domain table", output.split("\n").filter((line) => line.trim() !== "").slice(-8));
         }
@@ -816,7 +863,7 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "caddy-unit",
       title: "Caddy's drop-in",
-      check: deployCheck("setup:caddy-unit:check", [
+      check: installCheck("setup:caddy-unit:check", [
         present("drop-in", CADDY_DROP_IN),
         { label: "restart-always", test: `[ "$(systemctl show caddy -p Restart --value)" = always ]` },
         { label: "zone-variables", test: "systemctl show caddy -p EnvironmentFiles --value | grep -q /etc/caddy/sitesolide.env" },
@@ -824,7 +871,7 @@ export function installSteps(): Step<SetupContext>[] {
       ]),
       run: async (context) => {
         const dropIn = readFileSync(join(kitRoot(), "infra", "caddy", "caddy.service.d", "override.conf"), "utf8");
-        await rootRun(context.machine, context.deployUser, "setup:caddy-unit:run", caddyUnitRun(dropIn), "Caddy did not restart with its drop-in");
+        await rootRun(context.machine, context.operator, "setup:caddy-unit:run", caddyUnitRun(dropIn), "Caddy did not restart with its drop-in");
         return "the zone variables loaded, Restart=always, Caddy restarted";
       },
       inspect: (context) => journal(context, "caddy"),
@@ -832,21 +879,21 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "caddy-config",
       title: "the Caddyfile",
-      check: deployCheck("setup:caddy-config:check", [{ label: "caddyfile", test: "grep -q SITESOLIDE_ZONE /etc/caddy/Caddyfile" }, active("caddy-active", "caddy")]),
+      check: installCheck("setup:caddy-config:check", [{ label: "caddyfile", test: "grep -q SITESOLIDE_ZONE /etc/caddy/Caddyfile" }, active("caddy-active", "caddy")]),
       run: (context) => script(context, "deploy-caddy.sh"),
       inspect: (context) => journal(context, "caddy"),
     },
     {
       id: "api",
       title: "shared service",
-      check: deployCheck("setup:api:check", [active("api-active", "sitesolide-api"), enabled("api-enabled", "sitesolide-api")]),
+      check: installCheck("setup:api:check", [active("api-active", "sitesolide-api"), enabled("api-enabled", "sitesolide-api")]),
       run: (context) => script(context, "deploy-api.sh"),
       inspect: (context) => journal(context, "sitesolide-api"),
     },
     {
       id: "gatekeeper",
       title: "gatekeeper",
-      check: deployCheck("setup:gatekeeper:check", [
+      check: installCheck("setup:gatekeeper:check", [
         present("gatekeeper-code", `${LIB}/gatekeeper.js`),
         present("gatekeeper-on", `${UNITS}/sitesolide-gatekeeper-on@.service`),
         present("gatekeeper-off", `${UNITS}/sitesolide-gatekeeper-off@.service`),
@@ -857,7 +904,7 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "dashboard-password",
       title: "dashboard password",
-      check: deployCheck("setup:dashboard-password:check", [present("dashboard-password", "/etc/sitesolide/dashboard.env")]),
+      check: installCheck("setup:dashboard-password:check", [present("dashboard-password", "/etc/sitesolide/dashboard.env")]),
       run: async (context) => {
         context.deps.output.say("-> the dashboard's password is drawn now and shown ONCE, on standard error: store it in a password manager");
         const { code } = await context.deps.kit({ kind: "script", name: "dashboard-password.sh", args: [], passwordOnStderr: true }, context.childEnvironment);
@@ -870,31 +917,31 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "dashboard",
       title: "dashboard",
-      check: deployCheck("setup:dashboard:check", [active("dashboard-active", "dashboard")]),
+      check: installCheck("setup:dashboard:check", [active("dashboard-active", "dashboard")]),
       run: (context) => deployFolder(context, "dashboard"),
       inspect: (context) => journal(context, "dashboard"),
     },
     {
       id: "steward",
       title: "steward",
-      check: deployCheck("setup:steward:check", [active("steward-active", "sitesolide-steward"), present("steward-code", `${LIB}/steward.js`)]),
+      check: installCheck("setup:steward:check", [active("steward-active", "sitesolide-steward"), present("steward-code", `${LIB}/steward.js`)]),
       run: (context) => script(context, "deploy-steward.sh"),
       inspect: (context) => journal(context, "sitesolide-steward"),
     },
     {
       id: "collector",
       title: "collector",
-      check: deployCheck("setup:collector:check", [enabled("collector-enabled", "sitesolide-collector.timer"), active("collector-active", "sitesolide-collector.timer")]),
+      check: installCheck("setup:collector:check", [enabled("collector-enabled", "sitesolide-collector.timer"), active("collector-active", "sitesolide-collector.timer")]),
       run: (context) => script(context, "deploy-collector.sh"),
       inspect: (context) => journal(context, "sitesolide-collector"),
     },
     {
       id: "portal-password",
       title: "portal password",
-      check: deployCheck("setup:portal-password:check", [present("portal-password", PORTAL_ENV)]),
+      check: installCheck("setup:portal-password:check", [present("portal-password", PORTAL_ENV)]),
       run: async (context) => {
         const { password, hash } = await context.deps.drawPassword();
-        const execution = await asRoot(context.machine, context.deployUser, "setup:portal-password:run", portalPasswordRun(hash));
+        const execution = await asRoot(context.machine, context.operator, "setup:portal-password:run", portalPasswordRun(hash));
         if (execution.code !== 0) throw new StepFailure(`${PORTAL_ENV} could not be written (exit code ${execution.code})`, [execution.error.trim()].filter(Boolean));
         if (/portal-password: written/.test(execution.output)) {
           context.deps.secrets.portal = password;
@@ -907,14 +954,14 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "portal",
       title: "portal",
-      check: deployCheck("setup:portal:check", [active("portal-active", "portal")]),
+      check: installCheck("setup:portal:check", [active("portal-active", "portal")]),
       run: (context) => deployFolder(context, "portal"),
       inspect: (context) => journal(context, "portal"),
     },
     {
       id: "loopback",
       title: "loopback rule",
-      check: deployCheck("setup:loopback:check", [
+      check: installCheck("setup:loopback:check", [
         { label: "loopback-table", test: "nft list table inet sitesolide_boucle" },
         enabled("loopback-unit", "sitesolide-loopback"),
       ]),
@@ -924,7 +971,7 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "monitor",
       title: "monitor",
-      check: deployCheck("setup:monitor:check", [enabled("monitor-enabled", "sitesolide-monitor.timer"), active("monitor-active", "sitesolide-monitor.timer")]),
+      check: installCheck("setup:monitor:check", [enabled("monitor-enabled", "sitesolide-monitor.timer"), active("monitor-active", "sitesolide-monitor.timer")]),
       run: (context) => script(context, "deploy-monitor.sh"),
       inspect: (context) => journal(context, "sitesolide-monitor"),
     },
@@ -932,11 +979,11 @@ export function installSteps(): Step<SetupContext>[] {
       id: "backups",
       title: "backups",
       skip: optional,
-      check: deployCheck("setup:backups:check", [enabled("backup-enabled", "sitesolide-backup.timer"), active("backup-active", "sitesolide-backup.timer")]),
+      check: installCheck("setup:backups:check", [enabled("backup-enabled", "sitesolide-backup.timer"), active("backup-active", "sitesolide-backup.timer")]),
       // install, then the steward, whose unit opens /var/lib/sitesolide-backup
       // only if it exists when it starts, then the first run and the timer.
       run: async (context) => {
-        const installed = await deployCheck("setup:backups:installed", [present("backup-code", `${LIB}/backup.js`), present("backup-timer", `${UNITS}/sitesolide-backup.timer`)])(context);
+        const installed = await installCheck("setup:backups:installed", [present("backup-code", `${LIB}/backup.js`), present("backup-timer", `${UNITS}/sitesolide-backup.timer`)])(context);
         if (installed.state !== "done") await script(context, "deploy-backup.sh", ["install"]);
         await script(context, "deploy-steward.sh");
         await script(context, "deploy-backup.sh", ["enable"]);
@@ -948,7 +995,7 @@ export function installSteps(): Step<SetupContext>[] {
       id: "installer",
       title: "team installer",
       skip: optional,
-      check: deployCheck("setup:installer:check", [present("installer-code", `${LIB}/installer.js`), present("installer-unit", `${UNITS}/sitesolide-installer@.service`)]),
+      check: installCheck("setup:installer:check", [present("installer-code", `${LIB}/installer.js`), present("installer-unit", `${UNITS}/sitesolide-installer@.service`)]),
       run: (context) => script(context, "deploy-installer.sh"),
       inspect: (context) => `ssh ${context.server} 'ls -l ${LIB}/installer.js'`,
     },
@@ -956,7 +1003,7 @@ export function installSteps(): Step<SetupContext>[] {
       id: "egress",
       title: "egress proxy",
       skip: optional,
-      check: deployCheck("setup:egress:check", [active("egress-active", "sitesolide-egress"), stewardAfter("steward-after-egress", `${UNITS}/sitesolide-egress.service`)]),
+      check: installCheck("setup:egress:check", [active("egress-active", "sitesolide-egress"), stewardAfter("steward-after-egress", `${UNITS}/sitesolide-egress.service`)]),
       // The steward after the proxy, so that it may write the connectors'
       // folder the proxy's script makes.
       run: async (context, missing) => {
@@ -1069,6 +1116,26 @@ export function childEnvironment(
   return child;
 }
 
+/**
+ * The workstation's address withdrawn from what fail2ban spares, at the end of
+ * a run that spared it, success or failure: null when done or nothing to do,
+ * the line to show otherwise.
+ */
+async function releaseFail2ban(context: SetupContext): Promise<string | null> {
+  const address = context.ignoredAddress;
+  if (address === null) return null;
+  context.ignoredAddress = null;
+  const execution = await asRoot(context.machine, context.operator, "setup:fail2ban:release", fail2banRelease(address));
+  if (execution.code === 0) return null;
+  return `fail2ban still spares ${address} until its next restart: sudo fail2ban-client set sshd delignoreip ${address} ends it`;
+}
+
+/** Whether the machine refuses or drops a new connection now: asked after a step failed. */
+async function connectionLost(context: SetupContext): Promise<boolean> {
+  const probe = await context.machine.exec(context.operator, "true");
+  return probe.code !== 0 && CONNECTION_LOST.test(probe.error);
+}
+
 function stepList(reports: readonly StepReport[]) {
   return reports.map(({ step, status, detail }) => ({ step, status, detail }));
 }
@@ -1098,28 +1165,29 @@ export async function runSetup(options: SetupOptions, deps: SetupDependencies): 
   if (guard.kind === "installed") out.say(`   ${configPath} names this machine, which setup did not install: it is only read`);
   if (guard.kind === "ours") out.say(`   resuming the install ${configPath} records`);
 
-  // 2. The preflight, read only: as the account given, or as the deploy
-  // account when root may no longer log in, an earlier run having closed it.
-  const accounts = [options.login, ...(options.login === options.user ? [] : [options.user])];
-  let facts: Facts | null = null;
-  let operator = options.login;
-  let refusal: Refusal | null = null;
-  for (const account of accounts) {
+  // 2. The preflight, read only, as the account given; as the deploy account
+  // when setup's own install has closed root. Never as an account that may not
+  // exist: a refused login is a line fail2ban counts. See preflightAccounts.
+  const marker = readMarker(folder);
+  const accounts = preflightAccounts(options.login, options.user, guard, marker);
+  const read = async (account: string): Promise<{ facts: Facts } | { refusal: Refusal; refused: boolean }> => {
     const execution = await deps.machine.exec(account, "sh -s setup:preflight:read", { input: preflightScript() });
     const said = execution.error.trim().split("\n").filter((line) => line !== "").at(-1) ?? `exit code ${execution.code}`;
-    if (execution.code !== 0) {
-      refusal ??= REFUSALS.unreachable(`${account}@${options.host}`, said);
-      continue;
+    if (execution.code !== 0) return { refusal: REFUSALS.unreachable(`${account}@${options.host}`, said), refused: /Permission denied/.test(execution.error) };
+    const facts = readFacts(execution.output);
+    return facts === null ? { refusal: REFUSALS.unreadable(`${account}@${options.host}`, said), refused: false } : { facts };
+  };
+  let operator = accounts.first;
+  let preflight = await read(operator);
+  if ("refusal" in preflight && preflight.refused && accounts.then !== null) {
+    const second = await read(accounts.then);
+    if ("facts" in second) {
+      operator = accounts.then;
+      preflight = second;
     }
-    facts = readFacts(execution.output);
-    if (facts === null) {
-      refusal = REFUSALS.unreadable(`${account}@${options.host}`, said);
-      break;
-    }
-    operator = account;
-    break;
   }
-  if (facts === null) return refuse(refusal ?? REFUSALS.unreachable(`${options.login}@${options.host}`, "no answer"));
+  if ("refusal" in preflight) return refuse(preflight.refusal);
+  const { facts } = preflight;
   if (operator !== options.login) out.say(`   ${options.login} may no longer log in: going on as ${operator}`);
   const judged = judgeFacts(facts, options, operator);
   if (judged !== null) return refuse(judged);
@@ -1138,6 +1206,9 @@ export async function runSetup(options: SetupOptions, deps: SetupDependencies): 
     operator,
     deployUser: options.user,
     sshPort: facts.sshPort,
+    accountReady: false,
+    clientAddress: facts.clientAddress,
+    ignoredAddress: null,
     options,
     deps,
     folder,
@@ -1169,22 +1240,32 @@ export async function runSetup(options: SetupOptions, deps: SetupDependencies): 
   // 4. The steps.
   const outcome = await runSteps(steps, context, {
     checkOnly: false,
-    report: (report) => out.check(report),
+    report: (report) => {
+      out.check(report);
+      if (report.step === "ssh" && (report.status === "done" || report.status === "ok")) noteRootClosed(folder);
+    },
     starting: (step) => out.say(`-> ${step.title}`),
   });
   const portalDrawn = deps.secrets.portal !== null;
+  const released = await releaseFail2ban(context);
 
   if (outcome.failure !== null) {
     const { step, message, details, inspect } = outcome.failure;
-    out.error(`setup stopped at ${step}: ${message}`, [
+    // A machine that stopped answering ssh in the middle of a run has most
+    // likely banned the workstation: asked once more, it says so, and the
+    // report says what to do about it rather than only what failed.
+    const lost = CONNECTION_LOST.test([message, ...details].join("\n")) || (await connectionLost(context));
+    out.error(lost ? `setup stopped at ${step}: the connection to the machine was refused or dropped` : `setup stopped at ${step}: ${message}`, [
+      ...(lost ? [message] : []),
       ...details,
-      `inspect: ${inspect}`,
-      "run the same command again to resume: the steps already done are skipped",
+      ...(lost ? BAN_ADVICE : [`inspect: ${inspect}`, "run the same command again to resume: the steps already done are skipped"]),
+      ...(released === null ? [] : [released]),
     ]);
     // Its hash is on the machine already: lost now, it could only be replaced.
     showSecrets(deps);
     return 1;
   }
+  if (released !== null) out.say(`!! ${released}`);
 
   const ran = outcome.reports.filter((report) => report.status === "ok").map((report) => report.step);
   const already = outcome.reports.filter((report) => report.status === "done").map((report) => report.step);

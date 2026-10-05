@@ -3,13 +3,23 @@
  * infra/cloud-init.yaml does at a first boot, done over ssh instead, so that a
  * machine from any provider gets it.
  *
- *   packages      sudo ufw fail2ban unattended-upgrades rsync git curl unzip, and nft
+ *   packages      sudo ufw fail2ban unattended-upgrades rsync git curl unzip, and nft;
+ *                 fail2ban installed without being started
  *   account       the deploy account: sudo without a password, the operator's keys
  *   firewall      ufw: 22 (or the port ssh answers on), 80 and 443 in, the rest refused
- *   fail2ban      enabled and running
  *   updates       unattended security updates, every day
  *   directories   /srv/sites, /srv/api, /srv/data
  *   ssh           no root login, no password: only once a login as the deploy account is proven
+ *   fail2ban      enabled and running, last, the workstation's address spared for the run
+ *
+ * NO LOGIN AS AN ACCOUNT THAT DOES NOT EXIST. Until the account step has found
+ * or made the deploy account, every check and every run goes through the
+ * operator's session, and so does a dry run on a fresh machine, whose later
+ * checks then read as missing rather than as so many refused logins. A first
+ * run on Hetzner's Debian 13 logged twenty `Invalid user deploy` lines that
+ * way, and fail2ban, started by its own package a step later, read them and
+ * banned the workstation in the middle of the install: on 5 October 2026, the
+ * run stopped at the packages with every following connection refused.
  *
  * Each step is a check that reads and a run that does only what the check
  * found missing, through the account setup is connected as, the operator:
@@ -66,7 +76,31 @@ export type HardenContext = {
   deployUser: string;
   /** The port ssh answered on, which the firewall must keep open. */
   sshPort: number;
+  /**
+   * Whether the account step found the deploy account complete. Until then
+   * nothing logs in as it: a login refused to an account that does not exist
+   * is a line fail2ban counts against the workstation.
+   */
+  accountReady: boolean;
+  /** The workstation's address as the machine sees it, the first field of $SSH_CONNECTION; null when unread. */
+  clientAddress: string | null;
+  /** The address fail2ban was told to spare for the run, to be withdrawn at its end; null when none. */
+  ignoredAddress: string | null;
 };
+
+/**
+ * A connection the machine refused or dropped, as ssh words it. Mid-run, the
+ * likeliest cause is fail2ban, whose ban rejects every packet to the ssh port,
+ * those of a session already open included.
+ */
+export const CONNECTION_LOST = /Connection refused|Connection timed out|Operation timed out|No route to host|Connection reset|Connection closed by remote host|kex_exchange_identification|Broken pipe/;
+
+/** What to tell whoever finds the machine no longer answering ssh. */
+export const BAN_ADVICE = [
+  "fail2ban may have banned this workstation's address: a ban lasts 10 minutes by default (bantime), and refuses every connection to the ssh port meanwhile",
+  "from the provider's console: sudo fail2ban-client status sshd lists the banned addresses, sudo fail2ban-client set sshd unbanip <address> lifts one",
+  "wait for the ban to lapse, or lift it, then run the same command again: it resumes where it stopped",
+];
 
 /**
  * The PATH of every script: root's, whatever the account and the sudo
@@ -129,15 +163,38 @@ export function packagesCheck(): string {
   ]);
 }
 
+/**
+ * fail2ban apart, under a policy-rc.d that forbids starting a service, the
+ * way Debian's own image builders install packages: its package would start
+ * it at once, and a fail2ban started before the deploy account's login is
+ * proven reads the journal's recent failed logins and may ban the workstation
+ * running this install. It is left installed, stopped and disabled; the
+ * fail2ban step, after ssh, starts it. A policy-rc.d already in place, a
+ * container's, is put back as it was, whatever happens to the install.
+ */
 export function packagesRun(): string {
+  const others = PACKAGES.filter((name) => name !== "fail2ban");
   return runScript(
     "setup:packages:run",
     `
 ${APT} update -q </dev/null
-${APT} install -y -q ${PACKAGES.join(" ")} </dev/null
+${APT} install -y -q ${others.join(" ")} </dev/null
 # Only when missing: installed by default on Debian, where its own service stays
 # disabled and never flushes the firewall's rules.
 command -v nft >/dev/null 2>&1 || ${APT} install -y -q nftables </dev/null
+if ! dpkg-query -W -f='\${Status}' fail2ban 2>/dev/null | grep -q 'ok installed'; then
+  policy=/usr/sbin/policy-rc.d
+  saved=""
+  if [ -e "$policy" ]; then saved="$policy.sitesolide"; mv "$policy" "$saved"; fi
+  restore_policy() { rm -f "$policy"; if [ -n "$saved" ]; then mv "$saved" "$policy"; saved=""; fi; }
+  trap restore_policy EXIT
+  printf '#!/bin/sh\\nexit 101\\n' > "$policy"
+  chmod 755 "$policy"
+  ${APT} install -y -q fail2ban </dev/null
+  restore_policy
+  trap - EXIT
+  systemctl disable --now fail2ban >/dev/null 2>&1 </dev/null || true
+fi
 `,
   );
 }
@@ -257,8 +314,58 @@ export function fail2banCheck(): string {
   ]);
 }
 
-export function fail2banRun(): string {
-  return runScript("setup:fail2ban:run", "systemctl enable --now fail2ban </dev/null");
+export const FAIL2BAN_IGNORE = "/etc/fail2ban/jail.d/00-sitesolide-setup.conf";
+
+/**
+ * fail2ban started, the workstation's own address spared for the run.
+ *
+ * WHY SPARED BEFOREHAND RATHER THAN UNBANNED AFTERWARDS. A fail2ban that starts
+ * reads the journal back over its findtime, and a ban there rejects every
+ * packet to the ssh port, those of the session running this very script
+ * included: an unban sent after the start races with the connection that
+ * would send it. So the address goes into the sshd jail's ignoreip BEFORE the
+ * start, in a file of jail.d, and the file is removed as soon as the jail
+ * answers, so that nothing lasting exempts it on disk: the running jail keeps
+ * the setting in memory. At the end of the run, success or failure,
+ * `fail2banRelease` withdraws it from memory with delignoreip, without a
+ * reload: a reload would read the journal back again, and could ban the
+ * address then. Only an interrupted run leaves it in memory, until fail2ban's
+ * next restart. Nothing already banned is unbanned, ever.
+ *
+ * `address` is null when the preflight could not read it: fail2ban then starts
+ * with nothing spared, setup's own logins being all successful by then.
+ */
+export function fail2banRun(address: string | null): string {
+  const spare =
+    address === null
+      ? ""
+      : `mkdir -p /etc/fail2ban/jail.d
+cat > ${FAIL2BAN_IGNORE} <<'JAIL'
+# Laid by sitesolide setup for the time fail2ban starts, then removed.
+[sshd]
+ignoreip = 127.0.0.1/8 ::1 ${address}
+JAIL`;
+  return runScript(
+    "setup:fail2ban:run",
+    `
+${spare}
+systemctl enable fail2ban >/dev/null 2>&1 </dev/null
+systemctl restart fail2ban </dev/null
+ready=""
+for attempt in $(seq 1 30); do
+  if fail2ban-client status sshd >/dev/null 2>&1 </dev/null; then ready=yes; break; fi
+  sleep 1
+done
+rm -f ${FAIL2BAN_IGNORE}
+[ -n "$ready" ] || { echo "fail2ban runs, but its sshd jail did not answer within 30 seconds" >&2; exit 1; }
+${address === null ? "" : `fail2ban-client get sshd ignoreip </dev/null | grep -qF -- '${address}' || echo "note: fail2ban does not list ${address} among the addresses it spares" >&2`}
+`,
+  );
+}
+
+/** The workstation's address withdrawn from what the sshd jail spares, without a reload: see fail2banRun. */
+export function fail2banRelease(address: string): string {
+  return runScript("setup:fail2ban:release", `fail2ban-client set sshd delignoreip '${address}' >/dev/null </dev/null`);
 }
 
 /** The file cloud-init writes, word for word: apt reads it, and so does unattended-upgrades. */
@@ -388,7 +495,11 @@ export function hardeningSteps<C extends HardenContext>(): Step<C>[] {
     {
       id: "account",
       title: "deploy account",
-      check: check("setup:account:check", (context) => accountCheck(context.deployUser, context.operator)),
+      check: async (context) => {
+        const found = await rootCheck(context.machine, context.operator, "setup:account:check", accountCheck(context.deployUser, context.operator));
+        context.accountReady = found.state === "done";
+        return found;
+      },
       run: async (context) => {
         await rootRun(context.machine, context.operator, "setup:account:run", accountRun(context.deployUser, context.operator), `the account ${context.deployUser} could not be completed`);
         return `${context.deployUser}: sudo without a password, ${context.operator === context.deployUser ? "its own keys" : `the keys of ${context.operator}`}`;
@@ -404,13 +515,6 @@ export function hardeningSteps<C extends HardenContext>(): Step<C>[] {
         return `ufw: ${firewallPorts(context.sshPort).join(", ")} in, the rest refused`;
       },
       inspect: (context) => inspect(context, "sudo ufw status verbose"),
-    },
-    {
-      id: "fail2ban",
-      title: "fail2ban",
-      check: check("setup:fail2ban:check", () => fail2banCheck()),
-      run: (context) => rootRun(context.machine, context.operator, "setup:fail2ban:run", fail2banRun(), "fail2ban did not start"),
-      inspect: (context) => inspect(context, "sudo journalctl -u fail2ban -n 50"),
     },
     {
       id: "updates",
@@ -429,9 +533,38 @@ export function hardeningSteps<C extends HardenContext>(): Step<C>[] {
     {
       id: "ssh",
       title: "ssh: keys only, no root",
-      check: check("setup:ssh:check", () => sshCheck()),
-      run: (context) => closeSsh(context),
+      // sshd closed already, and the operator another account than the deploy
+      // one, a sudoer's: the deploy account's login is proven here, once it is
+      // known to exist, before any step logs in as it.
+      check: async (context) => {
+        const found = await rootCheck(context.machine, context.operator, "setup:ssh:check", sshCheck());
+        if (found.state !== "done" || context.operator === context.deployUser || !context.accountReady) return found;
+        if ((await context.machine.exec(context.deployUser, PROOF)).code !== 0) return { state: "missing", missing: ["deploy-login"] };
+        context.operator = context.deployUser;
+        return found;
+      },
+      run: async (context, missing) => {
+        if (missing.length === 1 && missing[0] === "deploy-login") {
+          throw new StepFailure(`no login as ${context.deployUser}@${context.host} could be proven`, [
+            `ssh ${context.deployUser}@${context.host} '${PROOF}' must work before setup goes on as that account`,
+          ]);
+        }
+        return closeSsh(context);
+      },
       inspect: (context) => `ssh ${context.deployUser}@${context.host} 'sudo sshd -T | grep -E "^(permitrootlogin|passwordauthentication|kbdinteractiveauthentication) "'`,
+    },
+    {
+      id: "fail2ban",
+      title: "fail2ban",
+      check: check("setup:fail2ban:check", () => fail2banCheck()),
+      run: async (context) => {
+        // Recorded before the run, so that a run failing half way still has
+        // its ignore withdrawn at the end.
+        context.ignoredAddress = context.clientAddress;
+        await rootRun(context.machine, context.operator, "setup:fail2ban:run", fail2banRun(context.clientAddress), "fail2ban did not start");
+        return context.clientAddress === null ? "running" : `running, ${context.clientAddress} spared until the end of this run`;
+      },
+      inspect: (context) => inspect(context, "sudo journalctl -u fail2ban -n 50"),
     },
   ];
 }

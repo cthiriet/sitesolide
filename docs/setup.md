@@ -34,13 +34,13 @@ missing. The output is a checklist: `[done]` already there, `[ok]` done now,
 | preflight | always read | nothing: system, architecture, free disk, sudo, addresses, ssh port |
 | configuration | `config.json` names this server and zone | your workstation: `~/.config/sitesolide/config.json`, and `setup.json` beside it |
 | dns | `x<random>.<zone>` and `<zone>` resolve to the machine | Cloudflare: `<zone>` and `*.<zone>`, A and AAAA, DNS only, TTL auto |
-| packages | sudo ufw fail2ban unattended-upgrades rsync git curl unzip installed, `nft` present | apt |
+| packages | sudo ufw fail2ban unattended-upgrades rsync git curl unzip installed, `nft` present | apt; fail2ban installed without being started |
 | account | the deploy account exists, `sudo -n` works for it, it holds the operator's keys | `useradd`, `/etc/sudoers.d/90-sitesolide-<user>`, its `authorized_keys` |
 | firewall | ufw active, incoming denied, the ssh port, 80 and 443 allowed | ufw |
-| fail2ban | enabled and active | `systemctl enable --now fail2ban` |
 | updates | `apt-config` shows the two `APT::Periodic` settings at 1 | `/etc/apt/apt.conf.d/20auto-upgrades` |
 | directories | `/srv/sites`, `/srv/api`, `/srv/data` exist | `mkdir` |
 | ssh | `sshd -T` says no root login, no password, no keyboard-interactive | `/etc/ssh/sshd_config.d/00-sitesolide.conf`, `systemctl reload ssh` |
+| fail2ban | enabled and active | `systemctl enable fail2ban`, a restart, your address spared for the run |
 | caddy | the package installed and `dns.providers.cloudflare` listed | Caddy's apt repository, `caddy add-package` |
 | bun | `/usr/local/bin/bun` exists | Bun's installer |
 | cloudflare-token | `/etc/caddy/cloudflare.env` root:caddy 0640, holding the token given | that file |
@@ -83,8 +83,27 @@ settings in effect, and only that disarms the timer. If the first login
 fails, sshd is not touched. If anything fails after the reload, root login and
 passwords come back on their own within two minutes.
 
-From then on every step runs as the deploy account, and so does a later run:
-`sitesolide setup root@...` again finds root closed and goes on as `deploy`.
+Until the account step has made the deploy account, nothing logs in as it:
+every check and every run goes through the root session, a `--dry-run` on a
+fresh machine included. From the ssh step on, every step runs as the deploy
+account, and so does a later run: `setup.json` records that root is closed,
+and `sitesolide setup root@...` again goes straight to `deploy`.
+
+## fail2ban, and not banning yourself
+
+fail2ban counts refused logins, and a ban refuses every connection to the ssh
+port, the session running the install included. So setup never logs in as an
+account that does not exist, its package is installed without being started,
+and it is only started in the last hardening step, once ssh is closed. Your
+workstation's address, as the machine sees it, is spared while it starts and
+until the end of the run, then withdrawn without a reload; nothing already
+banned is ever unbanned by setup.
+
+If the machine stops answering ssh during a run, the report says so: a ban
+lasts 10 minutes by default. From the provider's console,
+`sudo fail2ban-client status sshd` lists the banned addresses, and
+`sudo fail2ban-client set sshd unbanip <address>` lifts one. Then run the same
+command again.
 Connected as a sudoer instead of root, setup checks the same things and does
 what is missing through `sudo -n`, that account being the deploy account
 unless `--user` names another.
