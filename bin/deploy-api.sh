@@ -41,8 +41,8 @@ if [ ! -w "$SOURCE" ]; then
 fi
 
 # On a fresh machine nothing has made the account the unit runs as, and
-# cloud-init leaves /srv/api to root while the releases below are written by
-# the deployment account: the first run failed on both, with 217/USER and a
+# /srv/api may be root's while the releases below are written by the
+# deployment account: the first run failed on both, with 217/USER and a
 # refused mkdir. Both are made here when missing, and nothing changes on a
 # machine that already has them.
 echo "-> account and directory"

@@ -23,16 +23,15 @@ describe("paths", () => {
     expect(configPath(HOME, {})).toBe(join(HOME, ".config", "sitesolide", "config.json"));
   });
 
-  test("SITESOLIDE_CONFIG_DIR moves the whole folder: configuration, vault and Terraform's", () => {
+  test("SITESOLIDE_CONFIG_DIR moves the whole folder: configuration and vault", () => {
     // A second installation driven from the same workstation, whose folder in
     // its usual place may point at a machine in service: every path of the
     // CLI and of the scripts comes from here, so none of them can miss it.
     const environment = { SITESOLIDE_CONFIG_DIR: "~/second" };
     expect(privateFolder(HOME, environment)).toBe("/Users/test/second");
     expect(configPath(HOME, environment)).toBe("/Users/test/second/config.json");
-    expect(defaultPaths(HOME, environment)).toEqual({ vault: "/Users/test/second/secrets", terraform: "/Users/test/second/terraform" });
+    expect(defaultPaths(HOME, environment)).toEqual({ vault: "/Users/test/second/secrets" });
     expect(mergeConfig(MINIMUM, environment, HOME).vault).toBe("/Users/test/second/secrets");
-    expect(settings(MINIMUM, environment, HOME).SITESOLIDE_TERRAFORM_DIR).toBe("/Users/test/second/terraform");
     expect(privateFolder(HOME, { SITESOLIDE_CONFIG_DIR: "" })).toBe(join(HOME, ".config", "sitesolide"));
   });
 
@@ -218,7 +217,6 @@ describe("the scripts under bin/ read the same configuration", () => {
     const defaults = defaultPaths(HOME, {});
     const values = settings(MINIMUM, {}, HOME);
     expect(values.SITESOLIDE_VAULT).toBe(defaults.vault);
-    expect(values.SITESOLIDE_TERRAFORM_DIR).toBe(defaults.terraform);
   });
 
   test("with no configuration, the server and the zone come out empty rather than invented", () => {
@@ -250,10 +248,7 @@ describe("the scripts under bin/ read the same configuration", () => {
     // Without that call, a script run with no configuration would set off with
     // an empty SITESOLIDE_SERVER: ssh would see a missing hostname, and the message would
     // be its own, not the one pointing at sitesolide init.
-    // terraform.sh creates the machine whose address `sitesolide init` then
-    // records: requiring that configuration first would make it unusable on a
-    // fresh install.
-    const exempt = new Set(["config.sh", "test.sh", "terraform.sh"]);
+    const exempt = new Set(["config.sh", "test.sh"]);
     const root = join(import.meta.dir, "..");
     for await (const name of new Bun.Glob("*.sh").scan({ cwd: root })) {
       const script = await Bun.file(join(root, name)).text();
@@ -316,27 +311,4 @@ describe("the dashboard's password", () => {
   });
 });
 
-describe("Terraform's values and state", () => {
-  const script = () => Bun.file(join(import.meta.dir, "..", "terraform.sh")).text();
-
-  test("live outside the repository, where the configuration says", async () => {
-    // Terraform reads a *.auto.tfvars only from the directory it runs in, and
-    // keeps its state there: left alone, both would sit in infra/, inside the
-    // public tree, guarded by nothing but a .gitignore line.
-    const text = await script();
-    expect(text).toContain('DIR="$SITESOLIDE_TERRAFORM_DIR"');
-    expect(text).toContain('-backend-config="path=$DIR/terraform.tfstate"');
-    expect(text).toContain('-var-file="$VALUES"');
-    expect(text).not.toContain("auto.tfvars\"");
-  });
-
-  test("the state has no path in the code, only at init", async () => {
-    const versions = await Bun.file(join(import.meta.dir, "..", "..", "infra", "versions.tf")).text();
-    expect(versions).toContain('backend "local" {}');
-  });
-
-  test("the default folder is beside the configuration file", () => {
-    expect(settings(MINIMUM, {}, HOME).SITESOLIDE_TERRAFORM_DIR).toBe("/Users/test/.config/sitesolide/terraform");
-  });
-});
 

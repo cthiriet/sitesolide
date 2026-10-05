@@ -432,7 +432,7 @@ export function systemdRunArguments(run: ProjectRun, systemdRun = "/usr/bin/syst
  * must reach the shell exactly as it was written.
  *
  * It used to run as the deployment account, which holds sudo without a
- * password (infra/cloud-init.yaml), outside any sandbox; and `bun install`
+ * password (sitesolide setup gives it that), outside any sandbox; and `bun install`
  * and `uv sync` run the lifecycle scripts of what they fetch. Any package one
  * of them pulled had root on the machine that serves every site.
  *

@@ -4,8 +4,7 @@
 #   . "$REPO_ROOT/bin/config.sh"
 #
 # Sets SITESOLIDE_SERVER, SITESOLIDE_ZONE, SITESOLIDE_EMAIL, SITESOLIDE_CONTACT,
-# SITESOLIDE_VAULT, SITESOLIDE_TERRAFORM_DIR and, if there is one,
-# SITESOLIDE_SITES_REPO. Those carry a prefix because whoever installs this
+# SITESOLIDE_VAULT and, if there is one, SITESOLIDE_SITES_REPO. Those carry a prefix because whoever installs this
 # software has an environment of their own, where a name as short as ZONE or
 # CONTACT would meet something else.
 #

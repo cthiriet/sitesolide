@@ -55,7 +55,6 @@ export const LEFT_OUT: ReadonlyArray<readonly [RegExp, string]> = [
   [/(^|\/)\.gitignore$/, "git's, and a kit is no checkout"],
   [/^bin\/(sitesolide|mcp|build)\.ts$/, "the CLI itself, which the binary is"],
   [/^bin\/(test\.sh|deprecations\.ts)$/, "the repository's own checks"],
-  [/^bin\/terraform\.sh$|^infra\/(.*\.tf|\.terraform\.lock\.hcl|terraform\.tfvars\.example)$/, "Terraform, which leaves the repository"],
 ];
 
 /**

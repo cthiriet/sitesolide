@@ -20,8 +20,10 @@
  *
  * What is private to the workstation sits beside this file, outside every
  * repository: `secrets/`, the credentials the workstation itself presents to
- * reach production, and `terraform/`, the values and the state of the machine's
- * infrastructure. Outside git, no `git add` can publish them.
+ * reach production. Outside git, no `git add` can publish them. A `terraform/`
+ * folder may sit there too, from before 0.3, when Terraform created the
+ * machine: nothing reads it any more, and it holds tokens and the machine's
+ * address all the same.
  *
  * `SITESOLIDE_CONFIG_DIR` moves that whole folder, for a second installation
  * driven from the same workstation: see `privateFolder`.
@@ -139,7 +141,7 @@ export function legacyKeysWarning(legacy: readonly string[]): string {
 
 /**
  * The variable that moves the whole private folder elsewhere: the
- * configuration, the vault and Terraform's folder with it.
+ * configuration and the vault with it.
  *
  * It exists for a second installation driven from the same workstation. The
  * folder in its usual place may well point at a machine in service, and
@@ -160,10 +162,9 @@ export function privateFolder(home = homedir(), environment: Record<string, stri
 }
 
 /** The default paths, outside every repository. */
-export function defaultPaths(home = homedir(), environment: Record<string, string | undefined> = process.env): { vault: string; terraform: string } {
+export function defaultPaths(home = homedir(), environment: Record<string, string | undefined> = process.env): { vault: string } {
   return {
     vault: join(privateFolder(home, environment), "secrets"),
-    terraform: join(privateFolder(home, environment), "terraform"),
   };
 }
 

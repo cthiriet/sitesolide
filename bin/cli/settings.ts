@@ -47,9 +47,6 @@ export function settings(
     // and a three-label zone puts it at 3.
     SLUG_LABEL: zone === "" ? "" : `{labels.${zone.split(".").length}}`,
     SITESOLIDE_VAULT: path(environment.SITESOLIDE_VAULT ?? file.vault, defaults.vault),
-    // Where Terraform finds the machine's values and keeps its state, outside
-    // the repository: see bin/terraform.sh.
-    SITESOLIDE_TERRAFORM_DIR: path(environment.SITESOLIDE_TERRAFORM_DIR, defaults.terraform),
   };
 
   // The contact address is optional: left empty, it makes the line disappear

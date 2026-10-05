@@ -874,7 +874,7 @@ cd dashboard && sitesolide deploy   # 1. the two routes
    as the owner`, and changes nothing. That read is the owner's way: root asks
    the portal on the loopback (`sudo curl -sS http://127.0.0.1:3026/admin/sharing`),
    after reading the site's manifest and block; it needs `curl` on the machine,
-   which cloud-init installs, and a portal that knows sharing (portal/README.md,
+   which sitesolide setup installs, and a portal that knows sharing (portal/README.md,
    "Upgrading", step 1). A portal from before it is said so, and nothing is
    changed.
 1. **The dashboard.** Check, with a token of yours that may deploy a site

@@ -1,19 +1,2 @@
-# Secrets: the API tokens must never be versioned
-*.tfvars
+# Secrets: a token never lands in this tree, even by an old habit
 *.env
-
-# Terraform state: contains the data of the resources, to be backed up but not to be versioned
-*.tfstate
-*.tfstate.*
-.terraform.tfstate.lock.info
-
-# Downloaded plugins
-.terraform/
-
-# Binary plans and crash logs
-*.tfplan
-crash.log
-crash.*.log
-
-# Plan files: they contain the value of the sensitive variables
-tfplan
