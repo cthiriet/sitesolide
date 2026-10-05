@@ -38,6 +38,10 @@
  * - `accounts`: the static accounts the machine carries, one passwd line each,
  *   which the reading of an account answers from; an accepted `useradd` adds
  *   its account there, so that the next reading finds it.
+ *
+ * `sitesolide setup`'s scripts, `sh -s <tag>` with the script on standard
+ * input, are writes like any other: refused, or accepted and answered from
+ * `answers.json`, their input read and never recorded.
  */
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -139,6 +143,8 @@ const LOCK = /^sudo sh -c ': caddy-lock (take|retake|release|verify) ([^;']*);/;
 const ACCOUNT_READING = /^SYSTEMD_NSS_DYNAMIC_BYPASS=1 getent passwd ([a-z][a-z0-9-]*) \|\| echo missing$/;
 /** An account made, its name last on the line, as every deploy script writes useradd. */
 const USERADD = /\buseradd .* ([a-z][a-z0-9-]*)$/;
+/** A script of `sitesolide setup`, on standard input, named by its tag: see bin/cli/harden.ts. */
+const SETUP_SCRIPT = /^(sudo -n )?sh -s setup:[a-z0-9-]+:[a-z]+$/;
 
 if (import.meta.main) {
   const vm = process.env.FAKE_VM ?? "";
@@ -391,7 +397,10 @@ if (import.meta.main) {
       // An account made is there for the next reading, as on a machine.
       const made = USERADD.exec(command)?.[1];
       if (made !== undefined) addAccount(vm, made);
-      if (command.includes("/dev/stdin")) await Bun.stdin.text();
+      // `sitesolide setup` sends its scripts on standard input to `sh -s
+      // <tag>`: read and dropped, never recorded, since one of them carries
+      // the Cloudflare token. The tag on the command line says which it was.
+      if (command.includes("/dev/stdin") || SETUP_SCRIPT.test(command)) await Bun.stdin.text();
       // A script handed to `sh -s` on standard input, an install's: recorded,
       // so that a test sees it travelled there and not in the arguments.
       if (command.includes('"/bin/sh" "-s"')) record(`STDIN ${(await Bun.stdin.text()).trimEnd()}`);

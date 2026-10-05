@@ -38,7 +38,7 @@
  */
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { bundle, excludedBy, type BundleEntry } from "./bundle";
 import { configPath, defaultPaths, expandHome, projectsRepo, readConfigFile } from "./config";
 import { hintForFailure } from "./hints";
@@ -58,8 +58,8 @@ export type Remote = { api: string; token: string };
 type Environment = Record<string, string | undefined>;
 
 /** The raw configuration file, the `api` key included, which `Config` does not carry. */
-function rawConfig(home: string): Record<string, unknown> {
-  const path = configPath(home);
+function rawConfig(home: string, environment: Environment): Record<string, unknown> {
+  const path = configPath(home, environment);
   if (!existsSync(path)) return {};
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
@@ -71,8 +71,8 @@ function rawConfig(home: string): Record<string, unknown> {
 
 /** The vault's folder, as the SSH path computes it: environment, file, default. */
 export function vaultFolder(environment: Environment, home: string): string {
-  const file = readConfigFile(home);
-  return expandHome(environment.SITESOLIDE_VAULT ?? file.vault ?? defaultPaths(home).vault, home);
+  const file = readConfigFile(home, environment);
+  return expandHome(environment.SITESOLIDE_VAULT ?? file.vault ?? defaultPaths(home, environment).vault, home);
 }
 
 export function tokenPath(environment: Environment, home: string): string {
@@ -103,7 +103,7 @@ export function apiOrigin(raw: string): string | null {
  */
 export function remoteMode(arguments_: string[], environment: Environment, home = homedir()): boolean {
   if (arguments_.includes("--api")) return true;
-  const file = rawConfig(home);
+  const file = rawConfig(home, environment);
   const server = environment.SITESOLIDE_SERVER ?? (typeof file.server === "string" ? file.server : "");
   if (server !== "") return false;
   const api = environment.SITESOLIDE_API ?? (typeof file.api === "string" ? file.api : "");
@@ -112,7 +112,7 @@ export function remoteMode(arguments_: string[], environment: Environment, home 
 
 /** The address and the token, or what is missing, said with the command that fixes it. */
 export function readRemote(environment: Environment, home = homedir()): Remote | { missing: string } {
-  const file = rawConfig(home);
+  const file = rawConfig(home, environment);
   const raw = environment.SITESOLIDE_API ?? (typeof file.api === "string" ? file.api : "");
   const api = raw === "" ? null : apiOrigin(raw);
   if (api === null) {
@@ -413,13 +413,13 @@ export async function login(arguments_: string[], dependencies: Omit<RemoteDepen
   const path = join(vault, TOKEN_FILE);
   writeFileSync(path, `${token}\n`, { mode: 0o600 });
   chmodSync(path, 0o600);
-  const file = rawConfig(home);
-  mkdirSync(join(home, ".config", "sitesolide"), { recursive: true });
-  writeFileSync(configPath(home), `${JSON.stringify({ ...file, api }, null, 2)}\n`);
+  const file = rawConfig(home, environment);
+  mkdirSync(dirname(configPath(home, environment)), { recursive: true });
+  writeFileSync(configPath(home, environment), `${JSON.stringify({ ...file, api }, null, 2)}\n`);
 
   output.say(`-> signed in to ${api}`);
   for (const line of describeIdentity(answer.body.identity)) output.say(line);
-  output.say(`   token kept in ${path}, address in ${configPath(home)}`);
+  output.say(`   token kept in ${path}, address in ${configPath(home, environment)}`);
   if (typeof file.server === "string" && file.server !== "") output.say("   this workstation also has a server: commands use SSH unless given --api");
   output.succeeded("login", { api, identity: answer.body.identity, tokenFile: path });
   return 0;

@@ -23,14 +23,17 @@
  * reach production, and `terraform/`, the values and the state of the machine's
  * infrastructure. Outside git, no `git add` can publish them.
  *
+ * `SITESOLIDE_CONFIG_DIR` moves that whole folder, for a second installation
+ * driven from the same workstation: see `privateFolder`.
+ *
  * The keys and the environment variable names are the interface between this
  * module and the shell scripts of `bin/`. A file written before they were
  * translated still works: `adoptLegacyKeys` reads the French keys and says on
  * standard error that they are outdated. See `docs/migration.md`.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export type Config = {
   /** `user@host`, as ssh takes it. */
@@ -134,16 +137,33 @@ export function legacyKeysWarning(legacy: readonly string[]): string {
   return lines.join("\n");
 }
 
+/**
+ * The variable that moves the whole private folder elsewhere: the
+ * configuration, the vault and Terraform's folder with it.
+ *
+ * It exists for a second installation driven from the same workstation. The
+ * folder in its usual place may well point at a machine in service, and
+ * `sitesolide setup` refuses to overwrite a configuration that names another
+ * server; a test machine gets a folder of its own instead, and every command
+ * run with this variable set reads that folder and nothing else. One variable
+ * read here, where every path of the CLI and of the scripts of bin/ comes
+ * from, rather than an option each command would have to learn: a command
+ * that forgot it would silently aim at the other machine.
+ */
+export const CONFIG_DIR_VARIABLE = "SITESOLIDE_CONFIG_DIR";
+
 /** The folder of everything private to the workstation, beside the configuration file. */
-export function privateFolder(home = homedir()): string {
+export function privateFolder(home = homedir(), environment: Record<string, string | undefined> = process.env): string {
+  const chosen = environment[CONFIG_DIR_VARIABLE];
+  if (chosen !== undefined && chosen !== "") return expandHome(chosen, home);
   return join(home, ".config", "sitesolide");
 }
 
 /** The default paths, outside every repository. */
-export function defaultPaths(home = homedir()): { vault: string; terraform: string } {
+export function defaultPaths(home = homedir(), environment: Record<string, string | undefined> = process.env): { vault: string; terraform: string } {
   return {
-    vault: join(privateFolder(home), "secrets"),
-    terraform: join(privateFolder(home), "terraform"),
+    vault: join(privateFolder(home, environment), "secrets"),
+    terraform: join(privateFolder(home, environment), "terraform"),
   };
 }
 
@@ -157,8 +177,8 @@ export function defaultPaths(home = homedir()): { vault: string; terraform: stri
  * `mergeConfig`, which every command goes through, and repeating it here would
  * print it twice per run.
  */
-export function readConfigFile(home = homedir()): Partial<Config> {
-  const path = configPath(home);
+export function readConfigFile(home = homedir(), environment: Record<string, string | undefined> = process.env): Partial<Config> {
+  const path = configPath(home, environment);
   if (!existsSync(path)) return {};
   return adoptLegacyKeys(JSON.parse(readFileSync(path, "utf8")) as Partial<Config>).config;
 }
@@ -187,8 +207,39 @@ export function deploymentAccount(server: string): string {
   return separator === -1 ? server : server.slice(0, separator);
 }
 
-export function configPath(home = homedir()): string {
-  return join(privateFolder(home), "config.json");
+export function configPath(home = homedir(), environment: Record<string, string | undefined> = process.env): string {
+  return join(privateFolder(home, environment), "config.json");
+}
+
+/** The settings `init` writes only when they are given or already set. */
+export const OPTIONAL_SETTINGS = ["contact", "vault", "sites", "api"] as const;
+
+/**
+ * The file `sitesolide init` writes, and `sitesolide setup` too: the three
+ * settings that name the machine, then each optional one given now or already
+ * in the file. A file that stays silent about a path lets the defaults play,
+ * and therefore never lies; the flag and the key carry the same name, so that
+ * what is typed is what lands in the file. `previous` is the file as read, its
+ * old keys already adopted: what an earlier version wrote is carried over
+ * under the current names, and the keys no longer read are left out.
+ */
+export function composeConfig(
+  required: { server: string; zone: string; email: string },
+  given: Partial<Record<(typeof OPTIONAL_SETTINGS)[number], string>>,
+  previous: Record<string, unknown>,
+): Record<string, string> {
+  const config: Record<string, string> = { ...required };
+  for (const key of OPTIONAL_SETTINGS) {
+    const value = given[key] ?? previous[key];
+    if (typeof value === "string" && value !== "") config[key] = value;
+  }
+  return config;
+}
+
+/** Writes the configuration at `path`, its folder made if missing. */
+export async function writeConfig(path: string, config: Record<string, string>): Promise<void> {
+  mkdirSync(dirname(path), { recursive: true });
+  await Bun.write(path, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 /** `~/Code/x` and `$HOME/Code/x` mean the same thing once written here. */
@@ -225,7 +276,7 @@ export function mergeConfig(
   home = homedir(),
   warn: (message: string) => void = (message) => console.error(message),
 ): Config {
-  const defaults = defaultPaths(home);
+  const defaults = defaultPaths(home, environment);
   const { config: adopted, legacy } = adoptLegacyKeys(file);
   if (legacy.length > 0) warn(legacyKeysWarning(legacy));
 

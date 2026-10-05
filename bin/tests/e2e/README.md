@@ -63,6 +63,19 @@ answers from the accounts the test lays (`addAccount`) and from those an
 accepted `useradd` made, so that `deploy-monitor.test.ts` sees the account made
 once, and a second run make nothing.
 
+## Setup
+
+`setup.test.ts` runs `sitesolide setup` in front of the same fake machine:
+the refusal of a configuration naming another zone before any connection, a
+preflight that refuses another system after one read, and `--dry-run`, every
+step checked through `sudo -n sh -s <tag>` and nothing run. Setup sends its
+scripts on standard input; the fake ssh reads and drops them without recording
+them, one of them carrying the Cloudflare token, and the tests check that the
+token appears in no output and no command line. A full install does not run
+here, since the fake answers a check the same way every time; that sequence
+runs in `bin/tests/cli-setup.test.ts`, against a model of the machine whose
+state is what the checks report.
+
 ## Agents
 
 `agents.test.ts` drives the CLI as an agent does: `--json`, whose standard

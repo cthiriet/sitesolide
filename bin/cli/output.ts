@@ -44,6 +44,11 @@ export type OutputEvent =
   | { type: "inferred"; kind: string; manifest: Record<string, unknown>; reasons: string[]; notes: string[] }
   /** One journal entry, for `logs`. */
   | { type: "log"; at: string | null; unit: string | null; priority: number | null; message: string }
+  /**
+   * One line of `setup`'s checklist: a step found already done, run now,
+   * skipped, still to do in a dry run, or failed. See bin/cli/steps.ts.
+   */
+  | { type: "check"; step: string; status: "done" | "ok" | "skip" | "todo" | "fail"; title: string; detail: string | null }
   /** The last event of a run that succeeded, with what it concluded. */
   | ({ type: "result"; ok: true; command: string } & Record<string, unknown>)
   /** The last event of a run that failed: what, why, and what to do next. */

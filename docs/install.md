@@ -93,6 +93,11 @@ the machine.
 
 ## 3. Install the base system
 
+`sitesolide setup` runs everything in this section and the next, the hardening
+of `cloud-init.yaml` and the DNS records included, in one command that can be
+run again at any time: see [setup.md](setup.md). What follows is what it does,
+by hand.
+
 These run once, in this order. Each one is idempotent. The order is the one a
 fresh machine accepts: every step leans on the one before it.
 

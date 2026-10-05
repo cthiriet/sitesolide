@@ -2,6 +2,7 @@
 /**
  * Deploys a project onto the machine from any repository.
  *
+ *   sitesolide setup <user@host>    install the machine itself, see bin/cli/setup.ts
  *   sitesolide detect [--write]     the manifest a folder without one implies
  *   sitesolide deploy [--dry-run]   prepare, build, push, install, verify
  *   sitesolide status               what the VM actually carries
@@ -92,8 +93,11 @@ import { basename, join, resolve } from "node:path";
 import { compareDirectives, sameDirectives, summariseDivergence } from "./cli/comparison";
 import {
   adoptLegacyKeys,
+  composeConfig,
   configPath,
   deploymentAccount,
+  OPTIONAL_SETTINGS,
+  writeConfig,
   IncompleteConfig,
   legacyKeysWarning,
   projectsRepo,
@@ -2543,23 +2547,20 @@ async function initialise(arguments_: string[]): Promise<void> {
     return chosen;
   };
 
-  const config: Record<string, string> = {
-    server: ask("server", "SSH target, user@host:", previous.server),
-    zone: ask("zone", "DNS zone served, e.g. example.com:", previous.zone),
-    email: ask("email", "Contact address for the certificate authority:", previous.email),
-  };
-
-  // The paths are written only if they are given or already set: a file that
-  // stays silent about them lets the repository's defaults play, and therefore
-  // never lies. The flag and the key carry the same name, so that what is typed
-  // is what lands in the file.
-  for (const key of ["contact", "vault", "sites", "api"] as const) {
-    const given = value(key) ?? previous[key];
-    if (given !== undefined && given !== "") config[key] = given;
-  }
+  // The paths are written only if they are given or already set: see
+  // composeConfig, which `sitesolide setup` writes the file through too.
+  const config = composeConfig(
+    {
+      server: ask("server", "SSH target, user@host:", previous.server),
+      zone: ask("zone", "DNS zone served, e.g. example.com:", previous.zone),
+      email: ask("email", "Contact address for the certificate authority:", previous.email),
+    },
+    Object.fromEntries(OPTIONAL_SETTINGS.map((key) => [key, value(key)])),
+    previous,
+  );
 
   const path = configPath();
-  await Bun.write(path, `${JSON.stringify(config, null, 2)}\n`);
+  await writeConfig(path, config);
   console.log(`written: ${path}`);
   for (const [key, given] of Object.entries(config)) console.log(`  ${key}: ${given}`);
 }
@@ -2597,6 +2598,13 @@ if (import.meta.main) {
   if (command === "init") {
     await initialise(arguments_);
     process.exit(0);
+  }
+
+  // `setup` installs a machine and writes the configuration as it goes: it
+  // reads the one in place itself, to refuse one that names another server.
+  // See bin/cli/setup.ts.
+  if (command === "setup") {
+    process.exit(await (await import("./cli/setup")).setupCommand(arguments_.slice(1)));
   }
 
   // A team member's workstation has no server and no root: `login`, and the
@@ -2724,6 +2732,17 @@ if (import.meta.main) {
       console.error(
         [
           "usage:",
+          "  sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a no-op once done",
+          "     --zone <dns.zone> --email <you@example.com>",
+          "     --contact <you@example.com>   shown on a locked preview's door",
+          "     --user <name>                the account that deploys, deploy by default as root",
+          "     --skip-dns                   create the DNS records by hand: setup lists them and waits",
+          "     --dns-replace                replace records that point elsewhere, on your decision alone",
+          "     --cloudflare-token-stdin     read the Cloudflare token from standard input",
+          "     --minimal                    leave out backups, the team installer and the egress proxy",
+          "     --any-os                     go on with a system other than Debian 13, at your own risk",
+          "     --config-dir <dir>           another installation's own configuration folder",
+          "     --dry-run                    check every step, change nothing",
           "  sitesolide init                 write ~/.config/sitesolide/config.json",
           "     --server <user@host> --zone <dns.zone> --email <you@example.com>",
           "     --contact <you@example.com>   shown on a locked preview's door",
@@ -2760,6 +2779,7 @@ if (import.meta.main) {
           "                                  a team member: keep a token, deploy without SSH",
           "     --token-stdin                read the token from standard input",
           "  any command --api               go through the dashboard's API even with a server",
+          "  SITESOLIDE_CONFIG_DIR=<dir>     before any command: read that installation's configuration",
           "",
           "--json, on every command but init and run: one JSON event per line, see docs/agents.md",
           `secrets live on the server: manage them in the Secrets section of ${dashboardAddress(config.zone)}`,

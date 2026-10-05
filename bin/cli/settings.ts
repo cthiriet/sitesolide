@@ -26,7 +26,7 @@ export function settings(
   environment: Record<string, string | undefined>,
   home = homedir(),
 ): Record<string, string> {
-  const defaults = defaultPaths(home);
+  const defaults = defaultPaths(home, environment);
   const path = (raw: string | undefined | null, fallback: string): string =>
     raw === undefined || raw === null || raw === "" ? fallback : expandHome(raw, home);
 

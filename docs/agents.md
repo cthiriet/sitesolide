@@ -163,6 +163,7 @@ $ sitesolide deploy --dry-run --json
 | `file` | `name`, `content` | a generated systemd unit or Caddy block |
 | `inferred` | `kind`, `manifest`, `reasons`, `notes` | the manifest inferred for a folder without one |
 | `log` | `at`, `unit`, `priority`, `message` | one journal entry, for `logs` |
+| `check` | `step`, `status` (`done`, `ok`, `skip`, `todo`, `fail`), `title`, `detail` | one line of `setup`'s checklist |
 | `result` | `ok`, `command`, and the command's data | the end of a run that succeeded |
 | `error` | `message`, `details`, `hint` | the end of a run that failed |
 
@@ -178,6 +179,11 @@ What `result` carries:
 | `domain` | `slug`, `domain`: `name`, `aliases`, `active`, `table`, `dns`, `https` |
 | `remove` | `slug`, `dryRun` |
 | `share` | `slug`, `url`, `policy` (`mode`, `people`, `domains`), `inEffect`, `updatedAt`, `signIn`, `allowedDomains`, `message` (null until signing in with a work account is set up), `changed`, `previous` when changed |
+| `setup` | `dryRun`, `server`, `zone`, `steps` (each `step`, `status`, `detail`); after a real run also `dashboard`, `portal`, `configuration`, `ran`, `already`, `skipped`, `passwords`, `next` |
+
+**`setup` never puts a password in an event.** The dashboard's and the
+portal's, when a run draws them, go to standard error once, for the person at
+the terminal; `passwords` only says that they did. See [setup.md](setup.md).
 
 **`manifestWritten: true` means `sitesolide.json` changed on disk**: an
 inferred manifest, a port chosen, or a door the dashboard set. Commit it.
