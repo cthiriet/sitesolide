@@ -22,6 +22,7 @@ would.
 | read the server's status, a project's logs, its lock state | `--force` over a file someone edited on the machine |
 | share a project behind the portal with people or a domain, and read who may open it | make a site public, which is turning its portal off |
 | list the machines sitesolide created at a cloud provider | destroy one, unless you asked for that machine to be destroyed |
+| check a machine with `setup --dry-run`, and install it when you asked | replace DNS records that point elsewhere (`setup --dns-replace`), unless you decided it |
 | | read, set or guess a secret, a provider's token included |
 
 Secrets are set in the dashboard's *Secrets* section, by you. A deploy that
@@ -237,8 +238,8 @@ one command, and a message longer than a mebibyte is refused unread.
 
 ### Registering it
 
-The README links `bin/sitesolide.ts` as `~/.local/bin/sitesolide`. With that
-on your `PATH`:
+`install.sh` puts the `sitesolide` binary in `~/.local/bin`, see
+[install.md](install.md). With that on your `PATH`:
 
 **Claude Code**, for every project:
 
@@ -271,31 +272,38 @@ args = ["mcp"]
 ```
 
 **Any other client** that launches stdio servers: the command `sitesolide`,
-the argument `mcp`. Without the link on the `PATH`, give the full path:
-`bun /path/to/sitesolide/bin/sitesolide.ts mcp`.
+the argument `mcp`. Without it on the `PATH`, give the binary's full path, or
+from a checkout `bun /path/to/sitesolide/bin/sitesolide.ts mcp`.
 
 ## The skill
 
 `skills/sitesolide/SKILL.md` teaches an agent the workflow: detect, review the
 manifest with you, dry-run, deploy, read the result, share it with the people
-who need it, read the logs when something fails, and where secrets go. Claude Code finds it in
-`~/.claude/skills/`:
+who need it, read the logs when something fails, and where secrets go. Claude
+Code finds it in `~/.claude/skills/`. The binary does not carry it: from a
+clone of this repository, link it,
 
 ```bash
 mkdir -p ~/.claude/skills
 ln -s "$PWD/skills/sitesolide" ~/.claude/skills/sitesolide
 ```
 
-or, for one repository only, in its `.claude/skills/`. It works with the MCP
-server or without it, through the CLI.
+or copy `skills/sitesolide/SKILL.md` into `~/.claude/skills/sitesolide/`, or,
+for one repository only, into its `.claude/skills/sitesolide/`. It works with
+the MCP server or without it, through the CLI.
 
 ## llms.txt
 
-`llms.txt`, at the root of the repository, is the index of these documents in
-the [llmstxt.org](https://llmstxt.org) format, for an agent that reads before
-it acts.
+`llms.txt`, at the root of the repository, is what an agent reads before it
+acts, in the [llmstxt.org](https://llmstxt.org) format: how to tell whether
+sitesolide is set up, the deploy loop, the `--json` contract, the MCP tools,
+team tokens, sharing, a new server, the rules an agent never breaks, and links
+to these documents.
 
-## Upgrading
+## Upgrading from 0.1
+
+Agents arrived in 0.2: a workstation on 0.2 or later has all of this, and
+[upgrading.md](upgrading.md) is the order from one release to the next.
 
 Everything here runs on the workstation. **Nothing changes on the machine**,
 and nothing has to be run there: the commands send the same remote commands
