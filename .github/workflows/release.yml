@@ -33,6 +33,10 @@ jobs:
   release:
     runs-on: macos-15
     timeout-minutes: 45
+    env:
+      # The tag on a release, dev on a run by hand: bin/build.ts accepts
+      # nothing else, and a branch name is neither.
+      VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'dev' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
@@ -61,7 +65,7 @@ jobs:
       # Builds the dashboard's interface too, once, for the kit every binary
       # carries: its packages come from npm, hence the network this needs.
       - name: Build
-        run: bun bin/build.ts --version "$GITHUB_REF_NAME"
+        run: bun bin/build.ts --version "$VERSION"
 
       # The runner is an arm64 Mac: the binary it can start says it carries
       # the tag, and answers without Bun, a configuration or the repository's
@@ -70,7 +74,7 @@ jobs:
       - name: Check
         run: |
           set -euo pipefail
-          test "$(dist/sitesolide-darwin-arm64 --version)" = "sitesolide $GITHUB_REF_NAME"
+          test "$(dist/sitesolide-darwin-arm64 --version)" = "sitesolide $VERSION"
           cd "$RUNNER_TEMP"
           env -i HOME="$RUNNER_TEMP/home" PATH=/usr/bin:/bin "$GITHUB_WORKSPACE/dist/sitesolide-darwin-arm64" --help > /dev/null
           (cd "$GITHUB_WORKSPACE/examples/bun-app" && env -i HOME="$RUNNER_TEMP/home" PATH=/usr/bin:/bin "$GITHUB_WORKSPACE/dist/sitesolide-darwin-arm64" detect --json > /dev/null)
