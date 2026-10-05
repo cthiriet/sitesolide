@@ -134,10 +134,15 @@ code="$(ssh -n "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s -o /dev/null
 [ "$code" = "200" ] || fail "site-dashboard does not get 200 on /projects (got: ${code:-nothing})"
 
 # And the list carries every deployed site, not only those of an old exclusion:
-# each site is an object with a `"slug":` there, and no file carries one. A
-# single site would mean a broken perimeter, or /srv/sites unreadable.
+# each site is an object with a `"slug":` there, and no file carries one. Fewer
+# than /srv/sites holds would mean a broken perimeter, or /srv/sites
+# unreadable. The count comes from the machine: the check used to demand more
+# than one, and a fresh install, where the guide deploys the steward right after
+# the dashboard, has exactly one.
+folders="$(ssh -n "$SITESOLIDE_SERVER" "find /srv/sites -mindepth 1 -maxdepth 1 -type d | wc -l" | tr -d ' ' || true)"
 sites="$(ssh -n "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s --max-time 10 --unix-socket $SOCKET http://steward/projects" | grep -o '"slug":' | wc -l | tr -d ' ' || true)"
-[ "${sites:-0}" -gt 1 ] || fail "/projects only lists ${sites:-0} site under site-dashboard, expected all those of /srv/sites"
+[ "${sites:-0}" -ge 1 ] && [ "${sites:-0}" -ge "${folders:-1}" ] \
+  || fail "/projects only lists ${sites:-0} site(s) under site-dashboard, expected the ${folders:-?} of /srv/sites"
 echo "   $sites sites listed by the steward"
 
 # The gatekeeper is another unit, deposited by bin/deploy-gatekeeper.sh: two

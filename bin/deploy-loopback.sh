@@ -270,18 +270,28 @@ printf "   caddy %s, other %s, dashboard %s (expected for the last two %s)  %s\n
   "$admin_caddy" "$admin_other" "$admin_dashboard" "$expected_admin" "$verdict"
 
 echo "-> each site, over HTTPS"
-ADDRESSES=("https://$SITESOLIDE_ZONE/")
+# The bare domain is the landing's, queried like any project only when it
+# serves something: a fresh machine has no landing yet, and its 404 there,
+# by design, undid the rule on every first install, as in bin/deploy-caddy.sh.
+ADDRESSES=()
 while IFS= read -r slug; do
-  [ -n "$slug" ] && [ "$slug" != "$SITESOLIDE_ZONE" ] && ADDRESSES+=("https://$slug.$SITESOLIDE_ZONE/")
+  [ -n "$slug" ] || continue
+  if [ "$slug" = "$SITESOLIDE_ZONE" ]; then
+    ADDRESSES+=("https://$SITESOLIDE_ZONE/")
+  else
+    ADDRESSES+=("https://$slug.$SITESOLIDE_ZONE/")
+  fi
 done < <(ssh "$SITESOLIDE_SERVER" '
   for folder in /srv/sites/*/; do
+    [ -d "$folder" ] || continue
     slug=$(basename "$folder")
     if [ -n "$(ls -A "$folder/public" 2>/dev/null)" ] || systemctl is-active --quiet "$slug"; then
       echo "$slug"
     fi
   done')
-for address in "${ADDRESSES[@]}"; do
-  code="$(curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$address" 2>/dev/null || echo 000)"
+for address in ${ADDRESSES[@]+"${ADDRESSES[@]}"}; do
+  # curl already writes 000 when nothing answers; an `|| echo 000` doubled it.
+  code="$(curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$address" 2>/dev/null || true)"
   case "$code" in
     200|401) printf "   %-44s %s\n" "$address" "$code" ;;
     *) printf "   %-44s %s  FAILED\n" "$address" "$code"; FAILURES=$((FAILURES + 1)) ;;

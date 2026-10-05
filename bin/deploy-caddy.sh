@@ -422,15 +422,23 @@ done < <(ssh "$SITESOLIDE_SERVER" '
   # That case came up on 19 August 2026: a project refused in the middle of its
   # deployment, for want of a secret, already had its folder. The reload of
   # Caddy had nothing to do with it.
+  #
+  # On a machine with no project yet the glob matches nothing and stays
+  # literal: the slug became "*", `systemctl is-active "*"` matched Caddy
+  # itself, and https://*.<zone>/ was queried and failed a first install.
   for folder in /srv/sites/*/; do
+    [ -d "$folder" ] || continue
     slug=$(basename "$folder")
     if [ -n "$(ls -A "$folder/public" 2>/dev/null)" ] || systemctl is-active --quiet "$slug"; then
       echo "$slug"
     fi
   done')
 
+# curl already writes 000 when it gets no answer, and exits non-zero: an
+# `|| echo 000` appended a second one, the code read 000000, and the wait below
+# for a first install's certificates never started.
 probe() {
-  curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$1" 2>/dev/null || echo 000
+  curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$1" 2>/dev/null || true
 }
 
 FAILURES=0
