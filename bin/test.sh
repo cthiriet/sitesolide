@@ -47,7 +47,12 @@ done
 
 # The tools of the sites repository, in its bin/, with their tests. They live
 # over there because they belong to the sites themselves, not to the platform.
-if [ -d "${SITESOLIDE_SITES_REPO:-}/bin" ]; then
+#
+# Only when there is one: an empty SITESOLIDE_SITES_REPO made the test read
+# "/bin", which every machine has, and the `cd` into nothing then ran this
+# repository's own bin/ tests a second time, from its root. That is what a
+# machine without a sites repository, the release workflow's, would do.
+if [ -n "${SITESOLIDE_SITES_REPO:-}" ] && [ -d "$SITESOLIDE_SITES_REPO/bin" ]; then
   echo
   echo "=== tools of the sites repository"
   if ! (cd "${SITESOLIDE_SITES_REPO:-}" && bun test bin/); then
