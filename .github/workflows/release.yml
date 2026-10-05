@@ -17,6 +17,10 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Run by hand on a branch, `gh workflow run release.yml --ref main`: the
+  # same tests, build and check on the runner, and nothing published. The
+  # first tag found failures this Mac never showed; a rehearsal costs no tag.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -42,6 +46,15 @@ jobs:
         with:
           bun-version: 1.3.11
 
+      # What the tests run against, in the log: the runner's image moves, and a
+      # failure there is read against these versions.
+      - name: Toolchain
+        run: |
+          sw_vers
+          bun --version
+          which -a openssl
+          openssl version
+
       - name: Tests
         run: bin/test.sh
 
@@ -63,6 +76,7 @@ jobs:
           (cd "$GITHUB_WORKSPACE/examples/bun-app" && env -i HOME="$RUNNER_TEMP/home" PATH=/usr/bin:/bin "$GITHUB_WORKSPACE/dist/sitesolide-darwin-arm64" detect --json > /dev/null)
 
       - name: Publish
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}

@@ -295,8 +295,14 @@ export function unpackKit(archive: Uint8Array<ArrayBuffer>, hash: string, destin
     writeFileSync(marker, `${JSON.stringify({ version, hash, files: header.files.length })}\n`);
     chmodSync(marker, 0o444);
     // The folders last, the deepest first: each one closed once nothing is
-    // left to write in it.
-    for (const folder of [...folders].sort((a, b) => b.length - a.length)) chmodSync(folder, 0o555);
+    // left to write in it. All but the kit's own root, which place() closes
+    // once it has its name: macOS 15 refuses to rename a folder its owner
+    // cannot write (EACCES), which macOS 26 and Linux allow. GitHub's macOS
+    // runner met it on the first release built there, and so would every
+    // workstation on that system, at the binary's first run.
+    for (const folder of [...folders].sort((a, b) => b.length - a.length)) {
+      if (folder !== temporary) chmodSync(folder, 0o555);
+    }
     place(temporary, destination, hash);
   } finally {
     removeTree(temporary);
@@ -314,6 +320,7 @@ function place(temporary: string, destination: string, hash: string): void {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       renameSync(temporary, destination);
+      chmodSync(destination, 0o555);
       return;
     } catch (error) {
       failure = error;
@@ -322,6 +329,9 @@ function place(temporary: string, destination: string, hash: string): void {
     if (attempt === 0 && existsSync(destination)) {
       const aside = sibling(destination, "aside");
       try {
+        // Writable for the rename, as above: a read-only folder cannot be
+        // moved on macOS 15. A real folder only: chmod would follow a link.
+        if (lstatSync(destination).isDirectory()) chmodSync(destination, 0o755);
         renameSync(destination, aside);
       } catch {
         // Another run set it aside first.
