@@ -13,8 +13,9 @@
  * anywhere is finished by running the same command again.
  *
  * `create` stops once the machine accepts connections on port 22, and prints
- * the `setup` command that comes next. It hardens nothing: cloud-init ran once
- * and could not be checked, `setup` runs over SSH and can be run again.
+ * the `setup` command that comes next. It hardens nothing: cloud-init, which
+ * did it up to 0.2, ran once and could not be checked; `setup` runs over SSH
+ * and can be run again.
  *
  * **The token.** It comes from the provider's usual environment variable,
  * HCLOUD_TOKEN for Hetzner, or from standard input with `--token-stdin`, and

@@ -4,7 +4,7 @@
  *
  *   configuration      ~/.config/sitesolide/config.json, as `init` writes it
  *   dns                the zone and its wildcard at the machine, through Cloudflare's API
- *   packages ... fail2ban   the hardening of infra/cloud-init.yaml, see bin/cli/harden.ts
+ *   packages ... fail2ban   the hardening, see bin/cli/harden.ts
  *   caddy, bun         from their own repositories, Caddy with the Cloudflare module
  *   cloudflare-token   /etc/caddy/cloudflare.env, root:caddy 0640
  *   resolution         this workstation resolves the zone to the machine

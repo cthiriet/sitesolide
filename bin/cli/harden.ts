@@ -1,7 +1,8 @@
 /**
- * The hardening `sitesolide setup` applies to a fresh machine: what
- * infra/cloud-init.yaml does at a first boot, done over ssh instead, so that a
- * machine from any provider gets it.
+ * The hardening `sitesolide setup` applies to a fresh machine: what the
+ * cloud-init file of 0.2 and earlier did at a first boot, done over ssh
+ * instead, so that a machine from any provider gets it and a run can be
+ * checked and repeated.
  *
  *   packages      sudo ufw fail2ban unattended-upgrades rsync git curl unzip, and nft;
  *                 fail2ban installed without being started
@@ -144,8 +145,8 @@ export function shellQuote(value: string): string {
 // --- packages ------------------------------------------------------------------
 
 /**
- * cloud-init's list, and sudo, which a minimal image may lack while every step
- * after the hardening runs through it.
+ * The list cloud-init installed up to 0.2, and sudo, which a minimal image
+ * may lack while every step after the hardening runs through it.
  */
 export const PACKAGES = ["sudo", "ufw", "fail2ban", "unattended-upgrades", "rsync", "git", "curl", "unzip"] as const;
 
@@ -368,7 +369,7 @@ export function fail2banRelease(address: string): string {
   return runScript("setup:fail2ban:release", `fail2ban-client set sshd delignoreip '${address}' >/dev/null </dev/null`);
 }
 
-/** The file cloud-init writes, word for word: apt reads it, and so does unattended-upgrades. */
+/** The file cloud-init wrote up to 0.2, word for word: apt reads it, and so does unattended-upgrades. */
 export const AUTO_UPGRADES = 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n';
 
 export function updatesCheck(): string {
@@ -385,7 +386,7 @@ export function updatesRun(): string {
   );
 }
 
-/** What cloud-init made: the served sites, the shared service's releases, and its data. */
+/** What cloud-init made up to 0.2: the served sites, the shared service's releases, and its data. */
 export const DIRECTORIES = ["/srv/sites", "/srv/api", "/srv/data"] as const;
 
 export function directoriesCheck(): string {
