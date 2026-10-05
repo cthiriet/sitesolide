@@ -20,9 +20,11 @@ import { createAccounts, project, tree } from "./backup-fixtures";
  * time, and nothing of its tree reaches the status file.
  */
 const roots: string[] = [];
+// A minute: the folder of too many names takes its time to remove, and on
+// GitHub's runner it took more than the five seconds a hook gets by default.
 afterAll(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
-});
+}, 60_000);
 function scratch(): string {
   const root = mkdtempSync(join(tmpdir(), "backup-bounds-"));
   roots.push(root);

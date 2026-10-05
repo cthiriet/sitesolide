@@ -62,11 +62,15 @@ export function authority(leaves: string[][]): { ca: string; leaves: { cert: str
     if (result.exitCode !== 0) throw new Error(`openssl: ${result.stderr.toString()}`);
   };
   try {
+    // The authority's extensions from a configuration of its own, never -addext:
+    // OpenSSL 1.1, first on the PATH of GitHub's macOS runner, applies its
+    // default v3_ca section as well, the certificate carries basicConstraints
+    // twice, and Bun refuses every leaf it signed. LibreSSL and OpenSSL 3 agree.
+    writeFileSync(join(folder, "authority.cnf"), "[req]\ndistinguished_name = dn\n[dn]\n[authority]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign,cRLSign\nsubjectKeyIdentifier = hash\n");
     run([
       "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "1",
       "-subj", "/CN=sitesolide test authority",
-      "-addext", "basicConstraints=critical,CA:TRUE",
-      "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+      "-config", "authority.cnf", "-extensions", "authority",
     ]);
     const issued = leaves.map((names, index) => {
       run(["req", "-newkey", "rsa:2048", "-nodes", "-keyout", `${index}.key`, "-out", `${index}.csr`, "-subj", `/CN=${names[0]}`]);

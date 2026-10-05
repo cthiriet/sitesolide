@@ -189,8 +189,13 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
 
   beforeAll(async () => {
     // Test authority and certificate, for the zone and its wildcard.
+    // The authority's extensions from a configuration of its own, never -addext:
+    // OpenSSL 1.1, first on the PATH of GitHub's macOS runner, applies its
+    // default v3_ca section as well, the certificate carries basicConstraints
+    // twice, and Bun refuses every leaf it signed. LibreSSL and OpenSSL 3 agree.
+    writeFileSync(join(D, "authority.cnf"), "[req]\ndistinguished_name = dn\n[dn]\n[authority]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign\nsubjectKeyIdentifier = hash\n");
     openssl(D, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
-      "-subj", "/CN=Gatekeeper sample", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign");
+      "-subj", "/CN=Gatekeeper sample", "-config", "authority.cnf", "-extensions", "authority");
     openssl(D, "req", "-newkey", "rsa:2048", "-nodes", "-keyout", "site.key", "-out", "site.csr", "-subj", `/CN=${ZONE}`);
     writeFileSync(
       join(D, "site.ext"),

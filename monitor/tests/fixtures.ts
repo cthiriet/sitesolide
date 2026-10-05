@@ -17,8 +17,13 @@ export function openssl(folder: string, ...arguments_: string[]): void {
 
 /** A test authority in `folder`, `ca.pem` and `ca.key`. */
 export function drawAuthority(folder: string): void {
+  // The authority's extensions from a configuration of its own, never -addext:
+  // OpenSSL 1.1, first on the PATH of GitHub's macOS runner, applies its
+  // default v3_ca section as well, the certificate carries basicConstraints
+  // twice, and Bun refuses every leaf it signed. LibreSSL and OpenSSL 3 agree.
+  writeFileSync(join(folder, "authority.cnf"), "[req]\ndistinguished_name = dn\n[dn]\n[authority]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign\nsubjectKeyIdentifier = hash\n");
   openssl(folder, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "90",
-    "-subj", "/CN=Monitor sample", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign");
+    "-subj", "/CN=Monitor sample", "-config", "authority.cnf", "-extensions", "authority");
 }
 
 /** `<name>.pem` and `<name>.key`, signed by the authority, for these names, valid this many days. */

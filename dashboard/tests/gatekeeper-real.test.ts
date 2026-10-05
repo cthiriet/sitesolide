@@ -309,8 +309,13 @@ describe.skipIf(OPENSSL === null)("the probe reads at most MAX_BODY bytes", () =
   }
 
   beforeAll(() => {
+    // The authority's extensions from a configuration of its own, never -addext:
+    // OpenSSL 1.1, first on the PATH of GitHub's macOS runner, applies its
+    // default v3_ca section as well, the certificate carries basicConstraints
+    // twice, and Bun refuses every leaf it signed. LibreSSL and OpenSSL 3 agree.
+    writeFileSync(join(T, "authority.cnf"), "[req]\ndistinguished_name = dn\n[dn]\n[authority]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign\nsubjectKeyIdentifier = hash\n");
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
-      "-subj", "/CN=Probe sample", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign");
+      "-subj", "/CN=Probe sample", "-config", "authority.cnf", "-extensions", "authority");
     openssl("req", "-newkey", "rsa:2048", "-nodes", "-keyout", "site.key", "-out", "site.csr", "-subj", "/CN=test-zone.invalid");
     writeFileSync(join(T, "site.ext"), "subjectAltName=DNS:*.test-zone.invalid\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n");
     openssl("x509", "-req", "-in", "site.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "site.pem",
@@ -438,8 +443,10 @@ describe.skipIf(OPENSSL === null)("the probe names the site in the TLS handshake
   }
 
   beforeAll(() => {
+    // As above: the authority's extensions from its own configuration.
+    writeFileSync(join(T, "authority.cnf"), "[req]\ndistinguished_name = dn\n[dn]\n[authority]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign\nsubjectKeyIdentifier = hash\n");
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
-      "-subj", "/CN=Probe SNI", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign");
+      "-subj", "/CN=Probe SNI", "-config", "authority.cnf", "-extensions", "authority");
     ca = readFileSync(join(T, "ca.pem"), "utf8");
     server = Bun.serve({
       port: 0,
