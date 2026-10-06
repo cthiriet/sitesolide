@@ -25,9 +25,10 @@
  *   the whole database in memory and writes a file still flagged WAL, which a
  *   read-only connection then cannot open; `VACUUM INTO` streams to disk, uses
  *   no extra memory and writes a plain rollback-journal file;
- * - every other regular file as it is, read once, exactly the size `lstat`
- *   gave: a file that changes meanwhile is padded or cut, as `tar` does, and
- *   the summary says so;
+ * - every other regular file as it is, read once, exactly the size it had
+ *   once opened: a file that changes meanwhile is padded or cut, as `tar`
+ *   does, and the summary says so; one replaced whole since it was listed is
+ *   archived as the version opened;
  * - folders as folders, empty ones included;
  * - symbolic links, sockets, pipes and devices are left out and named in the
  *   summary: a link restored as root could point anywhere.
@@ -49,8 +50,8 @@
  * refuse.
  */
 import { Database } from "bun:sqlite";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, rmSync, statSync, type Stats } from "node:fs";
-import { open } from "node:fs/promises";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, rmSync, type Stats } from "node:fs";
+import { open, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { TarWriter, gzipSink, type EntryMeta, type Sink } from "./tar";
 
@@ -150,23 +151,30 @@ export function isSqlite(path: string): boolean {
   }
 }
 
-/** Exactly `size` bytes of a file, or fewer if it shrank, in chunks of 64 KiB. */
-async function* readExactly(path: string, expected: Stats, size: number): AsyncGenerator<Uint8Array> {
+/**
+ * A file opened without following a link, never blocking, and what `fstat`
+ * says of what was opened: what is archived is described by the file read,
+ * never by an earlier look at its name.
+ */
+async function openFile(path: string): Promise<{ handle: FileHandle; stat: Stats }> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    const seen = fstatSync(handle.fd);
-    // What is read is the file that was looked at, not one swapped in since.
-    if (seen.ino !== expected.ino || seen.dev !== expected.dev) throw new CopyError("a file was replaced while being copied");
-    let position = 0;
-    while (position < size) {
-      const buffer = new Uint8Array(Math.min(64 * 1024, size - position));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, position);
-      if (bytesRead === 0) return;
-      position += bytesRead;
-      yield bytesRead === buffer.byteLength ? buffer : buffer.subarray(0, bytesRead);
-    }
-  } finally {
+    return { handle, stat: fstatSync(handle.fd) };
+  } catch (error) {
     await handle.close();
+    throw error;
+  }
+}
+
+/** Exactly `size` bytes of an open file, or fewer if it shrank, in chunks of 64 KiB. */
+async function* readExactly(handle: FileHandle, size: number): AsyncGenerator<Uint8Array> {
+  let position = 0;
+  while (position < size) {
+    const buffer = new Uint8Array(Math.min(64 * 1024, size - position));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, position);
+    if (bytesRead === 0) return;
+    position += bytesRead;
+    yield bytesRead === buffer.byteLength ? buffer : buffer.subarray(0, bytesRead);
   }
 }
 
@@ -362,10 +370,14 @@ export async function copyData(dataDir: string, stagingDir: string, sink: Sink, 
           throw new CopyError(`a database could not be copied (${describeError(error)})`, rel, "database");
         }
         try {
-          const copied = statSync(copy);
-          spend(copied.size, rel);
-          await tar.file(archived, metaOf(stat), copied.size, readExactly(copy, copied, copied.size));
-          summary.bytes += copied.size;
+          const copied = await openFile(copy);
+          try {
+            spend(copied.stat.size, rel);
+            await tar.file(archived, metaOf(stat), copied.stat.size, readExactly(copied.handle, copied.stat.size));
+            summary.bytes += copied.stat.size;
+          } finally {
+            await copied.handle.close();
+          }
         } finally {
           rmSync(copy, { force: true });
         }
@@ -374,18 +386,35 @@ export async function copyData(dataDir: string, stagingDir: string, sink: Sink, 
         continue;
       }
 
-      // Before a byte is read: a file grown to a terabyte stops the copy now, not in an hour.
-      spend(stat.size, rel);
+      // Opened first, and archived as what was opened. A service that writes a
+      // file whole and renames it over the old one swaps the name between the
+      // listing above and this read: the dashboard's collector does so with
+      // state.json every minute. Either version is complete, and the one
+      // opened is the one kept. Refused instead, it failed the dashboard's
+      // whole snapshot on a fresh machine, measured on 6 October 2026.
+      let opened: { handle: FileHandle; stat: Stats };
+      try {
+        opened = await openFile(path);
+      } catch (error) {
+        // Gone since it was listed, like a file gone before its lstat.
+        if ((error as { code?: string }).code === "ENOENT") continue;
+        throw new CopyError(`a file of the data could not be read or archived (${describeError(error)})`, rel);
+      }
       let outcome: Awaited<ReturnType<TarWriter["file"]>>;
       try {
-        outcome = await tar.file(archived, metaOf(stat), stat.size, readExactly(path, stat, stat.size));
+        if (!opened.stat.isFile()) throw new CopyError("a file was replaced by something other than a file while being copied", rel);
+        // Before a byte is read: a file grown to a terabyte stops the copy now, not in an hour.
+        spend(opened.stat.size, rel);
+        outcome = await tar.file(archived, metaOf(opened.stat), opened.stat.size, readExactly(opened.handle, opened.stat.size));
       } catch (error) {
-        if (error instanceof CopyError) throw new CopyError(error.message, rel);
+        if (error instanceof CopyError) throw error;
         throw new CopyError(`a file of the data could not be read or archived (${describeError(error)})`, rel);
+      } finally {
+        await opened.handle.close();
       }
       if (outcome !== "exact") summary.changed.push(rel);
       summary.files++;
-      summary.bytes += stat.size;
+      summary.bytes += opened.stat.size;
     }
   }
 

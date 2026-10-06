@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { closeSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { closeSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { copyBudget, copyData, CopyError, GROWTH_FLOOR, measureData } from "../src/backup/copy";
@@ -248,6 +249,45 @@ describe("a file grown after it was measured", () => {
     expect(copyBudget(0, 1024 ** 4)).toBe(GROWTH_FLOOR);
     expect(copyBudget(1024 ** 3, 1024 ** 4)).toBe(1024 ** 3 + 1024 ** 3 / 4);
     expect(copyBudget(1024 ** 3, 1024 ** 3 + 1)).toBe(1024 ** 3 + 1);
+  });
+});
+
+describe("a file a service replaces whole while the copy runs", () => {
+  test("is archived as the version opened, and the snapshot is taken", async () => {
+    const root = scratch();
+    const data = join(root, "data");
+    mkdirSync(data);
+    mkdirSync(join(root, "staging"));
+    // Listed before state.json, and incompressible: the compressor hands its
+    // bytes to the sink while it is archived, that is after state.json was
+    // listed and before it is opened.
+    writeFileSync(join(data, "a.bin"), randomBytes(4 * 1024 * 1024));
+    writeFileSync(join(data, "state.json"), '{"version":1}');
+    const archive = memory();
+    let written = 0;
+    let replaced = false;
+    const sink: Sink = {
+      async write(bytes) {
+        written += bytes.byteLength;
+        if (!replaced && written > 1024 * 1024) {
+          // What the dashboard's collector does every minute: the whole file
+          // written aside, then renamed over the old one.
+          writeFileSync(join(root, "next.json"), '{"version":2}');
+          renameSync(join(root, "next.json"), join(data, "state.json"));
+          replaced = true;
+        }
+        await archive.write(bytes);
+      },
+      close: () => archive.close(),
+    };
+    const summary = await copyData(data, join(root, "staging"), sink, { folder: "ledger", takenAt: T, maxBytes: 1 << 30 });
+    expect(replaced).toBe(true);
+    expect(summary).toMatchObject({ files: 2, changed: [] });
+    const destination = join(root, "restored");
+    mkdirSync(destination);
+    await extractData(archive.stream(), destination, { maxEntries: 10, maxBytes: 1 << 30 });
+    // The version renamed in, whole: the swap did land between the listing and the read.
+    expect(readFileSync(join(destination, "state.json"), "utf8")).toBe('{"version":2}');
   });
 });
 
