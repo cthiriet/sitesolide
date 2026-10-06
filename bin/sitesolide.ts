@@ -216,6 +216,27 @@ import {
 
 const MANIFEST_NAME = "sitesolide.json";
 
+/**
+ * Sets what a deployment has just sent to the modes the control API's archive
+ * gives: directories and executables 755, the rest 644.
+ *
+ * rsync -a carries the workstation's modes, and what it sends is read by
+ * another account than the one that owns it: the service as site-<slug>, the
+ * public files as caddy. A file written under a umask of 077 landed 0600, and
+ * the service died on EACCES at startup. Measured on 6 October 2026, the
+ * dashboard's borrowed/ copies on a fresh machine. Done on the machine rather
+ * than with rsync's --chmod, which the openrsync macOS ships ignores without a
+ * word, locally and remotely alike.
+ *
+ * Only what the deployment account owns, which is what rsync wrote: app/ also
+ * holds what `install` left there as site-<slug>, and a chmod -R would stop on
+ * the first of those files. Those are pruned, not entered: a directory of
+ * theirs may well be closed to this account.
+ */
+function sentModesCommand(path: string): string {
+  return `find ${path} ! -user "$(id -un)" -prune -o -exec chmod u+rwX,go=rX {} +`;
+}
+
 type Project = {
   /** Where sitesolide.json lives, and where a door changed from the dashboard is written back. */
   folder: string;
@@ -966,6 +987,7 @@ async function deploy(
       `${project.code}/`,
       `${config.server}:${paths.app}/`,
     ]);
+    await executor.ssh(config, sentModesCommand(paths.app));
   }
 
   const publicDir = publicFolder(project);
@@ -984,6 +1006,7 @@ async function deploy(
       `${publicDir}/`,
       `${config.server}:${paths.publicDir}/`,
     ]);
+    await executor.ssh(config, sentModesCommand(paths.publicDir));
   }
 
   await enterUnderLock();
