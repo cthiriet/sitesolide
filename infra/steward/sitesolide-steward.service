@@ -50,10 +50,15 @@ RestartSec=2
 # learns one more name there. StateDirectory makes it writable despite
 # ProtectSystem=strict, without ReadWritePaths (measured).
 #
+# /run/sitesolide-steward-owner, created the same way: the owner's socket,
+# which only root opens, for `sitesolide members` over the owner's SSH. A
+# folder of its own, since the dashboard's socket needs one of its own; the
+# steward closes it to 0700 and its socket to 0600, root's alone.
+#
 # UMask=0077: what it creates belongs to it alone, the socket receives its
 # permissions separately.
 UMask=0077
-RuntimeDirectory=sitesolide-steward
+RuntimeDirectory=sitesolide-steward sitesolide-steward-owner
 RuntimeDirectoryMode=0750
 StateDirectory=sitesolide-steward
 StateDirectoryMode=0700
@@ -99,6 +104,13 @@ ReadWritePaths=/etc/sitesolide
 # nothing more. The dash: the folder only exists once bin/deploy-egress.sh has
 # run, and a missing one must not fail the unit with 226/NAMESPACE.
 ReadWritePaths=-/etc/sitesolide-egress
+# The key pair members sign in with: the steward draws it, keeps the public
+# half in its own state folder, and lays the private half here,
+# root:site-portal 0640, where the portal reads it and the dashboard cannot.
+# The folder is root's, 0755, created by bin/deploy-steward.sh; the dash: a
+# machine where it is missing starts the steward as before, and members
+# cannot sign in until it exists.
+ReadWritePaths=-/etc/sitesolide-portal
 # The backup component's state (dashboard/src/backup/README.md): the steward
 # writes a restore request there, the one-shot that restores consumes it, and
 # it reads the component's database, whose WAL connection must write its -shm.

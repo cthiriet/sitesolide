@@ -6,10 +6,13 @@
 import { remainingWait, isPasswordValid, isAcceptableSubmission } from "./auth";
 import { invitableHosts, type Portal } from "./guests";
 import { read } from "./read";
+import { memberReading } from "./members/view";
+import type { Roles } from "./members/protocol";
 import {
   clearCookie,
   readCookie,
   isAcceptableOrigin,
+  isMemberSession,
   setCookie,
   isSessionAlive,
   type Session,
@@ -20,7 +23,8 @@ export type Store = {
   readSession: (token: string) => Promise<Session | null>;
   touchSession: (hash: string, now: number) => void;
   closeSession: (hash: string) => void;
-  purgeSessions: (before: number) => void;
+  /** The owner's sessions opened before `before`, a member's before `memberBefore`. */
+  purgeSessions: (before: number, memberBefore?: number) => void;
   readAttempts: () => { failures: number; lastAt: number };
   setAttempts: (failures: number, lastAt: number) => void;
 };
@@ -30,8 +34,21 @@ export type Options = {
   publicUrl: string;
   online: boolean;
   sessionDurationMs: number;
+  /** A member's session: half a day, whatever the owner's is. Absent, the owner's. */
+  memberSessionDurationMs?: number;
   stateFile: string;
   portal: Portal;
+  /**
+   * The roles that bound what a session sees of the snapshot: null for the
+   * owner, who sees the whole machine. Absent, everyone sees it whole, as
+   * before members. See src/members/view.ts.
+   */
+  roles?: (req: Request, now: number) => Promise<Roles | null | "no-session" | "unreachable">;
+  /**
+   * Called on signing out a member with their session's token: the steward
+   * closes its side and journals it. Never rejects.
+   */
+  memberSignOut?: (token: string) => Promise<void>;
   /**
    * Called on signing out with the hash of the closed session: the dashboard
    * forgets there the unlocking of the secrets and revokes it at the steward.
@@ -83,10 +100,13 @@ export type SessionReader = (req: Request, now: number) => Promise<Session | nul
  *
  * Built apart so that the secrets routes check the session by this same path
  * rather than by a copy, which would end up diverging.
+ *
+ * It reads the owner's sessions and the members' alike: `ownerSessions` keeps
+ * the first alone, for every route that is the super admin's.
  */
 export function createSessionReader(
   store: Pick<Store, "readSession" | "touchSession" | "closeSession">,
-  options: Pick<Options, "online" | "sessionDurationMs">,
+  options: Pick<Options, "online" | "sessionDurationMs" | "memberSessionDurationMs">,
 ): SessionReader {
   return async (req, now) => {
     const token = readCookie(req.headers.get("cookie"), options.online);
@@ -95,7 +115,7 @@ export function createSessionReader(
     const found = await store.readSession(token);
     if (found === null) return null;
 
-    if (!isSessionAlive(found, options.sessionDurationMs, now)) {
+    if (!isSessionAlive(found, options.sessionDurationMs, now, options.memberSessionDurationMs)) {
       store.closeSession(found.hash);
       return null;
     }
@@ -107,8 +127,22 @@ export function createSessionReader(
   };
 }
 
+/**
+ * The same reader, for the owner's sessions alone: a member's reads as no
+ * session. Every route that is the super admin's takes this one, so that a
+ * route forgetting to ask who is signed in still refuses a member.
+ */
+export function ownerSessions(reader: SessionReader): SessionReader {
+  return async (req, now) => {
+    const found = await reader(req, now);
+    return found !== null && !isMemberSession(found) ? found : null;
+  };
+}
+
 export function createRoutes(store: Store, options: Options, clock: () => number = Date.now): Routes {
   const session = createSessionReader(store, options);
+  // Guest access is the super admin's: a member's session reads as none.
+  const owner = ownerSessions(session);
 
   /**
    * The password attempts go through one by one, from the reading of the
@@ -188,7 +222,7 @@ export function createRoutes(store: Store, options: Options, clock: () => number
         }
 
         store.setAttempts(0, 0);
-        store.purgeSessions(now - options.sessionDurationMs);
+        store.purgeSessions(now - options.sessionDurationMs, now - (options.memberSessionDurationMs ?? options.sessionDurationMs));
         const token = await store.openSession(now);
 
         return Response.json(
@@ -207,9 +241,16 @@ export function createRoutes(store: Store, options: Options, clock: () => number
       const open = await session(req, now);
       if (open !== null) {
         store.closeSession(open.hash);
-        // Failing which the steward's token would survive the session that
-        // obtained it, until its expiry.
-        await options.forgetUnlock?.(open.hash);
+        if (isMemberSession(open)) {
+          // The steward holds the member's session too: it closes its side
+          // and journals the sign-out under the member's email.
+          const token = readCookie(req.headers.get("cookie"), options.online);
+          if (token !== null) await options.memberSignOut?.(token);
+        } else {
+          // Failing which the steward's token would survive the session that
+          // obtained it, until its expiry.
+          await options.forgetUnlock?.(open.hash);
+        }
       }
 
       // The cookie is erased even without a session: an already expired
@@ -225,14 +266,20 @@ export function createRoutes(store: Store, options: Options, clock: () => number
       if ((await session(req, now)) === null) {
         return Response.json({ error: "no-session" }, { status: 401 });
       }
+      // A member sees their projects alone; the owner, the whole machine.
+      const roles = options.roles === undefined ? null : await options.roles(req, now);
+      if (roles === "no-session") return Response.json({ error: "no-session" }, { status: 401 });
+      if (roles === "unreachable") {
+        return Response.json({ error: "failure", message: "Can't reach the steward to say what this member may see." }, { status: 502 });
+      }
 
       const reading = await read(options.stateFile, now);
       // Nothing in this dashboard is to be kept: it describes an instant.
-      return Response.json(reading, { headers: { "Cache-Control": "no-store" } });
+      return Response.json(roles === null ? reading : memberReading(reading, roles), { headers: { "Cache-Control": "no-store" } });
     },
 
     async guests(req) {
-      if ((await session(req, clock())) === null) {
+      if ((await owner(req, clock())) === null) {
         return Response.json({ error: "no-session" }, { status: 401 });
       }
       return relay(() => options.portal.list());
@@ -252,7 +299,7 @@ export function createRoutes(store: Store, options: Options, clock: () => number
       if (!isAcceptableOrigin(req.headers.get("origin"), options.publicUrl)) {
         return Response.json({ error: "origin-refused" }, { status: 403 });
       }
-      if ((await session(req, now)) === null) {
+      if ((await owner(req, now)) === null) {
         return Response.json({ error: "no-session" }, { status: 401 });
       }
 
@@ -277,7 +324,7 @@ export function createRoutes(store: Store, options: Options, clock: () => number
       if (!isAcceptableOrigin(req.headers.get("origin"), options.publicUrl)) {
         return Response.json({ error: "origin-refused" }, { status: 403 });
       }
-      if ((await session(req, now)) === null) {
+      if ((await owner(req, now)) === null) {
         return Response.json({ error: "no-session" }, { status: 401 });
       }
       return relay(() => options.portal.remove(id));

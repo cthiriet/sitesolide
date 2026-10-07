@@ -13,7 +13,7 @@ import type { Session } from "../src/sessions";
  * there.
  */
 const PUBLIC_URL = "https://dashboard.test-zone.invalid";
-const SESSION: Session = { hash: "session-hash", createdAt: 0, seenAt: 0 };
+const SESSION: Session = { hash: "session-hash", createdAt: 0, seenAt: 0, identity: "owner" };
 const VALUE = "Bearer relay-test-value-0123456789";
 const VIEW = { installed: true, state: "managed", reason: null, connectors: [], grants: [], requests: [], sites: ["shop"] };
 

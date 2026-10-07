@@ -1,10 +1,12 @@
 import { useData } from "@/components/data"
+import { MemberRestartButton } from "@/components/member-restart"
 import { SiteGuestsPanel } from "@/components/guests-site"
 import { ExternalLink } from "@/components/link"
 import { PanelSkeleton } from "@/components/page"
 import { SiteSecretsPanel } from "@/components/secrets-site"
 import { SiteState, SectionLink, SitePage, useSite } from "@/components/site"
 import { SiteDiscrepancies, AccessPanel, AddressesPanel, ServicePanel, ServicesPanel, StoragePanel } from "@/components/site-card"
+import { isMember, mayRestart } from "@/lib/members"
 import { siteAddress } from "@/lib/sites"
 import type { Discrepancy, Site } from "@/lib/types"
 
@@ -46,7 +48,10 @@ function OverviewSkeleton() {
  * for a site that has none.
  */
 export function OverviewSection({ slug }: { slug: string }) {
-  const { now } = useData()
+  const { now, identity } = useData()
+  // A member sees the site, not its guests nor its secrets, and restarts its
+  // service as a Developer or a Project admin; the steward decides.
+  const member = isMember(identity)
   const { site, discrepancies } = useSite(slug)
   return (
     <SitePage
@@ -60,15 +65,15 @@ export function OverviewSection({ slug }: { slug: string }) {
           <SiteDiscrepancies discrepancies={discrepancies} />
           <div className="grid items-start gap-6 @4xl/body:grid-cols-2">
             <div className="grid min-w-0 gap-6">
-              <ServicePanel site={snapshot} now={now} />
+              <ServicePanel site={snapshot} now={now} action={mayRestart(identity, slug) && snapshot.type === "app" ? <MemberRestartButton slug={slug} /> : undefined} />
               <ServicesPanel site={snapshot} />
               <AddressesPanel site={snapshot} />
               <StoragePanel site={snapshot} now={now} />
             </div>
             <div className="grid min-w-0 gap-6">
-              <AccessPanel site={snapshot} actions={<SectionLink slug={slug} section="access" />} />
-              <SiteGuestsPanel slug={slug} />
-              <SiteSecretsPanel slug={slug} />
+              <AccessPanel site={snapshot} actions={member ? undefined : <SectionLink slug={slug} section="access" />} />
+              {!member && <SiteGuestsPanel slug={slug} />}
+              {!member && <SiteSecretsPanel slug={slug} />}
             </div>
           </div>
         </>

@@ -234,7 +234,9 @@ function HomeSkeleton() {
  * A search and filters, the sites in discrepancy at the top.
  */
 export function HomePage() {
-  const { snapshot } = useData()
+  const { snapshot, identity } = useData()
+  // The machine's own figures are the super admin's: a member sees their projects.
+  const member = identity !== null && identity.kind === "member"
   return (
     <>
       <PageHeader title="Sites" count={snapshot?.sites.length} />
@@ -242,7 +244,7 @@ export function HomePage() {
         <WithSnapshot skeleton={<HomeSkeleton />}>
           {(snapshot) => (
             <>
-              <MachinePlate snapshot={snapshot} />
+              {!member && <MachinePlate snapshot={snapshot} />}
               <IssuesPanel discrepancies={snapshot.discrepancies} sites={snapshot.sites} />
               <Inventory snapshot={snapshot} />
             </>

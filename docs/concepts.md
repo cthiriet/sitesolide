@@ -70,7 +70,8 @@ more.
 | A project's service | `site-<slug>` | read its own directory, write its own data directory |
 | The shared service (`api/`) | its own account | answer `ask` for on-demand TLS, generate preview locks |
 | The dashboard | `site-dashboard` | read a snapshot file, relay to the steward, call the portal |
-| The steward | root | write `/etc/sitesolide`, restart services, command the gatekeeper |
+| The portal | `site-portal` | answer Caddy's `forward_auth`, sign people in with the identity provider, sign the dashboard's identity assertions |
+| The steward | root | write `/etc/sitesolide`, restart services, command the gatekeeper, keep the dashboard's members and judge what they do |
 | The gatekeeper | root, one-shot | rewrite one project's block, reload Caddy, probe, roll back |
 | The installer | root, one-shot | deploy one project for a team token, the archive read by the project's own account |
 | The collector | root, on a timer | read the machine, drop a snapshot where the dashboard can read it |
@@ -91,6 +92,20 @@ project named in its unit. Two unit templates rather than one instance, so that
 each can only write into `/srv/sites/%i`: a compromised gatekeeper holds the one
 site you named it for.
 
+**A member of the dashboard is judged as root.** The dashboard's members, the
+people the owner invites by email with a role per project, sign in with their
+work account, and the dashboard believes no name it is told: the portal, the
+one authority on who someone is, signs an assertion of the email the provider
+verified, for the dashboard, for five minutes, once; the steward checks it
+with a public key it keeps itself before it opens the session, and judges
+every write a member asks for against its own registry, at that moment. The
+key pair is the steward's: it lays the private half where only the portal's
+account reads it, `/etc/sitesolide-portal/assertion.key`. A compromised
+dashboard acts only for the members whose sessions pass through it, within
+their roles; it can neither make a member nor widen one. What a member sees,
+the dashboard filters from data it already holds. See
+[dashboard/README.md](../dashboard/README.md#members).
+
 **Everything that reloads Caddy shares one lock**, `/run/sitesolide-gatekeeper/caddy.lock`.
 The CLI, the deploy scripts and the gatekeeper all take it. Without it, a door
 set from the dashboard between a read and a write was silently overwritten, and
@@ -107,7 +122,8 @@ door of its own; it trusts the header Caddy puts on the request, and that trust
 is only founded because nothing else on the machine can forge it.
 
 One exception, deliberate: the dashboard may reach the portal, where it creates
-and revokes guest access, sets each site's sharing and reads the portal's audit.
+and revokes guest access, sets each site's sharing, reads the portal's audit,
+and has its members' sign-ins sealed and redeemed.
 Those routes have no other guard than this rule, and a test refuses any fragment
 that would expose them.
 
@@ -244,9 +260,11 @@ learns nobody. See [portal/README.md](../portal/README.md).
 
 Every component that acts records what it did in its own database, in one
 shape: an ISO date, an actor, a dotted action, a target, and a detail in JSON
-that never carries a secret value. An actor is an email, `owner` for whoever
-holds the dashboard's password, `token:<id>` for a team token, `guest:<id>`,
-`anonymous` before anyone is known, or `system`. Nothing gathers these tables
+that never carries a secret value. An actor is an email, a member of the
+dashboard's or a visitor's, `owner` for whoever holds the dashboard's
+password, `token:<id>` for a team token, `guest:<id>`, `anonymous` before
+anyone is known, or `system`. The steward writes a member's email as it
+verified it, never as a request names it. Nothing gathers these tables
 on the machine: the dashboard's *Activity* page reads each through the road it
 already takes to that component, and merges them, newest first. How long each
 keeps its rows is in [dashboard/README.md](../dashboard/README.md#the-audit).
@@ -267,16 +285,25 @@ keeps its rows is in [dashboard/README.md](../dashboard/README.md#the-audit).
 | `connector.grant` | egress | `owner` | slug | a connector granted to a site, or withdrawn |
 | `backup.run` | backups | `system` | none | an hourly run: snapshots taken and pruned, the offsite copy, the sites that failed |
 | `backup.restore` | backups | `owner` | slug | a restore, its snapshot and how it ended |
+| `member.invite`, `member.role`, `member.remove` | steward | `owner` | the member's email | a member invited, their roles changed, or removed, with their roles |
+| `member.signin` | steward | the member's email | the member's email | a member's session opened, from an assertion it verified |
+| `member.signin_failed` | steward | the email, or `anonymous` when the assertion did not verify | the email, or none | a sign-in refused: not a member, an assertion replayed, signed by another key, expired, too old; a minute holds twenty at most |
+| `member.signout` | steward | the member's email | the member's email | a member signed out |
 | `secrets.unlock`, `secrets.lock` | steward | `owner` | none | the secrets unlocked, or the password refused, and locked |
 | `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner` | slug | a variable read, set or removed, by its name |
 | `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner` | slug | a secret file created, put back to its previous version, or replaced |
 | `secrets.password` | steward | `owner` | slug | a password hash changed |
 | `door.update` | steward | `owner` | slug | a site's portal turned on or off from *Access* |
-| `service.restart` | steward | `owner` | slug | a service restarted from *Secrets*, with its verdict |
+| `service.restart` | steward | `owner`, or a member's email | slug | a service restarted from *Secrets*, or by a Developer or Project admin, with its verdict; a member's refused restart, with their role |
 
 The steward's rows say how each operation ended, `ok`, `rejects` or `failure`,
 in their detail's `result`. Their source is the steward's journal, which has
-no ids: the dashboard gives them the shared shape as it reads them.
+no ids: the dashboard gives them the shared shape as it reads them. A line of
+the journal written before it named its actor reads as `owner`, the only one
+it acted for then.
+
+The *Activity* page shows the owner the whole machine; a member, the rows of
+their projects and their own.
 
 ## What the deploy actually does
 

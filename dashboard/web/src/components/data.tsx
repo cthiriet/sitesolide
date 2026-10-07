@@ -13,7 +13,7 @@ import {
   sortProjects,
   type SiteSecretsPanel,
 } from "@/lib/secrets"
-import type { Snapshot, Reading, ProjectView } from "@/lib/types"
+import type { IdentityView, Snapshot, Reading, ProjectView, SsoOffer } from "@/lib/types"
 import { NO_DATA, verdict as judge, type Verdict } from "@/lib/verdict"
 
 /**
@@ -62,7 +62,7 @@ export type SecretsData = {
  * asked for while another is in flight follows it instead of being lost: an
  * action that has just written must see its effect.
  */
-export function useSecrets(generation: number, onSessionExpired: () => void): SecretsData {
+export function useSecrets(generation: number, onSessionExpired: () => void, enabled = true): SecretsData {
   const [projects, setProjects] = useState<ProjectView[] | null>(null)
   const [until, setUnlockedUntil] = useState<number | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
@@ -101,9 +101,10 @@ export function useSecrets(generation: number, onSessionExpired: () => void): Se
     return tache
   }, [onSessionExpired])
 
+  // A member reads no secret: the route is the super admin's.
   useEffect(() => {
-    void reload()
-  }, [reload, generation])
+    if (enabled) void reload()
+  }, [reload, generation, enabled])
 
   const reportUnreachable = useCallback(() => setProblem(UNREACHABLE), [])
 
@@ -132,7 +133,7 @@ export type GuestsData = {
  * the list with its reason: a stale list of accesses would suggest that an
  * access revoked elsewhere still opens.
  */
-export function useGuests(generation: number, onSessionExpired: () => void): GuestsData {
+export function useGuests(generation: number, onSessionExpired: () => void, enabled = true): GuestsData {
   const [list, setList] = useState<GuestList>({ state: "loading" })
 
   const reload = useCallback(
@@ -148,9 +149,10 @@ export function useGuests(generation: number, onSessionExpired: () => void): Gue
     [onSessionExpired],
   )
 
+  // A member reads no guest access: the route is the super admin's.
   useEffect(() => {
-    void reload()
-  }, [reload, generation])
+    if (enabled) void reload()
+  }, [reload, generation, enabled])
 
   return useMemo(() => ({ list, reload }), [list, reload])
 }
@@ -182,6 +184,8 @@ export type Data = {
   /** To be called on a 401: the sign-in comes over the top of the page, losing nothing. */
   sessionExpired: () => void
   signOut: () => void
+  /** Who is signed in: the owner, or a member and their roles. */
+  identity: IdentityView | null
 }
 
 const DataContext = createContext<Data | null>(null)
@@ -201,10 +205,14 @@ type Received = { reading: Reading; receivedAt: number }
  */
 function OpenSession({
   configured,
+  identity,
+  sso,
   onClosed,
   children,
 }: {
   configured: boolean
+  identity: IdentityView | null
+  sso: SsoOffer
   onClosed: (configured: boolean) => void
   children: ReactNode
 }) {
@@ -213,6 +221,9 @@ function OpenSession({
   const [inProgress, setInProgress] = useState(false)
   const [expired, setExpired] = useState(false)
   const [currentConfigured, setConfigured] = useState(configured)
+  const [currentIdentity, setIdentity] = useState(identity)
+  const [currentSso, setSso] = useState(sso)
+  const member = currentIdentity !== null && currentIdentity.kind === "member"
   const [generation, setGeneration] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const inFlight = useRef(false)
@@ -279,7 +290,11 @@ function OpenSession({
     void readSession().then(({ body }) => {
       if (body === null) return
       setConfigured(body.configured)
-      if (body.open) setExpired(false)
+      setSso(body.sso)
+      if (body.open) {
+        setIdentity(body.identity)
+        setExpired(false)
+      }
     })
   }, [expired])
 
@@ -289,8 +304,8 @@ function OpenSession({
     void postSignOut().then(() => onClosed(currentConfigured))
   }, [onClosed, currentConfigured])
 
-  const secrets = useSecrets(generation, sessionExpired)
-  const guests = useGuests(generation, sessionExpired)
+  const secrets = useSecrets(generation, sessionExpired, !member)
+  const guests = useGuests(generation, sessionExpired, !member)
   const bySite = useMemo(() => secretsBySite(secrets.projects), [secrets.projects])
 
   const reading = received?.reading ?? null
@@ -314,14 +329,21 @@ function OpenSession({
       guests,
       sessionExpired,
       signOut,
+      identity: currentIdentity,
     }
-  }, [reading, receivedAt, now, failure, inProgress, generation, refresh, secrets, bySite, guests, sessionExpired, signOut])
+  }, [reading, receivedAt, now, failure, inProgress, generation, refresh, secrets, bySite, guests, sessionExpired, signOut, currentIdentity])
 
-  const open = useCallback(() => setExpired(false), [])
+  // Signed in again: who it is may have changed, a member in the owner's place.
+  const open = useCallback(() => {
+    void readSession().then(({ body }) => {
+      if (body !== null && body.open) setIdentity(body.identity)
+      setExpired(false)
+    })
+  }, [])
 
   // With nothing to preserve, the sign-in takes the whole page.
   if (received === null && expired) {
-    return <SignIn configured={currentConfigured} message="Your session expired. Sign in again." onOpened={open} />
+    return <SignIn configured={currentConfigured} sso={currentSso} message="Your session expired. Sign in again." onOpened={open} />
   }
 
   return (
@@ -332,6 +354,7 @@ function OpenSession({
         <SignIn
           overlay
           configured={currentConfigured}
+          sso={currentSso}
           message="Your session expired. Sign in again to pick up where you left off."
           onOpened={open}
         />
@@ -340,11 +363,13 @@ function OpenSession({
   )
 }
 
+const NO_SSO: SsoOffer = { offered: false, providerName: null }
+
 type Session =
   | { state: "verification" }
   | { state: "unreachable" }
-  | { state: "closed"; configured: boolean }
-  | { state: "open"; configured: boolean }
+  | { state: "closed"; configured: boolean; sso: SsoOffer }
+  | { state: "open"; configured: boolean; sso: SsoOffer; identity: IdentityView | null }
 
 /**
  * The gate to the data: the session is checked, the sign-in is asked for, then
@@ -358,7 +383,12 @@ export function DataProvider({ wait, children }: { wait: ReactNode; children: Re
     if (!quiet) setSession({ state: "verification" })
     const { status, body } = await readSession()
     if (status !== 200 || body === null) return setSession({ state: "unreachable" })
-    setSession(body.open ? { state: "open", configured: body.configured } : { state: "closed", configured: body.configured })
+    const sso = body.sso ?? NO_SSO
+    setSession(
+      body.open
+        ? { state: "open", configured: body.configured, sso, identity: body.identity ?? null }
+        : { state: "closed", configured: body.configured, sso },
+    )
   }, [])
 
   useEffect(() => {
@@ -376,7 +406,8 @@ export function DataProvider({ wait, children }: { wait: ReactNode; children: Re
     return () => window.clearInterval(timer)
   }, [unreachable, check])
 
-  const closed = useCallback((configured: boolean) => setSession({ state: "closed", configured }), [])
+  // Signed out: the session is asked again, for the sign-in page's provider.
+  const closed = useCallback(() => void check(true), [check])
 
   switch (session.state) {
     case "verification":
@@ -384,15 +415,10 @@ export function DataProvider({ wait, children }: { wait: ReactNode; children: Re
     case "unreachable":
       return <UnreachableScreen onRetry={() => void check()} />
     case "closed":
-      return (
-        <SignIn
-          configured={session.configured}
-          onOpened={() => setSession({ state: "open", configured: session.configured })}
-        />
-      )
+      return <SignIn configured={session.configured} sso={session.sso} onOpened={() => void check(true)} />
     case "open":
       return (
-        <OpenSession configured={session.configured} onClosed={closed}>
+        <OpenSession configured={session.configured} identity={session.identity} sso={session.sso} onClosed={closed}>
           {children}
         </OpenSession>
       )

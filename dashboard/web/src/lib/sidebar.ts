@@ -74,7 +74,7 @@ function discrepancyIndicator(discrepancies: readonly Discrepancy[] | null): Ind
  * reports nothing, it is read when you go looking for it. Zero is not shown.
  */
 export function machineIndicators(discrepancies: readonly Discrepancy[] | null): Record<MachinePage, Indicator | null> {
-  return { home: discrepancyIndicator(discrepancies), activity: null, team: null, connectors: null }
+  return { home: discrepancyIndicator(discrepancies), activity: null, team: null, connectors: null, members: null }
 }
 
 export type SiteSources = {

@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { ChartNoAxesColumn, ChevronLeft, DatabaseBackup, Gauge, Globe, History, KeyRound, LogOut, PanelLeft, Plug, Share2, ShieldCheck, Users, UsersRound, type LucideIcon } from "lucide-react"
+import { ChartNoAxesColumn, ChevronLeft, Contact, DatabaseBackup, Gauge, Globe, History, KeyRound, LogOut, PanelLeft, Plug, Share2, ShieldCheck, Users, UsersRound, type LucideIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -18,7 +18,7 @@ import { InternalLink, useNavigation } from "@/components/navigation"
 import { SidebarSitePicker, useSite } from "@/components/site"
 import { useTheme } from "@/components/theme"
 import { machineIndicators, siteIndicators, sidebarShortcut, type Indicator } from "@/lib/sidebar"
-import { MACHINE_PAGES, SECTIONS, ariaCurrent, pageUrl, type MachinePage, type Page, type Section } from "@/lib/pages"
+import { ariaCurrent, machinePagesFor, pageUrl, sectionsFor, type MachinePage, type Page, type Section } from "@/lib/pages"
 import { TONE_PILL, TONE_DOT, type Tone } from "@/lib/tones"
 import { cn } from "@/lib/utils"
 
@@ -27,6 +27,7 @@ export const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
   home: Globe,
   activity: History,
   team: Users,
+  members: Contact,
   connectors: Plug,
 }
 
@@ -48,7 +49,7 @@ type NavEntry = { key: string; target: Page; title: string; Icon: LucideIcon; si
 /** The entries of the current level: the machine's pages, or the site's sections. */
 function useNavEntries(): NavEntry[] {
   const { page } = useNavigation()
-  const { snapshot, guests, now, offset } = useData()
+  const { snapshot, guests, now, offset, identity } = useData()
   const slug = page.name === "site" ? page.slug : ""
   const { site, discrepancies, project } = useSite(slug)
   const list = guests.list
@@ -56,7 +57,7 @@ function useNavEntries(): NavEntry[] {
   return useMemo(() => {
     if (page.name !== "site") {
       const signals = machineIndicators(snapshot?.discrepancies ?? null)
-      return MACHINE_PAGES.map((entry) => ({
+      return machinePagesFor(identity).map((entry) => ({
         key: entry.name,
         target: { name: entry.name },
         title: entry.title,
@@ -74,14 +75,14 @@ function useNavEntries(): NavEntry[] {
       now,
       serverNow: now + offset,
     })
-    return SECTIONS.map((entry) => ({
+    return sectionsFor(identity).map((entry) => ({
       key: entry.section,
       target: { name: "site", slug: page.slug, section: entry.section },
       title: entry.title,
       Icon: SECTION_ICONS[entry.section],
       signal: signals[entry.section],
     }))
-  }, [page, snapshot, site, discrepancies, project, list, now, offset])
+  }, [page, snapshot, site, discrepancies, project, list, now, offset, identity])
 }
 
 /** An indicator's word for screen readers, which the figure alone does not say. */
@@ -161,7 +162,7 @@ function SidebarEntries({ entries, label }: { entries: NavEntry[]; label: string
  */
 export function AppSidebar() {
   const { page } = useNavigation()
-  const { signOut, snapshot } = useData()
+  const { signOut, snapshot, identity } = useData()
   const { toggleSidebar } = useSidebar()
   const theme = useTheme()
   const entries = useNavEntries()
@@ -217,6 +218,11 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="pb-3">
+        {identity !== null && identity.kind === "member" && (
+          <p className="truncate px-2.5 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden" title={identity.email}>
+            {identity.email}
+          </p>
+        )}
         <SidebarMenu className="gap-0.5">
           <SidebarMenuItem>
             <SidebarMenuButton

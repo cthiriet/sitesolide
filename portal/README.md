@@ -37,7 +37,8 @@ browser --> Caddy, block for shop.<zone>
 browser --> Caddy, block for portal.<zone>
               +-- /sante, /oidc/start, /oidc/callback, /oidc/signout --> the portal
 
-dashboard (site-dashboard) --> portal 127.0.0.1:3026 /admin/guests, /admin/sharing, /admin/audit
+dashboard (site-dashboard) --> portal 127.0.0.1:3026 /admin/guests, /admin/sharing, /admin/audit,
+                               /admin/dashboard/flow, /admin/dashboard/redeem
                                never through Caddy
 root, over the owner's SSH --> portal 127.0.0.1:3026 /admin/sharing, for `sitesolide share`
 ```
@@ -319,6 +320,55 @@ which lifts the loopback-only confinement of its unit, everything else holding.
 That is the price of the feature, and it is paid whether or not a provider is
 configured.
 
+## Signing in to the dashboard
+
+The dashboard's members (dashboard/README.md, "Members") sign in with the same
+provider, through this same portal. The dashboard is never behind the portal
+and has no network: it cannot run a sign-in, and must not be believed when it
+names someone. So it asks the portal over the loopback, and the portal runs
+the flow it runs for a protected site, with the dashboard's host in the
+site's place:
+
+```
+dashboard.<zone>/api/sso/begin       binding cookie on the dashboard
+  -> POST /admin/dashboard/flow      loopback: a flow sealed for the dashboard's host, around that binding
+  -> portal.<zone>/oidc/start        as for a site; the portal's session spares the provider if younger than 12 hours
+  -> the provider, portal.<zone>/oidc/callback
+  -> dashboard.<zone>/api/sso/complete?code=...
+  -> POST /admin/dashboard/redeem    loopback: the code and the binding, for a signed assertion
+```
+
+**A code says what it was minted for.** A dashboard's flow mints a code for
+the dashboard, which `/admin/dashboard/redeem` alone redeems, for an
+assertion; a site's mints a code for that site, which its
+`/_portal/oidc/complete` alone redeems, for a cookie. Either carried to the
+other is refused, and burnt (`wrong-audience`). The binding, the transaction
+cookie, a code living a minute and burnt at the first attempt, one code per
+flow: everything above holds for the dashboard's too.
+
+**The assertion** (src/assertion.ts) is a compact JWT signed with Ed25519: the
+verified email and name, `auth_time`, when the person last signed in at the
+provider, `aud` the dashboard, five minutes of life, a nonce. The dashboard
+hands it to the steward, which checks it with a public key it keeps itself
+and opens the member's session; the portal judges the allowed domains once
+more before it signs.
+
+**The key** is the steward's: it draws the pair as root, keeps the public
+half, and lays the private half in `/etc/sitesolide-portal/assertion.key`,
+`root:site-portal 0640`, which this service reads at every redemption: a key
+laid or replaced needs no restart. Not in `portal.env`, which the dashboard's
+Secrets section reads after an unlock: a compromised dashboard would read the
+key there and forge assertions. Missing, a redemption answers `no-key` and
+nobody signs in to the dashboard; the sites are untouched.
+
+**The dashboard's address follows from this one's.** The manifest names the
+portal `https://{slug}.{zone}`; the dashboard is `https://dashboard.{zone}`.
+A portal whose address does not start with `portal.` offers no dashboard
+sign-in, and says so at startup. `DASHBOARD_URL` names it otherwise; it is not
+one of the names the steward accepts in `portal.env`, so a dashboard cannot
+send codes elsewhere by setting it. At startup the portal prints `dashboard
+sign-in offered, back to https://dashboard.<zone>`.
+
 ## Sharing
 
 Who may open a site with their work account, decided per site. Three modes,
@@ -431,6 +481,8 @@ share` over the owner's SSH, which reads and replaces policies alone:
 | `GET /admin/sharing` | how people sign in (configured or not, the provider's name, the portal's address, the admin emails and allowed domains, never the client secret nor its identifier), and every site whose policy was set |
 | `PUT /admin/sharing/:host` | replaces a site's policy: `{ "mode", "people", "domains" }`, one bad entry refusing the whole change |
 | `GET /admin/audit?limit=&before=` | the audit, most recent first, by pages |
+| `POST /admin/dashboard/flow` | `{ binding, returnTo, chooseAccount }`: a flow sealed for the dashboard's host, and the address to send the browser to; `not-offered` without a provider |
+| `POST /admin/dashboard/redeem` | `{ code, binding }`: the code burnt, and, minted for the dashboard on this binding, an assertion signed for it and the path to come back to |
 
 They have no secret, and that is deliberate: the only accounts that can reach
 that port are root, Caddy and `site-dashboard`, through the exception
@@ -463,7 +515,7 @@ of the repository shares (`id`, `at` in ISO 8601 UTC, `actor`, `action`,
 | Action | Actor | Detail |
 |---|---|---|
 | `portal.signin` | `owner`, `guest:<access>` or the email | `method`: `password`, `guest` or `oidc`, and the `role` for an identity; `count` when repeated |
-| `portal.signin_failed` | `anonymous`, or the email when the provider named one | `method`, and for a provider the `reason`: `bad-signature`, `wrong-audience`, `expired`, `wrong-nonce`, `unverified-email`, `unusable-email`, `domain-not-allowed`, `unmanaged-account`, `not-shared`, `wrong-browser`, `expired-session`... |
+| `portal.signin_failed` | `anonymous`, or the email when the provider named one | `method`, and for a provider the `reason`: `bad-signature`, `wrong-audience`, `expired`, `wrong-nonce`, `unverified-email`, `unusable-email`, `domain-not-allowed`, `unmanaged-account`, `not-shared`, `wrong-browser`, `expired-session`...; a dashboard's sign-in refused here names the dashboard's host, and a code carried to the wrong side reads `wrong-audience` too |
 | `portal.signout` | who the cookie names | none, or `count` when repeated |
 | `sharing.update` | `owner`, or `token:<id>` for a change made with a team token | the new and previous mode, the people and domains added and removed |
 
@@ -557,7 +609,10 @@ another account*, which asks the provider to choose.
 - A compromised portal opens every personal site; that is the price of one
   shared door. It gives neither their data, each service staying confined to
   its own directory, nor the customer sites, nor the certificates. Since the
-  provider, the portal can also reach the network.
+  provider, the portal can also reach the network. Since the dashboard's
+  members, it can also sign an assertion for anyone, and act in the dashboard
+  as any member, within their roles; it can neither invite anyone nor change a
+  role, which the steward keeps.
 - A compromised dashboard can create guest access on a personal site, and share
   one with anyone. During an unlock it can also take the door off a site,
   retyping the slug only guards against a misclick, and make it public; and it
@@ -675,6 +730,11 @@ a `POST` to a protected site's `/_portal/deconnexion` from its own pages shows
 the site's sign-in page; the next *Sign in with ...* goes to the provider and
 asks which account.
 
+**Signing in to the dashboard** needs this portal, the steward that lays its
+key, and the dashboard that asks: see dashboard/README.md, "Upgrading:
+members". `sitesolide upgrade` runs all three. Check: `journalctl -u portal`
+says `dashboard sign-in offered`, and a member signs in.
+
 **Sharing by token, and `sitesolide share`**, need nothing of the portal beyond
 step 1: it already records the actor the dashboard names, `token:<id>`
 included. The dashboard is what changes, see
@@ -701,7 +761,8 @@ bun test ../bin/tests/cli-portal-identity-caddy.test.ts  # the identity headers,
 
 `tests/sso.test.ts` runs this server and an identity provider of the tests'
 making, `tests/provider.ts`, through real HTTP: the whole flow, the second site
-that skips the provider, and every refusal, a token signed by another key, for
+that skips the provider, a dashboard's sign-in redeemed for an assertion the
+steward's key verifies, a dashboard's code refused on a site, and every refusal, a token signed by another key, for
 another client, expired, with another nonce, an unverified email, a disallowed
 domain, a callback or a code opened in another browser, a code replayed or
 carried to another host, a flow altered on the way or replayed for a second

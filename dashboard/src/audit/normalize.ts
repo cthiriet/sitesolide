@@ -141,11 +141,19 @@ export const STEWARD_ACTIONS: Readonly<Record<string, string>> = {
   password: "secrets.password",
   portal: "door.update",
   restart: "service.restart",
+  "member.invite": "member.invite",
+  "member.role": "member.role",
+  "member.remove": "member.remove",
+  "member.signin": "member.signin",
+  "member.signin_failed": "member.signin_failed",
+  "member.signout": "member.signout",
 };
 
 /**
- * Whoever holds the dashboard's password: the steward acts only for an
- * unlocked session of the dashboard, and the dashboard knows no other name.
+ * Who a journal line from before the steward named its actor speaks for:
+ * whoever held the dashboard's password, the only one the steward acted for
+ * then. A line written since names its actor itself, as the steward verified
+ * it: `owner`, or a member's email.
  */
 export const STEWARD_ACTOR = "owner";
 
@@ -184,15 +192,21 @@ export function fromJournal(entries: readonly unknown[]): SourceRow[] {
     if (file !== null) detail.file = file;
     if (variable !== null) detail.variable = variable;
     if (note !== null) detail.note = note;
+    const actor = name(entry.actor) ?? STEWARD_ACTOR;
+    const member = name(entry.member);
+    const slug = name(entry.slug);
+    // A member's own events are about them: the email they concern is the
+    // target, as a site's slug is for an operation on that site.
+    if (member !== null && member !== actor) detail.member = member;
     rows.push({
       position: [ms, rank],
       row: {
         id: `steward:${ms}.${rank}`,
         source: "steward",
         at: new Date(ms).toISOString(),
-        actor: STEWARD_ACTOR,
+        actor,
         action: STEWARD_ACTIONS[operation]!,
-        target: entry.slug === null || entry.slug === undefined ? null : name(entry.slug),
+        target: slug ?? member,
         detail,
       },
     });

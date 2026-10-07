@@ -83,7 +83,7 @@ describe("origin and lifetime", () => {
   });
 
   test("a session expires at the lifetime, not after", () => {
-    const session = { hash: "e", createdAt: 1000, seenAt: 1000 };
+    const session = { hash: "e", createdAt: 1000, seenAt: 1000, identity: "owner" };
     expect(isSessionAlive(session, 100, 1099)).toBe(true);
     expect(isSessionAlive(session, 100, 1100)).toBe(false);
   });

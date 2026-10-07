@@ -23,7 +23,26 @@ export const OPERATIONS: Operation[] = [
   "password",
   "portal",
   "restart",
+  "member.invite",
+  "member.role",
+  "member.remove",
+  "member.signin",
+  "member.signin_failed",
+  "member.signout",
 ];
+
+/**
+ * Who a line written before the journal named its actor speaks for: the
+ * dashboard's password, the only way the steward could be asked anything then.
+ */
+export const EARLIER_ACTOR = "owner";
+
+/**
+ * An actor as the steward writes one: `owner`, `anonymous` for a sign-in that
+ * names nobody it could verify, or an email it verified. Nothing else enters
+ * the journal in that place.
+ */
+const ACTOR = /^(owner|anonymous|[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(\.[a-z0-9-]+)+)$/;
 export const RESULTS: OperationResult[] = ["ok", "rejects", "failure"];
 
 /** A slug, a file name, a variable name, a short reason: nothing longer. */
@@ -143,17 +162,34 @@ export function isValidEntry(entry: unknown): entry is LogEntry {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
   const e = entry as Record<string, unknown>;
   const keys = Object.keys(e).sort().join(",");
-  if (keys !== "a,detail,file,operation,result,slug,variable") return false;
+  if (keys !== "a,actor,detail,file,member,operation,result,slug,variable") return false;
   return (
     typeof e.a === "number" &&
     Number.isFinite(e.a) &&
     OPERATIONS.includes(e.operation as Operation) &&
     RESULTS.includes(e.result as OperationResult) &&
+    typeof e.actor === "string" &&
+    e.actor.length <= MAX_FIELD &&
+    ACTOR.test(e.actor) &&
+    field(e.member) &&
+    (e.member === null || ACTOR.test(e.member as string)) &&
     field(e.slug) &&
     field(e.file) &&
     field(e.variable) &&
     field(e.detail)
   );
+}
+
+/**
+ * A line from before the journal named its actor and its member: the seven
+ * fields it carried then, read as the owner's, about no member. Anything else
+ * comes back untouched, for `isValidEntry` to judge.
+ */
+export function withActor(entry: unknown): unknown {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return entry;
+  const e = entry as Record<string, unknown>;
+  if (Object.keys(e).sort().join(",") !== "a,detail,file,operation,result,slug,variable") return entry;
+  return { ...e, actor: EARLIER_ACTOR, member: null };
 }
 
 /** The line to append, newline included. Throws on a malformed entry. */
@@ -162,6 +198,8 @@ export function encodeEntry(entry: LogEntry): string {
     a: entry.a,
     operation: entry.operation,
     result: entry.result,
+    actor: entry.actor,
+    member: entry.member,
     slug: entry.slug,
     file: entry.file,
     variable: entry.variable,
@@ -183,7 +221,7 @@ export function reread(text: string): LogEntry[] {
   for (const line of text.split("\n")) {
     if (line.trim() === "") continue;
     try {
-      const entry = underCurrentNames(JSON.parse(line));
+      const entry = withActor(underCurrentNames(JSON.parse(line)));
       if (isValidEntry(entry)) entries.push(entry);
     } catch {
       // corrupted line, ignored

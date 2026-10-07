@@ -44,7 +44,16 @@ export type AuditQuery = {
   to: number | null;
   limit: number;
   cursor: string | null;
+  /**
+   * What a member may read: the rows of their projects, and their own. Never
+   * from the address: the route sets it from the session, and null is the
+   * super admin's whole machine.
+   */
+  restrict: Restriction | null;
 };
+
+/** A member's view of the audit: the sites they hold a role on, and the rows they are the actor of. */
+export type Restriction = { sites: string[]; actor: string };
 
 /** Long enough for a page's positions, short enough to stay a parameter. */
 export const MAX_CURSOR = 2048;
@@ -106,6 +115,7 @@ export function readQuery(params: URLSearchParams): AuditQuery | { error: string
     to: typeof to === "number" ? to : null,
     limit,
     cursor,
+    restrict: null,
   };
 }
 
@@ -160,7 +170,13 @@ export function siteOf(row: Omit<AuditRow, "site">, resolve: SiteResolver): stri
  * `cms` finds the portal's sign-ins on `cms.<zone>` and on the site's own
  * domain, and the host finds the steward's operations on `cms`.
  */
-export function matches(row: AuditRow, query: Pick<AuditQuery, "actor" | "action" | "target" | "from" | "to">, resolve: SiteResolver): boolean {
+export function matches(
+  row: AuditRow,
+  query: Pick<AuditQuery, "actor" | "action" | "target" | "from" | "to"> & { restrict?: Restriction | null },
+  resolve: SiteResolver,
+): boolean {
+  const restrict = query.restrict ?? null;
+  if (restrict !== null && row.actor !== restrict.actor && (row.site === null || !restrict.sites.includes(row.site))) return false;
   if (query.actor !== null && !row.actor.toLowerCase().includes(query.actor)) return false;
   if (query.action !== null && !row.action.toLowerCase().startsWith(query.action)) return false;
   if (query.target !== null) {
@@ -185,9 +201,12 @@ export type Standings = Partial<Record<AuditSource, Standing>>;
  * The filters a cursor was made under. A cursor read under others would skip
  * rows that the new filters keep: it is refused instead.
  */
-export function fingerprint(query: Pick<AuditQuery, "sources" | "actor" | "action" | "target" | "from" | "to">): string {
+export function fingerprint(query: Pick<AuditQuery, "sources" | "actor" | "action" | "target" | "from" | "to"> & { restrict?: Restriction | null }): string {
   const { sources, actor, action, target, from, to } = query;
-  return Bun.hash(JSON.stringify([sources, actor, action, target, from, to])).toString(36);
+  // A member's cursor is no one else's: their restriction is part of it.
+  const restrict = query.restrict ?? null;
+  const scope = restrict === null ? [] : [[...restrict.sites].sort(), restrict.actor];
+  return Bun.hash(JSON.stringify([sources, actor, action, target, from, to, ...scope])).toString(36);
 }
 
 export function encodeCursor(print: string, standings: Standings): string {

@@ -93,6 +93,20 @@ export type {
 export type { Scope, TokenView, DeploymentState, AuditEntry, TeamDeployment, TeamPageResponse, CreatedTokenResponse } from "../../../src/control/protocol"
 
 /**
+ * The dashboard's members, from their contract (src/members/protocol.ts). Types
+ * only: what a member may do is the steward's to decide.
+ */
+export type {
+  IdentityView,
+  MemberView,
+  MembersPageResponse,
+  Role,
+  Roles,
+  SessionResponse,
+  SsoOffer,
+} from "../../../src/members/protocol"
+
+/**
  * The machine's audit, every component's in one shape (src/audit/protocol.ts).
  * Types only: which rows exist and what they hold is the components' to say.
  */

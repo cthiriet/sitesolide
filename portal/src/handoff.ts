@@ -43,6 +43,27 @@
  * person: an account closed at the provider is out of every site within a day
  * of signing in there, not a day after the last site it reached.
  *
+ * ## The dashboard takes the same road
+ *
+ * The dashboard is never behind the portal, and has no network: it cannot
+ * talk to a provider, nor read the portal's settings. Its sign-in therefore
+ * runs this very flow, with the dashboard's host in the place of a site's:
+ *
+ * ```
+ * dashboard /api/sso/begin       binding cookie on the dashboard, flow sealed over the loopback
+ *   -> portal /oidc/start        as for a site
+ *   -> provider, portal /oidc/callback
+ *   -> dashboard /api/sso/complete?code=...   code redeemed over the loopback
+ * ```
+ *
+ * The code says which audience it was minted for, and a code minted for the
+ * dashboard is redeemed for a signed assertion only (src/dashboard.ts), never
+ * for a site's cookie, nor the other way. The portal's session spares the
+ * provider for the dashboard too, but only while it is younger than
+ * `DASHBOARD_REAUTH_S`: a member's dashboard session lasts that long, so a
+ * person closed at the provider is out of the dashboard a day after they last
+ * proved themselves there, as out of every site.
+ *
  * Pure apart from the store, which holds the codes in memory and takes its
  * time and its draw as parameters.
  */
@@ -80,6 +101,14 @@ export const SPENT_FLOWS_MAX = 100_000;
  */
 export const IDENTITY_DURATION_S = 24 * 3600;
 
+/**
+ * How old the portal's session may be for a dashboard sign-in to skip the
+ * provider: beyond it, the person signs in at the provider again. The member
+ * session it opens lasts as long, so that the dashboard never trusts a proof
+ * more than a day old, as no site does.
+ */
+export const DASHBOARD_REAUTH_S = 12 * 3600;
+
 /** A sign-out is carried from the site to the portal's host within a redirect: a minute is generous. */
 export const SIGN_OUT_DURATION_S = 60;
 
@@ -106,14 +135,23 @@ export function isBinding(value: unknown): value is string {
 
 // --- The flow --------------------------------------------------------------------
 
+/**
+ * Who the sign-in is for. `site`: a protected site, whose own cookie the code
+ * is redeemed for, on that site. `dashboard`: the machine's dashboard, which
+ * is never behind the portal and redeems its code over the loopback for a
+ * signed identity assertion, see src/dashboard.ts.
+ */
+export type Audience = "site" | "dashboard";
+
 export type Flow = {
-  /** The protected site, as Caddy announced it when the flow began. */
+  /** The protected site, as Caddy announced it when the flow began; or the dashboard's host. */
   host: string;
   returnTo: string;
-  /** The hash of the binding cookie set on that site. */
+  /** The hash of the binding cookie set on that site, or on the dashboard. */
   binding: string;
   /** Ask the provider which account, instead of taking the one signed in. */
   chooseAccount: boolean;
+  audience: Audience;
 };
 
 export function issueFlow(key: Uint8Array, flow: Flow, nowS: number): string {
@@ -122,6 +160,8 @@ export function issueFlow(key: Uint8Array, flow: Flow, nowS: number): string {
     r: flow.returnTo,
     b: flow.binding,
     a: flow.chooseAccount,
+    // Only a dashboard's flow says so: a site's is sealed as it always was.
+    ...(flow.audience === "dashboard" ? { d: true } : {}),
     e: nowS + FLOW_DURATION_S,
   });
 }
@@ -130,12 +170,13 @@ export function issueFlow(key: Uint8Array, flow: Flow, nowS: number): string {
 export function readFlow(key: Uint8Array, token: string | null, nowS: number): Flow | null {
   const fields = unseal(purposeKey(key, "flow"), token);
   if (fields === null) return null;
-  const { h, r, b, a, e } = fields;
+  const { h, r, b, a, d, e } = fields;
   if (typeof e !== "number" || e <= nowS || e > nowS + FLOW_DURATION_S) return null;
   if (typeof h !== "string" || !isValidHost(h)) return null;
   if (typeof r !== "string" || safeReturnTo(r) !== r) return null;
   if (!isBinding(b) || typeof a !== "boolean") return null;
-  return { host: h, returnTo: r, binding: b, chooseAccount: a };
+  if (d !== undefined && d !== true) return null;
+  return { host: h, returnTo: r, binding: b, chooseAccount: a, audience: d === true ? "dashboard" : "site" };
 }
 
 // --- The provider transaction ------------------------------------------------------
@@ -215,11 +256,15 @@ export type Handoff = {
   returnTo: string;
   /** When the portal session that vouched for the identity expires, in seconds. */
   sessionExpiry: number;
+  /** When the person last signed in at the provider, in seconds. */
+  authTime: number;
+  /** What the code is redeemed for: a site's cookie, or the dashboard's assertion. */
+  audience: Audience;
 };
 
 export type Redemption =
   | { handoff: Handoff }
-  | { refusal: "unknown-code" | "expired-code" | "wrong-host" | "wrong-browser" };
+  | { refusal: "unknown-code" | "expired-code" | "wrong-host" | "wrong-audience" | "wrong-browser" };
 
 /**
  * A fresh code, or why none: `spent-flow` when this flow already minted its
@@ -229,8 +274,12 @@ export type Minting = { code: string } | { refusal: "spent-flow" | "too-many" };
 
 export type HandoffStore = {
   mint: (handoff: Handoff, now: number) => Minting;
-  /** Burns the code whatever the outcome, then says whether it hands over its identity here. */
-  redeem: (code: string, host: string, binding: string | null, now: number) => Redemption;
+  /**
+   * Burns the code whatever the outcome, then says whether it hands over its
+   * identity here: on this host, to this browser, for this audience. A code
+   * minted for the dashboard never sets a site's cookie, nor the other way.
+   */
+  redeem: (code: string, host: string, binding: string | null, now: number, audience?: Audience) => Redemption;
 };
 
 function codeKey(code: string): string {
@@ -284,13 +333,14 @@ export function handoffStore(drawCode: () => string = () => draw(32)): HandoffSt
       return { code };
     },
 
-    redeem(code, host, binding, now) {
+    redeem(code, host, binding, now, audience = "site") {
       if (typeof code !== "string" || !DRAWN_PATTERN.test(code)) return { refusal: "unknown-code" };
       const key = codeKey(code);
       const entry = codes.get(key);
       if (entry === undefined) return { refusal: "unknown-code" };
       forget(key);
       if (entry.expiresAt <= now) return { refusal: "expired-code" };
+      if (entry.audience !== audience) return { refusal: "wrong-audience" };
       if (entry.host !== host) return { refusal: "wrong-host" };
       if (binding === null || bindingHash(binding) !== entry.binding) return { refusal: "wrong-browser" };
       const { expiresAt: _, ...handoff } = entry;

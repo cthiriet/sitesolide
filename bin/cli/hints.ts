@@ -182,6 +182,9 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "no-portal": "sharing applies only to a site behind the portal: deploy it first if it is not deployed, or deploy it again if its block lags behind; putting a site behind the portal, or making it public, is the owner's, from the dashboard's Access section",
   "portal-unreachable": "the portal did not answer on the server, nothing was changed: tell the owner of the machine (`systemctl status portal` on the server); never restart it yourself",
   "ssh-failed": "a command over SSH failed, nothing was changed: run the same command again; if it fails twice, check that `ssh <server> true` connects without a prompt (load the key with ssh-add)",
+  // --- members, over the owner's SSH
+  "not-a-member": "that email is not a member of the dashboard: run `sitesolide members` for who is",
+  "steward-outdated": "the steward on the machine predates members: run `sitesolide upgrade` from this workstation, then the same command again",
   // --- a deployment that failed on the machine
   "install-failed": "run the install command from the message in the project folder, fix what it reports, then deploy again",
   "secret-missing": "ask the owner of the machine to create that file in the dashboard's Secrets section, then deploy again; never put secret values in the repository or in sitesolide.json",

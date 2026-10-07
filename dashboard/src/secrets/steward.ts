@@ -120,6 +120,9 @@ import { createConnectorRoutes } from "../connectors/steward";
 import type { ConnectorStore } from "../connectors/store";
 import { createBackupRoutes } from "../backup/routes";
 import type { BackupReader } from "../backup/reader";
+import { createMemberRoutes, type KeyState } from "../members/steward";
+import type { MembersSystem } from "../members/system";
+import { OWNER_ACTOR } from "../members/protocol";
 
 export type StewardOptions = {
   secretsFolder: string;
@@ -165,6 +168,12 @@ export type StewardOptions = {
   connectors?: ConnectorStore;
   /** The backups' folders, read for `/backups`; absent, the routes say backups are not set up. */
   backups?: BackupReader | null;
+  /**
+   * The dashboard's members, see src/members/steward.ts. Absent, the member
+   * routes do not exist, as on a steward that predates them, and the owner's
+   * socket answers nothing.
+   */
+  members?: { system: MembersSystem; zone: string };
 };
 
 export type Handler = (req: Request) => Promise<Response>;
@@ -174,7 +183,16 @@ export type Handler = (req: Request) => Promise<Response>;
  * state: whether a token is the live unlock token. Creating a deployment token
  * demands the dashboard unlocked, and the unlock lives here alone.
  */
-export type StewardHandler = Handler & { isUnlocked: (token: unknown) => Promise<boolean> };
+export type StewardHandler = Handler & {
+  isUnlocked: (token: unknown) => Promise<boolean>;
+  /**
+   * The handler of the owner's socket, which only root opens: the members
+   * registry, for `sitesolide members` over the owner's SSH.
+   */
+  owner: Handler;
+  /** The members' key pair, laid if missing: the entry point asks at startup. */
+  ensureMemberKeys: () => Promise<KeyState | null>;
+};
 
 /**
  * The biggest legitimate body outside a content is a set: a name, a value of
@@ -395,7 +413,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   /**
    * The log never makes an operation fail: it keeps quiet and says so.
    * `variable` is passed separately and not read from the body: on a refusal, a
-   * token pasted in the place of a name never enters it.
+   * token pasted in the place of a name never enters it. `who` is what this
+   * steward verified: the dashboard's password unless said otherwise, never a
+   * name a request carries.
    */
   async function writeLog(
     operation: Operation,
@@ -403,11 +423,14 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     body: Body | null,
     detail: string | null,
     variable: string | null = null,
+    who: { actor: string; member: string | null } = { actor: OWNER_ACTOR, member: null },
   ): Promise<void> {
     const entry: LogEntry = {
       a: system.now(),
       operation,
       result,
+      actor: who.actor,
+      member: who.member,
       slug: safeName(body?.slug, SLUG_SHAPE, 63),
       // The shape of an accepted file name, climbing paths and hidden names excluded.
       file: nameRefusal(body?.file) === null ? (body!.file as string) : null,
@@ -1406,6 +1429,62 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     });
   }
 
+  /**
+   * A member's restart, the role already judged by src/members/steward.ts and
+   * judged again here once the lock is taken. Unlike the Secrets section's, it
+   * does not ask whether the unit reads a managed file: a member restarts a
+   * service to restart it, not to apply a secret. The platform's own projects
+   * are never a member's, and the dashboard's restart would cut the relay that
+   * carries the verdict: both are refused.
+   */
+  async function memberRestart(req: Request, slug: string, actor: string, allowed: () => Promise<boolean>): Promise<Response> {
+    const body: Body = { slug };
+    const who = { actor, member: actor };
+    const taken = exclusive(async () => {
+      if (req.signal.aborted) return abandoned();
+      if (!(await allowed())) {
+        await writeLog("restart", "rejects", body, "no longer allowed", null, who);
+        return error("out-of-scope", `${actor} may no longer restart ${slug}`);
+      }
+      const found = checkSite(await sites(), slug);
+      if ("refusal" in found) {
+        await writeLog("restart", "rejects", body, found.refusal.error, null, who);
+        return error(found.refusal.error, found.refusal.message);
+      }
+      const { site } = found;
+      if (site.folder === DASHBOARD_SLUG) return error("out-of-scope", "the dashboard is the super admin's to restart");
+      const unit = unitOf(site.folder);
+      const text = site.isStatic ? null : await system.readUnit(unit);
+      if (text === null) {
+        await writeLog("restart", "rejects", body, "not-found", null, who);
+        return error("not-found", site.isStatic ? `${slug} is a static site: it has no service to restart` : `${unit}.service is not installed`);
+      }
+      await system.systemctl(["reset-failed", unit], showTimeoutMs);
+      await system.systemctl(["restart", unit], restartTimeoutMs);
+      const result = await observe(unit);
+      await writeLog("restart", result.kind === "active" ? "ok" : "failure", body, verdictDetail(result), null, who);
+      const response: RestartResponse = { verdict: result };
+      return Response.json(response);
+    });
+    return taken ?? busy();
+  }
+
+  // --- Members -----------------------------------------------------------------
+
+  const members =
+    options.members === undefined
+      ? null
+      : createMemberRoutes({
+          system: options.members.system,
+          zone: options.members.zone,
+          isUnlocked: (token) => isValidToken(state, token, system.now()),
+          readBody: (req, fields) => readBody(req, fields),
+          journal: (event) =>
+            writeLog(event.operation, event.result, "slug" in event ? { slug: event.slug } : null, event.detail, null, { actor: event.actor, member: event.member }),
+          restart: memberRestart,
+          random: options.random,
+        });
+
   // --- Backups -----------------------------------------------------------------
 
   // Their rules live in src/backup/routes.ts; the token, the body, the lock and
@@ -1433,6 +1512,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   const routes: Record<string, Record<string, (req: Request) => Promise<Response>>> = {
     ...connectorRoutes,
+    ...(members?.dashboard ?? {}),
     "/projects": { GET: listProjects },
     "/log": { GET: readLog },
     "/unlock": { POST: unlock },
@@ -1452,12 +1532,13 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   let inFlight = 0;
 
-  const handle: Handler = async (req) => {
+  /** One socket's routes, behind the same bound on requests in flight and the same catch. */
+  const serve = (table: Record<string, Record<string, (req: Request) => Promise<Response>>>): Handler => async (req) => {
     if (inFlight >= maxInFlight) return busy();
     inFlight++;
     try {
       const path = new URL(req.url).pathname;
-      const route = Object.hasOwn(routes, path) ? routes[path] : undefined;
+      const route = Object.hasOwn(table, path) ? table[path] : undefined;
       if (route === undefined) return error("not-found", "no such route");
 
       const handler = Object.hasOwn(route, req.method) ? route[req.method] : undefined;
@@ -1475,7 +1556,13 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       inFlight--;
     }
   };
-  return Object.assign(handle, { isUnlocked: (token: unknown) => isValidToken(state, token, system.now()) });
+
+  const handle = serve(routes);
+  return Object.assign(handle, {
+    isUnlocked: (token: unknown) => isValidToken(state, token, system.now()),
+    owner: serve(members?.owner ?? {}),
+    ensureMemberKeys: async () => (members === null ? null : members.ensureKeys()),
+  });
 }
 
 function errorName(e: unknown): string {

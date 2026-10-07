@@ -6,10 +6,12 @@ the discrepancies between what the repositories ask for and what the machine
 does, the only part of the dashboard that teaches you something, and the list
 of sites; *Activity*, the audit of the whole machine, every component's in one
 log; *Team*, the
-tokens that deploy without SSH; *Connectors*, the credentials the egress proxy
-lends to projects. **A site**: *Overview*, *Audience*, *Secrets*, *Guests*,
-*Sharing*, *Access* and *Backups*, everything that concerns that site and only
-it.
+tokens that deploy without SSH; *Members*, the people who sign in here with
+their work account, a role on each project; *Connectors*, the credentials the
+egress proxy lends to projects. **A site**: *Overview*, *Audience*, *Secrets*,
+*Guests*, *Sharing*, *Access* and *Backups*, everything that concerns that site
+and only it. A member sees Sites and Activity reduced to their projects, and in
+a project its Overview and Audience: see [Members](#members).
 
 **Few writes, and each one is a decision.** No button sets a preview lock. One
 machine serves every site, with no staging and no automatic recovery: what
@@ -40,6 +42,10 @@ relays to a component that judges for itself what it accepts:
   The steward starts a restore one-shot, which saves the current data first,
   swaps the folders and puts them back if the service does not come back. See
   [src/backup/README.md](src/backup/README.md).
+- **the dashboard's members and their restarts**, the *Members* page and a
+  project's *Overview*. The steward keeps the registry, opens a member's
+  session from an assertion the portal signed, and judges every restart a
+  member asks for. See [Members](#members).
 
 ## The web service does not read the machine
 
@@ -171,8 +177,8 @@ The rest of the door:
 
 | Measure | Detail |
 |---|---|
-| Session | 32-byte token, kept **hashed** in the database, `__Host-` cookie, `HttpOnly`, `SameSite=Strict`, seven days |
-| Rate limiting | after 3 failures, 5 s doubling up to an hour, **global** rather than per address: one user, and changing address would sidestep a per-IP counter for free |
+| Session | 32-byte token, kept **hashed** in the database, `__Host-` cookie, `HttpOnly`, `SameSite=Strict`, seven days; a member's, signed in with the provider, twelve hours, under their email in the same table (see [Members](#members)) |
+| Rate limiting | after 3 failures, 5 s doubling up to an hour, **global** rather than per address: one password, and changing address would sidestep a per-IP counter for free. Members' sign-ins are counted per identity, beside it |
 | `Origin` | compared to the literal `PUBLIC_URL`, on sign-in, sign-out, guest access and every non-`GET` secrets route, portal included. Behind Caddy, `req.url` announces `127.0.0.1:3022` and cannot serve as a reference. With `SameSite=Strict` it stands in for a CSRF token: `src/sessions.ts` says why a token would add nothing |
 | With no hash | the service starts, says so in its log, and refuses everyone. It never opens |
 
@@ -254,6 +260,8 @@ steward.js         root, hardened sitesolide-steward.service
    |-- reads  /var/backups/sitesolide/<slug>/            the snapshots, by name
    |-- reads  /var/lib/sitesolide-backup/backup.db       the bucket's index, the audit
    |-- writes /var/lib/sitesolide-backup/requests/       a restore request, consumed by the one-shot
+   |-- keeps  /var/lib/sitesolide-steward/members.json   the members, their sessions, the key pair, see Members
+   |-- lays   /etc/sitesolide-portal/assertion.key       the private key the portal signs members' sign-ins with
    `-- runs   systemctl reset-failed | restart | show <unit>
               systemctl start sitesolide-gatekeeper-<on|off>@<slug>
               systemctl start --no-block sitesolide-restore@<slug>
@@ -397,6 +405,192 @@ server.ts  --  GET 127.0.0.1:3129/audit, /status  -->  egress proxy
 The steward's unit gains `ReadWritePaths=-/etc/sitesolide-egress`, with the
 dash: the folder exists only once `bin/deploy-egress.sh` has run.
 
+## Members
+
+People the super admin invites by email, who sign in to the dashboard with
+their work account, through the portal's identity provider, and hold a role on
+each project: **Viewer** sees the project, its state, audience and activity;
+**Developer** also restarts its service; **Project admin** does the same for
+now, and gains more in a later release. The super admin is whoever holds the
+dashboard's password, made by `sitesolide setup`: they keep it, to sign in and
+to unlock, and nothing about it changes. A member never holds a password, a
+token or root.
+
+```
+browser, Sign in with ...                   the dashboard's own sign-in page
+   |  GET /api/sso/begin                     binding cookie on the dashboard's host
+   v
+server.ts  --  POST /admin/dashboard/flow  -->  portal, on the loopback: a flow sealed for the dashboard's host
+   |  303 to portal.<zone>/oidc/start
+   v
+portal  -->  identity provider  -->  portal /oidc/callback   the portal's usual sign-in
+   |  303 to dashboard.<zone>/api/sso/complete?code=...
+   v
+server.ts  --  POST /admin/dashboard/redeem  -->  portal: the code, for an assertion it signed
+   |  POST /members/signin { assertion }   on the steward's socket
+   v
+steward.js         root: the signature with its own public key, the audience, the expiry,
+                   the nonce never seen, the email in members.json; the session drawn
+   |-- reads/writes /var/lib/sitesolide-steward/members.json           the registry, 0600
+   |-- reads/writes /var/lib/sitesolide-steward/member-sessions.json   sessions and nonces, hashes only
+   |-- keeps        /var/lib/sitesolide-steward/assertion.pub          the public key, 0600
+   `-- lays         /etc/sitesolide-portal/assertion.key               the private key, root:site-portal 0640
+```
+
+**The portal says who; the steward says what they may do.** The dashboard is
+assumed compromised, as everywhere in this README, so it is never believed
+when it names someone. The portal, the one authority on identities, runs its
+usual sign-in (portal/README.md, "Signing in with a work account") and signs
+what the provider proved: an Ed25519 assertion (portal/src/assertion.ts) of the
+verified email, when the person last signed in at the provider, for the
+dashboard alone, for five minutes, with a nonce. The steward checks it with
+the public key it keeps itself, refuses it replayed, too old or for an email
+its registry does not name, and only then opens a session. Every write a
+member asks for carries that session, and the steward judges it against the
+registry as it reads at that moment: the member still there, their role on
+that project. Its journal names the email it verified, never one a request
+carries. A compromised dashboard can act only for the members whose sessions
+pass through it, within their roles; it can neither make a member, nor widen
+one, nor forge an assertion, the private key being out of its reach.
+
+**What a member sees, the dashboard filters**, from data it already holds:
+`/api/state` keeps their projects alone and drops the machine's own figures,
+`/api/audit` keeps the rows of their projects and their own
+(src/members/view.ts, src/audit/merge.ts). Every other route is the super
+admin's: `server.ts` answers a member's session 403 before the handler runs,
+and the handler reads the owner's sessions alone besides (`ownerSessions` in
+src/routes.ts), so that a route forgetting the first still refuses a member.
+The page shows a member Sites and Activity, and in a project its Overview,
+with *Restart* for a Developer or a Project admin, and its Audience.
+
+### The key pair
+
+**The steward draws it, as root.** At startup, and before every use, the
+steward reads its public half, `assertion.pub` in its own state folder, and
+the private half it laid for the portal; missing or not matching, it draws a
+new pair, lays the private half first, then the public one. The portal reads
+the private key at every redemption, so a pair laid or replaced needs no
+restart of the portal.
+
+**Why a file of its own, and not a variable in `portal.env`.** `portal.env`
+is managed from the Secrets section: an unlocked dashboard reads its values,
+restores its previous versions, and a compromised one, during an unlock,
+would read the private key and forge assertions for anyone, for as long as
+the key lived. The key therefore lives outside `/etc/sitesolide`, which the
+Secrets section manages, in `/etc/sitesolide-portal/`, a folder root owns,
+created `0755` by `bin/deploy-steward.sh`; the file is `root:site-portal 0640`:
+root writes it, the portal's account reads it, the dashboard's cannot. It
+never enters an environment, where every process of the portal's account and
+a crash report would see it. `portal.env` keeps its rule, a hash and the
+`OIDC_*` settings, nothing else. The steward's unit makes the folder writable
+with `ReadWritePaths=-/etc/sitesolide-portal`, the dash for a machine where it
+does not exist yet.
+
+### Sessions
+
+A member's session is the steward's: it draws the token when the assertion
+checks out, the dashboard sets it as the browser's `__Host-session` and keeps
+its hash in `dashboard.db`, under the member's email in the `identity` column
+of `sessions`, beside the owner's (`owner`). Every member request presents it,
+and the dashboard asks the steward who it belongs to, the answer kept five
+seconds (src/members/identity.ts): removed, a member sees nothing more within
+seconds, and their next write is refused at once. Both sides keep hashes only;
+the steward keeps its own in `member-sessions.json`, so that restarting it,
+or the dashboard, signs nobody out.
+
+| Measure | Detail |
+|---|---|
+| Lifetime | twelve hours, the steward's and the cookie's alike. The portal spares a dashboard sign-in the provider only while its own session is younger than twelve hours (`DASHBOARD_REAUTH_S`): a person closed at the provider is out of the dashboard a day after they last proved themselves there at most, as out of every site |
+| Assertion | five minutes, once: its nonce is remembered on disk until it would have expired. A sign-in at the provider older than a day opens no session |
+| Rate limiting | per identity, three refusals tolerated then five seconds doubling up to an hour, and ten sign-ins in ten minutes for one email; sixty sign-ins a minute for the whole machine; the owner's password counter unchanged, global (src/members/limiter.ts) |
+| Bounds | ten live sessions per member, the oldest giving way; a thousand on the machine; two hundred members, a hundred projects each |
+| Rotation | a new owner's password closes the owner's sessions, never a member's, which do not rest on it |
+| Sign-out | closes the dashboard's row and the steward's session, which journals `member.signout` |
+
+### Inviting, changing, removing
+
+From the *Members* page, or with `sitesolide members` over the owner's SSH
+([docs/commands.md](../docs/commands.md#the-dashboards-members)). Both end at the
+steward, which judges: an address outside `OIDC_ALLOWED_DOMAINS`, read from
+`portal.env`, is refused, as the portal would refuse it at sign-in, unless it
+is one of the portal's admin emails; a role only goes on a deployed project,
+never on the platform's own (`dashboard`, `portal`, `api`, `analytics`,
+`landing`, `www`, the landing's folder). **Inviting and changing roles ask for
+the unlock**, the same ten minutes as creating a token: a member can restart
+services. **Removing does not**, as revoking a token does not: closing someone
+out never waits for a password, and the worst a compromised dashboard does with
+it is remove everyone. No email is sent: the page and the command give the line
+to send.
+
+`sitesolide members` speaks to the steward's **owner socket**,
+`/run/sitesolide-steward-owner/owner.sock`, which only root opens: a runtime
+folder of its own, `0700`, the socket `0600`, both root's. Root asks it with
+`curl` on the machine, the body on standard input, and needs no unlock there:
+it is root. The socket carries the registry and nothing else.
+
+The steward's routes, in src/members/protocol.ts:
+
+| Socket | Route | What it does |
+|---|---|---|
+| dashboard's | `GET /members` | the registry, and what portal.env says of signing in |
+| dashboard's | `GET /members/key` | the public key, laid first if missing |
+| dashboard's | `PUT /members/member` `{ token, email, roles }` | invite, or replace the roles whole: the live unlock |
+| dashboard's | `DELETE /members/member` `{ email }` | remove, their sessions with them |
+| dashboard's | `POST /members/signin` `{ assertion }` | a session for a member, from an assertion it verifies |
+| dashboard's | `POST /members/whoami` `{ session }` | who the session is, their roles now |
+| dashboard's | `POST /members/signout` `{ session }` | closes it |
+| dashboard's | `POST /members/restart` `{ session, slug }` | a Developer's or Project admin's restart, judged under the lock |
+| owner's | `GET /members`, `PUT` and `DELETE /members/member` | the same, for root, with no unlock token |
+
+A member's restart is the Secrets section's restart, under the same lock and
+the same eight seconds of observation, without its check that the unit reads a
+managed file: a member restarts a service to restart it. The member's role is
+asked again once the lock is taken: removed while it waited, nothing restarts.
+A static site has no service; the dashboard is never a member's.
+
+### Threat model
+
+| Threat | What stops it |
+|---|---|
+| A compromised dashboard | It cannot make a member, nor widen one: the registry is root's, inviting asks for the unlock, and every write is judged by the steward on its own registry. It cannot forge an assertion: the private key is the portal's alone. It acts for the members whose sessions pass through it while it is compromised, within their roles, and reads what it already read. During an owner's unlock it can do what an unlock allows, inviting included, as it can already create a token. |
+| A stolen member cookie | Half a day at most, within that member's roles; removing them closes it at the next request. |
+| A replayed assertion | Its nonce is spent at the first session it opens, on disk; five minutes later it has expired anyway. |
+| A code carried to a site, a site's code carried here | A code says which it was minted for: a dashboard's is redeemed for an assertion only, a site's for a cookie only (portal/src/handoff.ts). |
+| A compromised portal | It can sign an assertion for anyone, and act as any member within their roles, as it already opens every protected site. It cannot invite anyone nor change a role. |
+| A flood of failed sign-ins | Twenty failures a minute enter the journal at most, so that a flood cannot push its history out; the rest are refused unrecorded. |
+
+### Upgrading: members
+
+`sitesolide upgrade` runs the three steps in their order; by hand:
+
+```bash
+bin/deploy-steward.sh               # 1. the registry, the owner's socket, the key pair, the key's folder
+cd dashboard && sitesolide deploy   # 2. the sign-in with the provider, the Members page, the member views
+cd portal && sitesolide deploy      # 3. the two routes the dashboard's sign-in needs
+```
+
+1. **The steward.** Its unit gains the owner's runtime folder and
+   `ReadWritePaths=-/etc/sitesolide-portal`; the script creates that folder
+   before restarting it, and checks the owner's socket: `700 root:root` and
+   `600 root:root`, root answered, site-dashboard refused. Check: the script
+   ends on `members' key laid for the portal, 640 root:site-portal`;
+   `sitesolide members` lists nobody. The journal gains `actor` and `member`
+   on every line; a line from before reads as `owner`. Roll back:
+   `bin/deploy-steward.sh` from the previous commit; `members.json`,
+   `member-sessions.json` and the key stay, unread, and the journal's newer
+   lines are skipped by the older steward.
+2. **The dashboard.** `dashboard.db` gains the `identity` column, every session
+   in place the owner's. Check: the sign-in page offers *Sign in with ...* once
+   the portal has a provider; the *Members* page lists the registry. Roll back:
+   deploy the previous commit of `dashboard/`; the column stays, unread, and
+   member sessions in flight read as the owner's no more than before, since an
+   older dashboard has no route a member reaches.
+3. **The portal.** Check: `journalctl -u portal` says `dashboard sign-in
+   offered, back to https://dashboard.<zone>` once a provider is configured,
+   and a member signs in. Without it, *Sign in with ...* lands back on the
+   sign-in page saying signing in is not available. Roll back: deploy the
+   previous commit of `portal/`.
+
 ## The audit
 
 The machine-level *Activity* page answers "who did what": who deployed, who
@@ -422,7 +616,9 @@ server.ts          reads, merges, bounds; writes nothing
 - **No new road, no new privilege.** The same clients as the Sharing,
   Connectors, Backups and Secrets pages, which already read these routes one
   at a time ([src/audit/sources.ts](src/audit/sources.ts)).
-- **The session is enough.** No row carries a secret value: each component
+- **The session is enough**, and a member's reads the rows of their projects
+  and their own, never the rest (`restrict` in src/audit/merge.ts, part of the
+  cursor). No row carries a secret value: each component
   sees to it where it writes, and a test in each says so, against the values
   in play (`portal/tests/sso.test.ts`, `egress/tests/audit.test.ts`,
   `tests/control-api.test.ts` and `control-team.test.ts`,
@@ -985,6 +1181,7 @@ ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
 | `steward.ts`, `src/secrets/`, `src/connectors/` (steward side), `bin/cli/connectors.ts`, `infra/steward/`, `portal/src/sharing.ts` | `bin/deploy-steward.sh` |
 | `gatekeeper.ts`, `src/gatekeeper/`, `infra/gatekeeper/`, `bin/cli/fragment.ts`, `bin/cli/portal.ts` | `bin/deploy-gatekeeper.sh` |
 | `src/control/steward.ts`, `src/control/system.ts`, `src/control/tokens.ts`, `src/control/policy.ts` | `bin/deploy-steward.sh` |
+| `src/members/steward.ts`, `registry.ts`, `sessions.ts`, `system.ts`, `portal/src/assertion.ts` | `bin/deploy-steward.sh`; the last one `sitesolide deploy` in `portal/` too |
 | `installer.ts`, `src/installer/`, `src/control/policy.ts`, `infra/installer/`, `bin/cli/` generators | `bin/deploy-installer.sh` |
 | `backup.ts`, `src/backup/` (but its steward routes), `infra/backup/` | `bin/deploy-backup.sh install` |
 | `src/backup/routes.ts`, `src/backup/reader.ts` | `bin/deploy-steward.sh` |
@@ -1013,7 +1210,10 @@ bun run page-bench       # the whole dashboard with plausible fake data
 The bench runs the real `server.ts` in a temporary directory, with a fake
 steward on a Unix socket, a simulated gatekeeper and a state file rewritten
 every thirty seconds. Nothing in it touches a machine, a real portal or a real
-vault.
+vault. Its steward carries the real member routes, and its portal signs
+members in: *Sign in with Google* on the sign-in page leads to a page of the
+bench's that signs in alice@example.com, a Developer on `cms` and a Viewer on
+`calendar`, or stranger@example.com, whom the registry does not name.
 
 ## Tests
 
@@ -1039,6 +1239,19 @@ token on a real port in front of a fake portal on another, every authorisation
 and the actor the portal receives (tests/control-sharing.test.ts). What only a
 machine can prove, `useradd` and `userdel`, `systemd-run`'s confinement and
 the template unit, is not covered here.
+
+For the members: every decision of the steward's on a throwaway tree, a
+signature by another key, another audience, an assertion expired, replayed,
+even after a restart, too old, an email the registry does not name, a viewer's
+restart, a project with no role, a member removed, even while their restart
+waited its turn, and the journal naming who it verified
+(tests/members-steward.test.ts); the registry, the sessions and what a member
+sees of the snapshot (tests/members-registry.test.ts); sessions with an
+identity, the steward asked who they are, the rate limiting
+(tests/members-sessions.test.ts); and a member's whole road through the real
+`server.ts` in its own process, the steward's routes on a real socket and a
+portal of the tests' making that signs with the steward's key
+(tests/members-flow.test.ts).
 
 For the audit: each source's rows in the shared shape, bounded, and garbage
 left out (tests/audit-merge.test.ts); the merge, the filters and a cursor

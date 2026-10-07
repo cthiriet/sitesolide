@@ -70,6 +70,9 @@ const BORROWINGS = [
   // The names of the data snapshots: the backup component writes them, the
   // steward lists them and `sitesolide backups` reads them, all by this rule.
   "bin/cli/backups.ts",
+  // The identity assertion: the portal signs it, the steward verifies it
+  // before it opens a member session, with this one copy of the format.
+  "portal/src/assertion.ts",
 ];
 
 /** The header of every copied module. */

@@ -679,7 +679,7 @@ export function unknownOptions(command: string, arguments_: string[]): Failure |
 }
 
 /** The commands only the owner's SSH access carries. */
-export const SSH_COMMANDS = ["lock", "unlock", "domain", "remove", "run", "secrets"];
+export const SSH_COMMANDS = ["lock", "unlock", "domain", "remove", "run", "secrets", "members"];
 
 export const REMOTE_USAGE = [
   "usage, with a team token:",

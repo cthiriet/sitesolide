@@ -29,6 +29,11 @@ UNIT_SOURCE="$REPO_ROOT/infra/steward/$UNIT.service"
 TARGET_JS="/usr/local/lib/sitesolide/steward.js"
 SOCKET_FOLDER="/run/$UNIT"
 SOCKET="$SOCKET_FOLDER/secretaire.sock"
+# The owner's socket, which only root opens: `sitesolide members` speaks to it.
+OWNER_FOLDER="/run/$UNIT-owner"
+OWNER_SOCKET="$OWNER_FOLDER/owner.sock"
+# Where the steward lays the private key the portal signs members' sign-ins with.
+PORTAL_KEY_FOLDER="/etc/sitesolide-portal"
 
 fail() {
   echo "!! $1" >&2
@@ -107,6 +112,13 @@ case "$dashboard_env" in
     ;;
 esac
 
+# The folder of the portal's key, root's and 0755: the steward lays the key in
+# it, root:site-portal 0640, and its unit makes it writable only if it exists
+# when the steward starts. Never through a link: a folder of another kind there
+# is a decision to read on the machine.
+key_folder="$(ssh -n "$SITESOLIDE_SERVER" "if [ -L $PORTAL_KEY_FOLDER ]; then echo link; elif [ -e $PORTAL_KEY_FOLDER ] && [ ! -d $PORTAL_KEY_FOLDER ]; then echo other; else echo ok; fi")"
+[ "$key_folder" = "ok" ] || { echo "!! $PORTAL_KEY_FOLDER is a $key_folder, expected a folder of root's" >&2; exit 1; }
+
 echo "-> sending"
 # A folder whose name is drawn by mktemp rather than predictable: what comes out
 # of it is installed as root.
@@ -116,6 +128,7 @@ rsync -a "$LOCAL/steward.js" "$UNIT_SOURCE" "$SITESOLIDE_SERVER:$REMOTE/"
 echo "-> installation"
 ssh -n "$SITESOLIDE_SERVER" "
   set -e
+  sudo install -d -m 0755 -o root -g root $PORTAL_KEY_FOLDER
   sudo install -D -m 0644 -o root -g root $REMOTE/steward.js $TARGET_JS
   sudo install -m 0644 -o root -g root $REMOTE/$UNIT.service /etc/systemd/system/$UNIT.service
   rm -rf $REMOTE
@@ -189,4 +202,21 @@ case "$seen" in
   *) fail "nobody is not refused by the folder's permissions: stat says '$seen'" ;;
 esac
 
-echo "   active, socket 660 root:site-dashboard, open to the dashboard and closed to the others"
+# The owner's socket: root's alone. site-dashboard is refused by the folder,
+# as nobody is by the dashboard's.
+permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $OWNER_FOLDER $OWNER_SOCKET 2>/dev/null | tr '\n' ' '")"
+[ "$permissions" = "700 root:root 600 root:root " ] || fail "$OWNER_FOLDER and its socket are '$permissions', expected 700 root:root and 600 root:root"
+code="$(ssh -n "$SITESOLIDE_SERVER" "sudo curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $OWNER_SOCKET http://steward/members" || true)"
+[ "$code" = "200" ] || fail "root does not get 200 on the owner's socket /members (got: ${code:-nothing})"
+code="$(ssh -n "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $OWNER_SOCKET http://steward/members" || true)"
+[ "$code" = "000" ] || fail "site-dashboard reaches the owner's socket (code ${code:-nothing}): it must be root's alone"
+
+# The members' key pair: laid at startup once the portal's account exists.
+key="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $PORTAL_KEY_FOLDER/assertion.key 2>/dev/null || echo missing")"
+case "$key" in
+  "640 root:site-portal") echo "   members' key laid for the portal, 640 root:site-portal" ;;
+  missing) echo "   note: no members' key yet, the portal is not deployed: it is laid at the first sign-in once it is" ;;
+  *) fail "$PORTAL_KEY_FOLDER/assertion.key is '$key', expected 640 root:site-portal" ;;
+esac
+
+echo "   active, socket 660 root:site-dashboard, open to the dashboard and closed to the others; the owner's socket root's alone"

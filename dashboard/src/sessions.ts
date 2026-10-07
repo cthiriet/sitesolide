@@ -48,14 +48,30 @@ export async function tokenHash(token: string): Promise<string> {
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * Who a session belongs to: `owner`, whoever typed the dashboard's password,
+ * or the email of a member who signed in with the portal's identity provider.
+ * An email always holds an `@`, `owner` never does.
+ */
+export const OWNER_IDENTITY = "owner";
+
 export type Session = {
   hash: string;
   createdAt: number;
   seenAt: number;
+  identity: string;
 };
 
-export function isSessionAlive(session: Session, durationMs: number, now: number): boolean {
-  return now - session.createdAt < durationMs;
+export function isMemberSession(session: Session): boolean {
+  return session.identity !== OWNER_IDENTITY;
+}
+
+/**
+ * `durationMs` is the owner's; a member's session lasts `memberDurationMs`,
+ * half a day, whatever the owner's is.
+ */
+export function isSessionAlive(session: Session, durationMs: number, now: number, memberDurationMs: number = durationMs): boolean {
+  return now - session.createdAt < (isMemberSession(session) ? memberDurationMs : durationMs);
 }
 
 /**

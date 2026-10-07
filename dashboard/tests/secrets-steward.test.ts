@@ -1903,6 +1903,8 @@ describe("POST /password", () => {
       a: bench.clock.t,
       operation: "password",
       result: "ok",
+      actor: "owner",
+      member: null,
       slug: "portal",
       file: "portal.env",
       variable: "PASSWORD_HASH",
@@ -2917,13 +2919,17 @@ describe("unit and capabilities", () => {
     }
     expect(unit).not.toMatch(/^CapabilityBoundingSet=.*(CAP_FOWNER|CAP_DAC_OVERRIDE|CAP_SYS_ADMIN)/m);
     // Nothing written outside /etc/sitesolide, the egress proxy's connectors,
-    // its own directories and the backup component's state, where it drops
-    // restore requests: Caddy, the gatekeeper and the archives are only read.
+    // the portal's key, its own directories and the backup component's state,
+    // where it drops restore requests: Caddy, the gatekeeper and the archives
+    // are only read.
     expect(directives.filter((line) => line.startsWith("ReadWritePaths="))).toEqual([
       "ReadWritePaths=/etc/sitesolide",
       "ReadWritePaths=-/etc/sitesolide-egress",
+      "ReadWritePaths=-/etc/sitesolide-portal",
       "ReadWritePaths=-/var/lib/sitesolide-backup",
     ]);
+    // The owner's socket has a runtime folder of its own, which systemd removes at stop.
+    expect(directives).toContain("RuntimeDirectory=sitesolide-steward sitesolide-steward-owner");
     expect(unit).not.toMatch(/^ReadWritePaths=.*\/var\/backups/m);
     expect(unit).not.toMatch(/^(ReadWritePaths|BindPaths)=.*(caddy|gatekeeper)/m);
     expect(unit).not.toMatch(/^(InaccessiblePaths|TemporaryFileSystem)=.*(\/etc\/caddy|\/run)/m);
@@ -2953,7 +2959,7 @@ describe("integration: dashboard/steward.ts on a socket", () => {
   test("listens, sets the socket's permissions, answers, and stops cleanly", async () => {
     const root = mkdtempSync(join(tmpdir(), "secr-"));
     toClean.push(root);
-    for (const folder of ["sites/cms", "sites/dashboard", "secrets", "units", "state/precedents", "run", "caddy", "gatekeeper"]) {
+    for (const folder of ["sites/cms", "sites/dashboard", "secrets", "units", "state/precedents", "run", "owner", "portal-key", "caddy", "gatekeeper"]) {
       mkdirSync(join(root, folder), { recursive: true });
     }
     writeFileSync(
@@ -2984,6 +2990,8 @@ describe("integration: dashboard/steward.ts on a socket", () => {
         CADDY_FOLDER: join(root, "caddy"),
         GATEKEEPER_FOLDER: join(root, "gatekeeper"),
         SOCKET: socket,
+        OWNER_SOCKET: join(root, "owner", "owner.sock"),
+        PORTAL_KEY_FOLDER: join(root, "portal-key"),
         SOCKET_GROUP: "",
         OWNERS: "",
         SYSTEMCTL: "false",
@@ -3007,6 +3015,16 @@ describe("integration: dashboard/steward.ts on a socket", () => {
       expect(statSync(socket).mode & 0o777).toBe(0o660);
       // The temporary name took the known name: nothing else is left.
       expect(readdirSync(join(root, "run"))).toEqual(["secretaire.sock"]);
+
+      // The owner's socket: root's alone, the members registry and nothing else.
+      const ownerSocket = join(root, "owner", "owner.sock");
+      expect(statSync(join(root, "owner")).mode & 0o777).toBe(0o700);
+      expect(statSync(ownerSocket).mode & 0o777).toBe(0o600);
+      expect((await fetch("http://steward/members", { unix: ownerSocket })).status).toBe(200);
+      expect((await fetch("http://steward/projects", { unix: ownerSocket })).status).toBe(404);
+      // The key pair was laid at startup, the private half where the portal reads it.
+      expect(existsSync(join(root, "portal-key", "assertion.key"))).toBe(true);
+      expect(existsSync(join(root, "state", "assertion.pub"))).toBe(true);
       expect(existsSync(join(root, "secrets/.cms.env.0123456789abcdef.tmp"))).toBe(false);
 
       const { projects: enumerate } = (await (await fetch("http://steward/projects", { unix: socket })).json()) as ProjectsResponse;

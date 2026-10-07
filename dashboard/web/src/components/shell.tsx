@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react"
+import { ShieldOff } from "lucide-react"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { AppSidebar, MobileTabs } from "@/components/sidebar"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { Logo } from "@/components/logo"
 import { useNavigation } from "@/components/navigation"
-import { CONTAINER, HeaderSkeleton, PanelSkeleton } from "@/components/page"
+import { CONTAINER, EmptyState, HeaderSkeleton, PageBody, PageHeader, Panel, PanelSkeleton } from "@/components/page"
 import { HomePage } from "@/components/pages/home"
 import { ActivityPage } from "@/components/pages/activity"
 import { ConnectorsPage } from "@/components/pages/connectors"
 import { TeamPage } from "@/components/pages/team"
+import { MembersPage } from "@/components/pages/members"
 import { AccessSection } from "@/components/pages/site-access"
 import { BackupsSection } from "@/components/pages/site-backups"
 import { OverviewSection } from "@/components/pages/site-overview"
@@ -19,7 +21,7 @@ import { SharingSection } from "@/components/pages/site-sharing"
 import { SecretsSection } from "@/components/pages/site-secrets"
 import { SecretsActionsProvider } from "@/components/secrets-actions"
 import { SIDEBAR_WIDTH, readCollapsed, storeCollapsed } from "@/lib/sidebar"
-import { PAGE_TITLE_ID, pendingTitle, documentTitle, pageTitle, pageUrl, type Page } from "@/lib/pages"
+import { PAGE_TITLE_ID, mayOpen, pendingTitle, documentTitle, pageTitle, pageUrl, type Page } from "@/lib/pages"
 import { cn } from "@/lib/utils"
 
 function Section({ page }: { page: Extract<Page, { name: "site" }> }) {
@@ -42,12 +44,33 @@ function Section({ page }: { page: Extract<Page, { name: "site" }> }) {
 }
 
 /**
+ * What a member reads where the page is the super admin's: the service refuses
+ * it too, this only says so instead of showing an error.
+ */
+function NotYours({ page }: { page: Page }) {
+  return (
+    <>
+      <PageHeader title={pageTitle(page)} />
+      <PageBody>
+        <Panel>
+          <EmptyState icon={ShieldOff} title="Not available to members">
+            This part of the dashboard is the super admin's. You see the projects you hold a role on, from Sites.
+          </EmptyState>
+        </Panel>
+      </PageBody>
+    </>
+  )
+}
+
+/**
  * The current page. The actions on secrets and their dialogs live above it,
  * remounted from one site to the next through the key: no dialog carries over
  * to the next site. The section itself is remounted on every section change,
  * and with it any revealed value.
  */
 function CurrentPage({ page }: { page: Page }) {
+  const { identity } = useData()
+  if (!mayOpen(page, identity)) return <NotYours page={page} />
   if (page.name === "site") {
     return (
       <SecretsActionsProvider key={page.slug}>
@@ -57,7 +80,17 @@ function CurrentPage({ page }: { page: Page }) {
   }
   return (
     <SecretsActionsProvider key={page.name}>
-      {page.name === "home" ? <HomePage /> : page.name === "connectors" ? <ConnectorsPage /> : page.name === "team" ? <TeamPage /> : <ActivityPage />}
+      {page.name === "home" ? (
+        <HomePage />
+      ) : page.name === "connectors" ? (
+        <ConnectorsPage />
+      ) : page.name === "team" ? (
+        <TeamPage />
+      ) : page.name === "members" ? (
+        <MembersPage />
+      ) : (
+        <ActivityPage />
+      )}
     </SecretsActionsProvider>
   )
 }

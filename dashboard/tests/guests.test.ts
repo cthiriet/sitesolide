@@ -80,7 +80,7 @@ function createStore(): Store {
     async openSession(now) {
       const token = `token-${sessions.size}`;
       const hash = await tokenHash(token);
-      sessions.set(hash, { hash, createdAt: now, seenAt: now });
+      sessions.set(hash, { hash, createdAt: now, seenAt: now, identity: "owner" });
       return token;
     },
     async readSession(token) {

@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { isPasswordValid } from "./borrowed/auth";
 import { createAdmin, createSharingAdmin } from "./src/admin";
+import { ASSERTION_KEY_FILE, createDashboardAdmin, dashboardOrigin, readKeyFile } from "./src/dashboard";
 import { auditStore, guestStore, openDatabase, sharingStore } from "./src/database";
 import { COOKIE_DURATION_S, PASSWORD_HASH, ONLINE, DATABASE_FILE, KEY_FILE, PORT, PUBLIC_URL } from "./src/config";
 import { deriveKey, KEY_BYTES } from "./src/gate";
@@ -40,6 +41,13 @@ const { settings, problems } = readSettings(process.env, PUBLIC_URL);
 for (const problem of problems) console.warn(`sign-in with a provider: ${problem}`);
 if (settings !== null) console.log(`sign-in with ${settings.providerName} offered, callback ${settings.redirectUri}`);
 
+// The dashboard signs in through the same flow, from its own address, which
+// follows from the portal's: see src/dashboard.ts.
+const dashboard = settings === null ? null : dashboardOrigin(PUBLIC_URL, process.env.DASHBOARD_URL);
+if (settings !== null) {
+  console.log(dashboard === null ? "dashboard sign-in not offered: the portal's address does not start with portal." : `dashboard sign-in offered, back to ${dashboard}`);
+}
+
 const database = openDatabase(DATABASE_FILE);
 const guests = guestStore(database);
 const sharing = sharingStore(database);
@@ -56,6 +64,10 @@ const routes = createRoutes({
   audit,
 });
 
+// One store of codes for the sites and the dashboard: a code says which it
+// was minted for, and is redeemed for nothing else.
+const handoffs = handoffStore();
+
 const sso = createSso({
   key,
   settings,
@@ -63,7 +75,17 @@ const sso = createSso({
   online: ONLINE,
   sharing,
   audit,
-  handoffs: handoffStore(),
+  handoffs,
+  dashboardOrigin: dashboard,
+});
+
+const dashboardAdmin = createDashboardAdmin({
+  key,
+  settings,
+  origin: dashboard,
+  handoffs,
+  audit,
+  readKey: () => readKeyFile(process.env.ASSERTION_KEY_FILE ?? ASSERTION_KEY_FILE),
 });
 
 const admin = createAdmin(guests, Date.now, undefined, audit);
@@ -102,6 +124,8 @@ const server = Bun.serve({
     "/admin/sharing": { GET: sharingAdmin.list },
     "/admin/sharing/:host": { PUT: (req) => sharingAdmin.replace(req, req.params.host) },
     "/admin/audit": { GET: sharingAdmin.audit },
+    "/admin/dashboard/flow": { POST: dashboardAdmin.flow },
+    "/admin/dashboard/redeem": { POST: dashboardAdmin.redeem },
   },
 
   fetch() {

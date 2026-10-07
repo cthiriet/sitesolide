@@ -102,6 +102,8 @@ export function logEntry(partial: Partial<LogEntry> = {}): LogEntry {
     a: 1_800_000_000_000,
     operation: "set",
     result: "ok",
+    actor: "owner",
+    member: null,
     slug: "cms",
     file: "cms.env",
     variable: "CMS_TOKEN",

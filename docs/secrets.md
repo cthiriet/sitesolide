@@ -64,7 +64,10 @@ is listed as unmanaged, with the command that repairs it.
 
 **What belongs to no project is not the dashboard's**: `cloudflare.env`, the
 token Caddy reads for its certificates, lives in `/etc/caddy` and is changed on
-the machine.
+the machine. Nor is the key the dashboard's members sign in with: the steward
+draws it and lays its private half in `/etc/sitesolide-portal/`, where only
+the portal's account reads it and the Secrets section never shows it, see
+[dashboard/README.md](../dashboard/README.md#the-key-pair).
 
 No secret is shared, and that is the rule: the shared service `api/` sends no
 mail and makes no call. Each file carries its project's name, so that each

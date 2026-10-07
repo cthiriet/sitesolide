@@ -17,11 +17,12 @@
  * Each path comes from a variable, with the production default. On the
  * workstation, a test tree, with no account or group to check:
  *
- *   E=$(mktemp -d) && mkdir -p $E/sites $E/secrets $E/units $E/state $E/run $E/caddy $E/gatekeeper
+ *   E=$(mktemp -d) && mkdir -p $E/sites $E/secrets $E/units $E/state $E/run $E/owner $E/caddy $E/gatekeeper $E/portal-key
  *   SITES_DIR=$E/sites SECRETS_FOLDER=$E/secrets UNITS_FOLDER=$E/units \
  *     STATE_FOLDER=$E/state CADDY_FOLDER=$E/caddy GATEKEEPER_FOLDER=$E/gatekeeper \
  *     BACKUP_FOLDER=$E/backups BACKUP_STATE_FOLDER=$E/backup-state BACKUP_RUN_FOLDER=$E/backup-run \
- *     SOCKET=$E/run/steward.sock SOCKET_GROUP= OWNERS= SYSTEMCTL=false \
+ *     SOCKET=$E/run/steward.sock OWNER_SOCKET=$E/owner/owner.sock PORTAL_KEY_FOLDER=$E/portal-key \
+ *     SOCKET_GROUP= OWNERS= SYSTEMCTL=false \
  *     bun steward.ts
  *   curl --unix-socket $E/run/steward.sock http://steward/projects
  *
@@ -42,6 +43,8 @@ import { createControlSystem } from "./src/control/system";
 import { INSTALLER_RUN_FOLDER } from "./src/control/protocol";
 import { BACKUP_FOLDER } from "./borrowed/backups";
 import { createBackupReader } from "./src/backup/reader";
+import { createMembersSystem } from "./src/members/system";
+import { OWNER_SOCKET, PORTAL_KEY_FOLDER } from "./src/members/protocol";
 
 const SITES_DIR = process.env.SITES_DIR ?? "/srv/sites";
 const SECRETS_FOLDER = process.env.SECRETS_FOLDER ?? "/etc/sitesolide";
@@ -71,6 +74,22 @@ const EGRESS_GROUP = process.env.EGRESS_GROUP ?? EGRESS_ACCOUNT;
 
 /** The only group allowed to open the socket. Empty: no chgrp, for the workstation. */
 const SOCKET_GROUP = process.env.SOCKET_GROUP ?? "site-dashboard";
+
+/**
+ * The owner's socket, which only root opens: `sitesolide members` reaches the
+ * members registry there, over the owner's SSH. Its folder is a runtime
+ * directory of its own, root's, since the dashboard's socket needs a folder
+ * of its own (src/secrets/socket.ts). Empty: no owner's socket.
+ */
+const OWNER_SOCKET_PATH = process.env.OWNER_SOCKET ?? OWNER_SOCKET;
+
+/**
+ * Where the portal's private key is laid, and the portal's group, which reads
+ * it. The folder is bin/deploy-steward.sh's; missing, members cannot sign in
+ * yet and the dashboard says so.
+ */
+const PORTAL_KEY_DIR = process.env.PORTAL_KEY_FOLDER ?? PORTAL_KEY_FOLDER;
+const PORTAL_GROUP = process.env.PORTAL_GROUP ?? "site-portal";
 
 /**
  * The check of the owners. Empty: neither uid check nor chown, and no check at
@@ -149,7 +168,28 @@ const handler = createSteward(system, {
   checkAccounts: OWNERS !== "",
   connectors,
   backups,
+  // The dashboard's members: the registry, the sessions, the key pair that
+  // the portal signs with. See src/members/.
+  members: {
+    system: createMembersSystem({
+      stateFolder: STATE_FOLDER,
+      sitesDir: SITES_DIR,
+      secretsFolder: SECRETS_FOLDER,
+      portalKeyFolder: PORTAL_KEY_DIR,
+      groupsFile: GROUPS_FILE,
+      portalGroup: OWNERS === "" ? "" : PORTAL_GROUP,
+    }),
+    zone: process.env.SITESOLIDE_ZONE ?? "",
+  },
 });
+
+// The key pair, laid now if it is missing: the portal reads its half at every
+// sign-in, and needs no restart for it. A portal not deployed yet is said, and
+// the pair is laid at the first sign-in asked for once it is.
+const keys = await handler.ensureMemberKeys().catch((e: unknown) => ({ kind: "unavailable" as const, reason: (e as Error).name }));
+if (keys !== null) {
+  console.log(keys.kind === "ready" ? `steward: members' key ${keys.publicKey.kid} in place` : `steward: members cannot sign in yet, ${keys.reason}`);
+}
 
 // The control API's routes, under /team/ and /control/: the token registry and
 // the start of the installer. They share the socket and its permissions, and
@@ -179,6 +219,35 @@ const control = createControlSteward(
  */
 const IDLE_S = Math.min(255, Math.ceil((MAX_PORTAL_MS + MAX_RESTART_MS) / 1000) + 10);
 
+// The owner's socket: the members registry for root, over the owner's SSH. No
+// group: the folder and the socket stay root's alone.
+// Its folder missing, a unit older than this code, the dashboard's socket
+// opens all the same: the owner's is said missing, and `sitesolide members`
+// says to upgrade.
+const ownerServer =
+  OWNER_SOCKET_PATH === ""
+    ? null
+    : (() => {
+        const ownerRefusal = prepareFolder(OWNER_SOCKET_PATH);
+        if (ownerRefusal !== null) {
+          console.error(`steward: no owner's socket, ${ownerRefusal}`);
+          return null;
+        }
+        return openSocket(
+          OWNER_SOCKET_PATH,
+          null,
+          (path) =>
+            Bun.serve({
+              unix: path,
+              fetch: (req) => handler.owner(req),
+              development: false,
+              error: () => Response.json({ error: "failure", message: "unexpected error" }, { status: 500 }),
+              maxRequestBodySize: 64 * 1024,
+            }),
+          { folder: 0o700, socket: 0o600 },
+        );
+      })();
+
 const server = openSocket(SOCKET, gid, (path) =>
   Bun.serve({
     unix: path,
@@ -203,6 +272,7 @@ console.log(
     `sites ${SITES_DIR}`,
     `secrets ${SECRETS_FOLDER}`,
     `owners ${OWNERS === "" ? "unchecked" : "checked"}`,
+    `owner's socket ${ownerServer === null ? "none" : OWNER_SOCKET_PATH}`,
   ].join(", "),
 );
 if (!existsSync(HASH_FILE)) {
@@ -222,8 +292,9 @@ async function shutDown(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
   console.log(`steward: ${signal}, stopping`);
-  await server.stop();
+  await Promise.all([server.stop(), ownerServer?.stop()]);
   closeSocket(SOCKET);
+  if (ownerServer !== null) closeSocket(OWNER_SOCKET_PATH);
   process.exit(0);
 }
 

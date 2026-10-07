@@ -32,6 +32,14 @@
  *   imported from src/;
  * - a fake portal on the loopback, which answers `/admin/guests` like
  *   `portal/src/admin.ts`, and `/admin/audit` with sign-ins of every kind;
+ * - the dashboard's members, with the steward's own member routes
+ *   (src/members/steward.ts) on the fake steward's socket, their registry and
+ *   key pair in the temporary directory: alice@example.com is a Developer on
+ *   `cms` and a Viewer on `calendar`. *Sign in with Google* on the sign-in
+ *   page goes through the fake portal's `/admin/dashboard/flow` to a page of
+ *   its own that signs in alice, or stranger@example.com, whom the registry
+ *   does not name, then back with a code the fake portal redeems for an
+ *   assertion signed with the steward's key, as the real one does;
  * - with the dashboard's own audit of tokens and deployments, written below,
  *   the egress proxy's, the backups' and the steward's, every source of the
  *   Activity page has rows;
@@ -61,7 +69,7 @@
  *
  * The password is fixed and obvious, `demo`, since nothing here is real.
  */
-import { mkdtempSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, normalize, resolve } from "node:path";
 import { GUEST_DURATIONS, cleanLabel, type Guest } from "../borrowed/guests";
@@ -82,6 +90,9 @@ import {
   type GrantsFile,
 } from "../borrowed/connectors";
 import { benchBackupRoutes } from "./bench-backups";
+import { readPrivateKey, signAssertion } from "../borrowed/assertion";
+import { createMemberRoutes } from "../src/members/steward";
+import { createMembersSystem } from "../src/members/system";
 
 const PASSWORD = "demo";
 
@@ -817,6 +828,9 @@ type LogRow = {
   a: number;
   operation: string;
   result: "ok" | "rejects" | "failure";
+  /** Absent: the owner's, as on a journal from before members. */
+  actor?: string;
+  member?: string | null;
   slug: string | null;
   file: string | null;
   variable: string | null;
@@ -1019,12 +1033,62 @@ Bun.spawnSync(
   { cwd: PROJECT_ROOT, env: { ...process.env, DATA_DIR: folder }, stdout: "inherit", stderr: "inherit" },
 );
 
+// --- The members, with the steward's own routes ---------------------------------
+//
+// The registry, the sessions and the key pair in the temporary directory, the
+// projects those of the snapshot, the portal's settings the fake portal's. A
+// restart is simulated, and recorded in the steward's log under the member.
+
+const membersState = join(folder, "members-state");
+const portalKeyFolder = join(folder, "portal-key");
+mkdirSync(membersState, { recursive: true });
+mkdirSync(portalKeyFolder, { recursive: true });
+
+const memberRoutes = createMemberRoutes({
+  system: {
+    ...createMembersSystem({
+      stateFolder: membersState,
+      sitesDir: join(folder, "no-sites"),
+      secretsFolder: join(folder, "no-secrets"),
+      portalKeyFolder,
+      groupsFile: "/etc/group",
+      portalGroup: "",
+    }),
+    projectExists: (slug) => FOLDERS.some((one) => one.slug === slug),
+    readPortalSettings: async () => ({ configured: sso.configured, allowedDomains: sso.allowedDomains, admins: sso.admins }),
+  },
+  zone: "example.com",
+  isUnlocked: async (value) => isValidToken({ token: value }),
+  readBody: async (req, fields) => {
+    const body = await readBody(req);
+    return Object.keys(body).every((key) => fields.includes(key)) ? body : refusal(400, "invalid", "unexpected field in the request body");
+  },
+  journal: async (event) =>
+    record({
+      operation: event.operation,
+      result: event.result,
+      actor: event.actor,
+      member: event.member,
+      slug: "slug" in event ? event.slug : null,
+      file: null,
+      variable: null,
+      detail: event.detail,
+    }),
+  restart: async (_req, slug, actor, allowed) => {
+    await Bun.sleep(1500);
+    if (!(await allowed())) return refusal(403, "out-of-scope", `${actor} may no longer restart ${slug}`);
+    record({ operation: "restart", result: "ok", actor, member: actor, slug, file: null, variable: null, detail: "active, active/running, 0 restarts" });
+    return Response.json({ verdict: { kind: "active", state: "active", subState: "running", restarts: 0 } });
+  },
+});
+
 const steward =
   process.env.BENCH_NO_STEWARD === "1"
     ? null
     : Bun.serve({
         unix: socket,
         routes: {
+          ...memberRoutes.dashboard,
           // The backups, their troubles and a simulated restore: scripts/bench-backups.ts.
           ...benchBackupRoutes({ start, folders: FOLDERS, isValidToken }),
           "/projects": { GET: () => Response.json({ projects: PROJECTS.map(projectView) }) },
@@ -1513,6 +1577,12 @@ const sharing = new Map<string, { host: string; policy: Policy; updatedAt: numbe
   ],
 ]);
 
+/** The bench's sign-ins in flight: a flow until a user is picked, a code until it is redeemed. */
+const benchFlows = new Map<string, { binding: string; returnTo: string }>();
+const benchCodes = new Map<string, { binding: string; returnTo: string; email: string }>();
+/** The fake portal's own address, where the browser goes to sign in; set once it listens. */
+let portalAddress = "";
+
 const portal =
   process.env.BENCH_NO_PORTAL === "1"
     ? null
@@ -1565,9 +1635,60 @@ const portal =
             },
           },
           "/admin/audit": { GET: (req) => Response.json({ events: page(portalEvents, new URL(req.url).searchParams) }) },
+
+          // A member's sign-in, as portal/src/dashboard.ts: the flow sealed
+          // around the dashboard's binding, a page of the bench's own in the
+          // provider's place, and the code redeemed for a signed assertion.
+          "/admin/dashboard/flow": {
+            POST: async (req) => {
+              if (!sso.configured) return Response.json({ error: "not-offered", message: "no provider" }, { status: 404 });
+              const body = await readBody(req);
+              const id = draw(24, ALPHABET);
+              benchFlows.set(id, { binding: text(body.binding), returnTo: text(body.returnTo).startsWith("/") ? text(body.returnTo) : "/" });
+              return Response.json({ start: `${portalAddress}/oidc/start?flow=${id}` });
+            },
+          },
+          "/oidc/start": (req) => {
+            const flow = new URL(req.url).searchParams.get("flow") ?? "";
+            if (!benchFlows.has(flow)) return new Response("unknown flow", { status: 400 });
+            const choice = (email: string, label: string) => `<p><a href="/oidc/pick?flow=${flow}&email=${encodeURIComponent(email)}">Sign in as ${label}</a></p>`;
+            return new Response(
+              `<!doctype html><meta charset="utf-8"><title>Bench provider</title><h1>Bench identity provider</h1>${choice("alice@example.com", "alice@example.com, a member")}${choice("stranger@example.com", "stranger@example.com, not a member")}`,
+              { headers: { "Content-Type": "text/html; charset=utf-8" } },
+            );
+          },
+          "/oidc/pick": (req) => {
+            const params = new URL(req.url).searchParams;
+            const flow = benchFlows.get(params.get("flow") ?? "");
+            if (flow === undefined) return new Response("unknown flow", { status: 400 });
+            benchFlows.delete(params.get("flow")!);
+            const code = draw(43, ALPHABET);
+            benchCodes.set(code, { ...flow, email: params.get("email") ?? "" });
+            return new Response(null, { status: 303, headers: { Location: `${publicAddress}/api/sso/complete?code=${code}` } });
+          },
+          "/admin/dashboard/redeem": {
+            POST: async (req) => {
+              const body = await readBody(req);
+              const minted = benchCodes.get(text(body.code));
+              benchCodes.delete(text(body.code));
+              if (minted === undefined || minted.binding !== body.binding) return Response.json({ error: "wrong-browser", message: "expired" }, { status: 400 });
+              const key = readPrivateKey(readFileSync(join(portalKeyFolder, "assertion.key"), "utf8"));
+              if (key === null) return Response.json({ error: "no-key", message: "no key" }, { status: 503 });
+              const nowS = Math.floor(Date.now() / 1000);
+              return Response.json({ assertion: await signAssertion(key, { email: minted.email, name: null, authTime: nowS }, nowS), returnTo: minted.returnTo });
+            },
+          },
         },
         fetch: () => new Response("404", { status: 404 }),
       });
+
+portalAddress = portal === null ? "" : `http://127.0.0.1:${portal.port}`;
+
+// The member the bench starts with, invited as root would over the owner's SSH.
+await memberRoutes.ensureKeys();
+await memberRoutes.owner["/members/member"]!.PUT!(
+  new Request("http://steward/members/member", { method: "PUT", body: JSON.stringify({ email: "alice@example.com", roles: { cms: "developer", calendar: "viewer" } }) }),
+);
 
 // --- The service -------------------------------------------------------------
 

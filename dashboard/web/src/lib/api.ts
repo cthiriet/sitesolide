@@ -30,6 +30,10 @@ import type {
   BackupAuditResponse,
   BackupsResponse,
   RestoreResponse,
+  MembersPageResponse,
+  MemberView,
+  Roles,
+  SessionResponse,
 } from "./types"
 
 /** `status` is 0 when no answer arrived: network down, service stopped. */
@@ -53,7 +57,7 @@ export async function callApi<T>(path: string, options?: RequestInit): Promise<P
 }
 
 export function readSession() {
-  return callApi<{ open: boolean; configured: boolean }>("/api/session")
+  return callApi<SessionResponse>("/api/session")
 }
 
 export function signIn(password: string) {
@@ -253,5 +257,40 @@ export function restoreBackup({ slug, snapshot, confirmation }: { slug: string; 
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ slug, snapshot, confirmation }),
+  })
+}
+
+// --- The members -----------------------------------------------------------------
+//
+// The routes of `src/members/routes.ts`. Inviting needs the same unlock as the
+// secrets; removing does not. A member's restart is judged by the steward, and
+// its refusal comes back as it stands.
+
+export function readMembers() {
+  return callApi<MembersPageResponse & SecretsRefusal>("/api/members")
+}
+
+export function putMember(email: string, roles: Roles) {
+  return callApi<{ member: MemberView; change: "invite" | "role" | "none" } & SecretsRefusal>("/api/members/member", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, roles }),
+  })
+}
+
+export function removeMember(email: string) {
+  return callApi<{ member: MemberView } & SecretsRefusal>("/api/members/member", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  })
+}
+
+/** A member's restart: the steward observes the unit before its verdict, as for the Secrets section's. */
+export function restartAsMember(slug: string) {
+  return callApi<RestartResponse & SecretsRefusal>("/api/members/restart", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug }),
   })
 }

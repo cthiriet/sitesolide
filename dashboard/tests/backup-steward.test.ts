@@ -301,7 +301,7 @@ describe("the dashboard's relay", () => {
   };
   const tokens = createTokens();
   const routes = createSecretsRoutes({
-    session: async (req) => (req.headers.get("cookie") === "session=ok" ? { hash: "session-hash", createdAt: T, seenAt: T } : null),
+    session: async (req) => (req.headers.get("cookie") === "session=ok" ? { hash: "session-hash", createdAt: T, seenAt: T, identity: "owner" } : null),
     publicUrl: ORIGIN,
     steward: {} as Steward,
     tokens,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { deriveKey, type Identity } from "../src/gate";
+import { deriveKey, purposeKey, seal, type Identity } from "../src/gate";
 import {
   HANDOFF_MAX,
   HANDOFF_PER_EMAIL,
@@ -32,7 +32,8 @@ const NOW = NOW_S * 1000;
 const ALICE = { email: "alice@acme.test", name: "Alice" };
 
 const BINDING = drawBinding();
-const FLOW: Flow = { host: HOST, returnTo: "/board?week=3", binding: bindingHash(BINDING), chooseAccount: false };
+const FLOW: Flow = { host: HOST, returnTo: "/board?week=3", binding: bindingHash(BINDING), chooseAccount: false, audience: "site" };
+const DASHBOARD_HOST = "dashboard.test-zone.invalid";
 
 describe("the binding", () => {
   test("is drawn fresh, 256 bits, and travels only as its hash", () => {
@@ -46,6 +47,20 @@ describe("the binding", () => {
 describe("the flow", () => {
   test("reads back what was sealed", () => {
     expect(readFlow(KEY, issueFlow(KEY, FLOW, NOW_S), NOW_S + 10)).toEqual(FLOW);
+  });
+
+  test("a dashboard's flow reads back as the dashboard's, a site's as a site's", () => {
+    const dashboard: Flow = { ...FLOW, host: DASHBOARD_HOST, audience: "dashboard" };
+    expect(readFlow(KEY, issueFlow(KEY, dashboard, NOW_S), NOW_S)).toEqual(dashboard);
+    expect(readFlow(KEY, issueFlow(KEY, FLOW, NOW_S), NOW_S)?.audience).toBe("site");
+  });
+
+  test("a site's flow sealed before audiences existed reads as a site's", () => {
+    // What a portal from before the dashboard's sign-in sealed: no `d` at all.
+    const earlier = seal(purposeKey(KEY, "flow"), { h: HOST, r: "/", b: bindingHash(BINDING), a: false, e: NOW_S + 60 });
+    expect(readFlow(KEY, earlier, NOW_S)?.audience).toBe("site");
+    const forged = seal(purposeKey(KEY, "flow"), { h: HOST, r: "/", b: bindingHash(BINDING), a: false, d: "yes", e: NOW_S + 60 });
+    expect(readFlow(KEY, forged, NOW_S)).toBeNull();
   });
 
   test("expires with the sign-in it carries", () => {
@@ -120,7 +135,15 @@ describe("the sign-out ticket", () => {
 });
 
 describe("the handoff codes", () => {
-  const handoff: Handoff = { host: HOST, binding: bindingHash(BINDING), identity: ALICE, returnTo: "/board", sessionExpiry: NOW_S + 60 };
+  const handoff: Handoff = {
+    host: HOST,
+    binding: bindingHash(BINDING),
+    identity: ALICE,
+    returnTo: "/board",
+    sessionExpiry: NOW_S + 60,
+    authTime: NOW_S - 30,
+    audience: "site",
+  };
 
   /** A handoff of a flow of its own, as each sign-in has. */
   const fresh = (identity: Identity = ALICE) => ({ ...handoff, identity, binding: bindingHash(drawBinding()) });
@@ -157,6 +180,25 @@ describe("the handoff codes", () => {
     const code = minted(store);
     expect(store.redeem(code, "roster.test-zone.invalid", BINDING, NOW)).toEqual({ refusal: "wrong-host" });
     expect(store.redeem(code, HOST, BINDING, NOW)).toEqual({ refusal: "unknown-code" });
+  });
+
+  test("a code minted for the dashboard is redeemed for the dashboard only, and the other way round", () => {
+    const store = handoffStore();
+    const forDashboard: Handoff = { ...fresh(), host: DASHBOARD_HOST, audience: "dashboard" };
+    const binding = drawBinding();
+    const code = minted(store, { ...forDashboard, binding: bindingHash(binding) });
+    // Redeemed as a site's cookie on the dashboard's host: refused, and burnt.
+    expect(store.redeem(code, DASHBOARD_HOST, binding, NOW)).toEqual({ refusal: "wrong-audience" });
+    expect(store.redeem(code, DASHBOARD_HOST, binding, NOW, "dashboard")).toEqual({ refusal: "unknown-code" });
+
+    const siteBinding = drawBinding();
+    const siteCode = minted(store, { ...handoff, binding: bindingHash(siteBinding) });
+    expect(store.redeem(siteCode, HOST, siteBinding, NOW, "dashboard")).toEqual({ refusal: "wrong-audience" });
+
+    const again = drawBinding();
+    const good = minted(store, { ...forDashboard, binding: bindingHash(again) });
+    const redeemed = store.redeem(good, DASHBOARD_HOST, again, NOW, "dashboard");
+    expect("handoff" in redeemed && redeemed.handoff.authTime).toBe(NOW_S - 30);
   });
 
   test("in another browser, refused: a link carrying someone's code signs nobody in", () => {

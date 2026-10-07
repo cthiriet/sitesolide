@@ -10,6 +10,7 @@
  *   sitesolide logs [--follow]      journalctl for the service
  *   sitesolide backups              the project's data snapshots, read only
  *   sitesolide share [<email>...]   who may open it with a work account
+ *   sitesolide members              who signs in to the dashboard, and on what
  *   sitesolide remove --confirm <slug>  take the project off the machine
  *   sitesolide run -- <command>     load the vault secret and run
  *   sitesolide mcp                  the same commands, as tools for an agent
@@ -196,6 +197,7 @@ import { machine } from "./cli/machine";
 import { eventOutput, humanOutput, login, remoteMode, REMOTE_USAGE, runRemote } from "./cli/remote";
 import { KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
 import { share, sshSharing } from "./cli/sharing";
+import { members, sshMembers } from "./cli/members";
 import {
   foreignUnit,
   listUnitsCommand,
@@ -2826,6 +2828,11 @@ function usage(zone: string | null): string {
     "     --domain <domain>            with everyone at this domain",
     "     --remove <email|domain>      take a person or a domain off",
     "     --only-admins                back to the admins alone",
+    "  sitesolide members              who signs in to the dashboard with a work account, on which projects",
+    "     add <email> --project <slug> --role <viewer|developer|admin>",
+    "                                  invite them, or set their role; repeat --project and --role",
+    "     remove <email> [--project <slug>]",
+    "                                  take them off, signed out at once, or take projects off them",
     "  sitesolide lock   [--dry-run]   close the preview behind a code, or show it",
     "     --status                     wanted / installed / measured, without touching",
     "     --new-code                   replace the code in force by a fresh one",
@@ -3045,6 +3052,10 @@ if (import.meta.main) {
       process.exit(
         await share(arguments_, readProject(folder).manifest.slug, sshSharing((remote, input) => executor.execute(config, remote, input), config.zone), remoteOutput),
       );
+    case "members":
+      // The steward's members registry, on its owner socket, as root over SSH:
+      // see bin/cli/members.ts. It reads no project folder.
+      process.exit(await members(arguments_, dashboardAddress(config.zone), sshMembers((remote, input) => executor.execute(config, remote, input)), remoteOutput));
     case "secrets":
       pointToDashboard(config);
     case "lock": {

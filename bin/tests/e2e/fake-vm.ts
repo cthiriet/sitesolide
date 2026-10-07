@@ -26,7 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HOLDER_NAME, LOCK_NAME } from "../../cli/caddy-lock";
-import { addAccount, DEFAULT_PORTAL, readAccounts, SWITCHES, TEST_HOST, type PortalState } from "./fake-ssh";
+import { addAccount, DEFAULT_MEMBERS, DEFAULT_PORTAL, readAccounts, SWITCHES, TEST_HOST, type MembersState, type PortalState } from "./fake-ssh";
 
 export type FakeVm = {
   /** The folder that stands in for the machine. */
@@ -63,6 +63,10 @@ export type FakeVm = {
   setPortal(state: Partial<PortalState>): void;
   /** The portal's sharing as it stands, after the writes accepted. */
   portal(): PortalState;
+  /** Lays the steward's members registry `sitesolide members` finds on the owner socket, over the default: nobody, acme.test admitted. */
+  setMembers(state: Partial<MembersState>): void;
+  /** The members registry as it stands, after the writes accepted. */
+  members(): MembersState;
   /** Lays a static account the machine already carries, with a system uid unless one is given. */
   addAccount(name: string, uid?: number): void;
   /** The static accounts as /etc/passwd lines: those laid, and those an accepted useradd made. */
@@ -164,6 +168,13 @@ export function createFakeVm(): FakeVm {
     portal() {
       const file = join(root, SWITCHES.portal);
       return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as PortalState) : DEFAULT_PORTAL;
+    },
+    setMembers(state) {
+      writeFileSync(join(root, SWITCHES.members), JSON.stringify({ ...DEFAULT_MEMBERS, ...state }));
+    },
+    members() {
+      const file = join(root, SWITCHES.members);
+      return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as MembersState) : DEFAULT_MEMBERS;
     },
     addAccount(name, uid) {
       addAccount(root, name, uid);

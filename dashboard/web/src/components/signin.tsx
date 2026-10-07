@@ -1,33 +1,53 @@
 import { useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
-import { Eye, EyeOff } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { Eye, EyeOff, LogIn } from "lucide-react"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Logo } from "@/components/logo"
 import { ThemeToggleButton } from "@/components/theme"
 import { signIn } from "@/lib/api"
+import { signInFailure, signInUrl } from "@/lib/members"
 import { waitMessage, signInRefusal } from "@/lib/signin"
+import type { SsoOffer } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const NO_HASH = "Sign-in is disabled: no password hash is configured on the server."
 
 /**
+ * The address to come back to after the provider: this page, without the
+ * reason a previous attempt left in it.
+ */
+function currentReturn(): string {
+  const url = new URL(window.location.href)
+  url.searchParams.delete("signin")
+  return `${url.pathname}${url.search}`
+}
+
+/**
  * The dashboard's door. Full page on opening; as an overlay when the session
  * expired while the page is open, so that nothing underneath is lost, starting
  * with a guest password that is only shown once.
+ *
+ * Two ways in: a member signs in with the portal's identity provider, a link
+ * and not a form, since the flow leaves for the portal's own host; the owner
+ * types the dashboard's password. A sign-in with the provider that came back
+ * without a session says why, from the address (`?signin=`).
  */
 export function SignIn({
   configured,
+  sso = { offered: false, providerName: null },
   message = "",
   overlay = false,
   onOpened,
 }: {
   configured: boolean
+  sso?: SsoOffer
   message?: string
   overlay?: boolean
   onOpened: () => void
 }) {
+  const [ssoFailure] = useState(() => signInFailure(new URLSearchParams(window.location.search).get("signin")))
   const titleId = useId()
   const fieldId = useId()
   const errorId = useId()
@@ -111,7 +131,25 @@ export function SignIn({
           </CardTitle>
           <CardDescription>{message !== "" ? message : "Server dashboard"}</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="grid gap-4">
+          {ssoFailure !== null && (
+            <p role="alert" className="text-sm text-pretty text-destructive">
+              {ssoFailure}
+            </p>
+          )}
+          {sso.offered && (
+            <>
+              <a href={signInUrl(currentReturn())} className={cn(buttonVariants({ variant: "outline" }), "h-10 w-full")}>
+                <LogIn />
+                Sign in with {sso.providerName ?? "your work account"}
+              </a>
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span aria-hidden="true" className="h-px flex-1 bg-border" />
+                or with the owner's password
+                <span aria-hidden="true" className="h-px flex-1 bg-border" />
+              </div>
+            </>
+          )}
           <form noValidate onSubmit={submit} className="grid gap-4">
             {/* For password managers, which file a username with every secret. */}
             <input type="text" name="username" autoComplete="username" value="sitesolide" readOnly hidden />

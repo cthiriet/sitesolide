@@ -263,7 +263,7 @@ describe("a steward updated since the Activity page: both its audits read whole"
     const log: LogEntry[] = [];
     for (let index = 0; index < 120; index++) {
       const a = T - Math.floor(index / 3) * 1000;
-      log.unshift({ a, operation: "read", result: "ok", slug: "cms", file: "cms.env", variable: `V${index}`, detail: null });
+      log.unshift({ a, operation: "read", result: "ok", actor: "owner", member: null, slug: "cms", file: "cms.env", variable: `V${index}`, detail: null });
     }
     const asked: (string | null)[] = [];
     const steward = {
@@ -353,7 +353,7 @@ describe("GET /api/audit, against a portal, an egress proxy and a steward that r
   const control = store();
   control.recordAudit({ at: T, actor: "token:abc", action: "deploy.success", target: "cms", detail: { email: "ada@test-zone.invalid", deployment: "d1" } });
 
-  const signedIn: SessionReader = async (req) => (req.headers.get("cookie") === "session=yes" ? { hash: "h", createdAt: 0, seenAt: 0 } : null);
+  const signedIn: SessionReader = async (req) => (req.headers.get("cookie") === "session=yes" ? { hash: "h", createdAt: 0, seenAt: 0, identity: "owner" } : null);
   const routes = createAuditRoutes({
     session: signedIn,
     readers: createReaders({

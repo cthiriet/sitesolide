@@ -41,7 +41,7 @@ function setup(options: { signedIn?: boolean; old?: boolean; stewardLocked?: boo
     },
     revokeToken: async () => Response.json({ token: { ...view, revokedAt: 5 } }),
   } as unknown as ControlSteward;
-  const session: SessionReader = async () => (options.signedIn === false ? null : { hash: SESSION, createdAt: 0, seenAt: 0 });
+  const session: SessionReader = async () => (options.signedIn === false ? null : { hash: SESSION, createdAt: 0, seenAt: 0, identity: "owner" });
   const routes = createTeamRoutes({ session, publicUrl: PUBLIC_URL, steward, tokens, store });
   return { routes, tokens, store, sent };
 }

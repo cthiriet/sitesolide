@@ -158,7 +158,13 @@ export type Operation =
   | "replace"
   | "password"
   | "portal"
-  | "restart";
+  | "restart"
+  | "member.invite"
+  | "member.role"
+  | "member.remove"
+  | "member.signin"
+  | "member.signin_failed"
+  | "member.signout";
 
 export type OperationResult = "ok" | "rejects" | "failure";
 
@@ -167,6 +173,15 @@ export type LogEntry = {
   a: number;
   operation: Operation;
   result: OperationResult;
+  /**
+   * Who asked, as the steward verified it: `owner` for the dashboard's
+   * password, the email of a member whose session it opened, `anonymous` for
+   * a sign-in it could not attribute. Never taken from a request. A line
+   * written before this field reads as `owner`.
+   */
+  actor: string;
+  /** The member an event of the members is about, null otherwise. */
+  member: string | null;
   slug: string | null;
   file: string | null;
   variable: string | null;

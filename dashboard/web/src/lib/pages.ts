@@ -23,13 +23,14 @@
  * `/guests/`, keep their file so bookmarks keep working: they are read like
  * their equivalent, and navigation replaces the address with the new one.
  */
+import type { IdentityView } from "./types"
 import type { Verdict } from "./verdict"
 
 /** A site's sections, in the order of the sidebar and the tabs. */
 export type Section = "overview" | "audience" | "secrets" | "guests" | "sharing" | "access" | "backups"
 
 /** The pages of the machine level. */
-export type MachinePage = "home" | "activity" | "team" | "connectors"
+export type MachinePage = "home" | "activity" | "team" | "connectors" | "members"
 
 export type Page = { name: MachinePage } | { name: "site"; slug: string; section: Section }
 
@@ -41,8 +42,37 @@ export const MACHINE_PAGES: readonly MachineEntry[] = [
   { name: "home", title: "Sites", path: "/" },
   { name: "activity", title: "Activity", path: "/activity/" },
   { name: "team", title: "Team", path: "/team/" },
+  { name: "members", title: "Members", path: "/members/" },
   { name: "connectors", title: "Connectors", path: "/connectors/" },
 ]
+
+/**
+ * What a member sees: their projects on the home page, the activity of their
+ * projects, and in a site its Overview and Audience. The rest is the super
+ * admin's, hidden here and refused by the service.
+ */
+const MEMBER_PAGES: readonly MachinePage[] = ["home", "activity"]
+const MEMBER_SECTIONS: readonly Section[] = ["overview", "audience"]
+
+function isMemberIdentity(identity: IdentityView | null): boolean {
+  return identity !== null && identity.kind === "member"
+}
+
+/** The machine's pages this person may open, in the sidebar's order. */
+export function machinePagesFor(identity: IdentityView | null): readonly MachineEntry[] {
+  return isMemberIdentity(identity) ? MACHINE_PAGES.filter((entry) => MEMBER_PAGES.includes(entry.name)) : MACHINE_PAGES
+}
+
+/** A site's sections this person may open, in the sidebar's order. */
+export function sectionsFor(identity: IdentityView | null): readonly SectionEntry[] {
+  return isMemberIdentity(identity) ? SECTIONS.filter((entry) => MEMBER_SECTIONS.includes(entry.section)) : SECTIONS
+}
+
+/** May this person open this page? A member asking for one of the super admin's is told it is not theirs. */
+export function mayOpen(page: Page, identity: IdentityView | null): boolean {
+  if (!isMemberIdentity(identity)) return true
+  return page.name === "site" ? MEMBER_SECTIONS.includes(page.section) : MEMBER_PAGES.includes(page.name)
+}
 
 /** The order of the sidebar and the tabs, inside a site. */
 export const SECTIONS: readonly SectionEntry[] = [
@@ -182,7 +212,7 @@ export function pageTitle(page: Page): string {
  */
 export function documentTitle(page: Page, verdict: Verdict | null): string {
   const parts: string[] = []
-  if (page.name === "activity" || page.name === "team" || page.name === "connectors") parts.push(pageTitle(page))
+  if (page.name === "activity" || page.name === "team" || page.name === "connectors" || page.name === "members") parts.push(pageTitle(page))
   if (page.name === "site") {
     if (page.section !== "overview") parts.push(sectionEntry(page.section).title)
     parts.push(page.slug)

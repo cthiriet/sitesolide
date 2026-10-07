@@ -173,7 +173,8 @@ Computer (>= 768 px), machine level
 | Sites      6 | [Banner: Can't reach the dashboard / collector stale]     |
 | Activity     |                                                           |
 | Team         |                                                           |
-| Connectors   |   plate, Issues, search and filters, list of sites        |
+| Members      |   plate, Issues, search and filters, list of sites        |
+| Connectors   |                                                           |
 | Dark mode    |                                                           |
 | Sign out     |                                                           |
 | Collapse  ^B |                                                           |
@@ -205,12 +206,20 @@ text and a 2 px petrol bar on its left edge, where a hover only takes the
 `muted` grey; on a phone, a 2 px petrol rule above the tab. The sidebar's own
 controls (theme, sign out, collapse) sit at its foot in `muted-foreground`.
 
-**Two levels.** On the machine's pages (Sites, Activity, Team, Connectors), the
-sidebar carries them. Inside a site it becomes that site's: the *All sites*
+**Two levels.** On the machine's pages (Sites, Activity, Team, Members,
+Connectors), the sidebar carries them. Inside a site it becomes that site's: the *All sites*
 return, the current site on a bordered card (initial, name, state in one
 sentence, tone dot), which opens the site switcher, then its seven sections.
 Collapsed, the site is just its initial and its dot. On a phone the tabs follow
-the level: four for the machine, seven for a site, on one row.
+the level: five for the machine, seven for a site, on one row.
+
+**A member's shell.** A member, signed in with their work account, sees the
+pages that are theirs and no other entry: Sites and Activity at the machine
+level, Overview and Audience in a site, two tabs on a phone (`machinePagesFor`
+and `sectionsFor` in `lib/pages.ts`). Their email sits above the sidebar's own
+controls, in `muted-foreground`. A page of the super admin's, reached by its
+address, says *Not available to members* in an empty state rather than an
+error: the service refuses it too.
 
 Indicators (`lib/sidebar.ts`). Machine: *Sites* the number of discrepancies (error
 if there is one, otherwise attention). Site: *Overview* its discrepancies;
@@ -417,6 +426,7 @@ One page per served file, the site in `?s=`:
 | Sites, the home page | `/` | `index.html` |
 | Activity | `/activity/` | `activity/index.html` |
 | Team | `/team/` | `team/index.html` |
+| Members | `/members/` | `members/index.html` |
 | Connectors | `/connectors/` | `connectors/index.html` |
 | A site's Overview | `/site/?s=cms` | `site/index.html` |
 | A site's Audience | `/site/audience/?s=cms` | `site/audience/index.html` |
@@ -451,6 +461,24 @@ only. *Load older* at the foot while a source has more; a page that finds
 nothing goes on by itself a few times before handing the choice back. Under
 the panel, which sources only hand over their latest entries.
 
+**Members.** The lock in the header, the same as the secrets'. The **Members**
+panel: each member's email, their roles in words (`blog: Developer, shop:
+Viewer`), who invited them and when, with *Change roles* and *Remove*;
+*Invite* once unlocked, *Unlock to invite* before, as on Team. The dialog
+takes the work email, then one row per project, a project and a role side by
+side in the guest dialog's selects, a row added with *Add a project*, the
+three roles explained below them; a change keeps the email fixed and replaces
+the roles whole. A removal confirms in a destructive dialog, saying they are
+signed out at once. Then **Send them the link**, the line to paste with
+*Copy*, as on Sharing. A banner says when the portal has no provider, since
+nobody can sign in then.
+
+**The sign-in page, with a provider.** Above the password, *Sign in with
+<provider>*, an outline link to `/api/sso/begin` and not a form, the flow
+leaving for the portal's host; then a rule with *or with the owner's
+password* in its middle. A sign-in that came back without a session says why
+above both, in `destructive`: not a member, expired, not available.
+
 **Connectors.** The lock in the header, the same as the secrets'. Then three
 panels. **Connectors**: each one's name, base address, header, how many
 projects have it and when it changed, *Write-only* since its value is never
@@ -466,7 +494,11 @@ removal retypes the name.
 description and the main address; its discrepancies as banners. Then two
 columns: on the left the site on the machine, **Service**, **Addresses**,
 **Storage**; on the right what opens it and what it keeps, **Access**,
-**Guests** and **Secrets**, each with *Manage >* to its section.
+**Guests** and **Secrets**, each with *Manage >* to its section. A member sees
+**Access** without its link, and neither **Guests** nor **Secrets**; a
+Developer or a Project admin finds *Restart* in **Service**'s header, which
+confirms, waits for the steward's verdict and says it in plain words, or shows
+the steward's refusal as it stands.
 
 **A site's Secrets.** The lock in the header. The **Files** panel: the service
 and *Restart service*, what is wrong, then each file. A variables file lists its

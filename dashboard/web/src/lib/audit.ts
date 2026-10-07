@@ -201,8 +201,11 @@ function word(table: Readonly<Record<string, string>>, key: string | null): stri
   return key !== null && Object.hasOwn(table, key) ? table[key]! : key
 }
 
+/** The steward's operations on secrets, doors and services, as distinct from its members' events. */
+type StewardOperation = Exclude<Operation, `member.${string}`>
+
 /** The steward's operation behind an action, for the words its own Activity always used. */
-const STEWARD_OPERATIONS: Readonly<Record<string, Operation>> = {
+const STEWARD_OPERATIONS: Readonly<Record<string, StewardOperation>> = {
   "secrets.unlock": "unlock",
   "secrets.lock": "lock",
   "secrets.read": "read",
@@ -216,7 +219,7 @@ const STEWARD_OPERATIONS: Readonly<Record<string, Operation>> = {
   "service.restart": "restart",
 }
 
-const DONE: Readonly<Record<Operation, string>> = {
+const DONE: Readonly<Record<StewardOperation, string>> = {
   unlock: "Unlocked the secrets",
   lock: "Locked the secrets",
   read: "Read",
@@ -230,7 +233,7 @@ const DONE: Readonly<Record<Operation, string>> = {
   restart: "Restarted",
 }
 
-const TRIED: Readonly<Record<Operation, string>> = {
+const TRIED: Readonly<Record<StewardOperation, string>> = {
   unlock: "Tried to unlock the secrets",
   lock: "Tried to lock the secrets",
   read: "Tried to read",
@@ -244,13 +247,26 @@ const TRIED: Readonly<Record<Operation, string>> = {
   restart: "Tried to restart",
 }
 
-function stewardWords(row: AuditRow, operation: Operation): AuditWords {
+/** Why the steward refused a member's sign-in, in words. An unknown reason is shown as it is. */
+const MEMBER_REFUSALS: Readonly<Record<string, string>> = {
+  "not-a-member": "not a member",
+  "replayed-assertion": "sign-in already used",
+  "stale-authentication": "sign-in at the provider too old",
+  "too-many-sign-ins": "too many sign-ins",
+  "unknown-key": "signed by another key",
+  "bad-signature": "signature does not verify",
+  expired: "sign-in expired",
+}
+
+function stewardWords(row: AuditRow, operation: StewardOperation): AuditWords {
   const detail = row.detail ?? {}
   const result = text(detail.result)
   const entry: LogEntry = {
     a: Date.parse(row.at),
     operation,
     result: result === "rejects" || result === "failure" ? result : "ok",
+    actor: row.actor,
+    member: null,
     slug: row.target,
     file: text(detail.file),
     variable: text(detail.variable),
@@ -281,6 +297,19 @@ export function auditWords(row: AuditRow): AuditWords {
   if (Object.hasOwn(STEWARD_OPERATIONS, row.action) && row.source === "steward") return stewardWords(row, STEWARD_OPERATIONS[row.action]!)
 
   switch (row.action) {
+    case "member.invite":
+      return { summary: `Invited ${row.target ?? "a member"}`, note: text(detail.note), tone: "neutral" }
+    case "member.role":
+      return { summary: `Changed the roles of ${row.target ?? "a member"}`, note: text(detail.note), tone: "neutral" }
+    case "member.remove":
+      return { summary: `Removed the member ${row.target ?? ""}`.trim(), note: null, tone: "neutral" }
+    case "member.signin":
+      return { summary: "Signed in to the dashboard with a work account", note: null, tone: "neutral" }
+    case "member.signin_failed":
+      return { summary: "Dashboard sign-in refused", note: word(MEMBER_REFUSALS, text(detail.note)), tone: "attention" }
+    case "member.signout":
+      return { summary: "Signed out of the dashboard", note: null, tone: "neutral" }
+
     case "token.create":
     case "token.revoke": {
       const label = text(detail.label)

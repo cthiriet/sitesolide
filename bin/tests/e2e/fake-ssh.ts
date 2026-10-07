@@ -60,6 +60,7 @@ import { MARKER_ABSENT, MARKER_PRESENT } from "../../cli/unit";
 import { GENERATOR_MARK, loopbackStateCommand, MARKER_DONE, unitOriginsCommand } from "../../cli/services";
 import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
 import { sharingReadCommand, sharingWriteCommand } from "../../cli/sharing";
+import { membersReadCommand, membersWriteCommand } from "../../cli/members";
 
 export const TEST_HOST = "sample@invalid.local";
 
@@ -77,6 +78,7 @@ export const SWITCHES = {
   firstInstall: "first-install",
   systemUnits: "system-units.json",
   portal: "portal.json",
+  members: "members.json",
   accounts: "accounts",
 } as const;
 
@@ -111,6 +113,19 @@ export type PortalState = {
   sso: { configured: boolean; providerName: string | null; portalUrl: string | null; admins: string[]; allowedDomains: string[] };
   sites: { host: string; policy: { mode: string; people: string[]; domains: string[] }; updatedAt: number }[];
 };
+
+/**
+ * The steward's members registry as `sitesolide members` finds it on the owner
+ * socket: answering with this release's routes, from before members (`old`, a
+ * 404 `no such route`), or with no owner socket at all (`down`, curl's 7).
+ */
+export type MembersState = {
+  state: "current" | "old" | "down";
+  signIn: { configured: boolean; allowedDomains: string[] };
+  members: { email: string; roles: Record<string, string>; invitedBy: string; createdAt: number; updatedAt: number }[];
+};
+
+export const DEFAULT_MEMBERS: MembersState = { state: "current", signIn: { configured: true, allowedDomains: ["acme.test"] }, members: [] };
 
 export const DEFAULT_PORTAL: PortalState = {
   state: "current",
@@ -385,6 +400,64 @@ if (import.meta.main) {
     current.sites = [...current.sites.filter((site) => site.host !== sharingHost), { host: sharingHost!, policy, updatedAt }];
     writeFileSync(portalFile, JSON.stringify(current));
     process.stdout.write(`${JSON.stringify({ host: sharingHost, policy, updatedAt })}\n200\n`);
+    process.exit(0);
+  }
+
+  // The steward's members registry, asked as root on its owner socket. A
+  // reading is always answered; a change is a write, refused unless the test
+  // accepts writes, then applied as the steward would, an address outside the
+  // allowed domains refused, and recorded with the body that came on standard
+  // input.
+  const membersFile = join(vm, SWITCHES.members);
+  const registry = (): MembersState => (existsSync(membersFile) ? (JSON.parse(readFileSync(membersFile, "utf8")) as MembersState) : DEFAULT_MEMBERS);
+  const answerMembers = (state: MembersState["state"]): void => {
+    if (state === "down") {
+      console.error("curl: (7) Failed to connect to steward port 80 after 0 ms: Couldn't connect to server");
+      process.exit(7);
+    }
+    if (state === "old") {
+      process.stdout.write(`${JSON.stringify({ error: "not-found", message: "no such route" })}\n404\n`);
+      process.exit(0);
+    }
+  };
+  if (command === membersReadCommand()) {
+    record("MEMBERS GET");
+    const current = registry();
+    answerMembers(current.state);
+    process.stdout.write(`${JSON.stringify({ members: current.members, signIn: current.signIn })}\n200\n`);
+    process.exit(0);
+  }
+  if (command === membersWriteCommand("PUT") || command === membersWriteCommand("DELETE")) {
+    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
+    const method = command === membersWriteCommand("PUT") ? "PUT" : "DELETE";
+    const body = await Bun.stdin.text();
+    record(`MEMBERS ${method} ${body}`);
+    const current = registry();
+    answerMembers(current.state);
+    const asked = JSON.parse(body) as { email: string; roles?: Record<string, string> };
+    const found = current.members.find((member) => member.email === asked.email);
+    if (method === "DELETE") {
+      if (found === undefined) {
+        process.stdout.write(`${JSON.stringify({ error: "not-found", message: `${asked.email} is not a member` })}\n404\n`);
+        process.exit(0);
+      }
+      current.members = current.members.filter((member) => member.email !== asked.email);
+      writeFileSync(membersFile, JSON.stringify(current));
+      process.stdout.write(`${JSON.stringify({ member: found })}\n200\n`);
+      process.exit(0);
+    }
+    const domain = asked.email.slice(asked.email.lastIndexOf("@") + 1);
+    if (current.signIn.allowedDomains.length > 0 && !current.signIn.allowedDomains.includes(domain)) {
+      const message = `${asked.email} cannot sign in here: the portal admits only ${current.signIn.allowedDomains.join(", ")} (OIDC_ALLOWED_DOMAINS)`;
+      process.stdout.write(`${JSON.stringify({ error: "invalid", message })}\n400\n`);
+      process.exit(0);
+    }
+    const now = 1_791_000_000_000;
+    const member = { email: asked.email, roles: asked.roles ?? {}, invitedBy: "owner", createdAt: found?.createdAt ?? now, updatedAt: now };
+    const change = found === undefined ? "invite" : JSON.stringify(found.roles) === JSON.stringify(member.roles) ? "none" : "role";
+    current.members = [...current.members.filter((one) => one.email !== asked.email), member];
+    writeFileSync(membersFile, JSON.stringify(current));
+    process.stdout.write(`${JSON.stringify({ member, change })}\n${change === "invite" ? 201 : 200}\n`);
     process.exit(0);
   }
 

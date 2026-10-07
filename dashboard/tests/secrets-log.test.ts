@@ -20,7 +20,7 @@ import {
 import type { LogEntry } from "../src/secrets/protocol";
 
 function entry(a: number, others: Partial<LogEntry> = {}): LogEntry {
-  return { a, operation: "set", result: "ok", slug: "cms", file: "cms.env", variable: "TOKEN", detail: null, ...others };
+  return { a, operation: "set", result: "ok", actor: "owner", member: null, slug: "cms", file: "cms.env", variable: "TOKEN", detail: null, ...others };
 }
 
 describe("encoding", () => {
@@ -134,7 +134,7 @@ describe("the history written before the operations were translated", () => {
     for (const [before, now] of expected) {
       const entries = reread(earlier(before));
       expect([before, entries.length]).toEqual([before, 1]);
-      expect(entries[0]).toEqual({ a: 1, operation: now, result: "ok", slug: "cms", file: "cms.env", variable: "TOKEN", detail: null });
+      expect(entries[0]).toEqual({ a: 1, operation: now, result: "ok", actor: "owner", member: null, slug: "cms", file: "cms.env", variable: "TOKEN", detail: null });
     }
   });
 

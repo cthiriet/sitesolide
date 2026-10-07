@@ -46,7 +46,7 @@ beforeAll(() => writeFileSync(STATE_FILE, JSON.stringify(RAW)));
 afterAll(() => rmSync(STATE_FILE, { force: true }));
 
 const session: SessionReader = async (req) =>
-  (req.headers.get("cookie") ?? "").includes("session=open") ? { hash: "h", createdAt: NOW, seenAt: NOW } : null;
+  (req.headers.get("cookie") ?? "").includes("session=open") ? { hash: "h", createdAt: NOW, seenAt: NOW, identity: "owner" } : null;
 
 function fakePortal(fail = false) {
   const calls: { method: string; argument: unknown }[] = [];

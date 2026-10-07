@@ -43,7 +43,9 @@ import {
   readSignOut,
   readTransaction,
   transactionSuffix,
+  DASHBOARD_REAUTH_S,
   IDENTITY_DURATION_S,
+  type Audience,
   type HandoffStore,
 } from "./handoff";
 import {
@@ -81,6 +83,12 @@ export type SsoOptions = {
   sharing: SharingStore;
   audit: AuditStore;
   handoffs: HandoffStore;
+  /**
+   * The dashboard's origin, `https://dashboard.<zone>`, where a dashboard's
+   * flow comes back to with its code; null when the portal cannot tell it, and
+   * no dashboard flow can then be sealed (src/dashboard.ts).
+   */
+  dashboardOrigin?: string | null;
 };
 
 export type SsoRoutes = {
@@ -195,19 +203,28 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
    * outlive the session that vouched for the person.
    */
   function handOver(
-    flow: { host: string; binding: string; returnTo: string },
+    flow: { host: string; binding: string; returnTo: string; audience: Audience },
     identity: Identity,
     sessionExpiry: number,
+    authTime: number,
     now: number,
     cookies: string[],
   ): Response {
-    const minting = options.handoffs.mint({ ...flow, identity, sessionExpiry }, now);
+    // A dashboard's flow goes back to the dashboard's own address, the one the
+    // portal knows, whatever host the flow names.
+    const dashboard = options.dashboardOrigin ?? null;
+    if (flow.audience === "dashboard" && dashboard === null) {
+      return page(404, "Not available.", "Signing in to the dashboard with a work account isn't available on this server.", null, cookies);
+    }
+    const minting = options.handoffs.mint({ host: flow.host, binding: flow.binding, returnTo: flow.returnTo, identity, sessionExpiry, authTime, audience: flow.audience }, now);
     if ("refusal" in minting) {
       return minting.refusal === "spent-flow"
         ? page(400, "This sign-in link was already used.", "Go back to the site and sign in again.", flow, cookies)
         : page(503, "Too many sign-ins at once.", "Try again in a minute.", flow, cookies);
     }
-    const target = `${siteOrigin(flow.host)}/_portal/oidc/complete?${new URLSearchParams({ code: minting.code })}`;
+    const query = new URLSearchParams({ code: minting.code });
+    const target =
+      flow.audience === "dashboard" ? `${dashboard}/api/sso/complete?${query}` : `${siteOrigin(flow.host)}/_portal/oidc/complete?${query}`;
     return redirect(target, cookies);
   }
 
@@ -225,7 +242,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       const binding = drawBinding();
       const flow = issueFlow(
         options.key,
-        { host, returnTo, binding: bindingHash(binding), chooseAccount: params.get("account") === "choose" },
+        { host, returnTo, binding: bindingHash(binding), chooseAccount: params.get("account") === "choose", audience: "site" },
         Math.floor(now / 1000),
       );
       const start = `${options.settings.portalOrigin}/oidc/start?${new URLSearchParams({ flow })}`;
@@ -250,8 +267,12 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       const cookies = req.headers.get("cookie");
       const known = readSession(options.key, readCookie(cookies, cookieName(online, SESSION_SUFFIX)), nowS);
       const allowed = known !== null && maySignIn(known.identity.email, options.settings.allowedDomains, options.settings.admins);
-      if (known !== null && allowed && !flow.chooseAccount) {
-        return handOver(flow, known.identity, known.expiry, now, []);
+      // The session began a day before it expires. The dashboard trusts it for
+      // half that: a member session lasts as long again, see DASHBOARD_REAUTH_S.
+      const authTime = known === null ? 0 : known.expiry - IDENTITY_DURATION_S;
+      const recent = flow.audience !== "dashboard" || nowS - authTime <= DASHBOARD_REAUTH_S;
+      if (known !== null && allowed && recent && !flow.chooseAccount) {
+        return handOver(flow, known.identity, known.expiry, authTime, now, []);
       }
       // After a sign-out on this browser, the provider is asked which account,
       // whatever the site asked: see SIGNED_OUT_SUFFIX.
@@ -324,7 +345,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       // A new session, and this browser no longer counts as signed out.
       const session = setCookie(issueSession(options.key, result.identity, nowS), online, IDENTITY_DURATION_S, SESSION_SUFFIX);
       const cookies = [...spent, session, clearCookie(online, SIGNED_OUT_SUFFIX)];
-      return handOver(flow, result.identity, nowS + IDENTITY_DURATION_S, now, cookies);
+      return handOver(flow, result.identity, nowS + IDENTITY_DURATION_S, nowS, now, cookies);
     },
 
     complete(req) {
@@ -337,7 +358,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       // The binding is spent with the code: one flow, one redemption.
       const spent = [clearCookie(online, BINDING_SUFFIX)];
       const binding = readCookie(req.headers.get("cookie"), cookieName(online, BINDING_SUFFIX));
-      const redemption = options.handoffs.redeem(new URL(req.url).searchParams.get("code") ?? "", host, binding, now);
+      const redemption = options.handoffs.redeem(new URL(req.url).searchParams.get("code") ?? "", host, binding, now, "site");
       if ("refusal" in redemption) {
         if (redemption.refusal !== "unknown-code") {
           audit({ actor: "anonymous", action: "portal.signin_failed", target: host, detail: { method: "oidc", reason: redemption.refusal } }, now);

@@ -444,6 +444,12 @@ const OPERATION_NAMES: Record<Operation, string> = {
   password: "Change password",
   portal: "Portal",
   restart: "Restart",
+  "member.invite": "Invite member",
+  "member.role": "Change roles",
+  "member.remove": "Remove member",
+  "member.signin": "Sign in",
+  "member.signin_failed": "Sign-in refused",
+  "member.signout": "Sign out",
 }
 
 /**
@@ -537,7 +543,10 @@ export function operationOutcome(entry: LogEntry): OperationOutcome {
     // Alone in its column, the verdict takes its capital, like the dialog's word.
     const text = read.charAt(0).toUpperCase() + read.slice(1)
     if (entry.operation === "portal") return { tone: "neutral", text }
-    const tone: Tone = detail === "active" ? "ok" : detail === "scheduled" ? "attention" : "error"
+    // The steward writes the verdict first, then the systemd state:
+    // "active, active/running, 0 restarts". The first word decides.
+    const verdict = detail?.split(",")[0]?.trim()
+    const tone: Tone = verdict === "active" ? "ok" : verdict === "scheduled" ? "attention" : "error"
     return { tone, text }
   }
   const refusal = entry.result === "rejects" ? "Refused" : "Failed"

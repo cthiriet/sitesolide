@@ -125,7 +125,7 @@ function createStore(): Store & { sessions: Map<string, Session> } {
     async openSession(now) {
       const token = generateToken();
       const hash = await tokenHash(token);
-      sessions.set(hash, { hash, createdAt: now, seenAt: now });
+      sessions.set(hash, { hash, createdAt: now, seenAt: now, identity: "owner" });
       return token;
     },
     async readSession(token) {

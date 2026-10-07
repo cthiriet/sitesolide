@@ -135,7 +135,25 @@ describe("each source's rows, in one shape", () => {
   });
 
   test("every operation the steward journals has its action, and an unknown one is left out", () => {
-    expect(Object.keys(STEWARD_ACTIONS).sort()).toEqual(["create", "lock", "password", "portal", "read", "remove", "replace", "restart", "restore", "set", "unlock"]);
+    expect(Object.keys(STEWARD_ACTIONS).sort()).toEqual([
+      "create",
+      "lock",
+      "member.invite",
+      "member.remove",
+      "member.role",
+      "member.signin",
+      "member.signin_failed",
+      "member.signout",
+      "password",
+      "portal",
+      "read",
+      "remove",
+      "replace",
+      "restart",
+      "restore",
+      "set",
+      "unlock",
+    ]);
     expect(fromJournal([{ a: T, operation: "constructor", result: "ok", slug: null, file: null, variable: null, detail: null }])).toEqual([]);
     expect(fromJournal([{ a: "now", operation: "set" }, null, 4])).toEqual([]);
   });
@@ -152,7 +170,7 @@ describe("the query", () => {
   const read = (query: string) => readQuery(new URLSearchParams(query));
 
   test("with nothing, every source, the default page, no filter", () => {
-    expect(read("")).toEqual({ sources: [...AUDIT_SOURCES], actor: null, action: null, target: null, from: null, to: null, limit: 100, cursor: null });
+    expect(read("")).toEqual({ sources: [...AUDIT_SOURCES], actor: null, action: null, target: null, from: null, to: null, limit: 100, cursor: null, restrict: null });
   });
 
   test("sources repeated or listed, kept in their fixed order", () => {

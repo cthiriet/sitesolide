@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DASHBOARD_AUDIENCE, encodeKey, generateKeyPair, verifyAssertion } from "../src/assertion";
 import { DATA_DIR } from "../src/config";
 import { deriveKey } from "../src/gate";
-import { HANDOFF_PER_EMAIL, IDENTITY_DURATION_S, issueSession } from "../src/handoff";
+import { drawBinding, HANDOFF_PER_EMAIL, IDENTITY_DURATION_S, issueSession } from "../src/handoff";
 import { makeSigner, startProvider, type MockProvider } from "./provider";
 
 /**
@@ -22,6 +23,8 @@ if (!DATA_DIR.endsWith(".attempts")) throw new Error(`isolated tests expected, D
 
 const SITE = "kanban.localhost";
 const OTHER_SITE = "roster.localhost";
+/** The dashboard, which the test plays: the browser stops when it is sent there. */
+const DASHBOARD = "dashboard.localhost";
 const PASSWORD = "sample-portal-password";
 const FOLDER = join(DATA_DIR, "sso-flow");
 
@@ -34,6 +37,7 @@ function freePort(): number {
 
 let provider: MockProvider;
 let portal: ReturnType<typeof Bun.spawn>;
+const pair = await generateKeyPair();
 let hash = "";
 const portalPort = freePort();
 const PORTAL = `http://127.0.0.1:${portalPort}`;
@@ -67,6 +71,7 @@ class Browser {
   async get(address: string, extra: Record<string, string> = {}): Promise<Response> {
     const url = new URL(address);
     const host = url.host;
+    if (host === DASHBOARD) return new Response(null, { status: 204 });
     const isSite = host === SITE || host === OTHER_SITE;
     const target = isSite ? `${PORTAL}${url.pathname}${url.search}` : address;
     const headers: Record<string, string> = { ...extra };
@@ -131,6 +136,8 @@ beforeAll(async () => {
   mkdirSync(FOLDER, { recursive: true });
   provider = await startProvider();
   hash = await Bun.password.hash(PASSWORD, { algorithm: "argon2id", memoryCost: 8, timeCost: 1 });
+  // The key the steward would lay for the portal.
+  writeFileSync(join(FOLDER, "assertion.key"), encodeKey(pair.privateKey), { mode: 0o600 });
   Bun.spawnSync(["bun", join(import.meta.dir, "..", "scripts", "borrow.ts")], { stdout: "ignore" });
   portal = Bun.spawn(["bun", "run", join(import.meta.dir, "..", "server.ts")], {
     env: {
@@ -146,6 +153,8 @@ beforeAll(async () => {
       OIDC_ALLOWED_DOMAINS: "acme.test",
       OIDC_ADMIN_EMAILS: "owner@acme.test",
       OIDC_PROVIDER_NAME: "Acme",
+      DASHBOARD_URL: `http://${DASHBOARD}`,
+      ASSERTION_KEY_FILE: join(FOLDER, "assertion.key"),
     },
     stdout: "ignore",
     stderr: "ignore",
@@ -278,6 +287,82 @@ describe("signing in with the provider, end to end", () => {
     await share(SITE, { mode: "people", people: ["alice@acme.test"] });
     const { url } = await new Browser().follow(signInAt(SITE, "//evil.test/x"));
     expect(url).toBe(`http://${SITE}/`);
+  });
+});
+
+describe("signing in to the dashboard, end to end", () => {
+  const json = { "Content-Type": "application/json" };
+
+  /** What the dashboard does on a click: draw a binding, have the portal seal the flow, send the browser to it. */
+  async function begin(browser: Browser, chooseAccount = false): Promise<{ binding: string; url: string; visited: string[] }> {
+    const binding = drawBinding();
+    const sealed = await admin("/admin/dashboard/flow", { method: "POST", headers: json, body: JSON.stringify({ binding, returnTo: "/activity/", chooseAccount }) });
+    expect(sealed.status).toBe(200);
+    const { start } = (await sealed.json()) as { start: string };
+    const { url, visited } = await browser.follow(start);
+    return { binding, url, visited };
+  }
+
+  function redeem(code: string | null, binding: string | null): Promise<Response> {
+    return admin("/admin/dashboard/redeem", { method: "POST", headers: json, body: JSON.stringify({ code, binding }) });
+  }
+
+  test("the provider, then back to the dashboard with a code redeemed for a signed assertion", async () => {
+    const browser = new Browser();
+    provider.next = { email: "alice@acme.test", name: "Alice Martin" };
+    const { binding, url, visited } = await begin(browser);
+    expect(visited.map((one) => new URL(one).host + new URL(one).pathname)).toEqual([
+      `127.0.0.1:${portalPort}/oidc/start`,
+      `${new URL(provider.url).host}/authorize`,
+      `127.0.0.1:${portalPort}/oidc/callback`,
+      `${DASHBOARD}/api/sso/complete`,
+    ]);
+    const code = new URL(url).searchParams.get("code");
+
+    const answer = await redeem(code, binding);
+    expect(answer.status).toBe(200);
+    const { assertion } = (await answer.json()) as { assertion: string };
+    const reading = await verifyAssertion(assertion, pair.publicKey, { audience: DASHBOARD_AUDIENCE, nowS: Math.floor(Date.now() / 1000) });
+    expect("claims" in reading && reading.claims).toMatchObject({ email: "alice@acme.test", name: "Alice Martin", aud: "dashboard" });
+
+    // Once: the same code again is unknown, and recorded nowhere.
+    const before = await events();
+    expect(await (await redeem(code, binding)).json()).toMatchObject({ error: "unknown-code" });
+    expect(await events()).toEqual(before);
+  });
+
+  test("a code is redeemed only with the binding of the browser that began", async () => {
+    const { url } = await begin(new Browser());
+    const refused = await redeem(new URL(url).searchParams.get("code"), drawBinding());
+    expect(refused.status).toBe(400);
+    expect((await events())[0]).toMatchObject({ action: "portal.signin_failed", target: DASHBOARD, detail: { reason: "wrong-browser" } });
+  });
+
+  test("a dashboard's code signs nobody in on a site", async () => {
+    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    const browser = new Browser();
+    const { url } = await begin(browser);
+    const code = new URL(url).searchParams.get("code")!;
+    const response = await browser.get(`http://${SITE}/_portal/oidc/complete?code=${code}`);
+    expect(response.status).toBe(400);
+    expect(browser.cookie(SITE, "portal")).toBeUndefined();
+    expect((await events())[0]).toMatchObject({ action: "portal.signin_failed", target: SITE, detail: { reason: "wrong-audience" } });
+  });
+
+  test("the portal's session spares the provider for the next sign-in, unless another account is asked for", async () => {
+    const browser = new Browser();
+    expect(providerVisits((await begin(browser)).visited)).toBe(1);
+    expect(providerVisits((await begin(browser)).visited)).toBe(0);
+    const chosen = await begin(browser, true);
+    const authorize = chosen.visited.find((one) => one.startsWith(`${provider.url}/authorize`))!;
+    expect(new URL(authorize).searchParams.get("prompt")).toBe("select_account");
+  });
+
+  test("an account the portal does not admit never reaches the dashboard", async () => {
+    provider.next = { email: "eve@elsewhere.test" };
+    const { url } = await begin(new Browser());
+    expect(new URL(url).pathname).toBe("/oidc/callback");
+    expect((await events())[0]).toMatchObject({ actor: "eve@elsewhere.test", target: DASHBOARD, detail: { reason: "domain-not-allowed" } });
   });
 });
 

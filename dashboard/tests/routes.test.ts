@@ -30,6 +30,7 @@ function createStore(): Store & { sessions: Map<string, Session>; attempts: { fa
         hash: await tokenHash(token),
         createdAt: now,
         seenAt: now,
+        identity: "owner",
       });
       return token;
     },

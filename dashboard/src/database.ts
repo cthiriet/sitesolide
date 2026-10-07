@@ -1,5 +1,5 @@
 /**
- * The service's database: a session, a failure counter, and nothing else.
+ * The service's database: the sessions, a failure counter, and nothing else.
  *
  * What the machine carries is not here and never will be: that state lives in
  * the snapshot the collector rewrites every minute, and confusing it with kept
@@ -10,7 +10,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { DATA_DIR } from "./config";
-import { tokenHash, generateToken, isRotationDetected, type Session } from "./sessions";
+import { tokenHash, generateToken, isRotationDetected, OWNER_IDENTITY, type Session } from "./sessions";
 
 /**
  * Connection settings, applied in this order. A PRAGMA does not survive the
@@ -30,10 +30,13 @@ export const PRAGMAS = [
 ] as const;
 
 export const SCHEMA = [
+  // `identity`: `owner`, or a member's email. A database from before members
+  // gains it through MIGRATIONS, its sessions all the owner's.
   `CREATE TABLE IF NOT EXISTS sessions (
      empreinte TEXT PRIMARY KEY,
      cree_a    INTEGER NOT NULL,
-     vue_a     INTEGER NOT NULL
+     vue_a     INTEGER NOT NULL,
+     identity  TEXT NOT NULL DEFAULT 'owner'
    )`,
 
   // A single row, for ever. The rate limiting is global and not per address:
@@ -57,6 +60,14 @@ export const SCHEMA = [
 export const PASSWORD_HASH_KEY = "empreinte_mot_de_passe";
 
 /**
+ * The columns a table gained after it was first created, and their
+ * definition: `CREATE TABLE IF NOT EXISTS` leaves an existing table as it is.
+ */
+export const MIGRATIONS: readonly { table: string; column: string; definition: string }[] = [
+  { table: "sessions", column: "identity", definition: "TEXT NOT NULL DEFAULT 'owner'" },
+];
+
+/**
  * `strict` throws on a missing parameter instead of silently binding it to
  * NULL and writing an incomplete row.
  */
@@ -64,6 +75,10 @@ export function openDatabase(path: string): Database {
   const base = new Database(path, { create: true, strict: true });
   for (const pragma of PRAGMAS) base.run(`PRAGMA ${pragma}`);
   for (const table of SCHEMA) base.run(table);
+  for (const { table, column, definition } of MIGRATIONS) {
+    const columns = base.query<{ name: string }, []>(`SELECT name FROM pragma_table_info('${table}')`).all();
+    if (!columns.some((one) => one.name === column)) base.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
   return base;
 }
 
@@ -74,17 +89,19 @@ const base = openDatabase(join(DATA_DIR, "dashboard.db"));
 
 /** Prepared once: `db.query` keeps them in cache, `db.prepare` does not. */
 const queries = {
-  sessionByHash: base.query<{ hash: string; createdAt: number; seenAt: number }, [string]>(
-    "SELECT empreinte AS hash, cree_a AS createdAt, vue_a AS seenAt FROM sessions WHERE empreinte = ?",
+  sessionByHash: base.query<{ hash: string; createdAt: number; seenAt: number; identity: string }, [string]>(
+    "SELECT empreinte AS hash, cree_a AS createdAt, vue_a AS seenAt, identity FROM sessions WHERE empreinte = ?",
   ),
-  createSession: base.query<undefined, [string, number, number]>(
-    "INSERT INTO sessions (empreinte, cree_a, vue_a) VALUES (?, ?, ?)",
+  createSession: base.query<undefined, [string, number, number, string]>(
+    "INSERT INTO sessions (empreinte, cree_a, vue_a, identity) VALUES (?, ?, ?, ?)",
   ),
   touchSession: base.query<undefined, [number, string]>(
     "UPDATE sessions SET vue_a = ? WHERE empreinte = ?",
   ),
   deleteSession: base.query<undefined, [string]>("DELETE FROM sessions WHERE empreinte = ?"),
-  purgeSessions: base.query<undefined, [number]>("DELETE FROM sessions WHERE cree_a < ?"),
+  purgeSessions: base.query<undefined, [number, number]>(
+    "DELETE FROM sessions WHERE (identity = 'owner' AND cree_a < ?) OR (identity <> 'owner' AND cree_a < ?)",
+  ),
   attempts: base.query<{ failures: number; lastAt: number }, []>(
     "SELECT echecs AS failures, dernier_a AS lastAt FROM essais WHERE id = 1",
   ),
@@ -95,7 +112,9 @@ const queries = {
     `INSERT INTO reglages (cle, valeur) VALUES (?, ?)
        ON CONFLICT(cle) DO UPDATE SET valeur = excluded.valeur`,
   ),
-  clearSessions: base.query<undefined, []>("DELETE FROM sessions"),
+  // The owner's only: a member's session does not rest on the owner's password.
+  clearSessions: base.query<undefined, []>("DELETE FROM sessions WHERE identity = 'owner'"),
+  countOwnerSessions: base.query<{ n: number }, []>("SELECT count(*) AS n FROM sessions WHERE identity = 'owner'"),
 
   setAttempts: base.query<undefined, [number, number]>(
     `INSERT INTO essais (id, echecs, dernier_a) VALUES (1, ?, ?)
@@ -103,16 +122,25 @@ const queries = {
   ),
 };
 
+/** The owner's session, its token drawn here. */
 export async function openSession(now: number): Promise<string> {
   const token = generateToken();
-  queries.createSession.run(await tokenHash(token), now, now);
+  queries.createSession.run(await tokenHash(token), now, now, OWNER_IDENTITY);
   return token;
+}
+
+/**
+ * A member's session, whose token the steward drew: kept here by its hash, as
+ * the owner's, under the member's email.
+ */
+export async function recordSession(token: string, identity: string, now: number): Promise<void> {
+  queries.createSession.run(await tokenHash(token), now, now, identity);
 }
 
 export async function readSession(token: string): Promise<Session | null> {
   const row = queries.sessionByHash.get(await tokenHash(token));
   if (row === null) return null;
-  return { hash: row.hash, createdAt: row.createdAt, seenAt: row.seenAt };
+  return { hash: row.hash, createdAt: row.createdAt, seenAt: row.seenAt, identity: row.identity };
 }
 
 export function touchSession(hash: string, now: number): void {
@@ -123,9 +151,9 @@ export function closeSession(hash: string): void {
   queries.deleteSession.run(hash);
 }
 
-/** Called at every sign-in, not on a timer. */
-export function purgeSessions(before: number): void {
-  queries.purgeSessions.run(before);
+/** Called at every sign-in, not on a timer: the owner's sessions opened before `before`, a member's before `memberBefore`. */
+export function purgeSessions(before: number, memberBefore: number = before): void {
+  queries.purgeSessions.run(before, memberBefore);
 }
 
 export function readAttempts(): { failures: number; lastAt: number } {
@@ -158,7 +186,7 @@ export async function applyRotation(passwordHash: string): Promise<number> {
 
   let closed = 0;
   if (isRotationDetected(known, current)) {
-    closed = base.query<{ n: number }, []>("SELECT count(*) AS n FROM sessions").get()?.n ?? 0;
+    closed = queries.countOwnerSessions.get()?.n ?? 0;
     queries.clearSessions.run();
   }
 

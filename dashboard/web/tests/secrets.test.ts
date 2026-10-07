@@ -595,6 +595,10 @@ describe("log", () => {
       tone: "attention",
       text: "Restarting",
     })
+    // As the steward writes it: the verdict, then systemd's state. A running
+    // service is not an error for carrying its state after the word.
+    expect(operationOutcome(logEntry({ operation: "restart", detail: "active, active/running, 0 restarts" })).tone).toBe("ok")
+    expect(operationOutcome(logEntry({ operation: "restart", detail: "looping, activating/auto-restart, 3 restarts" })).tone).toBe("error")
   })
 
   test("a portal action says what the steward recorded, without judging", () => {

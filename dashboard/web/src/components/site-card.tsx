@@ -132,7 +132,7 @@ function MemoryGauge({ gauge }: { gauge: ServiceGauge }) {
   )
 }
 
-export function ServicePanel({ site, now }: { site: Site; now: number }) {
+export function ServicePanel({ site, now, action }: { site: Site; now: number; action?: ReactNode }) {
   const card = serviceCard(site, now)
   if (card.kind !== "app") {
     return (
@@ -156,7 +156,14 @@ export function ServicePanel({ site, now }: { site: Site; now: number }) {
     <Panel
       title={site.services.length > 1 ? "Main service" : "Service"}
       full
-      actions={card.unit === null ? undefined : <Terminal>{card.unit}</Terminal>}
+      actions={
+        card.unit === null && action === undefined ? undefined : (
+          <>
+            {card.unit !== null && <Terminal>{card.unit}</Terminal>}
+            {action}
+          </>
+        )
+      }
     >
       <div className="grid gap-4 p-4">
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">

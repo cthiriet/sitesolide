@@ -24,6 +24,7 @@ would.
 | list the machines sitesolide created at a cloud provider | destroy one, unless you asked for that machine to be destroyed |
 | check a machine with `setup --dry-run`, and install it when you asked | replace DNS records that point elsewhere (`setup --dns-replace`), unless you decided it |
 | list what a new release would change with `upgrade --dry-run`, and upgrade when you asked | redeploy a component by hand, or force over a file edited on the machine |
+| list the dashboard's members with `members` | invite, remove or change a member's roles, unless you asked for that person: it lets them into the dashboard |
 | | read, set or guess a secret, a provider's token included |
 
 Secrets are set in the dashboard's *Secrets* section, by you. A deploy that
@@ -182,6 +183,7 @@ What `result` carries:
 | `domain` | `slug`, `domain`: `name`, `aliases`, `active`, `table`, `dns`, `https` |
 | `remove` | `slug`, `dryRun` |
 | `share` | `slug`, `url`, `policy` (`mode`, `people`, `domains`), `inEffect`, `updatedAt`, `signIn`, `allowedDomains`, `message` (null until signing in with a work account is set up), `changed`, `previous` when changed |
+| `members` | listing: `members` (each `email`, `roles`, `invitedBy`, `createdAt`, `updatedAt`), `signIn` (`configured`, `allowedDomains`), `message`, `changed: false`; `add` and `remove --project`: `email`, `roles`, `change` (`invite`, `role`, `none`), `message`, `changed`; `remove`: `email`, `removed`, `roles`, `changed` |
 | `machine create` | `provider`, `created` (false when an earlier run had), `machine`, `resources` (each `kind`, `name`, `id`, `reused`), `next`, the `setup` command to run |
 | `machine list` | `provider`, `machines`, each with `name`, `type`, `location`, `status`, `ipv4`, `ipv6`, `ipv6Network`, `monthlyPrice` (`net`, `gross`, `currency`), `backups`, `managed` |
 | `machine destroy` | `provider`, `name`, `removed`, `kept`, `dns` |
@@ -233,7 +235,8 @@ by each command.
 | `lock_status` | `folder` | no |
 
 `setup` and `upgrade` are not tools: they change the machine itself, and run
-through the CLI, when the user asked. `folder` is an absolute path.
+through the CLI, when the user asked. Neither is `members`: it lets people
+into the dashboard, which is the owner's to do, over their SSH. `folder` is an absolute path.
 `deploy`'s description says first that it changes the live server, and `share`'s that it gives real people access: leave
 both on "ask" in your client rather than allowing them once and for all, so
 that every real deploy, and every person let in, is yours to approve.

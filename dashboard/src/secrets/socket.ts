@@ -73,13 +73,20 @@ function setPermissions(path: string, gid: number | null, mode: number): void {
  * a temporary name, which receives the group and 0660, then takes the known
  * name. A failure after listening removes the temporary one and rethrows: the
  * process stops, and systemd restarts it.
+ *
+ * `modes`: the owner's socket, which no group opens, takes 0700 and 0600.
  */
-export function openSocket<T>(socket: string, gid: number | null, listen: (path: string) => T): T {
-  setPermissions(dirname(socket), gid, 0o750);
+export function openSocket<T>(
+  socket: string,
+  gid: number | null,
+  listen: (path: string) => T,
+  modes: { folder: number; socket: number } = { folder: 0o750, socket: 0o660 },
+): T {
+  setPermissions(dirname(socket), gid, modes.folder);
   const temporary = temporaryName(socket);
   const server = listen(temporary);
   try {
-    setPermissions(temporary, gid, 0o660);
+    setPermissions(temporary, gid, modes.socket);
     renameSync(temporary, socket);
   } catch (error) {
     try {

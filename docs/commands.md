@@ -1,8 +1,8 @@
 # Commands
 
 Every command runs from a project's folder, the one holding its
-`sitesolide.json`, except `setup`, `upgrade`, `init`, `machine`, `help` and
-`--version`. This is what `sitesolide --help` prints.
+`sitesolide.json`, except `setup`, `upgrade`, `init`, `machine`, `members`,
+`help` and `--version`. This is what `sitesolide --help` prints.
 
 ```text
 sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a no-op once done
@@ -41,6 +41,11 @@ sitesolide share                who may open this project with their work accoun
    --domain <domain>            with everyone at this domain
    --remove <email|domain>      take a person or a domain off
    --only-admins                back to the admins alone
+sitesolide members              who signs in to the dashboard with a work account, on which projects
+   add <email> --project <slug> --role <viewer|developer|admin>
+                                invite them, or set their role; repeat --project and --role
+   remove <email> [--project <slug>]
+                                take them off, signed out at once, or take projects off them
 sitesolide lock   [--dry-run]   close the preview behind a code, or show it
    --status                     wanted / installed / measured, without touching
    --new-code                   replace the code in force by a fresh one
@@ -158,6 +163,49 @@ API on the loopback, after reading there that the site's manifest asks for the
 portal and that its block carries it. It touches nothing else, Caddy least of
 all. With a team token, it goes through the dashboard, which may refuse a
 domain: see [team.md](team.md#sharing-what-you-deployed).
+
+## The dashboard's members
+
+People who sign in to the dashboard itself with their work account, through
+the portal's identity provider, and see only the projects the owner gives
+them a role on: Viewer (the project's state, audience and activity),
+Developer (also restarts its service) and Project admin (the same for now;
+more comes in a later release). They never get a password, a token or root.
+`sitesolide members` is the owner's way to manage them, from any folder, over
+SSH; the dashboard's *Members* page is the other.
+
+```console
+$ sitesolide members add alice@acme.com --project notes --role developer --project shop --role viewer
+-> members of https://dashboard.example.com, over SSH, as the owner
+-> alice@acme.com invited: notes: developer, shop: viewer
+   send: Open https://dashboard.example.com and sign in with your Google work account.
+
+$ sitesolide members
+-> members of https://dashboard.example.com, over SSH, as the owner
+   alice@acme.com  notes: developer, shop: viewer
+   send: Open https://dashboard.example.com and sign in with your Google work account.
+
+$ sitesolide members remove alice@acme.com
+-> members of https://dashboard.example.com, over SSH, as the owner
+-> alice@acme.com removed: signed out of the dashboard, refused at their next request
+```
+
+Each `--project` takes the `--role` that follows it. `add` on someone already
+a member sets the roles named and keeps their others; `remove --project`
+takes those projects off them and keeps the rest. No email is sent: the
+command prints the line to send.
+
+Root on the machine asks the steward, on its owner socket
+(`/run/sitesolide-steward-owner/owner.sock`), which only root opens, the body
+on standard input. The steward decides: an address outside the portal's
+`OIDC_ALLOWED_DOMAINS` is refused, as the portal would refuse it at sign-in, a
+role only goes on a deployed project and never on the platform's own, and the
+change goes into its journal under `owner`. A member removed is out at once:
+their next request reads as no session, and their next write is refused. With
+a team token, the command is refused before anything is sent: it is the
+owner's. See [team.md](team.md#members-beside-tokens) for what a member sees,
+and [dashboard/README.md](../dashboard/README.md#members) for the machine's
+side.
 
 ## A folder without a manifest
 
