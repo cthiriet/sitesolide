@@ -500,7 +500,7 @@ Developer or a Project admin finds *Restart* in **Service**'s header, which
 confirms, waits for the steward's verdict and says it in plain words, or shows
 the steward's refusal as it stands.
 
-**A site's Secrets.** The lock in the header. The **Files** panel: the service
+**A site's Secrets.** The lock in the header: locked, a single *Unlock* button with a key, no state pill beside it; unlocked, a warning pill with the time left and a *Lock* button. The **Files** panel: the service
 and *Restart service*, what is wrong, then each file. A variables file lists its
 variables; a password variable offers only *Change password*. A file read whole
 states its size and offers *Replace*, and *Reveal* if it is readable. Then
@@ -527,7 +527,7 @@ the server side by side, the public paths, and *Turn on portal* or *Turn off
 portal* if the steward accepts, its reason otherwise. The confirmation states
 the gatekeeper's three steps and the rollback on failure; a removal warns that
 the site becomes public and makes you retype the slug. **Preview lock**: the
-code and its link, and the `bin/lock.sh` commands that set, change or remove it,
+code and its link, and the `sitesolide lock` commands that set, change or remove it,
 the dashboard not writing there.
 
 **A site's Backups.** The lock in the header, a restore asking for the dashboard

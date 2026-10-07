@@ -1,5 +1,5 @@
 import { type ReactNode } from "react"
-import { FileKey, FilePen, FilePlus, FileText, Lock, LockOpen, Plus, RotateCcw, Undo2 } from "lucide-react"
+import { FileKey, FilePen, FilePlus, FileText, KeyRound, Lock, LockOpen, Plus, RotateCcw, Undo2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Command } from "@/components/copy"
 import { EmptyState, SeverityIcon, Panel, Status } from "@/components/page"
@@ -24,24 +24,29 @@ import { cn } from "@/lib/utils"
 // --- The lock, in the page header ------------------------------------------------
 
 /**
- * The lock's state and its button, among the header's actions: visible from the
- * whole page, since the header stays at the top. Unlocked, the pill turns to
- * warning: the values are one click away.
+ * The lock, among the header's actions: visible from the whole page, since the
+ * header stays at the top.
+ *
+ * Locked, a single button says what it does, with a key rather than a padlock:
+ * a closed "Locked" pill beside an open padlock on the button read as two
+ * states at once. Unlocked, a warning pill with the time left joins it, since
+ * the values are then one click away, and the button locks again.
  */
 export function SecretsLockControl() {
   const { state, locking, lockButtonRef, unlock, lock } = useSecretsActions()
-  const Icon = state.open ? LockOpen : Lock
   return (
     <>
-      <span
-        className={cn(
-          "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium whitespace-nowrap tabular-nums",
-          TONE_PILL[state.open ? "attention" : "neutral"],
-        )}
-      >
-        <Icon aria-hidden="true" className="size-3.5" />
-        {state.label}
-      </span>
+      {state.open && (
+        <span
+          className={cn(
+            "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium whitespace-nowrap tabular-nums",
+            TONE_PILL.attention,
+          )}
+        >
+          <LockOpen aria-hidden="true" className="size-3.5" />
+          {state.label}
+        </span>
+      )}
       {/* One single button, whose label changes: focus stays on it from one state to the next. */}
       <Button
         ref={lockButtonRef}
@@ -50,7 +55,7 @@ export function SecretsLockControl() {
         onClick={state.open ? lock : unlock}
         className="max-md:h-10 max-md:px-3.5"
       >
-        {state.open ? <Lock /> : <LockOpen />}
+        {state.open ? <Lock /> : <KeyRound />}
         {state.open ? (locking ? "Locking…" : "Lock") : "Unlock"}
       </Button>
     </>
