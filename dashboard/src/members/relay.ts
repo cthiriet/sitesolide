@@ -19,6 +19,11 @@
  * **A member's unlock token is the steward's**, drawn when a forced sign-in
  * checks out (routes.ts, `complete`), kept here in memory by the session's
  * hash, as the super admin's is, and never sent to the browser.
+ *
+ * **A member's own tokens** answer at the Team page's addresses too: their
+ * tokens alone, minted under their unlock within their roles, revoked
+ * without it. The steward judges and journals each (src/control/steward.ts);
+ * the dashboard adds what it keeps itself, the deployments of those tokens.
  */
 import { invitableHosts } from "../guests";
 import { read } from "../read";
@@ -28,6 +33,8 @@ import { fields, reach, relay, type Extraction, type Received } from "../secrets
 import type { Steward } from "../secrets/client";
 import type { Tokens } from "../secrets/tokens";
 import type { BackupSteward } from "../backup/client";
+import type { ControlStore } from "../control/store";
+import type { TeamPageResponse, TokenView } from "../control/protocol";
 import type { MembersSteward } from "./client";
 import type { Identity, IdentityResolver, Resolved } from "./identity";
 import { may, type Power } from "./powers";
@@ -49,6 +56,8 @@ export type MemberRelayDependencies = {
   backups: Pick<BackupSteward, "readBackups" | "readBackupAudit">;
   /** The provider's name, for the line a Project admin sends someone invited. */
   providerName: (now: number) => Promise<string | null>;
+  /** The deployments and the audit the dashboard keeps, for a member's Team page: those of their own tokens. */
+  control: Pick<ControlStore, "recent" | "listAudit">;
 };
 
 export type MemberRelay = {
@@ -75,6 +84,9 @@ export type MemberRelay = {
   projectMembers: Handler;
   putProjectMember: Handler;
   removeProjectMember: Handler;
+  team: Handler;
+  createToken: Handler;
+  revokeToken: Handler;
   /** Not a route: a member signing out, their unlock forgotten here and locked at the steward. */
   forgetUnlock: (sessionToken: string) => Promise<void>;
 };
@@ -91,6 +103,9 @@ const error = (status: number, code: string, message: string) => json({ error: c
 export const MEMBER_LOCKED = "Unlock first: sign in again with your provider.";
 
 const locked = () => error(423, "locked", MEMBER_LOCKED);
+
+/** What a member's Team page says when the steward predates members' tokens. */
+export const TOKENS_OUTDATED = "This server's steward doesn't know members' tokens yet. Ask the super admin to run sitesolide upgrade.";
 
 /** Beyond that, it is not a site name. */
 const MAX_SLUG = 128;
@@ -368,6 +383,72 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
       const body = await readBody(req);
       if (body === null || typeof body.slug !== "string" || typeof body.email !== "string") return error(400, "invalid", "Missing or non-text field: slug, email.");
       return withSession(open, "DELETE", "/members/project/member", { slug: body.slug, email: body.email });
+    },
+
+    /**
+     * The member's Team page: their tokens, what they may mint them for, and
+     * the deployments those tokens made. A steward that predates members'
+     * tokens is said, as for the super admin.
+     */
+    async team(req) {
+      const open = await member(req, false);
+      if (open instanceof Response) return open;
+      const received = await reach(() => steward.act("POST", "/team/member/list", { session: open.token }), null, [open.token]);
+      const until = tokens.read(open.session.hash)?.expiresAt ?? null;
+      const self = { email: open.identity.email, roles: open.identity.roles, create: open.identity.create };
+      if (received.kind === "received" && received.status === 404 && received.body?.message === "no such route") {
+        const page: TeamPageResponse = { available: false, reason: TOKENS_OUTDATED, member: self, tokens: [], until, deployments: [], audit: [] };
+        return json(page);
+      }
+      if (received.kind !== "received" || received.status !== 200) return answer(open, received);
+      const listed = received.body?.tokens;
+      const rights = received.body?.rights;
+      if (!Array.isArray(listed) || !isObject(rights)) return error(502, "failure", "The steward sent an unreadable answer.");
+      const mine = listed as TokenView[];
+      const ids = new Set(mine.map((token) => token.id));
+      const deployments = dependencies.control
+        .recent(200)
+        .filter((row) => ids.has(row.tokenId))
+        .slice(0, 20)
+        .map(({ manifest: _manifest, ...row }) => row);
+      const audit = dependencies.control
+        .listAudit(500, "deploy.")
+        .filter((entry) => entry.actor.startsWith("token:") && ids.has(entry.actor.slice("token:".length)))
+        .slice(0, 50);
+      const page: TeamPageResponse = {
+        available: true,
+        reason: null,
+        member: { email: open.identity.email, roles: (rights.roles ?? open.identity.roles) as Roles, create: rights.create === true },
+        tokens: mine,
+        until,
+        deployments,
+        audit,
+      };
+      return json(page);
+    },
+
+    async createToken(req) {
+      const open = await member(req, true);
+      if (open instanceof Response) return open;
+      const body = await readBody(req);
+      if (body === null) return error(400, "invalid", "Unreadable request body.");
+      const kept = tokens.read(open.session.hash);
+      if (kept === null) return locked();
+      const { label, expiresAt, scope } = body;
+      const received = await reach(
+        () => steward.act("POST", "/team/member/tokens", { session: open.token, token: kept.token, label, expiresAt, scope }),
+        kept.token,
+        [open.token],
+      );
+      return answer(open, received, kept);
+    },
+
+    async revokeToken(req) {
+      const open = await member(req, true);
+      if (open instanceof Response) return open;
+      const body = await readBody(req);
+      if (body === null || typeof body.id !== "string") return error(400, "invalid", "Missing or non-text field: id.");
+      return withSession(open, "POST", "/team/member/revoke", { id: body.id });
     },
 
     async forgetUnlock(sessionToken) {

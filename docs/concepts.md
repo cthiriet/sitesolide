@@ -70,8 +70,8 @@ more.
 | A project's service | `site-<slug>` | read its own directory, write its own data directory |
 | The shared service (`api/`) | its own account | answer `ask` for on-demand TLS, generate preview locks |
 | The dashboard | `site-dashboard` | read a snapshot file, relay to the steward, call the portal |
-| The portal | `site-portal` | answer Caddy's `forward_auth`, sign people in with the identity provider, sign the dashboard's identity assertions |
-| The steward | root | write `/etc/sitesolide`, restart services, command the gatekeeper, keep the dashboard's members and judge what they do, ask the portal for a Project admin through its relay |
+| The portal | `site-portal` | answer Caddy's `forward_auth`, sign people in with the identity provider, sign the dashboard's identity assertions, believe an actor other than `owner` from root alone |
+| The steward | root | write `/etc/sitesolide`, restart services, command the gatekeeper, keep the dashboard's members and judge what they do, their own tokens included, ask the portal for a Project admin or a team token through its relay |
 | The portal relay | root, no capability, on demand | forward the steward's connections to the portal's admin API, and to nothing else |
 | The gatekeeper | root, one-shot | rewrite one project's block, reload Caddy, probe, roll back |
 | The installer | root, one-shot | deploy one project for a team token, the archive read by the project's own account |
@@ -111,14 +111,25 @@ Their roles: a Viewer looks; a Developer also restarts the project's service
 and writes its secrets without ever reading one back; a Project admin looks
 after all of the project, its secrets read, its door, sharing, guests,
 backups, and its members, a role at most their own. **A member's secret read,
-a door, a restore, a role given, each waits for the member's own unlock**: a
-forced sign-in at the provider, which the portal asks for (`prompt=login`,
-`max_age=0`) and reads back in the provider's own ID token, and the steward
-checks again, for ten minutes and that member's session alone. The steward
-never hands a Developer a value, whatever the dashboard relays. A Project
-admin's sharing and guests reach the portal from the steward, as root,
-through a relay: the steward keeps no network, and the portal records the
-email the steward verified.
+a door, a restore, a role given, a token minted, each waits for the member's
+own unlock**: a forced sign-in at the provider, which the portal asks for
+(`prompt=login`, `max_age=0`) and reads back in the provider's own ID token,
+and the steward checks again, for ten minutes and that member's session
+alone. The steward never hands a Developer a value, whatever the dashboard
+relays. A Project admin's sharing and guests reach the portal from the
+steward, as root, through a relay: the steward keeps no network, and the
+portal records the email the steward verified, believing an actor other than
+`owner` from root alone, which it tells by the uid of the connection.
+
+**A member's own tokens are never stronger than the member.** A Developer
+mints a token that deploys their project, a Project admin one that may also
+deploy public sites, declare a domain or reach outside hosts, and a member the
+owner granted the right to create projects one that creates them, which makes
+them Project admin of what it creates. The steward reads the registry at
+every use of such a token, and again when the installer starts: a role
+lowered to Viewer stops that project's deployments at the next request, and a
+member removed takes their tokens with them. See
+[team.md](team.md#a-members-own-tokens).
 
 **Everything that reloads Caddy shares one lock**, `/run/sitesolide-gatekeeper/caddy.lock`.
 The CLI, the deploy scripts and the gatekeeper all take it. Without it, a door
@@ -140,10 +151,13 @@ and revokes guest access, sets each site's sharing, reads the portal's audit,
 and has its members' sign-ins sealed and redeemed.
 Those routes have no other guard than this rule, and a test refuses any fragment
 that would expose them. Root reaches them too: `sitesolide share` over the
-owner's SSH, and the steward for a Project admin, through
+owner's SSH, and the steward for a Project admin or a team token, through
 `sitesolide-portal-relay`, a systemd proxy that forwards a socket only root
 opens to the portal's port and to nothing else, so that the steward's own
-unit keeps no network at all.
+unit keeps no network at all. The portal tells root from the dashboard the way
+the egress proxy tells its callers apart, by the uid of the connection's
+other end in `/proc/net/tcp`: only root may name who acts, a member's email
+or a token, and the dashboard speaks as `owner`, whatever it sends.
 
 And one set: a project that declares several `services` reaches its own ports,
 and nobody else's. Its front calls its API, its API its worker, and a neighbour
@@ -262,9 +276,10 @@ company account, Google Workspace, Microsoft Entra or any OpenID Connect
 provider, and the dashboard's *Sharing* section decides per site who gets in:
 the admins only, a list of people, or everyone at a domain. `sitesolide share`
 does the same from a project's folder, over the owner's SSH, or with a team
-token through the dashboard, which lets a token open a site only to the
-domains the portal admits. A change of sharing touches only the portal's
-database, never Caddy, and holds from the next request.
+token through the dashboard and the steward, which lets a token open a site
+only to the domains the portal admits and hands the change to the portal as
+root. A change of sharing touches only the portal's database, never Caddy, and
+holds from the next request.
 
 A project behind the portal writes no door of its own. It trusts Caddy, which is
 sound only because of the loopback rule. It also learns who came in, from three
@@ -282,29 +297,35 @@ that never carries a secret value. An actor is an email, a member of the
 dashboard's or a visitor's, `owner` for whoever holds the dashboard's
 password, `token:<id>` for a team token, `guest:<id>`, `anonymous` before
 anyone is known, or `system`. The steward writes a member's email as it
-verified it, never as a request names it. Nothing gathers these tables
+verified it, never as a request names it, and the portal takes a member's
+email or a token as the actor from root alone. A deployment by a member's own
+token is recorded under `token:<id>`, the member's email in its detail,
+`member`. Nothing gathers these tables
 on the machine: the dashboard's *Activity* page reads each through the road it
 already takes to that component, and merges them, newest first. How long each
 keeps its rows is in [dashboard/README.md](../dashboard/README.md#the-audit).
 
 | Event | Source | Actor | Target | What it records |
 |---|---|---|---|---|
-| `token.create`, `token.revoke` | dashboard | `owner` | none | a team token created or revoked, its label, email and scope |
-| `deploy.start` | dashboard | `token:<id>` | slug | a token's deployment handed to the installer |
-| `deploy.success`, `deploy.failure` | dashboard | `token:<id>` | slug | how it ended, the error's code for a failure |
+| `token.create`, `token.revoke` | dashboard | `owner` | none | a team token created or revoked from the owner's *Team* page, its label, email and scope |
+| `token.create`, `token.revoke` | steward | a member's email, or who removed them | none | a member's own token created or revoked, its id and scope; one refused above their roles, with the steward's reason; the tokens of a member removed, revoked under the owner or the Project admin who took their last role |
+| `project.create` | steward | a member's email | slug | a project a member's own token created, which made them its Project admin; the token in the detail |
+| `project.remove` | steward | `owner` | slug | a project `sitesolide remove` took off the machine: the name its team token owned, free again for another token; that token in the detail |
+| `deploy.start` | dashboard | `token:<id>` | slug | a token's deployment handed to the installer; `member` for a member's own token |
+| `deploy.success`, `deploy.failure` | dashboard | `token:<id>` | slug | how it ended, the error's code for a failure; `member` for a member's own token |
 | `portal.signin` | portal | `owner`, `guest:<id>` or an email | host | a sign-in with the shared password, a guest password or a work account, its role; repeats within a minute counted on one row |
 | `portal.signin_failed` | portal | `anonymous` or an email | host | a wrong password, or a work account refused and why |
 | `portal.signout` | portal | as it signed in | host | a sign-out |
-| `sharing.update` | portal | `owner`, `token:<id>` or a Project admin's email | host | who gets in changed: the mode, the people and domains added and removed |
-| `guest.create`, `guest.revoke` | portal | `owner` or a Project admin's email | host | a guest access given or revoked, the guest's label and expiry, never the password |
-| `sharing.update`, `guest.create`, `guest.revoke`, `backup.restore` | steward | a member's email | slug | a member's change refused before it reached the portal or the backups: their role, or a domain the portal does not admit |
+| `sharing.update` | portal | `owner`, or `token:<id>` or a Project admin's email from the steward, as root | host | who gets in changed: the mode, the people and domains added and removed |
+| `guest.create`, `guest.revoke` | portal | `owner`, or a Project admin's email from the steward, as root | host | a guest access given or revoked, the guest's label and expiry, never the password |
+| `sharing.update`, `guest.create`, `guest.revoke`, `backup.restore` | steward | a member's email | slug | a member's change refused before it reached the portal or the backups: their role, or a domain the portal does not admit; a member's own token refused sharing, by role |
 | `egress.denied` | egress | `system` | slug, or none | connections refused, by destination and reason, counted by the minute |
 | `connector.use` | egress | `system` | slug | a connector's calls, counted by the minute, and how many failed |
 | `connector.update` | egress | `owner` | connector | a connector created, changed or removed; a replaced value is said, never shown |
 | `connector.grant` | egress | `owner` | slug | a connector granted to a site, or withdrawn |
 | `backup.run` | backups | `system` | none | an hourly run: snapshots taken and pruned, the offsite copy, the sites that failed |
 | `backup.restore` | backups | `owner` or a Project admin's email | slug | a restore, its snapshot and how it ended |
-| `member.invite`, `member.role`, `member.remove` | steward | `owner`, or a Project admin's email | the member's email, or the project for a Project admin's change, the member in the detail | a member invited, their roles changed, or removed, with their roles; a Project admin's change refused, with their role |
+| `member.invite`, `member.role`, `member.remove` | steward | `owner`, or a Project admin's email | the member's email, or the project for a Project admin's change, the member in the detail | a member invited, their roles or their right to create projects changed, or removed, with their roles and that right; a Project admin's change refused, with their role |
 | `member.signin` | steward | the member's email | the member's email | a member's session opened, from an assertion it verified |
 | `member.signin_failed` | steward | the email, or `anonymous` when the assertion did not verify | the email, or none | a sign-in refused: not a member, an assertion replayed, signed by another key, expired, too old; a minute holds twenty at most |
 | `member.signout` | steward | the member's email | the member's email | a member signed out |

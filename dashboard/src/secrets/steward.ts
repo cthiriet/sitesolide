@@ -58,7 +58,7 @@ import {
   checkValue,
   type EnvDocument,
 } from "./envfile";
-import { latest, page, readPageQuery, RETURNED_ENTRIES, encodeEntry, reread } from "./log";
+import { latest, page, readPageQuery, RETURNED_ENTRIES, encodeEntry, MAX_FIELD, reread } from "./log";
 import {
   MAX_FILE_BYTES,
   expectedText,
@@ -123,7 +123,8 @@ import type { BackupReader } from "../backup/reader";
 import { createMemberRoutes, type KeyState } from "../members/steward";
 import type { MembersSystem } from "../members/system";
 import { OWNER_ACTOR, type Roles } from "../members/protocol";
-import { createMemberActions, type Who } from "../members/actions";
+import { createMemberActions, createSharing, type Who } from "../members/actions";
+import type { MemberAuthority } from "../control/steward";
 import { machineRefusal, may } from "../members/powers";
 import type { PortalAdmin } from "../members/portal";
 
@@ -185,6 +186,12 @@ export type StewardOptions = {
      * missing.
      */
     portal?: PortalAdmin | null;
+    /**
+     * A member removed: their tokens revoked, `actor` who removed them. The
+     * control routes' (src/control/steward.ts), built after this handler,
+     * hence a function of their own the entry point fills in.
+     */
+    revokeTokens?: (email: string, actor: string) => Promise<number>;
   };
 };
 
@@ -204,6 +211,10 @@ export type StewardHandler = Handler & {
   owner: Handler;
   /** The members' key pair, laid if missing: the entry point asks at startup. */
   ensureMemberKeys: () => Promise<KeyState | null>;
+  /** What the control routes ask of the members for a member's own tokens; null without members. */
+  memberAuthority: MemberAuthority | null;
+  /** A team token's sharing, handed to the portal as root through the relay, the token as actor. */
+  shareForToken: (slug: string, policy: Record<string, unknown>, actor: string) => Promise<Response>;
 };
 
 /**
@@ -1560,8 +1571,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           isUnlocked: (token) => isValidToken(state, token, system.now()),
           readBody: (req, fields) => readBody(req, fields),
           journal: (event) =>
-            writeLog(event.operation, event.result, "slug" in event ? { slug: event.slug } : null, event.detail, null, { actor: event.actor, member: event.member }),
+            writeLog(event.operation, event.result, "slug" in event ? { slug: event.slug } : null, bounded(event.detail), null, { actor: event.actor, member: event.member }),
           restart: memberRestart,
+          revokeTokens: options.members.revokeTokens,
           random: options.random,
         });
 
@@ -1611,6 +1623,15 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           zone: memberZone,
           maxContentBytes: MAX_CONTENT_BODY_BYTES,
         });
+
+  // A team token's sharing takes a Project admin's road to the portal: see
+  // src/members/actions.ts, `createSharing`, and src/control/steward.ts.
+  const tokenSharing = createSharing({
+    portal: options.members?.portal ?? null,
+    sites,
+    portalOf: portalView,
+    hostOf: (slug) => addressOf(slug, memberZone),
+  });
 
   // --- Routing -----------------------------------------------------------------
 
@@ -1675,7 +1696,26 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     isUnlocked: (token: unknown) => isValidToken(state, token, system.now()),
     owner: serve(members?.owner ?? {}),
     ensureMemberKeys: async () => (members === null ? null : members.ensureKeys()),
+    memberAuthority:
+      members === null
+        ? null
+        : {
+            authorize: members.authorize,
+            unlockedUntil: members.unlockedUntil,
+            rights: members.rights,
+            recordCreation: members.recordCreation,
+            journal: members.journal,
+            journalRefusal: members.journalRefusal,
+          },
+    shareForToken: (slug: string, policy: Record<string, unknown>, actor: string) => tokenSharing.share(slug, policy, actor, "token"),
   });
+}
+
+/** A journal's detail, one line within its bound: a list of roles grows with the projects. */
+function bounded(detail: string | null): string | null {
+  if (detail === null) return null;
+  const flat = detail.replace(/[\n\r\0]/g, " ");
+  return flat.length <= MAX_FIELD ? flat : `${flat.slice(0, MAX_FIELD - 1)}…`;
 }
 
 function errorName(e: unknown): string {

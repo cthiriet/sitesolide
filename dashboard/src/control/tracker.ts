@@ -38,7 +38,8 @@ export function createTracker(dependencies: { store: ControlStore; steward: Cont
       actor: `token:${row.tokenId}`,
       action,
       target: row.slug,
-      detail: { email: row.email, deployment: row.id, ...detail },
+      // A member's own token: the member named, as the audit names a person.
+      detail: { email: row.email, ...(row.member === null ? {} : { member: row.member }), deployment: row.id, ...detail },
     });
   }
 

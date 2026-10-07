@@ -23,7 +23,7 @@
  *
  *   GET    /members                             -> MembersResponse
  *   GET    /members/key                         -> KeyResponse
- *   PUT    /members/member   PutMemberRequest   -> PutMemberResponse   the live unlock token
+ *   PUT    /members/member   PutMemberRequest   -> PutMemberResponse   the live unlock token; `create`, the right to create projects
  *   DELETE /members/member   { email }          -> MemberResponse      no unlock, like revoking a token
  *   POST   /members/signin   { assertion }      -> SignInResponse
  *   POST   /members/whoami   { session }        -> WhoamiResponse
@@ -39,12 +39,16 @@
  * `/members/sharing`, `/members/guests`, `/members/backups/restore`, each
  * carrying the session, and the member's unlock token where the power needs it.
  *
+ * A member's own tokens are the control routes', src/control/steward.ts,
+ * under `/team/member/`, which ask these routes for the member's session,
+ * unlock and rights (src/members/tokens.ts).
+ *
  * On the owner's socket, `/run/sitesolide-steward-owner/owner.sock`, which
  * only root opens, for `sitesolide members` over the owner's SSH:
  *
- *   GET    /members                             -> MembersResponse
- *   PUT    /members/member   { email, roles }   -> PutMemberResponse
- *   DELETE /members/member   { email }          -> MemberResponse
+ *   GET    /members                                     -> MembersResponse
+ *   PUT    /members/member   { email, roles, create? }  -> PutMemberResponse
+ *   DELETE /members/member   { email }                  -> MemberResponse     their tokens revoked
  *
  * Every refusal is `{ error, message }`, the message in English, shown as it
  * stands.
@@ -103,6 +107,13 @@ export type Roles = Record<string, Role>;
 export type MemberView = {
   email: string;
   roles: Roles;
+  /**
+   * May they create projects: a right the super admin alone grants, from the
+   * Members page or `sitesolide members add <email> --may-create`. What they
+   * create, through a token of their own that may create, makes them its
+   * Project admin. A registry written before it reads as false.
+   */
+  create: boolean;
   /** `owner`, or the email the owner linked: who invited them. */
   invitedBy: string;
   createdAt: number;
@@ -119,7 +130,8 @@ export type SignInSettings = { configured: boolean; allowedDomains: string[] };
 
 export type MembersResponse = { members: MemberView[]; signIn: SignInSettings };
 
-export type PutMemberRequest = { token?: string; email: string; roles: Roles };
+/** `create` absent: the right as it stands, so that a client from before it changes nothing of it. */
+export type PutMemberRequest = { token?: string; email: string; roles: Roles; create?: boolean };
 
 /** `change`: `invite` for a new member, `role` for a change, `none` when nothing changed. */
 export type PutMemberResponse = { member: MemberView; change: "invite" | "role" | "none" };
@@ -131,7 +143,7 @@ export type PublicKeyView = { kty: "OKP"; crv: "Ed25519"; x: string; kid: string
 export type KeyResponse = { publicKey: PublicKeyView };
 
 /** Who a member session belongs to, as the steward reads its registry now. */
-export type MemberIdentity = { kind: "member"; email: string; name: string | null; roles: Roles };
+export type MemberIdentity = { kind: "member"; email: string; name: string | null; roles: Roles; create: boolean };
 
 export type SignInResponse = { session: string; expiresAt: number; identity: MemberIdentity };
 
@@ -172,7 +184,7 @@ export type MemberFailure = { error: string; message: string };
 // --- The dashboard's routes, for the page ----------------------------------------
 
 /** Who `/api/session` says is signed in. Never a token. */
-export type IdentityView = { kind: "owner" } | { kind: "member"; email: string; name: string | null; roles: Roles; expiresAt: number };
+export type IdentityView = { kind: "owner" } | { kind: "member"; email: string; name: string | null; roles: Roles; create: boolean; expiresAt: number };
 
 /** Whether the sign-in page offers the portal's provider, and under which name. */
 export type SsoOffer = { offered: boolean; providerName: string | null };

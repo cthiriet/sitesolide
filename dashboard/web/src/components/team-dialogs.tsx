@@ -24,13 +24,17 @@ import {
   firstTokenField,
   invitationText,
   loginCommand,
+  mintableProjects,
+  optionsAllowed,
   parseSlugs,
   tokenRefusal,
+  validateMemberTokenForm,
   validateTokenForm,
   type TokenErrors,
   type TokenField,
 } from "@/lib/team"
-import type { Scope, TokenView } from "@/lib/types"
+import { roleLabel } from "@/lib/members"
+import type { Roles, Scope, TokenView } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /**
@@ -40,6 +44,11 @@ import { cn } from "@/lib/utils"
  * Creating needs the dashboard unlocked, as reading a secret does: the page
  * asks for the password first, and a 423 from the service closes this dialog
  * and asks again, the steward having forgotten the unlock.
+ *
+ * A member creates their own: no email, theirs is the token's; the projects
+ * where they are a Developer or a Project admin to choose from; creating
+ * projects only with the right the super admin granted them; and the options
+ * only for projects they administer. The steward judges it all again.
  */
 
 const COPY_WARNING = "You haven't copied the token. It can't be shown again."
@@ -65,10 +74,33 @@ function Field({ id, labelText, help, error, children }: { id: string; labelText
 }
 
 /** One permission: a checkbox, what it allows, and what it costs. */
-function Permission({ checked, onChange, title, children }: { checked: boolean; onChange: (next: boolean) => void; title: string; children: ReactNode }) {
+function Permission({
+  checked,
+  onChange,
+  title,
+  disabled = false,
+  children,
+}: {
+  checked: boolean
+  onChange: (next: boolean) => void
+  title: string
+  disabled?: boolean
+  children: ReactNode
+}) {
   return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-input px-3 py-2.5 transition-colors select-none hover:bg-muted has-checked:border-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring">
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="mt-0.5 size-4 accent-foreground" />
+    <label
+      className={cn(
+        "flex items-start gap-3 rounded-lg border border-input px-3 py-2.5 transition-colors select-none has-checked:border-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring",
+        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-muted",
+      )}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        className="mt-0.5 size-4 accent-foreground"
+      />
       <span className="grid gap-0.5">
         <span className="text-sm font-medium">{title}</span>
         <span className="text-xs text-pretty text-muted-foreground">{children}</span>
@@ -83,6 +115,7 @@ export function CreateTokenDialog({
   open,
   origin,
   knownSlugs,
+  member = null,
   now,
   onClose,
   onCreated,
@@ -94,6 +127,8 @@ export function CreateTokenDialog({
   origin: string
   /** The projects on the machine, for the slugs granted. */
   knownSlugs: readonly string[]
+  /** A member minting their own: their roles and the create right. Null for the owner. */
+  member?: { roles: Roles; create: boolean } | null
   now: number
   onClose: () => void
   onCreated: () => void
@@ -106,7 +141,12 @@ export function CreateTokenDialog({
   const [email, setEmail] = useState("")
   const [slugsText, setSlugsText] = useState("")
   const [expiry, setExpiry] = useState<number | null>(DEFAULT_EXPIRY_DAYS)
-  const [scope, setScope] = useState<Omit<Scope, "slugs">>({ create: true, outbound: false, domain: false, public: false })
+  const [scope, setScope] = useState<Omit<Scope, "slugs">>({ create: member === null, outbound: false, domain: false, public: false })
+  const [chosen, setChosen] = useState<string[]>([])
+  const mintable = member === null ? [] : mintableProjects(member.roles)
+  const options = member === null || optionsAllowed(member.roles, chosen, scope.create)
+  // A member's options fall as soon as their choice no longer allows them.
+  const effective = options ? scope : { ...scope, outbound: false, domain: false, public: false }
   const [errors, setErrors] = useState<TokenErrors>({})
   const [formError, setFormError] = useState("")
   const [inProgress, setInProgress] = useState(false)
@@ -136,8 +176,8 @@ export function CreateTokenDialog({
   async function create(event: SyntheticEvent) {
     event.preventDefault()
     if (inProgress) return
-    const slugs = parseSlugs(slugsText)
-    const faults = validateTokenForm({ label, email, slugs }, knownSlugs)
+    const slugs = member === null ? parseSlugs(slugsText) : chosen
+    const faults = member === null ? validateTokenForm({ label, email, slugs }, knownSlugs) : validateMemberTokenForm({ label, slugs, create: effective.create })
     setErrors(faults)
     setFormError("")
     const first = firstTokenField(faults)
@@ -145,7 +185,8 @@ export function CreateTokenDialog({
 
     setInProgress(true)
     try {
-      const { status, body } = await createTeamToken({ label: label.trim(), email: email.trim(), expiresAt: expiryFrom(expiry, now), scope: { ...scope, slugs } })
+      // A member's token carries their own email: the steward writes it, whatever is sent.
+      const { status, body } = await createTeamToken({ label: label.trim(), email: member === null ? email.trim() : "", expiresAt: expiryFrom(expiry, now), scope: { ...effective, slugs } })
       if (status === 401) {
         onClose()
         return onSessionExpired()
@@ -184,12 +225,13 @@ export function CreateTokenDialog({
             <DialogHeader>
               <DialogTitle>New token</DialogTitle>
               <DialogDescription className="text-pretty">
-                One token per person or agent. It deploys over HTTPS, without SSH and without root, and only what you allow
-                here. You can revoke it at any time.
+                {member === null
+                  ? "One token per person or agent. It deploys over HTTPS, without SSH and without root, and only what you allow here. You can revoke it at any time."
+                  : "A token of your own, for your CLI or an agent. It never does more than your roles: lowered, they narrow it at once, and you can revoke it at any time."}
               </DialogDescription>
             </DialogHeader>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className={cn("grid gap-4", member === null && "sm:grid-cols-2")}>
               <Field id={labelId} labelText="For" error={errors.label} help="A name you will recognise: a person, a laptop, an agent.">
                 <Input
                   ref={labelField}
@@ -206,6 +248,7 @@ export function CreateTokenDialog({
                   className="h-10 sm:h-9"
                 />
               </Field>
+              {member === null && (
               <Field id={emailId} labelText="Email" error={errors.email} help="Recorded with every deployment it makes.">
                 <Input
                   ref={emailField}
@@ -222,8 +265,42 @@ export function CreateTokenDialog({
                   className="h-10 sm:h-9"
                 />
               </Field>
+              )}
             </div>
 
+            {member !== null ? (
+              <fieldset aria-describedby={errors.slugs !== undefined ? `${slugsId}-error` : `${slugsId}-help`}>
+                <legend className="mb-2 text-sm leading-none font-medium">Projects it may deploy</legend>
+                {mintable.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">None of your projects: you are a viewer on each. It may still create projects.</p>
+                ) : (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {mintable.map(({ slug, role }) => (
+                      <Permission
+                        key={slug}
+                        checked={chosen.includes(slug)}
+                        onChange={(next) => {
+                          setChosen((before) => (next ? [...before, slug] : before.filter((one) => one !== slug)))
+                          setErrors(({ slugs: _, ...rest }) => rest)
+                        }}
+                        title={slug}
+                      >
+                        {roleLabel(role)} here
+                      </Permission>
+                    ))}
+                  </div>
+                )}
+                {errors.slugs !== undefined ? (
+                  <p id={`${slugsId}-error`} role="alert" className="mt-2 text-xs text-destructive">
+                    {errors.slugs}
+                  </p>
+                ) : (
+                  <p id={`${slugsId}-help`} className="mt-2 text-xs text-muted-foreground">
+                    Where you are a developer or a project admin. A role lowered later stops it there.
+                  </p>
+                )}
+              </fieldset>
+            ) : (
             <Field
               id={slugsId}
               labelText="Existing projects it may deploy"
@@ -245,23 +322,38 @@ export function CreateTokenDialog({
                 className="h-10 font-mono sm:h-9"
               />
             </Field>
+            )}
 
             <fieldset>
               <legend className="mb-2 text-sm leading-none font-medium">It may also</legend>
               <div className="grid gap-2 sm:grid-cols-2">
-                <Permission checked={scope.create} onChange={(next) => setScope({ ...scope, create: next })} title="Create projects">
-                  New slugs, behind the portal unless public sites are allowed. It deploys what it creates.
-                </Permission>
-                <Permission checked={scope.public} onChange={(next) => setScope({ ...scope, public: next })} title="Deploy public sites">
+                {(member === null || member.create) && (
+                  <Permission
+                    checked={effective.create}
+                    onChange={(next) => {
+                      setScope({ ...scope, create: next })
+                      setErrors(({ slugs: _, ...rest }) => rest)
+                    }}
+                    title="Create projects"
+                  >
+                    {member === null
+                      ? "New slugs, behind the portal unless public sites are allowed. It deploys what it creates."
+                      : "New slugs, behind the portal unless public sites are allowed. You become project admin of what it creates."}
+                  </Permission>
+                )}
+                <Permission checked={effective.public} disabled={!options} onChange={(next) => setScope({ ...scope, public: next })} title="Deploy public sites">
                   Sites anyone can open, and paths exempted from the portal. Off: everything it deploys asks for a sign-in.
                 </Permission>
-                <Permission checked={scope.outbound} onChange={(next) => setScope({ ...scope, outbound: next })} title="Use outbound network">
+                <Permission checked={effective.outbound} disabled={!options} onChange={(next) => setScope({ ...scope, outbound: next })} title="Use outbound network">
                   Services that call an outside API, openly or through the hosts they list. Off: they reach the loopback only, and the connectors you grant.
                 </Permission>
-                <Permission checked={scope.domain} onChange={(next) => setScope({ ...scope, domain: next })} title="Declare a domain">
-                  A customer domain in the manifest. Switching to it stays yours.
+                <Permission checked={effective.domain} disabled={!options} onChange={(next) => setScope({ ...scope, domain: next })} title="Declare a domain">
+                  A customer domain in the manifest. Switching to it stays {member === null ? "yours" : "the owner's"}.
                 </Permission>
               </div>
+              {!options && (
+                <p className="mt-2 text-xs text-muted-foreground">Public sites, outbound network and a domain are for projects you administer: choose only those.</p>
+              )}
             </fieldset>
 
             <fieldset className="grid gap-2" aria-describedby={`${expiryId}-help`}>
@@ -330,8 +422,9 @@ function TokenScreen({ created, origin, warned, onCopied, onDone }: { created: C
       <DialogHeader>
         <DialogTitle className="pr-8 leading-snug wrap-anywhere">Token for {created.token.label}</DialogTitle>
         <DialogDescription className="text-pretty">
-          Send it to {created.token.email}. They run the command below and paste the token at its prompt. The token is shown
-          only once.
+          {created.token.member === null
+            ? `Send it to ${created.token.email}. They run the command below and paste the token at its prompt. The token is shown only once.`
+            : "Run the command below where you deploy from, and paste the token at its prompt. The token is shown only once."}
         </DialogDescription>
       </DialogHeader>
 

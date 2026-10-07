@@ -33,8 +33,12 @@ import {
 } from "./protocol";
 import { isValidSlug } from "../../borrowed/manifest";
 
-/** What the registry keeps of a token: its view without `owned`, and its hash. */
-export type TokenRecord = Omit<TokenView, "owned"> & { hash: string };
+/**
+ * What the registry keeps of a token: its view without `owned`, and its hash.
+ * `member` is written for a member's token alone, so that an owner's token
+ * reads as it always did.
+ */
+export type TokenRecord = Omit<TokenView, "owned" | "member"> & { hash: string; member?: string };
 
 export type Team = {
   tokens: TokenRecord[];
@@ -163,7 +167,8 @@ function isRecord(value: unknown): value is TokenRecord {
     isOptionalDate(value.expiresAt) &&
     isOptionalDate(value.revokedAt) &&
     isOptionalDate(value.lastUsedAt) &&
-    isScope(value.scope)
+    isScope(value.scope) &&
+    (value.member === undefined || (typeof value.member === "string" && EMAIL_SHAPE.test(value.member)))
   );
 }
 
@@ -207,10 +212,11 @@ export function ownedBy(team: Team, id: string): string[] {
 }
 
 export function viewOf(team: Team, record: TokenRecord): TokenView {
-  const { hash: _hash, ...view } = record;
-  return { ...view, scope: { ...record.scope, slugs: [...record.scope.slugs] }, owned: ownedBy(team, record.id) };
+  const { hash: _hash, member, ...view } = record;
+  return { ...view, scope: { ...record.scope, slugs: [...record.scope.slugs] }, owned: ownedBy(team, record.id), member: member ?? null };
 }
 
+/** The holder as minted. A member's token is narrowed to the member's rights before anyone reads it (src/members/tokens.ts). */
 export function identityOf(team: Team, record: TokenRecord): Identity {
   return {
     id: record.id,
@@ -219,7 +225,18 @@ export function identityOf(team: Team, record: TokenRecord): Identity {
     expiresAt: record.expiresAt,
     scope: { ...record.scope, slugs: [...record.scope.slugs] },
     owned: ownedBy(team, record.id),
+    member: record.member ?? null,
   };
+}
+
+/** Is this token still able to deploy, for a cap counted on live tokens? */
+function isLive(record: TokenRecord, now: number): boolean {
+  return record.revokedAt === null && (record.expiresAt === null || now < record.expiresAt);
+}
+
+/** The live tokens a member minted. */
+export function liveTokensOf(team: Team, email: string, now: number): TokenRecord[] {
+  return team.tokens.filter((record) => record.member === email && isLive(record, now));
 }
 
 /** Newest first: the page lists them that way. */
@@ -243,6 +260,7 @@ export async function createToken(
   request: TokenRequest,
   now: number,
   random: RandomSource = (bytes) => crypto.getRandomValues(new Uint8Array(bytes)),
+  member: string | null = null,
 ): Promise<{ team: Team; view: TokenView; secret: string } | Refusal> {
   const alive = team.tokens.filter((record) => record.revokedAt === null).length;
   if (alive >= MAX_TOKENS) return { refusal: `${MAX_TOKENS} live tokens at most: revoke the ones nobody uses` };
@@ -257,6 +275,7 @@ export async function createToken(
     lastUsedAt: null,
     scope: request.scope,
     hash: await tokenHash(secret),
+    ...(member === null ? {} : { member }),
   };
   const next: Team = { tokens: [...team.tokens, record], owners: { ...team.owners } };
   return { team: next, view: viewOf(next, record), secret };
@@ -276,9 +295,20 @@ export function revokeToken(team: Team, id: unknown, now: number): { team: Team;
   return { team: next, view: viewOf(next, revoked) };
 }
 
+/**
+ * Every live token a member minted, revoked: the member was removed. Their
+ * projects stay where they are, as for any revoked token.
+ */
+export function revokeMemberTokens(team: Team, email: string, now: number): { team: Team; revoked: TokenView[] } {
+  const ids = new Set(team.tokens.filter((record) => record.member === email && record.revokedAt === null).map((record) => record.id));
+  if (ids.size === 0) return { team, revoked: [] };
+  const next: Team = { tokens: team.tokens.map((record) => (ids.has(record.id) ? { ...record, revokedAt: now } : record)), owners: team.owners };
+  return { team: next, revoked: next.tokens.filter((record) => ids.has(record.id)).map((record) => viewOf(next, record)) };
+}
+
 export type Authentication =
   | { kind: "accepted"; record: TokenRecord; identity: Identity }
-  | { kind: "refused"; reason: "unknown" | "expired" | "revoked" };
+  | { kind: "refused"; reason: "unknown" | "expired" | "revoked"; member?: boolean };
 
 /**
  * Who holds this bearer. Found by its hash; expired or revoked, refused with a
@@ -290,18 +320,20 @@ export async function authenticate(team: Team, bearer: unknown, now: number): Pr
   const hash = await tokenHash(bearer);
   const record = team.tokens.find((candidate) => candidate.hash === hash);
   if (record === undefined) return { kind: "refused", reason: "unknown" };
-  if (record.revokedAt !== null) return { kind: "refused", reason: "revoked" };
-  if (record.expiresAt !== null && now >= record.expiresAt) return { kind: "refused", reason: "expired" };
+  const member = record.member !== undefined;
+  if (record.revokedAt !== null) return { kind: "refused", reason: "revoked", member };
+  if (record.expiresAt !== null && now >= record.expiresAt) return { kind: "refused", reason: "expired", member };
   return { kind: "accepted", record, identity: identityOf(team, record) };
 }
 
-/** What the holder is told: the reason, and what to do about it. */
+/** What the holder is told: the reason, and what to do about it. A member mints their own again, from the Team page. */
 export function refusalMessage(reason: Authentication & { kind: "refused" }): string {
+  const another = reason.member === true ? "mint a new one from the dashboard's Team page if you are still a member" : "ask the owner of the machine for a new one";
   switch (reason.reason) {
     case "expired":
-      return "this token has expired: ask the owner of the machine for a new one, then run sitesolide login again";
+      return `this token has expired: ${another}, then run sitesolide login again`;
     case "revoked":
-      return "this token was revoked: ask the owner of the machine for a new one, then run sitesolide login again";
+      return `this token was revoked: ${another}, then run sitesolide login again`;
     default:
       return "missing or unknown token: send Authorization: Bearer <token>, the value shown once when the owner created it";
   }
@@ -316,6 +348,19 @@ export function touch(team: Team, id: string, now: number): Team | null {
     tokens: team.tokens.map((candidate) => (candidate.id === id ? { ...candidate, lastUsedAt: rounded } : candidate)),
     owners: team.owners,
   };
+}
+
+/**
+ * The registry with this slug no longer anyone's, and whose it was; null when
+ * no token owned it. For a project removed from the machine: another token
+ * may then create a project of that name. Its tokens stay as they are.
+ */
+export function forgetOwnership(team: Team, slug: string): { team: Team; id: string } | null {
+  if (!Object.hasOwn(team.owners, slug)) return null;
+  const owners = { ...team.owners };
+  const id = owners[slug]!;
+  delete owners[slug];
+  return { team: { tokens: team.tokens, owners }, id };
 }
 
 /** The registry with this slug recorded as the token's, or null when it already is. */

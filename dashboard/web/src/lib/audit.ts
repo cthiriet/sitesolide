@@ -206,7 +206,10 @@ function word(table: Readonly<Record<string, string>>, key: string | null): stri
  * its members' events and from a Project admin's change it refused before it
  * reached the portal or the backups, which record those that go through.
  */
-type StewardOperation = Exclude<Operation, `member.${string}` | "sharing" | "guest.create" | "guest.revoke" | "backup.restore">
+type StewardOperation = Exclude<
+  Operation,
+  `member.${string}` | "sharing" | "guest.create" | "guest.revoke" | "backup.restore" | "token.create" | "token.revoke" | "project.create" | "project.remove"
+>
 
 /** What a Project admin's change the steward refused tried to do. */
 const REFUSED_CHANGES: Readonly<Record<string, string>> = {
@@ -339,10 +342,24 @@ export function auditWords(row: AuditRow): AuditWords {
 
     case "token.create":
     case "token.revoke": {
+      // A member's own token, journaled by the steward: its id and scope in the note.
+      if (row.source === "steward") {
+        const refused = text(detail.result) === "rejects"
+        if (row.action === "token.create") {
+          return refused
+            ? { summary: "Tried to create a token above their roles", note: text(detail.note), tone: "attention" }
+            : { summary: "Created a token of their own", note: text(detail.note), tone: "neutral" }
+        }
+        return { summary: member === null ? "Revoked a token of their own" : `Revoked the tokens of ${member}`, note: text(detail.note), tone: "neutral" }
+      }
       const label = text(detail.label)
       const holder = `${text(detail.email) ?? "someone"}${label === null ? "" : ` (${label})`}`
       return { summary: row.action === "token.create" ? `Created a token for ${holder}` : `Revoked the token of ${holder}`, note: null, tone: "neutral" }
     }
+    case "project.create":
+      return { summary: "Created the project with a token, project admin of it", note: text(detail.note), tone: "neutral" }
+    case "project.remove":
+      return { summary: "Removed the project: its name free for another token", note: text(detail.note), tone: "neutral" }
     case "deploy.start":
       return { summary: detail.creating === true ? "Started deploying a new project" : "Started a deployment", note: null, tone: "neutral" }
     case "deploy.success":
@@ -414,9 +431,9 @@ export function auditWords(row: AuditRow): AuditWords {
   }
 }
 
-/** Who acted. A token says whose it is when the row knows. */
+/** Who acted. A token says whose it is when the row knows: the member whose own token it is, or the holder's email. */
 export function actorLabel(row: AuditRow): string {
-  const email = text(row.detail?.email)
+  const email = text(row.detail?.member) ?? text(row.detail?.email)
   if (row.actor.startsWith("token:") && email !== null) return `${email} (${row.actor})`
   return row.actor
 }

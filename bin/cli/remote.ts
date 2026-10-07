@@ -362,13 +362,23 @@ type DeploymentView = {
   allocated: { service: string | null; port: number }[];
 };
 
-type Identity = { id: string; label: string; email: string; expiresAt: number | null; scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean }; owned: string[] };
+/** `member`: the dashboard's member whose own token it is, narrowed to their roles; absent from a dashboard before them. */
+type Identity = {
+  id: string;
+  label: string;
+  email: string;
+  expiresAt: number | null;
+  scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean };
+  owned: string[];
+  member?: string | null;
+};
 
 /** The token held, said in one line: who, and what it may do. */
 export function describeIdentity(identity: Identity): string[] {
   const may = [
     identity.scope.create ? "create projects" : null,
-    identity.scope.public ? "deploy public sites" : "deploy private sites only",
+    // A member's token deploys its projects behind the door they have, and opens none without the option.
+    identity.scope.public ? "deploy public sites" : typeof identity.member === "string" ? "open no site to the public" : "deploy private sites only",
     identity.scope.outbound ? "use network: outbound" : null,
     identity.scope.domain ? "declare a domain" : null,
   ].filter((part): part is string => part !== null);
@@ -378,6 +388,7 @@ export function describeIdentity(identity: Identity): string[] {
     `   may ${may.join(", ")}`,
     `   projects: ${projects.length === 0 ? "none yet" : projects.join(", ")}`,
     ...(identity.expiresAt === null ? [] : [`   expires ${new Date(identity.expiresAt).toISOString().slice(0, 10)}`]),
+    ...(typeof identity.member === "string" ? [`   a member's own token: never more than ${identity.member}'s roles on the dashboard, read at every request`] : []),
   ];
 }
 

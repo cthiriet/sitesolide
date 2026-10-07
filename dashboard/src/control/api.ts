@@ -15,9 +15,10 @@
  * requests for the same reason: the manifest first, judged, then the archive,
  * streamed to the spool and handed to the installer.
  *
- * **Sharing goes to the portal the way the Sharing section does**, through the
- * same client and the same admin route, with the token as the actor: see
- * sharing.ts for what a token may share.
+ * **Sharing is read from the portal the way the Sharing section reads it, and
+ * written through the steward**, which judges the token and asks the portal
+ * as root, the one caller the portal believes when it names the token as the
+ * actor: see sharing.ts for what a token may share.
  *
  * Nothing here logs a bearer, and no response carries one.
  */
@@ -355,7 +356,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       const slug = manifest.slug;
       const { sites } = await snapshotSites();
       const site = sites.get(slug);
-      const decision = decideManifest(manifest, identity.scope, site === undefined ? null : site.portal.wanted, dependencies.zone);
+      const decision = decideManifest(manifest, identity.scope, site === undefined ? null : site.portal.wanted, dependencies.zone, identity.member !== null && identity.member !== undefined);
       if (decision.kind === "refused") {
         if (decision.error === "reserved") return failure("reserved", decision.message);
         return failure("invalid-manifest", "your token may not deploy this manifest: fix every point in details, or ask the owner of the machine", {
@@ -389,7 +390,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       if (store.countRunning() >= MAX_RUNNING) return failure("busy", "the machine is already running several deployments: try again in a minute");
 
       const id = newDeploymentId(random);
-      store.createDeployment({ id, tokenId: identity.id, email: identity.email, slug, creating, manifest: text, createdAt: now });
+      store.createDeployment({ id, tokenId: identity.id, email: identity.email, member: identity.member ?? null, slug, creating, manifest: text, createdAt: now });
       const row = store.deployment(id)!;
       return json({ deployment: view(row, null, 0) }, 201, { Location: `/api/v1/deployments/${id}` });
     },
@@ -444,7 +445,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
         actor: `token:${identity.id}`,
         action: "deploy.start",
         target: row.slug,
-        detail: { email: identity.email, deployment: row.id, creating: row.creating, bytes: receipt.bytes },
+        detail: { email: identity.email, ...(row.member === null ? {} : { member: row.member }), deployment: row.id, creating: row.creating, bytes: receipt.bytes },
       });
       return json({ deployment: view(store.deployment(row.id)!, null, 0) }, 202);
     },
@@ -517,16 +518,16 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
     /**
      * Replaces the policy, as the Sharing section's `PUT` does. The body is
      * judged here first, so that a refusal names the entry at fault, then
-     * rebuilt key by key for the portal, which judges it again, writes it and
-     * records `sharing.update` in its audit with this token as the actor. The
-     * dashboard records nothing of its own: one change, one line in the
-     * Activity view.
+     * rebuilt key by key for the steward, which judges the token again and
+     * hands it to the portal as root, through its relay; the portal judges it
+     * once more, writes it and records `sharing.update` in its audit with this
+     * token as the actor. The dashboard records nothing of its own: one
+     * change, one line in the Activity view.
      */
     async replaceProjectSharing(req, slug) {
       const auth = await authenticated(req);
       if (auth instanceof Response) return auth;
-      const { identity } = auth;
-      if (!visible(identity, slug)) return failure("not-found", `no project ${slug.slice(0, 63)} for this token`);
+      if (!visible(auth.identity, slug)) return failure("not-found", `no project ${slug.slice(0, 63)} for this token`);
       const body = await readJson(req, MAX_SHARING_BYTES);
       if (body === "too-large") return failure("too-large", "the sharing policy is over 256 KiB: share with a domain rather than with people one by one");
       if (body === null) return failure("invalid", 'send a JSON object: { "mode": "admins" | "people" | "domain", "people": [emails], "domains": [domains] }');
@@ -539,16 +540,16 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       const refusals = domainRefusals(before.policy, reading.policy, context.list.sso.allowedDomains);
       if (refusals.length > 0) return failure("out-of-scope", domainMessage(context.list.sso.allowedDomains), { details: refusals });
 
+      // The write is the steward's: it judges the bearer and the project
+      // again, a member's own power to share for a member's token, and asks
+      // the portal as root, which alone may name the token as the actor.
       const { mode, people, domains } = reading.policy;
-      const answer = await askPortal(() => context.portal.replace(context.host, { mode, people, domains, actor: `token:${identity.id}` }));
-      if (answer.kind === "unreachable") return portalUnreachable();
-      if (answer.kind === "unreadable") return portalUnreadable();
-      if (answer.status === 404) return portalTooOld();
-      if (answer.status === 400) {
-        const reason = (answer.body as { error?: unknown } | null)?.error;
-        return failure("invalid", `the portal refused this policy (${typeof reason === "string" ? reason : "no reason given"}): nothing was changed`);
+      const reached = await reach(() => steward.share({ bearer: auth.bearer, slug, mode, people, domains }), [auth.bearer]);
+      if (reached.kind === "unavailable") {
+        return failure("not-available", "the steward on this machine predates sharing through it: the owner must run sitesolide upgrade");
       }
-      const saved = answer.status === 200 ? readSavedPolicy(answer.body) : null;
+      if (reached.kind !== "received" || reached.status !== 200) return relayed(reached);
+      const saved = readSavedPolicy(reached.body);
       if (saved === null) return portalUnreadable();
       return json({ sharing: projectSharing(slug, context.host, context.list, saved) });
     },

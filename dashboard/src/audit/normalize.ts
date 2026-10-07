@@ -151,6 +151,10 @@ export const STEWARD_ACTIONS: Readonly<Record<string, string>> = {
   "guest.create": "guest.create",
   "guest.revoke": "guest.revoke",
   "backup.restore": "backup.restore",
+  "token.create": "token.create",
+  "token.revoke": "token.revoke",
+  "project.create": "project.create",
+  "project.remove": "project.remove",
 };
 
 /**

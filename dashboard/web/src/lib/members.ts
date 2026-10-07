@@ -106,8 +106,13 @@ export type RoleRow = { slug: string; role: Role }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-/** What the form can see is wrong before sending. The steward judges the rest, the allowed domains included. */
-export function validateMemberForm(email: string, rows: readonly RoleRow[], allowedDomains: readonly string[]): MemberErrors {
+/**
+ * What the form can see is wrong before sending. The steward judges the rest,
+ * the allowed domains included. `create`: the right to create projects, which
+ * is enough on its own, a member who will create their projects holding none
+ * yet.
+ */
+export function validateMemberForm(email: string, rows: readonly RoleRow[], allowedDomains: readonly string[], create = false): MemberErrors {
   const errors: MemberErrors = {}
   const address = email.trim().toLowerCase()
   if (!EMAIL.test(address)) errors.email = "Enter the person's work email."
@@ -115,7 +120,7 @@ export function validateMemberForm(email: string, rows: readonly RoleRow[], allo
     errors.email = `The portal admits only ${allowedDomains.join(", ")}: this person couldn't sign in.`
   }
   const slugs = rows.map((row) => row.slug).filter((slug) => slug !== "")
-  if (slugs.length === 0) errors.roles = "Give them a role on one project at least."
+  if (slugs.length === 0 && !create) errors.roles = "Give them a role on one project at least, or the right to create projects."
   else if (new Set(slugs).size !== slugs.length) errors.roles = "A project appears twice."
   return errors
 }

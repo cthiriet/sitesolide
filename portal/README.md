@@ -407,7 +407,7 @@ it rather than doing it a second way.
 | the owner | the dashboard's *Sharing* section | anything but public, recorded as `owner` |
 | the owner | `sitesolide share` in the project's folder, over SSH: root asks this port on the loopback, after reading on the machine that the site's manifest asks for the portal and its block carries it | the same, recorded as `owner` |
 | a Project admin of the dashboard | its *Sharing* section, for their project: the steward checks their role and asks this port as root, through its relay | their project only; people at any address; a domain only among `OIDC_ALLOWED_DOMAINS`; recorded under their email |
-| a team member or an agent | `sitesolide share` with a team token, or `GET` and `PUT /api/v1/projects/<slug>/sharing`: the dashboard relays, as for its own section | only the projects its token may deploy; people at any address; a domain only among `OIDC_ALLOWED_DOMAINS`, none when that list is empty; recorded as `token:<id>` |
+| a team member or an agent | `sitesolide share` with a team token, or `GET` and `PUT /api/v1/projects/<slug>/sharing`: the dashboard checks early, the steward judges the token and asks this port as root, through its relay | only the projects its token may deploy, and for a member's own token only where the member is Project admin; people at any address; a domain only among `OIDC_ALLOWED_DOMAINS`, none when that list is empty; recorded as `token:<id>` |
 
 A token is narrower on domains because its holder is not the one who chose
 the company's own: the owner did, in `OIDC_ALLOWED_DOMAINS`. Keeping a domain
@@ -494,9 +494,9 @@ share` over the owner's SSH, which reads and replaces policies alone:
 
 | Route | What it does |
 |---|---|
-| `GET /admin/guests`, `POST /admin/guests`, `DELETE /admin/invites/:id` | guest access; `actor` in the body, a Project admin's email from the steward, `owner` when absent |
+| `GET /admin/guests`, `POST /admin/guests`, `DELETE /admin/invites/:id` | guest access; `actor` in the body, a Project admin's email from the steward, root's alone, `owner` when absent |
 | `GET /admin/sharing` | how people sign in (configured or not, the provider's name, the portal's address, the admin emails and allowed domains, never the client secret nor its identifier), and every site whose policy was set |
-| `PUT /admin/sharing/:host` | replaces a site's policy: `{ "mode", "people", "domains" }`, one bad entry refusing the whole change |
+| `PUT /admin/sharing/:host` | replaces a site's policy: `{ "mode", "people", "domains" }`, one bad entry refusing the whole change; `actor`, `token:<id>` or a Project admin's email, root's alone, `owner` when absent |
 | `GET /admin/audit?limit=&before=` | the audit, most recent first, by pages |
 | `POST /admin/dashboard/flow` | `{ binding, returnTo, chooseAccount, reauth }`: a flow sealed for the dashboard's host, a forced sign-in with `reauth`, and the address to send the browser to; `not-offered` without a provider |
 | `POST /admin/dashboard/redeem` | `{ code, binding }`: the code burnt, and, minted for the dashboard on this binding, an assertion signed for it, the path to come back to, and `reauth` |
@@ -509,8 +509,25 @@ through `sitesolide-portal-relay`, a socket only root opens, behind which
 systemd's proxy forwards to this port and nowhere else. The dashboard checks its session, its origin for a change,
 and that the host carries the portal in its snapshot, before relaying; for a
 team token, the token instead of the session, its scope, and the domains it may
-open. The CLI over SSH reads the deposited manifest and the block in service
+open, after which the steward judges the token again and writes as root. The CLI over SSH reads the deposited manifest and the block in service
 for the same check, then speaks to the port as root.
+
+**Only root says who acts.** A change names its actor: `owner` when the body
+says nothing, a Project admin's email or a team token's `token:<id>` when the
+steward sends one, having checked the role or judged the token. The portal
+believes that name from root alone, and tells root from the dashboard by the
+uid of the connection's other end, read from the kernel's socket tables, the
+egress proxy's reading borrowed (`src/peer.ts`, `borrowed/proc-net.ts`): the
+established socket whose local end is the caller's address and port and
+whose remote end is this server, in `/proc/net/tcp` or `tcp6`. Nothing the
+caller sends changes it. Any other account naming an email or a token gets
+`403 actor-not-root`, nothing changes, and the journal says which uid, never
+the name it gave. It fails closed: a table that cannot be read, or no single
+matching socket, is not root. It holds because the portal runs in the host's
+network namespace and its unit hides neither the network nor `/proc/net`, as
+the unit generator writes it. A compromised dashboard still changes sharing
+and guests, as the owner, as it always could; it can no longer write that a
+member or a token did.
 
 Caddy never relays them: a protected site forwards to the portal only
 `/_portal/*` and the `forward_auth` call to `/verifier`, and the portal's own
@@ -536,8 +553,8 @@ of the repository shares (`id`, `at` in ISO 8601 UTC, `actor`, `action`,
 | `portal.signin` | `owner`, `guest:<access>` or the email | `method`: `password`, `guest` or `oidc`, and the `role` for an identity; `count` when repeated |
 | `portal.signin_failed` | `anonymous`, or the email when the provider named one | `method`, and for a provider the `reason`: `bad-signature`, `wrong-audience`, `expired`, `wrong-nonce`, `unverified-email`, `unusable-email`, `domain-not-allowed`, `unmanaged-account`, `not-shared`, `wrong-browser`, `expired-session`...; a dashboard's sign-in refused here names the dashboard's host, and a code carried to the wrong side reads `wrong-audience` too |
 | `portal.signout` | who the cookie names | none, or `count` when repeated |
-| `sharing.update` | `owner`, `token:<id>` for a change made with a team token, or a Project admin's email, which the steward sends | the new and previous mode, the people and domains added and removed |
-| `guest.create`, `guest.revoke` | `owner`, or a Project admin's email, which the steward sends | the guest's id, label and expiry, never the password |
+| `sharing.update` | `owner`, `token:<id>` for a change made with a team token, or a Project admin's email, both of which the steward sends as root | the new and previous mode, the people and domains added and removed |
+| `guest.create`, `guest.revoke` | `owner`, or a Project admin's email, which the steward sends as root | the guest's id, label and expiry, never the password |
 
 Never a password, a code or a token. What a stranger can cause is bounded where
 it happens: failed password attempts by the rate limiting, a row per attempt
@@ -758,9 +775,21 @@ members". `sitesolide upgrade` runs all three. Check: `journalctl -u portal`
 says `dashboard sign-in offered`, and a member signs in.
 
 **Sharing by token, and `sitesolide share`**, need nothing of the portal beyond
-step 1: it already records the actor the dashboard names, `token:<id>`
-included. The dashboard is what changes, see
+step 1. The dashboard is what changes, see
 [dashboard/README.md](../dashboard/README.md), "Upgrading: sharing by token".
+
+**The actor rule**, root alone naming who acts, comes with members' own
+tokens: the steward first, which hands a token's sharing to the portal through
+its relay, then the dashboard, which asks the steward instead of the portal,
+then this portal. `sitesolide upgrade` runs them in that order; see
+dashboard/README.md, "Upgrading: members' tokens". Deployed before the
+dashboard, this portal refuses the older dashboard's sharing by token, `403
+actor-not-root`, until the dashboard follows. Check, on the machine:
+`echo '{"actor":"someone@<a domain>"}' | sudo -u site-dashboard curl -sS -X DELETE -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:3026/admin/invites/AAAAAAAAAAAAAAA0`
+answers `{"error":"actor-not-root"}`, the same as root `{"error":"unknown-access"}`,
+and `journalctl -u portal` says `refused: only root names who acts`. Roll back:
+deploy the previous commit of `portal/`, which takes any actor its caller
+names.
 
 **Rolling back.** The portal from before reads the owner's and the guests'
 cookies as always and refuses the identity cookies, four pieces where it
@@ -794,6 +823,14 @@ carried to another host, a flow altered on the way or replayed for a second
 code, more codes in flight than one email may hold; then a site cookie capped by
 a session about to expire, and a sign-out that ends the portal's session and
 makes the next sign-in ask which account.
+
+`tests/peer.test.ts` reads socket tables written as a little-endian kernel
+prints them: the dashboard's connection named by its uid, the relay's by
+root's, the portal's mirror of each never taken for the caller, two lines that
+disagree and a table that cannot be read refused; and the actor rule end to
+end, a member's email from the dashboard's connection refused, from the
+relay's recorded. `tests/admin.test.ts` refuses an email or a token from any
+account but root, and from a connection whose owner cannot be read.
 
 The last two run Caddy on your workstation, `admin off` on a free port, in front
 of this service and fake sites: what the door promises hangs entirely on the

@@ -67,9 +67,19 @@ export type TokenView = {
   scope: Scope;
   /** The projects it created, recorded at the start of their first deployment. */
   owned: string[];
+  /**
+   * The dashboard's member who minted it, null for a token the owner created.
+   * A member's token is never stronger than its member: the steward narrows
+   * it to their roles at every use (src/members/tokens.ts).
+   */
+  member: string | null;
 };
 
-/** What a request authenticated by a token knows of its holder. */
+/**
+ * What a request authenticated by a token knows of its holder. For a member's
+ * token, its scope and projects as the steward narrowed them to the member's
+ * roles at that moment, not as they were minted.
+ */
 export type Identity = {
   id: string;
   label: string;
@@ -77,6 +87,7 @@ export type Identity = {
   expiresAt: number | null;
   scope: Scope;
   owned: string[];
+  member: string | null;
 };
 
 /** The token's value: `sst_` then 43 characters of base64url, 256 bits. */
@@ -133,7 +144,12 @@ export type InstallRequest = {
   deployment: string;
   slug: string;
   requestedAt: number;
-  token: { id: string; email: string };
+  /**
+   * `member`: the member whose token it is, null for an owner's token. The
+   * installer narrows the scope again to that member's roles as the registry
+   * reads when it starts.
+   */
+  token: { id: string; email: string; member: string | null };
   scope: Scope;
   creating: boolean;
   /** The manifest's text as the client sent it. The installer re-validates it. */
@@ -261,11 +277,31 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   POST   /control/deploy        DeployRequest    -> { deployment, slug, creating }   202
 //   GET    /control/deployment?id=<id>             -> { result: InstallerResult }
 //   POST   /control/logs          LogsRequest      -> LogsResponse
+//   PUT    /control/sharing       SharingRequest   -> the portal's answer     a token's sharing, as root
+//
+// A member's own tokens, judged by their session, their unlock to create, and
+// their roles (src/members/tokens.ts):
+//
+//   POST   /team/member/list      { session }                                     -> MemberTeamResponse
+//   POST   /team/member/tokens    { session, token, label, expiresAt, scope }     -> CreatedTokenResponse   (their unlock)
+//   POST   /team/member/revoke    { session, id }                                 -> { token: TokenView }   their own alone
 //
 // Any error returns `ControlFailure`. An older steward answers 404 `no such
 // route` to all of them: the dashboard turns that into `not-available`.
 
 export type TeamResponse = { tokens: TokenView[] };
+/**
+ * A member's tokens and what they may mint them for: their roles, and the
+ * create right. `until`: the end of their session's unlock, null if locked.
+ */
+export type MemberTeamResponse = { tokens: TokenView[]; rights: { roles: Record<string, "viewer" | "developer" | "admin">; create: boolean }; until: number | null };
+export type CreateMemberTokenRequest = { session: string; token: string; label: string; expiresAt: number | null; scope: Scope };
+/**
+ * A token's sharing, which the steward hands to the portal as root, through
+ * the relay, naming the token as the actor: the portal believes an actor
+ * other than `owner` from root alone (portal/src/admin.ts).
+ */
+export type SharingRequest = { bearer: string; slug: string; mode: unknown; people: unknown; domains: unknown };
 export type CreateTokenRequest = {
   /** The unlock token of src/secrets: creating a token demands the dashboard unlocked. */
   token: string;
@@ -314,6 +350,11 @@ export type TeamPageResponse = {
   /** False when the steward does not carry the control routes yet; `reason` says what to run. */
   available: boolean;
   reason: string | null;
+  /**
+   * Null for the owner, who sees every token. A member sees their own alone,
+   * and mints them within these rights: their roles, and the create right.
+   */
+  member: { email: string; roles: Record<string, "viewer" | "developer" | "admin">; create: boolean } | null;
   tokens: TokenView[];
   /** End of this session's unlock, null if locked. */
   until: number | null;

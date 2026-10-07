@@ -151,7 +151,7 @@ export function finalManifest(
     throw new Stop("invalid-manifest", `sitesolide.json is refused: ${asked.errors.join("; ")}`);
   }
   const refusals = scopeRefusals(asked.manifest, scope, slug);
-  const door = decideDoor(asked.manifest, scope, onMachine.kind === "present" ? onMachine.portal : null);
+  const door = decideDoor(asked.manifest, scope, onMachine.kind === "present" ? onMachine.portal : null, request.token.member !== null);
   if ("refusal" in door) refusals.push(door.refusal);
   if (refusals.length > 0 || "refusal" in door) throw new Stop("out-of-scope", refusals.join("; "));
 

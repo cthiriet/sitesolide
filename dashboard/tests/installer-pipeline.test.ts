@@ -40,7 +40,7 @@ function request(manifest: object, scope: Scope = PRIVATE, slug = "shop"): Insta
     deployment: DEPLOYMENT,
     slug,
     requestedAt: NOW,
-    token: { id: "aaaaaaaaaaaa", email: "ada@test-zone.invalid" },
+    token: { id: "aaaaaaaaaaaa", email: "ada@test-zone.invalid", member: null },
     scope,
     creating: true,
     manifest: JSON.stringify(manifest),

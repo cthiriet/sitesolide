@@ -11,7 +11,8 @@
  * The audit table has the shape every component of the platform shares, so
  * that a later view can put them side by side: an ISO date, an actor
  * (`owner`, `token:<id>`, `system`), a dotted action, a target, and a detail in
- * JSON that never carries a secret.
+ * JSON that never carries a secret. A deployment by a member's own token
+ * names the member in its detail, `member`, beside the token's email.
  *
  * Built around a connection rather than opening one: the tests give it a
  * database in a temporary directory, the server the one in DATA_DIR, opened
@@ -46,12 +47,21 @@ export const CONTROL_SCHEMA = [
   `CREATE INDEX IF NOT EXISTS deployments_state ON deployments (state)`,
 ] as const;
 
+/**
+ * Columns added since a table was first created, each read back before it is
+ * added: `member`, the dashboard's member whose own token asked for a
+ * deployment, null for an owner's token, so that how it ended names them too.
+ */
+const ADDED_COLUMNS: readonly { table: string; column: string; definition: string }[] = [{ table: "deployments", column: "member", definition: "TEXT" }];
+
 export type { AuditEntry };
 
 export type DeploymentRow = {
   id: string;
   tokenId: string;
   email: string;
+  /** The member whose own token it is, null for an owner's token. */
+  member: string | null;
   slug: string;
   state: DeploymentState;
   creating: boolean;
@@ -68,7 +78,7 @@ type RawRow = Omit<DeploymentRow, "creating" | "state"> & { creating: number; st
 export type RawAuditRow = { id: number; at: string; actor: string; action: string; target: string | null; detail: string | null };
 
 const COLUMNS =
-  "id, token_id AS tokenId, email, slug, state, creating, manifest, created_at AS createdAt, started_at AS startedAt, finished_at AS finishedAt, message";
+  "id, token_id AS tokenId, email, member, slug, state, creating, manifest, created_at AS createdAt, started_at AS startedAt, finished_at AS finishedAt, message";
 
 function row(raw: RawRow | null): DeploymentRow | null {
   if (raw === null) return null;
@@ -79,6 +89,10 @@ export type ControlStore = ReturnType<typeof createControlStore>;
 
 export function createControlStore(db: Database) {
   for (const statement of CONTROL_SCHEMA) db.run(statement);
+  for (const { table, column, definition } of ADDED_COLUMNS) {
+    const columns = db.query<{ name: string }, []>(`SELECT name FROM pragma_table_info('${table}')`).all();
+    if (!columns.some((one) => one.name === column)) db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 
   const queries = {
     audit: db.query<undefined, [string, string, string, string | null, string | null]>(
@@ -92,8 +106,8 @@ export function createControlStore(db: Database) {
     pageAudit: db.query<RawAuditRow, [number, number]>(
       "SELECT id, at, actor, action, target, detail FROM audit WHERE id < ? ORDER BY id DESC LIMIT ?",
     ),
-    create: db.query<undefined, [string, string, string, string, string, number, string, number]>(
-      "INSERT INTO deployments (id, token_id, email, slug, state, creating, manifest, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    create: db.query<undefined, [string, string, string, string | null, string, string, number, string, number]>(
+      "INSERT INTO deployments (id, token_id, email, member, slug, state, creating, manifest, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ),
     byId: db.query<RawRow, [string]>(`SELECT ${COLUMNS} FROM deployments WHERE id = ?`),
     inState: db.query<RawRow, [string]>(`SELECT ${COLUMNS} FROM deployments WHERE state = ? ORDER BY created_at`),
@@ -156,8 +170,8 @@ export function createControlStore(db: Database) {
       return queries.pageAudit.all(before ?? Number.MAX_SAFE_INTEGER, limit);
     },
 
-    createDeployment(created: { id: string; tokenId: string; email: string; slug: string; creating: boolean; manifest: string; createdAt: number }): void {
-      queries.create.run(created.id, created.tokenId, created.email, created.slug, "awaiting-bundle", created.creating ? 1 : 0, created.manifest, created.createdAt);
+    createDeployment(created: { id: string; tokenId: string; email: string; member?: string | null; slug: string; creating: boolean; manifest: string; createdAt: number }): void {
+      queries.create.run(created.id, created.tokenId, created.email, created.member ?? null, created.slug, "awaiting-bundle", created.creating ? 1 : 0, created.manifest, created.createdAt);
     },
 
     deployment(id: string): DeploymentRow | null {

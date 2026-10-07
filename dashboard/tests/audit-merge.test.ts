@@ -149,6 +149,8 @@ describe("each source's rows, in one shape", () => {
       "member.signout",
       "password",
       "portal",
+      "project.create",
+      "project.remove",
       "read",
       "remove",
       "replace",
@@ -156,6 +158,8 @@ describe("each source's rows, in one shape", () => {
       "restore",
       "set",
       "sharing",
+      "token.create",
+      "token.revoke",
       "unlock",
     ]);
     expect(fromJournal([{ a: T, operation: "constructor", result: "ok", slug: null, file: null, variable: null, detail: null }])).toEqual([]);

@@ -141,7 +141,7 @@ describe("authentication and preflight", () => {
     const s = setup();
     const { token, secret } = await newToken(s);
     const response = await call(s, "POST", "/control/authenticate", { bearer: secret });
-    expect(await response.json()).toEqual({ identity: { id: token.id, label: "Ada", email: "ada@test-zone.invalid", expiresAt: null, scope: SCOPE, owned: [] } });
+    expect(await response.json()).toEqual({ identity: { id: token.id, label: "Ada", email: "ada@test-zone.invalid", expiresAt: null, scope: SCOPE, owned: [], member: null } });
     expect((await call(s, "POST", "/control/authenticate", { bearer: `sst_${"x".repeat(43)}` })).status).toBe(401);
     expect((await call(s, "POST", "/control/authenticate", {})).status).toBe(401);
   });

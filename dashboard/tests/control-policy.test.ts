@@ -7,7 +7,7 @@ const ZONE = "test-zone.invalid";
 const NONE: Scope = { slugs: [], create: false, outbound: false, domain: false, public: false };
 
 function identity(scope: Partial<Scope> = {}, owned: string[] = []): Identity {
-  return { id: "aaaaaaaaaaaa", label: "Ada", email: "ada@test-zone.invalid", expiresAt: null, scope: { ...NONE, ...scope }, owned };
+  return { id: "aaaaaaaaaaaa", label: "Ada", email: "ada@test-zone.invalid", expiresAt: null, scope: { ...NONE, ...scope }, owned, member: null };
 }
 
 const app = (extra: Partial<Manifest> = {}): Manifest => ({ slug: "shop", start: "/usr/local/bin/bun run server.ts", port: 3040, ...extra });
@@ -150,6 +150,19 @@ describe("decideDoor", () => {
 
   test("a public site on the machine is refused to a private token", () => {
     expect(decideDoor(app(), NONE, false)).toHaveProperty("refusal");
+  });
+
+  test("a member's token deploys an existing project behind the door it has, and opens none", () => {
+    // In the open on the machine: its Project admin or the owner chose so, the deployment changes nothing of it.
+    expect(decideDoor(app(), NONE, false, true)).toEqual({ portal: false });
+    expect(decideDoor(site(), NONE, false, true)).toEqual({ portal: false });
+    expect(decideDoor(app(), NONE, true, true)).toEqual({ portal: true });
+    // A new project still goes behind the portal without the public permission.
+    expect(decideDoor(app(), NONE, null, true)).toEqual({ portal: true });
+    expect(decideDoor(site(), NONE, null, true)).toHaveProperty("refusal");
+    // Exempting paths opens them: still the public permission's.
+    expect(decideManifest(app({ portal: true, portalExempt: ["/hook"] }), NONE, true, ZONE, true)).toMatchObject({ kind: "refused" });
+    expect(decideManifest(app(), NONE, false, ZONE, true)).toEqual({ kind: "allowed", portal: false });
   });
 
   test("a static site cannot sit behind the portal, so a private token cannot deploy one", () => {

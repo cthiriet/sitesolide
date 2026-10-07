@@ -44,8 +44,10 @@ sitesolide share                who may open this project with their work accoun
 sitesolide members              who signs in to the dashboard with a work account, on which projects
    add <email> --project <slug> --role <viewer|developer|admin>
                                 invite them, or set their role; repeat --project and --role
+   add <email> --may-create     let them create projects, with a token of their own
    remove <email> [--project <slug>]
-                                take them off, signed out at once, or take projects off them
+                                take them off, signed out, their tokens revoked, or take projects off them
+   remove <email> --may-create  take the right to create projects back
 sitesolide lock   [--dry-run]   close the preview behind a code, or show it
    --status                     wanted / installed / measured, without touching
    --new-code                   replace the code in force by a fresh one
@@ -54,12 +56,12 @@ sitesolide domain               where this project's own domain stands
    --activate [--force]         switch the site onto it, then rebuild the table
    --deactivate                 back to the preview subdomain
 sitesolide remove --confirm <slug>
-                                take the project off the machine, for good
+                                take the project off the machine, for good, its name freed from the token that created it
    --dry-run                    show every step, remove nothing
 sitesolide run -- <command>     load the secret from the vault and run
 sitesolide mcp                  serve these commands to an agent, over MCP on stdio
 sitesolide login --url <https://dashboard.zone>
-                                a team member: keep a token, deploy without SSH
+                                a team member: keep a token, deploy without SSH; a member's own too
    --token-stdin                read the token from standard input
 sitesolide machine create|list|destroy --provider hetzner
                                 a VM ordered by API, before setup: sitesolide machine lists the options
@@ -161,8 +163,9 @@ its *Guests* section, which shows a password once.
 The owner's `share` runs over SSH: root on the machine asks the portal's admin
 API on the loopback, after reading there that the site's manifest asks for the
 portal and that its block carries it. It touches nothing else, Caddy least of
-all. With a team token, it goes through the dashboard, which may refuse a
-domain: see [team.md](team.md#sharing-what-you-deployed).
+all. With a team token, it goes through the dashboard and the steward, which
+may refuse a domain, and hands it to the portal as root, the token named as
+the actor: see [team.md](team.md#sharing-what-you-deployed).
 
 ## The dashboard's members
 
@@ -172,10 +175,12 @@ them a role on: Viewer (the project's state, audience and activity),
 Developer (also restarts its service, and sets its secrets without ever
 reading one back) and Project admin (everything of the project: its secrets,
 its portal door, sharing, guests, backups, and giving people a role on it, at
-most their own). They never get a password, a token or root. `sitesolide
-members` is the owner's way to manage them, from any folder, over SSH; the
-dashboard's *Members* page is the other, and a Project admin has their
-project's own, see [team.md](team.md#members-beside-tokens).
+most their own). They never get a password or root; they mint tokens of their
+own on the dashboard's *Team* page, never stronger than their roles, see
+[team.md](team.md#a-members-own-tokens). `sitesolide members` is the owner's
+way to manage them, from any folder, over SSH; the dashboard's *Members* page
+is the other, and a Project admin has their project's own, see
+[team.md](team.md#members-beside-tokens).
 
 ```console
 $ sitesolide members add alice@acme.com --project notes --role developer --project shop --role viewer
@@ -188,9 +193,13 @@ $ sitesolide members
    alice@acme.com  notes: developer, shop: viewer
    send: Open https://dashboard.example.com and sign in with your Google work account.
 
+$ sitesolide members add alice@acme.com --may-create
+-> members of https://dashboard.example.com, over SSH, as the owner
+-> alice@acme.com: notes: developer, shop: viewer; may create projects
+
 $ sitesolide members remove alice@acme.com
 -> members of https://dashboard.example.com, over SSH, as the owner
--> alice@acme.com removed: signed out of the dashboard, refused at their next request
+-> alice@acme.com removed: signed out of the dashboard, their tokens revoked, refused at their next request
 ```
 
 Each `--project` takes the `--role` that follows it. `add` on someone already
@@ -198,13 +207,21 @@ a member sets the roles named and keeps their others; `remove --project`
 takes those projects off them and keeps the rest. No email is sent: the
 command prints the line to send.
 
+`--may-create` grants the right to create projects, beside projects or alone,
+someone new included (an invitation with neither a project nor the right is
+refused); `remove <email> --may-create` takes it back and leaves
+their roles. A member who holds it mints a token that may create projects,
+and becomes Project admin of each project it creates. Without the option,
+`add` and `remove --project` leave the right as it stands.
+
 Root on the machine asks the steward, on its owner socket
 (`/run/sitesolide-steward-owner/owner.sock`), which only root opens, the body
 on standard input. The steward decides: an address outside the portal's
 `OIDC_ALLOWED_DOMAINS` is refused, as the portal would refuse it at sign-in, a
 role only goes on a deployed project and never on the platform's own, and the
 change goes into its journal under `owner`. A member removed is out at once:
-their next request reads as no session, and their next write is refused. With
+their next request reads as no session, their next write is refused, and
+every token of theirs is revoked and refused. With
 a team token, the command is refused before anything is sent: it is the
 owner's. See [team.md](team.md#members-beside-tokens) for what a member sees,
 and [dashboard/README.md](../dashboard/README.md#members) for the machine's
@@ -289,6 +306,9 @@ SITESOLIDE_API and SITESOLIDE_TOKEN in the environment win over the files.
 `login` keeps the token in `~/.config/sitesolide/secrets/team-token`, 0600, and
 the address in `config.json` under `api`. `SITESOLIDE_API` and
 `SITESOLIDE_TOKEN` in the environment win over both, for an agent's sandbox.
+A token a member minted for themselves says so: `login` and `status` print
+whose roles bound it, and what it may do is the steward's reading of those
+roles at that moment.
 
 `deploy` sends the manifest first, so that a refusal arrives before the build,
 then a gzip-compressed tar holding `app/` and `public/`, exactly what rsync

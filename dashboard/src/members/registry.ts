@@ -41,12 +41,14 @@ export function mayRestart(role: Role | null): boolean {
 
 const isDate = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 
-function isRecord(value: unknown): value is MemberRecord {
+/** A record as the file holds it: `create` may be missing, from a registry written before the right existed. */
+function isRecord(value: unknown): value is Omit<MemberRecord, "create"> & { create?: boolean } {
   if (!isObject(value)) return false;
   const { email, roles, invitedBy, createdAt, updatedAt } = value;
   if (typeof email !== "string" || cleanEmail(email) !== email) return false;
   if (!isObject(roles) || Object.keys(roles).length > MAX_ROLES) return false;
   for (const [slug, role] of Object.entries(roles)) if (!isValidSlug(slug) || !isRole(role)) return false;
+  if (value.create !== undefined && typeof value.create !== "boolean") return false;
   return typeof invitedBy === "string" && invitedBy.length <= 254 && isDate(createdAt) && isDate(updatedAt);
 }
 
@@ -67,7 +69,8 @@ export function readRegistry(text: string | null): Registry | { unreadable: stri
   if (!object.members.every(isRecord)) return { unreadable: "a member of members.json does not have the expected shape" };
   const emails = new Set(object.members.map((member) => (member as MemberRecord).email));
   if (emails.size !== object.members.length) return { unreadable: "members.json names one email twice" };
-  return { members: object.members as MemberRecord[] };
+  // A member written before the create right holds none.
+  return { members: (object.members as MemberRecord[]).map((member) => ({ ...member, create: member.create === true })) };
 }
 
 export function encodeRegistry(registry: Registry): string {
@@ -99,6 +102,11 @@ export function views(registry: Registry): MemberView[] {
 export function rolesText(roles: Roles): string {
   const entries = Object.entries(roles).sort(([a], [b]) => a.localeCompare(b));
   return entries.length === 0 ? "no project" : entries.map(([slug, role]) => `${slug}: ${role}`).join(", ");
+}
+
+/** The roles, and the create right when held: `blog: developer; may create projects`. */
+export function rightsText(roles: Roles, create: boolean): string {
+  return create ? `${rolesText(roles)}; may create projects` : rolesText(roles);
 }
 
 // --- what the super admin asks for -----------------------------------------------
@@ -157,17 +165,22 @@ export type Put = { registry: Registry; member: MemberView; change: "invite" | "
 /**
  * A member invited with these roles, or their roles replaced whole: the
  * request names every project they keep. `invitedBy` is the steward's to say,
- * from who asked, never from the request.
+ * from who asked, never from the request. `create`, the right to create
+ * projects, is the super admin's to give or take; undefined keeps it as it
+ * stands, false for someone new.
  */
-export function putMember(registry: Registry, email: string, roles: Roles, invitedBy: string, now: number): Put | Refusal {
+export function putMember(registry: Registry, email: string, roles: Roles, invitedBy: string, now: number, create?: boolean): Put | Refusal {
   const found = findMember(registry, email);
   if (found === null) {
     if (registry.members.length >= MAX_MEMBERS) return { refusal: `${MAX_MEMBERS} members at most: remove the ones who left` };
-    const record: MemberRecord = { email, roles: { ...roles }, invitedBy, createdAt: now, updatedAt: now };
+    // Someone invited sees their projects, or creates their own: with neither, there is nothing to sign in to.
+    if (Object.keys(roles).length === 0 && create !== true) return { refusal: "roles: give them a role on one project at least, or the right to create projects" };
+    const record: MemberRecord = { email, roles: { ...roles }, create: create ?? false, invitedBy, createdAt: now, updatedAt: now };
     return { registry: { members: [...registry.members, record] }, member: viewOf(record), change: "invite" };
   }
-  if (sameRoles(found.roles, roles)) return { registry, member: viewOf(found), change: "none" };
-  const changed: MemberRecord = { ...found, roles: { ...roles }, updatedAt: now };
+  const right = create ?? found.create;
+  if (sameRoles(found.roles, roles) && right === found.create) return { registry, member: viewOf(found), change: "none" };
+  const changed: MemberRecord = { ...found, roles: { ...roles }, create: right, updatedAt: now };
   return {
     registry: { members: registry.members.map((member) => (member.email === email ? changed : member)) },
     member: viewOf(changed),
@@ -205,7 +218,9 @@ export function putProjectRole(registry: Registry, email: string, slug: string, 
 /**
  * A member's role on one project taken away by its Project admin. Their last
  * one gone, they are no member any more: a member with no project sees
- * nothing, and is removed rather than kept as an empty name.
+ * nothing, and is removed rather than kept as an empty name, unless they hold
+ * the create right, which the super admin gave them and a Project admin does
+ * not take away.
  */
 export function removeProjectRole(
   registry: Registry,
@@ -219,9 +234,29 @@ export function removeProjectRole(
   if (found === null || !Object.hasOwn(found.roles, slug)) return { refusal: `${email} holds no role on ${slug}` };
   const roles = { ...found.roles };
   delete roles[slug];
-  if (Object.keys(roles).length === 0) {
+  if (Object.keys(roles).length === 0 && !found.create) {
     return { registry: { members: registry.members.filter((member) => member.email !== email) }, member: viewOf(found), removed: true };
   }
   const changed: MemberRecord = { ...found, roles, updatedAt: now };
   return { registry: { members: registry.members.map((member) => (member.email === email ? changed : member)) }, member: viewOf(changed), removed: false };
+}
+
+// --- what a member creates ---------------------------------------------------------
+
+/**
+ * A project a member created, through a token of their own that may create:
+ * they become its Project admin, whatever role a registry edited by hand gave
+ * them there before. Their other projects and their create right untouched.
+ * The steward records it at the start of the project's first deployment,
+ * when it records the token's ownership, before anything is written on the
+ * machine: a first deployment that fails half way stays theirs to deploy
+ * again.
+ */
+export function recordCreation(registry: Registry, email: string, slug: string, now: number): Put | Refusal {
+  const found = findMember(registry, email);
+  if (found === null) return { refusal: `${email} is no longer a member of this dashboard` };
+  if (!Object.hasOwn(found.roles, slug) && Object.keys(found.roles).length >= MAX_ROLES) {
+    return { refusal: `a member may hold a role on ${MAX_ROLES} projects at most` };
+  }
+  return putMember(registry, email, { ...found.roles, [slug]: "admin" }, found.invitedBy, now);
 }

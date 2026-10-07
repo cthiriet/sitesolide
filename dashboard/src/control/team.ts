@@ -12,7 +12,9 @@
  * on the machine, it deserves the password retyped. The token's value comes
  * back once, in the answer to the creation, and is never stored here.
  *
- * Every creation and revocation goes into the audit, actor `owner`.
+ * Every creation and revocation goes into the audit, actor `owner`. A member's
+ * own tokens answer at the same addresses through src/members/relay.ts, and
+ * the steward journals them under the member's email.
  */
 import type { SessionReader } from "../routes";
 import { isAcceptableOrigin, type Session } from "../sessions";
@@ -87,11 +89,11 @@ export function createTeamRoutes(dependencies: TeamDependencies, clock: () => nu
       const audit = store.listAudit(50).filter((entry) => entry.action.startsWith("token.") || entry.action.startsWith("deploy."));
       const until = tokens.read(open.hash)?.expiresAt ?? null;
       if (reached.kind === "unavailable") {
-        return json({ available: false, reason: NOT_AVAILABLE_REASON, tokens: [], until, deployments, audit } satisfies TeamPageResponse);
+        return json({ available: false, reason: NOT_AVAILABLE_REASON, member: null, tokens: [], until, deployments, audit } satisfies TeamPageResponse);
       }
       if (reached.kind !== "received" || reached.status !== 200) return relayRefusal(reached);
       if (!Array.isArray(reached.body.tokens)) return error(502, "failure", "The steward sent an unreadable answer.");
-      return json({ available: true, reason: null, tokens: reached.body.tokens as TokenView[], until, deployments, audit } satisfies TeamPageResponse);
+      return json({ available: true, reason: null, member: null, tokens: reached.body.tokens as TokenView[], until, deployments, audit } satisfies TeamPageResponse);
     },
 
     async createToken(req) {

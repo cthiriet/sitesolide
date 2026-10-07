@@ -52,6 +52,8 @@ type Bench = {
   asRoot: (method: string, path: string, body?: unknown) => Promise<Response>;
   journal: () => LogEntry[];
   privateKey: () => PrivateKey;
+  /** The tokens revocations the steward asked for: who, and under whom. */
+  revoked: [string, string][];
 };
 
 async function mount(): Promise<Bench> {
@@ -121,8 +123,20 @@ async function mount(): Promise<Bench> {
     ...createMembersSystem({ stateFolder: state, sitesDir: sites, secretsFolder: secrets, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "" }),
     now: () => clock.t,
   };
+  const revoked: [string, string][] = [];
   const make = () =>
-    createSteward(system, { secretsFolder: secrets, checkAccounts: false, members: { system: members, zone: ZONE } });
+    createSteward(system, {
+      secretsFolder: secrets,
+      checkAccounts: false,
+      members: {
+        system: members,
+        zone: ZONE,
+        revokeTokens: async (email, actor) => {
+          revoked.push([email, actor]);
+          return 1;
+        },
+      },
+    });
   let dashboard = make();
   await dashboard.ensureMemberKeys();
 
@@ -144,6 +158,7 @@ async function mount(): Promise<Bench> {
     asRoot: request(() => dashboard.owner),
     journal: () => (existsSync(join(state, "journal.jsonl")) ? reread(readFileSync(join(state, "journal.jsonl"), "utf8")) : []),
     privateKey: () => readPrivateKey(readFileSync(join(portalKey, "assertion.key"), "utf8"))!,
+    revoked,
   };
 }
 
@@ -260,7 +275,7 @@ describe("signing in", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { session: string; expiresAt: number; identity: unknown };
     expect(body.expiresAt).toBe(bench.clock.t + MEMBER_SESSION_DURATION_MS);
-    expect(body.identity).toEqual({ kind: "member", email: ALICE, name: "Alice Martin", roles: { blog: "developer", shop: "viewer", notes: "developer" } });
+    expect(body.identity).toEqual({ kind: "member", email: ALICE, name: "Alice Martin", roles: { blog: "developer", shop: "viewer", notes: "developer" }, create: false });
     expect(bench.journal().at(-1)).toMatchObject({ operation: "member.signin", result: "ok", actor: ALICE, member: ALICE });
     // The session's token is nowhere in the steward's files: only its hash.
     expect(readFileSync(join(bench.root, "state", "member-sessions.json"), "utf8")).not.toContain(body.session);
@@ -452,5 +467,69 @@ describe("the journal from before members", () => {
   test("a line without an actor reads as the owner's", () => {
     const earlier = `${JSON.stringify({ a: 1, operation: "set", result: "ok", slug: "blog", file: "blog.env", variable: "TOKEN", detail: null })}\n`;
     expect(reread(earlier)).toEqual([{ a: 1, operation: "set", result: "ok", actor: "owner", member: null, slug: "blog", file: "blog.env", variable: "TOKEN", detail: null }]);
+  });
+});
+
+describe("the create right, and a member's own tokens", () => {
+  test("granted and taken back by root, kept when not named, journaled with the roles", async () => {
+    const bench = await mount();
+    const granted = await bench.asRoot("PUT", "/members/member", { email: ALICE, roles: { blog: "developer" }, create: true });
+    expect(granted.status).toBe(201);
+    expect(((await granted.json()) as { member: { create: boolean } }).member.create).toBe(true);
+    expect(bench.journal().at(-1)).toMatchObject({ operation: "member.invite", actor: "owner", member: ALICE, detail: "blog: developer; may create projects" });
+    // A request from before the right names none: it stays.
+    const kept = await bench.asRoot("PUT", "/members/member", { email: ALICE, roles: { blog: "developer", shop: "viewer" } });
+    expect(((await kept.json()) as { member: { create: boolean } }).member.create).toBe(true);
+    const taken = await bench.asRoot("PUT", "/members/member", { email: ALICE, roles: { blog: "developer", shop: "viewer" }, create: false });
+    expect(await taken.json()).toMatchObject({ change: "role", member: { create: false } });
+    expect(bench.journal().at(-1)).toMatchObject({ operation: "member.role", detail: "blog: developer, shop: viewer" });
+    expect((await bench.asRoot("PUT", "/members/member", { email: ALICE, roles: {}, create: "yes" })).status).toBe(400);
+    // Someone new with the right alone, no project yet; with neither, refused.
+    expect((await bench.asRoot("PUT", "/members/member", { email: "carol@acme.test", roles: {}, create: true })).status).toBe(201);
+    const neither = await bench.asRoot("PUT", "/members/member", { email: "dave@acme.test", roles: {} });
+    expect(neither.status).toBe(400);
+    expect(await neither.json()).toMatchObject({ message: "roles: give them a role on one project at least, or the right to create projects" });
+  });
+
+  test("on the dashboard's socket, the owner's unlock for it as for a role", async () => {
+    const bench = await mount();
+    expect((await bench.call("PUT", "/members/member", { token: "stale", email: ALICE, roles: { blog: "viewer" }, create: true })).status).toBe(401);
+    const token = await unlock(bench);
+    const response = await bench.call("PUT", "/members/member", { token, email: ALICE, roles: { blog: "viewer" }, create: true });
+    expect(await response.json()).toMatchObject({ change: "invite", member: { create: true } });
+  });
+
+  test("a viewer everywhere who may create projects unlocks, to mint a token that creates", async () => {
+    const bench = await mount();
+    await bench.asRoot("PUT", "/members/member", { email: ALICE, roles: { blog: "viewer" } });
+    const session = await sessionOf(bench);
+    const forced = async () => {
+      const nowS = Math.floor(bench.clock.t / 1000);
+      return signAssertion(bench.privateKey(), { email: ALICE, name: null, authTime: nowS - 10, reauth: true }, nowS);
+    };
+    const refused = await bench.call("POST", "/members/unlock", { session, assertion: await forced() });
+    expect(await refused.json()).toMatchObject({ error: "out-of-scope", message: `${ALICE} is a viewer on every project: there is nothing to unlock` });
+    await bench.asRoot("PUT", "/members/member", { email: ALICE, roles: { blog: "viewer" }, create: true });
+    expect((await bench.call("POST", "/members/unlock", { session, assertion: await forced() })).status).toBe(200);
+  });
+
+  test("a member removed by root takes their tokens with them, revoked under the owner", async () => {
+    const bench = await mount();
+    await withAlice(bench);
+    expect((await bench.asRoot("DELETE", "/members/member", { email: ALICE })).status).toBe(200);
+    expect(bench.revoked).toEqual([[ALICE, "owner"]]);
+  });
+
+  test("their rights as the registry reads now, and a creation recorded: project admin of it, journaled under them", async () => {
+    const bench = await mount();
+    await bench.asRoot("PUT", "/members/member", { email: ALICE, roles: { blog: "developer" }, create: true });
+    const authority = bench.dashboard.memberAuthority!;
+    expect(await authority.rights(ALICE)).toEqual({ email: ALICE, roles: { blog: "developer" }, create: true });
+    expect(await authority.rights("eve@acme.test")).toBeNull();
+    expect(await authority.recordCreation("omega", ALICE, "aaaaaaaaaaaa")).toBeNull();
+    expect(await authority.rights(ALICE)).toMatchObject({ roles: { blog: "developer", omega: "admin" } });
+    expect(bench.journal().at(-1)).toMatchObject({ operation: "project.create", result: "ok", actor: ALICE, member: ALICE, slug: "omega", detail: "admin, created with token aaaaaaaaaaaa" });
+    const refused = await authority.recordCreation("omega", "eve@acme.test", "aaaaaaaaaaaa");
+    expect(refused?.status).toBe(403);
   });
 });

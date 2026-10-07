@@ -6,7 +6,7 @@ import { openDatabase } from "../src/database";
 import { createApiRoutes } from "../src/control/api";
 import type { ControlSteward } from "../src/control/client";
 import { createLimiter } from "../src/control/limiter";
-import type { Identity, ProjectSharing } from "../src/control/protocol";
+import type { Identity, ProjectSharing, SharingRequest } from "../src/control/protocol";
 import { domainRefusals, readTokenPolicy } from "../src/control/sharing";
 import { createSpool } from "../src/control/spool";
 import { createControlStore } from "../src/control/store";
@@ -17,9 +17,11 @@ import type { Raw } from "../src/state";
 /**
  * Sharing through the control API: the dashboard's real routes on a real
  * port, the portal's admin API faked by a real HTTP server the dashboard
- * reaches with the Sharing section's own client, and the steward reduced to
+ * reads with the Sharing section's own client, and the steward reduced to
  * the identity it returns for each bearer, which is what the dashboard
- * decides on. The steward's own judgement of a token is tested in
+ * decides on, and to its relay of a token's sharing, which hands the policy
+ * to the portal as root with the token as the actor. The steward's own
+ * judgement of a token, and of its sharing, is tested in
  * control-steward.test.ts.
  */
 
@@ -32,9 +34,9 @@ const tokenOf = (letter: string) => `sst_${letter.repeat(43)}`;
 
 /** kanban is Ada's own, Grace is granted it and the others, notes belongs to Linus. */
 const IDENTITIES: Record<string, Identity> = {
-  [tokenOf("a")]: { id: "aaaaaaaaaaaa", label: "Ada", email: "ada@acme.test", expiresAt: null, scope: scope([]), owned: ["kanban"] },
-  [tokenOf("g")]: { id: "bbbbbbbbbbbb", label: "Grace", email: "grace@acme.test", expiresAt: null, scope: scope(["kanban", "roster", "showcase", "ghost"]), owned: [] },
-  [tokenOf("l")]: { id: "cccccccccccc", label: "Linus", email: "linus@acme.test", expiresAt: null, scope: scope([]), owned: ["notes"] },
+  [tokenOf("a")]: { id: "aaaaaaaaaaaa", label: "Ada", email: "ada@acme.test", expiresAt: null, scope: scope([]), owned: ["kanban"], member: null },
+  [tokenOf("g")]: { id: "bbbbbbbbbbbb", label: "Grace", email: "grace@acme.test", expiresAt: null, scope: scope(["kanban", "roster", "showcase", "ghost"]), owned: [], member: null },
+  [tokenOf("l")]: { id: "cccccccccccc", label: "Linus", email: "linus@acme.test", expiresAt: null, scope: scope([]), owned: ["notes"], member: null },
 };
 const ADA = tokenOf("a");
 const GRACE = tokenOf("g");
@@ -111,6 +113,18 @@ beforeAll(() => {
       IDENTITIES[bearer] === undefined
         ? Response.json({ error: "unauthenticated", message: "unknown token: ask the owner of the machine for one" }, { status: 401 })
         : Response.json({ identity: IDENTITIES[bearer] }),
+    // The steward's relay of a token's sharing, as root: the three keys and the token as the actor.
+    share: async (requested: SharingRequest) => {
+      const identity = IDENTITIES[requested.bearer];
+      if (identity === undefined) return Response.json({ error: "unauthenticated", message: "unknown token" }, { status: 401 });
+      const answer = await fetch(`http://127.0.0.1:${portal.port}/admin/sharing/${encodeURIComponent(`${requested.slug}.${ZONE}`)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: requested.mode, people: requested.people, domains: requested.domains, actor: `token:${identity.id}` }),
+      });
+      if (answer.status === 400) return Response.json({ error: "invalid", message: "the portal refused this policy: nothing was changed" }, { status: 400 });
+      return new Response(answer.body, { status: answer.status, headers: { "Content-Type": "application/json" } });
+    },
   } as unknown as ControlSteward;
   const store = createControlStore(openDatabase(join(root, "dashboard.db")));
   const spool = createSpool(join(root, "spool"));

@@ -42,6 +42,8 @@ type PortalCall = { route: string; body: unknown };
 
 type Bench = {
   root: string;
+  /** The token revocations the steward asked for: whose, and under whom. */
+  revoked: [string, string][];
   clock: { t: number };
   dashboard: StewardHandler;
   calls: string[][];
@@ -166,10 +168,19 @@ async function mount(): Promise<Bench> {
     },
   };
 
+  const revoked: [string, string][] = [];
   const dashboard = createSteward(system, {
     secretsFolder: secrets,
     checkAccounts: false,
-    members: { system: members, zone: ZONE, portal },
+    members: {
+      system: members,
+      zone: ZONE,
+      portal,
+      revokeTokens: async (email, actor) => {
+        revoked.push([email, actor]);
+        return 0;
+      },
+    },
     backups: createBackupReader({ sitesDir: sites, backupFolder: backups, stateFolder: backupState, runFolder: backupRun, unitsFolder: units }),
   });
   await dashboard.ensureMemberKeys();
@@ -179,6 +190,7 @@ async function mount(): Promise<Bench> {
 
   return {
     root,
+    revoked,
     clock,
     dashboard,
     calls,
@@ -592,6 +604,8 @@ describe("a Project admin's members", () => {
     expect(await body(removed)).toMatchObject({ change: "remove", member: { email: carol } });
     expect(bench.journal().at(-1)).toMatchObject({ operation: "member.remove", actor: ALICE, member: carol, slug: "beta" });
     expect((await bench.call("POST", "/members/whoami", { session: carolSession })).status).toBe(401);
+    // Her tokens go with her, revoked under the Project admin who took her last role.
+    expect(bench.revoked).toEqual([[carol, ALICE]]);
     // Bob keeps alpha when Alice takes nothing of his there.
     expect((await bench.call("DELETE", "/members/project/member", { session: alice, slug: "alpha", email: BOB })).status).toBe(403);
   });

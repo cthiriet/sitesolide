@@ -33,6 +33,10 @@ export const OPERATIONS: Operation[] = [
   "guest.create",
   "guest.revoke",
   "backup.restore",
+  "token.create",
+  "token.revoke",
+  "project.create",
+  "project.remove",
 ];
 
 /**

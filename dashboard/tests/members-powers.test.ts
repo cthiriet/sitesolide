@@ -107,7 +107,7 @@ describe("a member's unlocks", () => {
 
 describe("a Project admin's changes to the registry", () => {
   const registry: Registry = {
-    members: [{ email: "b@acme.test", roles: { alpha: "developer" }, invitedBy: "owner", createdAt: T, updatedAt: T }],
+    members: [{ email: "b@acme.test", roles: { alpha: "developer" }, create: false, invitedBy: "owner", createdAt: T, updatedAt: T }],
   };
 
   test("someone new is invited with that one role, by the Project admin", () => {

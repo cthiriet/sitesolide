@@ -172,6 +172,10 @@ const backups = createBackupReader({
   unitsFolder: UNITS_FOLDER,
 });
 
+// The control routes are built after this handler, and the members routes
+// ask them to revoke a removed member's tokens: the call is filled in below.
+let revokeMemberTokens: (email: string, actor: string) => Promise<number> = async () => 0;
+
 const handler = createSteward(system, {
   secretsFolder: SECRETS_FOLDER,
   checkAccounts: OWNERS !== "",
@@ -190,6 +194,7 @@ const handler = createSteward(system, {
     }),
     zone: process.env.SITESOLIDE_ZONE ?? "",
     portal: PORTAL_RELAY === "" ? null : relayedPortal(PORTAL_RELAY),
+    revokeTokens: (email, actor) => revokeMemberTokens(email, actor),
   },
 });
 
@@ -203,8 +208,10 @@ if (keys !== null) {
 
 // The control API's routes, under /team/ and /control/: the token registry and
 // the start of the installer. They share the socket and its permissions, and
-// ask the secrets routes one thing only, whether a token is the live unlock.
-// See src/control/steward.ts.
+// ask the secrets routes whether a token is the live unlock, the members
+// routes who a member is and what they may do now, for a member's own
+// tokens, and the relay to the portal for a token's sharing. See
+// src/control/steward.ts.
 const control = createControlSteward(
   createControlSystem({
     stateFolder: STATE_FOLDER,
@@ -218,8 +225,11 @@ const control = createControlSteward(
     zone: process.env.SITESOLIDE_ZONE ?? "",
     isUnlocked: handler.isUnlocked,
     uidRoot: OWNERS === "" ? null : 0,
+    members: handler.memberAuthority ?? undefined,
+    share: handler.shareForToken,
   },
 );
+revokeMemberTokens = control.revokeMember;
 
 /**
  * A restart is observed for eight seconds, a portal takes up to ninety, and a
@@ -249,7 +259,8 @@ const ownerServer =
           (path) =>
             Bun.serve({
               unix: path,
-              fetch: (req) => handler.owner(req),
+              // The members registry, and the token ownership of a project removed.
+              fetch: (req) => (isControlPath(new URL(req.url).pathname) ? control.owner(req) : handler.owner(req)),
               development: false,
               error: () => Response.json({ error: "failure", message: "unexpected error" }, { status: 500 }),
               maxRequestBodySize: 64 * 1024,

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { tokenHash } from "../src/sessions";
 import {
+  forgetOwnership,
   EMPTY_TEAM,
   LAST_USE_STEP_MS,
   authenticate,
@@ -126,17 +127,20 @@ describe("authentication", () => {
 
     const revoked = revokeToken(team, id, NOW + 5);
     if ("refusal" in revoked) throw new Error(revoked.refusal);
-    expect(await authenticate(revoked.team, secret, NOW + 6)).toEqual({ kind: "refused", reason: "revoked" });
+    expect(await authenticate(revoked.team, secret, NOW + 6)).toEqual({ kind: "refused", reason: "revoked", member: false });
 
     const expiring = { ...team, tokens: [{ ...team.tokens[0]!, expiresAt: NOW + 10 }] };
     expect((await authenticate(expiring, secret, NOW + 9)).kind).toBe("accepted");
-    expect(await authenticate(expiring, secret, NOW + 10)).toEqual({ kind: "refused", reason: "expired" });
+    expect(await authenticate(expiring, secret, NOW + 10)).toEqual({ kind: "refused", reason: "expired", member: false });
   });
 
   test("the message tells the holder what to do, and an unknown value learns nothing", () => {
     expect(refusalMessage({ kind: "refused", reason: "expired" })).toContain("expired");
     expect(refusalMessage({ kind: "refused", reason: "revoked" })).toContain("revoked");
     expect(refusalMessage({ kind: "refused", reason: "unknown" })).toContain("Authorization: Bearer");
+    // A member's own: mint another, rather than ask the owner.
+    expect(refusalMessage({ kind: "refused", reason: "revoked", member: true })).toContain("mint a new one from the dashboard's Team page");
+    expect(refusalMessage({ kind: "refused", reason: "expired", member: false })).toContain("ask the owner of the machine");
   });
 });
 
@@ -177,5 +181,15 @@ describe("the registry", () => {
   test("the view never carries the hash", async () => {
     const { team } = await teamWith();
     expect(JSON.stringify(views(team))).not.toContain(team.tokens[0]!.hash);
+  });
+});
+
+describe("a project removed", () => {
+  test("its owner forgotten, the others and every token kept; nothing to forget is said so", () => {
+    const team = { tokens: [], owners: { shop: "aaaaaaaaaaaa", blog: "bbbbbbbbbbbb" } };
+    expect(forgetOwnership(team, "shop")).toEqual({ team: { tokens: [], owners: { blog: "bbbbbbbbbbbb" } }, id: "aaaaaaaaaaaa" });
+    expect(forgetOwnership(team, "notes")).toBeNull();
+    expect(forgetOwnership(team, "constructor")).toBeNull();
+    expect(team.owners).toEqual({ shop: "aaaaaaaaaaaa", blog: "bbbbbbbbbbbb" });
   });
 });

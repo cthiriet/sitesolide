@@ -49,13 +49,23 @@ export const MACHINE_PAGES: readonly MachineEntry[] = [
 
 /**
  * What a member sees: their projects on the home page, the activity of their
- * projects, and in a site the sections their role there opens, the steward's
- * own table (src/members/powers.ts): a Viewer its Overview and Audience; a
- * Developer its Secrets too, values write-only; a Project admin everything of
- * the site, and its Members. The rest is the super admin's, hidden here and
- * refused by the service.
+ * projects, the Team page for their own tokens when a role or the create
+ * right lets them mint one, and in a site the sections their role there
+ * opens, the steward's own table (src/members/powers.ts): a Viewer its
+ * Overview and Audience; a Developer its Secrets too, values write-only; a
+ * Project admin everything of the site, and its Members. The rest is the
+ * super admin's, hidden here and refused by the service.
  */
 const MEMBER_PAGES: readonly MachinePage[] = ["home", "activity"]
+
+/** May this member mint a token of their own: a Developer or a Project admin somewhere, or the create right. A Viewer mints nothing. */
+export function mayMint(identity: Extract<IdentityView, { kind: "member" }>): boolean {
+  return identity.create || Object.values(identity.roles).some((role) => role === "developer" || role === "admin")
+}
+
+function memberPages(identity: Extract<IdentityView, { kind: "member" }>): readonly MachinePage[] {
+  return mayMint(identity) ? [...MEMBER_PAGES, "team"] : MEMBER_PAGES
+}
 const ROLE_SECTIONS: Readonly<Record<Role, readonly Section[]>> = {
   viewer: ["overview", "audience"],
   developer: ["overview", "audience", "secrets"],
@@ -77,7 +87,9 @@ export function roleIn(identity: IdentityView | null, slug: string): Role | null
 
 /** The machine's pages this person may open, in the sidebar's order. */
 export function machinePagesFor(identity: IdentityView | null): readonly MachineEntry[] {
-  return isMemberIdentity(identity) ? MACHINE_PAGES.filter((entry) => MEMBER_PAGES.includes(entry.name)) : MACHINE_PAGES
+  if (!isMemberIdentity(identity)) return MACHINE_PAGES
+  const pages = memberPages(identity)
+  return MACHINE_PAGES.filter((entry) => pages.includes(entry.name))
 }
 
 function allowedSections(identity: IdentityView | null, slug: string): readonly Section[] {
@@ -95,7 +107,7 @@ export function sectionsFor(identity: IdentityView | null, slug: string): readon
 /** May this person open this page? A member asking for one that is not theirs is told so. */
 export function mayOpen(page: Page, identity: IdentityView | null): boolean {
   if (page.name === "site") return allowedSections(identity, page.slug).includes(page.section)
-  return !isMemberIdentity(identity) || MEMBER_PAGES.includes(page.name)
+  return !isMemberIdentity(identity) || memberPages(identity).includes(page.name)
 }
 
 /** The order of the sidebar and the tabs, inside a site. */

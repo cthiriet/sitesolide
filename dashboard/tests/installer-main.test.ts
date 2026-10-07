@@ -112,6 +112,59 @@ describe("main", () => {
     expect(readdirSync(root).sort()).toEqual(["222222222222222222222222.json", "notes.txt"]);
   });
 
+  /** A member's request, the members registry beside it as the steward keeps it, and what the installer made of it. */
+  async function memberRun(
+    roles: Record<string, string> | null,
+    scope: Record<string, unknown>,
+    creating: boolean,
+    create = false,
+    extra: (root: string) => Record<string, string> = () => ({}),
+  ): Promise<{ root: string; result: InstallerResult }> {
+    const root = mkdtempSync(join(tmpdir(), "installer-member-"));
+    toClean.push(root);
+    for (const folder of ["sites", "units", "secrets", "state/installs", "results", "run", "caddy", `spool/${DEPLOYMENT}`]) mkdirSync(join(root, folder), { recursive: true });
+    writeFileSync(join(root, "passwd"), "root:x:0:0::/root:/bin/sh\n");
+    const members = roles === null ? [] : [{ email: "ada@acme.test", roles, create, invitedBy: "owner", createdAt: 1, updatedAt: 1 }];
+    writeFileSync(join(root, "state", "members.json"), JSON.stringify({ members }));
+    writeFileSync(
+      join(root, "state", "installs", "notes.json"),
+      JSON.stringify({
+        deployment: DEPLOYMENT,
+        slug: "notes",
+        requestedAt: Date.now(),
+        token: { id: "aaaaaaaaaaaa", email: "ada@acme.test", member: "ada@acme.test" },
+        scope: { slugs: ["notes"], create: false, outbound: false, domain: false, public: false, ...scope },
+        creating,
+        manifest: JSON.stringify({ slug: "notes", publicDir: "public" }),
+      }),
+    );
+    const code = await main(["sitesolide-installer@notes.service"], { SITESOLIDE_ZONE: "test-zone.invalid", STEWARD_STATE: join(root, "state"), INSTALLER_FOLDER: join(root, "results"), ...extra(root) });
+    expect(code).toBe(0);
+    return { root, result: JSON.parse(readFileSync(join(root, "results", `${DEPLOYMENT}.json`), "utf8")) as InstallerResult };
+  }
+
+  test("a member's token: their role lowered to viewer since the steward wrote the request stops it, nothing written", async () => {
+    const { root, result } = await memberRun({ notes: "viewer" }, {}, false);
+    expect(result).toMatchObject({ state: "failed", error: { code: "out-of-scope", message: "ada@acme.test is a viewer on notes: deploying it takes a developer or a project admin: nothing was changed" } });
+    expect(result.log[0]).toBe("-> deployment abcdefabcdefabcdefabcdef of notes, for ada@acme.test (token aaaaaaaaaaaa, a member's own)");
+    expect(readdirSync(join(root, "sites"))).toEqual([]);
+  });
+
+  test("a member's token: a member removed since, or a registry that does not read, is refused", async () => {
+    expect((await memberRun(null, {}, false)).result).toMatchObject({ state: "failed", error: { code: "out-of-scope", message: expect.stringContaining("no longer a member") } });
+    const { result } = await memberRun({ notes: "admin" }, { create: true }, true, false);
+    expect(result).toMatchObject({ state: "failed", error: { code: "out-of-scope", message: "ada@acme.test may no longer create projects: nothing was changed" } });
+  });
+
+  test("a member's token: a developer's deployment loses the options a project admin's would carry", async () => {
+    // Public sites asked for, Ada a developer there: the static site would need them, and is refused as private.
+    const env = (root: string) => ({ SITES_DIR: join(root, "sites"), BLOCKS_FOLDER: join(root, "caddy"), RUN_FOLDER: join(root, "run"), CHECK_ACCOUNTS: "" });
+    const { result } = await memberRun({ notes: "developer" }, { public: true }, false, false, env);
+    expect(result.state).toBe("failed");
+    expect(result.error?.code).not.toBe("misconfigured");
+    expect(JSON.stringify(result.error)).toContain("your token may only deploy private sites");
+  });
+
   test("a machine whose environment file lost DEPLOY_ACCOUNT refuses, and says so in the result", async () => {
     const root = mkdtempSync(join(tmpdir(), "installer-main-"));
     toClean.push(root);

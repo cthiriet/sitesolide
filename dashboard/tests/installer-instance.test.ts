@@ -27,7 +27,7 @@ const REQUEST = {
   deployment: "0123456789abcdef01234567",
   slug: "shop",
   requestedAt: NOW,
-  token: { id: "aaaaaaaaaaaa", email: "ada@test-zone.invalid" },
+  token: { id: "aaaaaaaaaaaa", email: "ada@test-zone.invalid", member: null as string | null },
   scope: { slugs: [], create: true, outbound: false, domain: false, public: false },
   creating: true,
   manifest: "{}",

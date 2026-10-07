@@ -92,6 +92,7 @@ import {
 import { benchBackupRoutes } from "./bench-backups";
 import { readPrivateKey, signAssertion } from "../borrowed/assertion";
 import { createMemberRoutes } from "../src/members/steward";
+import { mintRefusals, scopeText } from "../src/members/tokens";
 import { may, needsUnlock, powerRefusal, type Power } from "../src/members/powers";
 import { createMembersSystem } from "../src/members/system";
 
@@ -1001,12 +1002,16 @@ type BenchToken = {
   lastUsedAt: number | null;
   scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean };
   owned: string[];
+  /** The member who minted it, null for the owner's. */
+  member: string | null;
 };
 
 const teamTokens: BenchToken[] = [
-  { id: "a1b2c3d4e5f6", label: "Alice's laptop", email: "alice@example.com", createdAt: start - 12 * DAY, expiresAt: start + 78 * DAY, revokedAt: null, lastUsedAt: start - 3 * HOUR, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false }, owned: ["notes"] },
-  { id: "0f1e2d3c4b5a", label: "Release agent", email: "agent@example.com", createdAt: start - 40 * DAY, expiresAt: start + 4 * DAY, revokedAt: null, lastUsedAt: start - DAY, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: true }, owned: [] },
-  { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com", createdAt: start - 90 * DAY, expiresAt: null, revokedAt: start - 20 * DAY, lastUsedAt: start - 21 * DAY, scope: { slugs: [], create: true, outbound: false, domain: false, public: false }, owned: ["mockups"] },
+  { id: "a1b2c3d4e5f6", label: "Alice's laptop", email: "alice@example.com", createdAt: start - 12 * DAY, expiresAt: start + 78 * DAY, revokedAt: null, lastUsedAt: start - 3 * HOUR, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false }, owned: ["notes"], member: null },
+  { id: "0f1e2d3c4b5a", label: "Release agent", email: "agent@example.com", createdAt: start - 40 * DAY, expiresAt: start + 4 * DAY, revokedAt: null, lastUsedAt: start - DAY, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: true }, owned: [], member: null },
+  { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com", createdAt: start - 90 * DAY, expiresAt: null, revokedAt: start - 20 * DAY, lastUsedAt: start - 21 * DAY, scope: { slugs: [], create: true, outbound: false, domain: false, public: false }, owned: ["mockups"], member: null },
+  // A member's own, minted from her Team page: a Developer on cms, a Project admin on calendar.
+  { id: "c0ffee123456", label: "Alice's agent", email: "alice@example.com", createdAt: start - 2 * DAY, expiresAt: start + 88 * DAY, revokedAt: null, lastUsedAt: start - 5 * HOUR, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: false }, owned: [], member: "alice@example.com" },
 ];
 
 // The control API's history, written by the service's own store in its data
@@ -1166,9 +1171,59 @@ const steward =
                 lastUsedAt: null,
                 scope,
                 owned: [],
+                member: null,
               };
               teamTokens.push(created);
               return Response.json({ token: created, secret: `sst_${draw(43, ALPHABET)}` }, { status: 201 });
+            },
+          },
+          // A member's own tokens, judged by the real rules (src/members/tokens.ts) on her session and unlock.
+          "/team/member/list": {
+            POST: async (req) => {
+              const requested = await readBody(req);
+              const principal = await memberRoutes.authorize(requested.session, null);
+              if (principal instanceof Response) return principal;
+              return Response.json({
+                tokens: [...teamTokens].filter((token) => token.member === principal.email).sort((a, b) => b.createdAt - a.createdAt),
+                rights: { roles: principal.roles, create: principal.create },
+                until: await memberRoutes.unlockedUntil(requested.session),
+              });
+            },
+          },
+          "/team/member/tokens": {
+            POST: async (req) => {
+              const requested = await readBody(req);
+              const principal = await memberRoutes.authorize(requested.session, requested.token);
+              if (principal instanceof Response) return principal;
+              const scope = requested.scope as BenchToken["scope"];
+              const refusals = mintRefusals(scope, { email: principal.email, roles: principal.roles, create: principal.create });
+              if (refusals.length > 0) return refusal(403, "out-of-scope", refusals.join("; "), { details: refusals });
+              const created: BenchToken = {
+                id: draw(12, "0123456789abcdef"),
+                label: text(requested.label),
+                email: principal.email,
+                createdAt: Date.now(),
+                expiresAt: typeof requested.expiresAt === "number" ? requested.expiresAt : null,
+                revokedAt: null,
+                lastUsedAt: null,
+                scope,
+                owned: [],
+                member: principal.email,
+              };
+              teamTokens.push(created);
+              record({ operation: "token.create", result: "ok", actor: principal.email, member: principal.email, slug: null, file: null, variable: null, detail: `${created.id}: ${scopeText(scope)}` });
+              return Response.json({ token: created, secret: `sst_${draw(43, ALPHABET)}` }, { status: 201 });
+            },
+          },
+          "/team/member/revoke": {
+            POST: async (req) => {
+              const requested = await readBody(req);
+              const principal = await memberRoutes.authorize(requested.session, null);
+              if (principal instanceof Response) return principal;
+              const found = teamTokens.find((candidate) => candidate.id === requested.id && candidate.member === principal.email);
+              if (found === undefined) return refusal(404, "not-found", "no such token of yours");
+              found.revokedAt ??= Date.now();
+              return Response.json({ token: found });
             },
           },
           "/team/revoke": {

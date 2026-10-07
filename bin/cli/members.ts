@@ -4,12 +4,16 @@
  *
  *   sitesolide members                                          who, on what, and the line to send
  *   sitesolide members add <email> --project <slug> --role <role> [--project <slug> --role <role>]...
+ *   sitesolide members add <email> --may-create                 grant the right to create projects
  *   sitesolide members remove <email>                           take them off, signed out at once
  *   sitesolide members remove <email> --project <slug>...       take those projects off them
+ *   sitesolide members remove <email> --may-create              take the right to create projects back
  *
  * A role is `viewer`, `developer` or `admin`; each `--project` takes the
  * `--role` that follows it. `add` on someone already a member sets the roles
- * named and keeps their others.
+ * named and keeps their others. `--may-create` goes with either, beside
+ * projects or alone: a member who may create projects mints a token of their
+ * own that may, and becomes project admin of what it creates.
  *
  * **Over the owner's SSH, to the steward's owner socket.** The registry is the
  * steward's (dashboard/src/members/), which root alone may change without the
@@ -33,7 +37,8 @@ export const ROLES = ["viewer", "developer", "admin"] as const;
 export type Role = (typeof ROLES)[number];
 export type Roles = Record<string, Role>;
 
-export type MemberView = { email: string; roles: Roles; invitedBy: string; createdAt: number; updatedAt: number };
+/** `create`: may they create projects. A steward from before the right says nothing of it. */
+export type MemberView = { email: string; roles: Roles; create?: boolean; invitedBy: string; createdAt: number; updatedAt: number };
 export type MembersList = { members: MemberView[]; signIn: { configured: boolean; allowedDomains: string[] } };
 
 export const OWNER_SOCKET = "/run/sitesolide-steward-owner/owner.sock";
@@ -42,15 +47,18 @@ export const MEMBERS_USAGE = [
   "sitesolide members               who signs in to the dashboard, their roles, and the line to send",
   "   add <email> --project <slug> --role <viewer|developer|admin>",
   "                                 invite them, or set their role on these projects; repeat the pair",
-  "   remove <email>                take them off: signed out at once",
+  "   add <email> --may-create      let them create projects, project admin of what they create",
+  "   remove <email>                take them off: signed out at once, their tokens revoked",
   "   remove <email> --project <slug>",
   "                                 take these projects off them, their other roles kept",
+  "   remove <email> --may-create   take the right to create projects back",
 ];
 
+/** `create`: true to grant the right to create projects, false to take it back, undefined to leave it. */
 export type MembersRequest =
   | { action: "list" }
-  | { action: "add"; email: string; roles: Roles }
-  | { action: "remove"; email: string; projects: string[] };
+  | { action: "add"; email: string; roles: Roles; create?: true }
+  | { action: "remove"; email: string; projects: string[]; create?: false };
 
 function usage(message: string): Failure {
   return { error: "usage", message, details: MEMBERS_USAGE };
@@ -80,9 +88,16 @@ export function readMembersArguments(arguments_: string[]): MembersRequest | Fai
   const roles: Roles = {};
   const projects: string[] = [];
   let pending: string | null = null;
+  let mayCreate = false;
   for (let i = 2; i < rest.length; i++) {
     const option = rest[i]!;
     const value = rest[i + 1];
+    if (option === "--may-create") {
+      if (pending !== null) return usage(`--project ${pending}: its --role must follow, before --may-create`);
+      if (mayCreate) return usage("--may-create: named twice");
+      mayCreate = true;
+      continue;
+    }
     if (option !== "--project" && option !== "--role") return usage(`${option}: not an option of sitesolide members ${action}`);
     if (value === undefined || value.startsWith("-")) return usage(`${option}: ${option === "--project" ? "a project's slug" : "viewer, developer or admin"} must follow`);
     i++;
@@ -105,10 +120,10 @@ export function readMembersArguments(arguments_: string[]): MembersRequest | Fai
   }
   if (pending !== null) return usage(`--project ${pending}: its --role must follow`);
   if (action === "add") {
-    if (Object.keys(roles).length === 0) return usage("sitesolide members add: give at least one --project and its --role");
-    return { action: "add", email: address, roles };
+    if (Object.keys(roles).length === 0 && !mayCreate) return usage("sitesolide members add: give at least one --project and its --role, or --may-create");
+    return mayCreate ? { action: "add", email: address, roles, create: true } : { action: "add", email: address, roles };
   }
-  return { action: "remove", email: address, projects };
+  return mayCreate ? { action: "remove", email: address, projects, create: false } : { action: "remove", email: address, projects };
 }
 
 const ROLE_TEXT: Readonly<Record<Role, string>> = { viewer: "viewer", developer: "developer", admin: "project admin" };
@@ -117,6 +132,11 @@ const ROLE_TEXT: Readonly<Record<Role, string>> = { viewer: "viewer", developer:
 export function rolesText(roles: Roles): string {
   const entries = Object.entries(roles).sort(([a], [b]) => a.localeCompare(b));
   return entries.length === 0 ? "no project" : entries.map(([slug, role]) => `${slug}: ${ROLE_TEXT[role]}`).join(", ");
+}
+
+/** The roles, and the create right when held: `blog: developer; may create projects`. */
+export function rightsText(roles: Roles, create: boolean | undefined): string {
+  return create === true ? `${rolesText(roles)}; may create projects` : rolesText(roles);
 }
 
 /** The line to send someone invited: where to go, and with what. No email is sent. */
@@ -148,7 +168,8 @@ export type Answer = { ok: true; status: number; body: Record<string, unknown> }
 /** How the command reaches the steward's members registry. */
 export type MembersTransport = {
   list: () => Promise<Answer>;
-  put: (email: string, roles: Roles) => Promise<Answer>;
+  /** `create` undefined leaves the right as it stands. */
+  put: (email: string, roles: Roles, create?: boolean) => Promise<Answer>;
   remove: (email: string) => Promise<Answer>;
   /** The provider's name, for the line to send; null when the portal does not say. */
   providerName: () => Promise<string | null>;
@@ -211,7 +232,7 @@ export function sshMembers(run: RunOnMachine): MembersTransport {
 
   return {
     list: () => ask(membersReadCommand()),
-    put: (email, roles) => ask(membersWriteCommand("PUT"), JSON.stringify({ email, roles })),
+    put: (email, roles, create) => ask(membersWriteCommand("PUT"), JSON.stringify(create === undefined ? { email, roles } : { email, roles, create })),
     remove: (email) => ask(membersWriteCommand("DELETE"), JSON.stringify({ email })),
     async providerName() {
       const listed = await run(sharingReadCommand());
@@ -239,7 +260,10 @@ function readList(body: Record<string, unknown>): MembersList | null {
 
 /** The registry in lines, for a person. */
 export function describeMembers(list: MembersList, line: string): string[] {
-  const lines = list.members.length === 0 ? ["   nobody yet: sitesolide members add <email> --project <slug> --role viewer"] : list.members.map((member) => `   ${member.email}  ${rolesText(member.roles)}`);
+  const lines =
+    list.members.length === 0
+      ? ["   nobody yet: sitesolide members add <email> --project <slug> --role viewer"]
+      : list.members.map((member) => `   ${member.email}  ${rightsText(member.roles, member.create)}`);
   if (!list.signIn.configured) {
     lines.push("!! signing in with a work account is not set up on this machine: members cannot sign in until the portal has an identity provider (portal/README.md)");
   } else if (list.members.length > 0) {
@@ -279,7 +303,7 @@ export async function members(arguments_: string[], dashboardUrl: string, transp
 
   const current = list.members.find((member) => member.email === request.email) ?? null;
 
-  if (request.action === "remove" && request.projects.length === 0) {
+  if (request.action === "remove" && request.projects.length === 0 && request.create === undefined) {
     if (current === null) {
       output.failed({ error: "not-a-member", message: `${request.email} is not a member: nothing was changed` });
       return 1;
@@ -289,7 +313,7 @@ export async function members(arguments_: string[], dashboardUrl: string, transp
       output.failed(removed.failure);
       return 1;
     }
-    output.say(`-> ${request.email} removed: signed out of the dashboard, refused at their next request`);
+    output.say(`-> ${request.email} removed: signed out of the dashboard, their tokens revoked, refused at their next request`);
     output.succeeded("members", { email: request.email, removed: true, roles: current.roles, changed: true });
     return 0;
   }
@@ -307,7 +331,11 @@ export async function members(arguments_: string[], dashboardUrl: string, transp
     roles = addedRoles(current?.roles ?? {}, request.roles);
   }
 
-  const put = await transport.put(request.email, roles);
+  if (request.create === true && current === null && Object.keys(request.roles).length === 0) {
+    // Someone new with the create right alone: a member who sees nothing yet, until they create.
+    output.say(`   ${request.email} holds no project yet: they may create one with a token of their own`);
+  }
+  const put = await transport.put(request.email, roles, request.create);
   if (!put.ok) {
     output.failed(put.failure);
     return 1;
@@ -315,17 +343,18 @@ export async function members(arguments_: string[], dashboardUrl: string, transp
   const change = put.body.change === "invite" || put.body.change === "role" ? put.body.change : "none";
   const member = isObject(put.body.member) ? (put.body.member as MemberView) : null;
   const saved = member?.roles ?? roles;
+  const create = member?.create ?? request.create ?? current?.create;
   output.say(
     change === "invite"
-      ? `-> ${request.email} invited: ${rolesText(saved)}`
+      ? `-> ${request.email} invited: ${rightsText(saved, create)}`
       : change === "role"
-        ? `-> ${request.email}: ${rolesText(saved)}`
-        : `   nothing to change: ${request.email} already holds ${rolesText(saved)}`,
+        ? `-> ${request.email}: ${rightsText(saved, create)}`
+        : `   nothing to change: ${request.email} already holds ${rightsText(saved, create)}`,
   );
   if (change === "invite") {
     if (list.signIn.configured) output.say(`   send: ${line}`);
     else output.say("!! signing in with a work account is not set up on this machine: they cannot sign in until the portal has an identity provider (portal/README.md)");
   }
-  output.succeeded("members", { email: request.email, roles: saved, change, message: list.signIn.configured ? line : null, changed: change !== "none" });
+  output.succeeded("members", { email: request.email, roles: saved, create: create === true, change, message: list.signIn.configured ? line : null, changed: change !== "none" });
   return 0;
 }

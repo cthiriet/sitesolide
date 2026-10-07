@@ -8,6 +8,7 @@ import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { CreateTokenDialog, RevokeTokenDialog } from "@/components/team-dialogs"
 import { readTeam, revokeTeamToken } from "@/lib/api"
+import { isMember } from "@/lib/members"
 import { ago, dateTime } from "@/lib/format"
 import { auditLine, deploymentLabel, deploymentTone, isLive, reachedProjects, scopeSummary, tokenStatus } from "@/lib/team"
 import type { TeamPageResponse, TokenView } from "@/lib/types"
@@ -20,11 +21,15 @@ import type { TeamPageResponse, TokenView } from "@/lib/types"
  * only through this page. Creating one needs the dashboard unlocked, the
  * header's lock, the same one as the Secrets section; revoking does not, so
  * that a stolen token is closed without looking for a password first.
+ *
+ * The owner sees every token, a member's own marked with whose it is. A
+ * member sees their own alone, mints them under their own unlock, a forced
+ * sign-in at their provider, and never beyond their roles.
  */
 
 type Loaded = { state: "loading" } | { state: "failed" } | { state: "ready"; team: TeamPageResponse }
 
-function TokenRow({ token, now, onRevoke }: { token: TokenView; now: number; onRevoke: (token: TokenView) => void }) {
+function TokenRow({ token, now, mine, onRevoke }: { token: TokenView; now: number; mine: boolean; onRevoke: (token: TokenView) => void }) {
   const status = tokenStatus(token, now)
   const projects = reachedProjects(token)
   const live = isLive(token, now)
@@ -33,10 +38,11 @@ function TokenRow({ token, now, onRevoke }: { token: TokenView; now: number; onR
       <div className="grid min-w-0 flex-1 basis-64 gap-1">
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
           <span className="font-medium wrap-anywhere">{token.label}</span>
-          <span className="text-muted-foreground wrap-anywhere">{token.email}</span>
+          {!mine && <span className="text-muted-foreground wrap-anywhere">{token.email}</span>}
           <Status tone={status.tone}>{status.label}</Status>
+          {!mine && token.member !== null && <Status tone="neutral">Member's own</Status>}
         </div>
-        <p className="text-xs text-muted-foreground">{scopeSummary(token.scope).join(" · ")}</p>
+        <p className="text-xs text-muted-foreground">{scopeSummary(token.scope, token.member !== null).join(" · ")}</p>
         <p className="text-xs text-muted-foreground">
           {projects.length === 0
             ? "No project yet."
@@ -65,7 +71,8 @@ function TokenRow({ token, now, onRevoke }: { token: TokenView; now: number; onR
 }
 
 export function TeamPage() {
-  const { now, offset, snapshot, sessionExpired } = useData()
+  const { now, offset, snapshot, sessionExpired, identity } = useData()
+  const signedMember = isMember(identity)
   const actions = useSecretsActions()
   const announce = useAnnounce()
   const serverNow = now + offset
@@ -119,14 +126,16 @@ export function TeamPage() {
   const knownSlugs = snapshot?.sites.map((site) => site.slug) ?? []
   const team = loaded.state === "ready" ? loaded.team : null
   const live = team?.tokens.filter((token) => isLive(token, serverNow)).length ?? 0
+  const member = team?.member ?? null
 
   return (
     <>
       <PageHeader title="Team" actions={<SecretsLockControl />} />
       <PageBody>
         <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-          A token lets a colleague or an agent deploy over HTTPS with sitesolide deploy, without SSH and without root. Each one
-          deploys only the projects you grant it and the ones it creates, behind the portal unless you allow public sites.
+          {signedMember
+            ? "Your tokens let your CLI or an agent deploy over HTTPS with sitesolide deploy, without SSH. A token deploys only projects where you are a developer or a project admin, creates projects only if you may, and never does more than your roles do now."
+            : "A token lets a colleague or an agent deploy over HTTPS with sitesolide deploy, without SSH and without root. Each one deploys only the projects you grant it and the ones it creates, behind the portal unless you allow public sites. Members create their own, never beyond their roles."}
         </p>
 
         {loaded.state === "loading" && <PanelSkeleton lines={4} />}
@@ -154,12 +163,20 @@ export function TeamPage() {
           >
             {team.tokens.length === 0 ? (
               <EmptyState icon={KeySquare} title="No token yet">
-                Create one per person or agent. The token is shown once; its holder signs in with sitesolide login.
+                {member === null
+                  ? "Create one per person or agent. The token is shown once; its holder signs in with sitesolide login."
+                  : "Create one per workstation or agent. The token is shown once; sign in with sitesolide login."}
               </EmptyState>
             ) : (
               <ul className="divide-y divide-divider">
                 {team.tokens.map((token) => (
-                  <TokenRow key={token.id} token={token} now={serverNow} onRevoke={(chosen) => setRevoking({ token: chosen, open: true, inProgress: false, error: "" })} />
+                  <TokenRow
+                    key={token.id}
+                    token={token}
+                    now={serverNow}
+                    mine={member !== null}
+                    onRevoke={(chosen) => setRevoking({ token: chosen, open: true, inProgress: false, error: "" })}
+                  />
                 ))}
               </ul>
             )}
@@ -212,6 +229,7 @@ export function TeamPage() {
         open={creating.open}
         origin={window.location.origin}
         knownSlugs={knownSlugs}
+        member={member === null ? null : { roles: member.roles, create: member.create }}
         now={serverNow}
         onClose={() => setCreating((previous) => ({ ...previous, open: false }))}
         onCreated={() => void reload()}

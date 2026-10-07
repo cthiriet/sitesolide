@@ -20,11 +20,15 @@ import { auditWords } from "../src/lib/audit"
 import type { AuditRow, IdentityView } from "../src/lib/types"
 
 const OWNER: IdentityView = { kind: "owner" }
-const ALICE: IdentityView = { kind: "member", email: "alice@acme.test", name: null, roles: { blog: "developer", shop: "viewer", cms: "admin" }, expiresAt: 0 }
+const ALICE: IdentityView = { kind: "member", email: "alice@acme.test", name: null, roles: { blog: "developer", shop: "viewer", cms: "admin" }, create: false, expiresAt: 0 }
+/** A viewer everywhere, without the create right: nothing to mint. */
+const VIC: IdentityView = { kind: "member", email: "vic@acme.test", name: null, roles: { shop: "viewer" }, create: false, expiresAt: 0 }
 
 describe("what a member sees of the page", () => {
-  test("Sites and Activity, and in a site the sections their role there opens; the owner, every section but a project's Members", () => {
-    expect(machinePagesFor(ALICE).map((entry) => entry.name)).toEqual(["home", "activity"])
+  test("Sites, Activity, Team when they may mint a token, and in a site the sections their role there opens; the owner, every section but a project's Members", () => {
+    expect(machinePagesFor(ALICE).map((entry) => entry.name)).toEqual(["home", "activity", "team"])
+    expect(machinePagesFor(VIC).map((entry) => entry.name)).toEqual(["home", "activity"])
+    expect(machinePagesFor({ ...VIC, create: true } as IdentityView).map((entry) => entry.name)).toEqual(["home", "activity", "team"])
     expect(sectionsFor(ALICE, "shop").map((entry) => entry.section)).toEqual(["overview", "audience"])
     expect(sectionsFor(ALICE, "blog").map((entry) => entry.section)).toEqual(["overview", "audience", "secrets"])
     expect(sectionsFor(ALICE, "cms").map((entry) => entry.section)).toEqual(["overview", "audience", "secrets", "guests", "sharing", "access", "backups", "members"])
@@ -33,7 +37,10 @@ describe("what a member sees of the page", () => {
   })
 
   test("a page that is not theirs, reached by its address, says so", () => {
-    for (const path of ["/team/", "/members/", "/connectors/"]) expect(mayOpen(pageFromUrl(path), ALICE)).toBe(false)
+    for (const path of ["/members/", "/connectors/"]) expect(mayOpen(pageFromUrl(path), ALICE)).toBe(false)
+    // Their own tokens: a Developer or a Project admin somewhere, or the create right; never a viewer everywhere.
+    expect(mayOpen(pageFromUrl("/team/"), ALICE)).toBe(true)
+    expect(mayOpen(pageFromUrl("/team/"), VIC)).toBe(false)
     expect(mayOpen(pageFromUrl("/site/secrets/", "?s=shop"), ALICE)).toBe(false)
     expect(mayOpen(pageFromUrl("/site/secrets/", "?s=blog"), ALICE)).toBe(true)
     expect(mayOpen(pageFromUrl("/site/access/", "?s=blog"), ALICE)).toBe(false)
@@ -86,7 +93,10 @@ describe("the Members page", () => {
     expect(validateMemberForm("alice@acme.test", [{ slug: "blog", role: "viewer" }], ["acme.test"])).toEqual({})
     expect(validateMemberForm("alice", [{ slug: "blog", role: "viewer" }], [])).toMatchObject({ email: expect.any(String) })
     expect(validateMemberForm("eve@elsewhere.test", [{ slug: "blog", role: "viewer" }], ["acme.test"])).toMatchObject({ email: expect.stringContaining("acme.test") })
-    expect(validateMemberForm("alice@acme.test", [], [])).toMatchObject({ roles: expect.any(String) })
+    expect(validateMemberForm("alice@acme.test", [], [])).toMatchObject({ roles: "Give them a role on one project at least, or the right to create projects." })
+    // The right to create projects alone: someone who will create their own projects, none yet.
+    expect(validateMemberForm("alice@acme.test", [], [], true)).toEqual({})
+    expect(validateMemberForm("alice@acme.test", [{ slug: "", role: "viewer" }], [], true)).toEqual({})
     expect(validateMemberForm("alice@acme.test", [{ slug: "blog", role: "viewer" }, { slug: "blog", role: "admin" }], [])).toMatchObject({ roles: "A project appears twice." })
   })
 

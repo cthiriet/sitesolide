@@ -170,7 +170,15 @@ export type Operation =
   | "sharing"
   | "guest.create"
   | "guest.revoke"
-  | "backup.restore";
+  | "backup.restore"
+  // A member's own token created or revoked, or refused above their roles;
+  // the tokens of a member removed, revoked under who removed them; and a
+  // project a member's token created, which made them its Project admin.
+  | "token.create"
+  | "token.revoke"
+  | "project.create"
+  // A project removed from the machine: the name its token owned, free again.
+  | "project.remove";
 
 export type OperationResult = "ok" | "rejects" | "failure";
 

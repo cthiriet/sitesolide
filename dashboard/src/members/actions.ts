@@ -20,7 +20,10 @@
  * relay (portal.ts), with the member's email as actor: the dashboard never
  * names who acts. What a Project admin may share is a team token's rule: the
  * project's own site, people at any address, a domain only among those the
- * portal admits at sign-in, never public, which is the door, turned off.
+ * portal admits at sign-in, never public, which is the door, turned off. A
+ * team token's sharing takes the same road (`createSharing`, which the
+ * control routes call), the token as actor: the portal believes an actor
+ * other than `owner` from root alone.
  *
  * The routes, on the dashboard's socket:
  *
@@ -38,7 +41,7 @@
  *   POST   /members/guests            { session, slug, label, durationS }              -> the portal's answer  Project admin
  *   DELETE /members/guests            { session, id }                                  -> 204                  Project admin
  */
-import { domainRefusals, policyOf, readPortalSharing, readTokenPolicy } from "../control/sharing";
+import { domainMessage, domainRefusals, policyOf, readPortalSharing, readTokenPolicy } from "../control/sharing";
 import type { ProjectView, PortalView } from "../secrets/protocol";
 import { checkSite, type Site } from "../secrets/scope";
 import { machineRefusal, may, needsUnlock, powerRefusal, roleDetail, type Power } from "./powers";
@@ -134,8 +137,92 @@ function portalRefusal(status: number, body: unknown): Response {
   return Response.json({ error: code, message: `the portal refused: ${code}` }, { status: status >= 400 && status < 600 ? status : 502 });
 }
 
+export type SharingDependencies = Pick<MemberActionsDependencies, "portal" | "sites" | "portalOf" | "hostOf">;
+
+/** Who asks for a sharing: a Project admin through their session, or a team token through the control API. */
+export type Sharer = "member" | "token";
+
+export type Sharing = {
+  /** The project's site, behind the portal both in its manifest and in its block, and its host; or the refusal. */
+  portalSite: (slug: string, by: Sharer) => Promise<{ site: Site; host: string } | Response>;
+  /**
+   * The policy, judged by the portal's own rules and the token's rule for
+   * domains, then handed to the portal as root with `actor`. `onDomain`: a
+   * domain the portal does not admit refused, for the journal.
+   */
+  share: (slug: string, policy: Body, actor: string, by: Sharer, onDomain?: () => Promise<void>) => Promise<Response>;
+};
+
+/**
+ * Sharing a site from the steward, as root through the relay: for a Project
+ * admin's session (below) and for a team token (src/control/steward.ts). The
+ * caller has judged who may share this project; this judges the policy, the
+ * site and the domains, the same way for both.
+ */
+export function createSharing(dependencies: SharingDependencies): Sharing {
+  async function portalSite(slug: string, by: Sharer): Promise<{ site: Site; host: string } | Response> {
+    const found = checkSite(await dependencies.sites(), slug);
+    if ("refusal" in found) return fail(found.refusal.error, found.refusal.message);
+    const view = await dependencies.portalOf(found.site);
+    if (!view.requested || !view.installed) {
+      return fail(
+        "no-portal",
+        by === "member"
+          ? `${slug} is not behind the portal: everyone gets in already, and putting it behind the portal is its Access section's`
+          : `${slug} is not behind the portal, or its block in service does not carry it yet: everyone gets in already, and putting a site behind the portal is done from the dashboard's Access section`,
+      );
+    }
+    return { site: found.site, host: dependencies.hostOf(found.site.folder) };
+  }
+
+  async function share(slug: string, body: Body, actor: string, by: Sharer, onDomain?: () => Promise<void>): Promise<Response> {
+    const reading = readTokenPolicy(body);
+    if ("refusal" in reading) {
+      const message =
+        by === "member" && reading.refusal.code === "out-of-scope"
+          ? "public is not a sharing mode: making a site public turns its portal off, from its Access section"
+          : reading.refusal.message;
+      return fail(reading.refusal.code, message, reading.refusal.details);
+    }
+    const site = await portalSite(slug, by);
+    if (site instanceof Response) return site;
+    const portal = dependencies.portal;
+    if (portal === null) return fail("not-available", RELAY_MISSING);
+    const list = await asked(() => portal.sharing());
+    if (list instanceof Response) return list;
+    const known = list.status === 200 ? readPortalSharing(list.body) : null;
+    if (known === null) return fail("failure", "the portal's sharing list does not read: is the portal up to date?");
+    // Whoever shares did not choose the company's domains: the owner did, in
+    // OIDC_ALLOWED_DOMAINS. A domain they open must be one of those.
+    const refusals = domainRefusals(policyOf(known, site.host).policy, reading.policy, known.sso.allowedDomains);
+    if (refusals.length > 0) {
+      const allowed = known.sso.allowedDomains;
+      const message =
+        by === "token"
+          ? domainMessage(allowed)
+          : allowed.length === 0
+            ? "a project admin may open a site to no domain: the portal lets anyone its provider vouches for sign in, share with people by email instead"
+            : `a project admin may open a site only to the domains the portal admits at sign-in: ${allowed.join(", ")}`;
+      await onDomain?.();
+      return fail("out-of-scope", message, refusals);
+    }
+    const { mode, people, domains } = reading.policy;
+    const answer = await asked(() => portal.replaceSharing(site.host, { mode, people, domains, actor }));
+    if (answer instanceof Response) return answer;
+    if (answer.status === 200) return Response.json(answer.body);
+    if (by === "token" && answer.status === 400) {
+      const code = typeof answer.body === "object" && answer.body !== null && typeof (answer.body as Body).error === "string" ? ((answer.body as Body).error as string) : "no reason given";
+      return fail("invalid", `the portal refused this policy (${code}): nothing was changed`);
+    }
+    return portalRefusal(answer.status, answer.body);
+  }
+
+  return { portalSite, share };
+}
+
 export function createMemberActions(dependencies: MemberActionsDependencies): Routes {
   const { members, readBody, underLock, ops } = dependencies;
+  const sharingRoad = createSharing(dependencies);
 
   function roleOn(principal: MemberPrincipal, slug: string): Role | null {
     return Object.hasOwn(principal.roles, slug) ? principal.roles[slug]! : null;
@@ -205,17 +292,6 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
   const FILE = ["slug", "file"] as const;
   const VARIABLE = ["slug", "file", "variable"] as const;
 
-  /** The project's site, behind the portal both in its manifest and in its block, and its host; or the refusal. */
-  async function portalSite(slug: string): Promise<{ site: Site; host: string } | Response> {
-    const found = checkSite(await dependencies.sites(), slug);
-    if ("refusal" in found) return fail(found.refusal.error, found.refusal.message);
-    const view = await dependencies.portalOf(found.site);
-    if (!view.requested || !view.installed) {
-      return fail("no-portal", `${slug} is not behind the portal: everyone gets in already, and putting it behind the portal is its Access section's`);
-    }
-    return { site: found.site, host: dependencies.hostOf(found.site.folder) };
-  }
-
   async function sharing(req: Request): Promise<Response> {
     const body = await readBody(req, ["session", "slug", "mode", "people", "domains"]);
     if (body instanceof Response) return body;
@@ -224,38 +300,9 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
     const refusal = await judge(principal, body.slug, "sharing", "sharing");
     if (refusal !== null) return refusal;
     const slug = body.slug as string;
-    const reading = readTokenPolicy(only(body, ["mode", "people", "domains"]));
-    if ("refusal" in reading) {
-      const message =
-        reading.refusal.code === "out-of-scope"
-          ? "public is not a sharing mode: making a site public turns its portal off, from its Access section"
-          : reading.refusal.message;
-      return fail(reading.refusal.code, message, reading.refusal.details);
-    }
-    const site = await portalSite(slug);
-    if (site instanceof Response) return site;
-    const portal = dependencies.portal;
-    if (portal === null) return fail("not-available", RELAY_MISSING);
-    const list = await asked(() => portal.sharing());
-    if (list instanceof Response) return list;
-    const known = list.status === 200 ? readPortalSharing(list.body) : null;
-    if (known === null) return fail("failure", "the portal's sharing list does not read: is the portal up to date?");
-    // A Project admin did not choose the company's domains: the owner did, in
-    // OIDC_ALLOWED_DOMAINS. A domain they open must be one of those.
-    const refusals = domainRefusals(policyOf(known, site.host).policy, reading.policy, known.sso.allowedDomains);
-    if (refusals.length > 0) {
-      const allowed = known.sso.allowedDomains;
-      const message =
-        allowed.length === 0
-          ? "a project admin may open a site to no domain: the portal lets anyone its provider vouches for sign in, share with people by email instead"
-          : `a project admin may open a site only to the domains the portal admits at sign-in: ${allowed.join(", ")}`;
-      await members.journalRefusal({ operation: "sharing", result: "rejects", actor: principal.email, member: principal.email, slug, detail: "domain" });
-      return fail("out-of-scope", message, refusals);
-    }
-    const { mode, people, domains } = reading.policy;
-    const answer = await asked(() => portal.replaceSharing(site.host, { mode, people, domains, actor: principal.email }));
-    if (answer instanceof Response) return answer;
-    return answer.status === 200 ? Response.json(answer.body) : portalRefusal(answer.status, answer.body);
+    return sharingRoad.share(slug, only(body, ["mode", "people", "domains"]), principal.email, "member", () =>
+      members.journalRefusal({ operation: "sharing", result: "rejects", actor: principal.email, member: principal.email, slug, detail: "domain" }),
+    );
   }
 
   async function createGuest(req: Request): Promise<Response> {
@@ -265,7 +312,7 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
     if (principal instanceof Response) return principal;
     const refusal = await judge(principal, body.slug, "guests", "guest.create");
     if (refusal !== null) return refusal;
-    const site = await portalSite(body.slug as string);
+    const site = await sharingRoad.portalSite(body.slug as string, "member");
     if (site instanceof Response) return site;
     const portal = dependencies.portal;
     if (portal === null) return fail("not-available", RELAY_MISSING);

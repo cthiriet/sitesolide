@@ -5,8 +5,8 @@
  * | Role | Powers |
  * |---|---|
  * | Viewer | none: they see the project, the dashboard filters what they see |
- * | Developer | restart; list the secret files, names and metadata; write: create a declared file, set, replace or remove a variable, replace a whole file. Never a value read back |
- * | Project admin | everything a Developer has, and read a value or a file back, restore a file's previous version, the portal door, sharing, guests, backups and their restore, and the project's members, a role at most their own |
+ * | Developer | restart; list the secret files, names and metadata; write: create a declared file, set, replace or remove a variable, replace a whole file. Never a value read back. Deploy it with a token of their own |
+ * | Project admin | everything a Developer has, and read a value or a file back, restore a file's previous version, the portal door, sharing, guests, backups and their restore, and the project's members, a role at most their own. A token of theirs may also deploy it in the open, declare a domain for it, and let it reach outside hosts |
  *
  * Nothing here is a member's for the platform's own projects, the dashboard,
  * the portal and the others, nor for a file the machine keeps for root: those
@@ -28,12 +28,39 @@ export type Power =
   | "sharing"
   | "guests"
   | "backups"
-  | "members";
+  | "members"
+  | "deploy"
+  | "deploy.public"
+  | "deploy.domain"
+  | "deploy.outbound";
 
+/**
+ * `deploy` is what a member's own token does on a project: write its code,
+ * which a Developer already trusts with its secrets. The three others are
+ * what a token's scope may add to a deployment (src/control/protocol.ts,
+ * `Scope`): a site in the open is the door turned off, and a domain and the
+ * network outside widen what the project is; each is a Project admin's, as
+ * the door is.
+ */
 const POWERS: Readonly<Record<Role, readonly Power[]>> = {
   viewer: [],
-  developer: ["restart", "secrets.list", "secrets.write"],
-  admin: ["restart", "secrets.list", "secrets.write", "secrets.read", "secrets.restore", "door", "sharing", "guests", "backups", "members"],
+  developer: ["restart", "secrets.list", "secrets.write", "deploy"],
+  admin: [
+    "restart",
+    "secrets.list",
+    "secrets.write",
+    "secrets.read",
+    "secrets.restore",
+    "door",
+    "sharing",
+    "guests",
+    "backups",
+    "members",
+    "deploy",
+    "deploy.public",
+    "deploy.domain",
+    "deploy.outbound",
+  ],
 };
 
 /** The narrowest first: a role grants what every narrower one does. */
@@ -71,6 +98,10 @@ const WHAT: Readonly<Record<Power, string>> = {
   guests: "giving or revoking guest access takes a project admin",
   backups: "its backups and their restore are a project admin's",
   members: "giving people a role on it takes a project admin",
+  deploy: "deploying it takes a developer or a project admin",
+  "deploy.public": "deploying it in the open, without the portal, takes a project admin",
+  "deploy.domain": "declaring a domain for it takes a project admin",
+  "deploy.outbound": "letting it reach outside hosts takes a project admin",
 };
 
 /** The refusal, in English, shown as it stands. */

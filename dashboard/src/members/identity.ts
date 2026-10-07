@@ -54,7 +54,8 @@ export function readMemberIdentity(value: unknown): MemberIdentity | null {
     roles[slug] = role;
   }
   const name = typeof value.name === "string" ? value.name : null;
-  return { kind: "member", email: value.email, name, roles };
+  // A steward from before the create right says nothing of it: none.
+  return { kind: "member", email: value.email, name, roles, create: value.create === true };
 }
 
 export function createIdentityResolver(dependencies: IdentityDependencies): IdentityResolver & { forget: (hash: string) => void } {

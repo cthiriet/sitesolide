@@ -11,6 +11,8 @@
  * action without ever touching production, where a mistake here erases a site.
  */
 
+import { OWNER_SOCKET } from "./members";
+import { readCurlAnswer } from "./sharing";
 import { secretPath, projectPaths, systemUser, unitArgument } from "./unit";
 
 /**
@@ -190,6 +192,44 @@ export function leftToDo(slug: string, siteFolder: string | null): string[] {
     "if your workstation's vault holds a credential for it, delete that file too",
     "check what still mentions it: README, CLAUDE.md, your notes",
   ];
+}
+
+// --- the token that created it --------------------------------------------------------
+
+/**
+ * The steward's last word on a removed project: the team token that created
+ * it, if one did, no longer owns its name, so that another token may create a
+ * project of that name later. Root asks the steward's owner socket on the
+ * machine, the slug on standard input; the steward refuses while the machine
+ * still carries the project, so this comes once the folder is gone.
+ */
+export function ownershipReleaseCommand(): string {
+  return `sudo curl -sS --max-time 10 -X DELETE -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' --unix-socket ${OWNER_SOCKET} http://steward/team/project`;
+}
+
+export type OwnershipRelease =
+  | { kind: "released"; token: string }
+  | { kind: "none" }
+  /** A steward from before it, or one with no owner's socket: nothing released. */
+  | { kind: "outdated" }
+  | { kind: "failed"; reason: string };
+
+/** What the steward answered, read whole. Never thrown: the project is gone whatever this says. */
+export function readOwnershipRelease(done: { code: number; output: string; error: string }): OwnershipRelease {
+  if (done.code === 7) return { kind: "outdated" };
+  if (done.code !== 0) return { kind: "failed", reason: done.error.trim() || `exit ${done.code}` };
+  const answer = readCurlAnswer(done.output);
+  if (answer === null) return { kind: "failed", reason: "an answer this CLI cannot read" };
+  let body: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(answer.body);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) body = parsed as Record<string, unknown>;
+  } catch {
+    return { kind: "failed", reason: `the steward answered ${answer.status} with something this CLI cannot read` };
+  }
+  if (answer.status === 404 && body.message === "no such route") return { kind: "outdated" };
+  if (answer.status !== 200) return { kind: "failed", reason: typeof body.message === "string" ? body.message : `refused (${answer.status})` };
+  return typeof body.forgotten === "string" ? { kind: "released", token: body.forgotten } : { kind: "none" };
 }
 
 /**

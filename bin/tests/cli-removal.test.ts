@@ -5,6 +5,8 @@ import {
   removalSteps,
   removalActions,
   leftToDo,
+  ownershipReleaseCommand,
+  readOwnershipRelease,
   type RemovalStep,
   type ProjectToRemove,
 } from "../cli/removal";
@@ -209,5 +211,24 @@ describe("leftToDo", () => {
     // The machine's copy goes with the removal; one kept in the workstation's
     // vault, an API token a tool presents, would outlive the site unnoticed.
     expect(leftToDo("sample", null).join(" ")).toContain("vault");
+  });
+});
+
+describe("the token that created it", () => {
+  test("root asks the steward's owner socket, the slug on standard input, never on the command line", () => {
+    expect(ownershipReleaseCommand()).toBe(
+      "sudo curl -sS --max-time 10 -X DELETE -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' --unix-socket /run/sitesolide-steward-owner/owner.sock http://steward/team/project",
+    );
+  });
+
+  test("the steward's answers, read whole, never thrown", () => {
+    const ok = (body: object, status = 200) => ({ code: 0, output: `${JSON.stringify(body)}\n${status}\n`, error: "" });
+    expect(readOwnershipRelease(ok({ slug: "shop", forgotten: "aaaaaaaaaaaa" }))).toEqual({ kind: "released", token: "aaaaaaaaaaaa" });
+    expect(readOwnershipRelease(ok({ slug: "shop", forgotten: null }))).toEqual({ kind: "none" });
+    expect(readOwnershipRelease(ok({ error: "not-found", message: "no such route" }, 404))).toEqual({ kind: "outdated" });
+    expect(readOwnershipRelease({ code: 7, output: "", error: "curl: (7) Couldn't connect" })).toEqual({ kind: "outdated" });
+    expect(readOwnershipRelease(ok({ error: "busy", message: "shop is still on the machine" }, 409))).toEqual({ kind: "failed", reason: "shop is still on the machine" });
+    expect(readOwnershipRelease({ code: 255, output: "", error: "ssh: connect" })).toEqual({ kind: "failed", reason: "ssh: connect" });
+    expect(readOwnershipRelease({ code: 0, output: "garbage", error: "" }).kind).toBe("failed");
   });
 });

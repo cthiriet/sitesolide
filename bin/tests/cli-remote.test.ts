@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { apiOrigin, checkManifest, projectEntries, readRemote, readRemoteProject, remoteMode, TOKEN_FILE } from "../cli/remote";
+import { apiOrigin, checkManifest, describeIdentity, projectEntries, readRemote, readRemoteProject, remoteMode, TOKEN_FILE } from "../cli/remote";
 import { createFakeVm, type FakeVm } from "./e2e/fake-vm";
 import { CLI } from "./e2e/run";
 
@@ -439,5 +439,17 @@ describe("the pure parts", () => {
       "public/docs",
       "public/index.html",
     ]);
+  });
+});
+
+describe("the token held, in words", () => {
+  const identity = { id: "aaaaaaaaaaaa", label: "laptop", email: "ada@acme.test", expiresAt: null, scope: { slugs: ["alpha"], create: false, outbound: false, domain: false, public: false }, owned: [] };
+
+  test("a member's own says whose roles bound it; an owner's, and one from an older dashboard, say nothing of it", () => {
+    expect(describeIdentity({ ...identity, member: "ada@acme.test" }).at(-1)).toBe("   a member's own token: never more than ada@acme.test's roles on the dashboard, read at every request");
+    expect(describeIdentity({ ...identity, member: "ada@acme.test" })[1]).toBe("   may open no site to the public");
+    expect(describeIdentity({ ...identity, member: null })[1]).toBe("   may deploy private sites only");
+    expect(describeIdentity({ ...identity, member: null }).join("\n")).not.toContain("member");
+    expect(describeIdentity(identity).join("\n")).not.toContain("member");
   });
 });

@@ -61,6 +61,7 @@ import { GENERATOR_MARK, loopbackStateCommand, MARKER_DONE, unitOriginsCommand }
 import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
 import { sharingReadCommand, sharingWriteCommand } from "../../cli/sharing";
 import { membersReadCommand, membersWriteCommand } from "../../cli/members";
+import { ownershipReleaseCommand } from "../../cli/removal";
 
 export const TEST_HOST = "sample@invalid.local";
 
@@ -79,6 +80,8 @@ export const SWITCHES = {
   systemUnits: "system-units.json",
   portal: "portal.json",
   members: "members.json",
+  /** The steward's token ownership, `{ slug: tokenId }`, which a removal releases. */
+  owners: "owners.json",
   accounts: "accounts",
 } as const;
 
@@ -122,7 +125,7 @@ export type PortalState = {
 export type MembersState = {
   state: "current" | "old" | "down";
   signIn: { configured: boolean; allowedDomains: string[] };
-  members: { email: string; roles: Record<string, string>; invitedBy: string; createdAt: number; updatedAt: number }[];
+  members: { email: string; roles: Record<string, string>; create?: boolean; invitedBy: string; createdAt: number; updatedAt: number }[];
 };
 
 export const DEFAULT_MEMBERS: MembersState = { state: "current", signIn: { configured: true, allowedDomains: ["acme.test"] }, members: [] };
@@ -427,6 +430,21 @@ if (import.meta.main) {
     process.stdout.write(`${JSON.stringify({ members: current.members, signIn: current.signIn })}\n200\n`);
     process.exit(0);
   }
+  // The steward's owner socket again: a removed project's token ownership
+  // released, the slug on standard input, recorded with it.
+  if (command === ownershipReleaseCommand()) {
+    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
+    const body = await Bun.stdin.text();
+    record(`OWNERSHIP DELETE ${body}`);
+    const ownersFile = join(vm, SWITCHES.owners);
+    const owners = existsSync(ownersFile) ? (JSON.parse(readFileSync(ownersFile, "utf8")) as Record<string, string>) : {};
+    const { slug } = JSON.parse(body) as { slug: string };
+    const forgotten = Object.hasOwn(owners, slug) ? owners[slug]! : null;
+    delete owners[slug];
+    writeFileSync(ownersFile, JSON.stringify(owners));
+    process.stdout.write(`${JSON.stringify({ slug, forgotten })}\n200\n`);
+    process.exit(0);
+  }
   if (command === membersWriteCommand("PUT") || command === membersWriteCommand("DELETE")) {
     if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
     const method = command === membersWriteCommand("PUT") ? "PUT" : "DELETE";
@@ -434,7 +452,7 @@ if (import.meta.main) {
     record(`MEMBERS ${method} ${body}`);
     const current = registry();
     answerMembers(current.state);
-    const asked = JSON.parse(body) as { email: string; roles?: Record<string, string> };
+    const asked = JSON.parse(body) as { email: string; roles?: Record<string, string>; create?: boolean };
     const found = current.members.find((member) => member.email === asked.email);
     if (method === "DELETE") {
       if (found === undefined) {
@@ -453,8 +471,11 @@ if (import.meta.main) {
       process.exit(0);
     }
     const now = 1_791_000_000_000;
-    const member = { email: asked.email, roles: asked.roles ?? {}, invitedBy: "owner", createdAt: found?.createdAt ?? now, updatedAt: now };
-    const change = found === undefined ? "invite" : JSON.stringify(found.roles) === JSON.stringify(member.roles) ? "none" : "role";
+    // The right to create projects, as the steward keeps it: absent from the request, left as it stands.
+    const create = asked.create ?? found?.create ?? false;
+    const member = { email: asked.email, roles: asked.roles ?? {}, create, invitedBy: "owner", createdAt: found?.createdAt ?? now, updatedAt: now };
+    const same = found !== undefined && JSON.stringify(found.roles) === JSON.stringify(member.roles) && (found.create ?? false) === create;
+    const change = found === undefined ? "invite" : same ? "none" : "role";
     current.members = [...current.members.filter((one) => one.email !== asked.email), member];
     writeFileSync(membersFile, JSON.stringify(current));
     process.stdout.write(`${JSON.stringify({ member, change })}\n${change === "invite" ? 201 : 200}\n`);

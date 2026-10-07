@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
+  mintableProjects,
+  optionsAllowed,
+  validateMemberTokenForm,
   auditLine,
   deploymentLabel,
   deploymentTone,
@@ -115,5 +118,42 @@ describe("deployments and the audit", () => {
       "token:aaaaaaaaaaaa failed to deploy shop (install-failed)",
     )
     expect(auditLine({ actor: "system", action: "something.else", target: "x", detail: null })).toBe("system: something.else x")
+  })
+})
+
+describe("a member's own token", () => {
+  const roles = { alpha: "developer", beta: "admin", gamma: "viewer" } as const
+
+  test("the projects offered: where they are a developer or a project admin, sorted", () => {
+    expect(mintableProjects(roles)).toEqual([
+      { slug: "alpha", role: "developer" },
+      { slug: "beta", role: "admin" },
+    ])
+    expect(mintableProjects({ gamma: "viewer" })).toEqual([])
+  })
+
+  test("the options: a project admin of every project chosen, or a token that only creates", () => {
+    expect(optionsAllowed(roles, ["beta"], false)).toBe(true)
+    expect(optionsAllowed(roles, ["alpha", "beta"], false)).toBe(false)
+    expect(optionsAllowed(roles, [], true)).toBe(true)
+    expect(optionsAllowed(roles, [], false)).toBe(false)
+  })
+
+  test("a member's token opens no site to the public without the option, which says it better than private sites only", () => {
+    expect(scopeSummary({ slugs: ["alpha"], create: false, outbound: false, domain: false, public: false }, true)[0]).toBe("Opens no site to the public")
+    expect(scopeSummary({ slugs: ["alpha"], create: false, outbound: false, domain: false, public: false })[0]).toBe("Private sites only")
+  })
+
+  test("the form: a name, and something to deploy", () => {
+    expect(validateMemberTokenForm({ label: "", slugs: ["alpha"], create: false })).toHaveProperty("label")
+    expect(validateMemberTokenForm({ label: "laptop", slugs: [], create: false })).toHaveProperty("slugs")
+    expect(validateMemberTokenForm({ label: "laptop", slugs: [], create: true })).toEqual({})
+  })
+
+  test("the steward's refusal above their roles, without the fields' prefixes, under the projects when it is about them", () => {
+    const message = "scope.slugs: a@acme.test is a viewer on gamma: deploying it takes a developer or a project admin"
+    expect(tokenRefusal(403, { error: "out-of-scope", message })).toEqual({ field: "slugs", message: "a@acme.test is a viewer on gamma: deploying it takes a developer or a project admin" })
+    const options = "scope.public: a@acme.test is a developer on alpha: deploying it in the open, without the portal, takes a project admin"
+    expect(tokenRefusal(403, { error: "out-of-scope", message: options }).field).toBeNull()
   })
 })

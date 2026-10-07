@@ -10,7 +10,7 @@
  */
 import { duration } from "./format"
 import type { Tone } from "./tones"
-import type { AuditEntry, DeploymentState, Scope, TokenView } from "./types"
+import type { AuditEntry, DeploymentState, Role, Roles, Scope, TokenView } from "./types"
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -44,9 +44,13 @@ export function isLive(token: Pick<TokenView, "revokedAt" | "expiresAt">, now: n
   return token.revokedAt === null && (token.expiresAt === null || now < token.expiresAt)
 }
 
-/** What the token may do, in a few words: the door first, which is what the owner worries about. */
-export function scopeSummary(scope: Scope): string[] {
-  const parts = [scope.public ? "Public sites allowed" : "Private sites only"]
+/**
+ * What the token may do, in a few words: the door first, which is what the
+ * owner worries about. A member's token deploys its projects behind the door
+ * they have, in the open for one that is, and opens none without the option.
+ */
+export function scopeSummary(scope: Scope, member = false): string[] {
+  const parts = [scope.public ? "Public sites allowed" : member ? "Opens no site to the public" : "Private sites only"]
   if (scope.create) parts.push("Creates projects")
   if (scope.outbound) parts.push("Outbound network")
   if (scope.domain) parts.push("Own domains")
@@ -152,5 +156,42 @@ export function tokenRefusal(status: number, body: { error?: string; message?: s
     if (message.startsWith("email")) return { field: "email", message: "Enter the address of the person who will hold it." }
     if (message.startsWith("scope.slugs")) return { field: "slugs", message: message.replace(/^scope\.slugs: /, "") }
   }
+  // A member's token above their roles: the steward's words, each reason without its field's prefix.
+  if (status === 403 && /^scope\.[a-z]+: /.test(message)) {
+    return { field: message.startsWith("scope.slugs") ? "slugs" : null, message: message.replace(/scope\.[a-z]+: /g, "") }
+  }
   return { field: null, message }
+}
+
+// --- a member's own tokens ----------------------------------------------------------
+
+/**
+ * The projects a member's token may deploy: those where they are a Developer
+ * or a Project admin, sorted. The steward judges again; the page offers only
+ * these.
+ */
+export function mintableProjects(roles: Roles): { slug: string; role: Exclude<Role, "viewer"> }[] {
+  return Object.entries(roles)
+    .filter((entry): entry is [string, Exclude<Role, "viewer">] => entry[1] === "developer" || entry[1] === "admin")
+    .map(([slug, role]) => ({ slug, role }))
+    .sort((a, b) => a.slug.localeCompare(b.slug))
+}
+
+/**
+ * May a member's token carry the options, public sites, a domain, outbound
+ * network: only when they are Project admin of every project chosen; with
+ * none chosen, only for a token that creates, whose projects make them
+ * their Project admin.
+ */
+export function optionsAllowed(roles: Roles, slugs: readonly string[], create: boolean): boolean {
+  if (slugs.length === 0) return create
+  return slugs.every((slug) => Object.hasOwn(roles, slug) && roles[slug] === "admin")
+}
+
+/** What a member's form can see is wrong before sending: a name, and something to deploy. */
+export function validateMemberTokenForm(fields: { label: string; slugs: readonly string[]; create: boolean }): TokenErrors {
+  const errors: TokenErrors = {}
+  if (fields.label.trim() === "") errors.label = "Name the laptop, the workstation or the agent this token is for."
+  if (fields.slugs.length === 0 && !fields.create) errors.slugs = "Choose at least one project, or creating projects."
+  return errors
 }

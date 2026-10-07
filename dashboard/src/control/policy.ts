@@ -147,10 +147,19 @@ export type Door = { portal: boolean } | { refusal: string };
  * has none (a project being created, or one whose manifest is gone). The
  * machine's wins, as for `sitesolide deploy`; otherwise private unless the
  * token may go public and the manifest asks for it.
+ *
+ * `member`: a member's own token. An owner's token without the public
+ * permission deploys private sites only, an existing public one included: a
+ * stolen one publishes nothing. A member's token answers to the member's role
+ * instead (src/members/tokens.ts): the door of an existing project was
+ * decided by the owner or its Project admin, a deployment never changes it,
+ * and a Developer deploys the project as it stands, in the open if it is.
+ * What opens a door, a new project in the open or paths exempted from the
+ * portal, still takes the public permission, a Project admin's.
  */
-export function decideDoor(manifest: Manifest, scope: Scope, onMachine: boolean | null): Door {
+export function decideDoor(manifest: Manifest, scope: Scope, onMachine: boolean | null, member = false): Door {
   const portal = onMachine ?? (scope.public ? isProtected(manifest) : true);
-  if (!portal && !scope.public) {
+  if (!portal && !scope.public && !(member && onMachine === false)) {
     return { refusal: "this site is public on the machine, and your token may only deploy private sites: ask the owner of the machine" };
   }
   if (portal && !isApp(manifest)) {
@@ -179,11 +188,11 @@ export type ManifestDecision =
  * ask the owner, when docs/team.md promises a 403 that says to pick another
  * slug, and nothing the owner could grant would ever change the answer.
  */
-export function decideManifest(manifest: Manifest, scope: Scope, onMachine: boolean | null, zone: string): ManifestDecision {
+export function decideManifest(manifest: Manifest, scope: Scope, onMachine: boolean | null, zone: string, member = false): ManifestDecision {
   const reserved = reservedReason(manifest.slug, zone);
   if (reserved !== null) return { kind: "refused", error: "reserved", message: reserved };
   const refusals = scopeRefusals(manifest, scope, manifest.slug);
-  const door = decideDoor(manifest, scope, onMachine);
+  const door = decideDoor(manifest, scope, onMachine, member);
   if ("refusal" in door) refusals.push(door.refusal);
   if (refusals.length > 0 || "refusal" in door) return { kind: "refused", error: "invalid-manifest", details: refusals };
   return { kind: "allowed", portal: door.portal };

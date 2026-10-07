@@ -272,11 +272,12 @@ export function readMembers() {
   return callApi<MembersPageResponse & SecretsRefusal>("/api/members")
 }
 
-export function putMember(email: string, roles: Roles) {
+/** `create`: the right to create projects, granted or taken back with the roles. */
+export function putMember(email: string, roles: Roles, create: boolean) {
   return callApi<{ member: MemberView; change: "invite" | "role" | "none" } & SecretsRefusal>("/api/members/member", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, roles }),
+    body: JSON.stringify({ email, roles, create }),
   })
 }
 

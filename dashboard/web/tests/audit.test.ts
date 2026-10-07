@@ -180,6 +180,21 @@ describe("a row in words", () => {
   })
 })
 
+describe("a member's own tokens, in words", () => {
+  test("the steward's rows: a token created, refused above their roles, revoked, and a project created", () => {
+    const steward = (action: string, detail: Record<string, unknown>, actor = "ada@acme.test") => row({ source: "steward", actor, action, target: null, detail })
+    expect(auditWords(steward("token.create", { result: "ok", note: "abc: alpha" }))).toMatchObject({ summary: "Created a token of their own", note: "abc: alpha" })
+    expect(auditWords(steward("token.create", { result: "rejects", note: "scope.slugs: ..." }))).toMatchObject({ summary: "Tried to create a token above their roles", tone: "attention" })
+    expect(auditWords(steward("token.revoke", { result: "ok", note: "abc" }))).toMatchObject({ summary: "Revoked a token of their own" })
+    expect(auditWords(steward("token.revoke", { result: "ok", member: "ada@acme.test", note: "abc: gone" }, "owner"))).toMatchObject({ summary: "Revoked the tokens of ada@acme.test" })
+    expect(auditWords(steward("project.create", { result: "ok", note: "admin, created with token abc" }))).toMatchObject({ summary: "Created the project with a token, project admin of it" })
+  })
+
+  test("a deployment by a member's token names the member as whose it is", () => {
+    expect(actorLabel(row({ actor: "token:abc", action: "deploy.start", detail: { email: "ada@acme.test", member: "ada@acme.test" } }))).toBe("ada@acme.test (token:abc)")
+  })
+})
+
 describe("the detail, as text", () => {
   test("keys in words, nested objects flattened, lists joined, nothing left as an object", () => {
     expect(

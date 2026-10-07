@@ -32,6 +32,12 @@
  * at most their own, on a project where they are Project admin, under their
  * unlock; taking a role away needs no unlock, as for the super admin.
  *
+ * **The create right is the super admin's to grant**, per member, beside
+ * their roles. A member's own tokens (src/control/steward.ts) ask this file
+ * for the member's rights at every use, and for the project one of them
+ * creates, which makes the member its Project admin. A member removed takes
+ * their tokens with them: `revokeTokens`, once the registry is written.
+ *
  * The order of the checks is the order of the risk, as in src/secrets/steward.ts:
  * shape of the body, credential, registry, machine, writing.
  */
@@ -75,10 +81,12 @@ import {
   removeMember,
   removeProjectRole,
   roleOf,
-  rolesText,
+  recordCreation as creationRecorded,
+  rightsText,
   views,
   type Registry,
 } from "./registry";
+import { rightsOf, type MemberRights } from "./tokens";
 import { attemptWait, countAttempt, EMPTY_UNLOCKS, failed, grant, isUnlocked, revokeMember, revokeSession, unlockedUntil, type UnlockBook } from "./unlocks";
 import { dropMember, dropSession, encodeBook, findSession, openMemberSession, readBook, spendNonce, type SessionBook } from "./sessions";
 import type { MembersSystem } from "./system";
@@ -89,7 +97,20 @@ export type Routes = Record<string, Record<string, Handler>>;
 
 /** What the journal records of a member event: the actor this steward verified, never one a request named. */
 export type MemberEvent = {
-  operation: "member.invite" | "member.role" | "member.remove" | "member.signin" | "member.signin_failed" | "member.signout" | "unlock" | "lock";
+  operation:
+    | "member.invite"
+    | "member.role"
+    | "member.remove"
+    | "member.signin"
+    | "member.signin_failed"
+    | "member.signout"
+    | "unlock"
+    | "lock"
+    | "token.create"
+    | "token.revoke"
+    | "project.create"
+    | "project.remove"
+    | "sharing";
   result: "ok" | "rejects";
   actor: string;
   /** The member the event is about. */
@@ -99,8 +120,8 @@ export type MemberEvent = {
   slug?: string;
 };
 
-/** Who a member request comes from, as this steward verified it: their session, and their roles now. */
-export type MemberPrincipal = { email: string; roles: Roles; session: string };
+/** Who a member request comes from, as this steward verified it: their session, their roles and create right now. */
+export type MemberPrincipal = { email: string; roles: Roles; create: boolean; session: string };
 
 /**
  * A member's request refused by role before it reached anything: the journal
@@ -130,6 +151,14 @@ export type MemberRoutesDependencies = {
    * member removed while the restart waited behind another does not restart.
    */
   restart: (req: Request, slug: string, actor: string, allowed: () => Promise<boolean>) => Promise<Response>;
+  /**
+   * A member removed: every token of theirs revoked, journaled under `actor`
+   * (src/control/steward.ts, `revokeMember`). Called once the registry is
+   * written and this file's queue left, never from inside it: the control
+   * routes' queue may be waiting on this one for a creation. Absent, nothing
+   * to revoke, and their tokens are refused all the same.
+   */
+  revokeTokens?: (email: string, actor: string) => Promise<number>;
   random?: RandomSource;
   /** Failed sign-ins journaled per minute at most, so that a flood cannot push the journal's history out. */
   failuresPerMinute?: number;
@@ -152,6 +181,14 @@ export type MemberRoutes = {
   unlockedUntil: (session: unknown) => Promise<number | null>;
   /** A refusal for the journal, bounded per minute so that a flood cannot push its history out. */
   journalRefusal: (event: MemberEvent | RestartRefusal) => Promise<void>;
+  journal: (event: MemberEvent) => Promise<void>;
+  /** A member's rights as the registry reads now; null: no member; a Response: the registry does not read. */
+  rights: (email: string) => Promise<MemberRights | null | Response>;
+  /**
+   * A project a member's token creates: they become its Project admin, and
+   * the journal says so under their email. Null once recorded, or the refusal.
+   */
+  recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | null>;
 };
 
 export type KeyState = { kind: "ready"; publicKey: PublicKey } | { kind: "unavailable"; reason: string };
@@ -276,11 +313,17 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
     return Response.json(body);
   }
 
-  /** `asRoot`: the owner's socket, which only root opens, needs no unlock token. */
+  /**
+   * `asRoot`: the owner's socket, which only root opens, needs no unlock
+   * token. `create`, the right to create projects: true or false to grant or
+   * take it back, absent to leave it as it stands.
+   */
   function put(asRoot: boolean): Handler {
     return async (req) => {
-      const body = await readBody(req, asRoot ? ["email", "roles"] : ["token", "email", "roles"]);
+      const body = await readBody(req, asRoot ? ["email", "roles", "create"] : ["token", "email", "roles", "create"]);
       if (body instanceof Response) return body;
+      if (body.create !== undefined && typeof body.create !== "boolean") return fail("invalid", "create: true or false, or absent to leave it as it stands");
+      const create = body.create as boolean | undefined;
       if (!asRoot && !(await dependencies.isUnlocked(body.token))) return fail("locked", "locked, unlock again");
       return serially(async () => {
         if (!asRoot && !(await dependencies.isUnlocked(body.token))) return fail("locked", "locked, unlock again");
@@ -292,18 +335,19 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
         const kept = findMember(current, email)?.roles ?? {};
         const roles = readRoles(body.roles, { zone: dependencies.zone, exists: system.projectExists }, kept);
         if ("refusal" in roles) return fail("invalid", roles.refusal);
-        const result = putMember(current, email, roles, OWNER_ACTOR, system.now());
+        const result = putMember(current, email, roles, OWNER_ACTOR, system.now(), create);
         if ("refusal" in result) return fail("invalid", result.refusal);
         if (result.change !== "none") {
           await system.writeRegistry(encodeRegistry(result.registry));
+          const rights = rightsText(result.member.roles, result.member.create);
           await journal({
             operation: result.change === "invite" ? "member.invite" : "member.role",
             result: "ok",
             actor: OWNER_ACTOR,
             member: email,
-            detail: rolesText(roles),
+            detail: rights,
           });
-          console.log(`members: ${email} ${result.change === "invite" ? "invited" : "changed"}, ${rolesText(roles)}`);
+          console.log(`members: ${email} ${result.change === "invite" ? "invited" : "changed"}, ${rights}`);
         }
         const response: PutMemberResponse = { member: result.member, change: result.change };
         return Response.json(response, { status: result.change === "invite" ? 201 : 200 });
@@ -311,10 +355,24 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
     };
   }
 
+  /**
+   * Their tokens after them, outside this file's queue: see `revokeTokens`.
+   * A failure there is said and left: their tokens are refused anyway, the
+   * registry no longer naming them.
+   */
+  async function revokeTokensOf(email: string, actor: string): Promise<void> {
+    if (dependencies.revokeTokens === undefined) return;
+    try {
+      await dependencies.revokeTokens(email, actor);
+    } catch (e) {
+      console.error(`members: the tokens of ${email} not revoked (${errorName(e)}), refused all the same`);
+    }
+  }
+
   async function remove(req: Request): Promise<Response> {
     const body = await readBody(req, ["email"]);
     if (body instanceof Response) return body;
-    return serially(async () => {
+    const removed = await serially(async () => {
       const current = await registry();
       if (current instanceof Response) return current;
       const result = removeMember(current, body.email);
@@ -323,10 +381,13 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
       // Their sessions fall with them: the next request of any of them is refused.
       await system.writeBook(encodeBook(dropMember(await book(), result.member.email)));
       unlocks = revokeMember(unlocks, result.member.email);
-      await journal({ operation: "member.remove", result: "ok", actor: OWNER_ACTOR, member: result.member.email, detail: rolesText(result.member.roles) });
+      await journal({ operation: "member.remove", result: "ok", actor: OWNER_ACTOR, member: result.member.email, detail: rightsText(result.member.roles, result.member.create) });
       console.log(`members: ${result.member.email} removed`);
-      return Response.json({ member: result.member });
+      return result.member;
     });
+    if (removed instanceof Response) return removed;
+    await revokeTokensOf(removed.email, OWNER_ACTOR);
+    return Response.json({ member: removed });
   }
 
   // --- the member sessions -----------------------------------------------------------
@@ -340,7 +401,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
 
   function identityOf(current: Registry, email: string, name: string | null): MemberIdentity | null {
     const member = findMember(current, email);
-    return member === null ? null : { kind: "member", email, name, roles: { ...member.roles } };
+    return member === null ? null : { kind: "member", email, name, roles: { ...member.roles }, create: member.create };
   }
 
   async function signIn(req: Request): Promise<Response> {
@@ -377,7 +438,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
       }
       const opened = await openMemberSession(spent, claims.email, now, dependencies.random);
       await system.writeBook(encodeBook(opened.book));
-      await journal({ operation: "member.signin", result: "ok", actor: claims.email, member: claims.email, detail: rolesText(identity.roles) });
+      await journal({ operation: "member.signin", result: "ok", actor: claims.email, member: claims.email, detail: rightsText(identity.roles, identity.create) });
       const response: SignInResponse = { session: opened.token, expiresAt: opened.record.expiresAt, identity };
       return Response.json(response);
     });
@@ -453,7 +514,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
   async function authorize(session: unknown, unlock: unknown | null): Promise<MemberPrincipal | Response> {
     const found = await member(session);
     if (found instanceof Response) return found;
-    const principal: MemberPrincipal = { email: found.identity.email, roles: found.identity.roles, session: found.hash };
+    const principal: MemberPrincipal = { email: found.identity.email, roles: found.identity.roles, create: found.identity.create, session: found.hash };
     if (unlock === null) return principal;
     if (!(await isUnlocked(unlocks, found.hash, principal.email, unlock, system.now()))) {
       return fail("locked", "locked: unlock again, signing in once more with your provider");
@@ -480,7 +541,9 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
       return Response.json({ error: "too-many-attempts", message: "too many attempts, wait before unlocking again", wait: Math.ceil(wait / 1000) }, { status: 429 });
     }
     unlocks = countAttempt(unlocks, now);
-    if (!Object.values(found.identity.roles).some((role) => may(role, "secrets.write"))) {
+    // A member who may create projects unlocks to mint a token that does,
+    // whatever their roles.
+    if (!found.identity.create && !Object.values(found.identity.roles).some((role) => may(role, "secrets.write"))) {
       return fail("out-of-scope", `${email} is a viewer on every project: there is nothing to unlock`);
     }
 
@@ -607,7 +670,8 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
     if (body instanceof Response) return body;
     const asked = await projectAdmin(body.session, null, body.slug, "member.role");
     if (asked instanceof Response) return asked;
-    return serially(async () => {
+    let gone: { email: string; actor: string } | null = null;
+    const answer = await serially(async () => {
       const again = await projectAdmin(body.session, null, asked.slug, "member.role");
       if (again instanceof Response) return again;
       const { slug } = again;
@@ -619,6 +683,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
       if (result.removed) {
         await system.writeBook(encodeBook(dropMember(await book(), result.member.email)));
         unlocks = revokeMember(unlocks, result.member.email);
+        gone = { email: result.member.email, actor: again.principal.email };
       }
       await journal({
         operation: result.removed ? "member.remove" : "member.role",
@@ -630,6 +695,35 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
       });
       const response: ProjectMemberResponse = { member: projectView(result.member, slug), change: result.removed ? "remove" : "role" };
       return Response.json(response);
+    });
+    const removedMember = gone as { email: string; actor: string } | null;
+    if (removedMember !== null) await revokeTokensOf(removedMember.email, removedMember.actor);
+    return answer;
+  }
+
+  // --- a member's own tokens -----------------------------------------------------------
+
+  async function rights(email: string): Promise<MemberRights | null | Response> {
+    const current = await registry();
+    if (current instanceof Response) return current;
+    return rightsOf(current, email);
+  }
+
+  /**
+   * A project created by a member's token: its creator becomes Project admin
+   * of it, in the registry's queue, journaled as `project.create` under their
+   * email, the token in the detail.
+   */
+  function recordCreation(slug: string, email: string, tokenId: string): Promise<Response | null> {
+    return serially(async () => {
+      const current = await registry();
+      if (current instanceof Response) return current;
+      const result = creationRecorded(current, email, slug, system.now());
+      if ("refusal" in result) return fail("out-of-scope", result.refusal);
+      if (result.change !== "none") await system.writeRegistry(encodeRegistry(result.registry));
+      await journal({ operation: "project.create", result: "ok", actor: email, member: email, detail: `admin, created with token ${tokenId}`, slug });
+      console.log(`members: ${email} created ${slug} with token ${tokenId}, project admin of it`);
+      return null;
     });
   }
 
@@ -657,5 +751,8 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
       return found instanceof Response ? null : unlockedUntil(unlocks, found.hash, system.now());
     },
     journalRefusal,
+    journal: (event) => journal(event),
+    rights,
+    recordCreation,
   };
 }

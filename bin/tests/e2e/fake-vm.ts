@@ -65,6 +65,9 @@ export type FakeVm = {
   portal(): PortalState;
   /** Lays the steward's members registry `sitesolide members` finds on the owner socket, over the default: nobody, acme.test admitted. */
   setMembers(state: Partial<MembersState>): void;
+  /** The steward's token ownership, `{ slug: tokenId }`, as a removal finds and leaves it. */
+  setOwners(owners: Record<string, string>): void;
+  owners(): Record<string, string>;
   /** The members registry as it stands, after the writes accepted. */
   members(): MembersState;
   /** Lays a static account the machine already carries, with a system uid unless one is given. */
@@ -171,6 +174,13 @@ export function createFakeVm(): FakeVm {
     },
     setMembers(state) {
       writeFileSync(join(root, SWITCHES.members), JSON.stringify({ ...DEFAULT_MEMBERS, ...state }));
+    },
+    setOwners(owners) {
+      writeFileSync(join(root, SWITCHES.owners), JSON.stringify(owners));
+    },
+    owners() {
+      const file = join(root, SWITCHES.owners);
+      return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Record<string, string>) : {};
     },
     members() {
       const file = join(root, SWITCHES.members);

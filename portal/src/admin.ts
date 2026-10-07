@@ -17,12 +17,23 @@
  *
  * No shared secret: it would protect against nothing more, the only accounts
  * that reach this port being the ones that would hold it.
+ *
+ * ## Who may say who acts
+ *
+ * A change records its actor: `owner` by default, the dashboard's own calls.
+ * A Project admin's email or a team token's `token:<id>` is believed from
+ * root alone, recognised by the uid of the connection's other end
+ * (src/peer.ts): the steward, through its relay, and `sitesolide share` over
+ * the owner's SSH both run as root, the dashboard does not. A compromised
+ * dashboard can still change a site's sharing or guests, as the owner, as it
+ * always could; it can no longer write that someone else did.
  */
 import { generatePassword } from "../borrowed/password";
 import type { AuditStore, GuestStore, SharingStore } from "./database";
 import { isValidDuration, GUEST_PASSWORD_GROUPS, isValidId, cleanLabel, type Guest } from "./guests";
 import { guestHash, generateId, isValidHost } from "./gate";
 import type { Settings } from "./oidc";
+import { ROOT_UID, type CallerUid } from "./peer";
 import { cleanEmail, readPolicy, type Policy } from "./sharing";
 
 export type Admin = {
@@ -50,19 +61,25 @@ function isRelayed(req: Request): boolean {
   return req.headers.has("x-forwarded-for") || req.headers.has("x-portal-hote");
 }
 
+/**
+ * `callerUid`: whose account opened the connection, for the actor rule; the
+ * server reads it from the kernel. Without it nobody is root, and only `owner`
+ * is accepted, the safe failure.
+ */
 export function createAdmin(
   guests: GuestStore,
   clock: () => number = Date.now,
   tools: AdminTools = TOOLS,
   audit: AuditStore | null = null,
+  callerUid: CallerUid = () => null,
 ): Admin {
   /**
    * Who may see a site changes here as much as in the sharing: a guest access
    * is a door handed to one person. The actor is the caller's word, as for a
    * sharing: `owner` from the dashboard's own session, a Project admin's
    * email from the steward, which checked their role and speaks for them as
-   * root (dashboard/README.md, "Members"). The label is a name, never the
-   * password.
+   * root (dashboard/README.md, "Members"), and only root may name one. The
+   * label is a name, never the password.
    */
   function record(action: "guest.create" | "guest.revoke", guest: Guest, now: number, actor: string): void {
     if (audit === null) return;
@@ -100,8 +117,9 @@ export function createAdmin(
       } catch {
         return respond({ error: "unreadable-body" }, 400);
       }
-      const actor = readActor(body?.actor);
-      if (actor === null) return respond({ error: "invalid-actor" }, 400);
+      const reading = readActor(body?.actor, req, callerUid);
+      if ("refusal" in reading) return reading.refusal;
+      const { actor } = reading;
 
       const host = typeof body?.host === "string" ? body.host.toLowerCase() : "";
       if (!isValidHost(host)) return respond({ error: "invalid-host" }, 400);
@@ -136,17 +154,20 @@ export function createAdmin(
      */
     async remove(req, id) {
       if (isRelayed(req)) return respond({ error: "relayed-request" }, 403);
-      let actor: string | null = "owner";
+      let actor = "owner";
       const text = await req.text().catch(() => "");
       if (text !== "") {
+        let body: unknown;
         try {
-          const body: unknown = JSON.parse(text);
-          actor = typeof body === "object" && body !== null && !Array.isArray(body) ? readActor((body as { actor?: unknown }).actor) : null;
+          body = JSON.parse(text);
         } catch {
           return respond({ error: "unreadable-body" }, 400);
         }
+        if (typeof body !== "object" || body === null || Array.isArray(body)) return respond({ error: "invalid-actor" }, 400);
+        const reading = readActor((body as { actor?: unknown }).actor, req, callerUid);
+        if ("refusal" in reading) return reading.refusal;
+        actor = reading.actor;
       }
-      if (actor === null) return respond({ error: "invalid-actor" }, 400);
       const guest = isValidId(id) ? guests.list().find((one) => one.id === id) : undefined;
       if (guest === undefined || !guests.remove(id)) return respond({ error: "unknown-access" }, 404);
       record("guest.revoke", guest, clock(), actor);
@@ -190,14 +211,24 @@ export function ssoView(settings: Settings | null): SsoView {
 
 /**
  * Who made a change, as the caller says: `owner` by default, the one password
- * the dashboard knows, a `token:<id>` the dashboard relays for, or a member's
- * email, which the steward sends once it has checked their role. Anything
- * else is refused rather than written into the audit.
+ * the dashboard knows; a team token's `token:<id>` or a member's email, which
+ * the steward sends once it has judged the token or checked the role, and
+ * which only root may send: anyone else naming one is refused, 403
+ * `actor-not-root`, and nothing changes. Anything else is refused rather than
+ * written into the audit.
  */
-function readActor(actor: unknown): string | null {
-  if (actor === undefined || actor === "owner") return "owner";
-  if (typeof actor === "string" && /^token:[A-Za-z0-9_-]{1,64}$/.test(actor)) return actor;
-  return cleanEmail(actor);
+export function readActor(actor: unknown, req: Request, callerUid: CallerUid): { actor: string } | { refusal: Response } {
+  if (actor === undefined || actor === "owner") return { actor: "owner" };
+  const token = typeof actor === "string" && /^token:[A-Za-z0-9_-]{1,64}$/.test(actor) ? actor : null;
+  const named = token ?? cleanEmail(actor);
+  if (named === null) return { refusal: respond({ error: "invalid-actor" }, 400) };
+  const uid = callerUid(req);
+  if (uid !== ROOT_UID) {
+    // The kind of actor, never its value: an address is a person's.
+    console.warn(`admin: ${token === null ? "an email" : "a token"} named as actor by uid ${uid ?? "unknown"} refused: only root names who acts`);
+    return { refusal: respond({ error: "actor-not-root" }, 403) };
+  }
+  return { actor: named };
 }
 
 /** What changed between two lists, for the audit: the additions and the removals, not the whole list again. */
@@ -217,9 +248,10 @@ function difference(before: readonly string[], after: readonly string[]): { adde
  * nothing.
  */
 export function createSharingAdmin(
-  stores: { sharing: SharingStore; audit: AuditStore; settings: Settings | null },
+  stores: { sharing: SharingStore; audit: AuditStore; settings: Settings | null; callerUid?: CallerUid },
   clock: () => number = Date.now,
 ): SharingAdmin {
+  const callerUid: CallerUid = stores.callerUid ?? (() => null);
   return {
     list(req) {
       if (isRelayed(req)) return respond({ error: "relayed-request" }, 403);
@@ -237,10 +269,11 @@ export function createSharingAdmin(
       } catch {
         return respond({ error: "unreadable-body" }, 400);
       }
+      const named = readActor((body as { actor?: unknown } | null)?.actor, req, callerUid);
+      if ("refusal" in named) return named.refusal;
+      const { actor } = named;
       const reading = readPolicy(body);
       if ("error" in reading) return respond({ error: reading.error }, 400);
-      const actor = readActor((body as { actor?: unknown }).actor);
-      if (actor === null) return respond({ error: "invalid-actor" }, 400);
 
       const now = clock();
       const before: Policy = stores.sharing.get(host);

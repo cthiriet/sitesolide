@@ -8,7 +8,7 @@
  * route. That answer, and that one only, reads as `unavailable`: the API says
  * the machine does not carry it yet, the Team page says which script to run.
  */
-import type { CreateTokenRequest, DeployRequest, LogsRequest } from "./protocol";
+import type { CreateTokenRequest, DeployRequest, LogsRequest, SharingRequest } from "./protocol";
 
 export type ControlSteward = {
   listTokens: () => Promise<Response>;
@@ -19,6 +19,8 @@ export type ControlSteward = {
   deploy: (requested: DeployRequest) => Promise<Response>;
   deployment: (id: string) => Promise<Response>;
   logs: (requested: LogsRequest) => Promise<Response>;
+  /** A token's sharing, which the steward hands to the portal as root. */
+  share: (requested: SharingRequest) => Promise<Response>;
 };
 
 /**
@@ -47,6 +49,7 @@ export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_
     deploy: (requested) => call("POST", "/control/deploy", requested),
     deployment: (id) => call("GET", `/control/deployment?${new URLSearchParams({ id })}`),
     logs: (requested) => call("POST", "/control/logs", requested),
+    share: (requested) => call("PUT", "/control/sharing", requested),
   };
 }
 

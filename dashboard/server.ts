@@ -176,6 +176,7 @@ const memberRelay = createMemberRelay({
   secrets: localSteward(STEWARD_SOCKET),
   backups: localBackupSteward(STEWARD_SOCKET),
   providerName: members.providerName,
+  control: controlStore,
 });
 
 const routes = createRoutes(store, {
@@ -245,9 +246,9 @@ function long(
 /**
  * The routes a member's session may reach: their session, their sign-in and
  * sign-out, the snapshot and the audit, both filtered to their projects,
- * their restart, and a site's Secrets, Access, Sharing, Guests and Backups,
- * which `either()` sends to src/members/relay.ts, where the steward judges
- * each by role. Every other route is the super admin's: `owner()` answers a
+ * their restart, a site's Secrets, Access, Sharing, Guests and Backups, and
+ * their own tokens on the Team page, which `either()` sends to
+ * src/members/relay.ts, where the steward judges each by role. Every other route is the super admin's: `owner()` answers a
  * member 403 before its handler runs, and the handler itself reads the
  * owner's sessions alone (`ownerReader`), so that a route forgetting the
  * first still refuses a member. The control API is reached with a team
@@ -347,9 +348,11 @@ const server = Bun.serve({
     },
     "/api/connectors/grant": { PUT: owner((req, server) => long(req, server, connectors.setGrant)) },
 
-    "/api/team": { GET: owner(team.team) },
-    "/api/team/tokens": { POST: owner(team.createToken) },
-    "/api/team/revoke": { POST: owner(team.revokeToken) },
+    // The owner sees and revokes every token; a member, their own, minted
+    // within their roles and judged by the steward (src/members/relay.ts).
+    "/api/team": { GET: either(team.team, memberRelay.team) },
+    "/api/team/tokens": { POST: either(team.createToken, memberRelay.createToken) },
+    "/api/team/revoke": { POST: either(team.revokeToken, memberRelay.revokeToken) },
 
     // The control API. The archive streams for as long as it takes to arrive:
     // Bun's ten seconds of silence would cut a slow upload in the middle.

@@ -70,7 +70,7 @@ describe("the registry", () => {
     const invited = putMember({ members: [] }, "alice@acme.test", { blog: "developer" }, "owner", NOW);
     if ("refusal" in invited) throw new Error(invited.refusal);
     expect(invited.change).toBe("invite");
-    expect(invited.member).toEqual({ email: "alice@acme.test", roles: { blog: "developer" }, invitedBy: "owner", createdAt: NOW, updatedAt: NOW });
+    expect(invited.member).toEqual({ email: "alice@acme.test", roles: { blog: "developer" }, create: false, invitedBy: "owner", createdAt: NOW, updatedAt: NOW });
 
     const same = putMember(invited.registry, "alice@acme.test", { blog: "developer" }, "owner", NOW + 1);
     expect("change" in same && same.change).toBe("none");
@@ -83,13 +83,18 @@ describe("the registry", () => {
     expect(roleOf(changed.registry, "alice@acme.test", "notes")).toBeNull();
     expect(roleOf(changed.registry, "bob@acme.test", "shop")).toBeNull();
 
+    // Neither a role nor the right to create projects: no invitation; the right alone is one.
+    expect(putMember({ members: [] }, "bob@acme.test", {}, "owner", NOW)).toEqual({ refusal: "roles: give them a role on one project at least, or the right to create projects" });
+    expect(putMember({ members: [] }, "bob@acme.test", {}, "owner", NOW, false)).toMatchObject({ refusal: expect.any(String) });
+    expect(putMember({ members: [] }, "bob@acme.test", {}, "owner", NOW, true)).toMatchObject({ change: "invite", member: { roles: {}, create: true } });
+
     const removed = removeMember(changed.registry, "Alice@acme.test");
     expect("registry" in removed && removed.registry.members).toEqual([]);
     expect(removeMember(changed.registry, "bob@acme.test")).toEqual({ refusal: "bob@acme.test is not a member" });
   });
 
   test("reads back what it wrote, and a file that does not read is no registry", () => {
-    const registry: Registry = { members: [{ email: "alice@acme.test", roles: { blog: "viewer" }, invitedBy: "owner", createdAt: 1, updatedAt: 2 }] };
+    const registry: Registry = { members: [{ email: "alice@acme.test", roles: { blog: "viewer" }, create: false, invitedBy: "owner", createdAt: 1, updatedAt: 2 }] };
     expect(readRegistry(encodeRegistry(registry))).toEqual(registry);
     expect(readRegistry(null)).toEqual({ members: [] });
     expect(readRegistry("{")).toMatchObject({ unreadable: expect.any(String) });

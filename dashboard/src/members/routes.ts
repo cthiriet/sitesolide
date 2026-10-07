@@ -7,7 +7,7 @@
  *                                  `reauth=1`, a member's unlock, the provider made to ask again
  *   GET    /api/sso/complete       where the portal sends the browser back, with a code
  *   GET    /api/members            the Members page, the super admin's
- *   PUT    /api/members/member     invite, or change roles: unlocked, as creating a token
+ *   PUT    /api/members/member     invite, or change roles and the create right: unlocked, as creating a token
  *   DELETE /api/members/member     remove: no unlock, as revoking a token
  *   POST   /api/members/restart    a member's restart, judged by the steward
  *
@@ -191,7 +191,7 @@ export const MEMBERS_NOT_AVAILABLE = "The steward on this machine does not know 
 function identityView(identity: Identity): Record<string, unknown> {
   return identity.kind === "owner"
     ? { kind: "owner" }
-    : { kind: "member", email: identity.email, name: identity.name, roles: identity.roles, expiresAt: identity.expiresAt };
+    : { kind: "member", email: identity.email, name: identity.name, roles: identity.roles, create: identity.create, expiresAt: identity.expiresAt };
 }
 
 function relayRefusal(reached: Reached): Response {
@@ -417,7 +417,9 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
       if (body === null) return error(400, "invalid", "Unreadable request body.");
       const kept = tokens.read(open.hash);
       if (kept === null) return error(423, "locked", "Unlock first: inviting a member needs the dashboard password.");
-      const reached = await reach(() => steward.put({ token: kept.token, email: body.email as string, roles: body.roles as Roles }), [kept.token]);
+      // `create` passes only as a boolean: absent, the steward leaves the right as it stands.
+      const create = typeof body.create === "boolean" ? { create: body.create } : {};
+      const reached = await reach(() => steward.put({ token: kept.token, email: body.email as string, roles: body.roles as Roles, ...create }), [kept.token]);
       if (reached.kind === "received" && reached.status === 401 && reached.body.error === "locked") {
         if (tokens.read(open.hash)?.token === kept.token) tokens.forget(open.hash);
         return error(423, "locked", "Unlock first: inviting a member needs the dashboard password.");

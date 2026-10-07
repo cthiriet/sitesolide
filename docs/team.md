@@ -18,8 +18,12 @@ Two ways for a colleague to work on the machine, which do not overlap:
 | Signs in | to the dashboard, with their work account, through the portal's identity provider | nowhere: the CLI and the control API present it |
 | Sees | the projects the owner, or a project's Project admin, gave them a role on, in the dashboard | the projects it may deploy, through `sitesolide status` |
 | Does | by role, see below: from looking at a project to looking after all of it | deploys, reads logs, shares what it deploys |
-| Lasts | half a day per sign-in, until the owner removes them; an unlock ten minutes | until it expires or the owner revokes it |
-| In the audit | their email | `token:<id>` |
+| Lasts | half a day per sign-in, until the owner removes them; an unlock ten minutes | until it expires or is revoked; a member's, until its member is removed too |
+| In the audit | their email | `token:<id>`, and the member's email for a member's own |
+
+The two meet in one place: **a member mints tokens of their own**, from the
+*Team* page, never stronger than their roles. See [A member's own
+tokens](#a-members-own-tokens).
 
 A member holds a role on each of their projects:
 
@@ -31,13 +35,20 @@ A member holds a role on each of their projects:
 
 The machine itself stays the owner's: the platform's own projects, the
 dashboard and the portal among them, their settings, the preview locks, the
-tokens, the connectors and every member's roles on other projects.
+tokens of others, the connectors and every member's roles on other projects.
 
-A member never holds a password, a token or root. The owner invites them from
-the dashboard's *Members* page or with `sitesolide members add <email>
---project <slug> --role <viewer|developer|admin>` ([commands.md](commands.md#the-dashboards-members)),
-then sends them the line it prints: the dashboard's address, and to sign in
-with their work account. A Project admin invites on their own project, from
+**Creating projects is a right the owner grants per member**, beside their
+roles: the *Members* page's "May create projects", or `sitesolide members add
+<email> --may-create`, taken back with `sitesolide members remove <email>
+--may-create`. It may be all they hold, someone invited to create their own
+projects, none yet. A member who holds it mints a token that may create, and
+becomes Project admin of each project that token creates.
+
+A member never holds a password or root, and no token but those they mint
+themselves. The owner invites them from the dashboard's *Members* page or with
+`sitesolide members add <email> --project <slug> --role <viewer|developer|admin>`
+([commands.md](commands.md#the-dashboards-members)), then sends them the line it
+prints: the dashboard's address, and to sign in with their work account. A Project admin invites on their own project, from
 its *Members* section. An address outside the portal's `OIDC_ALLOWED_DOMAINS`
 is refused, as the portal would refuse it.
 
@@ -57,15 +68,61 @@ back unlocked for ten minutes, for their session alone. The owner unlocks with
 the dashboard's password, as before; neither unlock replaces the other, nor
 another member's.
 
-Tokens of a member's own, no stronger than their roles, come in a later
-release.
+## A member's own tokens
+
+A member deploys the way a team token does, with a token they mint
+themselves on the dashboard's *Team* page: for their workstation's CLI, for
+an agent. The steward judges it, never the dashboard, and **a member's token
+is never stronger than its member**:
+
+| A token of theirs | Takes |
+|---|---|
+| a project to deploy | a Developer or a Project admin role there |
+| creating projects | the create right the owner granted them; each project it creates makes them its Project admin |
+| deploying public sites, declaring a domain, outbound network | Project admin of every project the token reaches; with creating alone, what it creates is theirs to administer |
+
+A Viewer everywhere, without the create right, mints nothing, and sees no
+*Team* page.
+
+- **Minted under their own unlock**, the forced sign-in at the provider that
+  every secret write asks for: *Unlock to create*, then *New token*. The
+  dialog offers the projects where they are a Developer or a Project admin,
+  creating projects only with the right, and the options only for projects
+  they administer. The token carries their email, whatever is sent, and is
+  shown once, as the owner's are.
+- **Narrowed live.** The steward reads the members registry at every use of
+  the token, not only when it was minted: a role lowered to Viewer stops that
+  project's deployments at the next request, the create right taken back
+  stops new projects, and the options hold only while the member is Project
+  admin of every project the token reaches; one lowered turns them off for
+  the whole token, and the member mints another for what they still
+  administer. The installer reads the registry once more when it starts.
+- **An existing project keeps its door.** The portal of a deployed site is
+  turned on or off by its Project admin or the owner, never by a deployment:
+  a Developer's token deploys a project in the open as it stands, and opens
+  nothing. A new project goes behind the portal unless the token may deploy
+  public sites; exempting paths from the portal takes that option too.
+- **Sharing**, `sitesolide share`, takes the member's own power to share: a
+  Project admin's, on that project, now.
+- **Removed, a member's tokens go with them**: revoked by the steward at
+  once, under whoever removed them, and refused anyway, since the registry no
+  longer names them. Revoking one needs no unlock, from their *Team* page, or
+  the owner's, which lists every token, a member's own marked as such.
+- **Ten live tokens per member**, so that one member cannot fill the
+  machine's registry.
+
+Everything is audited under the person: the steward journals `token.create`
+and `token.revoke` under the member's email, and `project.create` for a
+project their token created; the dashboard's deployments, under
+`token:<id>`, name the member in their detail.
 
 ## What you get from the owner
 
 - the dashboard's address, `https://dashboard.<zone>`;
 - a token, `sst_...`, shown to the owner once when they created it on the
   dashboard's *Team* page. Keep it like a password: whoever holds it deploys
-  what it allows.
+  what it allows. A member of the dashboard mints their own instead, see
+  [A member's own tokens](#a-members-own-tokens).
 
 A token deploys only what the owner allowed when creating it: the existing
 projects they granted, and, if they allowed it, new projects, which are then
@@ -157,7 +214,11 @@ it in `sitesolide.json` to make it explicit.
 | `memory` above 1G, more than 6 services | never | one machine serves everyone |
 
 A project that already exists keeps the door the machine carries: the portal
-of a deployed site changes from the dashboard, never from a deployment.
+of a deployed site changes from the dashboard, never from a deployment. A
+token without the public permission does not deploy an existing public site
+either, so that a stolen one publishes nothing; a member's own token does,
+the door being its Project admin's choice, which the deployment leaves as it
+is.
 
 `connectors` needs no permission of the token: a manifest only asks for one,
 and nothing reaches it until the owner grants it to the project from the
@@ -212,14 +273,15 @@ sitesolide share --remove bob@acme.com
 sitesolide share --only-admins              # closed again, the lists kept for later
 ```
 
-The dashboard relays each change to the portal as its *Sharing* section does,
-and the portal records it in its audit under your token, `token:<id>`, never
-as the owner. It holds from the next request. What a token may share is
-narrower than what the owner may:
+The steward judges each change and hands it to the portal as root, through
+the relay a Project admin's sharing takes, and the portal records it in its
+audit under your token, `token:<id>`, never as the owner: the portal believes
+an actor other than the owner from root alone. It holds from the next
+request. What a token may share is narrower than what the owner may:
 
 | You may | You may not |
 |---|---|
-| share a project you may deploy, your own or one granted to you | share another token's project, which reads as unknown |
+| share a project you may deploy, your own or one granted to you; with a member's own token, one where the member is Project admin | share another token's project, which reads as unknown |
 | add or remove anyone, by their work email | open a site to a domain the portal does not admit at sign-in (`OIDC_ALLOWED_DOMAINS`); with no such list, to any domain at all |
 | open it to a domain the portal admits, close a domain, go back to the admins | make a site public: that is turning its portal off, the owner's, from *Access* |
 
@@ -269,9 +331,9 @@ curl -s -H "$AUTH" "$API/api/v1/deployments/<id>?after=0"
 
 | Code | Status | What to do |
 |---|---|---|
-| `unauthenticated` | 401 | the token is missing, unknown, expired or revoked: ask the owner |
+| `unauthenticated` | 401 | the token is missing, unknown, expired or revoked, or its member removed: ask the owner, or mint another if it is your own |
 | `too-many-attempts` | 429 | too many wrong tokens from your address: wait `wait` seconds |
-| `out-of-scope` | 403 | the token may not do this, a domain outside the ones the portal admits or `public` among them: the message says whom to ask |
+| `out-of-scope` | 403 | the token may not do this, a domain outside the ones the portal admits or `public` among them, or its member's role no longer allows it: the message says whom to ask |
 | `reserved` | 403 | the slug belongs to the platform: pick another |
 | `invalid-manifest` | 422 | fix every point of `details` |
 | `invalid` | 400 | the request itself is malformed |
@@ -300,3 +362,8 @@ message that says what to do.
   changed: deploy again in a moment.
 - **A project you created and can no longer deploy**: your token was revoked.
   Your projects stay on the machine; the owner grants them to your new token.
+  Once the owner removes one with `sitesolide remove`, its name is free
+  again: any token that may create projects may create one of that name.
+  A member's own token answers to their role instead: a project they created
+  is theirs to deploy as long as they are its Developer or Project admin, with
+  any token of theirs that names it.

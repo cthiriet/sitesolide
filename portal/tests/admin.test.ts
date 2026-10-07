@@ -141,10 +141,11 @@ const SETTINGS = readSettings(
   "https://portal.test-zone.invalid",
 ).settings!;
 
-function sharingAdmin(settings: Settings | null = SETTINGS) {
+/** `uid`: the account behind every connection, root unless a test says otherwise. */
+function sharingAdmin(settings: Settings | null = SETTINGS, uid: number | null = 0) {
   const sharing = memorySharing();
   const audit = memoryAudit();
-  return { sharing, audit, routes: createSharingAdmin({ sharing, audit, settings }, () => NOW) };
+  return { sharing, audit, routes: createSharingAdmin({ sharing, audit, settings, callerUid: () => uid }, () => NOW) };
 }
 
 function replacement(body: unknown, headers: Record<string, string> = {}): Request {
@@ -225,12 +226,30 @@ describe("the sharing policies", () => {
     expect(audit.events).toEqual([]);
   });
 
-  test("the actor is the owner unless the dashboard names an email or a token", async () => {
+  test("the actor is the owner unless root names an email or a token", async () => {
     const { audit, routes } = sharingAdmin();
     await routes.replace(replacement({ mode: "admins", actor: "token:abc_1" }), HOST);
     await routes.replace(replacement({ mode: "admins", actor: "Alice@acme.test" }), HOST);
     expect((await routes.replace(replacement({ mode: "admins", actor: "root; drop" }), HOST)).status).toBe(400);
     expect(audit.events.map((event) => event.actor)).toEqual(["token:abc_1", "alice@acme.test"]);
+  });
+
+  test("any account but root naming an email or a token is refused, and nothing changes", async () => {
+    // The dashboard's uid, and a connection whose owner could not be read.
+    for (const uid of [997, null]) {
+      const { audit, sharing, routes } = sharingAdmin(SETTINGS, uid);
+      for (const actor of ["alice@acme.test", "token:abc_1"]) {
+        const refused = await routes.replace(replacement({ mode: "domain", domains: ["acme.test"], actor }), HOST);
+        expect(refused.status).toBe(403);
+        expect(await refused.json()).toEqual({ error: "actor-not-root" });
+      }
+      expect(sharing.rows.size).toBe(0);
+      expect(audit.events).toHaveLength(0);
+      // The dashboard's own call, as the owner, goes through.
+      expect((await routes.replace(replacement({ mode: "admins" }), HOST)).status).toBe(200);
+      expect((await routes.replace(replacement({ mode: "admins", actor: "owner" }), HOST)).status).toBe(200);
+      expect(audit.events.map((event) => event.actor)).toEqual(["owner", "owner"]);
+    }
   });
 
   test("the audit reads by pages", async () => {
@@ -258,7 +277,8 @@ describe("the sharing policies", () => {
 });
 
 describe("the audit of guest accesses", () => {
-  function audited() {
+  /** `uid`: the account behind every connection, root unless a test says otherwise. */
+  function audited(uid: number | null = 0) {
     const store = memoryStore();
     const audit = memoryAudit();
     const routes = createAdmin(
@@ -266,8 +286,9 @@ describe("the audit of guest accesses", () => {
       () => NOW,
       { drawPassword: () => PASSWORD, drawId: () => "AAAAAAAAAAAAAAA0" },
       audit,
+      () => uid,
     );
-    return { routes, audit };
+    return { routes, audit, store };
   }
 
   test("giving an access records who it is for and until when, never the password", async () => {
@@ -294,6 +315,23 @@ describe("the audit of guest accesses", () => {
       ["bob@acme.test", "guest.create"],
       ["bob@acme.test", "guest.revoke"],
     ]);
+  });
+
+  test("only root names a Project admin as the actor: the dashboard naming one is refused, nothing given nor revoked", async () => {
+    const { routes, audit, store } = audited(997);
+    const given = await routes.create(creation({ ...VALID, actor: "bob@acme.test" }));
+    expect(given.status).toBe(403);
+    expect(await given.json()).toEqual({ error: "actor-not-root" });
+    expect(store.rows.size).toBe(0);
+    // As the owner, the dashboard's own word, it goes through.
+    expect((await routes.create(creation(VALID))).status).toBe(201);
+    const del = new Request("http://127.0.0.1:3026/admin/invites/AAAAAAAAAAAAAAA0", { method: "DELETE", body: JSON.stringify({ actor: "bob@acme.test" }) });
+    expect((await routes.remove(del, "AAAAAAAAAAAAAAA0")).status).toBe(403);
+    expect(store.rows.size).toBe(1);
+    // An access that does not exist answers the same refusal: the actor is judged first.
+    const unknown = new Request("http://127.0.0.1:3026/admin/invites/AAAAAAAAAAAAAAA9", { method: "DELETE", body: JSON.stringify({ actor: "bob@acme.test" }) });
+    expect((await routes.remove(unknown, "AAAAAAAAAAAAAAA9")).status).toBe(403);
+    expect(audit.events.map((event) => [event.actor, event.action])).toEqual([["owner", "guest.create"]]);
   });
 
   test("an actor the audit cannot record refuses the change, and records nothing", async () => {

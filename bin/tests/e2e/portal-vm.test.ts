@@ -600,6 +600,36 @@ describe("sitesolide remove also removes the block laid from the dashboard", () 
     expect(vm.logs()).toEqual([`READ ${SHOWCASE.slug}`]);
   });
 
+  test("for real, an open static site: gone, then its name released from the team token that created it", async () => {
+    vm = createFakeVm();
+    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
+    vm.setOwners({ [SHOWCASE.slug]: "aaaaaaaaaaaa", other: "bbbbbbbbbbbb" });
+    vm.acceptWrites();
+    const r = await run(project(SHOWCASE), ["remove", "--confirm", SHOWCASE.slug], { vm });
+    expect(r.code).toBe(0);
+    const logs = vm.logs();
+    // Once the folder is gone, never before: the steward refuses while the machine carries it.
+    const folder = logs.indexOf(`ACCEPTED sudo rm -rf /srv/sites/${SHOWCASE.slug}`);
+    const release = logs.indexOf(`OWNERSHIP DELETE {"slug":"${SHOWCASE.slug}"}`);
+    expect(folder).toBeGreaterThan(-1);
+    expect(release).toBeGreaterThan(folder);
+    expect(r.output).toContain(`${SHOWCASE.slug} created by token aaaaaaaaaaaa: its name is free again for another token`);
+    expect(vm.owners()).toEqual({ other: "bbbbbbbbbbbb" });
+    // Run again, as after a failure half way: nothing left to release, said so.
+    const again = await run(project(SHOWCASE), ["remove", "--confirm", SHOWCASE.slug], { vm });
+    expect(again.code).toBe(0);
+    expect(again.output).toContain(`no team token created ${SHOWCASE.slug}`);
+  });
+
+  test("a dry run says it would release the name, and asks the steward nothing", async () => {
+    vm = createFakeVm();
+    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
+    const r = await run(project(SHOWCASE), ["remove", "--confirm", SHOWCASE.slug, "--dry-run"], { vm });
+    expect(r.code).toBe(0);
+    expect(r.output).toContain(`[dry-run] release ${SHOWCASE.slug} from the team token that created it`);
+    expect(vm.logs().some((line) => line.startsWith("OWNERSHIP"))).toBe(false);
+  });
+
   test("an open static site has no block to remove", async () => {
     vm = createFakeVm();
     vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));

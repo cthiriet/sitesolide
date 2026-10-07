@@ -80,6 +80,7 @@ function MemberDialog({
 }) {
   const [email, setEmail] = useState(member?.email ?? "")
   const [rows, setRows] = useState<RoleRow[]>(() => (member === null ? [{ slug: projects[0] ?? "", role: "viewer" }] : rowsFromRoles(member.roles)))
+  const [create, setCreate] = useState(member?.create ?? false)
   const [errors, setErrors] = useState<MemberErrors>({})
   const [formError, setFormError] = useState("")
   const [inProgress, setInProgress] = useState(false)
@@ -98,14 +99,14 @@ function MemberDialog({
   async function save(event: SyntheticEvent) {
     event.preventDefault()
     if (inProgress) return
-    const faults = validateMemberForm(email, rows, member === null ? allowedDomains : [])
+    const faults = validateMemberForm(email, rows, member === null ? allowedDomains : [], create)
     setErrors(faults)
     setFormError("")
     if (faults.email !== undefined) return emailField.current?.focus()
     if (faults.roles !== undefined) return
     setInProgress(true)
     try {
-      const { status, body } = await putMember(email.trim().toLowerCase(), rolesFromRows(rows))
+      const { status, body } = await putMember(email.trim().toLowerCase(), rolesFromRows(rows), create)
       if (status === 401) {
         onClose()
         return onSessionExpired()
@@ -170,6 +171,9 @@ function MemberDialog({
 
           <fieldset aria-describedby={rolesId} className="grid gap-2">
             <legend className="mb-2 text-sm leading-none font-medium">Roles</legend>
+            {rows.length === 0 && (
+              <p className="text-xs text-muted-foreground">No project yet: they create their own, and become project admin of each.</p>
+            )}
             <ul className="grid gap-2">
               {rows.map((row, index) => (
                 <li key={index} className="flex items-center gap-2">
@@ -203,7 +207,7 @@ function MemberDialog({
                     variant="ghost"
                     size="icon-sm"
                     aria-label={`Take ${row.slug} off`}
-                    disabled={rows.length === 1}
+                    disabled={rows.length === 1 && !create}
                     onClick={() => setRows((before) => before.filter((_, at) => at !== index))}
                     className="text-muted-foreground max-md:size-10"
                   >
@@ -238,6 +242,24 @@ function MemberDialog({
               </p>
             )}
           </fieldset>
+
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-input px-3 py-2.5 transition-colors select-none hover:bg-muted has-checked:border-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring">
+            <input
+              type="checkbox"
+              checked={create}
+              onChange={(event) => {
+                setCreate(event.target.checked)
+                setErrors(({ roles: _, ...rest }) => rest)
+              }}
+              className="mt-0.5 size-4 accent-foreground"
+            />
+            <span className="grid gap-0.5">
+              <span className="text-sm font-medium">May create projects</span>
+              <span className="text-xs text-pretty text-muted-foreground">
+                With a token of their own that may create, they deploy new projects, behind the portal, and become project admin of what they create.
+              </span>
+            </span>
+          </label>
 
           {formError !== "" && <Banner tone="error">{formError}</Banner>}
 
@@ -278,7 +300,10 @@ function MemberRow({ member, now, onEdit, onRemove }: { member: MemberView; now:
     <li className="flex flex-wrap items-start gap-x-4 gap-y-2 px-4 py-3">
       <div className="grid min-w-0 flex-1 basis-64 gap-1">
         <span className="font-medium wrap-anywhere">{member.email}</span>
-        <p className="text-xs text-muted-foreground">{rolesSummary(member.roles)}</p>
+        <p className="text-xs text-muted-foreground">
+          {rolesSummary(member.roles)}
+          {member.create ? " · May create projects" : ""}
+        </p>
       </div>
       <span className="text-xs text-muted-foreground tabular-nums max-md:basis-full">
         invited {ago(now - member.createdAt)} by {member.invitedBy}

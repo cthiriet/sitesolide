@@ -454,6 +454,10 @@ const OPERATION_NAMES: Record<Operation, string> = {
   "guest.create": "Give guest access",
   "guest.revoke": "Revoke guest access",
   "backup.restore": "Restore backup",
+  "token.create": "Create token",
+  "token.revoke": "Revoke token",
+  "project.create": "Create project",
+  "project.remove": "Remove project",
 }
 
 /**

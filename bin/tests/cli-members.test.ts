@@ -10,6 +10,7 @@ import {
   membersWriteCommand,
   readMembersArguments,
   removedRoles,
+  rightsText,
   rolesText,
 } from "../cli/members";
 import { createFakeVm, type FakeVm } from "./e2e/fake-vm";
@@ -102,12 +103,35 @@ describe("members as the owner, over SSH to the steward's owner socket", () => {
     expect(machine.members().members[0]!.roles).toEqual({ blog: "admin" });
   });
 
+  test("--may-create grants the right to create projects, alone or with roles, and remove --may-create takes it back", async () => {
+    machine.acceptWrites();
+    machine.setMembers({ members: [{ email: "alice@acme.test", roles: { blog: "developer" }, invitedBy: "owner", createdAt: 1, updatedAt: 1 }] });
+    const granted = await owner(["members", "add", "alice@acme.test", "--may-create"]);
+    expect(granted.code).toBe(0);
+    expect(machine.logs()).toContain('MEMBERS PUT {"email":"alice@acme.test","roles":{"blog":"developer"},"create":true}');
+    expect(granted.output).toContain("-> alice@acme.test: blog: developer; may create projects");
+    expect((await owner(["members"])).output).toContain("alice@acme.test  blog: developer; may create projects");
+    // Roles changed without naming it: the right stays, the body says nothing of it.
+    expect((await owner(["members", "add", "alice@acme.test", "--project", "shop", "--role", "viewer"])).code).toBe(0);
+    expect(machine.logs().at(-1)).toBe('MEMBERS PUT {"email":"alice@acme.test","roles":{"blog":"developer","shop":"viewer"}}');
+    expect(machine.members().members[0]!.create).toBe(true);
+    const taken = await owner(["members", "remove", "alice@acme.test", "--may-create", "--json"]);
+    expect(taken.code).toBe(0);
+    expect(machine.logs().at(-1)).toBe('MEMBERS PUT {"email":"alice@acme.test","roles":{"blog":"developer","shop":"viewer"},"create":false}');
+    expect(events(taken.output).at(-1)).toMatchObject({ type: "result", create: false, roles: { blog: "developer", shop: "viewer" } });
+    // Someone new with the right alone.
+    const fresh = await owner(["members", "add", "carol@acme.test", "--may-create"]);
+    expect(fresh.code).toBe(0);
+    expect(fresh.output).toContain("carol@acme.test holds no project yet");
+    expect(fresh.output).toContain("-> carol@acme.test invited: no project; may create projects");
+  });
+
   test("remove takes the member off, and someone who is not one is said so", async () => {
     machine.acceptWrites();
     machine.setMembers({ members: [{ email: "alice@acme.test", roles: { blog: "viewer" }, invitedBy: "owner", createdAt: 1, updatedAt: 1 }] });
     const removed = await owner(["members", "remove", "alice@acme.test"]);
     expect(removed.code).toBe(0);
-    expect(removed.output).toContain("alice@acme.test removed: signed out of the dashboard");
+    expect(removed.output).toContain("alice@acme.test removed: signed out of the dashboard, their tokens revoked");
     expect(machine.logs()).toContain('MEMBERS DELETE {"email":"alice@acme.test"}');
     expect(machine.members().members).toEqual([]);
     const again = await owner(["members", "remove", "alice@acme.test", "--json"]);
@@ -185,6 +209,21 @@ describe("the decisions", () => {
     });
     expect(readMembersArguments(["members", "add", "a@acme.test", "--project", "../x", "--role", "viewer"])).toMatchObject({ error: "invalid" });
     expect(readMembersArguments(["members", "remove", "a@acme.test", "--role", "viewer"])).toMatchObject({ error: "usage" });
+  });
+
+  test("--may-create: with add, with remove, alone or beside projects, once", () => {
+    expect(readMembersArguments(["members", "add", "a@acme.test", "--may-create"])).toEqual({ action: "add", email: "a@acme.test", roles: {}, create: true });
+    expect(readMembersArguments(["members", "add", "a@acme.test", "--project", "blog", "--role", "viewer", "--may-create"])).toEqual({
+      action: "add",
+      email: "a@acme.test",
+      roles: { blog: "viewer" },
+      create: true,
+    });
+    expect(readMembersArguments(["members", "remove", "a@acme.test", "--may-create"])).toEqual({ action: "remove", email: "a@acme.test", projects: [], create: false });
+    expect(readMembersArguments(["members", "add", "a@acme.test", "--may-create", "--may-create"])).toMatchObject({ error: "usage" });
+    expect(readMembersArguments(["members", "add", "a@acme.test", "--project", "blog", "--may-create"])).toMatchObject({ error: "usage" });
+    expect(rightsText({ blog: "viewer" }, true)).toBe("blog: viewer; may create projects");
+    expect(rightsText({ blog: "viewer" }, undefined)).toBe("blog: viewer");
   });
 
   test("roles merged and taken off, in words", () => {

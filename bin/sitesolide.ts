@@ -160,6 +160,8 @@ import {
 } from "./cli/portal-vm";
 import {
   isValidConfirmation,
+  ownershipReleaseCommand,
+  readOwnershipRelease,
   removalSteps,
   leftToDo,
 } from "./cli/removal";
@@ -2537,10 +2539,19 @@ async function remove(
   await rebuildProjectPorts(config, executor, "follow");
 
   releaseCaddyLock();
+  step("token ownership, on the steward");
   if (executor.simulated) {
+    say(`   [dry-run] release ${slug} from the team token that created it, if one did: the steward's owner socket`);
     say("-> dry run, nothing was removed");
     return;
   }
+  // The project is gone whatever the steward says: a refusal here is said, and
+  // running this command again, which tolerates every absence, finishes it.
+  const release = readOwnershipRelease(await executor.execute(config, ownershipReleaseCommand(), JSON.stringify({ slug })));
+  if (release.kind === "released") say(`   ${slug} created by token ${release.token}: its name is free again for another token`);
+  else if (release.kind === "none") say(`   no team token created ${slug}`);
+  else if (release.kind === "outdated") warn(`the steward on the server keeps no record to release, or predates it: run sitesolide upgrade, then this command again, if a team token created ${slug}`);
+  else warn(`the steward kept ${slug} as its team token's (${release.reason}): run this command again`);
 
   say("");
   say("-> gone from the machine. What is left, and this command will not do it:");
@@ -2831,8 +2842,10 @@ function usage(zone: string | null): string {
     "  sitesolide members              who signs in to the dashboard with a work account, on which projects",
     "     add <email> --project <slug> --role <viewer|developer|admin>",
     "                                  invite them, or set their role; repeat --project and --role",
+    "     add <email> --may-create     let them create projects, with a token of their own",
     "     remove <email> [--project <slug>]",
-    "                                  take them off, signed out at once, or take projects off them",
+    "                                  take them off, signed out, their tokens revoked, or take projects off them",
+    "     remove <email> --may-create  take the right to create projects back",
     "  sitesolide lock   [--dry-run]   close the preview behind a code, or show it",
     "     --status                     wanted / installed / measured, without touching",
     "     --new-code                   replace the code in force by a fresh one",
@@ -2841,7 +2854,7 @@ function usage(zone: string | null): string {
     "     --activate [--force]         switch the site onto it, then rebuild the table",
     "     --deactivate                 back to the preview subdomain",
     "  sitesolide remove --confirm <slug>",
-    "                                  take the project off the machine, for good",
+    "                                  take the project off the machine, for good, its name freed from the token that created it",
     "     --dry-run                    show every step, remove nothing",
     "  sitesolide run -- <command>     load the secret from the vault and run",
     "  sitesolide mcp                  serve these commands to an agent, over MCP on stdio",

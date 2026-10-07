@@ -3,6 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readPrivateKey, signAssertion } from "../borrowed/assertion";
+import { INSTALLER_TEMPLATE } from "../src/control/protocol";
+import { createControlSteward, isControlPath, type ControlHandler } from "../src/control/steward";
+import { createControlSystem } from "../src/control/system";
 import type { PortalAdmin } from "../src/members/portal";
 import { createMembersSystem } from "../src/members/system";
 import { createSteward, type StewardHandler } from "../src/secrets/steward";
@@ -34,6 +37,10 @@ function freePort(): number {
 
 let root: string;
 let steward: StewardHandler;
+/** The control routes beside it, as dashboard/steward.ts mounts them: tokens, a member's own included. */
+let control: ControlHandler;
+/** What the steward asked of the installer: the requests it wrote. */
+const installs: string[] = [];
 let socketServer: ReturnType<typeof Bun.serve>;
 let portalServer: ReturnType<typeof Bun.serve>;
 let dashboard: ReturnType<typeof Bun.spawn>;
@@ -279,12 +286,24 @@ beforeAll(async () => {
         system: createMembersSystem({ stateFolder: state, sitesDir: sites, secretsFolder: secrets, portalKeyFolder: join(root, "portal-key"), groupsFile: join(root, "group"), portalGroup: "" }),
         zone: ZONE,
         portal: relayTo(() => PORTAL),
+        revokeTokens: (email, actor) => control.revokeMember(email, actor),
       },
     },
   );
   await steward.ensureMemberKeys();
+  writeFileSync(join(units, INSTALLER_TEMPLATE), "[Service]\n");
+  control = createControlSteward(
+    {
+      ...createControlSystem({ stateFolder: state, sitesDir: sites, unitsFolder: units, installerFolder: folder("installer"), systemctl: "/bin/false", journalctl: "/bin/false" }),
+      systemctl: async (arguments_) => {
+        if (arguments_[0] === "start") installs.push(arguments_.at(-1)!);
+        return arguments_[0] === "is-active" ? { code: 3, output: "inactive\n" } : { code: 0, output: "" };
+      },
+    },
+    { zone: ZONE, isUnlocked: steward.isUnlocked, uidRoot: null, members: steward.memberAuthority!, share: steward.shareForToken },
+  );
   const socket = join(root, "steward.sock");
-  socketServer = Bun.serve({ unix: socket, fetch: (req) => steward(req) });
+  socketServer = Bun.serve({ unix: socket, fetch: (req) => (isControlPath(new URL(req.url).pathname) ? control(req) : steward(req)) });
 
   portalServer = startPortal();
   PORTAL = `http://127.0.0.1:${portalServer.port}`;
@@ -350,7 +369,7 @@ describe("a member, end to end", () => {
 
   test("cannot open the super admin's pages, whatever the route", async () => {
     const { browser } = await signInAs(ALICE);
-    for (const path of ["/api/team", "/api/members", "/api/connectors", "/api/portal/audit"]) {
+    for (const path of ["/api/members", "/api/connectors", "/api/portal/audit"]) {
       const response = await browser.api(path);
       expect([path, response.status]).toEqual([path, 403]);
       expect(await response.json()).toMatchObject({ error: "owner-only" });
@@ -428,6 +447,16 @@ describe("the owner, beside the members", () => {
     expect(locked.status).toBe(423);
     // The member's restart route is a member's: the owner restarts from Secrets, unlocked.
     expect((await browser.api("/api/members/restart", { method: "POST", body: { slug: "blog" } })).status).toBe(403);
+
+    // Unlocked, the Members page saves someone with the right to create projects alone, and no one with neither.
+    expect((await browser.api("/api/secrets/unlock", { method: "POST", body: { password: PASSWORD } })).status).toBe(200);
+    const creator = await browser.api("/api/members/member", { method: "PUT", body: { email: "erin@acme.test", roles: {}, create: true } });
+    expect(creator.status).toBe(201);
+    expect(await creator.json()).toMatchObject({ change: "invite", member: { email: "erin@acme.test", roles: {}, create: true } });
+    const neither = await browser.api("/api/members/member", { method: "PUT", body: { email: "frank@acme.test", roles: {}, create: false } });
+    expect(neither.status).toBe(400);
+    expect(((await neither.json()) as { message: string }).message).toBe("roles: give them a role on one project at least, or the right to create projects");
+    expect((await asRoot("DELETE", "/members/member", { email: "erin@acme.test" })).status).toBe(200);
   });
 });
 
@@ -537,5 +566,84 @@ describe("a member's secrets, door and project, end to end", () => {
     expect(refused.status).toBe(403);
     expect((await browser.api("/api/members/project?slug=blog")).status).toBe(403);
     expect((await browser.api("/api/members/project", { method: "DELETE", body: { slug: "shop", email: "erin@acme.test" } })).status).toBe(200);
+  });
+});
+
+describe("a member's own tokens, end to end", () => {
+  /** The control API, as the CLI or an agent calls it, with a bearer. */
+  const api = (path: string, bearer: string, init: { method?: string; body?: unknown } = {}) =>
+    fetch(`${DASHBOARD}${path}`, {
+      method: init.method ?? "GET",
+      headers: { Authorization: `Bearer ${bearer}`, "Content-Type": "application/json" },
+      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+    });
+
+  test("minted on the Team page under their own unlock, within their roles, and narrowed with them", async () => {
+    const carol = "carol@acme.test";
+    expect((await asRoot("PUT", "/members/member", { email: carol, roles: { blog: "developer", shop: "admin" } })).status).toBe(201);
+    const { browser } = await signInAs(carol);
+
+    // Their Team page: their tokens alone, and what they may mint them for.
+    const page = (await (await browser.api("/api/team")).json()) as { member: unknown; tokens: unknown[] };
+    expect(page).toMatchObject({ member: { email: carol, roles: { blog: "developer", shop: "admin" }, create: false }, tokens: [] });
+
+    const mint = (scope: Record<string, unknown>) =>
+      browser.api("/api/team/tokens", { method: "POST", body: { label: "laptop", expiresAt: null, scope: { slugs: [], create: false, outbound: false, domain: false, public: false, ...scope } } });
+    // Locked: the forced sign-in first.
+    expect((await mint({ slugs: ["blog"] })).status).toBe(423);
+    await unlockAs(browser, carol, "/team/");
+
+    const created = await mint({ slugs: ["blog"] });
+    expect(created.status).toBe(201);
+    const { token, secret } = (await created.json()) as { token: { id: string; email: string; member: string }; secret: string };
+    expect(token).toMatchObject({ email: carol, member: carol });
+
+    // Above their roles, the steward's words: the options are a Project admin's.
+    const above = await mint({ slugs: ["blog"], public: true });
+    expect(above.status).toBe(403);
+    expect(((await above.json()) as { message: string }).message).toBe(`scope.public: ${carol} is a developer on blog: deploying it in the open, without the portal, takes a project admin`);
+    expect((await mint({ create: true })).status).toBe(403);
+    // Within: the options where they are Project admin.
+    expect((await mint({ slugs: ["shop"], outbound: true })).status).toBe(201);
+
+    // The token works over the control API, as the member's, narrowed to their roles.
+    const who = (await (await api("/api/v1/whoami", secret)).json()) as { identity: { member: string; scope: { slugs: string[] } } };
+    expect(who.identity).toMatchObject({ member: carol, scope: { slugs: ["blog"] } });
+    // blog is in the open on the machine: a Developer's token deploys it as it stands.
+    const opened = await api("/api/v1/deployments", secret, { method: "POST", body: { manifest: { slug: "blog", start: "/usr/local/bin/bun run server.ts", port: 3040, publicDir: "public", secrets: ["blog.env"] } } });
+    expect(opened.status).toBe(201);
+
+    // Lowered to viewer on blog: the next deployment is refused by the steward, in its words.
+    await asRoot("PUT", "/members/member", { email: carol, roles: { blog: "viewer", shop: "admin" } });
+    const narrowed = (await (await api("/api/v1/whoami", secret)).json()) as { identity: { scope: { slugs: string[] } } };
+    expect(narrowed.identity.scope.slugs).toEqual([]);
+    const refused = await api("/api/v1/deployments", secret, { method: "POST", body: { manifest: { slug: "blog", start: "/usr/local/bin/bun run server.ts", port: 3040, publicDir: "public", secrets: ["blog.env"] } } });
+    expect(refused.status).toBe(403);
+    expect(((await refused.json()) as { message: string }).message).toBe(`${carol} is a viewer on blog: deploying it takes a developer or a project admin`);
+
+    // Their own list, and the owner's: every token, with whose it is.
+    const listed = (await (await browser.api("/api/team")).json()) as { tokens: { id: string }[] };
+    expect(listed.tokens).toHaveLength(2);
+    expect(listed.tokens.map((one) => one.id)).toContain(token.id);
+
+    // Removed: every token of theirs refused, revoked under the owner.
+    expect((await asRoot("DELETE", "/members/member", { email: carol })).status).toBe(200);
+    const gone = await api("/api/v1/whoami", secret);
+    expect(gone.status).toBe(401);
+    const all = (await (await control(new Request("http://steward/team/tokens"))).json()) as { tokens: { member: string | null; revokedAt: number | null }[] };
+    expect(all.tokens.filter((one) => one.member === carol).every((one) => one.revokedAt !== null)).toBe(true);
+    expect(installs).toEqual([]);
+  });
+
+  test("a viewer everywhere has no Team page of their own to mint from", async () => {
+    const dave = "dave@acme.test";
+    await asRoot("PUT", "/members/member", { email: dave, roles: { blog: "viewer" } });
+    const { browser } = await signInAs(dave);
+    const page = (await (await browser.api("/api/team")).json()) as { member: { create: boolean } };
+    expect(page.member.create).toBe(false);
+    const refused = await browser.api("/api/team/tokens", { method: "POST", body: { label: "x", expiresAt: null, scope: { slugs: ["blog"], create: false, outbound: false, domain: false, public: false } } });
+    // No unlock to hold for a viewer: locked before anything else.
+    expect(refused.status).toBe(423);
+    await asRoot("DELETE", "/members/member", { email: dave });
   });
 });
