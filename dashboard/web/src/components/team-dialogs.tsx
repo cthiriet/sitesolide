@@ -67,7 +67,7 @@ function Field({ id, labelText, help, error, children }: { id: string; labelText
 /** One permission: a checkbox, what it allows, and what it costs. */
 function Permission({ checked, onChange, title, children }: { checked: boolean; onChange: (next: boolean) => void; title: string; children: ReactNode }) {
   return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-input px-3 py-2.5 transition-colors select-none hover:bg-muted has-checked:border-foreground has-focus-visible:ring-3 has-focus-visible:ring-ring/50">
+    <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-input px-3 py-2.5 transition-colors select-none hover:bg-muted has-checked:border-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring">
       <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="mt-0.5 size-4 accent-foreground" />
       <span className="grid gap-0.5">
         <span className="text-sm font-medium">{title}</span>
@@ -270,7 +270,7 @@ export function CreateTokenDialog({
                 {EXPIRY_CHOICES.map((choice) => (
                   <label
                     key={choice.label}
-                    className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-input px-2 text-sm whitespace-nowrap transition-colors select-none hover:bg-muted has-checked:border-foreground has-checked:bg-muted has-checked:font-medium has-checked:ring-1 has-checked:ring-foreground has-focus-visible:ring-3 has-focus-visible:ring-ring/50 sm:h-9"
+                    className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-input px-2 text-sm whitespace-nowrap transition-colors select-none hover:bg-muted has-checked:border-foreground has-checked:bg-muted has-checked:font-medium has-checked:ring-1 has-checked:ring-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring sm:h-9"
                   >
                     <input type="radio" name={expiryId} checked={expiry === choice.days} onChange={() => setExpiry(choice.days)} className="sr-only" />
                     {choice.label}

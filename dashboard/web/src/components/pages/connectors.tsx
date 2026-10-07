@@ -84,7 +84,7 @@ function SiteLink({ slug, known }: { slug: string | null; known: ReadonlySet<str
   return (
     <InternalLink
       href={siteUrl(slug)}
-      className="rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+      className="rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
     >
       {slug}
     </InternalLink>
@@ -404,7 +404,7 @@ function ConnectorsPanel({
           Add one to lend a credential to a project without putting it in its code, its repository or its environment.
         </EmptyState>
       ) : (
-        <ul className="divide-y">
+        <ul className="divide-y divide-divider">
           {view.connectors.map((connector) => {
             const grants = used(connector.name)
             const changed = Date.parse(connector.updatedAt)
@@ -507,7 +507,7 @@ function GrantsPanel({
           <table className="hidden w-full text-sm @2xl:table">
             <caption className="sr-only">{caption}</caption>
             <thead>
-              <tr className="h-9 border-b bg-muted/50 text-left text-xs font-medium text-muted-foreground">
+              <tr className="h-10 border-b bg-muted text-left text-xs font-medium text-muted-foreground">
                 <th scope="col" className="px-3 pl-4 font-medium">
                   Site
                 </th>
@@ -522,18 +522,18 @@ function GrantsPanel({
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+            <tbody className="divide-y divide-divider">
               {rows.map((row) => {
                 const words = grantWords(row)
                 return (
                   <tr key={`${row.slug}/${row.connector}`}>
-                    <td className="px-3 py-2.5 pl-4">
+                    <td className="px-3 py-3 pl-4">
                       <SiteLink slug={row.slug} known={known} />
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-3">
                       <code className="font-mono text-[0.8125rem]">{row.connector}</code>
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-3">
                       <Status tone={words.tone} title={words.help}>
                         {words.word}
                       </Status>
@@ -546,7 +546,7 @@ function GrantsPanel({
             </tbody>
           </table>
 
-          <ul aria-label={caption} className="divide-y @2xl:hidden">
+          <ul aria-label={caption} className="divide-y divide-divider @2xl:hidden">
             {rows.map((row) => {
               const words = grantWords(row)
               return (
@@ -611,7 +611,7 @@ function ActivityPanel({
           <table className="hidden w-full text-sm @2xl:table">
             <caption className="sr-only">{caption}</caption>
             <thead>
-              <tr className="h-9 border-b bg-muted/50 text-left text-xs font-medium text-muted-foreground">
+              <tr className="h-10 border-b bg-muted text-left text-xs font-medium text-muted-foreground">
                 <th scope="col" className="px-3 pl-4 font-medium">
                   What
                 </th>
@@ -623,21 +623,21 @@ function ActivityPanel({
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+            <tbody className="divide-y divide-divider">
               {activity.rows.map((row) => {
                 const line = activityLine(row)
                 return (
                   <tr key={row.id}>
-                    <td className="px-3 py-2.5 pl-4">
+                    <td className="px-3 py-3 pl-4">
                       <div className="grid gap-0.5">
                         {line.tone === "attention" ? <Status tone="attention">{line.summary}</Status> : <span className="wrap-anywhere">{line.summary}</span>}
                         {line.detail !== null && <span className="text-xs text-muted-foreground wrap-anywhere">{line.detail}</span>}
                       </div>
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-3">
                       <SiteLink slug={line.site} known={known} />
                     </td>
-                    <td className="px-3 py-2.5 pr-4 text-right">
+                    <td className="px-3 py-3 pr-4 text-right">
                       <When at={line.at} serverNow={serverNow} />
                     </td>
                   </tr>
@@ -646,7 +646,7 @@ function ActivityPanel({
             </tbody>
           </table>
 
-          <ol aria-label={caption} className="divide-y @2xl:hidden">
+          <ol aria-label={caption} className="divide-y divide-divider @2xl:hidden">
             {activity.rows.map((row) => {
               const line = activityLine(row)
               return (
@@ -787,7 +787,7 @@ export function ConnectorsPage() {
         </p>
 
         {list.state === "loading" && (
-          <div aria-busy="true" aria-label="Loading connectors" className="overflow-hidden rounded-lg border bg-card">
+          <div aria-busy="true" aria-label="Loading connectors" className="overflow-hidden rounded-xl border bg-card">
             <RowsSkeleton lines={3} />
           </div>
         )}

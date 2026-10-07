@@ -127,7 +127,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   const [editing, setEditing] = useState<(EditTarget & { open: boolean }) | null>(null)
   const [removal, setRemoval] = useState<Confirmation | null>(null)
   const [restoration, setRestauration] = useState<Confirmation | null>(null)
-  const [confirmationEnCours, setConfirmationEnCours] = useState(false)
+  const [confirmationInProgress, setConfirmationInProgress] = useState(false)
   const [confirmError, setConfirmError] = useState("")
   const [restartState, setRestartState] = useState<RestartState | null>(null)
   const [replacement, setReplacement] = useState<Opening<FileTarget> | null>(null)
@@ -376,9 +376,9 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   }
 
   async function confirmRemoval() {
-    if (removal === null || removal.variable === null || confirmationEnCours) return
+    if (removal === null || removal.variable === null || confirmationInProgress) return
     const target = { slug: removal.slug, file: removal.file, variable: removal.variable }
-    setConfirmationEnCours(true)
+    setConfirmationInProgress(true)
     setConfirmError("")
     try {
       const { status, body } = await removeVariable(target)
@@ -395,7 +395,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
       const message = onRefusal(refusalOf(status, body))
       if (message !== null) setConfirmError(message)
     } finally {
-      setConfirmationEnCours(false)
+      setConfirmationInProgress(false)
     }
   }
 
@@ -407,9 +407,9 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   }
 
   async function confirmRestore() {
-    if (restoration === null || confirmationEnCours) return
+    if (restoration === null || confirmationInProgress) return
     const target = { slug: restoration.slug, file: restoration.file }
-    setConfirmationEnCours(true)
+    setConfirmationInProgress(true)
     setConfirmError("")
     try {
       const { status, body } = await restoreSecretFile(target)
@@ -421,7 +421,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
       const message = onRefusal(refusalOf(status, body))
       if (message !== null) setConfirmError(message)
     } finally {
-      setConfirmationEnCours(false)
+      setConfirmationInProgress(false)
     }
   }
 
@@ -631,9 +631,9 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
           </>
         }
         action="Remove"
-        actionEnCours="Removing…"
+        actionInProgress="Removing…"
         destructive
-        inProgress={confirmationEnCours}
+        inProgress={confirmationInProgress}
         error={confirmError}
         onConfirm={() => void confirmRemoval()}
         onClose={() => setRemoval((before) => before && { ...before, open: false })}
@@ -649,8 +649,8 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
         }
         description="The whole file goes back to how it was before its last change, and may hold a key you meant to retire. The service keeps its current values until it restarts."
         action="Restore"
-        actionEnCours="Restoring…"
-        inProgress={confirmationEnCours}
+        actionInProgress="Restoring…"
+        inProgress={confirmationInProgress}
         error={confirmError}
         onConfirm={() => void confirmRestore()}
         onClose={() => setRestauration((before) => before && { ...before, open: false })}

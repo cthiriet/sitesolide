@@ -20,8 +20,8 @@ describe("tones", () => {
 
   /**
    * The colours are the tokens from global.css, never the Tailwind palette: the
-   * seal's red only serves errors, and an `amber-500` written here would escape
-   * the theme.
+   * red only serves errors, and an `amber-500` written here would escape the
+   * theme.
    */
   test("every class is spelled out in full, and only names tokens", async () => {
     const source = await Bun.file(new URL("../src/lib/tones.ts", import.meta.url)).text()

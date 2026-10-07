@@ -145,7 +145,7 @@ export function PortalPanel({
 
       <table className="w-full border-t text-sm">
         <caption className="sr-only">The portal, as sitesolide.json asks and as the server applies it</caption>
-        <tbody className="divide-y">
+        <tbody className="divide-y divide-divider">
           <tr>
             <th
               scope="row"
@@ -456,7 +456,7 @@ function PortalFlow({
           disabled={inProgress || (!active && !confirmationValid(entry, slug))}
           className="max-sm:h-11"
         >
-          {inProgress ? texts.actionEnCours : texts.action}
+          {inProgress ? texts.actionInProgress : texts.action}
         </Button>
       </DialogFooter>
     </form>

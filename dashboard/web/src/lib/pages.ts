@@ -129,9 +129,9 @@ export function pageFromUrl(path: string, search = ""): Page {
 export function redirect(path: string, search = ""): string | null {
   const normalized = normalizePath(path)
   const legacy = Object.hasOwn(LEGACY_PATHS, normalized)
-  const sectionSansSite =
+  const sectionWithoutSite =
     SECTIONS.some((candidate) => candidate.path === normalized) && requestedSite(new URLSearchParams(search)) === null
-  if (!legacy && !sectionSansSite) return null
+  if (!legacy && !sectionWithoutSite) return null
   return pageUrl(pageFromUrl(path, search))
 }
 

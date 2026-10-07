@@ -59,13 +59,13 @@ function IssuesPanel({ discrepancies, sites }: { discrepancies: readonly Discrep
         </EmptyState>
       ) : (
         <div className="@container">
-          <ul className="grid divide-y @lg:grid-cols-[auto_auto_minmax(0,1fr)]">
+          <ul className="grid divide-y divide-divider @lg:grid-cols-[auto_auto_minmax(0,1fr)]">
             {sortDiscrepancies(discrepancies).map((discrepancy, index) => {
               const slug = discrepancy.slug
               return (
                 <li
                   key={`${slug}-${index}`}
-                  className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 px-4 py-2.5 @lg:col-span-3 @lg:grid-cols-subgrid"
+                  className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 px-4 py-3 @lg:col-span-3 @lg:grid-cols-subgrid"
                 >
                   <SeverityIcon severity={discrepancy.severity} label className="row-span-2 mt-0.5 @lg:row-span-1" />
                   <div className="col-start-2 @lg:pr-3">
@@ -74,7 +74,7 @@ function IssuesPanel({ discrepancies, sites }: { discrepancies: readonly Discrep
                     ) : known.has(slug) ? (
                       <InternalLink
                         href={siteUrl(slug)}
-                        className="rounded-sm font-medium underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+                        className="rounded-sm font-medium underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         {slug}
                       </InternalLink>

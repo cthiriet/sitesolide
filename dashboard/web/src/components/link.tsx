@@ -19,7 +19,7 @@ export function ExternalLink({ href, children, className }: { href: string; chil
       target="_blank"
       rel="noopener noreferrer"
       className={cn(
-        "max-w-full rounded-sm underline decoration-foreground/20 underline-offset-4 transition-colors outline-none wrap-anywhere hover:decoration-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
+        "max-w-full rounded-sm underline decoration-foreground/20 underline-offset-4 transition-colors outline-none wrap-anywhere hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring",
         className,
       )}
     >

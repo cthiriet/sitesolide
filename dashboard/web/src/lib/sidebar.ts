@@ -13,6 +13,12 @@ import type { Tone } from "./tones"
 import type { Discrepancy, PortalView, ProjectView, Site } from "./types"
 
 /**
+ * The expanded sidebar's width. styles/global.css repeats it as
+ * `--pending-sidebar-width`, the column held before React mounts the shell.
+ */
+export const SIDEBAR_WIDTH = "14.5rem"
+
+/**
  * The collapse key, `"1"` when the sidebar is collapsed, absent otherwise. The
  * inline script in layouts/main.astro reads it back before the first render,
  * and tests/sidebar.test.ts runs it against these functions.

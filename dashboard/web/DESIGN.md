@@ -17,18 +17,21 @@ during the day and dark in the evening. The page answers one question first:
 **is the machine all right, and if not, which site should I look at?** Then,
 once inside a site: **what makes it run, who gets in, and what needs changing?**
 
-The personality comes from the landing page: midnight-blue ink on cold glass,
-one red, the one from the logo's seal, and widened Archivo for titles. The only
-remarkable piece is **the machine plate** at the top of the home page, where the
-70 and 90 % thresholds are engraved on each gauge. Everything else is calm,
-dense and aligned.
+The look is **Graphite**: neutral greys, one family, Geist, and one colour
+family, petrol, which is the brand's: the logo is a petrol gradient around the
+accent, and the accent marks what is current or in focus. Red is the error
+colour, not the brand's, and it only says error. The only remarkable piece is
+**the machine plate** at the top of the home page, where the 70 and 90 %
+thresholds are ticked on each gauge. Everything else is calm, dense and
+aligned.
 
 1. **The verdict first.** Every page carries, in the same place, the machine's
    verdict and the age of the data. A stale snapshot never says "All clear".
 2. **Red means error, and nothing else.** Neither a link, nor the current page,
-   nor a focus ring is red.
+   nor a focus ring is red. **Petrol means "here"**: the current page, the
+   focused element, a gauge's fill, the primary button; never a state.
 3. **Structure carries information.** A rule separates the rows of a list, a
-   white surface groups what is read together, a tick on a gauge marks a
+   bordered card groups what is read together, a tick on a gauge marks a
    threshold. No decorative frames, numbers or labels.
 4. **Panels, not stacked cards.** One panel per readable set, divided lists
    inside.
@@ -48,22 +51,53 @@ All in `src/styles/global.css`, under `:root` (light) and `.dark`. A component
 
 | Token (class) | Light | Dark | Role |
 |---|---|---|---|
-| `background` | `#e8ecf1` glass | `#0e1726` ink | page and sidebar background |
-| `foreground` | `#0e1726` | `#e6eaf1` | text |
-| `card`, `popover` | `#ffffff` | `#131f35`, `#172440` | panels; menus and dialogs |
-| `muted`, `secondary`, `accent` | `#dfe4eb` | `#1a2842` | table headers, hover, neutral pill |
-| `muted-foreground` | `#56637a` | `#9aa8c4` | meta, help text, column headers |
-| `primary` | `#0e1726` | `#e6eaf1` | the primary button, in ink |
-| `border` | `#d2d9e3` | `#25324b` | rules and borders |
-| `input` | `#c5cedb` | `#2e3c57` | field edges |
-| `ring` | `#5b6c92` | `#9aa8c4` | focus ring, the brand's steel blue |
+| `background` | `#f7f8fa` | `#0a0b0d` | page and sidebar background |
+| `foreground` | `#16181d` | `#e7e9ec` | text |
+| `strong` | `#0a0b0d` | `#ffffff` | what is current or chosen: the sidebar's page, a selected filter, a site's name |
+| `secondary-foreground` | `#3a404a` | `#c9cdd3` | text a step below the body: navigation, the filters not chosen, a counter |
+| `muted-foreground` | `#5f6672` | `#8b9098` | meta, help text, column headers |
+| `card`, `popover` | `#ffffff` | `#111316`, `#16181c` | panels; menus and dialogs |
+| `muted`, `secondary`, `accent` | `#eceef2` | `#16181c` | hover, table header, a selected segment, the neutral pill |
+| `border` | `#e3e6eb` | `#1f2227` | a panel's frame, a header's rule, a counter's fill |
+| `divider` | `#edeff2` | `#1a1c20` | the rule between two rows of a list or a table |
+| `input` | `#d9dde3` | `#23262c` | field edges |
+| `primary`, `ring` | `#0b6e79` | `#4cb8c4` | petrol: the primary button, the focus ring, the sidebar's marker, a gauge's fill |
+| `primary-foreground` | `#ffffff` | `#0a0b0d` | text on the primary button |
+| `highlight` | `#e7f3f4` | `#0e2427` | the accent's palest tint: the current page in the sidebar |
+| `mark-from`, `mark-to` | `#138896`, `#0a5560` | `#5cc8d3`, `#2c98a4` | the logo's gradient, top left to bottom right |
+| `track`, `tick` | `#e3e6eb`, `#8e95a1` | `#1f2227`, `#5e6572` | a gauge's empty bar, its threshold ticks |
 | `destructive` | `#b3253f` | `#f36f84` | errors, and only errors |
-| `plaque` | `#131f35` | `#131f35` | the machine plate, dark in both themes |
-| `sidebar-accent` | `#ffffff` | `#131f35` | the current page in the sidebar |
+| `sidebar-accent`, `sidebar-primary` | as `muted`, `primary` | as `muted`, `primary` | a hover in the sidebar, and the current page's marker |
 
-Measured contrasts (WCAG), to check again after any change:
-`muted-foreground` 6.1:1 on white and 5.1:1 on glass, 6.9:1 on `card` in dark;
-`destructive` 6.5:1 on white, 5.8:1 on `card` in dark.
+**The brand is one petrol ramp**, one hue (185 to 188 degrees) in four steps:
+`highlight`, the palest, for a surface that says "here"; `mark-from`, a step
+lighter than the accent; `primary`, the accent; `mark-to`, a step deeper. The
+logo's gradient brackets the accent, so the logo, the sidebar's marker and the
+primary button read as one colour, in both themes. Dark lifts the accent and
+the logo's steps, so that the deep end does not sink into the page, and turns
+the tint into a deep petrol surface. The logo writes its stops as
+`var(--mark-from)` and `var(--mark-to)`; the favicon, the portal's page and
+`docs/assets` repeat the hex values, which cannot read a token, and change
+with them.
+
+Measured contrasts (WCAG), to check again after any change. Light:
+`foreground` 17.8:1 on `card`; `secondary-foreground` 10.4:1 on `card`;
+`muted-foreground` 5.8:1 on `card`, 5.4:1 on `background` and 5.0:1 on `muted`;
+white on `primary` 6.0:1; `primary` as a ring, a marker or a fill 6.0:1 on
+`card`, 5.1:1 on `muted` and 4.8:1 on the track; `destructive` 6.5:1 on `card`;
+a tick 3.0:1 on `card`. Dark: `foreground` 15.3:1 on `card`;
+`muted-foreground` 5.8:1 on `card`; near black on `primary` 8.4:1; `primary`
+7.9:1 on `card`; `destructive` 6.6:1 on `card`; a tick 3.2:1 on `card` and
+3.0:1 on `popover`. On `highlight`: `strong` 17.4:1 in light and 16.2:1 in
+dark, `muted-foreground` 5.1 and 5.0:1, the `primary` marker 5.3 and 6.9:1,
+an error count 4.9 and 5.0:1 on its pill. The logo, as a graphic: `mark-from`
+4.0:1 on `background` in light, `mark-to` 8.0:1; in dark 10.0 and 5.8:1. The
+full list is in the comment of `styles/global.css`.
+
+One pair stays short, in a passing state: the primary button's hover,
+`primary/80` from the generated `button`, puts white at 3.95:1 in light. A
+generated component is not edited, and petrol dark enough to hold 4.5:1 there
+would no longer be the chosen petrol.
 
 ### 2.2 Status tones
 
@@ -71,53 +105,61 @@ Four tones, not one more, from the `Tone` type in `lib/tones.ts`. Their classes
 are spelled out there (`TONE_DOT`, `TONE_TEXT`, `TONE_PILL`, `TONE_BANNER`),
 and `tests/tones.test.ts` checks that they only name tokens.
 
-| Tone | Dot (solid) | Text | Meaning |
-|---|---|---|---|
-| `ok` | `bg-ok` | `text-ok-text` | running, up to date |
-| `attention` | `bg-attention` | `text-attention-text` | worth a look: 70 % threshold, restart pending, expiry near |
-| `error` | `bg-destructive` | `text-destructive` | to deal with: service not running, door in disagreement, 90 % threshold |
-| `neutral` | `bg-muted-foreground` | `text-muted-foreground` | information, without judgement |
+| Tone | Dot (solid) | Text | Light, dot and text | Dark, dot and text | Meaning |
+|---|---|---|---|---|---|
+| `ok` | `bg-ok` | `text-ok-text` | `#22a05a`, `#1e7a43` | `#3fb950`, `#7ee2a0` | running, up to date |
+| `attention` | `bg-attention` | `text-attention-text` | `#b0790a`, `#8a5a00` | `#e3b341`, `#f2c55c` | worth a look: 70 % threshold, restart pending, expiry near |
+| `error` | `bg-destructive` | `text-destructive` | `#b3253f` | `#f36f84` | to deal with: service not running, door in disagreement, 90 % threshold |
+| `neutral` | `bg-muted-foreground` | `text-muted-foreground` | `#5f6672` | `#8b9098` | information, without judgement |
 
-Each tone's text clears 4.9:1 on its tinted pill, in both themes. Colour never
-carries meaning alone: a dot comes with a word, a severity icon with text for
-screen readers. `severityTone` gives a discrepancy's tone, `verdictTone` the
-verdict's (a stale snapshot is an error).
+Each tone's text clears 4.5:1 on its tinted pill, in both themes: in light
+`ok-text` 4.8:1, `attention-text` 5.2:1 and `destructive` 5.5:1 over `card`,
+the tightest being `ok-text` at 4.5:1 over `background`; in dark beyond 5.8:1.
+Every dot clears 3:1 on `card` and on `background`, and the attention fill 3:1
+on the track: the mockup's amber, `#c98a0b`, did not (2.4:1 on the track), so
+it moved to `#b0790a`. Colour never carries meaning alone: a dot comes with a
+word, a severity icon with text for screen readers. `severityTone` gives a
+discrepancy's tone, `verdictTone` the verdict's (a stale snapshot is an
+error).
 
 ### 2.3 Typography
 
-One family, **Archivo Variable**, served from `_assets/` with no third-party
-request. `font-display` is the same family at `font-stretch: 118%`. A system
-monospace **only for what is typed into a terminal**: file name, variable name,
-lock code, path, unit, command. A slug, an address or a number is not
-monospace.
+One family, **Geist Variable**, for everything, titles included, served from
+`_assets/` with no third-party request (`@fontsource-variable/geist`). **Geist
+Mono** (`@fontsource-variable/geist-mono`) **only for what is typed into a
+terminal**: file name, variable name, lock code, path, unit, command. A slug,
+an address or a number is not monospace, nor is a key in a `kbd`.
 
 | Role | Classes |
 |---|---|
-| Page title (`h1`) | `font-display text-[1.375rem] leading-7 font-semibold tracking-tight` |
-| Gauge figure | `font-display text-[1.75rem] leading-8 font-semibold tabular-nums` |
+| Page title (`h1`) | `text-xl font-semibold tracking-title` (20/28 px, -0.02 em) |
+| Gauge figure | `text-2xl leading-7 font-semibold tracking-title tabular-nums` (24/28 px) |
 | Panel title (`h2`) | `text-sm font-semibold` |
-| Body text, cells | `text-sm` |
-| Meta, column headers, help | `text-xs text-muted-foreground` |
-| Wordmark in the sidebar | `font-display text-[0.9375rem] font-semibold` |
+| Body text, cells | `text-sm` (14/20 px) |
+| Meta, column headers, help, a gauge's heading | `text-xs text-muted-foreground` (12 px) |
+| Wordmark in the sidebar | `text-sm font-semibold tracking-[-0.01em]`, the zone below in `text-xs text-muted-foreground` |
 
-No label capitals, no letter spacing (except a lock code), no single word in a
-different colour inside a title. Every number that gets compared is
-`tabular-nums`.
+`tracking-title` is a theme token in `styles/global.css`. No label capitals,
+no letter spacing (except a lock code), no single word in a different colour
+inside a title. Every number that gets compared is `tabular-nums`.
 
 ### 2.4 Spacing, widths, radii
 
 - 4 px base. Page gutter `px-4`, then `md:px-8`.
 - Content in `max-w-6xl` (1152 px), centred to the right of the sidebar.
 - Between two blocks of a page, `gap-6`. Inside a panel, rows `px-4 py-2.5`
-  (dense list) or `py-3` (two-level row).
+  (dense list) or `py-3` (two-level row, and every table row).
 - Bottom padding `pb-28` on a phone, to clear the tabs.
-- `--radius: 0.5rem`, and the more containing the object, the more containing
-  its radius: plate and dialogs `rounded-xl`, panel, table and banner
-  `rounded-lg`, pill and counter `rounded-sm`, dot `rounded-full`. **A control
-  keeps its shadcn component's radius** (8 px at default size, 6 px in `sm`),
-  with no override; a hand-drawn control takes a field's.
-- No shadow on a page surface: they separate by colour and a rule. Only menus,
-  tooltips and dialogs have a shadow.
+- Radii in whole pixels, the more containing the object, the more containing
+  its radius: plate, panel, table and dialog `rounded-xl` (12 px), a control
+  and a banner `rounded-lg` (8 px), a pill, a badge and a filter segment
+  `rounded-md` (6 px), a counter, a `kbd` and inline code `rounded-sm` (4 px),
+  a dot `rounded-full`. **A control keeps its shadcn component's radius** (8 px
+  at default size, 6 px in `sm`), with no override; a hand-drawn control takes
+  a field's. A shadcn `Badge` is a pill: it takes `rounded-md` through its
+  `className`.
+- One pixel borders, no shadow on a page surface: they separate by a rule.
+  Only menus, tooltips and dialogs have a shadow.
 
 ## 3. Layout
 
@@ -127,11 +169,11 @@ different colour inside a title. Every number that gets compared is
 Computer (>= 768 px), machine level
 +--------------+-----------------------------------------------------------+
 | sitesolide   | Sites 13                * 3 errors, 3 warnings  26s  [R]  |  sticky header
-|              +-----------------------------------------------------------+
+| example.com  +-----------------------------------------------------------+
 | Sites      6 | [Banner: Can't reach the dashboard / collector stale]     |
 | Activity     |                                                           |
-| Connectors   |                                                           |
-|              |   plate, Issues, search and filters, list of sites        |
+| Team         |                                                           |
+| Connectors   |   plate, Issues, search and filters, list of sites        |
 | Dark mode    |                                                           |
 | Sign out     |                                                           |
 | Collapse  ^B |                                                           |
@@ -150,19 +192,25 @@ Phone (< 768 px), inside a site
 +------------------------------------+
 ```
 
-The sidebar is the shadcn `sidebar` component (`collapsible="icon"`). Collapsed
-with `Cmd+B`, `Ctrl+B` or its button: icons only, a tooltip, a tone dot on the
-icon when the indicator is `attention` or `error`. The state lives in
-`localStorage["sidebar-collapsed"]`, read back before the first render by an inline
-script. The current page is a white surface, never a colour; on a phone, a 2 px
-rule above the tab.
+The sidebar is the shadcn `sidebar` component (`collapsible="icon"`), 232 px
+wide (`SIDEBAR_WIDTH` in `lib/sidebar.ts`, repeated as `--pending-sidebar-width`
+for the column held before React mounts). Its header: the logo, the wordmark
+and, below it, the zone the server serves, once the first snapshot has said it.
+An entry is 36 px tall, its stroke icon 16 px, in `secondary-foreground`.
+Collapsed with `Cmd+B`, `Ctrl+B` or its button: icons only, 48 px, a tooltip, a
+tone dot on the icon when the indicator is `attention` or `error`. The state
+lives in `localStorage["sidebar-collapsed"]`, read back before the first render
+by an inline script. The current page takes the `highlight` tint, `strong`
+text and a 2 px petrol bar on its left edge, where a hover only takes the
+`muted` grey; on a phone, a 2 px petrol rule above the tab. The sidebar's own
+controls (theme, sign out, collapse) sit at its foot in `muted-foreground`.
 
-**Two levels.** On the home page, Activity and Connectors, the sidebar carries the
-machine's pages. Inside a site it becomes that site's: the *All sites* return,
-the current site on a white surface (initial, name, state in one sentence, tone
-dot), which opens the site switcher, then its six sections. Collapsed, the site
-is just its initial and its dot. On a phone the tabs follow the level: three for
-the machine, six for a site, on one row.
+**Two levels.** On the machine's pages (Sites, Activity, Team, Connectors), the
+sidebar carries them. Inside a site it becomes that site's: the *All sites*
+return, the current site on a bordered card (initial, name, state in one
+sentence, tone dot), which opens the site switcher, then its seven sections.
+Collapsed, the site is just its initial and its dot. On a phone the tabs follow
+the level: four for the machine, seven for a site, on one row.
 
 Indicators (`lib/sidebar.ts`). Machine: *Sites* the number of discrepancies (error
 if there is one, otherwise attention). Site: *Overview* its discrepancies;
@@ -175,8 +223,8 @@ shared with is a choice, not a problem. Zero is not shown.
 
 **One rule, no exception**: everything laid out inside the content, columns,
 table or list, follows its container's width through an `@container` query,
-never the screen's. The expanded sidebar takes 256 px: at 1024 px the content
-has only 704, and an `lg:` rule would put two 340 px columns there. The screen
+never the screen's. The expanded sidebar takes 232 px: at 1024 px the content
+has only 728, and an `lg:` rule would put two 352 px columns there. The screen
 (`md`, 768 px) decides only the shell: sidebar or tabs, header arrangement,
 gutters, bottom margin, touch target size.
 
@@ -187,12 +235,12 @@ gutters, bottom margin, touch target size.
 | Guests panel, a site's Activity panel | `@2xl:` (42 rem) | table, otherwise list |
 | the machine's Activity log, five columns | `@3xl:` (48 rem) | table, otherwise list |
 | Activity filters | `@4xl/body:` (56 rem) | five fields on one row, otherwise two columns |
-| machine plate | `@2xl:` | four columns, otherwise three rows |
+| machine plate | `@2xl:` | four columns, otherwise four rows |
 | Issues panel | `@lg:` (32 rem) | messages aligned behind the slugs |
 | `@container/file` | `@xl/file:` (36 rem) | Name, Value and action columns |
 
-Useful content widths: 1088 px at 1440 with the sidebar expanded, 960 at 1280,
-912 at 1024 collapsed, 704 at 1024 expanded, 358 on a phone.
+Useful content widths: 1088 px at 1440 with the sidebar expanded, 984 at 1280,
+912 at 1024 collapsed, 728 at 1024 expanded, 358 on a phone.
 
 ### 3.3 The page header
 
@@ -203,6 +251,10 @@ the home page when not on it), the age and the refresh control. On a phone the
 verdict and the age move under the title, the actions below that. Page-wide
 banners follow the header.
 
+- **Look.** A sticky band in the page's colour, ruled below, at least 68 px
+  tall on a computer like the sidebar's header. The verdict stays on the right
+  on every page: there it reads as the machine's, where beside a site's title
+  it would read as that site's state.
 - **Title.** The home page is called *Sites*. Inside a site, Overview carries
   the slug, the other sections their name, and the breadcrumb says
   *All sites > cms*.
@@ -242,7 +294,7 @@ afterwards. A page never reads `window.location` itself.
 |---|---|
 | `PageBody` | the content container, and the `body` query container |
 | `SitePage` | a site's section: header with breadcrumb and switcher, body, "No site named x" for an unknown slug |
-| `Panel` | a bordered surface; with `title`, a 44 px header row; `full` for a table or list that touches the edges |
+| `Panel` | a bordered card, `rounded-xl`; with `title`, a 44 px header row; `full` for a table or list that touches the edges |
 | `WithSnapshot` | loading, dashboard unreachable, snapshot incomplete, rendered the same everywhere |
 | `EmptyState` | nothing to show: the title states the state, the text says what to do |
 | `ErrorState` | a page-specific read failed and there is nothing else: a title naming what did not answer, advice and a command, *Retry* |
@@ -258,10 +310,10 @@ on screen.
 |---|---|
 | `Status` | a dot and a word. `point` in lists and tables, `pill` for what has to be seen from afar |
 | `SeverityIcon` | crossed circle (error) or triangle (warning) before a discrepancy, with hidden text |
-| `Count` | the number beside a title |
+| `Count` | the number beside a title, `secondary-foreground` on the `border` grey |
 | `ExternalLink` | a site address, underlined at rest, in a new tab |
-| `MachinePlate`, `Track` | the plate, reserved for the home page; `Track` reused for a service's memory |
-| `Track` (dialogs) | waiting for a long answer: the time actually elapsed on its scale, the usual duration engraved when known, never an invented progress bar |
+| `MachinePlate`, `Track` | the plate, reserved for the home page: one bordered panel, the server (its zone, cores, memory and disk) then load, memory and disk; `Track` is a 6 px bar with a 1 px tick across it at each threshold, reused for a service's memory |
+| `Track` (dialogs) | waiting for a long answer: the time actually elapsed on its scale, the usual duration ticked when known, never an invented progress bar |
 | `Command` | a command to type in a terminal, copyable |
 | `serviceWord` | the word and tone of a systemd unit, the same on the home page, the Overview and Secrets |
 
@@ -275,8 +327,11 @@ edited, it is varied through `data-slot` or wrapped.
 
 **Tables and lists.** A table lives in a `Panel full` and becomes a divided
 list below the width it needs (3.2). Header
-`h-9 bg-muted/50 text-xs font-medium text-muted-foreground`, cells
-`px-3 py-2.5`, first column `pl-4`, last `pr-4`, numbers right-aligned.
+`h-10 bg-muted text-xs font-medium text-muted-foreground`, ruled in `border`;
+cells `px-3 py-3`, which makes 44 px rows, ruled in `divider`; first column
+`pl-4`, last `pr-4`, numbers right-aligned. A divided list rules its rows in
+`divider` too (`divide-y divide-divider`), a panel's own frame and header stay
+`border`.
 `caption` in `sr-only` stating the order and the filter. A row in discrepancy
 carries the `SeverityIcon` before the name, with no tinted background.
 
@@ -288,7 +343,7 @@ so an address stays selectable. Cmd, Ctrl and the middle button open a new tab.
 of a site with no portal leads to Access, Secrets of a site with no file says to
 declare `secrets` in `sitesolide.json` and then run `sitesolide deploy`.
 
-**Buttons.** One primary per view, in ink. `destructive` is used only for a
+**Buttons.** One primary per view, in petrol. `destructive` is used only for a
 confirmation's action. A button in progress says what it is doing:
 *Revoking...*, *Saving...*.
 
@@ -303,8 +358,11 @@ reach the portal." then the command to run. Under the offending field
 (`role="alert"`), in a `Banner` when the page stays readable, in an
 `ErrorState` when there is nothing to show.
 
-**Search and filters.** In a toolbar under the header, on the left. `/` focuses
-the site search, Escape clears it then returns focus. The count and the order on
+**Search and filters.** In a toolbar under the header, on the left: the search
+field, with a `/` key hint, then the filters as a segmented control, a bordered
+card whose chosen segment takes the `muted` grey and `strong` text (in dark, the
+control sits on `background` so that the grey still shows). `/` focuses the
+site search, Escape clears it then returns focus. The count and the order on
 the right: "3 of 13 sites, issues first".
 
 **Secrets and passwords.** A field that receives a secret is `type="password"`,
@@ -315,7 +373,11 @@ changed. A write-only file offers neither *Reveal* nor *Copy* and says so; a
 password variable offers only *Change password*. A drawn password is shown once,
 with its copy button.
 
-**Keyboard and announcements.** `focus-visible:ring-3 ring-ring/50` everywhere.
+**Keyboard and announcements.** Every focus ring is petrol. A hand-drawn
+element takes `focus-visible:ring-2 focus-visible:ring-ring`, solid, 6.0:1 on
+`card` in light; a field, generated or hand-drawn, keeps shadcn's
+`focus-visible:border-ring` (solid, the same contrast) inside a
+`ring-3 ring-ring/50` halo, the halo alone being too pale to count.
 After a navigation: scroll to top (except on back), focus on the `h1`, title
 announced, tab title updated. One `aria-live` region, through which a password
 or a value never passes. Under the sign-in of an expired session, the page is
@@ -354,8 +416,10 @@ One page per served file, the site in `?s=`:
 |---|---|---|
 | Sites, the home page | `/` | `index.html` |
 | Activity | `/activity/` | `activity/index.html` |
+| Team | `/team/` | `team/index.html` |
 | Connectors | `/connectors/` | `connectors/index.html` |
 | A site's Overview | `/site/?s=cms` | `site/index.html` |
+| A site's Audience | `/site/audience/?s=cms` | `site/audience/index.html` |
 | A site's Secrets | `/site/secrets/?s=cms` | `site/secrets/index.html` |
 | A site's Guests | `/site/guests/?s=cms` | `site/guests/index.html` |
 | A site's Sharing | `/site/sharing/?s=cms` | `site/sharing/index.html` |
@@ -365,8 +429,9 @@ One page per served file, the site in `?s=`:
 Older addresses keep their file and redirect client-side, with no history entry.
 A section without `?s=` goes to the home page.
 
-**Sites (the home page).** The machine plate (memory, disk, load, with their
-ticks at 70 and 90 %), the Issues panel, errors first, then the search, the
+**Sites (the home page).** The machine plate (the server, its zone and its
+size, then load, memory and disk, with their ticks at 70 and 90 %), the Issues
+panel, errors first, then the search, the
 filters (All, Issues, Apps, Static, Portal, each with its count) and the
 inventory, sites in discrepancy at the top: Site, Address, Access, Service,
 Size. Summaries live in the rows, not in cards.
@@ -448,13 +513,17 @@ change it.
 
 1. **Four "big number, small label" tiles** at the top: replaced by one plate
    where the thresholds are read on the gauges.
-2. **The seal red as an accent**: it would have shouted everywhere in a tool
-   where red means error.
+2. **A red brand**: the logo was a red seal, and beside a petrol accent the
+   two clashed; in a tool where red means error, it also said error at the top
+   of every page. The logo moved into the accent's family, and red kept one
+   meaning.
 3. **A summary in three side-by-side cards**: what it said lives in the sites'
    rows.
 4. **Every identifier in monospace**: it is kept for what is typed in a
    terminal.
-5. **Inter**, shadcn's font: Archivo, the brand's.
+5. **Inter**, shadcn's font, then **widened Archivo** for titles, the landing
+   page's: one family, Geist, holds a dense page better, and Geist Mono gives
+   what is typed in a terminal a matching voice.
 6. **Tinted backgrounds on rows in discrepancy**: the icon already says it.
 7. **Screen breakpoints**: the sidebar made any `lg:` rule wrong by one sidebar
    width (3.2).
@@ -463,6 +532,13 @@ change it.
 9. **A ticked step bar while waiting for the gatekeeper**: the page does not
    know where it is, so it shows the steps and the elapsed time, ticking
    nothing.
+10. **The plate dark in both themes**, the landing page's deep section carried
+    into the page: in light it was the one dark object on the screen. A
+    bordered panel that follows the theme reads as one with the rest, and its
+    ticks keep it remarkable.
+11. **An ink primary, midnight blue on cold glass**: petrol gives "here" a
+    single colour, from the primary button to the focus ring and the
+    sidebar's marker, and stays clear of the error red and of the three tones.
 
 ## 9. Seeing the page, and looking at it
 

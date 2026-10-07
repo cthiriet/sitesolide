@@ -19,7 +19,7 @@ import { SidebarSitePicker, useSite } from "@/components/site"
 import { useTheme } from "@/components/theme"
 import { machineIndicators, siteIndicators, sidebarShortcut, type Indicator } from "@/lib/sidebar"
 import { MACHINE_PAGES, SECTIONS, ariaCurrent, pageUrl, type MachinePage, type Page, type Section } from "@/lib/pages"
-import { TONE_PILL, TONE_DOT } from "@/lib/tones"
+import { TONE_PILL, TONE_DOT, type Tone } from "@/lib/tones"
 import { cn } from "@/lib/utils"
 
 /** The icon of each machine page. */
@@ -90,8 +90,17 @@ function HiddenIndicator({ indicator }: { indicator: Indicator | null }) {
   return <span className="sr-only">, {indicator.label}</span>
 }
 
+/**
+ * A navigation entry: 36 px, its icon at 16 px. The current page takes the
+ * accent's palest tint, `highlight`, and on its left edge a two pixel bar of
+ * the accent itself: petrol is the one colour the page gives to "you are
+ * here", and a hover keeps the grey, so the two never look alike.
+ */
 const SIDEBAR_BUTTON =
-  "h-9 gap-2.5 text-[0.875rem] text-sidebar-foreground/80 hover:bg-foreground/5 data-active:font-semibold data-active:text-sidebar-foreground data-active:shadow-[0_0_0_1px_var(--sidebar-border)] data-active:hover:bg-sidebar-accent"
+  "h-9 gap-2.5 rounded-lg px-2.5 text-secondary-foreground hover:bg-sidebar-accent hover:text-strong data-active:bg-highlight data-active:font-medium data-active:text-strong data-active:shadow-[inset_2px_0_0_var(--sidebar-primary)]"
+
+/** The sidebar's own controls, below the pages: quieter than them. */
+const SIDEBAR_CONTROL = "h-9 gap-2.5 rounded-lg px-2.5 text-muted-foreground hover:bg-sidebar-accent hover:text-strong"
 
 function SidebarEntries({ entries, label }: { entries: NavEntry[]; label: string }) {
   const { page } = useNavigation()
@@ -152,7 +161,7 @@ function SidebarEntries({ entries, label }: { entries: NavEntry[]; label: string
  */
 export function AppSidebar() {
   const { page } = useNavigation()
-  const { signOut } = useData()
+  const { signOut, snapshot } = useData()
   const { toggleSidebar } = useSidebar()
   const theme = useTheme()
   const entries = useNavEntries()
@@ -163,11 +172,15 @@ export function AppSidebar() {
         <InternalLink
           href="/"
           aria-label="sitesolide, all sites"
-          className="flex h-10 items-center gap-2.5 rounded-md px-1.5 outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          className="flex h-11 items-center gap-2.5 rounded-lg px-1.5 outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
         >
-          <Logo className="size-7 shrink-0" />
-          <span className="font-display text-[0.9375rem] font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
-            sitesolide
+          <Logo className="size-6 shrink-0" />
+          <span className="grid min-w-0 group-data-[collapsible=icon]:hidden">
+            <span className="text-sm font-semibold tracking-[-0.01em]">sitesolide</span>
+            {/* The zone this server serves, once the first snapshot has said it. */}
+            {snapshot !== null && snapshot.zone !== "" && (
+              <span className="truncate text-xs text-muted-foreground">{snapshot.zone}</span>
+            )}
           </span>
         </InternalLink>
       </SidebarHeader>
@@ -181,7 +194,7 @@ export function AppSidebar() {
                   <SidebarMenuButton
                     tooltip="All sites"
                     render={<InternalLink href="/" />}
-                    className="h-8 gap-2 text-[0.8125rem] text-muted-foreground hover:bg-foreground/5 hover:text-sidebar-foreground"
+                    className="h-8 gap-2 rounded-lg px-2.5 text-[0.8125rem] text-muted-foreground hover:bg-sidebar-accent hover:text-strong"
                   >
                     <ChevronLeft />
                     <span>All sites</span>
@@ -209,14 +222,14 @@ export function AppSidebar() {
             <SidebarMenuButton
               tooltip={theme.label}
               onClick={theme.toggle}
-              className="h-9 gap-2.5 text-sidebar-foreground/80 hover:bg-foreground/5"
+              className={SIDEBAR_CONTROL}
             >
               <theme.Icon />
               <span>{theme.theme === "dark" ? "Light mode" : "Dark mode"}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <SidebarMenuButton tooltip="Sign out" onClick={signOut} className="h-9 gap-2.5 text-sidebar-foreground/80 hover:bg-foreground/5">
+            <SidebarMenuButton tooltip="Sign out" onClick={signOut} className={SIDEBAR_CONTROL}>
               <LogOut />
               <span>Sign out</span>
             </SidebarMenuButton>
@@ -226,7 +239,7 @@ export function AppSidebar() {
               tooltip="Expand sidebar"
               onClick={toggleSidebar}
               aria-keyshortcuts="Meta+B Control+B"
-              className="h-9 gap-2.5 text-sidebar-foreground/80 hover:bg-foreground/5"
+              className={SIDEBAR_CONTROL}
             >
               <PanelLeft />
               <span className="flex flex-1 items-center justify-between">
@@ -239,6 +252,17 @@ export function AppSidebar() {
       </SidebarFooter>
     </Sidebar>
   )
+}
+
+/**
+ * A count on a tone's solid dot, beside the tab's icon. Near black on green and
+ * amber, in both themes; on the error red, the card's colour, white in light
+ * and near black in dark. The contrasts are in styles/global.css.
+ */
+const TAB_BADGE_TEXT: Record<Exclude<Tone, "neutral">, string> = {
+  ok: "text-foreground dark:text-background",
+  attention: "text-foreground dark:text-background",
+  error: "text-card",
 }
 
 /**
@@ -277,12 +301,12 @@ export function MobileTabs() {
                 href={pageUrl(target)}
                 aria-current={current}
                 className={cn(
-                  "relative flex h-16 flex-col items-center justify-center gap-1 text-xs outline-none focus-visible:bg-foreground/5",
-                  current !== undefined ? "font-semibold text-foreground" : "text-muted-foreground",
+                  "relative flex h-16 flex-col items-center justify-center gap-1 text-xs outline-none focus-visible:bg-muted",
+                  current !== undefined ? "font-medium text-strong" : "text-muted-foreground",
                 )}
               >
                 {current !== undefined && (
-                  <span aria-hidden="true" className="absolute inset-x-5 top-0 h-0.5 rounded-b-sm bg-foreground" />
+                  <span aria-hidden="true" className="absolute inset-x-5 top-0 h-0.5 rounded-b-sm bg-primary" />
                 )}
                 <span className="relative">
                   <Icon aria-hidden="true" className="size-5" strokeWidth={current !== undefined ? 2.25 : 1.75} />
@@ -291,9 +315,7 @@ export function MobileTabs() {
                       aria-hidden="true"
                       className={cn(
                         "absolute -top-1.5 left-3 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[0.625rem] leading-none font-semibold ring-2 ring-background tabular-nums",
-                        signal.tone === "neutral"
-                          ? "bg-muted text-muted-foreground"
-                          : cn("text-white dark:text-background", TONE_DOT[signal.tone]),
+                        signal.tone === "neutral" ? "bg-muted text-muted-foreground" : cn(TAB_BADGE_TEXT[signal.tone], TONE_DOT[signal.tone]),
                       )}
                     >
                       {signal.count}

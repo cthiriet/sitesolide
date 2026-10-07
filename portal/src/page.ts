@@ -20,35 +20,50 @@
 import { CONTACT } from "./config";
 
 
-/** The portal's icon, in `data:` so as to ask nothing of the server. */
+/**
+ * The portal's icon, in `data:` so as to ask nothing of the server: the
+ * dashboard's favicon, the logo's light gradient, or its dark one when the
+ * browser is dark.
+ */
 const ICON =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='f' x1='1' y1='1' x2='31' y2='31' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' stop-color='%23b3253f'/%3E%3Cstop offset='1' stop-color='%237d1730'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M7.32 1H24.68A6.32 6.32 0 0 1 31 7.32V9.92H11.11A1.42 1.42 0 0 0 11.11 12.76H31V24.68A6.32 6.32 0 0 1 24.68 31H7.32A6.32 6.32 0 0 1 1 24.68V22.08H20.89A1.42 1.42 0 0 0 20.89 19.24H1V7.32A6.32 6.32 0 0 1 7.32 1Z' fill='url(%23f)'/%3E%3C/svg%3E";
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cstyle%3E.a%7Bstop-color:%23138896%7D.b%7Bstop-color:%230a5560%7D@media (prefers-color-scheme:dark)%7B.a%7Bstop-color:%235cc8d3%7D.b%7Bstop-color:%232c98a4%7D%7D%3C/style%3E%3Cdefs%3E%3ClinearGradient id='f' x1='1' y1='1' x2='31' y2='31' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' class='a'/%3E%3Cstop offset='1' class='b'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M7.32 1H24.68A6.32 6.32 0 0 1 31 7.32V9.92H11.11A1.42 1.42 0 0 0 11.11 12.76H31V24.68A6.32 6.32 0 0 1 24.68 31H7.32A6.32 6.32 0 0 1 1 24.68V22.08H20.89A1.42 1.42 0 0 0 20.89 19.24H1V7.32A6.32 6.32 0 0 1 7.32 1Z' fill='url(%23f)'/%3E%3C/svg%3E";
 
 /**
  * The logo of the portal and of the dashboard: a solid block with two slits
  * cut in from opposite sides, the S of sitesolide. Inline rather than as a
- * file, for the same reason as the rest of the page. The gradient identifier is
- * global to the document, and there is only one logo per page.
+ * file, for the same reason as the rest of the page. Its gradient is the
+ * dashboard's light one, the brand's petrol around the accent. The gradient
+ * identifier is global to the document, and there is only one logo per page.
  */
 const LOGO = `<svg viewBox="0 0 32 32" aria-hidden="true">
         <defs>
           <linearGradient id="mark-fill" x1="3" y1="3" x2="29" y2="29" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stop-color="#b3253f" />
-            <stop offset="1" stop-color="#7d1730" />
+            <stop offset="0" stop-color="#138896" />
+            <stop offset="1" stop-color="#0a5560" />
           </linearGradient>
         </defs>
         <path d="M8.47 3H23.53A5.47 5.47 0 0 1 29 8.47V10.73H11.76A1.23 1.23 0 0 0 11.76 13.19H29V23.53A5.47 5.47 0 0 1 23.53 29H8.47A5.47 5.47 0 0 1 3 23.53V21.27H20.24A1.23 1.23 0 0 0 20.24 18.81H3V8.47A5.47 5.47 0 0 1 8.47 3Z" fill="url(#mark-fill)" />
       </svg>`;
 
+/**
+ * The dashboard's light palette, from web/src/styles/global.css: graphite
+ * neutrals, petrol for the primary action and the focus ring, red for an error
+ * and nothing else. The font is the dashboard's fallback stack: the CSP
+ * (`default-src 'none'`) loads no font, and the door page asks nothing of the
+ * server anyway.
+ */
 const STYLE = `
     :root {
-      --ink: #0e1726;
-      --ink-70: #3b4a63;
-      --ink-45: #6c7a91;
-      --glass: #e8ecf1;
+      --ink: #16181d;
+      --ink-70: #3a404a;
+      --ink-45: #5f6672;
+      --glass: #f7f8fa;
       --surface: #ffffff;
-      --line: #d2d9e3;
-      --seal: #b3253f;
+      --line: #e3e6eb;
+      --field: #d9dde3;
+      --accent: #0b6e79;
+      --accent-deep: #0a5560;
+      --destructive: #b3253f;
     }
 
     * { box-sizing: border-box; }
@@ -62,7 +77,7 @@ const STYLE = `
       padding: clamp(20px, 5vw, 48px);
       background: var(--glass);
       color: var(--ink);
-      font-family: "Helvetica Neue", Helvetica, Arial, "Segoe UI", system-ui, sans-serif;
+      font-family: ui-sans-serif, system-ui, sans-serif;
       font-size: 1rem;
       line-height: 1.6;
       -webkit-font-smoothing: antialiased;
@@ -123,7 +138,7 @@ const STYLE = `
       font-size: 1.125rem;
       color: var(--ink);
       background: var(--surface);
-      border: 1px solid var(--line);
+      border: 1px solid var(--field);
       border-radius: 5px;
     }
 
@@ -133,11 +148,11 @@ const STYLE = `
 
     input:focus-visible,
     button:focus-visible {
-      outline: 2px solid var(--seal);
+      outline: 2px solid var(--accent);
       outline-offset: 2px;
     }
 
-    .alert { margin-top: 10px; font-size: 0.875rem; color: var(--seal); }
+    .alert { margin-top: 10px; font-size: 0.875rem; color: var(--destructive); }
 
     button {
       margin-top: 14px;
@@ -147,13 +162,13 @@ const STYLE = `
       font-size: 0.9375rem;
       font-weight: 500;
       color: var(--surface);
-      background: var(--ink);
+      background: var(--accent);
       border: 1px solid transparent;
       border-radius: 5px;
       cursor: pointer;
     }
 
-    button:hover { background: #1c2c47; }
+    button:hover { background: var(--accent-deep); }
 
     a.sso {
       display: block;
@@ -164,14 +179,14 @@ const STYLE = `
       text-align: center;
       text-decoration: none;
       color: var(--surface);
-      background: var(--ink);
+      background: var(--accent);
       border-radius: 5px;
     }
 
-    a.sso:hover { background: #1c2c47; }
+    a.sso:hover { background: var(--accent-deep); }
 
     a.sso:focus-visible {
-      outline: 2px solid var(--seal);
+      outline: 2px solid var(--accent);
       outline-offset: 2px;
     }
 
@@ -187,7 +202,7 @@ const STYLE = `
     .or + form button {
       color: var(--ink);
       background: var(--surface);
-      border-color: var(--line);
+      border-color: var(--field);
     }
 
     .or + form button:hover { border-color: var(--ink-70); background: var(--surface); }
@@ -233,7 +248,7 @@ function template({ title, text, form, footer = "", comment = "", refresh = "" }
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">${refresh === "" ? "" : `\n  <meta http-equiv="refresh" content="0; url=${refresh}">`}
   <title>${tabTitle}</title>${comment === "" ? "" : `\n  <!--\n${comment}\n  -->`}
-  <meta name="theme-color" content="#e8ecf1">
+  <meta name="theme-color" content="#f7f8fa">
   <link rel="icon" href="${ICON}">
   <style>${STYLE}</style>
 </head>

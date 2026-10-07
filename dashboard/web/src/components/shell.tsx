@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type CSSProperties } from "react"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { AppSidebar, MobileTabs } from "@/components/sidebar"
 import { useAnnounce } from "@/components/copy"
@@ -18,7 +18,7 @@ import { GuestsSection } from "@/components/pages/site-guests"
 import { SharingSection } from "@/components/pages/site-sharing"
 import { SecretsSection } from "@/components/pages/site-secrets"
 import { SecretsActionsProvider } from "@/components/secrets-actions"
-import { readCollapsed, storeCollapsed } from "@/lib/sidebar"
+import { SIDEBAR_WIDTH, readCollapsed, storeCollapsed } from "@/lib/sidebar"
 import { PAGE_TITLE_ID, pendingTitle, documentTitle, pageTitle, pageUrl, type Page } from "@/lib/pages"
 import { cn } from "@/lib/utils"
 
@@ -105,7 +105,11 @@ export function Shell() {
   }
 
   return (
-    <SidebarProvider open={!collapsed} onOpenChange={onCollapseChange}>
+    <SidebarProvider
+      open={!collapsed}
+      onOpenChange={onCollapseChange}
+      style={{ "--sidebar-width": SIDEBAR_WIDTH } as CSSProperties}
+    >
       <AppSidebar />
       <SidebarInset className="min-w-0">
         <CurrentPage page={page} />
@@ -127,7 +131,7 @@ export function PendingShell({ path }: { path: string }) {
     <div aria-busy="true" aria-label="Loading" className="flex min-h-svh">
       <div className="hidden w-(--pending-sidebar-width) shrink-0 border-r bg-sidebar md:block">
         <div className="flex h-[4.25rem] items-center px-3.5">
-          <Logo className="size-7" />
+          <Logo className="size-6" />
         </div>
       </div>
       <div className="min-w-0 flex-1">

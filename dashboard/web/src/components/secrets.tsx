@@ -35,7 +35,7 @@ export function SecretsLockControl() {
     <>
       <span
         className={cn(
-          "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-sm px-2 text-xs font-medium whitespace-nowrap tabular-nums",
+          "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium whitespace-nowrap tabular-nums",
           TONE_PILL[state.open ? "attention" : "neutral"],
         )}
       >
@@ -183,7 +183,7 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
       {offer.add && file.variables.length > 0 && (
         <>
           <VariablesHeader />
-          <ul aria-label={`Variables in ${file.name}`} className="divide-y @max-xl/file:border-t">
+          <ul aria-label={`Variables in ${file.name}`} className="divide-y divide-divider @max-xl/file:border-t">
             {file.variables.map((variable) => {
               const variableTarget = { ...target, variable }
               const rowOffer = variableOffer(file, variable)
@@ -321,7 +321,7 @@ export function FilesPanel({ project }: { project: ProjectView }) {
       }
     >
       {problems.length > 0 && (
-        <ul aria-label={`What needs attention in ${project.slug}`} className="divide-y border-b">
+        <ul aria-label={`What needs attention in ${project.slug}`} className="divide-y divide-divider border-b">
           {problems.map((problem) => (
             <ProblemRow key={problem.key} problem={problem} slug={project.slug} />
           ))}

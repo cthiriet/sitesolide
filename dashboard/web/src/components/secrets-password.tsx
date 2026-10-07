@@ -114,7 +114,7 @@ function PasswordFlow({
   const announce = useAnnounce()
   const texts = passwordTexts(target.slug, target.variable)
   const [step, setStep] = useState<Step>({ phase: "entry" })
-  const [inProgress, setEnCours] = useState(false)
+  const [inProgress, setInProgress] = useState(false)
   const [copyState, setCopied] = useState(false)
   const [warned, setWarned] = useState(false)
 
@@ -182,7 +182,7 @@ function PasswordFlow({
       <PasswordForm
         target={target}
         inProgress={inProgress}
-        setEnCours={setEnCours}
+        setInProgress={setInProgress}
         onChange={change}
         onRefusal={onRefusal}
       />
@@ -229,13 +229,13 @@ const describedBy = (id: string, error: string | undefined, help: boolean) =>
 function PasswordForm({
   target,
   inProgress,
-  setEnCours,
+  setInProgress,
   onChange,
   onRefusal,
 }: {
   target: PasswordTarget
   inProgress: boolean
-  setEnCours: (inProgress: boolean) => void
+  setInProgress: (inProgress: boolean) => void
   onChange: (password: string | null) => void
   onRefusal: OnRefusal
 }) {
@@ -259,7 +259,7 @@ function PasswordForm({
   const newPasswordId = useId()
   const idConfirmation = useId()
 
-  const restantS = waitUntil === null ? 0 : Math.max(0, Math.ceil((waitUntil - clock) / 1000))
+  const remainingS = waitUntil === null ? 0 : Math.max(0, Math.ceil((waitUntil - clock) / 1000))
 
   // The rate limit countdown, second by second, as on the unlock.
   useEffect(() => {
@@ -269,21 +269,21 @@ function PasswordForm({
   }, [waitUntil])
 
   useEffect(() => {
-    if (waitUntil === null || restantS > 0) return
+    if (waitUntil === null || remainingS > 0) return
     setWaitUntil(null)
     setErrors(({ dashboard: _, ...remaining }) => remaining)
-  }, [waitUntil, restantS])
+  }, [waitUntil, remainingS])
 
   async function submit(event: SyntheticEvent) {
     event.preventDefault()
-    if (inProgress || restantS > 0) return
+    if (inProgress || remainingS > 0) return
     const faults = checkEntry({ dashboard, mode, newPassword, confirmation })
     setErrors(faults)
     setFormError("")
     const first = firstFaultyField(faults)
     if (first !== null) return fields[first].current?.focus()
 
-    setEnCours(true)
+    setInProgress(true)
     try {
       const { status, body } = await changePassword({
         slug: target.slug,
@@ -315,11 +315,11 @@ function PasswordForm({
       }
       setFormError(message)
     } finally {
-      setEnCours(false)
+      setInProgress(false)
     }
   }
 
-  const label = inProgress ? "Changing…" : restantS > 0 ? waitMessage(restantS) : "Change password"
+  const label = inProgress ? "Changing…" : remainingS > 0 ? waitMessage(remainingS) : "Change password"
   const fieldType = visible ? "text" : "password"
 
   return (
@@ -342,7 +342,7 @@ function PasswordForm({
           value={dashboard}
           onChange={(event) => {
             setDashboardPassword(event.target.value)
-            if (restantS === 0) setErrors(({ dashboard: _, ...remaining }) => remaining)
+            if (remainingS === 0) setErrors(({ dashboard: _, ...remaining }) => remaining)
           }}
           aria-invalid={errors.dashboard !== undefined || undefined}
           aria-describedby={describedBy(dashboardPasswordId, errors.dashboard, true)}
@@ -361,7 +361,7 @@ function PasswordForm({
           ).map(([value, text]) => (
             <label
               key={value}
-              className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-input px-2 text-center text-sm transition-colors select-none hover:bg-muted has-checked:border-foreground has-checked:bg-muted has-checked:font-medium has-checked:ring-1 has-checked:ring-foreground has-focus-visible:ring-3 has-focus-visible:ring-ring/50 sm:h-9"
+              className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-input px-2 text-center text-sm transition-colors select-none hover:bg-muted has-checked:border-foreground has-checked:bg-muted has-checked:font-medium has-checked:ring-1 has-checked:ring-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring sm:h-9"
             >
               <input
                 type="radio"
@@ -443,7 +443,7 @@ function PasswordForm({
         <DialogClose render={<Button variant="outline" className="max-sm:h-11" />} disabled={inProgress}>
           Cancel
         </DialogClose>
-        <Button type="submit" disabled={inProgress || restantS > 0} className="tabular-nums max-sm:h-11">
+        <Button type="submit" disabled={inProgress || remainingS > 0} className="tabular-nums max-sm:h-11">
           {label}
         </Button>
       </DialogFooter>

@@ -79,13 +79,13 @@ export function SearchField({
         spellCheck={false}
         enterKeyHint="search"
         aria-keyshortcuts="/"
-        className="peer h-10 bg-card pr-9 pl-8 md:h-9 dark:bg-card [&::-webkit-search-cancel-button]:appearance-none"
+        className="peer h-10 bg-card pr-9 pl-8 md:h-9 dark:bg-background [&::-webkit-search-cancel-button]:appearance-none"
       />
       {value === "" ? (
         // A reminder for the mouse and the physical keyboard: not on a narrow screen, nor on a touch screen.
         <kbd
           aria-hidden="true"
-          className="pointer-events-none absolute top-1/2 right-2 hidden h-5 min-w-5 -translate-y-1/2 items-center justify-center rounded-sm bg-muted px-1 font-sans text-xs font-medium text-muted-foreground peer-focus:opacity-0 sm:pointer-fine:inline-flex"
+          className="pointer-events-none absolute top-1/2 right-2 hidden h-5 min-w-5 -translate-y-1/2 items-center justify-center rounded-sm border border-input px-1.5 font-sans text-[0.6875rem] text-muted-foreground peer-focus:opacity-0 sm:pointer-fine:inline-flex"
         >
           /
         </kbd>
@@ -96,7 +96,7 @@ export function SearchField({
             size="icon-sm"
             aria-label="Clear search"
             onClick={clear}
-            className="rounded-sm text-muted-foreground hover:text-foreground max-md:size-8"
+            className="text-muted-foreground hover:text-foreground max-md:size-8"
           >
             <X />
           </Button>
@@ -110,7 +110,7 @@ export function SearchField({
  * The inventory's filters, one at a time, each with the number of sites it
  * would keep under the current search. Toggle buttons rather than a radio
  * group: each one reads and is reached on its own, with the keyboard as with a
- * finger. The chosen filter takes the white surface of the current page.
+ * finger. The chosen filter takes the grey of the sidebar's current page.
  */
 export function SiteFilterChips({
   value,
@@ -125,7 +125,7 @@ export function SiteFilterChips({
     <div
       role="group"
       aria-label="Filter sites"
-      className="grid w-full grid-cols-5 gap-0.5 rounded-lg bg-foreground/[0.06] p-0.5 sm:inline-flex sm:w-auto"
+      className="grid w-full grid-cols-5 gap-0.5 rounded-lg border bg-card p-0.5 sm:inline-flex sm:w-auto dark:bg-background"
     >
       {FILTERS.map((filter) => {
         const selected = filter.key === value
@@ -137,10 +137,10 @@ export function SiteFilterChips({
             title={filter.description}
             onClick={() => onValue(filter.key)}
             className={cn(
-              "inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-md px-1.5 text-[0.8125rem] whitespace-nowrap outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:h-8 sm:px-2.5 sm:text-sm",
+              "inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-md px-1.5 text-[0.8125rem] whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-[1.875rem] sm:px-2.5",
               selected
-                ? "bg-card font-medium text-foreground shadow-[0_0_0_1px_var(--border)]"
-                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                ? "bg-muted font-medium text-strong"
+                : "text-secondary-foreground hover:bg-muted/60 hover:text-strong",
             )}
           >
             {filter.label}

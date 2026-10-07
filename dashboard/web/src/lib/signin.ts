@@ -24,8 +24,8 @@ export function signInRefusal(status: number, body: { error?: string; wait?: num
  * The button's label during the wait. The failure counter is global, not
  * specific to this browser: the wait applies to everyone.
  */
-export function waitMessage(restantS: number): string {
-  return `Try again in ${duration(Math.max(0, restantS) * 1000)}`
+export function waitMessage(remainingS: number): string {
+  return `Try again in ${duration(Math.max(0, remainingS) * 1000)}`
 }
 
 /** The shortcut to announce when the automatic copy failed. */

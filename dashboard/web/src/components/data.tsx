@@ -210,7 +210,7 @@ function OpenSession({
 }) {
   const [received, setReceived] = useState<Received | null>(null)
   const [failure, setFailed] = useState(false)
-  const [inProgress, setEnCours] = useState(false)
+  const [inProgress, setInProgress] = useState(false)
   const [expired, setExpired] = useState(false)
   const [currentConfigured, setConfigured] = useState(configured)
   const [generation, setGeneration] = useState(0)
@@ -226,7 +226,7 @@ function OpenSession({
   const refresh = useCallback(async () => {
     if (inFlight.current) return
     inFlight.current = true
-    setEnCours(true)
+    setInProgress(true)
     try {
       const { status, body } = await readState()
       // 401: session expired or closed elsewhere, including by a password
@@ -241,7 +241,7 @@ function OpenSession({
       setGeneration((before) => before + 1)
     } finally {
       inFlight.current = false
-      setEnCours(false)
+      setInProgress(false)
     }
   }, [])
 
@@ -330,7 +330,7 @@ function OpenSession({
       <div inert={expired}>{children}</div>
       {expired && (
         <SignIn
-          superposition
+          overlay
           configured={currentConfigured}
           message="Your session expired. Sign in again to pick up where you left off."
           onOpened={open}

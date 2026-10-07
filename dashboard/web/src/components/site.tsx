@@ -98,8 +98,9 @@ function SiteMenu({ slug, section }: { slug: string; section: Section }) {
 }
 
 /**
- * The current site in the sidebar: its name and its state, with the switcher
- * behind it. Collapsed, the sidebar keeps only its initial, with the state dot.
+ * The current site in the sidebar, on the card surface: its name and its
+ * state, with the switcher behind it. Collapsed, the sidebar keeps only its
+ * initial, with the state dot.
  */
 export function SidebarSitePicker({ slug, section }: { slug: string; section: Section }) {
   const { snapshot } = useData()
@@ -112,19 +113,19 @@ export function SidebarSitePicker({ slug, section }: { slug: string; section: Se
           <SidebarMenuButton
             size="lg"
             tooltip={`${slug}, switch site`}
-            className="h-auto min-h-12 gap-2.5 border bg-sidebar-accent py-2 hover:bg-sidebar-accent data-popup-open:bg-sidebar-accent group-data-[collapsible=icon]:min-h-8 group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
+            className="h-auto min-h-12 gap-2.5 rounded-lg border bg-card py-2 hover:bg-card data-popup-open:bg-card group-data-[collapsible=icon]:min-h-8 group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
           />
         }
       >
         <span
           aria-hidden="true"
-          className="relative flex size-8 shrink-0 items-center justify-center rounded-md bg-muted font-display text-sm font-semibold uppercase"
+          className="relative flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-sm font-semibold uppercase"
         >
           {slug.charAt(0)}
           {state !== null && (
             <span
               className={cn(
-                "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-sidebar-accent",
+                "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-card",
                 TONE_DOT[state.tone],
               )}
             />
@@ -167,7 +168,7 @@ function HeaderSitePicker({ slug, section }: { slug: string; section: Section })
 // --- The breadcrumb ----------------------------------------------------------------
 
 const BREADCRUMB_LINK =
-  "rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+  "rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
 
 /**
  * The path up to the section, above its title: all sites, then the site when

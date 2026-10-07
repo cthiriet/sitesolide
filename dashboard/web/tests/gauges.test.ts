@@ -67,10 +67,10 @@ describe("load share", () => {
 })
 
 describe("gauge colour", () => {
-  test("below the first threshold, the bar is neutral", () => {
+  test("below the first threshold, the bar takes the accent rather than a tone", () => {
     expect(level(0)).toBe("normal")
     expect(level(WARNING_THRESHOLD - 1)).toBe("normal")
-    expect(BAR_CLASSES[level(WARNING_THRESHOLD - 1)]).toContain("bg-foreground")
+    expect(BAR_CLASSES[level(WARNING_THRESHOLD - 1)]).toContain("bg-primary")
   })
 
   test("at the first threshold it turns to attention, at the second to error", () => {
@@ -100,7 +100,7 @@ describe("gauge colour", () => {
 })
 
 describe("thresholds engraved on the track", () => {
-  /** The machine plate notches every gauge at the thresholds: the position has to follow the constant. */
+  /** The machine plate ticks every gauge at the thresholds: the position has to follow the constant. */
   test("one position per threshold, following its value, spelled out in full", async () => {
     const source = await Bun.file(new URL("../src/lib/gauges.ts", import.meta.url)).text()
     expect(THRESHOLD_POSITIONS.map(({ threshold }) => threshold)).toEqual([WARNING_THRESHOLD, CRITICAL_THRESHOLD])

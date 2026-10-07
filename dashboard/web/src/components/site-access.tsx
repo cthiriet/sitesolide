@@ -30,7 +30,7 @@ export function CodeChip({
   return (
     <span
       className={cn(
-        "inline-flex max-w-full items-center gap-0.5 rounded-sm border bg-muted/40 pl-2 whitespace-nowrap",
+        "inline-flex max-w-full items-center gap-0.5 rounded-md border bg-muted/40 pl-2 whitespace-nowrap",
         large ? "py-0.5 pr-0.5" : "pr-0.5",
       )}
     >

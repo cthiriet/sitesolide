@@ -70,7 +70,7 @@ export function Status({
       <span
         title={title}
         className={cn(
-          "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-sm px-2 text-xs font-medium whitespace-nowrap",
+          "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium whitespace-nowrap",
           TONE_PILL[tone],
           className,
         )}
@@ -127,7 +127,7 @@ export function Count({ children, className }: { children: ReactNode; className?
   return (
     <span
       className={cn(
-        "inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-sm bg-muted px-1.5 text-xs font-medium text-muted-foreground tabular-nums",
+        "inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-sm bg-border px-1.5 text-xs font-medium text-secondary-foreground tabular-nums",
         className,
       )}
     >
@@ -156,7 +156,7 @@ export function PageBody({ narrow = false, className, children }: { narrow?: boo
 }
 
 /**
- * A bordered white surface, grouping what is read together. With a title, a
+ * A bordered card, grouping what is read together. With a title, a
  * header row and its rule. `full` makes the content touch the edges: a table,
  * a divided list.
  */
@@ -184,7 +184,7 @@ export function Panel({
     <section
       id={id}
       aria-labelledby={title === undefined ? undefined : titleId}
-      className={cn("min-w-0 overflow-hidden rounded-lg border bg-card text-sm text-card-foreground", className)}
+      className={cn("min-w-0 overflow-hidden rounded-xl border bg-card text-sm text-card-foreground", className)}
     >
       {title !== undefined && (
         <div className="flex min-h-11 flex-wrap items-center gap-x-2.5 gap-y-1 border-b px-4 py-2">
@@ -297,7 +297,7 @@ const TEXT_WIDTHS = ["max-w-md", "max-w-sm", "max-w-lg", "max-w-xs", "max-w-md",
 /** The rows of a loading list, at the heights of the real ones. */
 export function RowsSkeleton({ lines = 4, className }: { lines?: number; className?: string }) {
   return (
-    <div aria-hidden="true" className={cn("divide-y", className)}>
+    <div aria-hidden="true" className={cn("divide-y divide-divider", className)}>
       {Array.from({ length: lines }, (_, index) => (
         <div key={index} className="flex h-11 items-center gap-3 px-4">
           <Skeleton className="size-4 shrink-0 rounded-full" />
@@ -312,7 +312,7 @@ export function RowsSkeleton({ lines = 4, className }: { lines?: number; classNa
 /** A loading panel. */
 export function PanelSkeleton({ lines = 4, title = true, className }: { lines?: number; title?: boolean; className?: string }) {
   return (
-    <div aria-busy="true" aria-label="Loading" className={cn("overflow-hidden rounded-lg border bg-card", className)}>
+    <div aria-busy="true" aria-label="Loading" className={cn("overflow-hidden rounded-xl border bg-card", className)}>
       {title && (
         <div className="flex h-11 items-center border-b px-4">
           <Skeleton className="h-3.5 w-24" />
@@ -335,7 +335,7 @@ export function HeaderSkeleton({ title }: { title: string | null }) {
         {title === null ? (
           <Skeleton className="h-6 w-32" />
         ) : (
-          <p className="font-display text-[1.375rem] leading-7 font-semibold tracking-tight">{title}</p>
+          <p className="text-xl font-semibold tracking-title">{title}</p>
         )}
         <Skeleton className="ml-auto hidden h-6 w-40 md:block" />
         <Skeleton className="ml-auto size-9 md:hidden" />
@@ -360,7 +360,7 @@ function Verdict() {
   return (
     <InternalLink
       href="/"
-      className="inline-flex rounded-sm outline-none hover:opacity-80 focus-visible:ring-3 focus-visible:ring-ring/50"
+      className="inline-flex rounded-md outline-none hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring"
     >
       {pill}
       <span className="sr-only">, show issues</span>
@@ -489,7 +489,7 @@ export function PageHeader({
             <InternalLink
               href="/"
               aria-label="All sites"
-              className="shrink-0 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50 md:hidden"
+              className="shrink-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring md:hidden"
             >
               <Logo className="size-7" />
             </InternalLink>
@@ -499,7 +499,7 @@ export function PageHeader({
                 <h1
                   id={PAGE_TITLE_ID}
                   tabIndex={-1}
-                  className="truncate font-display text-[1.375rem] leading-7 font-semibold tracking-tight outline-none"
+                  className="truncate text-xl font-semibold tracking-title outline-none"
                 >
                   {title}
                 </h1>
@@ -585,7 +585,7 @@ export function UnreachableScreen({ onRetry }: { onRetry: () => void }) {
     <main className="grid min-h-svh place-items-center bg-background p-6">
       <div className="grid max-w-xs justify-items-center gap-2 text-center">
         <Logo className="mb-3 size-10" />
-        <h1 className="font-display text-lg font-semibold tracking-tight">Can't reach the dashboard.</h1>
+        <h1 className="text-lg font-semibold tracking-title">Can't reach the dashboard.</h1>
         <p className="text-sm text-muted-foreground">
           The server didn't answer. The page tries again every few seconds; check your connection if it lasts.
         </p>

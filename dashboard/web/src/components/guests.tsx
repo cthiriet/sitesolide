@@ -307,8 +307,8 @@ export function ExpiredSubheading({ count }: { count: number }) {
 
 // --- The table -------------------------------------------------------------------
 
-const HEAD = "h-9 px-3 text-xs font-medium text-muted-foreground"
-const CELL = "px-3 py-2.5"
+const HEAD = "h-10 px-3 text-xs font-medium text-muted-foreground"
+const CELL = "px-3 py-3"
 
 function GuestTableRow({
   guest,
@@ -324,7 +324,7 @@ function GuestTableRow({
   const isExpired = deadline(guest, now).tone === "expired"
   const finish = endDate(guest)
   return (
-    <TableRow className={cn("hover:bg-transparent", isExpired && "text-muted-foreground")}>
+    <TableRow className={cn("border-divider hover:bg-transparent", isExpired && "text-muted-foreground")}>
       <TableCell className={cn(CELL, "max-w-72 min-w-44 pl-4 font-medium whitespace-normal wrap-anywhere")}>
         {guest.label}
       </TableCell>
@@ -370,7 +370,7 @@ export function GuestList({
       <div className="hidden @2xl:block">
         <Table>
           <caption className="sr-only">Guest access to {slug}. Active access first, soonest expiry first, then expired access.</caption>
-          <TableHeader className="bg-muted/50">
+          <TableHeader className="bg-muted">
             <TableRow className="hover:bg-transparent">
               <TableHead className={cn(HEAD, "pl-4")}>Guest</TableHead>
               <TableHead className={HEAD}>Expires</TableHead>
@@ -398,7 +398,7 @@ export function GuestList({
         </Table>
       </div>
 
-      <ul className="divide-y @2xl:hidden" aria-label={`Guest access to ${slug}`}>
+      <ul className="divide-y divide-divider @2xl:hidden" aria-label={`Guest access to ${slug}`}>
         {active.map((guest) => (
           <GuestRow key={guest.id} guest={guest} slug={slug} now={now} actions={actions} />
         ))}

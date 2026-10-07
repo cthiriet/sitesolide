@@ -73,7 +73,7 @@ export function SiteGuestsPanel({ slug }: { slug: string }) {
       )}
 
       {list.state === "ready" && active.length + expired.length > 0 && (
-        <ul className="divide-y" aria-label={`Guest access to ${slug}`}>
+        <ul className="divide-y divide-divider" aria-label={`Guest access to ${slug}`}>
           {active.map((guest) => (
             <GuestRow key={guest.id} guest={guest} slug={slug} now={now} actions={actions} />
           ))}

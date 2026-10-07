@@ -197,7 +197,7 @@ export function ContentDialog({
   onRefusal: OnRefusal
   focusReturn: FocusReturn
 }) {
-  const [inProgress, setEnCours] = useState<"save" | "restart" | null>(null)
+  const [inProgress, setInProgress] = useState<"save" | "restart" | null>(null)
   return (
     <Dialog
       open={open}
@@ -223,7 +223,7 @@ export function ContentDialog({
             target={target}
             restartable={restartable}
             inProgress={inProgress}
-            setEnCours={setEnCours}
+            setInProgress={setInProgress}
             onReplaced={onReplaced}
             onRefusal={onRefusal}
           />
@@ -237,14 +237,14 @@ function ContentForm({
   target,
   restartable,
   inProgress,
-  setEnCours,
+  setInProgress,
   onReplaced,
   onRefusal,
 }: {
   target: ContentTarget
   restartable: boolean
   inProgress: "save" | "restart" | null
-  setEnCours: (inProgress: "save" | "restart" | null) => void
+  setInProgress: (inProgress: "save" | "restart" | null) => void
   onReplaced: (target: { slug: string; file: string }, restart: boolean) => void
   onRefusal: OnRefusal
 }) {
@@ -285,7 +285,7 @@ function ContentForm({
 
   async function save(restart: boolean) {
     if (busy) return
-    setEnCours(restart ? "restart" : "save")
+    setInProgress(restart ? "restart" : "save")
     setError("")
     try {
       const { status, body } = await replaceSecretContent({ slug: target.slug, file: target.file, content })
@@ -296,7 +296,7 @@ function ContentForm({
       const message = onRefusal(refusalOf(status, body))
       if (message !== null) setError(message)
     } finally {
-      setEnCours(null)
+      setInProgress(null)
     }
   }
 
@@ -353,7 +353,7 @@ function ContentForm({
           }}
           onDragLeave={() => setDragOver(false)}
           onDrop={onDropFile}
-          className={cn("rounded-lg", dragOver && "ring-3 ring-ring/50")}
+          className={cn("rounded-lg", dragOver && "ring-2 ring-ring")}
         >
           <textarea
             ref={field}

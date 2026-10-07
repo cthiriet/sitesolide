@@ -121,7 +121,7 @@ export function Command({ text, label = "Copy command" }: { text: string; label?
   const { state, copy, reset } = useCopy("Command copied")
   if (state === "failure") return <CopyFallback text={text} onClose={reset} />
   return (
-    <div className="flex min-w-0 items-center gap-1 rounded-sm bg-muted py-1 pr-1 pl-3">
+    <div className="flex min-w-0 items-center gap-1 rounded-lg bg-muted py-1 pr-1 pl-3">
       <code className="min-w-0 flex-1 font-mono text-xs break-all">{text}</code>
       <Button
         variant="ghost"

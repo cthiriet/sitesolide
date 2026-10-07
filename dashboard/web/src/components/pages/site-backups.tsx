@@ -126,7 +126,7 @@ function SchedulePanel({ view, serverNow }: { view: BackupsView; serverNow: numb
     <Panel title="Schedule" full>
       <table className="w-full text-sm">
         <caption className="sr-only">How this site's data is saved</caption>
-        <tbody className="divide-y">
+        <tbody className="divide-y divide-divider">
           <Row label="This site">
             <Reading reading={freshness(view, serverNow)} />
           </Row>
@@ -222,7 +222,7 @@ function SnapshotsPanel({
           <table className="hidden w-full text-sm @2xl:table">
             <caption className="sr-only">{caption}</caption>
             <thead>
-              <tr className="h-9 border-b bg-muted/50 text-left text-xs font-medium text-muted-foreground">
+              <tr className="h-10 border-b bg-muted text-left text-xs font-medium text-muted-foreground">
                 <th scope="col" className="px-3 pl-4 font-medium">
                   Taken
                 </th>
@@ -240,22 +240,22 @@ function SnapshotsPanel({
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+            <tbody className="divide-y divide-divider">
               {shown.map((snapshot) => (
                 <tr key={snapshot.name}>
-                  <td className="px-3 py-2.5 pl-4">
+                  <td className="px-3 py-3 pl-4">
                     <When at={snapshot.takenAt} serverNow={serverNow} />
                   </td>
-                  <td className="px-3 py-2.5">{kindLabel(snapshot.kind)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{size(snapshot.bytes)}</td>
-                  <td className="px-3 py-2.5">{whereLabel(snapshot)}</td>
-                  <td className="px-3 py-2.5 pr-4 text-right">{restoreButton(snapshot)}</td>
+                  <td className="px-3 py-3">{kindLabel(snapshot.kind)}</td>
+                  <td className="px-3 py-3 text-right tabular-nums">{size(snapshot.bytes)}</td>
+                  <td className="px-3 py-3">{whereLabel(snapshot)}</td>
+                  <td className="px-3 py-3 pr-4 text-right">{restoreButton(snapshot)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
 
-          <ol aria-label={caption} className="divide-y @2xl:hidden">
+          <ol aria-label={caption} className="divide-y divide-divider @2xl:hidden">
             {shown.map((snapshot) => (
               <li key={snapshot.name} className="flex items-center gap-3 px-4 py-3">
                 <div className="grid min-w-0 flex-1 gap-0.5">
@@ -297,7 +297,7 @@ function ActivityPanel({ slug, audit, serverNow }: { slug: string; audit: Backup
         </EmptyState>
       )}
       {audit !== null && audit.length > 0 && (
-        <ol aria-label={`Backup activity of ${slug}, most recent first`} className="divide-y">
+        <ol aria-label={`Backup activity of ${slug}, most recent first`} className="divide-y divide-divider">
           {audit.slice(0, 20).map((entry) => {
             const line = auditLine(entry, slug)
             return (
@@ -575,7 +575,7 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
     return (
       <div aria-busy="true" aria-label="Loading backups" className="grid gap-6">
         <PanelSkeleton lines={3} />
-        <div className="overflow-hidden rounded-lg border bg-card">
+        <div className="overflow-hidden rounded-xl border bg-card">
           <RowsSkeleton lines={4} />
         </div>
       </div>

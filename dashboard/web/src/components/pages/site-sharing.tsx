@@ -79,7 +79,7 @@ function SecretsLink({ children }: { children: string }) {
   return (
     <InternalLink
       href={siteUrl(PORTAL_SLUG, "secrets")}
-      className="rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+      className="rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
     >
       {children}
     </InternalLink>
@@ -105,7 +105,7 @@ function ModeChoice({
         {SHARING_MODES.map((mode) => (
           <label
             key={mode}
-            className="grid cursor-pointer content-start gap-1 rounded-lg border border-input p-3 transition-colors select-none hover:bg-muted has-checked:border-foreground has-checked:bg-muted has-checked:ring-1 has-checked:ring-foreground has-focus-visible:ring-3 has-focus-visible:ring-ring/50 has-disabled:cursor-default"
+            className="grid cursor-pointer content-start gap-1 rounded-lg border border-input p-3 transition-colors select-none hover:bg-muted has-checked:border-foreground has-checked:bg-muted has-checked:ring-1 has-checked:ring-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring has-disabled:cursor-default"
           >
             <input
               type="radio"
@@ -181,7 +181,7 @@ function EntryList({
       {values.length === 0 ? (
         <EmptyState icon={people ? UserRoundX : Share2} title={people ? "Nobody added yet" : "No domain added yet"} compact />
       ) : (
-        <ul className="divide-y" aria-label={people ? `People ${slug} is shared with` : `Domains ${slug} is shared with`}>
+        <ul className="divide-y divide-divider" aria-label={people ? `People ${slug} is shared with` : `Domains ${slug} is shared with`}>
           {values.map((value) => (
             <li key={value} className="flex min-h-11 items-center gap-3 py-1 pr-2 pl-4">
               <span className="min-w-0 flex-1 wrap-anywhere">{value}</span>
@@ -382,7 +382,7 @@ function Content({
               </EmptyState>
             ) : (
               <>
-                <ul className="divide-y" aria-label="Admin emails">
+                <ul className="divide-y divide-divider" aria-label="Admin emails">
                   {sso.admins.map((email) => (
                     <li key={email} className="flex min-h-11 items-center px-4 py-1 wrap-anywhere">
                       {email}

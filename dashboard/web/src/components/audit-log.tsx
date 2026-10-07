@@ -55,11 +55,11 @@ export function SourceStates({ statuses }: { statuses: readonly SourceStatus[] }
 
 // --- The filters -----------------------------------------------------------------
 
-/** One source or every one, the chosen one on the white surface, like the home page's filters. */
+/** One source or every one, the chosen one on the grey of the current page, like the home page's filters. */
 function SourceChips({ value, onValue }: { value: AuditSource | null; onValue: (source: AuditSource | null) => void }) {
   const choices: { key: AuditSource | null; label: string; description: string }[] = [{ key: null, label: "All", description: "Every source" }, ...SOURCES]
   return (
-    <div role="group" aria-label="Filter by source" className="grid w-full grid-cols-3 gap-0.5 rounded-lg bg-foreground/[0.06] p-0.5 sm:inline-flex sm:w-auto">
+    <div role="group" aria-label="Filter by source" className="grid w-full grid-cols-3 gap-0.5 rounded-lg border bg-card p-0.5 sm:inline-flex sm:w-auto dark:bg-background">
       {choices.map((choice) => {
         const selected = choice.key === value
         return (
@@ -70,8 +70,8 @@ function SourceChips({ value, onValue }: { value: AuditSource | null; onValue: (
             title={choice.description}
             onClick={() => onValue(choice.key)}
             className={cn(
-              "inline-flex h-9 min-w-0 items-center justify-center rounded-md px-1.5 text-[0.8125rem] whitespace-nowrap outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:h-8 sm:px-2.5 sm:text-sm",
-              selected ? "bg-card font-medium text-foreground shadow-[0_0_0_1px_var(--border)]" : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+              "inline-flex h-9 min-w-0 items-center justify-center rounded-md px-1.5 text-[0.8125rem] whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-[1.875rem] sm:px-2.5",
+              selected ? "bg-muted font-medium text-strong" : "text-secondary-foreground hover:bg-muted/60 hover:text-strong",
             )}
           >
             {choice.label}
@@ -162,7 +162,7 @@ function When({ at, serverNow }: { at: string; serverNow: number }) {
   )
 }
 
-const LINK = "rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+const LINK = "rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
 
 /**
  * The site, linked when the server still has it; the host or name recorded,
@@ -268,7 +268,7 @@ export function AuditLog({ rows, known, serverNow, caption }: { rows: readonly A
       <table className="hidden w-full text-sm @3xl:table">
         <caption className="sr-only">{caption}</caption>
         <thead>
-          <tr className="h-9 border-b bg-muted/50 text-left text-xs font-medium text-muted-foreground">
+          <tr className="h-10 border-b bg-muted text-left text-xs font-medium text-muted-foreground">
             <th scope="col" className="px-3 pl-4 font-medium">
               Actor
             </th>
@@ -289,22 +289,22 @@ export function AuditLog({ rows, known, serverNow, caption }: { rows: readonly A
             </th>
           </tr>
         </thead>
-        <tbody className="divide-y">
+        <tbody className="divide-y divide-divider">
           {rows.map((row) => {
             const expanded = open.has(row.id)
             const id = detailId(row, "table")
             return (
               <Fragment key={row.id}>
                 <tr className="align-top">
-                  <td className="max-w-[16rem] px-3 py-2.5 pl-4 wrap-anywhere">{actorLabel(row)}</td>
-                  <td className="px-3 py-2.5">
+                  <td className="max-w-[16rem] px-3 py-3 pl-4 wrap-anywhere">{actorLabel(row)}</td>
+                  <td className="px-3 py-3">
                     <Summary row={row} />
                   </td>
-                  <td className="px-3 py-2.5">
+                  <td className="px-3 py-3">
                     <Target row={row} known={known} />
                   </td>
-                  <td className="px-3 py-2.5 text-muted-foreground">{sourceLabel(row.source)}</td>
-                  <td className="px-3 py-2.5 text-right">
+                  <td className="px-3 py-3 text-muted-foreground">{sourceLabel(row.source)}</td>
+                  <td className="px-3 py-3 text-right">
                     <When at={row.at} serverNow={serverNow} />
                   </td>
                   <td className="px-3 py-1.5 pr-4 text-right">
@@ -324,7 +324,7 @@ export function AuditLog({ rows, known, serverNow, caption }: { rows: readonly A
         </tbody>
       </table>
 
-      <ol aria-label={caption} className="divide-y @3xl:hidden">
+      <ol aria-label={caption} className="divide-y divide-divider @3xl:hidden">
         {rows.map((row) => {
           const expanded = open.has(row.id)
           const id = detailId(row, "list")

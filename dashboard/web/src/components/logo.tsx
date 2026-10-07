@@ -6,10 +6,11 @@ import { useId } from "react"
  * carry the same outline, and docs/assets holds it as files.
  *
  * One path rather than a block under two lighter bars: the slits are holes, so
- * the page shows through them in both themes. The gradient runs from the seal
- * red to bordeaux, lifted in the dark theme where bordeaux would sink into the
- * midnight blue. Its id goes through useId: ids are global to the document, and
- * two logos rendered together would steal each other's gradient.
+ * the page shows through them in both themes. The gradient is the brand's
+ * petrol, `mark-from` to `mark-to` in styles/global.css, one step lighter and
+ * one step deeper than the accent, lifted in the dark theme where the deep end
+ * would sink into the page. Its id goes through useId: ids are global to the
+ * document, and two logos rendered together would steal each other's gradient.
  */
 export function Logo({ className }: { className?: string }) {
   const fill = `${useId()}-fill`
@@ -18,8 +19,8 @@ export function Logo({ className }: { className?: string }) {
     <svg className={className} viewBox="0 0 32 32" aria-hidden="true">
       <defs>
         <linearGradient id={fill} x1="3" y1="3" x2="29" y2="29" gradientUnits="userSpaceOnUse">
-          <stop offset="0" className="[stop-color:#b3253f] dark:[stop-color:#d8425d]" />
-          <stop offset="1" className="[stop-color:#7d1730] dark:[stop-color:#a0203c]" />
+          <stop offset="0" className="[stop-color:var(--mark-from)]" />
+          <stop offset="1" className="[stop-color:var(--mark-to)]" />
         </linearGradient>
       </defs>
       <path

@@ -157,7 +157,7 @@ export function TeamPage() {
                 Create one per person or agent. The token is shown once; its holder signs in with sitesolide login.
               </EmptyState>
             ) : (
-              <ul className="divide-y">
+              <ul className="divide-y divide-divider">
                 {team.tokens.map((token) => (
                   <TokenRow key={token.id} token={token} now={serverNow} onRevoke={(chosen) => setRevoking({ token: chosen, open: true, inProgress: false, error: "" })} />
                 ))}
@@ -172,7 +172,7 @@ export function TeamPage() {
               {team.deployments.length === 0 ? (
                 <EmptyState compact title="No deployment by token yet" />
               ) : (
-                <ul className="divide-y">
+                <ul className="divide-y divide-divider">
                   {team.deployments.map((deployment) => (
                     <li key={deployment.id} className="grid gap-0.5 px-4 py-2.5">
                       <div className="flex flex-wrap items-center gap-x-2.5">
@@ -193,7 +193,7 @@ export function TeamPage() {
               {team.audit.length === 0 ? (
                 <EmptyState compact title="Nothing yet" />
               ) : (
-                <ul className="divide-y">
+                <ul className="divide-y divide-divider">
                   {team.audit.map((entry) => (
                     <li key={entry.id} className="flex flex-wrap items-baseline gap-x-3 px-4 py-2.5">
                       <span className="min-w-0 flex-1 wrap-anywhere">{auditLine(entry)}</span>

@@ -60,7 +60,7 @@ function ProjectLink({ slug, known }: { slug: string | null; known: ReadonlySet<
   return (
     <InternalLink
       href={siteUrl(slug, "secrets")}
-      className="rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+      className="rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
     >
       {slug}
     </InternalLink>
@@ -135,7 +135,7 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
           <table className="hidden w-full text-sm @2xl:table">
             <caption className="sr-only">{caption}</caption>
             <thead>
-              <tr className="h-9 border-b bg-muted/50 text-left text-xs font-medium text-muted-foreground">
+              <tr className="h-10 border-b bg-muted text-left text-xs font-medium text-muted-foreground">
                 <th scope="col" className="px-3 pl-4 font-medium">
                   Operation
                 </th>
@@ -155,26 +155,26 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+            <tbody className="divide-y divide-divider">
               {list.entries.map((entry, index) => {
                 const place = operationPlace(entry)
                 return (
                   <tr key={`${entry.a}-${index}`}>
-                    <td className="px-3 py-2.5 pl-4">
+                    <td className="px-3 py-3 pl-4">
                       <Operation entry={entry} />
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-3">
                       <Outcome entry={entry} />
                     </td>
                     {withSite && (
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-3">
                         <ProjectLink slug={place.project} known={known} />
                       </td>
                     )}
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-3">
                       {place.file !== null && <code className="font-mono text-xs">{place.file}</code>}
                     </td>
-                    <td className="px-3 py-2.5 pr-4 text-right">
+                    <td className="px-3 py-3 pr-4 text-right">
                       <When a={entry.a} serverNow={serverNow} />
                     </td>
                   </tr>
@@ -183,7 +183,7 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
             </tbody>
           </table>
 
-          <ol aria-label={caption} className="divide-y @2xl:hidden">
+          <ol aria-label={caption} className="divide-y divide-divider @2xl:hidden">
             {list.entries.map((entry, index) => {
               const place = operationPlace(entry)
               const outcome = operationOutcome(entry)

@@ -63,7 +63,7 @@ export function UnlockDialog({
   onRefusal: OnRefusal
   focusReturn: FocusReturn
 }) {
-  const [inProgress, setEnCours] = useState(false)
+  const [inProgress, setInProgress] = useState(false)
   const [waitUntil, setWaitUntil] = useState<number | null>(null)
   const field = useRef<HTMLInputElement>(null)
 
@@ -85,7 +85,7 @@ export function UnlockDialog({
         <UnlockForm
           field={field}
           inProgress={inProgress}
-          setEnCours={setEnCours}
+          setInProgress={setInProgress}
           waitUntil={waitUntil}
           setWaitUntil={setWaitUntil}
           onUnlocked={onUnlocked}
@@ -99,7 +99,7 @@ export function UnlockDialog({
 function UnlockForm({
   field,
   inProgress,
-  setEnCours,
+  setInProgress,
   waitUntil,
   setWaitUntil,
   onUnlocked,
@@ -107,7 +107,7 @@ function UnlockForm({
 }: {
   field: React.RefObject<HTMLInputElement | null>
   inProgress: boolean
-  setEnCours: (inProgress: boolean) => void
+  setInProgress: (inProgress: boolean) => void
   waitUntil: number | null
   setWaitUntil: (finish: number | null) => void
   onUnlocked: (until: number) => void
@@ -120,7 +120,7 @@ function UnlockForm({
   const [error, setError] = useState("")
   const [clock, setClock] = useState(() => Date.now())
 
-  const restantS = waitUntil === null ? 0 : Math.max(0, Math.ceil((waitUntil - clock) / 1000))
+  const remainingS = waitUntil === null ? 0 : Math.max(0, Math.ceil((waitUntil - clock) / 1000))
 
   // The rate limit countdown, second by second, down to zero, as on the sign-in.
   useEffect(() => {
@@ -130,19 +130,19 @@ function UnlockForm({
   }, [waitUntil])
 
   useEffect(() => {
-    if (waitUntil === null || restantS > 0) return
+    if (waitUntil === null || remainingS > 0) return
     setWaitUntil(null)
     setError("")
-  }, [waitUntil, restantS, setWaitUntil])
+  }, [waitUntil, remainingS, setWaitUntil])
 
   async function submit(event: SyntheticEvent) {
     event.preventDefault()
-    if (inProgress || restantS > 0) return
+    if (inProgress || remainingS > 0) return
     if (password === "") {
       setError("Enter the password.")
       return field.current?.focus()
     }
-    setEnCours(true)
+    setInProgress(true)
     setError("")
     try {
       const { status, body } = await unlockSecrets(password)
@@ -162,11 +162,11 @@ function UnlockForm({
       setError(message)
       field.current?.focus()
     } finally {
-      setEnCours(false)
+      setInProgress(false)
     }
   }
 
-  const label = inProgress ? "Unlocking…" : restantS > 0 ? waitMessage(restantS) : "Unlock"
+  const label = inProgress ? "Unlocking…" : remainingS > 0 ? waitMessage(remainingS) : "Unlock"
 
   return (
     <form noValidate onSubmit={submit} className="grid gap-4">
@@ -208,7 +208,7 @@ function UnlockForm({
         <DialogClose render={<Button variant="outline" className="max-sm:h-11" />} disabled={inProgress}>
           Cancel
         </DialogClose>
-        <Button type="submit" disabled={inProgress || restantS > 0} className="tabular-nums max-sm:h-11">
+        <Button type="submit" disabled={inProgress || remainingS > 0} className="tabular-nums max-sm:h-11">
           {label}
         </Button>
       </DialogFooter>
@@ -248,7 +248,7 @@ export function VariableDialog({
   onRefusal: OnRefusal
   focusReturn: FocusReturn
 }) {
-  const [inProgress, setEnCours] = useState<"save" | "restart" | null>(null)
+  const [inProgress, setInProgress] = useState<"save" | "restart" | null>(null)
   const editing = target?.variable !== null && target?.variable !== undefined
 
   return (
@@ -287,7 +287,7 @@ export function VariableDialog({
             key={target.opening}
             target={target}
             inProgress={inProgress}
-            setEnCours={setEnCours}
+            setInProgress={setInProgress}
             onSaved={onSaved}
             onRefusal={onRefusal}
           />
@@ -300,13 +300,13 @@ export function VariableDialog({
 function VariableForm({
   target,
   inProgress,
-  setEnCours,
+  setInProgress,
   onSaved,
   onRefusal,
 }: {
   target: EditTarget
   inProgress: "save" | "restart" | null
-  setEnCours: (inProgress: "save" | "restart" | null) => void
+  setInProgress: (inProgress: "save" | "restart" | null) => void
   onSaved: (target: EditTarget, variable: string, restart: boolean) => void
   onRefusal: OnRefusal
 }) {
@@ -324,7 +324,7 @@ function VariableForm({
 
   async function save(restart: boolean) {
     if (inProgress !== null) return
-    setEnCours(restart ? "restart" : "save")
+    setInProgress(restart ? "restart" : "save")
     setError("")
     try {
       const { status, body } = await setVariable({ slug: target.slug, file: target.file, variable: name, value })
@@ -335,7 +335,7 @@ function VariableForm({
       const message = onRefusal(refusalOf(status, body))
       if (message !== null) setError(message)
     } finally {
-      setEnCours(null)
+      setInProgress(null)
     }
   }
 
@@ -447,7 +447,7 @@ export function ConfirmDialog({
   title,
   description,
   action,
-  actionEnCours,
+  actionInProgress,
   destructive = false,
   inProgress,
   error,
@@ -459,7 +459,7 @@ export function ConfirmDialog({
   title: React.ReactNode
   description: React.ReactNode
   action: string
-  actionEnCours: string
+  actionInProgress: string
   destructive?: boolean
   inProgress: boolean
   error: string
@@ -494,7 +494,7 @@ export function ConfirmDialog({
             onClick={onConfirm}
             className="max-sm:h-11"
           >
-            {inProgress ? actionEnCours : action}
+            {inProgress ? actionInProgress : action}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -560,23 +560,24 @@ export function Track({
     <div className="grid gap-2">
       <div className="flex items-baseline justify-between gap-3 text-sm">
         <span className="text-muted-foreground">{label}</span>
-        <span className="font-display text-base font-semibold tabular-nums">{elapsed}</span>
+        <span className="text-base font-semibold tabular-nums">{elapsed}</span>
       </div>
       <div className="relative pb-5">
-        <Progress
-          value={part * 100}
-          aria-label="Time waited"
-          getAriaValueText={() => `${elapsed} waited`}
-          className="w-full [&_[data-slot=progress-indicator]]:bg-foreground/55 [&_[data-slot=progress-indicator]]:transition-[width] [&_[data-slot=progress-indicator]]:duration-1000 [&_[data-slot=progress-indicator]]:ease-linear motion-reduce:[&_[data-slot=progress-indicator]]:transition-none [&_[data-slot=progress-track]]:h-2 [&_[data-slot=progress-track]]:bg-foreground/10"
-        />
+        <div className="relative py-[3px]">
+          <Progress
+            value={part * 100}
+            aria-label="Time waited"
+            getAriaValueText={() => `${elapsed} waited`}
+            className="w-full [&_[data-slot=progress-indicator]]:bg-primary [&_[data-slot=progress-indicator]]:transition-[width] [&_[data-slot=progress-indicator]]:duration-1000 [&_[data-slot=progress-indicator]]:ease-linear motion-reduce:[&_[data-slot=progress-indicator]]:transition-none [&_[data-slot=progress-track]]:h-1.5 [&_[data-slot=progress-track]]:bg-track"
+          />
+          {position !== null && (
+            <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 w-px -translate-x-1/2 bg-tick" style={position} />
+          )}
+        </div>
         {position !== null && (
-          <>
-            <span aria-hidden="true" className="pointer-events-none absolute top-0 h-2 w-0.5 -translate-x-1/2 bg-popover" style={position} />
-            <span aria-hidden="true" className="pointer-events-none absolute top-2.5 h-1.5 w-px -translate-x-1/2 bg-foreground/35" style={position} />
-            <span aria-hidden="true" className="absolute bottom-0 -translate-x-1/2 text-xs text-muted-foreground" style={position}>
-              usual
-            </span>
-          </>
+          <span aria-hidden="true" className="absolute bottom-0 -translate-x-1/2 text-xs text-muted-foreground" style={position}>
+            usual
+          </span>
         )}
         <span aria-hidden="true" className="absolute right-0 bottom-0 text-xs text-muted-foreground">
           {finish}

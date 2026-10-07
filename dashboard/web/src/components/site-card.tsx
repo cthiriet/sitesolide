@@ -44,7 +44,7 @@ function Terminal({ children }: { children: string }) {
 function FactList({ facts, className }: { facts: readonly Fact[]; className?: string }) {
   if (facts.length === 0) return null
   return (
-    <dl className={cn("divide-y", className)}>
+    <dl className={cn("divide-y divide-divider", className)}>
       {facts.map((fact) => {
         const marked = fact.tone === "attention" || fact.tone === "error"
         return (
@@ -102,7 +102,7 @@ function MemoryGauge({ gauge }: { gauge: ServiceGauge }) {
         <p className="flex flex-wrap items-baseline gap-x-2">
           <span
             className={cn(
-              "font-display text-[1.75rem] leading-8 font-semibold tracking-tight tabular-nums",
+              "text-2xl leading-7 font-semibold tracking-title tabular-nums",
               LEVEL_TEXT[tile.level],
             )}
           >
@@ -115,11 +115,11 @@ function MemoryGauge({ gauge }: { gauge: ServiceGauge }) {
         )}
       </div>
       <div className="relative">
-        <Track tile={tile} thresholds={SERVICE_THRESHOLD_POSITIONS} title={SERVICE_THRESHOLDS_TITLE} notch="bg-card" />
+        <Track tile={tile} thresholds={SERVICE_THRESHOLD_POSITIONS} title={SERVICE_THRESHOLDS_TITLE} />
         {gauge.peak !== null && (
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute -top-1 h-4 w-0.5 -translate-x-1/2 rounded-full bg-foreground"
+            className="pointer-events-none absolute -top-0.5 h-4 w-0.5 -translate-x-1/2 rounded-full bg-foreground"
             style={{ left: `${gauge.peak}%` }}
           />
         )}
@@ -182,7 +182,7 @@ export function ServicePanel({ site, now }: { site: Site; now: number }) {
 function ReachBadges({ reach }: { reach: Reach }) {
   if (reach.kind === "internal") {
     return (
-      <Badge variant="secondary" title="Called by the project's other services, never by visitors">
+      <Badge variant="secondary" className="rounded-md" title="Called by the project's other services, never by visitors">
         <Lock aria-hidden="true" />
         Internal
       </Badge>
@@ -190,7 +190,7 @@ function ReachBadges({ reach }: { reach: Reach }) {
   }
   if (reach.kind === "rest") {
     return (
-      <Badge variant="outline" title="Every request no other service claims">
+      <Badge variant="outline" className="rounded-md" title="Every request no other service claims">
         <Globe aria-hidden="true" />
         All other paths
       </Badge>
@@ -199,7 +199,7 @@ function ReachBadges({ reach }: { reach: Reach }) {
   return (
     <span className="flex flex-wrap gap-1">
       {reach.paths.map((path) => (
-        <Badge key={path} variant="outline" className="font-mono" title="Requests on this path">
+        <Badge key={path} variant="outline" className="rounded-md font-mono" title="Requests on this path">
           <Globe aria-hidden="true" />
           {path}
         </Badge>
@@ -246,8 +246,8 @@ function StateLine({ row, className }: { row: ServiceRow; className?: string }) 
   )
 }
 
-const SERVICES_HEAD = "h-9 px-3 text-xs font-medium text-muted-foreground"
-const SERVICES_CELL = "px-3 py-2.5 align-top whitespace-normal"
+const SERVICES_HEAD = "h-10 px-3 text-xs font-medium text-muted-foreground"
+const SERVICES_CELL = "px-3 py-3 align-top whitespace-normal"
 
 /**
  * The processes of a project that runs several: what each one is, what
@@ -269,7 +269,7 @@ export function ServicesPanel({ site }: { site: Site }) {
         <div className="hidden @xl:block">
           <Table>
             <caption className="sr-only">The services of {site.slug}, the main one first.</caption>
-            <TableHeader className="bg-muted/50">
+            <TableHeader className="bg-muted">
               <TableRow className="hover:bg-transparent">
                 <TableHead className={cn(SERVICES_HEAD, "pl-4")}>Service</TableHead>
                 <TableHead className={SERVICES_HEAD}>Receives</TableHead>
@@ -279,7 +279,7 @@ export function ServicesPanel({ site }: { site: Site }) {
             </TableHeader>
             <TableBody>
               {rows.map((row) => (
-                <TableRow key={row.unit} className="hover:bg-transparent">
+                <TableRow key={row.unit} className="border-divider hover:bg-transparent">
                   <TableCell className={cn(SERVICES_CELL, "pl-4")}>
                     <span className="grid gap-0.5">
                       <span className="font-medium">{row.name}</span>
@@ -304,7 +304,7 @@ export function ServicesPanel({ site }: { site: Site }) {
           </Table>
         </div>
 
-        <ul className="divide-y @xl:hidden">
+        <ul className="divide-y divide-divider @xl:hidden">
           {rows.map((row) => (
             <li key={row.unit} className="grid gap-2 px-4 py-3">
               <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
@@ -335,7 +335,7 @@ export function AddressesPanel({ site }: { site: Site }) {
   const lines = siteAddresses(site)
   return (
     <Panel title="Addresses" full>
-      <ul className="divide-y">
+      <ul className="divide-y divide-divider">
         {lines.map((line) => (
           <li
             key={line.name}
@@ -422,7 +422,7 @@ export function AccessPanel({ site, actions }: { site: Site; actions?: ReactNode
       {reading.checks.length > 0 && (
         <table className="w-full border-t text-sm">
           <caption className="sr-only">Each gate, as sitesolide.json asks and as the server applies it</caption>
-          <thead className="bg-muted/50 text-xs text-muted-foreground">
+          <thead className="bg-muted text-xs text-muted-foreground">
             <tr>
               <th scope="col" className="h-8 py-0 pr-3 pl-4 text-left font-medium">
                 Gate
@@ -435,7 +435,7 @@ export function AccessPanel({ site, actions }: { site: Site; actions?: ReactNode
               </th>
             </tr>
           </thead>
-          <tbody className="divide-y border-t">
+          <tbody className="divide-y divide-divider border-t">
             {reading.checks.map((check) => (
               <tr key={check.door}>
                 <th scope="row" className="py-2.5 pr-3 pl-4 text-left align-top font-normal">

@@ -48,7 +48,7 @@ function Content({ project }: { project: ProjectView }) {
         section, where Manage leads. Here, one file per row, what it holds in
         one sentence, and its state only if it calls for an action.
       */}
-      <ul aria-label={`Secret files of ${project.slug}`} className="divide-y">
+      <ul aria-label={`Secret files of ${project.slug}`} className="divide-y divide-divider">
         {project.files.map((file) => {
           const count = fileSummary(file)
           const reason = file.state === "unmanaged" ? splitReason(file.reason ?? "").text : null

@@ -125,7 +125,7 @@ export function CreateGuestDialog({
   const [choice, setChoice] = useState(toChoice(DEFAULT_GUEST_DURATION_S))
   const [errors, setErrors] = useState<FieldErrors>({})
   const [formError, setFormError] = useState("")
-  const [inProgress, setEnCours] = useState(false)
+  const [inProgress, setInProgress] = useState(false)
   const [created, setCreated] = useState<Created | null>(null)
   const [copied, setCopied] = useState(false)
   const [warned, setWarned] = useState(false)
@@ -160,7 +160,7 @@ export function CreateGuestDialog({
     const first = firstField(faults)
     if (first !== null) return focusField(first)
 
-    setEnCours(true)
+    setInProgress(true)
     try {
       const { status, body } = await createGuest(host, label, fromChoice(choice))
       if (status === 401) {
@@ -180,7 +180,7 @@ export function CreateGuestDialog({
       )
       void guests.reload()
     } finally {
-      setEnCours(false)
+      setInProgress(false)
     }
   }
 
@@ -270,7 +270,7 @@ export function CreateGuestDialog({
                   return (
                     <label
                       key={value}
-                      className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-input px-2 text-sm whitespace-nowrap transition-colors select-none hover:bg-muted has-checked:border-foreground has-checked:bg-muted has-checked:font-medium has-checked:ring-1 has-checked:ring-foreground has-focus-visible:ring-3 has-focus-visible:ring-ring/50 sm:h-9"
+                      className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-input px-2 text-sm whitespace-nowrap transition-colors select-none hover:bg-muted has-checked:border-foreground has-checked:bg-muted has-checked:font-medium has-checked:ring-1 has-checked:ring-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring sm:h-9"
                     >
                       <input
                         ref={index === 0 ? durationField : undefined}
@@ -380,7 +380,7 @@ function PasswordScreen({
         </DialogDescription>
       </DialogHeader>
 
-      <dl className="divide-y rounded-lg border bg-muted/40 text-sm">
+      <dl className="divide-y divide-divider rounded-lg border bg-muted/40 text-sm">
         <div className="grid gap-0.5 px-3 py-2.5 sm:grid-cols-[6rem_minmax(0,1fr)] sm:items-center sm:gap-3">
           <dt className="text-xs text-muted-foreground">Address</dt>
           <dd className="wrap-anywhere">https://{guest.host}</dd>

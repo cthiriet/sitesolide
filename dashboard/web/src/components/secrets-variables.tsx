@@ -59,7 +59,7 @@ export function VariablesHeader() {
   return (
     <div
       aria-hidden="true"
-      className="hidden h-9 grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto] items-center gap-x-4 border-y bg-muted/50 px-4 text-xs font-medium text-muted-foreground @xl/file:grid"
+      className="hidden h-10 grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto] items-center gap-x-4 border-y bg-muted px-4 text-xs font-medium text-muted-foreground @xl/file:grid"
     >
       <span>Name</span>
       <span>Value</span>

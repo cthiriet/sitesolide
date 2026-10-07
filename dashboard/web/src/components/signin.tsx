@@ -20,12 +20,12 @@ const NO_HASH = "Sign-in is disabled: no password hash is configured on the serv
 export function SignIn({
   configured,
   message = "",
-  superposition = false,
+  overlay = false,
   onOpened,
 }: {
   configured: boolean
   message?: string
-  superposition?: boolean
+  overlay?: boolean
   onOpened: () => void
 }) {
   const titleId = useId()
@@ -38,11 +38,11 @@ export function SignIn({
   // The opening message, an expired session for instance, is not an input
   // error: it replaces the subtitle, without marking the field as faulty.
   const [error, setError] = useState("")
-  const [inProgress, setEnCours] = useState(false)
+  const [inProgress, setInProgress] = useState(false)
   const [waitUntil, setWaitUntil] = useState<number | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
-  const restantS = waitUntil === null ? 0 : Math.max(0, Math.ceil((waitUntil - now) / 1000))
+  const remainingS = waitUntil === null ? 0 : Math.max(0, Math.ceil((waitUntil - now) / 1000))
 
   // The rate limit countdown, second by second, down to zero.
   useEffect(() => {
@@ -52,23 +52,23 @@ export function SignIn({
   }, [waitUntil])
 
   useEffect(() => {
-    if (waitUntil === null || restantS > 0) return
+    if (waitUntil === null || remainingS > 0) return
     setWaitUntil(null)
     setError("")
     field.current?.focus()
-  }, [waitUntil, restantS])
+  }, [waitUntil, remainingS])
 
   // SyntheticEvent and not FormEvent: React 19's types deprecate the latter,
   // and bin/deprecations.ts reports exactly that diagnostic.
   async function submit(event: SyntheticEvent) {
     event.preventDefault()
-    if (!configured || inProgress || restantS > 0) return
+    if (!configured || inProgress || remainingS > 0) return
     if (password === "") {
       setError("Enter the password.")
       return field.current?.focus()
     }
 
-    setEnCours(true)
+    setInProgress(true)
     setError("")
     try {
       const { status, body } = await signIn(password)
@@ -86,27 +86,27 @@ export function SignIn({
       setError(refusal.message)
       field.current?.focus()
     } finally {
-      setEnCours(false)
+      setInProgress(false)
     }
   }
 
   const errorText = configured ? error : ""
-  const buttonLabel = inProgress ? "Signing in…" : restantS > 0 ? waitMessage(restantS) : "Sign in"
+  const buttonLabel = inProgress ? "Signing in…" : remainingS > 0 ? waitMessage(remainingS) : "Sign in"
 
-  const carte = (
+  const card = (
     <div className="grid w-full max-w-xs justify-items-center gap-6">
       <div className="flex items-center gap-3">
         <Logo className="size-9" />
-        {superposition ? (
-          <p className="font-display text-xl font-semibold tracking-tight">sitesolide</p>
+        {overlay ? (
+          <p className="text-xl font-semibold tracking-title">sitesolide</p>
         ) : (
-          <h1 className="font-display text-xl font-semibold tracking-tight">sitesolide</h1>
+          <h1 className="text-xl font-semibold tracking-title">sitesolide</h1>
         )}
       </div>
 
       <Card className="w-full rounded-xl py-5 shadow-none ring-border">
         <CardHeader>
-          <CardTitle id={titleId} className="font-display text-lg font-semibold tracking-tight">
+          <CardTitle id={titleId} className="text-lg font-semibold tracking-title">
             Sign in
           </CardTitle>
           <CardDescription>{message !== "" ? message : "Server dashboard"}</CardDescription>
@@ -155,7 +155,7 @@ export function SignIn({
 
             <Button
               type="submit"
-              disabled={!configured || inProgress || restantS > 0}
+              disabled={!configured || inProgress || remainingS > 0}
               className="h-10 w-full tabular-nums"
             >
               {buttonLabel}
@@ -172,7 +172,7 @@ export function SignIn({
   // inert.
   const themeToggle = <ThemeToggleButton className="absolute top-3 right-3 size-10 text-muted-foreground" />
 
-  if (superposition) {
+  if (overlay) {
     return (
       <div
         role="dialog"
@@ -180,7 +180,7 @@ export function SignIn({
         aria-labelledby={titleId}
         className={cn("fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-background/70 p-6 backdrop-blur-sm")}
       >
-        {carte}
+        {card}
         {themeToggle}
       </div>
     )
@@ -188,7 +188,7 @@ export function SignIn({
 
   return (
     <main className="relative grid min-h-svh place-items-center bg-background p-6">
-      {carte}
+      {card}
       {themeToggle}
     </main>
   )

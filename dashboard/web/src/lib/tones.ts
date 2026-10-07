@@ -4,8 +4,8 @@
  * A tone states a judgement, never a decoration: `ok` running and up to date,
  * `attention` worth a look, `error` to deal with, `neutral` a piece of
  * information. The colours are the tokens from styles/global.css (`ok`,
- * `attention`, `destructive`), never the Tailwind palette: the red is the one
- * from the sitesolide seal, and it only serves errors.
+ * `attention`, `destructive`), never the Tailwind palette: the red is the
+ * error colour, not the brand's, and it only serves errors.
  *
  * The classes are spelled out in full: Tailwind only generates the ones it
  * reads in the source, and tests/tones.test.ts checks it.

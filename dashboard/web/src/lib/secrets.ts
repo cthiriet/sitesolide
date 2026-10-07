@@ -62,7 +62,7 @@ export function clockOffset(generated: number, age: number, receivedAt: number):
 
 export type UnlockStatus =
   | { open: false; expired: boolean; label: string }
-  | { open: true; remainingMs: number; restant: string; label: string }
+  | { open: true; remainingMs: number; remainingText: string; label: string }
 
 /** "9 min left", and "< 1 min left" rather than a zero that would read as locked. */
 export function remainingLabel(remainingMs: number): string {
@@ -79,8 +79,8 @@ export function unlockStatus(until: number | null, now: number, offset = 0): Unl
   if (until === null) return { open: false, expired: false, label: "Locked" }
   const remainingMs = until - (now + offset)
   if (remainingMs <= 0) return { open: false, expired: true, label: "Locked" }
-  const restant = remainingLabel(remainingMs)
-  return { open: true, remainingMs, restant, label: `Unlocked, ${restant}` }
+  const remainingText = remainingLabel(remainingMs)
+  return { open: true, remainingMs, remainingText, label: `Unlocked, ${remainingText}` }
 }
 
 /** What a revealed value says about its remasking: "Hides in 24s", never "in 0s". */

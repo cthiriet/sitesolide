@@ -50,7 +50,7 @@ function SiteName({ slug }: { slug: string }) {
   return (
     <InternalLink
       href={siteUrl(slug)}
-      className="rounded-sm font-medium wrap-anywhere underline decoration-foreground/20 underline-offset-4 outline-none group-hover/ligne:decoration-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+      className="rounded-sm font-medium text-strong wrap-anywhere underline decoration-foreground/20 underline-offset-4 outline-none group-hover/row:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
     >
       {slug}
     </InternalLink>
@@ -149,8 +149,8 @@ function ActiveGuests({ count, className }: { count: number | undefined; classNa
   )
 }
 
-const HEAD = "h-9 px-3 text-xs font-medium text-muted-foreground"
-const CELL = "px-3 py-2.5 align-top whitespace-normal"
+const HEAD = "h-10 px-3 text-xs font-medium text-muted-foreground"
+const CELL = "px-3 py-3 align-top whitespace-normal"
 
 type RowProps = { site: SiteWithSecrets; severity: Severity | null; guests: number | undefined; now: number }
 
@@ -158,7 +158,7 @@ function SiteRow({ site, severity, guests, now }: RowProps) {
   const click = useRowClick(siteUrl(site.slug))
   const access = siteAccess(site)
   return (
-    <TableRow {...click} className="group/row cursor-pointer hover:bg-muted/40">
+    <TableRow {...click} className="group/row cursor-pointer border-divider hover:bg-muted/40">
       <TableCell className={cn(CELL, "pl-4")}>
         <div className="flex gap-2.5">
           <Gutter severity={severity} />
@@ -283,7 +283,7 @@ export function SiteList({
       <div className="@container">
         <Table className="hidden table-fixed @4xl:table">
           <caption className="sr-only">{caption}</caption>
-          <TableHeader className="bg-muted/50">
+          <TableHeader className="bg-muted">
             <TableRow className="hover:bg-transparent">
               <TableHead className={cn(HEAD, "w-[24%] pl-4")}>
                 <span className="pl-6.5">Site</span>
@@ -307,7 +307,7 @@ export function SiteList({
           </TableBody>
         </Table>
 
-        <ul aria-label={caption} className="divide-y @4xl:hidden">
+        <ul aria-label={caption} className="divide-y divide-divider @4xl:hidden">
           {sites.map((site) => (
             <SiteEntry
               key={site.slug}

@@ -68,12 +68,13 @@ export function level(percent: number | null): Level {
  * by editing the component shadcn generated: a `shadcn add --overwrite` would
  * replace it without a word.
  *
- * Neutral below the first threshold: a green bar everywhere says nothing, and
- * colour thus stays reserved for what needs a look. The colours are the tone
- * tokens of styles/global.css, see lib/tones.ts.
+ * Below the first threshold the bar takes the accent, petrol, and not a tone:
+ * a green bar everywhere would say nothing, and the tones thus stay reserved
+ * for what needs a look. The colours are the tokens of styles/global.css, see
+ * lib/tones.ts.
  */
 export const BAR_CLASSES: Record<Level, string> = {
-  normal: "[&_[data-slot=progress-indicator]]:bg-foreground/55",
+  normal: "[&_[data-slot=progress-indicator]]:bg-primary",
   warn: "[&_[data-slot=progress-indicator]]:bg-attention",
   critical: "[&_[data-slot=progress-indicator]]:bg-destructive",
 }

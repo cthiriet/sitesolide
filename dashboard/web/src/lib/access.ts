@@ -119,7 +119,7 @@ export type ToggleTexts = {
   title: string
   consequence: string
   action: string
-  actionEnCours: string
+  actionInProgress: string
   runningTitle: string
   succeeded: string
   failure: string
@@ -132,7 +132,7 @@ export function toggleTexts(slug: string, active: boolean): ToggleTexts {
       title: `Turn on the portal for ${slug}?`,
       consequence: `Visitors will sign in through the shared portal before they reach ${slug}. Guests can then be given their own password for it.`,
       action: "Turn on portal",
-      actionEnCours: "Turning on…",
+      actionInProgress: "Turning on…",
       runningTitle: `Turning on the portal for ${slug}…`,
       succeeded: `The portal is on for ${slug}`,
       failure: `Couldn't turn on the portal for ${slug}`,
@@ -142,7 +142,7 @@ export function toggleTexts(slug: string, active: boolean): ToggleTexts {
     title: `Turn off the portal for ${slug}?`,
     consequence: `The portal stops guarding ${slug}, and guest passwords are no longer asked.`,
     action: "Turn off portal",
-    actionEnCours: "Turning off…",
+    actionInProgress: "Turning off…",
     runningTitle: `Turning off the portal for ${slug}…`,
     succeeded: `The portal is off for ${slug}`,
     failure: `Couldn't turn off the portal for ${slug}`,
