@@ -33,9 +33,10 @@
  *   progress;
  * - `system-units.json`: `{ <unit>: <file> }`, the units systemd knows from
  *   elsewhere than /etc/systemd/system, as a package's own;
- * - `portal.json`: the portal's sharing, which `share` asks on the loopback,
- *   see `PortalState`: answered from there, and changed there by an accepted
- *   write;
+ * - `access.json`: the steward's access registry, which `share` and `people`
+ *   ask on the steward's owner socket, see `AccessRegistry`: answered from
+ *   there, and changed there by an accepted write, judged by the steward's
+ *   rules as far as the tests need them;
  * - `accounts`: the static accounts the machine carries, one passwd line each,
  *   which the reading of an account answers from; an accepted `useradd` adds
  *   its account there, so that the next reading finds it.
@@ -59,8 +60,7 @@ import {
 import { MARKER_ABSENT, MARKER_PRESENT } from "../../cli/unit";
 import { GENERATOR_MARK, loopbackStateCommand, MARKER_DONE, unitOriginsCommand } from "../../cli/services";
 import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
-import { sharingReadCommand, sharingWriteCommand } from "../../cli/sharing";
-import { membersReadCommand, membersWriteCommand } from "../../cli/members";
+import { ownerReadCommand, ownerWriteCommand, type EntryView, type PersonView, type Role } from "../../cli/access";
 import { ownershipReleaseCommand } from "../../cli/removal";
 
 export const TEST_HOST = "sample@invalid.local";
@@ -78,8 +78,7 @@ export const SWITCHES = {
   egressState: "egress-state",
   firstInstall: "first-install",
   systemUnits: "system-units.json",
-  portal: "portal.json",
-  members: "members.json",
+  access: "access.json",
   /** The steward's token ownership, `{ slug: tokenId }`, which a removal releases. */
   owners: "owners.json",
   accounts: "accounts",
@@ -107,34 +106,76 @@ export function addAccount(vm: string, name: string, uid?: number): void {
 }
 
 /**
- * The portal as `share` finds it on the loopback: answering with this
- * release's sharing, from before sharing (`old`, a 404), or not at all
- * (`down`, curl's connection refused).
+ * The steward's access registry as `share` and `people` find it on the owner
+ * socket: answering with this release's routes, from before the registry
+ * (`old`, a 404 `no such route`), or with no owner socket at all (`down`,
+ * curl's 7). Per project, its general access as the machine carries it, null
+ * when it is not deployed, and its people with access, as the steward shows
+ * them; machine-wide, who may create projects.
  */
-export type PortalState = {
+export type AccessRegistry = {
   state: "current" | "old" | "down";
-  sso: { configured: boolean; providerName: string | null; portalUrl: string | null; admins: string[]; allowedDomains: string[] };
-  sites: { host: string; policy: { mode: string; people: string[]; domains: string[] }; updatedAt: number }[];
+  zone: string;
+  signIn: { configured: boolean; allowedDomains: string[]; admins: string[]; providerName: string | null };
+  portal: { reading: "steward" | "portal" | "unreadable" | "unknown"; writtenAt: number | null };
+  projects: Record<string, { general: "public" | "restricted" | "code" | null; entries: EntryView[] }>;
+  creators: string[];
 };
 
-/**
- * The steward's members registry as `sitesolide members` finds it on the owner
- * socket: answering with this release's routes, from before members (`old`, a
- * 404 `no such route`), or with no owner socket at all (`down`, curl's 7).
- */
-export type MembersState = {
-  state: "current" | "old" | "down";
-  signIn: { configured: boolean; allowedDomains: string[] };
-  members: { email: string; roles: Record<string, string>; create?: boolean; invitedBy: string; createdAt: number; updatedAt: number }[];
-};
+/** What every change is dated, and the password a password access is given: the tests read both back. */
+export const FAKE_NOW = 1_791_000_000_000;
+export const FAKE_PASSWORD = "fake-password-for-tests-only";
 
-export const DEFAULT_MEMBERS: MembersState = { state: "current", signIn: { configured: true, allowedDomains: ["acme.test"] }, members: [] };
-
-export const DEFAULT_PORTAL: PortalState = {
+/** kanban deployed and restricted, nobody on it, acme.test the company's domain, Google set up. */
+export const DEFAULT_ACCESS: AccessRegistry = {
   state: "current",
-  sso: { configured: true, providerName: "Google", portalUrl: null, admins: [], allowedDomains: [] },
-  sites: [],
+  zone: "test-zone.invalid",
+  signIn: { configured: true, allowedDomains: ["acme.test"], admins: [], providerName: "Google" },
+  portal: { reading: "steward", writtenAt: FAKE_NOW },
+  projects: { kanban: { general: "restricted", entries: [] } },
+  creators: [],
 };
+
+const ROLE_ORDER: readonly Role[] = ["visitor", "viewer", "developer", "admin"];
+
+/** The steward's answer to `GET /access?slug=`, from the registry. */
+function accessAnswer(registry: AccessRegistry, slug: string): object {
+  const project = registry.projects[slug]!;
+  const host = `${slug}.${registry.zone}`;
+  return {
+    slug,
+    host,
+    url: `https://${host}/`,
+    general: project.general === null ? null : { access: project.general, modifiable: project.general !== "code", reason: null },
+    entries: project.entries,
+    signIn: registry.signIn,
+    portal: registry.portal,
+  };
+}
+
+/** Everyone across projects, as `GET /people` answers. */
+function peopleAnswer(registry: AccessRegistry): { people: PersonView[]; domains: { slug: string; domain: string }[]; signIn: AccessRegistry["signIn"] } {
+  const people = new Map<string, PersonView>();
+  const person = (who: string): PersonView => {
+    const found = people.get(who) ?? { who, roles: {}, create: registry.creators.includes(who), passwords: [], admin: registry.signIn.admins.includes(who) };
+    people.set(who, found);
+    return found;
+  };
+  const domains: { slug: string; domain: string }[] = [];
+  for (const [slug, project] of Object.entries(registry.projects)) {
+    for (const entry of project.entries) {
+      if (entry.kind === "domain") {
+        domains.push({ slug, domain: entry.who });
+        continue;
+      }
+      const one = person(entry.who);
+      one.roles[slug] = entry.role;
+      if (entry.password !== null) one.passwords.push({ slug, ...entry.password });
+    }
+  }
+  for (const creator of registry.creators) person(creator);
+  return { people: [...people.values()].sort((a, b) => a.who.localeCompare(b.who)), domains, signIn: registry.signIn };
+}
 
 /**
  * The commands the simulated VM accepts, besides the reading of the manifests.
@@ -361,59 +402,14 @@ if (import.meta.main) {
     process.stdout.write(orphans.map((name) => `${name}\n`).join(""));
     process.exit(0);
   }
-  // The portal's sharing, asked as root on the loopback. A reading is always
-  // answered, from the state the test lays; a change is a write, refused
-  // unless the test accepts writes, then applied to that state as the portal
-  // would, and recorded with the body that came on standard input, never in
-  // the arguments.
-  const portalFile = join(vm, SWITCHES.portal);
-  const portal = (): PortalState => (existsSync(portalFile) ? (JSON.parse(readFileSync(portalFile, "utf8")) as PortalState) : DEFAULT_PORTAL);
-  const answerPortal = (state: PortalState["state"]): void => {
-    if (state === "down") {
-      console.error("curl: (7) Failed to connect to 127.0.0.1 port 3026 after 0 ms: Couldn't connect to server");
-      process.exit(7);
-    }
-    if (state === "old") {
-      process.stdout.write("404: unknown route\n404\n");
-      process.exit(0);
-    }
-  };
-  if (command === sharingReadCommand()) {
-    record("SHARING GET");
-    const current = portal();
-    answerPortal(current.state);
-    process.stdout.write(`${JSON.stringify({ sso: current.sso, sites: current.sites })}\n200\n`);
-    process.exit(0);
-  }
-  const sharingHost = /^sudo curl .* -X PUT .*\/admin\/sharing\/([a-z0-9.-]+)$/.exec(command)?.[1];
-  let sharingWrite = false;
-  try {
-    sharingWrite = sharingHost !== undefined && command === sharingWriteCommand(sharingHost);
-  } catch {
-    sharingWrite = false;
-  }
-  if (sharingWrite) {
-    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
-    const body = await Bun.stdin.text();
-    record(`SHARING PUT ${sharingHost} ${body}`);
-    const current = portal();
-    answerPortal(current.state);
-    const policy = JSON.parse(body) as PortalState["sites"][number]["policy"];
-    const updatedAt = 1_791_000_000_000;
-    current.sites = [...current.sites.filter((site) => site.host !== sharingHost), { host: sharingHost!, policy, updatedAt }];
-    writeFileSync(portalFile, JSON.stringify(current));
-    process.stdout.write(`${JSON.stringify({ host: sharingHost, policy, updatedAt })}\n200\n`);
-    process.exit(0);
-  }
-
-  // The steward's members registry, asked as root on its owner socket. A
-  // reading is always answered; a change is a write, refused unless the test
-  // accepts writes, then applied as the steward would, an address outside the
-  // allowed domains refused, and recorded with the body that came on standard
-  // input.
-  const membersFile = join(vm, SWITCHES.members);
-  const registry = (): MembersState => (existsSync(membersFile) ? (JSON.parse(readFileSync(membersFile, "utf8")) as MembersState) : DEFAULT_MEMBERS);
-  const answerMembers = (state: MembersState["state"]): void => {
+  // The steward's access registry, asked as root on its owner socket. A
+  // reading is always answered, from the registry the test lays; a change is
+  // a write, refused unless the test accepts writes, then judged and applied
+  // as the steward would, and recorded with the body that came on standard
+  // input, never in the arguments.
+  const accessFile = join(vm, SWITCHES.access);
+  const registry = (): AccessRegistry => (existsSync(accessFile) ? (JSON.parse(readFileSync(accessFile, "utf8")) as AccessRegistry) : structuredClone(DEFAULT_ACCESS));
+  const answerOwner = (state: AccessRegistry["state"]): void => {
     if (state === "down") {
       console.error("curl: (7) Failed to connect to steward port 80 after 0 ms: Couldn't connect to server");
       process.exit(7);
@@ -423,12 +419,83 @@ if (import.meta.main) {
       process.exit(0);
     }
   };
-  if (command === membersReadCommand()) {
-    record("MEMBERS GET");
-    const current = registry();
-    answerMembers(current.state);
-    process.stdout.write(`${JSON.stringify({ members: current.members, signIn: current.signIn })}\n200\n`);
+  const answer = (status: number, body: object): never => {
+    process.stdout.write(`${JSON.stringify(body)}\n${status}\n`);
     process.exit(0);
+  };
+  const refusal = (status: number, error: string, message: string): never => answer(status, { error, message });
+
+  const readSlug = /^sudo curl .*http:\/\/steward\/access\?slug=([a-z0-9.-]+)'$/.exec(command)?.[1];
+  if (readSlug !== undefined && command === ownerReadCommand(`/access?slug=${readSlug}`)) {
+    record(`ACCESS GET ${readSlug}`);
+    const current = registry();
+    answerOwner(current.state);
+    if (!Object.hasOwn(current.projects, readSlug)) refusal(404, "not-found", `${readSlug} is not deployed on this machine`);
+    answer(200, accessAnswer(current, readSlug));
+  }
+  if (command === ownerReadCommand("/people")) {
+    record("PEOPLE GET");
+    const current = registry();
+    answerOwner(current.state);
+    answer(200, peopleAnswer(current));
+  }
+  if (command === ownerWriteCommand("PUT", "/access/entry") || command === ownerWriteCommand("DELETE", "/access/entry")) {
+    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
+    const method = command === ownerWriteCommand("PUT", "/access/entry") ? "PUT" : "DELETE";
+    const body = await Bun.stdin.text();
+    record(`ACCESS ${method} ${body}`);
+    const current = registry();
+    answerOwner(current.state);
+    const asked = JSON.parse(body) as { slug: string; who: string; role?: Role; expiresInS?: number | null };
+    const project = current.projects[asked.slug];
+    if (project === undefined) refusal(404, "not-found", `${asked.slug} is not deployed on this machine`);
+    const existing = project!.entries.find((entry) => entry.who === asked.who) ?? null;
+    const save = (): void => writeFileSync(accessFile, JSON.stringify(current));
+    if (method === "DELETE") {
+      if (existing === null) refusal(404, "not-found", `${asked.who} has no access to ${asked.slug}`);
+      project!.entries = project!.entries.filter((entry) => entry.who !== asked.who);
+      save();
+      answer(200, { slug: asked.slug, entry: existing!, change: "remove" });
+    }
+    const role = asked.role ?? "visitor";
+    const domain = asked.who.startsWith("@");
+    if (domain && role !== "visitor") refusal(400, "invalid", `${asked.who}: a domain can only open the site (Can open); give people roles one by one`);
+    if (existing?.password != null && role !== "visitor") {
+      refusal(403, "out-of-scope", `${asked.who} has password access, which opens the site and nothing more: remove it first to give them a role`);
+    }
+    const inside = current.signIn.configured && (current.signIn.allowedDomains.length === 0 || current.signIn.allowedDomains.includes(asked.who.slice(asked.who.lastIndexOf("@") + 1)));
+    const outside = !domain && !inside && (existing === null || existing.password !== null);
+    if (outside && ROLE_ORDER.indexOf(role) > 0) refusal(400, "invalid", `${asked.who} can only be given Can open, with password access: ${asked.who.slice(asked.who.lastIndexOf("@") + 1)} is not among the company's domains`);
+    const drawn = outside && existing === null;
+    const expiresInS = asked.expiresInS === undefined ? 7 * 24 * 3600 : asked.expiresInS;
+    const entry: EntryView = {
+      who: asked.who,
+      kind: domain ? "domain" : drawn || existing?.password != null ? "password" : "person",
+      role,
+      by: existing?.by ?? "owner",
+      createdAt: existing?.createdAt ?? FAKE_NOW,
+      updatedAt: FAKE_NOW,
+      password: drawn ? { expiresAt: expiresInS === null ? null : FAKE_NOW + expiresInS * 1000, expired: false } : (existing?.password ?? null),
+    };
+    const change = existing === null ? "add" : existing.role === role ? "none" : "role";
+    if (change !== "none") {
+      project!.entries = [...project!.entries.filter((one) => one.who !== asked.who), entry];
+      save();
+    }
+    answer(change === "add" ? 201 : 200, { slug: asked.slug, entry: change === "none" ? existing! : entry, change, ...(drawn ? { password: FAKE_PASSWORD } : {}) });
+  }
+  if (command === ownerWriteCommand("PUT", "/people/person")) {
+    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
+    const body = await Bun.stdin.text();
+    record(`PEOPLE PUT ${body}`);
+    const current = registry();
+    answerOwner(current.state);
+    const asked = JSON.parse(body) as { email: string; create: boolean };
+    const had = current.creators.includes(asked.email);
+    current.creators = asked.create ? [...new Set([...current.creators, asked.email])] : current.creators.filter((one) => one !== asked.email);
+    writeFileSync(accessFile, JSON.stringify(current));
+    const person = peopleAnswer(current).people.find((one) => one.who === asked.email) ?? { who: asked.email, roles: {}, create: false, passwords: [], admin: false };
+    answer(200, { person, change: had === asked.create ? "none" : asked.create ? "create" : "remove" });
   }
   // The steward's owner socket again: a removed project's token ownership
   // released, the slug on standard input, recorded with it.
@@ -443,42 +510,6 @@ if (import.meta.main) {
     delete owners[slug];
     writeFileSync(ownersFile, JSON.stringify(owners));
     process.stdout.write(`${JSON.stringify({ slug, forgotten })}\n200\n`);
-    process.exit(0);
-  }
-  if (command === membersWriteCommand("PUT") || command === membersWriteCommand("DELETE")) {
-    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
-    const method = command === membersWriteCommand("PUT") ? "PUT" : "DELETE";
-    const body = await Bun.stdin.text();
-    record(`MEMBERS ${method} ${body}`);
-    const current = registry();
-    answerMembers(current.state);
-    const asked = JSON.parse(body) as { email: string; roles?: Record<string, string>; create?: boolean };
-    const found = current.members.find((member) => member.email === asked.email);
-    if (method === "DELETE") {
-      if (found === undefined) {
-        process.stdout.write(`${JSON.stringify({ error: "not-found", message: `${asked.email} is not a member` })}\n404\n`);
-        process.exit(0);
-      }
-      current.members = current.members.filter((member) => member.email !== asked.email);
-      writeFileSync(membersFile, JSON.stringify(current));
-      process.stdout.write(`${JSON.stringify({ member: found })}\n200\n`);
-      process.exit(0);
-    }
-    const domain = asked.email.slice(asked.email.lastIndexOf("@") + 1);
-    if (current.signIn.allowedDomains.length > 0 && !current.signIn.allowedDomains.includes(domain)) {
-      const message = `${asked.email} cannot sign in here: the portal admits only ${current.signIn.allowedDomains.join(", ")} (OIDC_ALLOWED_DOMAINS)`;
-      process.stdout.write(`${JSON.stringify({ error: "invalid", message })}\n400\n`);
-      process.exit(0);
-    }
-    const now = 1_791_000_000_000;
-    // The right to create projects, as the steward keeps it: absent from the request, left as it stands.
-    const create = asked.create ?? found?.create ?? false;
-    const member = { email: asked.email, roles: asked.roles ?? {}, create, invitedBy: "owner", createdAt: found?.createdAt ?? now, updatedAt: now };
-    const same = found !== undefined && JSON.stringify(found.roles) === JSON.stringify(member.roles) && (found.create ?? false) === create;
-    const change = found === undefined ? "invite" : same ? "none" : "role";
-    current.members = [...current.members.filter((one) => one.email !== asked.email), member];
-    writeFileSync(membersFile, JSON.stringify(current));
-    process.stdout.write(`${JSON.stringify({ member, change })}\n${change === "invite" ? 201 : 200}\n`);
     process.exit(0);
   }
 

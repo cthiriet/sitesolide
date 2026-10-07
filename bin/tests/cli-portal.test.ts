@@ -42,9 +42,10 @@ test("the portal announces the identity headers the CLI copies, under the same n
 });
 
 test("no fragment relays anything to the portal beyond its door, its login and /sante", () => {
-  // The portal's /admin/* routes, where the dashboard creates and revokes
-  // guest accesses, have no guard other than the loopback rule: a fragment
-  // that relayed them would open them to the web. See portal/src/admin.ts.
+  // The portal's /admin/* routes, where the steward asks what the portal
+  // reads and the audit is read, have no guard other than the loopback rule
+  // and the caller's uid: a fragment that relayed them would open them to
+  // the web. See portal/src/admin.ts.
   const upstream = `127.0.0.1:${PORTAL_PORT}`;
   const door = [`reverse_proxy /_portal/* ${upstream} {`, `forward_auth @portal_guard ${upstream} {`];
 

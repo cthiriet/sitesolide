@@ -5,10 +5,12 @@
 # Why a relay rather than a network for the steward: the steward holds every
 # secret of the machine as root, and its unit keeps no network at all,
 # PrivateNetwork=true and AF_UNIX alone, measured on the bench. On the
-# loopback it would also reach Caddy's admin API and every project's port. A
-# Project admin's sharing and guests need the portal, and the portal only:
-# the steward connects here, the proxy forwards to one port, and nothing of
-# the steward's own unit changes.
+# loopback it would also reach Caddy's admin API and every project's port.
+# The steward asks the portal one thing, GET /admin/access, whether it decides
+# from the access projection the steward writes in /etc/sitesolide-portal, so
+# that every access answer can say so: the steward connects here, the proxy
+# forwards to one port, and nothing of the steward's own unit changes. It
+# never changes anything through it: the portal reads the projection.
 #
 # Placed by bin/deploy-steward.sh, beside the steward.
 

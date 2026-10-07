@@ -159,21 +159,34 @@ export type Operation =
   | "password"
   | "portal"
   | "restart"
+  // Someone given access to a project, their role changed, or taken off; the
+  // registry made from the stores before it; the right to create projects.
+  | "access.add"
+  | "access.change"
+  | "access.remove"
+  | "access.migrate"
+  | "people.create"
+  // A person's session opened from an assertion, refused, or closed.
+  | "dashboard.signin"
+  | "dashboard.signin_failed"
+  | "dashboard.signout"
+  // The names a journal written before the access registry carries: read,
+  // never written any more.
   | "member.invite"
   | "member.role"
   | "member.remove"
   | "member.signin"
   | "member.signin_failed"
   | "member.signout"
-  // A Project admin's change refused by the steward before it reached the
-  // portal or the backups, which record those that go through.
   | "sharing"
   | "guest.create"
   | "guest.revoke"
+  // A person's restore refused by the steward before it reached the backups,
+  // which record those that go through.
   | "backup.restore"
   // A member's own token created or revoked, or refused above their roles;
   // the tokens of a member removed, revoked under who removed them; and a
-  // project a member's token created, which made them its Project admin.
+  // project a member's token created, which made them its Admin.
   | "token.create"
   | "token.revoke"
   | "project.create"
@@ -189,12 +202,13 @@ export type LogEntry = {
   result: OperationResult;
   /**
    * Who asked, as the steward verified it: `owner` for the dashboard's
-   * password, the email of a member whose session it opened, `anonymous` for
-   * a sign-in it could not attribute. Never taken from a request. A line
-   * written before this field reads as `owner`.
+   * password, the email of a person whose session it opened, `token:<id>`
+   * for a token it judged, `anonymous` for a sign-in it could not
+   * attribute, `system` for what it did on its own, the migration. Never
+   * taken from a request. A line written before this field reads as `owner`.
    */
   actor: string;
-  /** The member an event of the members is about, null otherwise. */
+  /** The person an event is about, null otherwise. */
   member: string | null;
   slug: string | null;
   file: string | null;

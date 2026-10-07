@@ -279,7 +279,7 @@ export type Guard =
  * leaves the workstation. The server and the zone are the effective ones, the
  * environment's over the file's, as every other command reads them.
  *
- * - none: a fresh workstation, or one with a team token only: setup writes it.
+ * - none: a fresh workstation, or one with a token only: setup writes it.
  * - another zone, another machine, another account: refused, untouched.
  * - this machine, and setup's marker for it: setup's own install, resumed.
  * - this machine, no marker: installed some other way, read only.

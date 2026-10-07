@@ -1,16 +1,17 @@
 /**
- * The portal's database: the guest accesses, each site's sharing policy, and
- * the audit of sign-ins and policy changes.
+ * The portal's database: the audit of sign-ins, and two tables from before
+ * the steward kept who may open a site, `invites` and `sharing`, read-only:
+ * a portal that finds no projection from the steward yet decides from them
+ * as it did (src/projection.ts), the steward carries them over once into
+ * its registry, and a rollback finds them as they were. Nothing writes them
+ * any more.
  *
  * The owner does not appear in it: their cookie is enough on its own, and
- * their password lives in the vault. A lost database therefore closes the
- * guests and the shared people out, never the owner nor the admin emails,
- * which live in the environment. Every site falls back to `admins`, the
- * narrowest policy.
+ * their password lives in the vault. A lost database loses the audit, never
+ * who may open a site, which is the steward's.
  *
- * Every table is created if it is missing, at every opening: a database from
- * before sharing gains its tables at the first start of this version, and
- * keeps its guests.
+ * Every table is created if it is missing, at every opening, so that the
+ * reads above find one even on a portal that never had them.
  *
  * No effect at import: `server.ts` opens the database, the tests open one of
  * their own.
@@ -82,15 +83,12 @@ export function openDatabase(path: string): Database {
   return db;
 }
 
+/** The password access from before the steward kept it, read-only. */
 export type GuestStore = {
   byId: (id: string) => Guest | null;
   byHash: (hash: string) => Guest | null;
   /** Most recent first. The hash never leaves this place. */
   list: () => Guest[];
-  create: (guest: Guest, hash: string) => void;
-  touch: (id: string, now: number) => void;
-  /** True if the access existed. */
-  remove: (id: string) => boolean;
 };
 
 /**
@@ -127,24 +125,12 @@ export function guestStore(db: Database): GuestStore {
     byId: db.query<Row, [string]>(`SELECT ${COLUMNS} FROM invites WHERE id = ?`),
     byHash: db.query<Row, [string]>(`SELECT ${COLUMNS} FROM invites WHERE empreinte = ?`),
     list: db.query<Row, []>(`SELECT ${COLUMNS} FROM invites ORDER BY cree_a DESC, id`),
-    create: db.query<undefined, [string, string, string, string, number, number | null]>(
-      "INSERT INTO invites (id, hote, libelle, empreinte, cree_a, expire_a) VALUES (?, ?, ?, ?, ?, ?)",
-    ),
-    touch: db.query<undefined, [number, string]>("UPDATE invites SET vu_a = ? WHERE id = ?"),
-    remove: db.query<undefined, [string]>("DELETE FROM invites WHERE id = ?"),
   };
 
   return {
     byId: (id) => toGuest(queries.byId.get(id)),
     byHash: (hash) => toGuest(queries.byHash.get(hash)),
     list: () => queries.list.all().map((row) => toGuest(row)!),
-    create(guest, hash) {
-      queries.create.run(guest.id, guest.host, guest.label, hash, guest.createdAt, guest.expiresAt);
-    },
-    touch(id, now) {
-      queries.touch.run(now, id);
-    },
-    remove: (id) => queries.remove.run(id).changes > 0,
   };
 }
 
@@ -152,12 +138,12 @@ export function guestStore(db: Database): GuestStore {
 
 export type SharedSite = { host: string; policy: Policy; updatedAt: number };
 
+/** Each site's sharing from before the steward kept who may open it, read-only. */
 export type SharingStore = {
   /** The site's policy, `DEFAULT_POLICY` when none was ever set. */
   get: (host: string) => Policy;
   /** The sites whose policy was set, by host. */
   list: () => SharedSite[];
-  set: (host: string, policy: Policy, now: number) => void;
 };
 
 type SharingRow = { host: string; mode: string; people: string; domains: string; updated_at: number };
@@ -186,19 +172,11 @@ export function sharingStore(db: Database): SharingStore {
   const queries = {
     get: db.query<SharingRow, [string]>("SELECT host, mode, people, domains, updated_at FROM sharing WHERE host = ?"),
     list: db.query<SharingRow, []>("SELECT host, mode, people, domains, updated_at FROM sharing ORDER BY host"),
-    set: db.query<undefined, [string, string, string, string, number]>(
-      `INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (host) DO UPDATE SET mode = excluded.mode, people = excluded.people,
-         domains = excluded.domains, updated_at = excluded.updated_at`,
-    ),
   };
 
   return {
     get: (host) => toPolicy(queries.get.get(host)),
     list: () => queries.list.all().map((row) => ({ host: row.host, policy: toPolicy(row), updatedAt: row.updated_at })),
-    set(host, policy, now) {
-      queries.set.run(host, policy.mode, JSON.stringify(policy.people), JSON.stringify(policy.domains), now);
-    },
   };
 }
 
@@ -208,9 +186,13 @@ export type AuditEvent = {
   id: number;
   /** ISO 8601, UTC. */
   at: string;
-  /** An email, `owner` for the password holder, `guest:<id>`, or `anonymous` before anyone is known. */
+  /**
+   * An email, `owner` for the password holder, `password:<id>` for a
+   * password access given under a name, `guest:<id>` in rows written before
+   * the registry, or `anonymous` before anyone is known.
+   */
   actor: string;
-  /** Dotted: `portal.signin`, `portal.signin_failed`, `portal.signout`, `sharing.update`. */
+  /** Dotted: `portal.signin`, `portal.signin_failed`, `portal.signout`; `sharing.update`, `guest.create`, `guest.revoke` in older rows. */
   action: string;
   /** The host concerned, or null. */
   target: string | null;

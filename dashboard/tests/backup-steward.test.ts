@@ -152,8 +152,8 @@ describe("what the steward says of a site's backups", () => {
     expect(await backups("dashboard")).toMatchObject({ restorable: false, reason: DASHBOARD_REASON });
   });
 
-  test("nor the portal, whose old copy would let revoked guests back in", async () => {
-    expect(PORTAL_REASON).toContain("revoked guest access");
+  test("nor the portal, whose old copy would bring back its old audit and the tables it kept before the access registry", async () => {
+    expect(PORTAL_REASON).toContain("the tables it kept before the access registry");
     expect(await backups("portal")).toMatchObject({ restorable: false, reason: PORTAL_REASON });
   });
 

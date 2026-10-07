@@ -1,16 +1,12 @@
 /**
- * The members, seen from the dashboard: the steward's member routes on its
- * socket, and the portal's two dashboard routes on the loopback. One method
- * per route, the response returned as it stands: what it means is judged in
- * routes.ts, which the tests drive with simulated correspondents.
+ * The people who sign in to the dashboard, seen from it: the steward's
+ * session routes on its socket, and the portal's two dashboard routes on the
+ * loopback. One method per route, the response returned as it stands: what
+ * it means is judged in routes.ts, which the tests drive with simulated
+ * correspondents.
  */
-import type { PutMemberRequest } from "./protocol";
-
 export type MembersSteward = {
-  list: () => Promise<Response>;
   key: () => Promise<Response>;
-  put: (requested: PutMemberRequest & { token: string }) => Promise<Response>;
-  remove: (email: string) => Promise<Response>;
   signIn: (assertion: string) => Promise<Response>;
   whoami: (session: string) => Promise<Response>;
   signOut: (session: string) => Promise<Response>;
@@ -19,10 +15,11 @@ export type MembersSteward = {
   unlock: (session: string, assertion: string) => Promise<Response>;
   lock: (session: string, token: string) => Promise<Response>;
   /**
-   * A member's work on their projects (src/members/actions.ts) and a Project
-   * admin's members: the route and the body as the relay builds them, the
-   * session and the member's token inside. `long`: a route that waits under
-   * the steward's lock, a restart or a door.
+   * A person's work on their projects (src/members/actions.ts) and on their
+   * people with access (src/access/steward.ts): the route and the body as the
+   * relay builds them, the session and the person's unlock token inside.
+   * `long`: a route that waits under the steward's lock, a restart or a
+   * change of general access.
    */
   act: (method: "POST" | "PUT" | "DELETE", path: string, body: object, long?: boolean) => Promise<Response>;
 };
@@ -43,10 +40,7 @@ export function localMembersSteward(socket: string): MembersSteward {
     });
   }
   return {
-    list: () => call("GET", "/members"),
     key: () => call("GET", "/members/key"),
-    put: (requested) => call("PUT", "/members/member", requested),
-    remove: (email) => call("DELETE", "/members/member", { email }),
     signIn: (assertion) => call("POST", "/members/signin", { assertion }),
     whoami: (session) => call("POST", "/members/whoami", { session }),
     signOut: (session) => call("POST", "/members/signout", { session }),
@@ -58,7 +52,7 @@ export function localMembersSteward(socket: string): MembersSteward {
 }
 
 export type DashboardPortal = {
-  /** How people sign in: the portal's `GET /admin/sharing`, of which the dashboard reads `sso`. */
+  /** How people sign in: the portal's `GET /admin/sharing`, of which the dashboard reads `sso` alone. */
   sso: () => Promise<Response>;
   /** `reauth`: a member unlocking, whom the provider must sign in again; a portal that predates it signs in as usual, and the steward refuses the unlock. */
   flow: (body: { binding: string; returnTo: string; chooseAccount: boolean; reauth?: boolean }) => Promise<Response>;

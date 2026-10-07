@@ -1,5 +1,5 @@
 /**
- * The Team page's routes, `/api/team/*`: the owner's side of the control API,
+ * The Tokens page's routes, `/api/team/*`: the owner's side of the control API,
  * behind the dashboard's session like every other page.
  *
  * Same stance as src/secrets/routes.ts: the dashboard checks the origin, the

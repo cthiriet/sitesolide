@@ -23,6 +23,14 @@ export const OPERATIONS: Operation[] = [
   "password",
   "portal",
   "restart",
+  "access.add",
+  "access.change",
+  "access.remove",
+  "access.migrate",
+  "people.create",
+  "dashboard.signin",
+  "dashboard.signin_failed",
+  "dashboard.signout",
   "member.invite",
   "member.role",
   "member.remove",
@@ -47,10 +55,11 @@ export const EARLIER_ACTOR = "owner";
 
 /**
  * An actor as the steward writes one: `owner`, `anonymous` for a sign-in that
- * names nobody it could verify, or an email it verified. Nothing else enters
- * the journal in that place.
+ * names nobody it could verify, `system` for what it did on its own, a token
+ * it judged, or an email it verified. Nothing else enters the journal in that
+ * place.
  */
-const ACTOR = /^(owner|anonymous|[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(\.[a-z0-9-]+)+)$/;
+const ACTOR = /^(owner|anonymous|system|token:[A-Za-z0-9_-]{1,64}|[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(\.[a-z0-9-]+)+)$/;
 export const RESULTS: OperationResult[] = ["ok", "rejects", "failure"];
 
 /** A slug, a file name, a variable name, a short reason: nothing longer. */

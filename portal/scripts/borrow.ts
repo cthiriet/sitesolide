@@ -5,8 +5,8 @@
  * rsync only carries that folder. Same mechanism, and same reason, as
  * dashboard/scripts/borrow.ts.
  *
- * Copying rather than rewriting: the rate limiting and the password draw are
- * tested over there, and a second writing would end up diverging. So is the
+ * Copying rather than rewriting: the rate limiting is tested over there, and
+ * a second writing would end up diverging. So is the
  * egress proxy's reading of the kernel's socket tables, by which the portal
  * tells root's calls to its admin routes from the dashboard's (src/peer.ts).
  *
@@ -24,7 +24,6 @@ const ROOT = join(import.meta.dir, "..", "..");
 const DESTINATION = join(import.meta.dir, "..", "borrowed");
 const BORROWED = [
   "dashboard/src/auth.ts",
-  "dashboard/src/password.ts",
   // Who is at the other end of a loopback connection, from /proc/net/tcp, and
   // what it imports: an address's canonical form, a slug's shape.
   "egress/src/proc-net.ts",

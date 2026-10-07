@@ -6,9 +6,9 @@
  * **An older steward is not a failure.** Until bin/deploy-steward.sh has run
  * with this code, the steward answers `404 no such route` to every control
  * route. That answer, and that one only, reads as `unavailable`: the API says
- * the machine does not carry it yet, the Team page says which script to run.
+ * the machine does not carry it yet, the Tokens page says which script to run.
  */
-import type { CreateTokenRequest, DeployRequest, LogsRequest, SharingRequest } from "./protocol";
+import type { CreateTokenRequest, DeployRequest, LogsRequest } from "./protocol";
 
 export type ControlSteward = {
   listTokens: () => Promise<Response>;
@@ -19,8 +19,11 @@ export type ControlSteward = {
   deploy: (requested: DeployRequest) => Promise<Response>;
   deployment: (id: string) => Promise<Response>;
   logs: (requested: LogsRequest) => Promise<Response>;
-  /** A token's sharing, which the steward hands to the portal as root. */
-  share: (requested: SharingRequest) => Promise<Response>;
+  /** A project's access, as a token reads it. */
+  accessList: (bearer: string, slug: string) => Promise<Response>;
+  /** Someone given Can open, or taken off, by a token: the steward judges both. */
+  accessPut: (requested: { bearer: string; slug: string; who: unknown; role: unknown }) => Promise<Response>;
+  accessRemove: (requested: { bearer: string; slug: string; who: unknown }) => Promise<Response>;
 };
 
 /**
@@ -49,7 +52,9 @@ export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_
     deploy: (requested) => call("POST", "/control/deploy", requested),
     deployment: (id) => call("GET", `/control/deployment?${new URLSearchParams({ id })}`),
     logs: (requested) => call("POST", "/control/logs", requested),
-    share: (requested) => call("PUT", "/control/sharing", requested),
+    accessList: (bearer, slug) => call("POST", "/control/access/list", { bearer, slug }),
+    accessPut: (requested) => call("PUT", "/control/access", requested),
+    accessRemove: (requested) => call("DELETE", "/control/access", requested),
   };
 }
 

@@ -1,51 +1,38 @@
 /**
- * A member's work on their projects, judged by the steward: their secrets,
- * the portal door, sharing, guest access, and the restore of a backup. Each
- * route asks, in the order of the risk:
+ * A person's work on their projects, judged by the steward: their secrets,
+ * the project's general access, and the restore of a backup. Each route
+ * asks, in the order of the risk:
  *
- *   the body's shape, the member session, the member's own unlock where the
+ *   the body's shape, the person's session, their own unlock where the
  *   power needs one, the role on that project (powers.ts), the machine's own
  *   projects and files refused, then the operation, under the steward's lock,
  *   where the session, the unlock and the role are asked again.
  *
- * **The operations are the super admin's, with the member as actor.** Writing
- * a variable, reading one, turning a door, starting a restore: the very code
- * of src/secrets/steward.ts and src/backup/routes.ts, handed over here with
- * `who`, the email this steward verified, which its journal and the backups'
- * audit record. A Developer is the same code with nothing read back: the
- * listing hides every value, size and previous version from them, and a read
- * is refused before any file is opened.
+ * **The operations are the owner's, with the person as actor.** Writing a
+ * variable, reading one, changing general access, starting a restore: the
+ * very code of src/secrets/steward.ts and src/backup/routes.ts, handed over
+ * here with `who`, the email this steward verified, which its journal and
+ * the backups' audit record. A Developer is the same code with nothing read
+ * back: the listing hides every value, size and previous version from them,
+ * and a read is refused before any file is opened.
  *
- * **Sharing and guests go to the portal from here**, as root, through the
- * relay (portal.ts), with the member's email as actor: the dashboard never
- * names who acts. What a Project admin may share is a team token's rule: the
- * project's own site, people at any address, a domain only among those the
- * portal admits at sign-in, never public, which is the door, turned off. A
- * team token's sharing takes the same road (`createSharing`, which the
- * control routes call), the token as actor: the portal believes an actor
- * other than `owner` from root alone.
+ * Their people with access are the access routes' (src/access/steward.ts).
  *
  * The routes, on the dashboard's socket:
  *
  *   POST   /members/secrets/projects  { session }                                      -> MemberProjectsResponse
- *   POST   /members/secrets/value     { session, token, slug, file, variable }         -> ValueResponse     Project admin
+ *   POST   /members/secrets/value     { session, token, slug, file, variable }         -> ValueResponse     Admin
  *   PUT    /members/secrets/variable  { session, token, slug, file, variable, value }  -> FileResponse      Developer
  *   DELETE /members/secrets/variable  { session, token, slug, file, variable }         -> FileResponse      Developer
  *   POST   /members/secrets/file      { session, token, slug, file }                   -> FileResponse      Developer
- *   POST   /members/secrets/restore   { session, token, slug, file }                   -> FileResponse      Project admin
- *   POST   /members/secrets/content   { session, token, slug, file }                   -> ContentResponse   Project admin
+ *   POST   /members/secrets/restore   { session, token, slug, file }                   -> FileResponse      Admin
+ *   POST   /members/secrets/content   { session, token, slug, file }                   -> ContentResponse   Admin
  *   PUT    /members/secrets/content   { session, token, slug, file, content }          -> FileResponse      Developer
- *   POST   /members/portal            { session, token, slug, active, confirmation }   -> PortalResponse    Project admin
- *   POST   /members/backups/restore   { session, token, slug, snapshot, confirmation } -> 202 RestoreResponse  Project admin
- *   PUT    /members/sharing           { session, slug, mode, people, domains }         -> the portal's answer  Project admin
- *   POST   /members/guests            { session, slug, label, durationS }              -> the portal's answer  Project admin
- *   DELETE /members/guests            { session, id }                                  -> 204                  Project admin
+ *   POST   /members/portal            { session, token, slug, active, confirmation }   -> PortalResponse    Admin
+ *   POST   /members/backups/restore   { session, token, slug, snapshot, confirmation } -> 202 RestoreResponse  Admin
  */
-import { domainMessage, domainRefusals, policyOf, readPortalSharing, readTokenPolicy } from "../control/sharing";
-import type { ProjectView, PortalView } from "../secrets/protocol";
-import { checkSite, type Site } from "../secrets/scope";
+import type { ProjectView } from "../secrets/protocol";
 import { machineRefusal, may, needsUnlock, powerRefusal, roleDetail, type Power } from "./powers";
-import type { PortalAdmin } from "./portal";
 import type { Role, Roles } from "./protocol";
 import type { MemberPrincipal, MemberRoutes, RestartRefusal } from "./steward";
 
@@ -55,12 +42,12 @@ export type Routes = Record<string, Record<string, Handler>>;
 
 /**
  * Who the steward acts for: the email it verified, as the journal writes it.
- * `readsBack`: a member whose role reads values back, a Project admin; a
+ * `readsBack`: a member whose role reads values back, an Admin; a
  * Developer's answers show every file write-only.
  */
 export type Who = { actor: string; member: string | null; readsBack?: boolean };
 
-/** The super admin's operations, taken with the member as `who`. They run under the steward's lock. */
+/** The owner's operations, taken with the member as `who`. They run under the steward's lock. */
 export type MemberOps = {
   /** The projects whose files this member may list, in the shape the page knows, what they may not read hidden. */
   projects: (roles: Roles) => Promise<ProjectView[]>;
@@ -83,12 +70,6 @@ export type MemberActionsDependencies = {
   ops: MemberOps;
   /** The backup routes' restore, the requester given: absent, a steward built without backups. */
   startRestore: ((req: Request, body: Body) => Promise<Response>) | null;
-  /** The portal's admin API through the relay; null, sharing and guests say the relay is missing. */
-  portal: PortalAdmin | null;
-  sites: () => Promise<Map<string, Site>>;
-  portalOf: (site: Site) => Promise<PortalView>;
-  /** The site's address under the zone, where the portal keeps its policy and its guests. */
-  hostOf: (slug: string) => string;
   zone: string;
   /** The biggest body, a whole file's content. */
   maxContentBytes: number;
@@ -109,120 +90,8 @@ function fail(code: string, message: string, details?: string[]): Response {
 
 const SLUG_SHAPE = /^[a-z0-9][a-z0-9.-]{0,62}$/;
 
-const RELAY_MISSING =
-  "the steward cannot reach the portal: its relay, sitesolide-portal-relay.socket, is not installed or not running; the super admin runs sitesolide upgrade";
-
-/** The portal's answer, read whole, or why there is none. Never thrown. */
-async function asked(call: () => Promise<Response>): Promise<{ status: number; body: unknown } | Response> {
-  try {
-    const response = await call();
-    const text = await response.text();
-    let body: unknown = null;
-    if (text !== "") {
-      try {
-        body = JSON.parse(text);
-      } catch {
-        return fail("failure", "the portal sent an answer that does not read");
-      }
-    }
-    return { status: response.status, body };
-  } catch {
-    return fail("not-available", RELAY_MISSING);
-  }
-}
-
-/** The portal's own refusal, its code kept and a message added, as the dashboard shows it. */
-function portalRefusal(status: number, body: unknown): Response {
-  const code = typeof body === "object" && body !== null && typeof (body as Body).error === "string" ? ((body as Body).error as string) : "failure";
-  return Response.json({ error: code, message: `the portal refused: ${code}` }, { status: status >= 400 && status < 600 ? status : 502 });
-}
-
-export type SharingDependencies = Pick<MemberActionsDependencies, "portal" | "sites" | "portalOf" | "hostOf">;
-
-/** Who asks for a sharing: a Project admin through their session, or a team token through the control API. */
-export type Sharer = "member" | "token";
-
-export type Sharing = {
-  /** The project's site, behind the portal both in its manifest and in its block, and its host; or the refusal. */
-  portalSite: (slug: string, by: Sharer) => Promise<{ site: Site; host: string } | Response>;
-  /**
-   * The policy, judged by the portal's own rules and the token's rule for
-   * domains, then handed to the portal as root with `actor`. `onDomain`: a
-   * domain the portal does not admit refused, for the journal.
-   */
-  share: (slug: string, policy: Body, actor: string, by: Sharer, onDomain?: () => Promise<void>) => Promise<Response>;
-};
-
-/**
- * Sharing a site from the steward, as root through the relay: for a Project
- * admin's session (below) and for a team token (src/control/steward.ts). The
- * caller has judged who may share this project; this judges the policy, the
- * site and the domains, the same way for both.
- */
-export function createSharing(dependencies: SharingDependencies): Sharing {
-  async function portalSite(slug: string, by: Sharer): Promise<{ site: Site; host: string } | Response> {
-    const found = checkSite(await dependencies.sites(), slug);
-    if ("refusal" in found) return fail(found.refusal.error, found.refusal.message);
-    const view = await dependencies.portalOf(found.site);
-    if (!view.requested || !view.installed) {
-      return fail(
-        "no-portal",
-        by === "member"
-          ? `${slug} is not behind the portal: everyone gets in already, and putting it behind the portal is its Access section's`
-          : `${slug} is not behind the portal, or its block in service does not carry it yet: everyone gets in already, and putting a site behind the portal is done from the dashboard's Access section`,
-      );
-    }
-    return { site: found.site, host: dependencies.hostOf(found.site.folder) };
-  }
-
-  async function share(slug: string, body: Body, actor: string, by: Sharer, onDomain?: () => Promise<void>): Promise<Response> {
-    const reading = readTokenPolicy(body);
-    if ("refusal" in reading) {
-      const message =
-        by === "member" && reading.refusal.code === "out-of-scope"
-          ? "public is not a sharing mode: making a site public turns its portal off, from its Access section"
-          : reading.refusal.message;
-      return fail(reading.refusal.code, message, reading.refusal.details);
-    }
-    const site = await portalSite(slug, by);
-    if (site instanceof Response) return site;
-    const portal = dependencies.portal;
-    if (portal === null) return fail("not-available", RELAY_MISSING);
-    const list = await asked(() => portal.sharing());
-    if (list instanceof Response) return list;
-    const known = list.status === 200 ? readPortalSharing(list.body) : null;
-    if (known === null) return fail("failure", "the portal's sharing list does not read: is the portal up to date?");
-    // Whoever shares did not choose the company's domains: the owner did, in
-    // OIDC_ALLOWED_DOMAINS. A domain they open must be one of those.
-    const refusals = domainRefusals(policyOf(known, site.host).policy, reading.policy, known.sso.allowedDomains);
-    if (refusals.length > 0) {
-      const allowed = known.sso.allowedDomains;
-      const message =
-        by === "token"
-          ? domainMessage(allowed)
-          : allowed.length === 0
-            ? "a project admin may open a site to no domain: the portal lets anyone its provider vouches for sign in, share with people by email instead"
-            : `a project admin may open a site only to the domains the portal admits at sign-in: ${allowed.join(", ")}`;
-      await onDomain?.();
-      return fail("out-of-scope", message, refusals);
-    }
-    const { mode, people, domains } = reading.policy;
-    const answer = await asked(() => portal.replaceSharing(site.host, { mode, people, domains, actor }));
-    if (answer instanceof Response) return answer;
-    if (answer.status === 200) return Response.json(answer.body);
-    if (by === "token" && answer.status === 400) {
-      const code = typeof answer.body === "object" && answer.body !== null && typeof (answer.body as Body).error === "string" ? ((answer.body as Body).error as string) : "no reason given";
-      return fail("invalid", `the portal refused this policy (${code}): nothing was changed`);
-    }
-    return portalRefusal(answer.status, answer.body);
-  }
-
-  return { portalSite, share };
-}
-
 export function createMemberActions(dependencies: MemberActionsDependencies): Routes {
   const { members, readBody, underLock, ops } = dependencies;
-  const sharingRoad = createSharing(dependencies);
 
   function roleOn(principal: MemberPrincipal, slug: string): Role | null {
     return Object.hasOwn(principal.roles, slug) ? principal.roles[slug]! : null;
@@ -292,58 +161,6 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
   const FILE = ["slug", "file"] as const;
   const VARIABLE = ["slug", "file", "variable"] as const;
 
-  async function sharing(req: Request): Promise<Response> {
-    const body = await readBody(req, ["session", "slug", "mode", "people", "domains"]);
-    if (body instanceof Response) return body;
-    const principal = await members.authorize(body.session, null);
-    if (principal instanceof Response) return principal;
-    const refusal = await judge(principal, body.slug, "sharing", "sharing");
-    if (refusal !== null) return refusal;
-    const slug = body.slug as string;
-    return sharingRoad.share(slug, only(body, ["mode", "people", "domains"]), principal.email, "member", () =>
-      members.journalRefusal({ operation: "sharing", result: "rejects", actor: principal.email, member: principal.email, slug, detail: "domain" }),
-    );
-  }
-
-  async function createGuest(req: Request): Promise<Response> {
-    const body = await readBody(req, ["session", "slug", "label", "durationS"]);
-    if (body instanceof Response) return body;
-    const principal = await members.authorize(body.session, null);
-    if (principal instanceof Response) return principal;
-    const refusal = await judge(principal, body.slug, "guests", "guest.create");
-    if (refusal !== null) return refusal;
-    const site = await sharingRoad.portalSite(body.slug as string, "member");
-    if (site instanceof Response) return site;
-    const portal = dependencies.portal;
-    if (portal === null) return fail("not-available", RELAY_MISSING);
-    // The label and the duration are the portal's to judge, as for the super admin.
-    const answer = await asked(() => portal.createGuest({ host: site.host, label: body.label, durationS: body.durationS, actor: principal.email }));
-    if (answer instanceof Response) return answer;
-    return answer.status === 201 ? Response.json(answer.body, { status: 201 }) : portalRefusal(answer.status, answer.body);
-  }
-
-  async function revokeGuest(req: Request): Promise<Response> {
-    const body = await readBody(req, ["session", "id"]);
-    if (body instanceof Response) return body;
-    if (typeof body.id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(body.id)) return fail("invalid", "id: a guest access's identifier");
-    const principal = await members.authorize(body.session, null);
-    if (principal instanceof Response) return principal;
-    const portal = dependencies.portal;
-    if (portal === null) return fail("not-available", RELAY_MISSING);
-    const list = await asked(() => portal.guests());
-    if (list instanceof Response) return list;
-    const guests = typeof list.body === "object" && list.body !== null ? (list.body as Body).guests : null;
-    const guest = Array.isArray(guests) ? (guests as Body[]).find((one) => one.id === body.id) : undefined;
-    // The project whose site the access opens: an access elsewhere reads as unknown.
-    const slug = guest === undefined ? null : [...(await dependencies.sites()).keys()].find((folder) => dependencies.hostOf(folder) === guest.host) ?? null;
-    if (slug === null) return fail("not-found", "no such guest access on your projects");
-    const refusal = await judge(principal, slug, "guests", "guest.revoke");
-    if (refusal !== null) return refusal;
-    const answer = await asked(() => portal.revokeGuest(body.id as string, principal.email));
-    if (answer instanceof Response) return answer;
-    return answer.status === 204 ? new Response(null, { status: 204 }) : portalRefusal(answer.status, answer.body);
-  }
-
   async function projects(req: Request): Promise<Response> {
     const body = await readBody(req, ["session"]);
     if (body instanceof Response) return body;
@@ -386,7 +203,5 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
         run: (req, body, who) => (startRestore === null ? Promise.resolve(fail("not-found", "backups are not set up on this server")) : startRestore(req, { ...body, actor: who.actor })),
       }),
     },
-    "/members/sharing": { PUT: sharing },
-    "/members/guests": { POST: createGuest, DELETE: revokeGuest },
   };
 }

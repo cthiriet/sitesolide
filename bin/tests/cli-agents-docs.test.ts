@@ -58,7 +58,7 @@ describe("the documented usage", () => {
     }
   });
 
-  test("docs/commands.md quotes every line the CLI prints for its usage with a team token", () => {
+  test("docs/commands.md quotes every line the CLI prints for its usage with a token", () => {
     const documented = read("docs/commands.md");
     const lines = REMOTE_USAGE.filter((line) => line !== "" && !line.startsWith("usage")).map((line) => line.replace(/^ {2}/, ""));
     expect(lines.length).toBeGreaterThan(10);

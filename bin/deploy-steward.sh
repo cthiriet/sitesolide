@@ -29,14 +29,16 @@ UNIT_SOURCE="$REPO_ROOT/infra/steward/$UNIT.service"
 TARGET_JS="/usr/local/lib/sitesolide/steward.js"
 SOCKET_FOLDER="/run/$UNIT"
 SOCKET="$SOCKET_FOLDER/secretaire.sock"
-# The owner's socket, which only root opens: `sitesolide members` speaks to it.
+# The owner's socket, which only root opens: `sitesolide share` and
+# `sitesolide people` speak to it.
 OWNER_FOLDER="/run/$UNIT-owner"
 OWNER_SOCKET="$OWNER_FOLDER/owner.sock"
-# Where the steward lays the private key the portal signs members' sign-ins with.
+# Where the steward lays the private key the portal signs dashboard sign-ins
+# with, and the projection of the access registry the portal reads.
 PORTAL_KEY_FOLDER="/etc/sitesolide-portal"
-# The steward's relay to the portal's admin API, for a Project admin's sharing
-# and guests: a socket root's alone, and systemd-socket-proxyd behind it. The
-# steward's own unit keeps no network.
+# The steward's relay to the portal's admin API, asked whether the portal
+# reads the access projection: a socket root's alone, and systemd-socket-proxyd
+# behind it. The steward's own unit keeps no network.
 RELAY="sitesolide-portal-relay"
 RELAY_SOCKET_SOURCE="$REPO_ROOT/infra/steward/$RELAY.socket"
 RELAY_SERVICE_SOURCE="$REPO_ROOT/infra/steward/$RELAY.service"
@@ -230,16 +232,27 @@ esac
 # as nobody is by the dashboard's.
 permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $OWNER_FOLDER $OWNER_SOCKET 2>/dev/null | tr '\n' ' '")"
 [ "$permissions" = "700 root:root 600 root:root " ] || fail "$OWNER_FOLDER and its socket are '$permissions', expected 700 root:root and 600 root:root"
-code="$(ssh -n "$SITESOLIDE_SERVER" "sudo curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $OWNER_SOCKET http://steward/members" || true)"
-[ "$code" = "200" ] || fail "root does not get 200 on the owner's socket /members (got: ${code:-nothing})"
-code="$(ssh -n "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $OWNER_SOCKET http://steward/members" || true)"
+code="$(ssh -n "$SITESOLIDE_SERVER" "sudo curl -s -o /dev/null -w '%{http_code}' --max-time 30 --unix-socket $OWNER_SOCKET http://steward/people" || true)"
+[ "$code" = "200" ] || fail "root does not get 200 on the owner's socket /people (got: ${code:-nothing})" \
+  "the access registry may not have been made from members.json and the portal's database: the journal says why"
+code="$(ssh -n "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $OWNER_SOCKET http://steward/people" || true)"
 [ "$code" = "000" ] || fail "site-dashboard reaches the owner's socket (code ${code:-nothing}): it must be root's alone"
 
-# The members' key pair: laid at startup once the portal's account exists.
+# The access registry, root's alone, and its projection for the portal.
+registry="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' /var/lib/$UNIT/access.json 2>/dev/null || echo missing")"
+[ "$registry" = "600 root:root" ] || fail "/var/lib/$UNIT/access.json is '$registry', expected 600 root:root"
+projection="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $PORTAL_KEY_FOLDER/access.json 2>/dev/null || echo missing")"
+case "$projection" in
+  "640 root:site-portal") echo "   access registry 600 root:root, its projection for the portal 640 root:site-portal" ;;
+  missing) echo "   note: no access projection yet, the portal is not deployed: it is written at the first change once it is" ;;
+  *) fail "$PORTAL_KEY_FOLDER/access.json is '$projection', expected 640 root:site-portal" ;;
+esac
+
+# The sign-in key pair: laid at startup once the portal's account exists.
 key="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $PORTAL_KEY_FOLDER/assertion.key 2>/dev/null || echo missing")"
 case "$key" in
-  "640 root:site-portal") echo "   members' key laid for the portal, 640 root:site-portal" ;;
-  missing) echo "   note: no members' key yet, the portal is not deployed: it is laid at the first sign-in once it is" ;;
+  "640 root:site-portal") echo "   dashboard sign-in key laid for the portal, 640 root:site-portal" ;;
+  missing) echo "   note: no dashboard sign-in key yet, the portal is not deployed: it is laid at the first sign-in once it is" ;;
   *) fail "$PORTAL_KEY_FOLDER/assertion.key is '$key', expected 640 root:site-portal" ;;
 esac
 
@@ -247,12 +260,13 @@ esac
 # reaches the portal's admin API through it once the portal is deployed.
 permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $RELAY_FOLDER $RELAY_SOCKET 2>/dev/null | tr '\n' ' '")"
 [ "$permissions" = "700 root:root 600 root:root " ] || fail "$RELAY_FOLDER and its socket are '$permissions', expected 700 root:root and 600 root:root"
-code="$(ssh -n "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $RELAY_SOCKET http://portal/admin/sharing" || true)"
+code="$(ssh -n "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $RELAY_SOCKET http://portal/admin/access" || true)"
 [ "$code" = "000" ] || fail "site-dashboard reaches the portal relay (code ${code:-nothing}): it must be root's alone"
-code="$(ssh -n "$SITESOLIDE_SERVER" "sudo curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $RELAY_SOCKET http://portal/admin/sharing" || true)"
+code="$(ssh -n "$SITESOLIDE_SERVER" "sudo curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $RELAY_SOCKET http://portal/admin/access" || true)"
 case "$code" in
   200) echo "   portal relay: root reaches the portal's admin API, 600 root:root" ;;
-  *) echo "   note: the portal does not answer through its relay yet (code ${code:-nothing}): Project admins cannot share nor give guest access until it is deployed" ;;
+  404) echo "   portal relay: root reaches a portal from before the access registry: sitesolide upgrade deploys it" ;;
+  *) echo "   note: the portal does not answer through its relay yet (code ${code:-nothing}): the steward cannot say whether it reads the access projection until it is deployed" ;;
 esac
 
 echo "   active, socket 660 root:site-dashboard, open to the dashboard and closed to the others; the owner's socket and the portal relay root's alone"

@@ -50,13 +50,6 @@ export const PEOPLE_MAX = 500;
 
 export const DOMAINS_MAX = 50;
 
-/**
- * The roles a protected site learns through `X-Sitesolide-Role`: `admin` for
- * the owner's password and the admin emails, `member` for whoever the policy
- * lets in, `guest` for a password guest.
- */
-export type Role = "admin" | "member" | "guest";
-
 const LABEL = "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?";
 const DOMAIN_PATTERN = new RegExp(`^${LABEL}(\\.${LABEL})+$`);
 

@@ -5,50 +5,55 @@ levels. **The machine**: *Sites*, the home page, with the state of the machine,
 the discrepancies between what the repositories ask for and what the machine
 does, the only part of the dashboard that teaches you something, and the list
 of sites; *Activity*, the audit of the whole machine, every component's in one
-log; *Team*, the
-tokens that deploy without SSH; *Members*, the people who sign in here with
-their work account, a role on each project; *Connectors*, the credentials the
-egress proxy lends to projects. **A site**: *Overview*, *Audience*, *Secrets*,
-*Guests*, *Sharing*, *Access* and *Backups*, everything that concerns that site
-and only it, and *Members* for its Project admins. A member sees Sites and
-Activity reduced to their projects, and in a project the sections their role
-there opens: see [Members](#members).
+log; *Tokens*, the tokens that deploy without SSH; *People*, everyone with
+access to a project, their roles, and who may create projects; *Connectors*,
+the credentials the egress proxy lends to projects. **A site**: *Overview*,
+*Audience*, *Secrets*, *Access* and *Backups*, everything that concerns that
+site and only it, *Access* saying who may open it and who may do what on it.
+Someone with a role on a project signs in with their company account, and
+sees Sites and Activity reduced to their projects, and in a project the
+sections their role there opens: see [Access](#access).
+
+Until the next release the page keeps the names and sections it had before
+the access registry: *Team* for Tokens, *Members* for People, and in a site
+*Guests*, *Sharing*, *Access* and *Members* where one *Access* will stand.
+They already read and write through the access routes described here.
 
 **Few writes, and each one is a decision.** No button sets a preview lock. One
 machine serves every site, with no staging and no automatic recovery: what
 touches their shared configuration stays in the workstation's scripts, under the
-eyes of whoever runs them. Four exceptions, and in all four the dashboard only
+eyes of whoever runs them. A few exceptions, and in each the dashboard only
 relays to a component that judges for itself what it accepts:
 
-- **guest access and sharing**, the *Guests* and *Sharing* sections, which
-  touch only the portal's database: a password for one person, or who may sign
-  in with their work account, see [portal/README.md](../portal/README.md). A
-  team token shares the projects it may deploy through the control API, by the
-  same relay: see [Sharing by token](#sharing-by-token);
+- **who may open a site and who may do what on it**, a site's *Access* and the
+  *People* page. The steward keeps the one registry, judges every change by
+  its rules, and writes the projection the portal reads; the dashboard never
+  touches the portal's decisions. A token gives Can open on the projects it
+  may deploy through the control API, by the same steward: see
+  [Access by token](#access-by-token);
 - **the secret files of every deployed project** in `/etc/sitesolide`, and the
   restart of its service, the *Secrets* section. The steward, a root daemon,
   decides;
-- **a project's portal door**, the *Access* section, the only button in the
-  dashboard that reloads Caddy. The steward asks the gatekeeper, a root one-shot
-  that validates, reloads, probes every site and restores at the slightest
-  discrepancy;
+- **a project's general access, public or restricted**, in its *Access*
+  section, the only button in the dashboard that reloads Caddy. The steward
+  asks the gatekeeper, a root one-shot that validates, reloads, probes every
+  site and restores at the slightest discrepancy;
 - **the egress proxy's connectors and their grants**, the *Connectors* page,
   written by the steward under the same unlock as a secret, see
-  [Connectors](#connectors).
-- **a deployment by a team token**, the control API under `/api/v1/` and the
-  *Team* page. The steward judges every token and starts the installer, a root
-  one-shot that deploys one project as `sitesolide deploy` would. See
-  [The control API](#the-control-api).
+  [Connectors](#connectors);
+- **a deployment by a token**, the control API under `/api/v1/` and the
+  *Tokens* page. The steward judges every token and starts the installer, a
+  root one-shot that deploys one project as `sitesolide deploy` would. See
+  [The control API](#the-control-api);
 - **a project's data, put back as a snapshot had it**, the *Backups* section.
   The steward starts a restore one-shot, which saves the current data first,
   swaps the folders and puts them back if the service does not come back. See
-  [src/backup/README.md](src/backup/README.md).
-- **the dashboard's members and their work on their projects**, the
-  *Members* page, and a project's sections as their role opens them. The
-  steward keeps the registry, opens a member's session from an assertion the
-  portal signed, unlocks a member on a forced sign-in, and judges by role
-  every restart, secret, door, sharing, guest, restore and invitation a member
-  asks for. See [Members](#members).
+  [src/backup/README.md](src/backup/README.md);
+- **the work of the people who sign in here on their projects**, a project's
+  sections as their role opens them. The steward opens a person's session
+  from an assertion the portal signed, unlocks them on a forced sign-in, and
+  judges by role every restart, secret, change of general access, restore and
+  change of access they ask for. See [Access](#access).
 
 ## The web service does not read the machine
 
@@ -176,13 +181,13 @@ restart the service sees the hash has changed and closes every session
 ([tests/rotation.test.ts](tests/rotation.test.ts)): you sign in again with the
 new one.
 
-The rest of the door:
+The rest of what guards it:
 
 | Measure | Detail |
 |---|---|
-| Session | 32-byte token, kept **hashed** in the database, `__Host-` cookie, `HttpOnly`, `SameSite=Strict`, seven days; a member's, signed in with the provider, twelve hours, under their email in the same table (see [Members](#members)) |
-| Rate limiting | after 3 failures, 5 s doubling up to an hour, **global** rather than per address: one password, and changing address would sidestep a per-IP counter for free. Members' sign-ins are counted per identity, beside it |
-| `Origin` | compared to the literal `PUBLIC_URL`, on sign-in, sign-out, guest access and every non-`GET` secrets route, portal included. Behind Caddy, `req.url` announces `127.0.0.1:3022` and cannot serve as a reference. With `SameSite=Strict` it stands in for a CSRF token: `src/sessions.ts` says why a token would add nothing |
+| Session | 32-byte token, kept **hashed** in the database, `__Host-` cookie, `HttpOnly`, `SameSite=Strict`, seven days; a person's, signed in with their company account, twelve hours, under their email in the same table (see [Sessions](#sessions)) |
+| Rate limiting | after 3 failures, 5 s doubling up to an hour, **global** rather than per address: one password, and changing address would sidestep a per-IP counter for free. The sign-ins of people with a company account are counted per identity, beside it |
+| `Origin` | compared to the literal `PUBLIC_URL`, on sign-in, sign-out, every change of access and every non-`GET` secrets route, general access included. Behind Caddy, `req.url` announces `127.0.0.1:3022` and cannot serve as a reference. With `SameSite=Strict` it stands in for a CSRF token: `src/sessions.ts` says why a token would add nothing |
 | With no hash | the service starts, says so in its log, and refuses everyone. It never opens |
 
 **What this password does not protect.** The dashboard shows the lock codes,
@@ -258,14 +263,17 @@ steward.js         root, hardened sitesolide-steward.service
    |-- writes /etc/sitesolide/<file>                     atomic write
    |-- keeps  /var/lib/sitesolide-steward/precedents/    the previous version
    |-- writes /var/lib/sitesolide-steward/journal.jsonl  with no values at all
-   |-- reads  /etc/caddy/sites/<slug>.caddy              whether the door is on
+   |-- reads  /etc/caddy/sites/<slug>.caddy              whether the portal is in front of it
    |-- writes /etc/sitesolide-egress/*.json              the connectors, see Connectors
    |-- reads  /var/backups/sitesolide/<slug>/            the snapshots, by name
    |-- reads  /var/lib/sitesolide-backup/backup.db       the bucket's index, the audit
    |-- writes /var/lib/sitesolide-backup/requests/       a restore request, consumed by the one-shot
-   |-- keeps  /var/lib/sitesolide-steward/members.json   the members, their sessions, the key pair, see Members
-   |-- lays   /etc/sitesolide-portal/assertion.key       the private key the portal signs members' sign-ins with
-   |-- asks   /run/sitesolide-portal-relay/portal.sock   the portal's admin API, a Project admin's sharing and guests
+   |-- keeps  /var/lib/sitesolide-steward/access.json    who may do what on each project, see Access
+   |-- keeps  /var/lib/sitesolide-steward/member-sessions.json  the sessions of people who sign in
+   |-- writes /etc/sitesolide-portal/access.json         the projection the portal decides from
+   |-- lays   /etc/sitesolide-portal/assertion.key       the private key the portal signs dashboard sign-ins with
+   |-- reads  /srv/sites/portal/data/portal.db           once, a checked copy, to make the first registry
+   |-- asks   /run/sitesolide-portal-relay/portal.sock   the portal's admin API: what it decides from
    `-- runs   systemctl reset-failed | restart | show <unit>
               systemctl start sitesolide-gatekeeper-<on|off>@<slug>
               systemctl start --no-block sitesolide-restore@<slug>
@@ -317,16 +325,16 @@ directories, no IP addresses at all, capabilities reduced to `CAP_CHOWN` and
   no longer rests on `ProtectSystem=strict` alone. **The steward refuses a hash
   that does not belong to root**: nobody unlocks then.
 - **A fixed ten-minute token**, which use does not extend, one per principal:
-  the super admin has one, which unlocking from another of their sessions
-  replaces; each member session has its own (see [A member's unlock](#a-members-unlock)).
+  the owner has one, which unlocking from another of their sessions
+  replaces; each session of a person has its own (see [A person's unlock](#a-persons-unlock)).
   Neither evicts the other. The steward keeps only their hashes.
 - **The token never goes to the browser.** The dashboard's service keeps it in
   memory, attached to the session's hash, and forgets it on sign-out,
   where it revokes it, as on its own restart: you unlock again, nothing more.
 - **Rate limiting per principal**, taken from sign-in: three failures, then 5 s
-  doubling up to an hour. The super admin's, global to their one password, **is
+  doubling up to an hour. The owner's, global to their one password, **is
   held on disk** and survives a steward restart; *Change password* counts its
-  attempts there like an unlock. A member's counts their refused forced
+  attempts there like an unlock. A person's counts their refused forced
   sign-ins, in memory, under a cap of sixty unlock attempts a minute for the
   whole machine: neither slows the other.
 - **One argon2id verification at a time**, new hashes included. Each costs about
@@ -362,8 +370,10 @@ unmanaged, with the command that repairs it.
 
 A compromised dashboard yields what the page already showed, plus what an
 unlocked session grants: reading and writing the secrets of every project, for
-ten minutes, among them the portal's sign-in settings, and creating guest
-access or sharing a site. It never touches Caddy itself, the
+ten minutes, among them the portal's sign-in settings, and giving people
+roles. Without an unlock, it can give Can open, password access included, and
+take anyone's access away, through the steward, which records each under the
+owner's name (see the [threat model of access](#threat-model)). It never touches Caddy itself, the
 gatekeeper refuses everything its own rules refuse, and restores. It cannot
 rewrite the hash that unlocks the secrets, which belongs to root.
 
@@ -413,34 +423,157 @@ server.ts  --  GET 127.0.0.1:3129/audit, /status  -->  egress proxy
 The steward's unit gains `ReadWritePaths=-/etc/sitesolide-egress`, with the
 dash: the folder exists only once `bin/deploy-egress.sh` has run.
 
-## Members
+## Access
 
-People the super admin invites by email, who sign in to the dashboard with
-their work account, through the portal's identity provider, and hold a role on
-each project. The super admin is whoever holds the dashboard's password, made
-by `sitesolide setup`: they keep it, to sign in and to unlock, and nothing
-about it changes. A member never holds a password or root; they mint tokens of
-their own, never stronger than their roles, see [A member's own
-tokens](#a-members-own-tokens).
+Who may do what on a project, in one model. Per project, its **general
+access**, who may open the site at all, and its **people with access**, a
+list of entries `{ who, role }`, `who` an email or a whole domain written
+`@acme.com`. Beside the projects, one person may do everything: **the
+owner**, whoever holds the dashboard's password, made by `sitesolide setup`,
+who keeps it to sign in and to unlock. Everyone else holds what the list
+gives them, project by project, signs in with their company account through
+the portal's identity provider, and never holds the dashboard's password or
+root; they mint tokens of their own, never stronger than their roles, see
+[A person's own tokens](#a-persons-own-tokens).
+
+**General access** is what the machine already carries, not a list the
+registry keeps:
+
+| General access | Who opens the site | What carries it |
+|---|---|---|
+| **Public** | anyone | the manifest's `portal` flag off, and its block |
+| **Restricted** | the people with access, signed in by the portal in front of the site | the manifest's `portal` flag on, and its block's `forward_auth` |
+| **Anyone with the code** | whoever has the preview code | the preview lock, `sitesolide lock` |
+
+Public and restricted switch from a site's *Access*, under the unlock,
+through the steward and the gatekeeper: see [The portal, from the
+dashboard](#the-portal-from-the-dashboard). The code is set and removed with
+`sitesolide lock` alone, from the project's folder, never from the page.
+
+**People with access** hold one rung of a ladder, each including the ones
+below:
 
 | Role | On that project | Unlock |
 |---|---|---|
-| **Viewer** | sees it: its state, audience and activity | none |
+| **Can open** (`visitor`) | opens the site when its general access is restricted, and sees nothing in the dashboard | none |
+| **Viewer** | also sees the project in the dashboard: its state, audience and activity | none |
 | **Developer** | also restarts its service; lists its secret files, names and metadata; sets, replaces and removes a variable, replaces a file read whole, creates a declared file, and never reads a value back; deploys it with a token of their own | to write, to mint a token |
-| **Project admin** | everything of the project: what a Developer does, reads a value or a file back, restores a file's previous version, turns its portal door on or off, shares it, gives and revokes guest access, lists and restores its backups, and gives people a role on it, at most their own; a token of theirs may also deploy it in the open, declare a domain and reach outside hosts | to read, write, restore, turn the door, give a role, mint a token |
+| **Admin** | everything of the project: what a Developer does, reads a value or a file back, restores a file's previous version, switches its general access between public and restricted, gives and takes away access to it, a role at most their own, lists and restores its backups; a token of theirs may also deploy it in the open, declare a domain and reach outside hosts | to read, write, restore, switch general access, give a role above Can open, mint a token |
 
-Beside the roles, one right per member, the super admin's to give: **may
-create projects**. A member who holds it mints a token that may create
-projects, and becomes Project admin of each one it creates.
+Who may hold which role is the steward's to decide, alone
+([src/access/rules.ts](src/access/rules.ts)), on rules few and strict:
 
-The table is the steward's, `src/members/powers.ts`, and the page reads it to
-offer what the steward will accept. Nothing in it reaches the machine itself:
-a role is never given on the platform's projects, `dashboard`, `portal`, `api`,
-`analytics` and the landing, and the steward refuses a member any file it lays
-for root, `dashboard.env` and `portal.env` among them, whatever a registry
-edited by hand would claim. A password hash changes with the dashboard's own
-password, the super admin's alone; so do the preview locks, the tokens of
-others, the connectors and the Members page.
+- **a domain is Can open only**, and only once signing in with a company
+  account is set up: everyone at acme.com opens the site, and nobody
+  administers anything for being there;
+- **a person inside the company's domains** signs in with their company
+  account and may hold any role. The company's domains are
+  `OIDC_ALLOWED_DOMAINS`, read from `portal.env`: with that list empty,
+  anyone the provider vouches for; the admin emails always;
+- **a person outside them**, or anyone when no provider is set up, is Can
+  open only, with **password access**: the steward draws a password of four
+  groups of four characters, shown once, which they type on the portal's
+  sign-in page, for 24 hours, 7 days (the default), 30 days or with no
+  expiry, chosen when it is given. The registry and the portal keep its
+  SHA-256 alone: drawn at random, it leaves nothing to guess, and a fast hash
+  finds it by lookup;
+- **an Admin gives at most their own role, on their project alone**, and a
+  domain only among the company's; **the owner gives anything**;
+- **removing someone, or lowering them, holds from their next request**, on
+  the site as in the dashboard.
+
+Beside the roles, one right per person, the owner's to give: **may create
+projects**. A person who holds it mints a token that may create projects,
+and becomes Admin of each one it creates. And `OIDC_ADMIN_EMAILS` keeps its
+meaning: those addresses open every restricted site, as `admin`, and
+*People* shows them as such.
+
+**Who signs in to the dashboard**: someone with a role above Can open on a
+project, or the create right. Someone with Can open alone, or password access
+alone, opens sites and nothing more: the dashboard refuses their sign-in,
+saying they have no role on it. When someone's last role above Can open
+goes, removed or lowered, and they do not hold the create right, their
+dashboard sessions close and their tokens are revoked.
+
+The table of powers is the steward's, [src/members/powers.ts](src/members/powers.ts),
+and the page reads it to offer what the steward will accept. Nothing in it
+reaches the machine itself: a role is never given on the platform's
+projects, `dashboard`, `portal`, `api`, `analytics` and the landing, and the
+steward refuses a person any file it lays for root, `dashboard.env` and
+`portal.env` among them, whatever a registry edited by hand would claim. A
+password hash changes with the dashboard's own password, the owner's alone;
+so do the preview codes, the tokens of others, the connectors and the
+*People* page.
+
+### One registry, the steward's
+
+```
+steward.js         root, the only writer
+   |-- reads/writes /var/lib/sitesolide-steward/access.json   the registry, root 0600, written atomically
+   `-- writes       /etc/sitesolide-portal/access.json        its projection, root:site-portal 0640
+                         |
+portal             site-portal: reads the projection again whenever it changes
+dashboard          site-dashboard: reads neither, asks the steward
+```
+
+**The registry** holds, per project, its entries, each `{ who, role, by,
+createdAt, updatedAt }`, and for password access `password: { id, hash,
+expiresAt }`; the people who may create projects, `creators`; and
+`migration`, when and from what it was first made, with what it set aside.
+It is root's for the reason the tokens' registry is: one the dashboard or
+the portal could write would let either of them make anyone an Admin of
+anything. The steward reads it at every decision, so a role taken away
+holds from the next request, and makes every change in one queue: two
+changes read side by side would each write a registry without the other's.
+A file that does not read is never guessed at: every person is refused
+until the owner looks, the journal and every answer saying why.
+
+**The projection** is what the portal needs and nothing more: per host,
+`<slug>.<zone>`, `{ slug, people: { email: role }, domains, passwords: [{ id,
+who, hash, expiresAt }] }`. It lies beside the assertion key, in the same
+folder with the same rights, for the same reason (see [The key
+pair](#the-key-pair)): root writes it, the portal's account reads it, the
+dashboard's cannot. The steward writes it **before** the registry: a change
+the portal cannot be told of is no change, and the registry stays as it
+was; a registry write that fails after it leaves the projection a step
+ahead, which the next change or the next start writes again. At startup the
+steward writes it again from the registry, which also sets right one edited
+by hand; with its folder or the portal's group missing, it says so once, and
+tries again within the minute once the portal is deployed.
+
+**The portal decides from it, and stores no list any more.** It checks the
+file's inode, size and modification time at every request, one `stat`, and
+reads it again whole when they move, so a removal holds at the next request.
+A projection that does not read opens nothing but the owner's password and
+the admin emails. A portal that finds none and has never read one decides
+from its own tables of before, `sharing` and `invites`, read-only, so that
+the order of an upgrade opens and closes nothing; once it has read one, it
+leaves a mark, `data/access-from-steward`, and never reads those tables
+again. Its sessions stay its own. `GET /admin/access`, on the loopback, says
+what it decides from: `{ reading: "steward" | "portal" | "unreadable",
+writtenAt }`. The header a restricted site reads, `X-Sitesolide-Role`, now
+carries the role on this ladder: see [portal/README.md](../portal/README.md).
+
+**The steward asks it, through the relay, and tells nothing.** Every access
+answer says what the portal decides from, `portal.reading`, from `GET
+/admin/access` asked through `sitesolide-portal-relay`: a socket only root
+opens, `/run/sitesolide-portal-relay/portal.sock`, behind which systemd's own
+`systemd-socket-proxyd`, root with no capability and the loopback alone,
+forwards to the portal's port and to nothing else
+(infra/steward/sitesolide-portal-relay.socket). The steward's own unit keeps
+no network. `portal` is a portal still deciding from its own tables, from
+before the registry or before its first projection, which the page and
+`sitesolide share` say to upgrade; `unknown`, a portal the steward could not
+ask. Nothing is written through the relay: the portal reads, and is never
+told.
+
+**The first registry is made from the stores before it**, once, at the
+steward's first start on this code: `members.json`, in its own state folder,
+and the portal's database, read as root from a checked copy. What is
+carried, what is set aside and why, and how to go back, are in
+[docs/migration.md](../docs/migration.md#access-the-registry-made-from-the-stores-before-it).
+
+### Who decides what
 
 ```
 browser, Sign in with ...                   the dashboard's own sign-in page
@@ -455,46 +588,49 @@ portal  -->  identity provider  -->  portal /oidc/callback   the portal's usual 
 server.ts  --  POST /admin/dashboard/redeem  -->  portal: the code, for an assertion it signed
    |  POST /members/signin { assertion }   on the steward's socket
    v
-steward.js         root: the signature with its own public key, the audience, the expiry,
-                   the nonce never seen, the email in members.json; the session drawn
-   |-- reads/writes /var/lib/sitesolide-steward/members.json           the registry, 0600
+steward.js         root: the signature with its own public key, the audience, the expiry, the nonce
+                   never seen, a role above Can open or the create right in access.json; the session drawn
+   |-- reads        /var/lib/sitesolide-steward/access.json            the registry, 0600
    |-- reads/writes /var/lib/sitesolide-steward/member-sessions.json   sessions and nonces, hashes only
    |-- keeps        /var/lib/sitesolide-steward/assertion.pub          the public key, 0600
    `-- lays         /etc/sitesolide-portal/assertion.key               the private key, root:site-portal 0640
 ```
 
-**The portal says who; the steward says what they may do.** The dashboard is
-assumed compromised, as everywhere in this README, so it is never believed
-when it names someone. The portal, the one authority on identities, runs its
-usual sign-in (portal/README.md, "Signing in with a work account") and signs
-what the provider proved: an Ed25519 assertion (portal/src/assertion.ts) of the
-verified email, when the person last signed in at the provider, for the
-dashboard alone, for five minutes, with a nonce. The steward checks it with
-the public key it keeps itself, refuses it replayed, too old or for an email
-its registry does not name, and only then opens a session. Every write a
-member asks for carries that session, and the steward judges it against the
-registry as it reads at that moment: the member still there, their role on
+**The portal says who; the steward says what they may do.** The dashboard
+is assumed compromised, as everywhere in this README, so it is never
+believed when it names someone. The portal, the one authority on
+identities, runs its usual sign-in (portal/README.md, "Signing in with a
+work account") and signs what the provider proved: an Ed25519 assertion
+(portal/src/assertion.ts) of the verified email, when the person last signed
+in at the provider, for the dashboard alone, for five minutes, with a nonce.
+The steward checks it with the public key it keeps itself, refuses it
+replayed, too old, or for an email the registry gives neither a role above
+Can open nor the create right, and only then opens a session. Every write a
+person asks for carries that session, and the steward judges it against the
+registry as it reads at that moment: the person still there, their role on
 that project. Its journal names the email it verified, never one a request
-carries. A compromised dashboard can act only for the members whose sessions
-pass through it, within their roles; it can neither make a member, nor widen
-one, nor forge an assertion, the private key being out of its reach.
+carries. A compromised dashboard can act only for the people whose sessions
+pass through it, within their roles; it can neither raise anyone above Can
+open without an unlock nor forge an assertion, the private key being out of
+its reach.
 
-**What a member sees, the dashboard filters**, from data it already holds:
+**What a person sees, the dashboard filters**, from data it already holds:
 `/api/state` keeps their projects alone and drops the machine's own figures,
 `/api/audit` keeps the rows of their projects and their own
-(src/members/view.ts, src/audit/merge.ts), the portal's guests and policies,
-the backups and a project's members keep those of the projects where their
-role shows them (src/members/relay.ts). A site's Secrets, Access, Sharing,
-Guests and Backups, and the *Team* page, answer at the super admin's
-addresses: `server.ts` sends a member's session to src/members/relay.ts
-(`either()`), which adds their session and unlock and relays to the steward,
-which judges. The super admin's
-handlers read the owner's sessions alone (`ownerSessions` in src/routes.ts),
-so that a route forgetting to dispatch still refuses a member, and every
-other route answers a member 403 before its handler runs.
-The page shows a member Sites and Activity, *Team* for their own tokens when
-a role or the create right lets them mint one, and in a project its Overview,
-with *Restart* for a Developer or a Project admin, and its Audience.
+(src/members/view.ts, src/audit/merge.ts), the backups keep those of the
+projects where their role shows them (src/members/relay.ts). A site's
+Secrets and Backups, and the *Tokens* page, answer at the owner's addresses:
+`server.ts` sends a person's session to src/members/relay.ts (`either()`),
+which adds their session and unlock and relays to the steward, which judges.
+`/api/access` tells the owner from a person itself, and sends a person's
+request to the steward's `/access/person/*` routes (src/access/routes.ts);
+*People* is the owner's alone. The owner's handlers read the owner's
+sessions alone (`ownerSessions` in src/routes.ts), so that a route
+forgetting to dispatch still refuses a person, and every other route answers
+a person 403 before its handler runs. The page shows a person Sites and
+Activity, *Tokens* for their own tokens when a role or the create right lets
+them mint one, and in a project its Overview, with *Restart* for a Developer
+or an Admin, its Audience, and the sections their role there opens.
 
 ### The key pair
 
@@ -511,44 +647,46 @@ restores its previous versions, and a compromised one, during an unlock,
 would read the private key and forge assertions for anyone, for as long as
 the key lived. The key therefore lives outside `/etc/sitesolide`, which the
 Secrets section manages, in `/etc/sitesolide-portal/`, a folder root owns,
-created `0755` by `bin/deploy-steward.sh`; the file is `root:site-portal 0640`:
-root writes it, the portal's account reads it, the dashboard's cannot. It
-never enters an environment, where every process of the portal's account and
-a crash report would see it. `portal.env` keeps its rule, a hash and the
-`OIDC_*` settings, nothing else. The steward's unit makes the folder writable
-with `ReadWritePaths=-/etc/sitesolide-portal`, the dash for a machine where it
-does not exist yet.
+created `0755` by `bin/deploy-steward.sh`; the file is `root:site-portal
+0640`: root writes it, the portal's account reads it, the dashboard's
+cannot. It never enters an environment, where every process of the portal's
+account and a crash report would see it. `portal.env` keeps its rule, a hash
+and the `OIDC_*` settings, nothing else. The steward's unit makes the folder
+writable with `ReadWritePaths=-/etc/sitesolide-portal`, the dash for a
+machine where it does not exist yet. The access projection lies beside the
+key, for the same reasons.
 
 ### Sessions
 
-A member's session is the steward's: it draws the token when the assertion
+A person's session is the steward's: it draws the token when the assertion
 checks out, the dashboard sets it as the browser's `__Host-session` and keeps
-its hash in `dashboard.db`, under the member's email in the `identity` column
-of `sessions`, beside the owner's (`owner`). Every member request presents it,
-and the dashboard asks the steward who it belongs to, the answer kept five
-seconds (src/members/identity.ts): removed, a member sees nothing more within
-seconds, and their next write is refused at once. Both sides keep hashes only;
-the steward keeps its own in `member-sessions.json`, so that restarting it,
-or the dashboard, signs nobody out.
+its hash in `dashboard.db`, under the person's email in the `identity`
+column of `sessions`, beside the owner's (`owner`). Every request of theirs
+presents it, and the dashboard asks the steward who it belongs to, the
+answer kept five seconds (src/members/identity.ts): removed, or left with Can
+open alone, a person sees nothing more within seconds, and their next write
+is refused at once. Both sides keep hashes only; the steward keeps its own in
+`member-sessions.json`, so that restarting it, or the dashboard, signs
+nobody out.
 
 | Measure | Detail |
 |---|---|
 | Lifetime | twelve hours, the steward's and the cookie's alike. The portal spares a dashboard sign-in the provider only while its own session is younger than twelve hours (`DASHBOARD_REAUTH_S`): a person closed at the provider is out of the dashboard a day after they last proved themselves there at most, as out of every site |
 | Assertion | five minutes, once: its nonce is remembered on disk until it would have expired. A sign-in at the provider older than a day opens no session |
 | Rate limiting | per identity, three refusals tolerated then five seconds doubling up to an hour, and ten sign-ins in ten minutes for one email; sixty sign-ins a minute for the whole machine; the owner's password counter unchanged, global (src/members/limiter.ts) |
-| Bounds | ten live sessions per member, the oldest giving way; a thousand on the machine; two hundred members, a hundred projects each |
-| Rotation | a new owner's password closes the owner's sessions, never a member's, which do not rest on it |
-| Sign-out | closes the dashboard's row and the steward's session, which journals `member.signout` |
+| Bounds | ten live sessions per person, the oldest giving way; a thousand on the machine; two hundred people who sign in to the dashboard; six hundred entries per project |
+| Rotation | a new owner's password closes the owner's sessions, never a person's, which do not rest on it |
+| Sign-out | closes the dashboard's row and the steward's session, which journals `dashboard.signout` |
 
-### A member's unlock
+### A person's unlock
 
-Whatever reads or writes a secret, turns a door, restores data or gives a role
-asks for the member's own unlock, the way the super admin's asks for the
-password. A member has no password: they sign in again, made to by the
-provider.
+Whatever reads or writes a secret, switches general access, restores data
+or gives a role above Can open asks for the person's own unlock, the way the
+owner's asks for the password. A person has no password: they sign in
+again, made to by the provider.
 
 ```
-page, Unlock                                  the member's session open
+page, Unlock                                  the person's session open
    |  GET /api/sso/begin?reauth=1&return=...   their session kept against the binding
    v
 server.ts  --  POST /admin/dashboard/flow { reauth: true }  -->  portal: a flow sealed with reauth
@@ -564,347 +702,351 @@ steward.js         root: the signature, reauth, auth_time five minutes old at mo
                    the email the session's, the nonce never seen; a token for that session
 ```
 
-- **One token per member session**, ten minutes fixed, which use does not
-  extend, kept by its hash in the steward's memory (src/members/unlocks.ts):
-  a restart of the steward locks everyone. The same member unlocking again in
-  that session replaces it; another member, the same member in another
-  browser, the super admin, each keeps their own. The dashboard keeps the
-  token in memory against the session's hash, in a store apart from the super
-  admin's, and never sends it to the browser.
+- **One token per session**, ten minutes fixed, which use does not extend,
+  kept by its hash in the steward's memory (src/members/unlocks.ts): a
+  restart of the steward locks everyone. The same person unlocking again in
+  that session replaces it; another person, the same person in another
+  browser, the owner, each keeps their own. The dashboard keeps the token in
+  memory against the session's hash, in a store apart from the owner's, and
+  never sends it to the browser.
 - **The provider's word, not the portal's clock.** The portal asks every
   provider for `max_age=0`, and all but Google for `prompt=login`, which
   Google does not document; by the OpenID Connect specification a provider
   asked for `max_age` says in `auth_time` when the person signed in, and the
   portal signs `reauth` only when that time falls within the flow
   (portal/src/oidc.ts, `freshReauth`). A provider that ignores the request
-  hands back its old sign-in, and the unlock is refused, never believed: with
-  Google, check on the installation that it does ask again before relying on
-  members' unlocks.
-- **The steward checks it all again**: `reauth`, `auth_time` five minutes old
-  at most, the email the session's own, the nonce spent with the sign-ins'.
-  A sign-in's assertion, which may ride on the provider's session, never
-  unlocks.
+  hands back its old sign-in, and the unlock is refused, never believed:
+  with Google, check on the installation that it does ask again before
+  relying on these unlocks.
+- **The steward checks it all again**: `reauth`, `auth_time` five minutes
+  old at most, the email the session's own, the nonce spent with the
+  sign-ins'. A sign-in's assertion, which may ride on the provider's
+  session, never unlocks.
 - **The session survives the provider's site.** The session cookie is
   `SameSite=Strict`, and the way back from a provider on another domain is a
   cross-site navigation, which never carries it. The dashboard keeps, from
   `begin`, the session against the binding, which does travel (`Lax`), ten
   minutes at most, a thousand in flight at most.
-- **Bounded**: a member's refused unlocks, three tolerated then five seconds
+- **Bounded**: a person's refused unlocks, three tolerated then five seconds
   doubling up to an hour; sixty attempts a minute for the whole machine; the
-  super admin's password counter untouched. A Viewer everywhere has nothing to
+  owner's password counter untouched. A Viewer everywhere has nothing to
   unlock and is told so.
-- **Locked** on demand, at sign-out, and for every session of a member removed.
+- **Locked** on demand, at sign-out, and for every session of someone who no
+  longer signs in.
 
-### A member's work, judged by the steward
+### A person's work, judged by the steward
 
-The page asks the super admin's routes, `/api/secrets/*`, `/api/sharing`,
-`/api/guests`, `/api/backups`, whoever is signed in; for a member,
-src/members/relay.ts relays to the steward's member routes with the session
-and the member's token, and src/members/actions.ts judges, in the order of
-the risk: the session, the member's unlock where the power needs one, the
-role on that project, the machine's own projects and files refused, then the
-operation, under the steward's lock, where the session, the unlock and the
-role are asked again. The operations are the super admin's own code,
-src/secrets/steward.ts and src/backup/routes.ts, handed the member as `who`:
-the journal and the backups' audit name the email the steward verified, never
-one a request carries.
+The page asks the owner's routes, `/api/secrets/*`, `/api/backups`, whoever
+is signed in; for a person, src/members/relay.ts relays to the steward's
+`/members/*` routes with the session and the person's unlock token, and
+src/members/actions.ts judges, in the order of the risk: the session, the
+person's unlock where the power needs one, the role on that project, the
+machine's own projects and files refused, then the operation, under the
+steward's lock, where the session, the unlock and the role are asked again.
+The operations are the owner's own code, src/secrets/steward.ts and
+src/backup/routes.ts, handed the person as `who`: the journal and the
+backups' audit name the email the steward verified, never one a request
+carries.
 
-- **A Developer reads nothing back.** The listing hides every value, size and
-  previous version from them, a write answers with the file's names only, and
-  a read is refused by role before any file is opened, the refusal journaled
-  with their role.
-- **Sharing and guests reach the portal from the steward, as root.** The
-  steward checks the role, that the site carries the portal in its manifest
-  and its block, and a team token's rule for domains: a Project admin opens a
-  site only to the domains the portal admits at sign-in, never to the public,
-  which is the door, turned off. It then asks the portal's admin API with the
-  member's email as actor, which the portal records. The steward's unit keeps
-  no network: it reaches the portal through `sitesolide-portal-relay`, a
-  socket only root opens, `/run/sitesolide-portal-relay/portal.sock`, behind
-  which systemd's own `systemd-socket-proxyd`, root with no capability and
-  the loopback alone, forwards to the portal's port and to nothing else
-  (infra/steward/sitesolide-portal-relay.socket).
-- **A restore's requester is the steward's to say**, the member's email,
+- **A Developer reads nothing back.** The listing hides every value, size
+  and previous version from them, a write answers with the file's names
+  only, and a read is refused by role before any file is opened, the refusal
+  journaled with their role.
+- **General access goes the owner's road.** An Admin switching their site
+  between public and restricted takes `/members/portal`, under their unlock,
+  the steward checking the role before it asks the gatekeeper, as it would
+  for the owner. The preview code stays `sitesolide lock`'s.
+- **People with access are the access routes'**, `/access/person/*`, judged
+  by src/access/rules.ts with the Admin as the one who gives: see
+  [Granting, changing, removing](#granting-changing-removing).
+- **A restore's requester is the steward's to say**, the person's email,
   written into the request the restore one-shot reads.
 
-### A Project admin's members
+### A person's own tokens
 
-A project's *Members* section lists who holds a role on it, their role there
-alone, nothing of their other projects. Its Project admin gives a role on it,
-at most their own, to someone new or to a member, their other projects
-untouched, under their unlock; they take a role away with no unlock, as the
-super admin removes someone, and a member whose last role goes is no member
-any more, signed out. Never on another project, never on the platform's,
-never an address the portal would turn away. The journal names the Project
-admin as actor, the project as slug, the member in its detail.
-
-### A member's own tokens
-
-A member deploys from their workstation's CLI, or an agent of theirs, with a
-token they mint on the *Team* page, which shows them their own tokens alone.
-The steward judges it, in src/members/tokens.ts, and **a member's token is
-never stronger than the member**:
+A person deploys from their workstation's CLI, or an agent of theirs, with a
+token they mint on the *Tokens* page, which shows them their own tokens
+alone. The steward judges it, in src/members/tokens.ts, and **a person's
+token is never stronger than the person**:
 
 | In the scope | Takes, as the registry reads at that moment |
 |---|---|
-| a slug | a Developer or a Project admin role on it (`deploy`) |
-| `create` | the member's create right |
-| `public`, `domain`, `outbound` | Project admin of every slug of the token (`deploy.public`, `deploy.domain`, `deploy.outbound`); with `create` alone, the projects it creates being theirs to administer |
+| a slug | a Developer or an Admin role on it (`deploy`) |
+| `create` | the person's create right |
+| `public`, `domain`, `outbound` | Admin of every slug of the token (`deploy.public`, `deploy.domain`, `deploy.outbound`); with `create` alone, the projects it creates being theirs to administer |
 
 ```
-page, Team, New token                        the member's session, unlocked
+page, Tokens, New token                      the person's session, unlocked
    |  POST /api/team/tokens { label, expiresAt, scope }
    v
-server.ts          src/members/relay.ts: origin, session, the member's unlock kept in memory
+server.ts          src/members/relay.ts: origin, session, the person's unlock kept in memory
    |  POST /team/member/tokens { session, token, label, expiresAt, scope }   on the steward's socket
    v
-steward.js         src/control/steward.ts: the session and the unlock asked of the members routes,
-                   again in the registry's queue; the scope against the member's rights now;
+steward.js         src/control/steward.ts: the session and the unlock asked of the sign-in routes,
+                   again in the registry's queue; the scope against the person's rights now;
                    the token written with `member`, their email on it; token.create journaled
 ```
 
-- **Minted under the member's own unlock**, the forced sign-in at the
+- **Minted under the person's own unlock**, the forced sign-in at the
   provider, and asked again once its turn has come; a refusal names every
-  reason in the steward's words, and enters the journal, bounded per minute.
-  A Viewer everywhere without the create right mints nothing and has no
-  *Team* page; one with the create right unlocks for it. Ten live tokens per
-  member at most, so that one member cannot fill the registry's two hundred.
+  reason in the steward's words, and enters the journal, bounded per
+  minute. A Viewer everywhere without the create right mints nothing and has
+  no *Tokens* page; one with the create right unlocks for it. Ten live
+  tokens per person at most, so that one person cannot fill the two hundred
+  of `team.json`.
 - **Narrowed at every use.** `team.json` keeps the scope as minted and the
-  member's email; the steward reads `members.json` whenever the token
-  authenticates, which every request of the control API does, and hands on
-  the scope narrowed to the member's rights: the slugs where they still
-  deploy, the projects it created likewise, `create` while they hold the
-  right, the options while they are Project admin of every project it still
-  reaches. Before the token's own rule (`decideSlug`), which counts a project
-  the token created as its own, the member's role on the slug decides: a
-  project lowered to Viewer is refused even to the token that created it.
-  The request the installer reads names the member, and the installer reads
-  the registry once more when it starts (src/installer/main.ts), refusing
-  `out-of-scope` before anything is written: the steward's copy is seconds
-  old, a deployment can wait behind another.
-- **An existing project keeps its door**, for a member's token too: its
-  Project admin or the super admin chose it, and a deployment never changes it.
+  person's email, in its `member` field; the steward reads `access.json`
+  whenever the token authenticates, which every request of the control API
+  does, and hands on the scope narrowed to the person's rights: the slugs
+  where they still deploy, the projects it created likewise, `create` while
+  they hold the right, the options while they are Admin of every project it
+  still reaches. Before the token's own rule (`decideSlug`), which counts a
+  project the token created as its own, the person's role on the slug
+  decides: a project lowered to Viewer is refused even to the token that
+  created it. The request the installer reads names the person, and the
+  installer reads the registry once more when it starts
+  (src/installer/main.ts), refusing `out-of-scope` before anything is
+  written: the steward's copy is seconds old, a deployment can wait behind
+  another.
+- **An existing project keeps its general access**, for a person's token
+  too: its Admin or the owner chose it, and a deployment never changes it.
   An owner's token without `public` deploys no public site, an existing one
-  included, so that a stolen one publishes nothing; a member's token answers
-  to the member's role instead, and a Developer deploys a public project as it
-  stands (src/control/policy.ts, `decideDoor`). What opens a door, a new
+  included, so that a stolen one publishes nothing; a person's token answers
+  to the person's role instead, and a Developer deploys a public project as
+  it stands (src/control/policy.ts, `decideDoor`). What opens a site, a new
   project in the open, paths exempted from the portal, takes `public`.
-- **What a member's token creates is theirs to administer.** At the start of
+- **What a person's token creates is theirs to administer.** At the start of
   a project's first deployment, before anything is written on the machine,
-  the steward makes the member its Project admin in `members.json`, in the
-  registry's queue, journaled as `project.create` under their email, then
-  records the token's ownership in `team.json`, as for any token.
-- **Sharing by a member's token** takes the member's own power to share it,
-  a Project admin's, now; refused, it is journaled under their email.
-- **A member removed takes their tokens with them.** Once the registry is
-  written, outside its queue, the members routes ask the control routes to
-  revoke every live token of theirs, journaled as `token.revoke` under the
-  super admin or the Project admin who took their last role; and a token whose
-  member the registry no longer names is refused anyway. Revoking one of
-  their own needs no unlock; the super admin's *Team* page lists every token,
-  a member's own marked, and revokes any.
+  the steward makes the person its Admin in `access.json`, in the registry's
+  queue, journaled as `project.create` under their email, then records the
+  token's ownership in `team.json`, as for any token.
+- **Access by a person's token** gives Can open alone, and only where the
+  person is Admin now: see [Access by token](#access-by-token).
+- **Someone who no longer signs in takes their tokens with them.** Once the
+  registry is written, outside its queue, the steward closes their sessions
+  and asks the control routes to revoke every live token of theirs,
+  journaled as `token.revoke` under the owner or the Admin who took their
+  last role above Can open; and a token whose person the registry no longer
+  lets sign in is refused anyway. Revoking one of their own needs no unlock;
+  the owner's *Tokens* page lists every token, a person's own marked, and
+  revokes any.
 
 The steward's routes for it, on the dashboard's socket, under `/team/`:
 
 | Route | What it does |
 |---|---|
-| `POST /team/member/list` `{ session }` | the member's tokens, their roles and create right, the end of their unlock |
-| `POST /team/member/tokens` `{ session, token, label, expiresAt, scope }` | mints one, the member's unlock asked |
+| `POST /team/member/list` `{ session }` | the person's tokens, their roles and create right, the end of their unlock |
+| `POST /team/member/tokens` `{ session, token, label, expiresAt, scope }` | mints one, the person's unlock asked |
 | `POST /team/member/revoke` `{ session, id }` | revokes one of theirs; anyone else's reads as unknown |
 
-### Inviting, changing, removing
+### Granting, changing, removing
 
-From the *Members* page, or with `sitesolide members` over the owner's SSH
-([docs/commands.md](../docs/commands.md#the-dashboards-members)). Both end at the
-steward, which judges: an address outside `OIDC_ALLOWED_DOMAINS`, read from
-`portal.env`, is refused, as the portal would refuse it at sign-in, unless it
-is one of the portal's admin emails; a role only goes on a deployed project,
-never on the platform's own (`dashboard`, `portal`, `api`, `analytics`,
-`landing`, `www`, the landing's folder). The create right goes with the roles,
-`create: true` or `false` in the same request, kept as it stands when absent,
-journaled with them (`member.invite` or `member.role`, "may create projects"
-in the detail). Someone invited holds a role on one project at least, or the
-create right alone, a member who will create their own projects; with
-neither, the invitation is refused. **Inviting and changing roles ask for the unlock**, the same
-ten minutes as creating a token: a member can restart services. **Removing does not**, as revoking a token does not: closing someone
-out never waits for a password, and the worst a compromised dashboard does with
-it is remove everyone. No email is sent: the page and the command give the line
-to send.
+From a site's *Access* and the *People* page, with `sitesolide share` and
+`sitesolide people` over the owner's SSH, or with `sitesolide share` and a
+token ([docs/commands.md](../docs/commands.md)). All of them end at the
+steward, which judges by src/access/rules.ts, reading the sign-in settings
+from `portal.env` at each change:
 
-`sitesolide members` speaks to the steward's **owner socket**,
-`/run/sitesolide-steward-owner/owner.sock`, which only root opens: a runtime
-folder of its own, `0700`, the socket `0600`, both root's. Root asks it with
-`curl` on the machine, the body on standard input, and needs no unlock there:
-it is root. The socket carries the registry, and one route of the control
-routes': the token ownership of a project `sitesolide remove` took off the
-machine (see "The control API", Tokens).
+| Who asks | From | May give | Asks for |
+|---|---|---|---|
+| the owner, over SSH | `sitesolide share`, `sitesolide people`, on the owner's socket | any role, to anyone the rules admit, on any deployed project; the create right | nothing more: it is root |
+| the owner, in the dashboard | a site's *Access*, *People* | the same | the password unlock, to give a role above Can open or the create right |
+| an Admin | their project's *Access* | a role at most their own, Admin included, on that project alone; a domain only among the company's | their own unlock, a forced sign-in, to give a role above Can open |
+| a token | `sitesolide share`, `/api/v1/projects/<slug>/access` | Can open alone, see [Access by token](#access-by-token) | nothing more: it never gives more than Can open |
 
-The steward's routes, in src/members/protocol.ts:
+- **Giving Can open, removing and lowering never wait for an unlock.**
+  Closing someone out never waits for a password, and the worst a
+  compromised dashboard does with it is remove everyone. Can open is what
+  the owner's session already gave without an unlock before the registry.
+  Raising someone above Can open asks for the unlock, the same ten
+  minutes as creating a token: a Developer restarts services and writes
+  secrets.
+- **Who removes whom**: anyone who manages the project removes or lowers
+  anyone they could have given that role; a token, Can open entries alone.
+  Removing someone from *People* takes them off every project and takes the
+  create right back, the owner's alone.
+- **A role only goes on a deployed project**, never on the platform's own
+  (`dashboard`, `portal`, `api`, `analytics`, `landing`, `www`, the
+  landing's folder); an entry of a project removed since can still be
+  changed or removed.
+- **Password access is given once.** Asked again, it keeps its password;
+  removing it and giving it anew draws another. It opens the site and
+  nothing more: to give its holder a role, remove it first. A password given
+  to an email also lets that email in with its company account, should the
+  portal admit that account at sign-in.
+- **The create right** goes only to someone who can sign in with their
+  company account; giving it in the dashboard asks for the unlock, taking it
+  back does not, and journals `people.create` either way.
+- **No email is sent**: the page and the command give the line to send,
+  `Open https://<slug>.<zone>/ and sign in with your <provider> account.`,
+  and a password once, to send yourself.
+- **Every change is journaled** by the steward, `access.add`,
+  `access.change` or `access.remove`, under the owner, the Admin's email or
+  `token:<id>`, with the project and "who: Role", the expiry for password
+  access; a refusal as `rejects`, bounded per minute.
+
+`sitesolide share` and `sitesolide people` speak to the steward's **owner
+socket**, `/run/sitesolide-steward-owner/owner.sock`, which only root opens:
+a runtime folder of its own, `0700`, the socket `0600`, both root's. Root
+asks it with `curl` on the machine, the JSON body on standard input so that
+no address goes through a shell, and needs no unlock there: it is root. The
+socket carries the access routes, and one of the control routes': the token
+ownership of a project `sitesolide remove` took off the machine (see "The
+control API", Tokens).
+
+### The steward's routes
+
+In src/access/protocol.ts and src/members/protocol.ts. On the dashboard's
+socket, the owner's routes carry no session: the dashboard calls them for
+the owner's sessions alone, and what they allow without the live unlock,
+reading, giving Can open, removing, is what the owner's session allows.
 
 | Socket | Route | What it does |
 |---|---|---|
-| dashboard's | `GET /members` | the registry, and what portal.env says of signing in |
+| owner's, dashboard's | `GET /access?slug=<slug>` | a project's general access, people with access, sign-in settings, and what the portal decides from |
+| owner's, dashboard's | `PUT /access/entry` `{ slug, who, role, expiresInS? }` | gives access or changes a role, the password once when one is drawn; on the dashboard's, `token`, the owner's live unlock, for a role above Can open |
+| owner's, dashboard's | `DELETE /access/entry` `{ slug, who }` | takes access away, never an unlock |
+| owner's, dashboard's | `GET /people` | everyone, their roles per project, the create right, the domains, the sign-in settings |
+| owner's, dashboard's | `PUT /people/person` `{ email, create }` | the create right; on the dashboard's, `token` to give it |
+| owner's, dashboard's | `DELETE /people/person` `{ email }` | someone taken off every project and the create right, signed out |
+| dashboard's | `POST /access/person/list` `{ session, slug }` | an Admin reads their project's access |
+| dashboard's | `PUT /access/person/entry` `{ session, token?, slug, who, role, expiresInS? }` | an Admin gives access or changes a role, their unlock for a role above Can open |
+| dashboard's | `DELETE /access/person/entry` `{ session, slug, who }` | an Admin takes access away |
 | dashboard's | `GET /members/key` | the public key, laid first if missing |
-| dashboard's | `PUT /members/member` `{ token, email, roles, create }` | invite, or replace the roles whole, and the create right when named: the live unlock |
-| dashboard's | `DELETE /members/member` `{ email }` | remove, their sessions with them |
-| dashboard's | `POST /members/signin` `{ assertion }` | a session for a member, from an assertion it verifies |
-| dashboard's | `POST /members/whoami` `{ session }` | who the session is, their roles now |
+| dashboard's | `POST /members/signin` `{ assertion }` | a session, from an assertion it verifies |
+| dashboard's | `POST /members/whoami` `{ session }` | who the session is, their roles above Can open and create right now |
 | dashboard's | `POST /members/signout` `{ session }` | closes it |
-| dashboard's | `POST /members/restart` `{ session, slug }` | a Developer's or Project admin's restart, judged under the lock |
-| dashboard's | `POST /members/unlock` `{ session, assertion }` | a member's unlock, from a forced sign-in's assertion |
+| dashboard's | `POST /members/restart` `{ session, slug }` | a Developer's or an Admin's restart, judged under the lock |
+| dashboard's | `POST /members/unlock` `{ session, assertion }` | a person's unlock, from a forced sign-in's assertion |
 | dashboard's | `POST /members/lock` `{ session, token }` | locks it |
-| dashboard's | `PUT /members/project/member` `{ session, token, slug, email, role }` | a Project admin gives a role on their project, unlocked |
-| dashboard's | `DELETE /members/project/member` `{ session, slug, email }` | a Project admin takes it away |
-| dashboard's | `POST /members/secrets/projects`, `/members/secrets/value`, `/variable`, `/file`, `/restore`, `/content`, `/members/portal`, `/members/sharing`, `/members/guests`, `/members/backups/restore` | a member's work on their projects, see src/members/actions.ts |
-| owner's | `GET /members`, `PUT` and `DELETE /members/member` | the same, for root, with no unlock token |
+| dashboard's | `POST /members/secrets/projects`, `/members/secrets/value`, `/variable`, `/file`, `/restore`, `/content`, `/members/portal`, `/members/backups/restore` | a person's work on their projects, see src/members/actions.ts |
+| dashboard's | `POST /control/access/list` `{ bearer, slug }`, `PUT` and `DELETE /control/access` `{ bearer, slug, who, role? }` | a token's, see [Access by token](#access-by-token) |
+| dashboard's | `POST /team/member/list`, `/team/member/tokens`, `/team/member/revoke` | a person's own tokens, see [A person's own tokens](#a-persons-own-tokens) |
 | owner's | `DELETE /team/project` `{ slug }` | a project removed: the name its token owned, free again, once the machine no longer carries it |
-| dashboard's | `POST /team/member/list`, `/team/member/tokens`, `/team/member/revoke` | a member's own tokens, see [A member's own tokens](#a-members-own-tokens) |
 
-A member's restart is the Secrets section's restart, under the same lock and
-the same eight seconds of observation, without its check that the unit reads a
-managed file: a member restarts a service to restart it. The member's role is
-asked again once the lock is taken: removed while it waited, nothing restarts.
-A static site has no service; the dashboard is never a member's.
+The routes of before the registry, `/members`, `/members/member`,
+`/members/project/member`, `/members/sharing`, `/members/guests` and
+`/control/sharing`, are gone and answer `no such route`. The session routes
+kept their `/members/` paths: renaming them would only make a dashboard and a
+steward of different days disagree.
+
+A person's restart is the Secrets section's restart, under the same lock and
+the same eight seconds of observation, without its check that the unit reads
+a managed file: a person restarts a service to restart it. Their role is
+asked again once the lock is taken: removed while it waited, nothing
+restarts. A static site has no service; the dashboard is never anyone's but
+the owner's.
 
 ### Threat model
 
 | Threat | What stops it |
 |---|---|
-| A compromised dashboard | It cannot make a member, nor widen one: the registry is root's, inviting asks for an unlock, and every write and every secret read is judged by the steward on its own registry, by role. It cannot forge an assertion: the private key is the portal's alone, so it cannot unlock a member either, which takes a forced sign-in the portal signs. It never reads a value a member's role does not reach: the steward hands a Developer none, whatever is relayed. It acts for the members whose sessions pass through it while it is compromised, within their roles, and during a member's unlock within what that unlock opens, their projects' secrets for a Project admin. It reads what it already read. It can still write to the portal's admin API itself, as it always could, sharing and guests as the owner, but no longer under a member's name or a token's: the portal believes such an actor from root alone, by the uid of the connection (portal/README.md, "The admin API"). It mints a member's token only during that member's unlock, within their roles, and every use of it is narrowed to their roles by the steward. During an owner's unlock it can do what an unlock allows, inviting included, as it can already create a token. |
-| A stolen member token | Within the member's roles at each request, not as minted: lowered, they narrow it; removed, it is revoked and refused. Revoked from the member's *Team* page or the owner's, no unlock. Every deployment under `token:<id>`, the member named. |
-| A member above their roles | The steward refuses the scope before the token exists, every reason journaled; and should the registry move after, it narrows the token at every use and the installer at its start. |
-| A stolen member cookie | Half a day at most, within that member's roles, and without their unlock, which needs a forced sign-in at the provider: what reads or writes a secret, turns a door, restores or invites stays closed. Removing them closes it at the next request. |
-| A stolen member unlock token | Useless alone: it is valid only with the session it was granted to, for its member, ten minutes, and the dashboard never sends it to a browser. |
+| A compromised dashboard | It cannot raise anyone above Can open, nor give the create right: the registry is root's, and that takes the owner's unlock or an Admin's, which takes a forced sign-in the portal signs. It cannot forge an assertion: the private key is the portal's alone. Every write and every secret read is judged by the steward on its own registry, by role, and it never reads a value a person's role does not reach. It acts for the people whose sessions pass through it while it is compromised, within their roles, and during a person's unlock within what that unlock opens, their projects' secrets for an Admin. Without any unlock it can give Can open, password access included, and remove anyone, as it could share sites, give guest access and remove people before: only through the steward, under the owner's name or a session's, every change in the steward's journal. It sees a password access's password once, as it carries it to the page; never a hash nor an identifier, since the steward hands out views. It can no longer name a person or a token as the author of a change it made: the steward writes the actor it verified, and the portal records no change of access at all. It mints a person's token only during that person's unlock, within their roles, and every use of it is narrowed to their roles by the steward. During an owner's unlock it can do what an unlock allows, roles included, as it can already create a token. |
+| A compromised portal | As before, it opens every restricted site, can sign an assertion for anyone, a forced sign-in's included, and act as anyone who signs in to the dashboard, within their roles, their unlock included. It cannot change the registry, root's, nor the projection, which root writes and it only reads: it gives nobody a role. It records no change of access any more, so it can no longer write one under anyone's name. |
+| A stolen token | Can open alone, on the projects it reaches, a person's own only where the person is Admin now, to the company's people and domains; never password access for someone outside them, never a role above Can open; it removes Can open entries alone. Every change is in the steward's journal under `token:<id>`. See [Access by token](#access-by-token). |
+| A stolen person's token | Within the person's roles at each request, not as minted: lowered, they narrow it; no longer signing in, it is revoked and refused. Revoked from the person's *Tokens* page or the owner's, no unlock. Every deployment under `token:<id>`, the person named. |
+| A person above their roles | The steward refuses the scope before the token exists, every reason journaled; and should the registry move after, it narrows the token at every use and the installer at its start. |
+| A stolen session cookie | Half a day at most, within that person's roles, and without their unlock, which needs a forced sign-in at the provider: what reads or writes a secret, switches general access, restores or raises someone above Can open stays closed. Removing them closes it at the next request. |
+| A stolen unlock token | Useless alone: it is valid only with the session it was granted to, for its person, ten minutes, and the dashboard never sends it to a browser. |
 | A Developer reading a secret | Refused by the steward before any file is opened: the listing and every answer show names and metadata only, never a value, a size or a previous version. What they write still reaches the service, which may expose it: the role trusts them with the project's behaviour, not with reading its keys back. |
-| A Project admin reaching further | One project, their own: the steward refuses another project, the platform's projects, the files it keeps for root, a password hash, a domain the portal does not admit, the public, and a role above their own; a role they give lands on their project alone. |
+| An Admin reaching further | One project, their own: the steward refuses another project, the platform's projects, the files it keeps for root, a password hash, a domain outside the company's, and a role above their own; a role they give lands on their project alone. |
+| Someone outside the company | Can open alone, with password access: a password of their own, for one site, until its expiry, kept as a SHA-256 by the registry and the portal; they never sign in to the dashboard. |
+| A registry that does not read | Nothing is guessed: every person is refused, and the journal and every answer say why, until the owner repairs it. A projection that does not read opens nothing but the owner's password and the admin emails. |
 | A provider that does not ask again | The portal believes the provider's `auth_time`, not its own clock: an old sign-in returned to a forced request is refused, and the steward wants `reauth` and five minutes. |
 | A replayed assertion | Its nonce is spent at the first session it opens, on disk; five minutes later it has expired anyway. |
 | A code carried to a site, a site's code carried here | A code says which it was minted for: a dashboard's is redeemed for an assertion only, a site's for a cookie only (portal/src/handoff.ts). |
-| A compromised portal | It can sign an assertion for anyone, a forced sign-in's included, and act as any member within their roles, their unlock included, as it already opens every protected site. It cannot invite anyone beyond what a Project admin may, nor change a role elsewhere. |
-| A flood of failed sign-ins | Twenty failures a minute enter the journal at most, so that a flood cannot push its history out; the rest are refused unrecorded. |
+| A flood of refusals | Twenty refusals a minute enter the journal at most, failed sign-ins, refused changes of access and refused work together, so that a flood cannot push its history out; the rest are refused unrecorded. |
 
-### Upgrading: members' tokens
+### Upgrading: access
 
-Members mint their own tokens, the create right, and the portal believing a
-named actor from root alone. `sitesolide upgrade` runs the four steps in
-their order; by hand:
-
-```bash
-bin/deploy-steward.sh               # 1. members' tokens, the create right, token sharing as root, revocation on removal
-cd dashboard && sitesolide deploy   # 2. the Team page for members, the create right on Members, sharing through the steward
-bin/deploy-installer.sh             # 3. a member's deployment narrowed again when it starts
-cd portal && sitesolide deploy      # 4. a named actor from root alone
-```
-
-1. **The steward.** Its unit does not change. `team.json` gains `member` on a
-   member's token, `members.json` `create` on a member, both absent from what
-   was there; the journal gains `token.create`, `token.revoke`,
-   `project.create` and `project.remove`, which an older dashboard shows by
-   their name. The owner's socket also answers `DELETE /team/project`, which
-   `sitesolide remove` now asks once a project is gone, freeing the name its
-   token owned: a project removed before this step left its name owned, and
-   `sitesolide remove --confirm <slug>` run again, from a folder holding its
-   manifest, frees it. Check: `sitesolide members add <email> --may-create`
-   says `may create projects`, and
-   `sudo curl -s --unix-socket /run/sitesolide-steward/secretaire.sock http://steward/team/tokens`
-   lists every token with `member`, null for the owner's. Roll back:
-   `bin/deploy-steward.sh` from the previous commit, **after revoking every
-   member's token** from the *Team* page: an older steward reads a member's
-   token as an owner's token with the scope it was minted with, no longer
-   narrowed. `create` stays in `members.json`, unread, and `sitesolide
-   remove` says the steward has nothing to release.
-2. **The dashboard.** A member who deploys somewhere, or may create, sees
-   *Team*, their tokens, *Unlock to create*; the super admin's *Team* page
-   marks a member's own, the *Members* page offers "May create projects".
-   `dashboard.db` gains the `member` column of `deployments`. Sharing by
-   token now asks the steward: before step 1, it answers `not-available`,
-   saying to upgrade. Check: a member mints a token after a forced sign-in,
-   `sitesolide login` with it says `a member's own token`. Roll back: deploy
-   the previous commit of `dashboard/`; members see no *Team* page, and their
-   tokens keep working, narrowed by the steward.
-3. **The installer.** Check: a member's token deploying a project where the
-   member was just lowered to Viewer fails `out-of-scope` with the member's
-   role in the message, nothing written. Before it, the steward's own refusal
-   holds, a few seconds older. Roll back: `bin/deploy-installer.sh` from the
-   previous commit.
-4. **The portal.** Check, on the machine: a member's email named as the actor
-   by `site-dashboard` is refused `403 actor-not-root`, by root accepted
-   (portal/README.md, "Upgrading"). Before it, the portal records whatever
-   actor its caller names, as it did. Deployed before step 2, it refuses an
-   older dashboard's sharing by token until the dashboard follows. Roll back:
-   deploy the previous commit of `portal/`.
-
-### Upgrading: members' powers
-
-`sitesolide upgrade` runs the three steps in their order; by hand:
+One registry for who may do what, the steward's, and the portal reading its
+projection, replacing the dashboard's people of `members.json` and the
+portal's sharing and guest passwords. `sitesolide upgrade` runs the four
+steps in their order, together; by hand:
 
 ```bash
-bin/deploy-steward.sh               # 1. the member actions, the unlocks, the portal relay
-cd dashboard && sitesolide deploy   # 2. the sections by role, the unlock through the provider, a project's Members
-cd portal && sitesolide deploy      # 3. the forced sign-in, guests recording their actor
+bin/deploy-steward.sh               # 1. the registry, made once from the stores before it, and its projection
+cd dashboard && sitesolide deploy   # 2. the access routes, the pages of before working on them
+bin/deploy-installer.sh             # 3. a person's deployment narrowed by the registry when it starts
+cd portal && sitesolide deploy      # 4. the projection read from the first request
 ```
 
-1. **The steward.** Its unit does not change. The script places and starts
-   `sitesolide-portal-relay.socket` and its service beside it, and checks the
-   relay: `700 root:root` and `600 root:root`, site-dashboard refused, root
-   answered by the portal. Check: `sudo curl -s --unix-socket
-   /run/sitesolide-portal-relay/portal.sock http://portal/admin/sharing`
-   answers the portal's list. The journal gains the operations `sharing`,
-   `guest.create`, `guest.revoke` and `backup.restore`, refusals only, which
-   an older dashboard shows by their name. Roll back: `bin/deploy-steward.sh`
-   from the previous commit; the relay stays, unused, until `sudo systemctl
-   disable --now sitesolide-portal-relay.socket` and its two files removed;
-   members lose their powers, a restart excepted.
-2. **The dashboard.** Check: a Developer's *Secrets* shows every file
-   write-only, *Unlock* leads to the provider; a Project admin's project has
-   *Access*, *Sharing*, *Guests*, *Backups* and *Members*. Before the steward,
-   a member's sections answer that the steward does not know them. Roll back:
-   deploy the previous commit of `dashboard/`.
-3. **The portal.** Check: a member's unlock sends them to the provider's
-   password page even while signed in there. An older portal ignores the
-   forced sign-in and signs an assertion without `reauth`, which the steward
-   refuses: the page says the unlock did not go through. Roll back: deploy the
-   previous commit of `portal/`.
+**Before anything.** An app that reads `X-Sitesolide-Role` must be updated,
+and deployed, before step 4: the header now carries the role, and `member`
+and `guest` are gone ([docs/upgrading.md](../docs/upgrading.md#access-one-registry)).
+And everyone with a role above Can open on a project, Viewer, Developer or
+Admin, now opens its site when it is restricted, which was not true before,
+the dashboard's roles and the portal's sharing being separate: read each
+restricted site's people with access afterwards, `sitesolide share` in its
+folder.
 
-### Upgrading: members
+1. **The steward.** Its unit does not change: the projection lies in
+   `/etc/sitesolide-portal`, already writable for the key, and the portal's
+   database is read under `ProtectSystem=strict` with the
+   `CAP_DAC_READ_SEARCH` it holds. At its first start it makes
+   `access.json` from `members.json` and a checked copy of the portal's
+   `portal.db`, writes the projection, then the registry, and journals
+   `access.migrate`, actor `system`, with the counts. The running portal,
+   the old one, keeps deciding from its own tables, which still say the
+   same: nothing opens or closes. `members.json` is never written again, nor
+   the portal's `sharing` and `invites` tables; they stay, read-only, until
+   the next release. The journal gains `access.add`, `access.change`,
+   `access.remove`, `access.migrate`, `people.create`, `dashboard.signin`,
+   `dashboard.signin_failed` and `dashboard.signout`, which an older
+   dashboard shows by their name; the `member.*` rows written before still
+   read. The relay stays, asked `GET /admin/access` now. Check: the script
+   ends on `access registry 600 root:root, its projection for the portal 640
+   root:site-portal`, and `sitesolide people` lists everyone with their
+   roles. A store that does not read leaves no registry: the script stops on
+   the owner's socket, every person is refused, and `sudo journalctl -u
+   sitesolide-steward | grep access:` says which store and why; the next
+   request, or the next start, tries again.
+2. **The dashboard.** Its access routes, `/api/access`, `/api/people` and
+   `/api/v1/projects/<slug>/access`, speak to the steward; the pages of
+   before, *Guests*, *Sharing*, *Members* and a project's *Members*, keep
+   working on them until the next release replaces them with one *Access*
+   section and *People*. Before step 1 they answer that the steward does not
+   keep people with access yet. Check: a site's *Sharing* page lists who
+   could open it before the upgrade, and *Guests* the passwords handed out.
+   A change made in the old dashboard between step 1 and this step goes to
+   the portal's old tables, which nothing reads any more: run the steps
+   together.
+3. **The installer.** It reads `access.json` when it starts. Check: a
+   person's token deploying a project where they were just lowered to Viewer
+   fails `out-of-scope`, nothing written. Before it, the older installer
+   reads `members.json`, frozen at the migration, and the steward's own
+   narrowing holds, a few seconds older.
+4. **The portal**, last. From its first request it decides from the
+   projection, and leaves the mark that keeps it from ever reading its old
+   tables again. Its old admin routes, `PUT /admin/sharing/:host`, `GET`
+   and `POST /admin/guests` and `DELETE /admin/invites/:id`, answer `410
+   moved`, after the actor rule. Check, on the machine: `sudo curl -s
+   http://127.0.0.1:3026/admin/access` answers `"reading":"steward"`, and
+   `sitesolide share` no longer warns that the portal decides from its own
+   tables. A guest password handed out before the upgrade still opens its
+   site, as password access, and a cookie set before it stays valid.
 
-The first release of members, for a machine that predates them. `sitesolide
-upgrade` runs the three steps in their order; by hand:
-
-```bash
-bin/deploy-steward.sh               # 1. the registry, the owner's socket, the key pair, the key's folder
-cd dashboard && sitesolide deploy   # 2. the sign-in with the provider, the Members page, the member views
-cd portal && sitesolide deploy      # 3. the two routes the dashboard's sign-in needs
-```
-
-1. **The steward.** Its unit gains the owner's runtime folder and
-   `ReadWritePaths=-/etc/sitesolide-portal`; the script creates that folder
-   before restarting it, and checks the owner's socket: `700 root:root` and
-   `600 root:root`, root answered, site-dashboard refused. Check: the script
-   ends on `members' key laid for the portal, 640 root:site-portal`;
-   `sitesolide members` lists nobody. The journal gains `actor` and `member`
-   on every line; a line from before reads as `owner`. Roll back:
-   `bin/deploy-steward.sh` from the previous commit; `members.json`,
-   `member-sessions.json` and the key stay, unread, and the journal's newer
-   lines are skipped by the older steward.
-2. **The dashboard.** `dashboard.db` gains the `identity` column, every session
-   in place the owner's. Check: the sign-in page offers *Sign in with ...* once
-   the portal has a provider; the *Members* page lists the registry. Roll back:
-   deploy the previous commit of `dashboard/`; the column stays, unread, and
-   member sessions in flight read as the owner's no more than before, since an
-   older dashboard has no route a member reaches.
-3. **The portal.** Check: `journalctl -u portal` says `dashboard sign-in
-   offered, back to https://dashboard.<zone>` once a provider is configured,
-   and a member signs in. Without it, *Sign in with ...* lands back on the
-   sign-in page saying signing in is not available. Roll back: deploy the
-   previous commit of `portal/`.
+**Rolling back** is the previous commit of the steward, the dashboard and
+the portal together, from a checkout of before: `bin/deploy-steward.sh`,
+then `sitesolide deploy` in `dashboard/`, then `sitesolide deploy --force`
+in `portal/`; and `bin/deploy-installer.sh`, since the newer installer would
+go on narrowing a person's deployment by `access.json`, which nothing writes
+any more. They read `members.json` and the portal's tables as they stood
+at the migration: every change of access made since is lost for them, and
+password access given since does not exist for them. `access.json` and the
+projection stay beside them, unread; `X-Sitesolide-Role` goes back to
+`member` and `guest`. Upgrading again keeps the registry as it stood; to
+make it afresh from the old stores, delete
+`/var/lib/sitesolide-steward/access.json` first, which loses the changes
+made after the first migration instead. The detail is in
+[docs/migration.md](../docs/migration.md#going-back).
 
 ## The audit
 
 The machine-level *Activity* page answers "who did what": who deployed, who
-signed in where, who changed who gets in, what the egress proxy refused or
-lent, which backups ran and who restored one, which secrets were read or
-changed. Every component keeps its own audit, in its own database, in the
+signed in where, who changed who may open a site or do what on it, what the
+egress proxy refused or lent, which backups ran and who restored one, which
+secrets were read or changed. Every component keeps its own audit, in its own database, in the
 shape they all share: an ISO date, an actor, a dotted action, a target, and a
 JSON detail that never carries a secret. The dashboard reads them all and
 merges them, newest first. Every event, and who records it, is listed in
@@ -915,16 +1057,17 @@ page, Activity
    |  GET /api/audit : session, no unlock
    v
 server.ts          reads, merges, bounds; writes nothing
-   |-- dashboard.db                       its own: tokens, team deployments
+   |-- dashboard.db                       its own: tokens, token deployments
    |-- 127.0.0.1:3026/admin/audit         the portal, the loopback rule's one exception
    |-- 127.0.0.1:3129/audit               the egress proxy, answered to site-dashboard alone
    `-- the steward's socket               /backups/audit, /log
 ```
 
-- **No new road, no new privilege.** The same clients as the Sharing,
+- **No new road, no new privilege.** The portal's audit client,
+  [src/portal-audit.ts](src/portal-audit.ts), and the same clients as the
   Connectors, Backups and Secrets pages, which already read these routes one
   at a time ([src/audit/sources.ts](src/audit/sources.ts)).
-- **The session is enough**, and a member's reads the rows of their projects
+- **The session is enough**, and a person's reads the rows of their projects
   and their own, never the rest (`restrict` in src/audit/merge.ts, part of the
   cursor). No row carries a secret value: each component
   sees to it where it writes, and a test in each says so, against the values
@@ -967,11 +1110,20 @@ of the others, and forgets nothing of its own.
 
 | Source | Where | Kept | What the dashboard reads |
 |---|---|---|---|
-| `dashboard` | `audit` in `dashboard.db` | everything, never pruned: a few rows per token and per team deployment | all of it, by pages |
+| `dashboard` | `audit` in `dashboard.db` | everything, never pruned: a few rows per token and per token deployment | all of it, by pages |
 | `portal` | `audit` in `portal.db` | 180 days; past 100,000 rows the oldest go, those of the last 30 days excepted; sign-ins and sign-outs repeated within a minute make one row | all of it, by pages |
 | `egress` | `audit` in `/var/lib/sitesolide-egress/` | 90 days, pruned every hour; refusals and connector calls counted by the minute | all of it, by pages |
 | `backups` | `audit` in `/var/lib/sitesolide-backup/backup.db` | everything, never pruned: one row per hourly run, some 8,800 a year, and one per restore | all of it, by pages, from a steward that knows pages; the latest 50 from an older one |
 | `steward` | `/var/lib/sitesolide-steward/journal.jsonl` | the last 500 to 1,000 operations: past 1,000 lines, the file keeps its last 500 | all of it, by pages, from a steward that knows pages; the latest 50 from an older one |
+
+**Changes of access are the steward's to record now.** Before the access
+registry the portal recorded them, `sharing.update`, `guest.create` and
+`guest.revoke`, kept 180 days, and those rows still read. Since, the portal
+records sign-ins and sign-outs alone, and the steward journals every change of
+access, `access.add`, `access.change`, `access.remove`, `access.migrate` and
+`people.create`, under the actor it verified: in a journal that keeps its
+last 500 to 1,000 operations, so that on a busy machine a change of access
+leaves *Activity* sooner than it did.
 
 The steward's two routes, `GET /backups/audit` and `GET /log`, hand over their
 latest 50, which is all the Backups and Secrets sections read. Asked for a
@@ -1012,16 +1164,20 @@ bin/deploy-steward.sh               # 2. optional: the backups' audit and the jo
 
 ## The portal, from the dashboard
 
-A site's *Access* section shows its door as the machine carries it, the deployed
-manifest and the running block side by side, and offers *Turn on portal* or
-*Turn off portal* when the steward accepts. The preview lock appears there too,
-read-only: it remains `bin/lock.sh`'s business, and the page gives the commands.
+A site's *Access* section shows its general access as the machine carries it,
+the deployed manifest and the running block side by side, and switches it
+between public and restricted when the steward accepts: restricted is the
+portal turned on in front of the site, public the portal turned off, which
+retypes the slug to confirm. Anyone with the code, the preview lock, appears
+there too, read-only: it remains `sitesolide lock`'s business, and the page
+gives the commands. Who may open a restricted site is the steward's registry,
+not this switch: see [Access](#access).
 
 ```
 page, Access
-   |  /api/secrets/portal : session, Origin, unlocked
+   |  /api/access/general, /api/secrets/portal : session, Origin, unlocked
    v
-server.ts                  relays, with no rule
+server.ts                  relays, with no rule; a person's request through src/members/relay.ts
    v
 steward.js                 rule, confirmation, writes one at a time
    |  systemctl start sitesolide-gatekeeper-<on|off>@<slug>.service
@@ -1036,7 +1192,8 @@ gatekeeper.js              root, one-shot, one transaction per start
 
 ### Why a gatekeeper, and two units
 
-**The steward never touches Caddy.** Putting a door up rewrites a block and
+**The steward never touches Caddy.** Putting the portal in front of a site
+rewrites a block and
 reloads the configuration that serves every site: the riskiest act on the
 platform. That act lives apart, in `dashboard/gatekeeper.ts` and
 `src/gatekeeper/`, tested without a machine all the way up to a real test Caddy.
@@ -1067,7 +1224,8 @@ site's block, but not its files.
 **One act on Caddy at a time, across every site**, whether it comes from the
 dashboard or from a workstation. `sitesolide deploy`, `remove`, `domain`,
 `bin/deploy-caddy.sh`, `bin/lock.sh` and every script that reloads Caddy take it
-like the gatekeeper: they read the machine's door, then write minutes later, and
+like the gatekeeper: they read whether the machine puts the portal in front of
+a site, then write minutes later, and
 may restore a backup with `rsync --delete`. A gatekeeper action falling in that
 window was overwritten without a word, and a site closed from the dashboard was
 served in the clear again.
@@ -1088,13 +1246,13 @@ served in the clear again.
 
 Deploying over SSH means holding root on the machine: `sitesolide deploy`
 drives `sudo`. That cannot be handed to a colleague, nor to an agent in a
-sandbox with no key. A **team token** deploys over HTTPS instead, through this
+sandbox with no key. A **token** deploys over HTTPS instead, through this
 dashboard, and its holder never holds root. The owner's SSH path does not
 change. The holder's side is in [docs/team.md](../docs/team.md); this is the
 machine's side.
 
 ```
-sitesolide deploy (team member, agent)          Authorization: Bearer sst_...
+sitesolide deploy (a person, an agent)          Authorization: Bearer sst_...
    |  HTTPS, dashboard.<zone>/api/v1/
    v
 server.ts          site-dashboard, confined: checks, stages the archive in data/control/<id>/
@@ -1154,7 +1312,7 @@ manifest). It runs the same order ([src/installer/pipeline.ts](src/installer/pip
 lists it step by step) with the same decisions, borrowed from `bin/cli/`
 unchanged: the manifest's validation, the unit and block generators, the
 block and unit decisions, the port conflicts, the units no longer declared,
-the loopback's project set, the door confirmed under the lock. Two things
+the loopback's project set, the portal confirmed under the lock. Two things
 differ, both on purpose:
 
 - `install` runs before the files are put in place, in the staging directory,
@@ -1167,20 +1325,21 @@ differ, both on purpose:
 
 ### Tokens
 
-- **Created on the *Team* page, unlocked.** A token can run code on the
+- **Created on the *Tokens* page, unlocked.** A token can run code on the
   machine: it asks for the same ten-minute unlock as the Secrets section,
   checked by the steward. **Revoked without the unlock**, so that closing a
   stolen token never waits on the password; the worst a compromised dashboard
   does with that route is revoke every token.
 - **Shown once, kept as a SHA-256**, for the reason
-  [portal/README.md](../portal/README.md) gives for guest passwords: 256 random
+  [portal/README.md](../portal/README.md) gives for password access: 256 random
   bits leave nothing to guess, and a fast hash finds the token by lookup. The
   value is `sst_` and 43 characters of base64url.
 - **One per person**: a label, an email, an optional expiry, and a scope, all
   off by default: existing slugs it may deploy; whether it may create projects,
   deploy public sites, use outbound network (`network: outbound` or `egress`),
-  declare a domain. A member of the dashboard mints their own, narrowed to
-  their roles at every use: see [A member's own tokens](#a-members-own-tokens).
+  declare a domain. The owner's belong to the owner; a person who signs in to
+  the dashboard mints their own, narrowed to their roles at every use: see
+  [A person's own tokens](#a-persons-own-tokens).
 - **Ownership**: a project a token creates is recorded as its own at the start
   of its first deployment, before anything is written, so that a first
   deployment that fails half way stays its creator's, and nobody else's.
@@ -1195,7 +1354,7 @@ differ, both on purpose:
 - **Failed authentications** are rate limited per address, three tolerated,
   then five seconds doubling up to an hour. Per address and not global, unlike
   the sign-in: there are as many holders as tokens, and a global counter would
-  let anyone lock the whole team out.
+  let anyone lock every holder out.
 
 ### What a token's project may not do
 
@@ -1208,7 +1367,7 @@ earlier by the steward and the dashboard: see
   created; an existing slug the token was not granted.
 - **Private by default**: a new project goes behind the portal unless the token
   may deploy public sites and the manifest asks for it; an existing project
-  keeps the door the machine carries. `portalExempt`, which opens paths, needs
+  keeps the general access the machine carries. `portalExempt`, which opens paths, needs
   the public permission; a static site cannot sit behind the portal yet, so a
   private token cannot deploy one.
 - **Secrets**: `<slug>.env` and no other name. The unit hands a declared file to
@@ -1225,71 +1384,76 @@ earlier by the steward and the dashboard: see
 - **Ports**: a service with no port gets the lowest free one of 3000 to 3099,
   or the one it had; one another project declares is refused.
 
-### Sharing by token
+### Access by token
 
-A team member, or an agent, who deployed a tool shares it with the people who
-need it: `sitesolide share alice@acme.com` in its folder, or the two routes
-under it, `GET` and `PUT /api/v1/projects/<slug>/sharing`.
+A person, or an agent, who deployed a tool gives the people who need it
+access: `sitesolide share alice@acme.com` in its folder, or the routes under
+it, `GET /api/v1/projects/<slug>/access`, `PUT` with `{ who, role }` and
+`DELETE` with `{ who }`.
 
 ```
-sitesolide share (team member, agent)          Authorization: Bearer sst_...
-   |  HTTPS, dashboard.<zone>/api/v1/projects/<slug>/sharing
+sitesolide share (a person, an agent)          Authorization: Bearer sst_...
+   |  HTTPS, dashboard.<zone>/api/v1/projects/<slug>/access
    v
-server.ts          the slug, the snapshot's door, the policy, the domains, read from the portal
-   |  PUT /control/sharing { bearer, slug, mode, people, domains }   on the steward's socket
+server.ts          the token may deploy the project; the body's shape, `who` and `role` alone
+   |  PUT /control/access { bearer, slug, who, role }   on the steward's socket
    v
-steward.js         the bearer, the slug it reaches, a member's own power to share; the site's door,
-   |               the policy and the domains again; then the relay, as for a Project admin
-   v
-portal             PUT /admin/sharing/<host> { mode, people, domains, actor: "token:<id>" }, from root
-   `-- writes      its database, and sharing.update in its audit
+steward.js         the bearer, the project it reaches, then the access rules with the token
+   |               as the one who gives: Can open alone, the company's people and domains
+   |-- writes      /etc/sitesolide-portal/access.json, then access.json
+   `-- journals    access.add, access.change or access.remove, under token:<id>
 ```
 
-The dashboard reads the portal as its *Sharing* section does, for its early
-refusals and its answer, and the steward writes: the portal believes an actor
-other than `owner` from root alone (portal/README.md, "The admin API"), so the
-dashboard cannot name a token as the author of a change it made itself. The
-steward's write is a Project admin's road, src/members/actions.ts
-(`createSharing`), the token as actor.
-
-What the dashboard checks, in order ([src/control/sharing.ts](src/control/sharing.ts)):
+The dashboard only checks what it can refuse early; the steward judges and
+writes, by the rules every change of access takes (src/access/rules.ts),
+with the token as the one who gives. In order:
 
 1. **The token may deploy the project**, its own or granted: any other slug
-   reads as `not-found`, as for its logs.
-2. **The body is the policy's three keys**, judged by the portal's own rule
-   (`borrowed/sharing.ts`), each refused entry named in `details`. An `actor`
-   key is refused: a token never speaks for the owner. `public` is refused as
-   `out-of-scope`, saying the portal turned off is the owner's, from *Access*.
-3. **The site carries the portal** in the snapshot, its manifest and its block,
-   as for the *Sharing* section: otherwise `no-portal`.
-4. **The domains**: the portal's `GET /admin/sharing` names the domains it
-   admits at sign-in, `OIDC_ALLOWED_DOMAINS`. A domain the token adds, or opens
-   by switching to domain mode, must be one of them; with none, a token opens a
-   site to no domain. One the owner opened, kept open, is not widening, and
-   closing is always allowed.
-5. **The steward judges again**, the bearer, the project, for a member's own
-   token the member's power to share it, the door in the site's manifest and
-   block, the policy and the domains, and hands it to the portal as root.
-6. **The portal judges again** and records `sharing.update` under
-   `token:<id>`: neither the dashboard nor the steward records it, so that one
-   change is one line of the Activity view.
+   reads as `not-found`, as for its logs, on the dashboard and again on the
+   steward.
+2. **The body is `who`, and `role` for a `PUT`**, nothing else: an `actor`
+   key, or any other, is refused as an unexpected field. `role` is `visitor`
+   when absent.
+3. **Can open alone.** A higher role is refused `out-of-scope`: it is given
+   from the dashboard, or by the owner over SSH.
+4. **A person's own token only where that person is Admin now**, to read
+   the people with access as to change them, read from the registry at that
+   moment, once a change's turn has come; the owner's tokens, on any project
+   they reach.
+5. **A domain only among the company's domains**, `OIDC_ALLOWED_DOMAINS`,
+   which the owner chose; with that list empty, none at all, since `@gmail.com`
+   would be half the internet. A domain already there is not widened by
+   keeping it.
+6. **Never password access.** A person outside the company's domains is
+   refused: whoever holds a token is not the one who chose the company's
+   people, and password access is given from the dashboard or by the owner
+   over SSH.
+7. **Can open entries alone are removed**: a token takes nobody's role away.
+8. **The steward writes** the projection, then the registry, and journals the
+   change under `token:<id>`, a refusal as `rejects`; the dashboard records
+   nothing, so that one change is one line of *Activity*. The answer carries
+   the entry, the change and the project's access as it stands, without the
+   admin emails.
 
-A portal from before sharing answers 404, which the API turns into
-`not-available`; a portal that does not answer, into `failure`, 502.
+General access is never a token's: public or restricted is a site's
+*Access*, the preview code `sitesolide lock`. A steward from before the
+registry answers these routes `no such route`, which the API turns into
+`not-available`, saying to run `sitesolide upgrade`; a steward that does not
+answer, into `failure`, 502.
 
 ### Threat model
 
 | Threat | What stops it |
 |---|---|
-| A stolen token | Its scope: the projects granted and its own, private sites unless allowed. Every deployment is in the audit with the token's id and email. Revoking takes one click and no password; an expiry ends it anyway. |
+| A stolen token | Its scope: the projects granted and its own, private sites unless allowed. Every deployment is in the audit with the token's id and email. Of access, Can open alone, to the company's people and domains, never password access for someone outside them, and the removal of Can open entries, every change in the steward's journal under `token:<id>`. Revoking takes one click and no password; an expiry ends it anyway. |
 | A malicious archive | Read by the project's account in a confined unit, never by root; links, devices, `..`, absolute paths and duplicates refused, data and entries capped while reading; nothing served changes until the whole archive extracted. |
 | A malicious manifest | Re-validated on the machine with the CLI's `validate()`, then the scope; the unit and block are generated from it by the same generators as over SSH. Every string that lands in a block or a unit is judged for it: header values with no `"`, `\`, `{`, `}`, `$` or backtick, since Caddy fills `{$NAME}` and `{env.NAME}` from its own environment, the Cloudflare token included; routes and exemptions that are plain paths; a `start` with no `+`, `!` or other prefix systemd reads, `+` and `!` meaning root; environment values with no space or quote, which would set a second variable; secret names that are plain file names; a `%` escaped. The generators refuse the same again rather than write it. Unknown keys refused, secrets limited to its own file, memory capped. |
 | Path traversal | The tar reader's refusals, the extraction's `O_EXCL` and `O_NOFOLLOW`, the unit that sees only the staging directory; on root's side, slugs and deployment ids checked against their shape before they enter a path. |
 | Resource exhaustion | Upload counted while it streams (Bun's own cap does not hold for a chunked body), 100 MiB; extraction 512 MiB, 20,000 entries, 256 MiB of memory, five minutes; `install` 1G and fifteen minutes; three deployments running at a time on the machine, claimed when the archive arrives, one per project; three waiting for their archive per token, the newest replacing the oldest, and none of them counted against the machine; an archive that does not arrive in fifteen minutes expires. |
 | A token reaching another project | The slug decision on the steward, again on the installer; secrets limited to `<slug>.env`; `install` runs without the loopback, where the other projects listen, and the extraction without any network. |
 | A replayed request | The installer refuses a request older than ten minutes or for another slug, and writes nothing for it. |
-| A compromised dashboard | It sees the bearers that pass and can use them within their scope, a member's within the member's roles, and read deployment logs; it cannot mint a token without the password or a member's own unlock, nor deploy without one, nor hand root a file it could not read, nor name a token as the actor of a sharing it made itself. |
-| A token sharing too widely | It shares only the projects it may deploy, a member's own only where the member is Project admin, opens them only to the domains the portal admits at sign-in, never to the public; the steward judges it and writes as root, every change is in the portal's audit under `token:<id>`, and the owner narrows it from *Sharing*. |
+| A compromised dashboard | It sees the bearers that pass and can use them within their scope, a person's within the person's roles, and read deployment logs; it cannot mint a token without the password or a person's own unlock, nor deploy without one, nor hand root a file it could not read, nor name a token as the actor of a change of access it made itself: the steward journals the token it judged. |
+| A token giving access too widely | It gives Can open alone, on the projects it may deploy, a person's own only where the person is Admin now, to the company's people and domains alone, never password access to someone outside them, never public; it removes Can open entries alone. The steward judges it and writes, every change is in its journal under `token:<id>`, and the owner or an Admin takes it back from *Access*. |
 | A compromised project | Its service's unit binds `app/`, `public/` and `data/` alone, so it never sees the staging directory its next deployment is extracted into; once in place, the trees are handed to the deployment account and bound read-only, as over SSH. |
 
 ### Where the installer is the weak point
@@ -1308,20 +1472,20 @@ Opt-in, and in this order. Nothing happens on the machine until the third
 step; each step degrades gracefully without the next.
 
 ```bash
-cd dashboard && sitesolide deploy   # 1. the API and the Team page
+cd dashboard && sitesolide deploy   # 1. the API and the Tokens page
 bin/deploy-steward.sh               # 2. the token registry and the control routes
 bin/deploy-installer.sh             # 3. the installer's code, its template, its environment file
 ```
 
-1. **The dashboard.** `/api/v1/` answers `not-available`, and the *Team* page
+1. **The dashboard.** `/api/v1/` answers `not-available`, and the *Tokens* page
    says to run the steward's script: the steward in place answers
    `404 no such route` to the control routes, which the dashboard reads as
    "not yet". Check, with a value that has a token's shape and is nobody's:
    `curl -s https://dashboard.<zone>/api/v1/whoami -H "Authorization: Bearer sst_$(printf '0%.0s' $(seq 43))"`
-   answers 503 `not-available`, and the *Team* page shows the same banner; the
+   answers 503 `not-available`, and the *Tokens* page shows the same banner; the
    other pages are unchanged. Roll back: deploy the previous commit of
    `dashboard/`; the two new tables of `dashboard.db` stay, unread.
-2. **The steward.** The *Team* page lists tokens and creates them; the same
+2. **The steward.** The *Tokens* page lists tokens and creates them; the same
    `curl` now answers 401 `unauthenticated`, and a deployment answers
    `not-available` until the installer is there. The steward's script checks
    itself as before. Check, on the machine:
@@ -1331,14 +1495,14 @@ bin/deploy-installer.sh             # 3. the installer's code, its template, its
 3. **The installer.** `bin/deploy-installer.sh` writes
    `/etc/sitesolide-installer.env` with `DEPLOY_ACCOUNT`, the account of your
    `server`, and verifies the template with `systemd-analyze verify`. It starts
-   nothing. Check: create a token on the *Team* page for yourself, with "May
+   nothing. Check: create a token on the *Tokens* page for yourself, with "May
    create projects", and deploy `examples/bun-app` with it from a workstation
    with no server (`SITESOLIDE_API=... SITESOLIDE_TOKEN=... sitesolide deploy`);
    then `journalctl -u sitesolide-installer@bun-app`. Roll back:
    `sudo rm /etc/systemd/system/sitesolide-installer@.service /etc/sitesolide-installer.env /usr/local/lib/sitesolide/installer.js && sudo systemctl daemon-reload`;
    deployments then answer `not-available` again.
 
-Revoking every token closes the API without touching anything else: *Team*,
+Revoking every token closes the API without touching anything else: *Tokens*,
 *Revoke* on each.
 
 ### Upgrading: the manifest's strings, egress, the deployment cap
@@ -1358,8 +1522,8 @@ there is a manifest to fix before deploying anything. None of them holds a
 
 ```bash
 bin/deploy-installer.sh             # 1. the judge that counts: validate(), the scope, the generators
-cd dashboard && sitesolide deploy   # 2. the API's early refusals, the cap, the limiter, the Team page
-bin/deploy-gatekeeper.sh            # 3. the same generator for the portal's door
+cd dashboard && sitesolide deploy   # 2. the API's early refusals, the cap, the limiter, the Tokens page
+bin/deploy-gatekeeper.sh            # 3. the same generator for the portal's block
 ```
 
 1. **The installer.** Check: a token deployment whose manifest carries
@@ -1368,7 +1532,7 @@ bin/deploy-gatekeeper.sh            # 3. the same generator for the portal's doo
    Roll back: `bin/deploy-installer.sh` from the previous commit.
 2. **The dashboard.** Check: the same manifest is refused at
    `POST /api/v1/deployments` before any upload; a token without outbound
-   network gets `egress: your token may not reach outside hosts`; the *Team*
+   network gets `egress: your token may not reach outside hosts`; the *Tokens*
    page's outbound permission mentions the hosts a service lists. Roll back:
    deploy the previous commit of `dashboard/`; no table changed.
 3. **The gatekeeper.** Check: putting a site's portal up and down from the
@@ -1377,43 +1541,41 @@ bin/deploy-gatekeeper.sh            # 3. the same generator for the portal's doo
 
 The steward needs nothing: it judges tokens and slugs, not manifests.
 
-### Upgrading: sharing by token
+### Upgrading: access by token
 
-`GET` and `PUT /api/v1/projects/<slug>/sharing`, and `sitesolide share` on the
-workstations. Opt-in in the plainest sense: nothing changes on the machine
-until somebody shares, and the routes only reach the portal's database, never
-Caddy. The steward, the gatekeeper and the installer need nothing.
+A release before the access registry gave tokens `GET` and `PUT
+/api/v1/projects/<slug>/sharing`, which the dashboard relayed to the portal's
+own tables, and `sitesolide share` read the portal on the loopback over the
+owner's SSH. Both roads are gone. A token now goes through
+`/api/v1/projects/<slug>/access` to the steward ([Access by
+token](#access-by-token)), the owner's SSH to the steward's owner socket, and
+neither touches the portal, which reads its projection. A machine that
+predates either needs nothing of that release: [Upgrading:
+access](#upgrading-access) brings it to the registry in one go.
 
 ```bash
 bin/test.sh                         # 0. on the workstation
-cd dashboard && sitesolide deploy   # 1. the two routes
+sitesolide upgrade                  # 1. the steward, the dashboard, the installer, the portal
 ```
 
-0. **The workstation.** Pull, then `bin/test.sh`. Check, in the folder of a
-   site behind the portal: `sitesolide share` prints who gets in, `over SSH,
-   as the owner`, and changes nothing. That read is the owner's way: root asks
-   the portal on the loopback (`sudo curl -sS http://127.0.0.1:3026/admin/sharing`),
-   after reading the site's manifest and block; it needs `curl` on the machine,
-   which sitesolide setup installs, and a portal that knows sharing (portal/README.md,
-   "Upgrading", step 1). A portal from before it is said so, and nothing is
-   changed.
-1. **The dashboard.** Check, with a token of yours that may deploy a site
-   behind the portal, from a workstation with no server
+0. **The workstation.** Pull, then `bin/test.sh`: a CLI from before the
+   registry still asks `.../sharing`, which the API's catch-all answers
+   `not-found`, `no such route`, and the CLI says as `not-available`.
+1. **The machine.** Check, in the folder of a restricted site: `sitesolide
+   share` prints its general access and people with access, `over SSH, as the
+   owner`, and changes nothing; root asks the owner's socket with `curl`,
+   which `sitesolide setup` installs. Then with a token of yours that may
+   deploy that site, from a workstation with no server
    (`SITESOLIDE_API=https://dashboard.<zone> SITESOLIDE_TOKEN=sst_...`):
-   `sitesolide share` prints the policy `through https://dashboard.<zone>`;
-   `sitesolide share you@<your domain>` saves it, and the *Sharing* section of
-   that site shows you listed; the portal's audit, `sudo curl -s
-   'http://127.0.0.1:3026/admin/audit?limit=1'`, shows `sharing.update` with
-   the actor `token:<id>`; `sitesolide share --domain gmail.com` is refused
-   with `out-of-scope` unless `gmail.com` is in `OIDC_ALLOWED_DOMAINS`. Then
-   `sitesolide share --remove you@<your domain>` to put it back. Before this
-   step, the API's catch-all answers these routes `not-found`, `no such
-   route`, which the CLI says as `not-available`: the dashboard does not carry
-   sharing yet.
+   `sitesolide share` prints the same `through https://dashboard.<zone>`;
+   `sitesolide share colleague@<your domain>` gives them Can open, and
+   *Activity* shows `access.add` under `token:<id>`; `sitesolide share
+   @gmail.com` is refused `out-of-scope` unless `gmail.com` is among
+   `OIDC_ALLOWED_DOMAINS`. Then `sitesolide share --remove colleague@<your
+   domain>` to put it back.
 
-**Rolling back.** Deploy the previous commit of `dashboard/`: the two routes
-answer `not-found` again, nothing else changes, and the policies a token set
-stay in the portal, where the *Sharing* section shows and changes them.
+**Rolling back** is [Upgrading: access](#upgrading-access)'s: the steward,
+the dashboard and the portal of before, together.
 
 ### Upgrading: a refused new project leaves nothing behind
 
@@ -1505,8 +1667,8 @@ ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
 | `steward.ts`, `src/secrets/`, `src/connectors/` (steward side), `bin/cli/connectors.ts`, `infra/steward/`, `portal/src/sharing.ts` | `bin/deploy-steward.sh` |
 | `gatekeeper.ts`, `src/gatekeeper/`, `infra/gatekeeper/`, `bin/cli/fragment.ts`, `bin/cli/portal.ts` | `bin/deploy-gatekeeper.sh` |
 | `src/control/steward.ts`, `src/control/system.ts`, `src/control/tokens.ts`, `src/control/policy.ts` | `bin/deploy-steward.sh` |
-| `src/members/steward.ts`, `registry.ts`, `sessions.ts`, `system.ts`, `actions.ts`, `powers.ts`, `unlocks.ts`, `tokens.ts`, `portal.ts`, `infra/steward/sitesolide-portal-relay.*`, `portal/src/assertion.ts` | `bin/deploy-steward.sh`; the last one `sitesolide deploy` in `portal/` too |
-| `installer.ts`, `src/installer/`, `src/control/policy.ts`, `src/members/tokens.ts`, `src/members/registry.ts`, `src/members/powers.ts`, `infra/installer/`, `bin/cli/` generators | `bin/deploy-installer.sh` |
+| `src/access/` (but its web routes, `routes.ts` and `client.ts`), `src/members/steward.ts`, `sessions.ts`, `system.ts`, `actions.ts`, `powers.ts`, `unlocks.ts`, `tokens.ts`, `portal.ts`, `infra/steward/sitesolide-portal-relay.*`, `portal/src/assertion.ts`, `portal/src/access.ts` | `bin/deploy-steward.sh`; the last two `sitesolide deploy` in `portal/` too |
+| `installer.ts`, `src/installer/`, `src/control/policy.ts`, `src/members/tokens.ts`, `src/access/registry.ts`, `src/members/powers.ts`, `infra/installer/`, `bin/cli/` generators | `bin/deploy-installer.sh` |
 | `backup.ts`, `src/backup/` (but its steward routes), `infra/backup/` | `bin/deploy-backup.sh install` |
 | `src/backup/routes.ts`, `src/backup/reader.ts` | `bin/deploy-steward.sh` |
 | `src/backup/database.ts`, which both embed | `bin/deploy-backup.sh install` and `bin/deploy-steward.sh` |
@@ -1534,15 +1696,18 @@ bun run page-bench       # the whole dashboard with plausible fake data
 The bench runs the real `server.ts` in a temporary directory, with a fake
 steward on a Unix socket, a simulated gatekeeper and a state file rewritten
 every thirty seconds. Nothing in it touches a machine, a real portal or a real
-vault. Its steward carries the real member routes, and its portal signs
-members in: *Sign in with Google* on the sign-in page leads to a page of the
-bench's that signs in alice@example.com, a Developer on `cms`, a Project admin
-on `calendar` and a Viewer on `photos`, or stranger@example.com, whom the
-registry does not name. The same page stands for the provider's forced
-sign-in when a member unlocks, and the bench's steward judges a member's
-secrets and door by role before its own fake operations, and her own tokens on
-the *Team* page with the real rules of src/members/tokens.ts; the super
-admin's *Team* page lists one of hers, marked.
+vault. Its steward carries the real access and sign-in routes, its registry
+made by the real migration from a `members.json` and a portal database of
+before, and its portal signs people in: *Sign in with Google* on the sign-in
+page leads to a page of the bench's that signs in alice@example.com, a
+Developer on `cms`, an Admin on `calendar` and a Viewer on `photos`, or
+stranger@example.com, whom the registry does not name. People and a domain
+can open `cms` and `calendar`, and four password accesses are carried over.
+The same page stands for the provider's forced sign-in when a person
+unlocks, and the bench's steward judges a person's secrets and general access
+by role before its own fake operations, and her own tokens on the *Tokens*
+page with the real rules of src/members/tokens.ts; the owner's *Tokens* page
+lists one of hers, marked.
 
 ## Tests
 
@@ -1563,62 +1728,73 @@ archive); the installer's pipeline on a throwaway tree with a real extraction
 in a child process, a real `install`, and every refusal, before and after the
 files are in place; the steward's control routes on real files; and the whole
 chain, the API on a real port, the steward on a real socket, the installer
-started by the simulated `systemctl` (tests/control-api.test.ts); sharing by
-token on a real port in front of a fake portal on another, every authorisation
-and the actor the portal receives (tests/control-sharing.test.ts). What only a
-machine can prove, `useradd` and `userdel`, `systemd-run`'s confinement and
+started by the simulated `systemctl` (tests/control-api.test.ts). Access by
+token is tested with the access routes, below. What only a machine can prove, `useradd` and `userdel`, `systemd-run`'s confinement and
 the template unit, is not covered here.
 
-For the members: every decision of the steward's on a throwaway tree, a
-signature by another key, another audience, an assertion expired, replayed,
-even after a restart, too old, an email the registry does not name, a viewer's
-restart, a project with no role, a member removed, even while their restart
-waited its turn, and the journal naming who it verified
-(tests/members-steward.test.ts); the registry, the sessions and what a member
-sees of the snapshot (tests/members-registry.test.ts); sessions with an
-identity, the steward asked who they are, the rate limiting
-(tests/members-sessions.test.ts); and a member's whole road through the real
+For access: the rules, pure, who may name whom, the ladder and who may give
+what, domains, password access and its four durations, the platform's
+projects, removing, the registry read back and refused, who signs in to the
+dashboard, and the portal's projection, a removal in the very next one
+(tests/access-rules.test.ts); the steward's access routes on a throwaway
+tree, the owner over SSH and in the dashboard, an Admin through their
+session, a token through the control routes, the projection written before
+every answer, someone whose last role above Can open goes signed out with
+their tokens, the registry root's alone and the projection the portal's
+group's (tests/access-steward.test.ts); the migration, every store carried
+over, what it sets aside, conflicts toward the higher role, made once, a
+portal database that does not read or sits behind a link, and the old stores
+left for a rollback (tests/access-migrate.test.ts); the dashboard's access
+routes against a simulated steward, the origin, the unlock carried, `locked`
+turned into the page's 423, general access never the code
+(tests/access-routes.test.ts).
+
+For the people who sign in: every decision of the steward's on a throwaway
+tree, a signature by another key, another audience, an assertion expired,
+replayed, even after a restart, too old, an email the registry gives no role
+above Can open, a Viewer's restart, a project with no role, someone removed,
+even while their restart waited its turn, and the journal naming who it
+verified (tests/members-steward.test.ts); the sessions and what a person sees
+of the snapshot (tests/members-view.test.ts); sessions with an identity, the
+steward asked who they are, the rate limiting
+(tests/members-sessions.test.ts); and a person's whole road through the real
 `server.ts` in its own process, the steward's routes on a real socket and a
 portal of the tests' making that signs with the steward's key
-(tests/members-flow.test.ts), the way back from the provider carrying no
-Strict cookie, a forced sign-in unlocking, one not forced or for another
-account refused, a Developer's write and refused read, a Project admin's read,
-sharing, guest and invitation, and the super admin's unlock beside a
-member's.
+(tests/members-flow.test.ts): the way back from the provider carrying no
+Strict cookie, someone who can only open a site refused at sign-in, a forced
+sign-in unlocking, one not forced or for another account refused, a
+Developer's write and refused read, an Admin's read and the access they give,
+which the portal is told through the projection, and the owner's unlock
+beside a person's.
 
-For the members' powers: each decision of the steward's on a throwaway tree
-with a real backup reader and a portal of the tests' making
-(tests/members-actions.test.ts): an unlock only on a forced sign-in for the
-session's own email, fresh and once, one per session, neither evicting the
-super admin's nor another member's, locked on demand, at sign-out and on
-removal, counted per member; a Developer listing names only, writing,
-refused a read before any file is read; a Project admin reading; another
-project, a viewed one, the platform's, a registry edited by hand and a
-password hash refused; a write that waited behind a restart refused once its
-member was removed; the door, sharing with the domain rule, guests and a
-restore by role, the actor the steward's; invitations at most one's own role,
-on one's own project. The table itself, the unlocks and a Project admin's
-registry changes, pure (tests/members-powers.test.ts).
+For their powers: each decision of the steward's on a throwaway tree with a
+real backup reader (tests/members-actions.test.ts): an unlock only on a
+forced sign-in for the session's own email, fresh and once, one per session,
+neither evicting the owner's nor another person's, locked on demand, at
+sign-out and when they no longer sign in, counted per person; a Developer
+listing names only, writing, refused a read before any file is read; an
+Admin reading; another project, a viewed one, the platform's, a registry
+edited by hand and a password hash refused; a write that waited behind a
+restart refused once its person was removed; general access and a restore by
+role, the actor the steward's. The table itself and the unlocks, pure
+(tests/members-powers.test.ts).
 
-For the members' own tokens: what a member may mint and what one of theirs
-may do once their roles move, pure (tests/members-tokens.test.ts); the control
-routes with a members registry the test changes as the super admin would
-(tests/control-members.test.ts): minting within the roles under the member's
-unlock, refused above them, a viewer refused, the create right required, the
-options a Project admin's; the identity narrowed at every use, a role lowered
-to Viewer stopping deployments and logs, a project the token created
-included, the create right taken back; a member removed refused, then
-revoked under who removed them; a creation making the member Project admin
-before the token owns it, the installer told whose token it is; sharing by
-token handed on as root, a member's own only as a Project admin. The create
-right, unlocking with it, a removal revoking the tokens, rights and
-creations, on the real member routes (tests/members-steward.test.ts and
-members-actions.test.ts); the installer refusing a member lowered, removed
-or without the create right since, and stripping a Developer's options
-(tests/installer-main.test.ts); a member's door kept (tests/control-policy.test.ts);
-and the whole road through the real `server.ts`, a member minting on the
-*Team* page after a forced sign-in, refused above their roles, deploying,
-narrowed and then removed (tests/members-flow.test.ts).
+For a person's own tokens: what a person may mint and what one of theirs may
+do once their roles move, pure (tests/members-tokens.test.ts); the control
+routes with an access registry the test changes as the owner would
+(tests/control-members.test.ts): minting within the roles under the person's
+unlock, refused above them, a Viewer refused, the create right required, the
+options an Admin's; the identity narrowed at every use, a role lowered to
+Viewer or Can open stopping deployments and logs, a project the token created
+included, the create right taken back; someone who no longer signs in
+refused, then revoked under who took them off; a creation making the person
+Admin before the token owns it, the installer told whose token it is. The
+installer refusing a person lowered, removed or without the create right
+since, and stripping a Developer's options (tests/installer-main.test.ts); a
+person's general access kept (tests/control-policy.test.ts); and the whole
+road through the real `server.ts`, a person minting on the *Tokens* page
+after a forced sign-in, refused above their roles, deploying, narrowed and
+then removed (tests/members-flow.test.ts).
 
 For the audit: each source's rows in the shared shape, bounded, and garbage
 left out (tests/audit-merge.test.ts); the merge, the filters and a cursor

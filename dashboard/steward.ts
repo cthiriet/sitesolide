@@ -44,6 +44,7 @@ import { INSTALLER_RUN_FOLDER } from "./src/control/protocol";
 import { BACKUP_FOLDER } from "./borrowed/backups";
 import { createBackupReader } from "./src/backup/reader";
 import { createMembersSystem } from "./src/members/system";
+import { createAccessSystem } from "./src/access/system";
 import { OWNER_SOCKET, PORTAL_KEY_FOLDER } from "./src/members/protocol";
 import { PORTAL_RELAY_SOCKET, relayedPortal } from "./src/members/portal";
 
@@ -77,10 +78,11 @@ const EGRESS_GROUP = process.env.EGRESS_GROUP ?? EGRESS_ACCOUNT;
 const SOCKET_GROUP = process.env.SOCKET_GROUP ?? "site-dashboard";
 
 /**
- * The owner's socket, which only root opens: `sitesolide members` reaches the
- * members registry there, over the owner's SSH. Its folder is a runtime
- * directory of its own, root's, since the dashboard's socket needs a folder
- * of its own (src/secrets/socket.ts). Empty: no owner's socket.
+ * The owner's socket, which only root opens: `sitesolide share` and
+ * `sitesolide people` reach the access registry there, over the owner's SSH.
+ * Its folder is a runtime directory of its own, root's, since the dashboard's
+ * socket needs a folder of its own (src/secrets/socket.ts). Empty: no
+ * owner's socket.
  */
 const OWNER_SOCKET_PATH = process.env.OWNER_SOCKET ?? OWNER_SOCKET;
 
@@ -93,12 +95,18 @@ const PORTAL_KEY_DIR = process.env.PORTAL_KEY_FOLDER ?? PORTAL_KEY_FOLDER;
 const PORTAL_GROUP = process.env.PORTAL_GROUP ?? "site-portal";
 
 /**
- * The relay to the portal's admin API, for a Project admin's sharing and
- * guests: a Unix socket root's alone, behind which systemd-socket-proxyd
- * reaches the portal's port on the loopback. This unit keeps no network.
- * Empty: no relay, sharing and guests say so.
+ * The relay to the portal's admin API, asked whether the portal reads the
+ * access projection: a Unix socket root's alone, behind which
+ * systemd-socket-proxyd reaches the portal's port on the loopback. This unit
+ * keeps no network. Empty: no relay, and the portal is not asked.
  */
 const PORTAL_RELAY = process.env.PORTAL_RELAY_SOCKET ?? PORTAL_RELAY_SOCKET;
+
+/**
+ * The portal's own data folder, read once, as a checked copy, when the access
+ * registry is made from the stores before it: see src/access/system.ts.
+ */
+const PORTAL_DATA_FOLDER = process.env.PORTAL_DATA_FOLDER ?? `${SITES_DIR}/portal/data`;
 
 /**
  * The check of the owners. Empty: neither uid check nor chown, and no check at
@@ -173,7 +181,8 @@ const backups = createBackupReader({
 });
 
 // The control routes are built after this handler, and the members routes
-// ask them to revoke a removed member's tokens: the call is filled in below.
+// ask them to revoke the tokens of someone who no longer signs in: the call
+// is filled in below.
 let revokeMemberTokens: (email: string, actor: string) => Promise<number> = async () => 0;
 
 const handler = createSteward(system, {
@@ -181,8 +190,9 @@ const handler = createSteward(system, {
   checkAccounts: OWNERS !== "",
   connectors,
   backups,
-  // The dashboard's members: the registry, the sessions, the key pair that
-  // the portal signs with. See src/members/.
+  // Access: the registry of who may do what on each project, the portal's
+  // projection of it, the sessions of the people who sign in, the key pair
+  // the portal signs with. See src/access/ and src/members/.
   members: {
     system: createMembersSystem({
       stateFolder: STATE_FOLDER,
@@ -192,6 +202,16 @@ const handler = createSteward(system, {
       groupsFile: GROUPS_FILE,
       portalGroup: OWNERS === "" ? "" : PORTAL_GROUP,
     }),
+    access: createAccessSystem(
+      {
+        stateFolder: STATE_FOLDER,
+        portalKeyFolder: PORTAL_KEY_DIR,
+        groupsFile: GROUPS_FILE,
+        portalGroup: OWNERS === "" ? "" : PORTAL_GROUP,
+        portalDataFolder: PORTAL_DATA_FOLDER,
+      },
+      OWNERS !== "",
+    ),
     zone: process.env.SITESOLIDE_ZONE ?? "",
     portal: PORTAL_RELAY === "" ? null : relayedPortal(PORTAL_RELAY),
     revokeTokens: (email, actor) => revokeMemberTokens(email, actor),
@@ -203,14 +223,19 @@ const handler = createSteward(system, {
 // the pair is laid at the first sign-in asked for once it is.
 const keys = await handler.ensureMemberKeys().catch((e: unknown) => ({ kind: "unavailable" as const, reason: (e as Error).name }));
 if (keys !== null) {
-  console.log(keys.kind === "ready" ? `steward: members' key ${keys.publicKey.kid} in place` : `steward: members cannot sign in yet, ${keys.reason}`);
+  console.log(keys.kind === "ready" ? `steward: dashboard sign-in key ${keys.publicKey.kid} in place` : `steward: nobody signs in to the dashboard with an account yet, ${keys.reason}`);
 }
+
+// The access registry: made from members.json and the portal's database at the
+// first start on this code, then its projection written again for the portal.
+// A store that does not read is said, and tried again at the next request.
+await handler.ensureAccess().catch((e: unknown) => console.error(`steward: access registry not ready (${(e as Error).name}), tried again at the next request`));
 
 // The control API's routes, under /team/ and /control/: the token registry and
 // the start of the installer. They share the socket and its permissions, and
 // ask the secrets routes whether a token is the live unlock, the members
-// routes who a member is and what they may do now, for a member's own
-// tokens, and the relay to the portal for a token's sharing. See
+// routes who a person is and what they may do now, for a person's own
+// tokens, and the access routes for a token's changes of access. See
 // src/control/steward.ts.
 const control = createControlSteward(
   createControlSystem({
@@ -226,7 +251,7 @@ const control = createControlSteward(
     isUnlocked: handler.isUnlocked,
     uidRoot: OWNERS === "" ? null : 0,
     members: handler.memberAuthority ?? undefined,
-    share: handler.shareForToken,
+    access: handler.accessForToken,
   },
 );
 revokeMemberTokens = control.revokeMember;
@@ -239,10 +264,10 @@ revokeMemberTokens = control.revokeMember;
  */
 const IDLE_S = Math.min(255, Math.ceil((MAX_PORTAL_MS + MAX_RESTART_MS) / 1000) + 10);
 
-// The owner's socket: the members registry for root, over the owner's SSH. No
+// The owner's socket: the access registry for root, over the owner's SSH. No
 // group: the folder and the socket stay root's alone.
 // Its folder missing, a unit older than this code, the dashboard's socket
-// opens all the same: the owner's is said missing, and `sitesolide members`
+// opens all the same: the owner's is said missing, and `sitesolide share`
 // says to upgrade.
 const ownerServer =
   OWNER_SOCKET_PATH === ""
@@ -259,7 +284,7 @@ const ownerServer =
           (path) =>
             Bun.serve({
               unix: path,
-              // The members registry, and the token ownership of a project removed.
+              // The access registry, and the token ownership of a project removed.
               fetch: (req) => (isControlPath(new URL(req.url).pathname) ? control.owner(req) : handler.owner(req)),
               development: false,
               error: () => Response.json({ error: "failure", message: "unexpected error" }, { status: 500 }),

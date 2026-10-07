@@ -326,9 +326,9 @@ export async function authenticate(team: Team, bearer: unknown, now: number): Pr
   return { kind: "accepted", record, identity: identityOf(team, record) };
 }
 
-/** What the holder is told: the reason, and what to do about it. A member mints their own again, from the Team page. */
+/** What the holder is told: the reason, and what to do about it. A member mints their own again, from the Tokens page. */
 export function refusalMessage(reason: Authentication & { kind: "refused" }): string {
-  const another = reason.member === true ? "mint a new one from the dashboard's Team page if you are still a member" : "ask the owner of the machine for a new one";
+  const another = reason.member === true ? "mint a new one from the dashboard's Tokens page if you still have a role there" : "ask the owner of the machine for a new one";
   switch (reason.reason) {
     case "expired":
       return `this token has expired: ${another}, then run sitesolide login again`;

@@ -2,7 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readProjection, type Role } from "../borrowed/access";
 import { readPrivateKey, signAssertion } from "../borrowed/assertion";
+import { createAccessSystem } from "../src/access/system";
 import { INSTALLER_TEMPLATE } from "../src/control/protocol";
 import { createControlSteward, isControlPath, type ControlHandler } from "../src/control/steward";
 import { createControlSystem } from "../src/control/system";
@@ -12,10 +14,12 @@ import { createSteward, type StewardHandler } from "../src/secrets/steward";
 import { createSystem, type Command } from "../src/secrets/system";
 
 /**
- * A member's whole road through the real dashboard: its own server.ts in a
- * process of its own, the steward's real routes on a real Unix socket, and a
- * portal of the tests' making on a port, which signs its assertions with the
- * key the steward laid, as the real one does.
+ * A person's whole road through the real dashboard: its own server.ts in a
+ * process of its own, the steward's real routes on a real Unix socket, the
+ * real access registry on a throwaway tree, and a portal of the tests' making
+ * on a port, which signs its assertions with the key the steward laid, as the
+ * real one does. Who holds which role is given by the owner over the owner's
+ * socket, as `sitesolide share` and `sitesolide people` do.
  *
  * The test is the browser: a cookie jar, the redirects followed by hand. The
  * portal's own side of the flow, the provider included, is tested through real
@@ -37,7 +41,7 @@ function freePort(): number {
 
 let root: string;
 let steward: StewardHandler;
-/** The control routes beside it, as dashboard/steward.ts mounts them: tokens, a member's own included. */
+/** The control routes beside it, as dashboard/steward.ts mounts them: tokens, a person's own included. */
 let control: ControlHandler;
 /** What the steward asked of the installer: the requests it wrote. */
 const installs: string[] = [];
@@ -56,39 +60,18 @@ let PORTAL = "";
  */
 const next = { email: ALICE, ignoreReauth: false };
 
-/** What reached the portal's admin API, and from whom: the steward's relay, or the dashboard. */
-const portalCalls: { route: string; body: Record<string, unknown> }[] = [];
-
-/** The portal's side, reduced to what the dashboard sees of it. */
+/** The portal's side, reduced to what the dashboard and the steward see of it. */
 function startPortal(): ReturnType<typeof Bun.serve> {
   const flows = new Map<string, { binding: string; returnTo: string; reauth: boolean }>();
   const codes = new Map<string, { binding: string; returnTo: string; email: string; reauth: boolean }>();
-  const policies: { host: string; policy: unknown; updatedAt: number }[] = [];
-  const guests: { id: string; host: string; label: string }[] = [{ id: "GUESTONBLOG00001", host: `blog.${ZONE}`, label: "Not shop's" }];
   return Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
     routes: {
-      "/admin/sharing": () => Response.json({ sso: { configured: true, providerName: "Acme", allowedDomains: ["acme.test"], admins: [], portalUrl: PORTAL }, sites: policies }),
-      "/admin/sharing/:host": {
-        PUT: async (req) => {
-          const body = (await req.json()) as Record<string, unknown>;
-          portalCalls.push({ route: `PUT /admin/sharing/${req.params.host}`, body });
-          const policy = { mode: body.mode, people: body.people, domains: body.domains };
-          policies.push({ host: req.params.host, policy, updatedAt: Date.now() });
-          return Response.json({ host: req.params.host, policy, updatedAt: Date.now() });
-        },
-      },
-      "/admin/guests": {
-        GET: () => Response.json({ guests }),
-        POST: async (req) => {
-          const body = (await req.json()) as Record<string, unknown>;
-          portalCalls.push({ route: "POST /admin/guests", body });
-          const guest = { id: "GUESTONSHOP00001", host: String(body.host), label: String(body.label) };
-          guests.push(guest);
-          return Response.json({ guest, password: "drawn-guest-password-0001" }, { status: 201 });
-        },
-      },
+      // How people sign in, which the dashboard reads; who may open a site is no longer the portal's.
+      "/admin/sharing": () => Response.json({ sso: { configured: true, providerName: "Acme", allowedDomains: ["acme.test"], admins: [], portalUrl: PORTAL }, sites: [] }),
+      // What the steward asks through its relay: the portal reads the steward's projection.
+      "/admin/access": () => Response.json({ reading: "steward", writtenAt: Date.now() }),
       "/admin/audit": () => Response.json({ events: [] }),
       "/admin/dashboard/flow": {
         POST: async (req) => {
@@ -125,15 +108,7 @@ function startPortal(): ReturnType<typeof Bun.serve> {
 
 /** The steward's relay to the portal, as a function of the portal's port: root's road, not the dashboard's. */
 function relayTo(url: () => string): PortalAdmin {
-  const call = (method: string, path: string, body?: object) =>
-    fetch(`${url()}${path}`, { method, ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }) });
-  return {
-    sharing: () => call("GET", "/admin/sharing"),
-    replaceSharing: (host, body) => call("PUT", `/admin/sharing/${encodeURIComponent(host)}`, body),
-    guests: () => call("GET", "/admin/guests"),
-    createGuest: (body) => call("POST", "/admin/guests", body),
-    revokeGuest: (id, actor) => call("DELETE", `/admin/invites/${id}`, { actor }),
-  };
+  return { access: () => fetch(`${url()}/admin/access`) };
 }
 
 class Browser {
@@ -200,7 +175,7 @@ async function signInAs(email: string, returnTo = "/"): Promise<{ browser: Brows
   return { browser, landed };
 }
 
-/** A member's unlock: the dashboard sends them through a forced sign-in, and back where they were. */
+/** A person's unlock: the dashboard sends them through a forced sign-in, and back where they were. */
 async function unlockAs(browser: Browser, email: string, returnTo = "/site/secrets/?s=blog"): Promise<string> {
   next.email = email;
   return browser.follow(`${DASHBOARD}/api/sso/begin?reauth=1&return=${encodeURIComponent(returnTo)}`);
@@ -208,6 +183,26 @@ async function unlockAs(browser: Browser, email: string, returnTo = "/site/secre
 
 const asRoot = (method: string, path: string, body?: unknown) =>
   steward.owner(new Request(`http://steward${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
+
+/** Roles given by the owner, over the owner's socket, as `sitesolide share` gives them. */
+async function give(email: string, roles: Record<string, Role>): Promise<void> {
+  for (const [slug, role] of Object.entries(roles)) {
+    const response = await asRoot("PUT", "/access/entry", { slug, who: email, role });
+    expect([email, slug, response.status < 300]).toEqual([email, slug, true]);
+  }
+}
+
+/** Someone taken off every project by the owner, as `sitesolide people --remove` does. */
+async function takeOff(email: string): Promise<void> {
+  expect((await asRoot("DELETE", "/people/person", { email })).status).toBe(200);
+}
+
+/** The portal's projection, as the steward laid it beside the assertion key. */
+function projection() {
+  const read = readProjection(readFileSync(join(root, "portal-key", "access.json"), "utf8"));
+  if ("unreadable" in read) throw new Error(read.unreadable);
+  return read;
+}
 
 function folder(name: string): string {
   mkdirSync(join(root, name), { recursive: true });
@@ -231,7 +226,7 @@ beforeAll(async () => {
     return manifest;
   };
   const manifests = [app("blog", 3040), app("shop", 3041, { portal: true }), app("secret-project", 3042)];
-  // shop's block carries the portal: it may be shared, and given guests.
+  // shop's block carries the portal: its general access is restricted.
   const guarded = "shop.{$SITESOLIDE_ZONE} {\n\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\turi /verifier\n\t}\n}\n";
   writeFileSync(join(folder("caddy"), "shop.caddy"), guarded);
   const hash = await Bun.password.hash(PASSWORD, { algorithm: "bcrypt", cost: 4 });
@@ -284,6 +279,7 @@ beforeAll(async () => {
       checkAccounts: false,
       members: {
         system: createMembersSystem({ stateFolder: state, sitesDir: sites, secretsFolder: secrets, portalKeyFolder: join(root, "portal-key"), groupsFile: join(root, "group"), portalGroup: "" }),
+        access: createAccessSystem({ stateFolder: state, portalKeyFolder: join(root, "portal-key"), groupsFile: join(root, "group"), portalGroup: "", portalDataFolder: join(root, "portal-data") }, false),
         zone: ZONE,
         portal: relayTo(() => PORTAL),
         revokeTokens: (email, actor) => control.revokeMember(email, actor),
@@ -300,7 +296,7 @@ beforeAll(async () => {
         return arguments_[0] === "is-active" ? { code: 3, output: "inactive\n" } : { code: 0, output: "" };
       },
     },
-    { zone: ZONE, isUnlocked: steward.isUnlocked, uidRoot: null, members: steward.memberAuthority!, share: steward.shareForToken },
+    { zone: ZONE, isUnlocked: steward.isUnlocked, uidRoot: null, members: steward.memberAuthority!, access: steward.accessForToken },
   );
   const socket = join(root, "steward.sock");
   socketServer = Bun.serve({ unix: socket, fetch: (req) => (isControlPath(new URL(req.url).pathname) ? control(req) : steward(req)) });
@@ -308,7 +304,7 @@ beforeAll(async () => {
   portalServer = startPortal();
   PORTAL = `http://127.0.0.1:${portalServer.port}`;
 
-  expect((await asRoot("PUT", "/members/member", { email: ALICE, roles: { blog: "developer", shop: "viewer" } })).status).toBe(201);
+  await give(ALICE, { blog: "developer", shop: "viewer" });
 
   dashboard = Bun.spawn([process.execPath, "run", join(import.meta.dir, "..", "server.ts")], {
     env: {
@@ -345,7 +341,7 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-describe("a member, end to end", () => {
+describe("a person, end to end", () => {
   test("the sign-in page offers the portal's provider", async () => {
     const body = (await (await fetch(`${DASHBOARD}/api/session`)).json()) as Record<string, unknown>;
     expect(body).toMatchObject({ open: false, configured: true, identity: null, sso: { offered: true, providerName: "Acme" } });
@@ -367,20 +363,21 @@ describe("a member, end to end", () => {
     expect(reading.snapshot.machine).toBeNull();
   });
 
-  test("cannot open the super admin's pages, whatever the route", async () => {
+  test("cannot open the owner's pages, whatever the route", async () => {
     const { browser } = await signInAs(ALICE);
-    for (const path of ["/api/members", "/api/connectors", "/api/portal/audit"]) {
+    for (const path of ["/api/people", "/api/connectors", "/api/portal/audit"]) {
       const response = await browser.api(path);
       expect([path, response.status]).toEqual([path, 403]);
       expect(await response.json()).toMatchObject({ error: "owner-only" });
     }
-    // A member never unlocks with the dashboard's password, nor changes a password hash.
+    // A person never unlocks with the dashboard's password, nor changes a password hash.
     const unlock = await browser.api("/api/secrets/unlock", { method: "POST", body: { password: PASSWORD } });
     expect(unlock.status).toBe(400);
     expect(await unlock.json()).toMatchObject({ error: "reauthenticate" });
     const password = await browser.api("/api/secrets/password", { method: "POST", body: { slug: "blog", file: "blog.env", variable: "PASSWORD_HASH", dashboardPassword: PASSWORD, newPassword: null } });
     expect(password.status).toBe(403);
-    expect((await browser.api("/api/members/member", { method: "PUT", body: { email: "x@acme.test", roles: {} } })).status).toBe(403);
+    expect((await browser.api("/api/people/person", { method: "PUT", body: { email: "x@acme.test", create: true } })).status).toBe(403);
+    expect((await browser.api("/api/people/person", { method: "DELETE", body: { email: ALICE } })).status).toBe(403);
   });
 
   test("restarts the project they develop, and is refused, by the steward, on the one they only view", async () => {
@@ -394,33 +391,40 @@ describe("a member, end to end", () => {
     expect(refused.status).toBe(403);
     expect(await refused.json()).toEqual({
       error: "out-of-scope",
-      message: `${ALICE} is a viewer on shop: restarting its service takes a developer or a project admin`,
+      message: `${ALICE} is a Viewer on shop: restarting its service takes a Developer or an Admin`,
     });
     expect(restarts).not.toContain("shop");
   });
 
   test("reads the activity of their projects, their own sign-ins and restarts named by their email", async () => {
+    // Someone given access to a project that is not theirs: nothing of it is theirs to read.
+    await give("zed@acme.test", { "secret-project": "viewer" });
     const { browser } = await signInAs(ALICE);
     await browser.api("/api/members/restart", { method: "POST", body: { slug: "blog" } });
     const page = (await (await browser.api("/api/audit?source=steward")).json()) as { rows: { actor: string; action: string; target: string | null }[] };
-    expect(page.rows.some((row) => row.actor === ALICE && row.action === "member.signin")).toBe(true);
+    expect(page.rows.some((row) => row.actor === ALICE && row.action === "dashboard.signin")).toBe(true);
     expect(page.rows.some((row) => row.actor === ALICE && row.action === "service.restart" && row.target === "blog")).toBe(true);
-    // The owner's invitation names no project of theirs and is not theirs: not shown.
-    expect(page.rows.some((row) => row.action === "member.invite")).toBe(false);
+    expect(page.rows.some((row) => row.target === "secret-project" || row.target === "zed@acme.test")).toBe(false);
+    await takeOff("zed@acme.test");
   });
 
-  test("someone the registry does not name is refused at sign-in, and gets no session", async () => {
+  test("someone the registry does not name, or who can only open a site, is refused at sign-in, and gets no session", async () => {
     const { browser, landed } = await signInAs("bob@acme.test");
     expect(landed).toBe(`${DASHBOARD}/?signin=not-a-member`);
     expect(browser.jar.has("session")).toBe(false);
+    await give("vera@acme.test", { shop: "visitor" });
+    const visitor = await signInAs("vera@acme.test");
+    expect(visitor.landed).toBe(`${DASHBOARD}/?signin=not-a-member`);
+    expect(visitor.browser.jar.has("session")).toBe(false);
+    await takeOff("vera@acme.test");
   });
 
-  test("removed by the owner, their next write is refused and their session is gone", async () => {
+  test("taken off by the owner, their next write is refused and their session is gone", async () => {
     const bob = "carol@acme.test";
-    await asRoot("PUT", "/members/member", { email: bob, roles: { blog: "developer" } });
+    await give(bob, { blog: "developer" });
     const { browser } = await signInAs(bob);
     expect((await (await browser.api("/api/session")).json()) as unknown).toMatchObject({ identity: { email: bob } });
-    expect((await asRoot("DELETE", "/members/member", { email: bob })).status).toBe(200);
+    await takeOff(bob);
     const refused = await browser.api("/api/members/restart", { method: "POST", body: { slug: "blog" } });
     expect(refused.status).toBe(401);
     expect((await (await browser.api("/api/session")).json()) as unknown).toMatchObject({ open: false });
@@ -435,38 +439,46 @@ describe("a member, end to end", () => {
   });
 });
 
-describe("the owner, beside the members", () => {
-  test("sees the Members page with the password, and invites only unlocked", async () => {
+describe("the owner, beside the people", () => {
+  test("sees the People page with the password, and gives the create right or a role only unlocked", async () => {
     const signIn = await fetch(`${DASHBOARD}/api/signin`, { method: "POST", headers: { Origin: DASHBOARD, "Content-Type": "application/json" }, body: JSON.stringify({ password: PASSWORD }) });
     const browser = new Browser();
     browser.keep(signIn);
-    const page = (await (await browser.api("/api/members")).json()) as Record<string, unknown>;
-    expect(page).toMatchObject({ available: true, dashboardUrl: DASHBOARD, providerName: "Acme", projects: ["blog", "secret-project", "shop"] });
-    expect((page.members as { email: string }[]).some((member) => member.email === ALICE)).toBe(true);
-    const locked = await browser.api("/api/members/member", { method: "PUT", body: { email: "dave@acme.test", roles: { blog: "viewer" } } });
-    expect(locked.status).toBe(423);
-    // The member's restart route is a member's: the owner restarts from Secrets, unlocked.
+    const page = (await (await browser.api("/api/people")).json()) as Record<string, unknown>;
+    expect(page).toMatchObject({ available: true, dashboardUrl: DASHBOARD, providerName: "Acme", projects: ["blog", "secret-project", "shop"], signIn: { configured: true, allowedDomains: ["acme.test"] } });
+    expect((page.people as { who: string; roles: unknown }[]).find((person) => person.who === ALICE)?.roles).toEqual({ blog: "developer", shop: "viewer" });
+    const creator = { email: "erin@acme.test", create: true };
+    expect((await browser.api("/api/people/person", { method: "PUT", body: creator })).status).toBe(423);
+    const role = { slug: "blog", who: "frank@acme.test", role: "viewer" };
+    expect((await browser.api("/api/access/entry", { method: "PUT", body: role })).status).toBe(423);
+    // Can open needs no unlock, nor does taking someone off.
+    expect((await browser.api("/api/access/entry", { method: "PUT", body: { slug: "shop", who: "frank@acme.test", role: "visitor" } })).status).toBe(201);
+    expect((await browser.api("/api/access/entry", { method: "DELETE", body: { slug: "shop", who: "frank@acme.test" } })).status).toBe(200);
+    // A person's restart route is a person's: the owner restarts from Secrets, unlocked.
     expect((await browser.api("/api/members/restart", { method: "POST", body: { slug: "blog" } })).status).toBe(403);
 
-    // Unlocked, the Members page saves someone with the right to create projects alone, and no one with neither.
+    // Unlocked, the People page gives the create right alone, and the Access section a role.
     expect((await browser.api("/api/secrets/unlock", { method: "POST", body: { password: PASSWORD } })).status).toBe(200);
-    const creator = await browser.api("/api/members/member", { method: "PUT", body: { email: "erin@acme.test", roles: {}, create: true } });
-    expect(creator.status).toBe(201);
-    expect(await creator.json()).toMatchObject({ change: "invite", member: { email: "erin@acme.test", roles: {}, create: true } });
-    const neither = await browser.api("/api/members/member", { method: "PUT", body: { email: "frank@acme.test", roles: {}, create: false } });
-    expect(neither.status).toBe(400);
-    expect(((await neither.json()) as { message: string }).message).toBe("roles: give them a role on one project at least, or the right to create projects");
-    expect((await asRoot("DELETE", "/members/member", { email: "erin@acme.test" })).status).toBe(200);
+    const created = await browser.api("/api/people/person", { method: "PUT", body: creator });
+    expect(created.status).toBe(200);
+    expect(await created.json()).toMatchObject({ change: "create", person: { who: "erin@acme.test", roles: {}, create: true } });
+    const given = await browser.api("/api/access/entry", { method: "PUT", body: role });
+    expect(given.status).toBe(201);
+    expect(await given.json()).toMatchObject({ change: "add", entry: { who: "frank@acme.test", role: "viewer", by: "owner" } });
+    for (const email of ["erin@acme.test", "frank@acme.test"]) {
+      const removed = await browser.api("/api/people/person", { method: "DELETE", body: { email } });
+      expect([email, removed.status]).toEqual([email, 200]);
+    }
   });
 });
 
-describe("a member's secrets, door and project, end to end", () => {
+describe("a person's secrets, general access and people, end to end", () => {
   async function json(response: Response): Promise<Record<string, unknown>> {
     return (await response.json()) as Record<string, unknown>;
   }
 
   test("a Developer sees names, unlocks through a forced sign-in, writes, and is refused a read by the steward", async () => {
-    await asRoot("PUT", "/members/member", { email: ALICE, roles: { blog: "developer", shop: "viewer" } });
+    await give(ALICE, { blog: "developer", shop: "viewer" });
     const { browser } = await signInAs(ALICE);
     const listed = await json(await browser.api("/api/secrets"));
     expect((listed.projects as { slug: string }[]).map((project) => project.slug)).toEqual(["blog"]);
@@ -506,15 +518,15 @@ describe("a member's secrets, door and project, end to end", () => {
     expect((await browser.api("/api/secrets/variable", { method: "PUT", body: { slug: "blog", file: "blog.env", variable: "A", value: "b" } })).status).toBe(423);
   });
 
-  test("another account's forced sign-in does not unlock this member's session", async () => {
-    await asRoot("PUT", "/members/member", { email: "dan@acme.test", roles: { blog: "developer" } });
+  test("another account's forced sign-in does not unlock this person's session", async () => {
+    await give("dan@acme.test", { blog: "developer" });
     const { browser } = await signInAs(ALICE);
     const landed = await unlockAs(browser, "dan@acme.test");
     expect(landed).toBe(`${DASHBOARD}/site/secrets/?s=blog&unlock=another-account`);
   });
 
-  test("the super admin's unlock and a member's live side by side", async () => {
-    await asRoot("PUT", "/members/member", { email: "gus@acme.test", roles: { blog: "developer" } });
+  test("the owner's unlock and a person's live side by side", async () => {
+    await give("gus@acme.test", { blog: "developer" });
     const { browser } = await signInAs("gus@acme.test");
     await unlockAs(browser, "gus@acme.test");
     const signIn = await fetch(`${DASHBOARD}/api/signin`, { method: "POST", headers: { Origin: DASHBOARD, "Content-Type": "application/json" }, body: JSON.stringify({ password: PASSWORD }) });
@@ -525,51 +537,53 @@ describe("a member's secrets, door and project, end to end", () => {
     expect((await owner.api("/api/secrets/value", { method: "POST", body: { slug: "blog", file: "blog.env", variable: "SIDE" } })).status).toBe(200);
   });
 
-  test("a Project admin reads, shares and gives guest access on their project, the portal told their email by the steward", async () => {
+  test("an Admin reads their project's values, and gives people access to it, which the portal is told through the steward's projection", async () => {
     const HAL = "hal@acme.test";
-    await asRoot("PUT", "/members/member", { email: HAL, roles: { blog: "developer", shop: "admin" } });
+    await give(HAL, { blog: "developer", shop: "admin" });
     const { browser } = await signInAs(HAL);
     await unlockAs(browser, HAL, "/site/secrets/?s=shop");
     const read = await browser.api("/api/secrets/value", { method: "POST", body: { slug: "shop", file: "shop.env", variable: "API_KEY" } });
     expect(await json(read)).toEqual({ value: SECRET_VALUE });
 
-    const before = portalCalls.length;
-    const shared = await browser.api(`/api/sharing/shop.${ZONE}`, { method: "PUT", body: { mode: "people", people: ["bob@acme.test"], domains: [] } });
-    expect(shared.status).toBe(200);
-    expect(portalCalls.at(-1)).toEqual({ route: `PUT /admin/sharing/shop.${ZONE}`, body: { mode: "people", people: ["bob@acme.test"], domains: [], actor: HAL } });
-    // blog is not behind the portal, and Alice is no admin there.
-    expect((await browser.api(`/api/sharing/blog.${ZONE}`, { method: "PUT", body: { mode: "people", people: [], domains: [] } })).status).toBe(400);
+    const page = await json(await browser.api("/api/access?slug=shop"));
+    expect(page).toMatchObject({ slug: "shop", you: { kind: "person", email: HAL, role: "admin" }, grantable: ["visitor", "viewer", "developer", "admin"], portal: { reading: "steward" } });
+    expect((await browser.api("/api/access?slug=blog")).status).toBe(403);
 
-    const guest = await browser.api("/api/guests", { method: "POST", body: { host: `shop.${ZONE}`, label: "Client", durationS: 3600 } });
-    expect(guest.status).toBe(201);
-    expect(portalCalls.at(-1)).toMatchObject({ route: "POST /admin/guests", body: { host: `shop.${ZONE}`, actor: HAL } });
-    expect(portalCalls.length).toBe(before + 2);
-    // The guests they see: shop's alone.
-    const listed = await json(await browser.api("/api/guests"));
-    expect((listed.guests as { host: string }[]).every((one) => one.host === `shop.${ZONE}`)).toBe(true);
+    const given = await browser.api("/api/access/entry", { method: "PUT", body: { slug: "shop", who: "bob@acme.test", role: "visitor" } });
+    expect(given.status).toBe(201);
+    expect(await json(given)).toMatchObject({ change: "add", entry: { who: "bob@acme.test", role: "visitor", by: HAL } });
+    expect(projection().sites[`shop.${ZONE}`]?.people["bob@acme.test"]).toBe("visitor");
+    // Someone outside the company's domains gets password access: the password shown this once.
+    const outsider = await json(await browser.api("/api/access/entry", { method: "PUT", body: { slug: "shop", who: "eve@elsewhere.test", role: "visitor", expiresInS: 86400 } }));
+    expect(outsider).toMatchObject({ change: "add", entry: { who: "eve@elsewhere.test", kind: "password", password: { expired: false } } });
+    expect(typeof outsider.password).toBe("string");
+    expect(JSON.stringify(projection())).not.toContain(outsider.password as string);
+    // Not on blog, where they are a Developer.
+    expect((await browser.api("/api/access/entry", { method: "PUT", body: { slug: "blog", who: "bob@acme.test", role: "visitor" } })).status).toBe(403);
+    for (const who of ["bob@acme.test", "eve@elsewhere.test"]) {
+      expect((await browser.api("/api/access/entry", { method: "DELETE", body: { slug: "shop", who } })).status).toBe(200);
+    }
   });
 
-  test("a Project admin invites on their project, under their unlock, and is refused on another", async () => {
+  test("an Admin gives a role above Can open under their unlock, at most their own, and is refused on another project", async () => {
     const IVY = "ivy@acme.test";
-    await asRoot("PUT", "/members/member", { email: IVY, roles: { blog: "developer", shop: "admin" } });
+    await give(IVY, { blog: "developer", shop: "admin" });
     const { browser } = await signInAs(IVY);
-    expect((await browser.api("/api/members/project", { method: "PUT", body: { slug: "shop", email: "erin@acme.test", role: "viewer" } })).status).toBe(423);
-    await unlockAs(browser, IVY, "/site/members/?s=shop");
-    const invited = await browser.api("/api/members/project", { method: "PUT", body: { slug: "shop", email: "erin@acme.test", role: "viewer" } });
-    expect(invited.status).toBe(201);
-    const page = await json(await browser.api("/api/members/project?slug=shop"));
-    const roles = (page.members as { email: string; role: string; roles?: unknown }[]).map((member) => [member.email, member.role]);
+    const viewer = { slug: "shop", who: "erin@acme.test", role: "viewer" };
+    expect((await browser.api("/api/access/entry", { method: "PUT", body: viewer })).status).toBe(423);
+    await unlockAs(browser, IVY, "/site/access/?s=shop");
+    expect((await browser.api("/api/access/entry", { method: "PUT", body: viewer })).status).toBe(201);
+    const page = await json(await browser.api("/api/access?slug=shop"));
+    const roles = (page.entries as { who: string; role: string }[]).map((entry) => [entry.who, entry.role]);
     expect(roles).toEqual(expect.arrayContaining([["erin@acme.test", "viewer"], [IVY, "admin"]]));
-    // Their role on shop alone: nothing of the projects they hold elsewhere.
-    expect((page.members as Record<string, unknown>[]).every((member) => !("roles" in member))).toBe(true);
-    const refused = await browser.api("/api/members/project", { method: "PUT", body: { slug: "blog", email: "erin@acme.test", role: "viewer" } });
-    expect(refused.status).toBe(403);
-    expect((await browser.api("/api/members/project?slug=blog")).status).toBe(403);
-    expect((await browser.api("/api/members/project", { method: "DELETE", body: { slug: "shop", email: "erin@acme.test" } })).status).toBe(200);
+    expect((await browser.api("/api/access/entry", { method: "PUT", body: { ...viewer, slug: "blog" } })).status).toBe(403);
+    // Taking someone off needs no unlock; it closes their way in at once.
+    expect((await browser.api("/api/access/entry", { method: "DELETE", body: { slug: "shop", who: "erin@acme.test" } })).status).toBe(200);
+    expect(projection().sites[`shop.${ZONE}`]?.people["erin@acme.test"]).toBeUndefined();
   });
 });
 
-describe("a member's own tokens, end to end", () => {
+describe("a person's own tokens, end to end", () => {
   /** The control API, as the CLI or an agent calls it, with a bearer. */
   const api = (path: string, bearer: string, init: { method?: string; body?: unknown } = {}) =>
     fetch(`${DASHBOARD}${path}`, {
@@ -578,12 +592,12 @@ describe("a member's own tokens, end to end", () => {
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
     });
 
-  test("minted on the Team page under their own unlock, within their roles, and narrowed with them", async () => {
+  test("minted on the Tokens page under their own unlock, within their roles, and narrowed with them", async () => {
     const carol = "carol@acme.test";
-    expect((await asRoot("PUT", "/members/member", { email: carol, roles: { blog: "developer", shop: "admin" } })).status).toBe(201);
+    await give(carol, { blog: "developer", shop: "admin" });
     const { browser } = await signInAs(carol);
 
-    // Their Team page: their tokens alone, and what they may mint them for.
+    // Their Tokens page: their tokens alone, and what they may mint them for.
     const page = (await (await browser.api("/api/team")).json()) as { member: unknown; tokens: unknown[] };
     expect(page).toMatchObject({ member: { email: carol, roles: { blog: "developer", shop: "admin" }, create: false }, tokens: [] });
 
@@ -598,36 +612,36 @@ describe("a member's own tokens, end to end", () => {
     const { token, secret } = (await created.json()) as { token: { id: string; email: string; member: string }; secret: string };
     expect(token).toMatchObject({ email: carol, member: carol });
 
-    // Above their roles, the steward's words: the options are a Project admin's.
+    // Above their roles, the steward's words: the options are an Admin's.
     const above = await mint({ slugs: ["blog"], public: true });
     expect(above.status).toBe(403);
-    expect(((await above.json()) as { message: string }).message).toBe(`scope.public: ${carol} is a developer on blog: deploying it in the open, without the portal, takes a project admin`);
+    expect(((await above.json()) as { message: string }).message).toBe(`scope.public: ${carol} is a Developer on blog: deploying it in the open, its general access public, takes an Admin`);
     expect((await mint({ create: true })).status).toBe(403);
-    // Within: the options where they are Project admin.
+    // Within: the options where they are Admin.
     expect((await mint({ slugs: ["shop"], outbound: true })).status).toBe(201);
 
-    // The token works over the control API, as the member's, narrowed to their roles.
+    // The token works over the control API, as the person's, narrowed to their roles.
     const who = (await (await api("/api/v1/whoami", secret)).json()) as { identity: { member: string; scope: { slugs: string[] } } };
     expect(who.identity).toMatchObject({ member: carol, scope: { slugs: ["blog"] } });
     // blog is in the open on the machine: a Developer's token deploys it as it stands.
     const opened = await api("/api/v1/deployments", secret, { method: "POST", body: { manifest: { slug: "blog", start: "/usr/local/bin/bun run server.ts", port: 3040, publicDir: "public", secrets: ["blog.env"] } } });
     expect(opened.status).toBe(201);
 
-    // Lowered to viewer on blog: the next deployment is refused by the steward, in its words.
-    await asRoot("PUT", "/members/member", { email: carol, roles: { blog: "viewer", shop: "admin" } });
+    // Lowered to Viewer on blog: the next deployment is refused by the steward, in its words.
+    await give(carol, { blog: "viewer" });
     const narrowed = (await (await api("/api/v1/whoami", secret)).json()) as { identity: { scope: { slugs: string[] } } };
     expect(narrowed.identity.scope.slugs).toEqual([]);
     const refused = await api("/api/v1/deployments", secret, { method: "POST", body: { manifest: { slug: "blog", start: "/usr/local/bin/bun run server.ts", port: 3040, publicDir: "public", secrets: ["blog.env"] } } });
     expect(refused.status).toBe(403);
-    expect(((await refused.json()) as { message: string }).message).toBe(`${carol} is a viewer on blog: deploying it takes a developer or a project admin`);
+    expect(((await refused.json()) as { message: string }).message).toBe(`${carol} is a Viewer on blog: deploying it takes a Developer or an Admin`);
 
     // Their own list, and the owner's: every token, with whose it is.
     const listed = (await (await browser.api("/api/team")).json()) as { tokens: { id: string }[] };
     expect(listed.tokens).toHaveLength(2);
     expect(listed.tokens.map((one) => one.id)).toContain(token.id);
 
-    // Removed: every token of theirs refused, revoked under the owner.
-    expect((await asRoot("DELETE", "/members/member", { email: carol })).status).toBe(200);
+    // Taken off: every token of theirs refused, revoked under the owner.
+    await takeOff(carol);
     const gone = await api("/api/v1/whoami", secret);
     expect(gone.status).toBe(401);
     const all = (await (await control(new Request("http://steward/team/tokens"))).json()) as { tokens: { member: string | null; revokedAt: number | null }[] };
@@ -635,15 +649,15 @@ describe("a member's own tokens, end to end", () => {
     expect(installs).toEqual([]);
   });
 
-  test("a viewer everywhere has no Team page of their own to mint from", async () => {
+  test("a Viewer everywhere has no Tokens page of their own to mint from", async () => {
     const dave = "dave@acme.test";
-    await asRoot("PUT", "/members/member", { email: dave, roles: { blog: "viewer" } });
+    await give(dave, { blog: "viewer" });
     const { browser } = await signInAs(dave);
     const page = (await (await browser.api("/api/team")).json()) as { member: { create: boolean } };
     expect(page.member.create).toBe(false);
     const refused = await browser.api("/api/team/tokens", { method: "POST", body: { label: "x", expiresAt: null, scope: { slugs: ["blog"], create: false, outbound: false, domain: false, public: false } } });
-    // No unlock to hold for a viewer: locked before anything else.
+    // No unlock to hold for a Viewer: locked before anything else.
     expect(refused.status).toBe(423);
-    await asRoot("DELETE", "/members/member", { email: dave });
+    await takeOff(dave);
   });
 });

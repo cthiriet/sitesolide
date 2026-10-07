@@ -125,10 +125,13 @@ describe("a row in words", () => {
     expect(auditWords(row({ source: "dashboard", action: "deploy.failure", detail: { error: "install-failed" } }))).toEqual({ summary: "Deployment failed", note: "install-failed", tone: "error" })
   })
 
-  test("the portal: sign-ins, refusals, sign-outs and sharing", () => {
-    expect(auditWords(row({ detail: { method: "oidc", role: "member" } })).summary).toBe("Signed in with a work account, as member")
+  test("the portal: sign-ins, refusals, sign-outs, and the sharing and guests of rows written before the access registry", () => {
+    expect(auditWords(row({ detail: { method: "oidc", role: "developer" } })).summary).toBe("Signed in with a company account, as developer")
     expect(auditWords(row({ detail: { method: "password", count: 4 } }))).toEqual({ summary: "Signed in with the shared password", note: "4 times", tone: "neutral" })
-    expect(auditWords(row({ detail: { method: "guest" } })).summary).toBe("Signed in with a guest password")
+    expect(auditWords(row({ actor: "eve@elsewhere.test", detail: { method: "password-access" } })).summary).toBe("Signed in with password access")
+    // A guest's sign-in, written before the access registry, reads the same.
+    expect(auditWords(row({ detail: { method: "guest" } })).summary).toBe("Signed in with password access")
+    expect(auditWords(row({ detail: { method: "something-new" } })).summary).toBe("Signed in")
     expect(auditWords(row({ action: "portal.signin_failed", detail: { method: "oidc", reason: "not-shared" } }))).toEqual({ summary: "Sign-in refused", note: "site not shared with them", tone: "attention" })
     expect(auditWords(row({ action: "portal.signin_failed", detail: { method: "password" } })).note).toBe("wrong password")
     expect(auditWords(row({ action: "portal.signin_failed", detail: { method: "oidc", reason: "constructor" } })).note).toBe("constructor")
@@ -168,6 +171,37 @@ describe("a row in words", () => {
     expect(steward("service.restart", { result: "failure", note: "looping" })).toEqual({ summary: "Tried to restart", note: "Failed: crash loop", tone: "error" })
     expect(steward("door.update", { result: "ok", note: "on, ok" })).toEqual({ summary: "Turned on the portal", note: null, tone: "neutral" })
     expect(steward("door.update", { result: "failure", note: "off, failure" })).toEqual({ summary: "Tried to turn off the portal", note: "Failed", tone: "error" })
+  })
+
+  test("the steward's access registry: given, changed, taken away, carried over, and who may create projects", () => {
+    const steward = (action: string, detail: Record<string, unknown>, actor = "owner") => auditWords(row({ source: "steward", actor, action, target: "kanban", site: "kanban", detail }))
+    expect(steward("access.add", { result: "ok", note: "alice@acme.test: Developer", member: "alice@acme.test" })).toEqual({ summary: "Gave access", note: "alice@acme.test: Developer", tone: "neutral" })
+    expect(steward("access.add", { result: "ok", note: "eve@elsewhere.test: Can open, password access until 2026-10-14" })).toMatchObject({ summary: "Gave access", note: expect.stringContaining("password access") })
+    expect(steward("access.add", { result: "rejects", note: "bob@acme.test may give at most Developer on kanban" }, "bob@acme.test")).toEqual({
+      summary: "Tried to give someone access",
+      note: "bob@acme.test may give at most Developer on kanban",
+      tone: "attention",
+    })
+    expect(steward("access.change", { result: "ok", note: "alice@acme.test: Developer -> Viewer" })).toEqual({ summary: "Changed someone's role", note: "alice@acme.test: Developer -> Viewer", tone: "neutral" })
+    expect(steward("access.remove", { result: "ok", note: "@acme.test: was Can open" }, "token:aaaaaaaaaaaa")).toEqual({ summary: "Took access away", note: "@acme.test: was Can open", tone: "neutral" })
+    expect(steward("access.remove", { result: "rejects", note: "a token removes Can open entries alone" }, "token:aaaaaaaaaaaa")).toMatchObject({ summary: "Tried to take someone's access away", tone: "attention" })
+    expect(steward("access.migrate", { result: "ok", note: "4 entries, 1 password access" }, "system")).toEqual({
+      summary: "Carried the people with access over to the steward's registry",
+      note: "4 entries, 1 password access",
+      tone: "neutral",
+    })
+    expect(steward("people.create", { result: "ok", note: "carol@acme.test may create projects" })).toEqual({ summary: "Changed who may create projects", note: "carol@acme.test may create projects", tone: "neutral" })
+  })
+
+  test("the dashboard's sign-ins with a company account, and the reason of a refusal", () => {
+    const signin = (action: string, detail: Record<string, unknown> = { result: "ok" }) => auditWords(row({ source: "steward", actor: "alice@acme.test", action, target: null, site: null, detail }))
+    expect(signin("dashboard.signin", { result: "ok", note: "kanban: Developer" })).toEqual({ summary: "Signed in to the dashboard with a company account", note: null, tone: "neutral" })
+    expect(signin("dashboard.signout")).toEqual({ summary: "Signed out of the dashboard", note: null, tone: "neutral" })
+    expect(signin("dashboard.signin_failed", { result: "rejects", note: "not-a-member" })).toEqual({ summary: "Dashboard sign-in refused", note: "no role on the dashboard", tone: "attention" })
+    expect(signin("dashboard.signin_failed", { result: "rejects", note: "no-role" }).note).toBe("no role on the dashboard")
+    expect(signin("dashboard.signin_failed", { result: "rejects", note: "replayed-assertion" }).note).toBe("sign-in already used")
+    // A reason this page does not know is shown as it is, never a prototype's.
+    expect(signin("dashboard.signin_failed", { result: "rejects", note: "constructor" }).note).toBe("constructor")
   })
 
   test("an action this page does not know is shown as it is", () => {

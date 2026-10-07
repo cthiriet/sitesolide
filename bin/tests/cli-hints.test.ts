@@ -101,7 +101,7 @@ describe("the hints", () => {
   });
 
   test("a refusal through the API is answered by its code, and never with --force", () => {
-    expect(hintForFailure("no-dry-run", "deploy --dry-run is not available with a team token: nothing was sent")).toContain("without --dry-run");
+    expect(hintForFailure("no-dry-run", "deploy --dry-run is not available with a token: nothing was sent")).toContain("without --dry-run");
     expect(hintForFailure("secret-missing", "/etc/sitesolide/shop.env missing")).toContain("never put secret values in the repository");
     // A code the table lacks falls back to what the message says.
     expect(hintForFailure("brand-new", "build failed: bun run build")).toBe(hintFor("build failed: bun run build"));
@@ -114,15 +114,27 @@ describe("the hints", () => {
     }
   });
 
-  test("every refusal of share has its code's hint, whichever way it runs, and so has every code the API's sharing answers", () => {
-    const source = readFileSync(join(import.meta.dir, "..", "cli", "sharing.ts"), "utf8");
+  test("every refusal of share and people has its code's hint, whichever way they run, and so has every code the API's access answers", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "cli", "access.ts"), "utf8");
     const codes = new Set([...source.matchAll(/error: "([a-z-]+)"/g)].map((match) => match[1]!));
     // Enough to be sure the scan reads the file.
-    expect(codes.size).toBeGreaterThan(6);
-    // What dashboard/src/control/api.ts answers on /api/v1/projects/<slug>/sharing, before and after the portal.
-    for (const code of ["unauthenticated", "too-many-attempts", "not-found", "invalid", "too-large", "out-of-scope", "no-portal", "not-available", "failure", "unreachable", "unreadable"]) codes.add(code);
+    expect(codes.size).toBeGreaterThan(5);
+    for (const code of ["usage", "invalid", "unknown-option", "ssh-failed", "steward-outdated", "failure"]) expect(codes.has(code)).toBe(true);
+    // What the steward refuses a change with, carried as it stands over the owner's SSH (dashboard/src/access/rules.ts).
+    for (const code of ["invalid", "out-of-scope", "not-found", "locked"]) codes.add(code);
+    // What dashboard/src/control/api.ts answers on /api/v1/projects/<slug>/access, and what the CLI says of an old dashboard.
+    for (const code of ["unauthenticated", "too-many-attempts", "not-found", "invalid", "too-large", "out-of-scope", "not-available", "failure", "unreachable", "unreadable"]) codes.add(code);
     expect([...codes].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
-    expect(hintForFailure("no-portal", "kanban is not behind the portal")).toContain("Access section");
+    expect(hintForFailure("steward-outdated", "the steward on the server has no owner's socket")).toContain("sitesolide upgrade");
+    expect(hintForFailure("locked", "giving Admin needs the dashboard's unlock")).toContain("unlock");
+  });
+
+  test("the codes of what is gone have no hint left: members and the portal's own sharing", () => {
+    for (const code of ["not-a-member", "portal-unreachable"]) expect(Object.hasOwn(REMOTE_HINTS, code)).toBe(false);
+    for (const hint of Object.values(REMOTE_HINTS)) {
+      expect(hint).not.toContain("sitesolide members");
+      expect(hint).not.toMatch(/\bsharing\b/);
+    }
   });
 
   test("a refusal nobody foresaw gets the default, which forbids the workarounds", () => {

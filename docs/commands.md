@@ -1,7 +1,7 @@
 # Commands
 
 Every command runs from a project's folder, the one holding its
-`sitesolide.json`, except `setup`, `upgrade`, `init`, `machine`, `members`,
+`sitesolide.json`, except `setup`, `upgrade`, `init`, `machine`, `people`,
 `help` and `--version`. This is what `sitesolide --help` prints.
 
 ```text
@@ -36,18 +36,14 @@ sitesolide status               what the server actually runs
 sitesolide logs [--follow]      journalctl for this project
    --lines <n>                  how many lines back, 50 by default
 sitesolide backups              this project's data snapshots, read only
-sitesolide share                who may open this project with their work account, and the line to send
-   <email>...                   share it with these people
-   --domain <domain>            with everyone at this domain
-   --remove <email|domain>      take a person or a domain off
-   --only-admins                back to the admins alone
-sitesolide members              who signs in to the dashboard with a work account, on which projects
-   add <email> --project <slug> --role <viewer|developer|admin>
-                                invite them, or set their role; repeat --project and --role
-   add <email> --may-create     let them create projects, with a token of their own
-   remove <email> [--project <slug>]
-                                take them off, signed out, their tokens revoked, or take projects off them
-   remove <email> --may-create  take the right to create projects back
+sitesolide share                this project's general access and people with access
+   <email|@domain>...           give them access, Can open by default
+   --role <role>                visitor (Can open), viewer, developer or admin
+   --expires <24h|7d|30d|never> for password access, 7d by default
+   --remove <email|@domain>...  take their access away, from their next request
+sitesolide people               everyone with access, their roles, who may create projects
+   <email> --may-create         let them create projects, Admin of what they create
+   <email> --no-create          take that right back
 sitesolide lock   [--dry-run]   close the preview behind a code, or show it
    --status                     wanted / installed / measured, without touching
    --new-code                   replace the code in force by a fresh one
@@ -61,7 +57,7 @@ sitesolide remove --confirm <slug>
 sitesolide run -- <command>     load the secret from the vault and run
 sitesolide mcp                  serve these commands to an agent, over MCP on stdio
 sitesolide login --url <https://dashboard.zone>
-                                a team member: keep a token, deploy without SSH; a member's own too
+                                a person with a token: deploy without SSH
    --token-stdin                read the token from standard input
 sitesolide machine create|list|destroy --provider hetzner
                                 a VM ordered by API, before setup: sitesolide machine lists the options
@@ -128,103 +124,133 @@ right after a successful one finds everything up to date and changes nothing.
 It never reads nor rotates a secret, and never touches Caddy but through
 `bin/deploy-caddy.sh` and `systemctl`. See [upgrading.md](upgrading.md).
 
-## Sharing a project
+## Access to a project
 
-A project behind the portal opens to the admins alone until it is shared:
-the owner's password, the admin emails, and guests with a password. `sitesolide
-share`, in its folder, shares it the way a Google Doc is shared, with people by
-their work email or with everyone at a domain, once the portal lets people sign
-in with a company account ([portal/README.md](../portal/README.md#signing-in-with-a-work-account)).
-
-```console
-$ sitesolide share alice@acme.com bob@acme.com
--> sharing of notes, https://notes.example.com/, over SSH, as the owner
--> replace the policy: the admins alone -> the people listed, and the admins
-   who gets in: the people listed, and the admins
-   people: alice@acme.com, bob@acme.com
-   the admins: the owner's password, the admin emails, and guests with a password
-   send: Open https://notes.example.com/ and sign in with your Google work account.
-   holds from their next request; the portal records the change in its audit
-```
-
-With no argument it shows who gets in and the line to send. Adding people to a
-site open to the admins alone switches it to those people; `--domain` opens it
-to everyone at the domain, subdomains not included; `--remove` takes a person
-or a domain off; `--only-admins` closes it back. The portal keeps both lists
-whatever the mode, as the dashboard's *Sharing* section does: someone shared
-with earlier is let in again by a switch back, and the command says who before
-it changes anything. A change holds from the next request, and the portal
-records it in its audit.
-
-Two things are never done here: making a site public, which is turning its
-portal off, from the dashboard's *Access* section; and guest passwords, from
-its *Guests* section, which shows a password once.
-
-The owner's `share` runs over SSH: root on the machine asks the portal's admin
-API on the loopback, after reading there that the site's manifest asks for the
-portal and that its block carries it. It touches nothing else, Caddy least of
-all. With a team token, it goes through the dashboard and the steward, which
-may refuse a domain, and hands it to the portal as root, the token named as
-the actor: see [team.md](team.md#sharing-what-you-deployed).
-
-## The dashboard's members
-
-People who sign in to the dashboard itself with their work account, through
-the portal's identity provider, and see only the projects the owner gives
-them a role on: Viewer (the project's state, audience and activity),
-Developer (also restarts its service, and sets its secrets without ever
-reading one back) and Project admin (everything of the project: its secrets,
-its portal door, sharing, guests, backups, and giving people a role on it, at
-most their own). They never get a password or root; they mint tokens of their
-own on the dashboard's *Team* page, never stronger than their roles, see
-[team.md](team.md#a-members-own-tokens). `sitesolide members` is the owner's
-way to manage them, from any folder, over SSH; the dashboard's *Members* page
-is the other, and a Project admin has their project's own, see
-[team.md](team.md#members-beside-tokens).
+Who may open a project, and who may do what on it, is one list per project,
+its people with access, which the steward keeps: each entry an email or a
+whole domain, `@acme.com`, with a role, Can open (`visitor`), Viewer,
+Developer or Admin, each including the ones before it.
+[team.md](team.md#people-with-access-beside-tokens) says what each role does.
+`sitesolide share`, in the project's folder, reads the list and changes it;
+the dashboard's *Access* section is the other way.
 
 ```console
-$ sitesolide members add alice@acme.com --project notes --role developer --project shop --role viewer
--> members of https://dashboard.example.com, over SSH, as the owner
--> alice@acme.com invited: notes: developer, shop: viewer
-   send: Open https://dashboard.example.com and sign in with your Google work account.
+$ sitesolide share
+-> access to notes, https://notes.example.com/, over SSH, as the owner
+   general access: Restricted: only the people with access open it
+   people with access:
+     alice@acme.com      Developer
+     @acme.com           Can open
+     client@example.org  Can open, password access until 2026-11-07 09:00 UTC
+   also open it when restricted: the owner's password, and the admin emails (OIDC_ADMIN_EMAILS)
+   send: Open https://notes.example.com/ and sign in with your Google account.
 
-$ sitesolide members
--> members of https://dashboard.example.com, over SSH, as the owner
-   alice@acme.com  notes: developer, shop: viewer
-   send: Open https://dashboard.example.com and sign in with your Google work account.
+$ sitesolide share bob@acme.com carol@acme.com --role developer
+-> access to notes, https://notes.example.com/, over SSH, as the owner
+-> bob@acme.com: Developer on notes
+-> carol@acme.com: Developer on notes
+   ...
+   send: Open https://notes.example.com/ and sign in with your Google account.
 
-$ sitesolide members add alice@acme.com --may-create
--> members of https://dashboard.example.com, over SSH, as the owner
--> alice@acme.com: notes: developer, shop: viewer; may create projects
+$ sitesolide share dana@example.net --expires 30d
+-> access to notes, https://notes.example.com/, over SSH, as the owner
+-> dana@example.net: Can open, password access until 2026-11-07 09:00 UTC on notes
+   password for dana@example.net: Xith-G4r4-nRJs-uDMV
+   shown once: send it to them yourself, with the address; the machine keeps only its hash
+   ...
 
-$ sitesolide members remove alice@acme.com
--> members of https://dashboard.example.com, over SSH, as the owner
--> alice@acme.com removed: signed out of the dashboard, their tokens revoked, refused at their next request
+$ sitesolide share --remove @acme.com
+-> access to notes, https://notes.example.com/, over SSH, as the owner
+-> @acme.com no longer has access to notes: refused from their next request
+   ...
 ```
 
-Each `--project` takes the `--role` that follows it. `add` on someone already
-a member sets the roles named and keeps their others; `remove --project`
-takes those projects off them and keeps the rest. No email is sent: the
-command prints the line to send.
+With no argument it shows the project's general access, its people with
+access, each with their role and password access with its expiry, who else
+opens it when it is restricted, and the line to send. Emails and `@domain`s
+are given access, Can open unless `--role` names another; someone already on
+the list gets the role named, raised or lowered, and someone who has it
+already is left as they are. A domain is Can open only, and only once signing
+in with a company account is set up. Someone outside the company's domains, or
+anyone when that is not set up, is Can open only, with **password access**:
+the machine draws a password for them, which the command prints once, and the
+access lasts what `--expires` says, 7 days by default. `--remove` takes access
+away, from the person's next request. Several people are handled one by one:
+a refusal stops before the next, and says who was already given access.
 
-`--may-create` grants the right to create projects, beside projects or alone,
-someone new included (an invitation with neither a project nor the right is
-refused); `remove <email> --may-create` takes it back and leaves
-their roles. A member who holds it mints a token that may create projects,
-and becomes Project admin of each project it creates. Without the option,
-`add` and `remove --project` leave the right as it stands.
+Nothing is sent to anyone: the command prints the line to send, and a
+password once. Two things are never done here: general access, Public or
+Restricted, from the dashboard's *Access* section, and the preview code,
+`sitesolide lock`. `--domain` and `--only-admins`, from before, are refused
+with a pointer: a domain is written `@acme.com`.
 
-Root on the machine asks the steward, on its owner socket
-(`/run/sitesolide-steward-owner/owner.sock`), which only root opens, the body
-on standard input. The steward decides: an address outside the portal's
-`OIDC_ALLOWED_DOMAINS` is refused, as the portal would refuse it at sign-in, a
-role only goes on a deployed project and never on the platform's own, and the
-change goes into its journal under `owner`. A member removed is out at once:
-their next request reads as no session, their next write is refused, and
-every token of theirs is revoked and refused. With
-a team token, the command is refused before anything is sent: it is the
-owner's. See [team.md](team.md#members-beside-tokens) for what a member sees,
-and [dashboard/README.md](../dashboard/README.md#members) for the machine's
+With `--json`, the `result` carries `slug`, `url`, `general` (`public`,
+`restricted`, `code`, or null for a project not deployed), `entries`, `signIn`
+(`configured`, `allowedDomains`), `message` (the line to send, null until
+signing in with a company account is set up), `changed`, and after a change
+`changes`, each `{ who, change, role }`, `change` being `add`, `role`, `none`
+or `remove`, and `password` for password access just given:
+
+```console
+$ sitesolide share dana@example.net --json
+...
+{"type":"result","ok":true,"command":"share","slug":"notes","url":"https://notes.example.com/","general":"restricted","entries":[...,{"who":"dana@example.net","kind":"password","role":"visitor","by":"owner","createdAt":1791450000000,"updatedAt":1791450000000,"password":{"expiresAt":1792054800000,"expired":false}}],"signIn":{"configured":true,"allowedDomains":["acme.com"]},"message":"Open https://notes.example.com/ and sign in with your Google account.","changed":true,"changes":[{"who":"dana@example.net","change":"add","role":"visitor","password":"Xith-G4r4-nRJs-uDMV"}]}
+```
+
+The owner's `share` runs over SSH: root on the machine asks the steward on
+its owner socket, `/run/sitesolide-steward-owner/owner.sock`, which only root
+opens, the body on standard input so that no address goes through a shell.
+The steward judges the change by its access rules, writes the portal's
+projection and its registry, and records it in its journal under `owner`.
+Root is the owner: no unlock is asked. It touches nothing else, Caddy least of
+all. With a token, the command goes through the dashboard to the steward, and
+gives Can open alone: see [team.md](team.md#giving-access-to-what-you-deployed).
+While the portal on the machine still decides from its own tables, halfway
+through an upgrade, the command warns of it: `sitesolide upgrade` deploys the
+portal that reads the registry.
+
+## People
+
+Everyone with access, machine-wide, for the owner, from any folder: their
+roles per project, their password access, who may create projects, the admin
+emails (`OIDC_ADMIN_EMAILS`, which open every restricted site) and the
+domains. The dashboard's *People* page is the other way. Roles are given per
+project, with `sitesolide share`; `people` grants the right to create
+projects.
+
+```console
+$ sitesolide people
+-> people of https://dashboard.example.com, over SSH, as the owner
+   alice@acme.com      notes: Developer, shop: Viewer
+   client@example.org  notes: Can open, password access until 2026-11-07 09:00 UTC
+   you@acme.com        no project; admin email, opens every restricted site
+   domains, Can open: notes: @acme.com
+   the company's domains: acme.com; anyone else gets password access
+
+$ sitesolide people alice@acme.com --may-create
+-> people of https://dashboard.example.com, over SSH, as the owner
+-> alice@acme.com may create projects, Admin of each one they create: open https://dashboard.example.com and sign in with their company account
+   alice@acme.com  notes: Developer, shop: Viewer; may create projects
+```
+
+`--may-create` grants the right to create projects to someone who signs in
+with a company account, whatever their roles, none included: they sign in to
+the dashboard, mint a token that may create projects, and become Admin of each
+project it creates. `--no-create` takes it back and leaves their roles;
+someone then left with no role above Can open no longer signs in to the
+dashboard, their sessions closed and their tokens revoked.
+
+With `--json`, the listing's `result` carries `people` (each `who`, `roles` by
+project, `create`, `passwords`, each `slug`, `expiresAt`, `expired`, and
+`admin`), `domains` (each `slug`, `domain`), `signIn` and `changed: false`;
+`--may-create` and `--no-create`, `email`, `create`, `roles`, `change`
+(`create` or `none`) and `changed`.
+
+Root on the machine asks the steward on its owner socket, as for `share`, and
+the steward records the change in its journal under `owner`. With a token, the
+command is refused before anything is sent: it is the owner's. See
+[team.md](team.md#people-with-access-beside-tokens) for what each person sees,
+and [dashboard/README.md](../dashboard/README.md#access) for the machine's
 side.
 
 ## A folder without a manifest
@@ -276,15 +302,15 @@ root@<ipv4> --zone <your zone> --email <you>`, once port 22 answers.
 
 `--json` prints one JSON event per line on standard output, nothing else, and
 ends with a `result` or an `error` carrying a `hint`. `sitesolide mcp` serves
-`detect`, `deploy`, `status`, `logs`, `share` (and `sharing`, its read alone)
+`detect`, `deploy`, `status`, `logs`, `share` (and `access`, its read alone)
 and `lock --status` as tools to an MCP client; `setup` and `upgrade`, which
 change the machine itself, are not tools. Both are described in
 [agents.md](agents.md).
 
-## With a team token
+## With a token
 
-A workstation with no `server`, but the dashboard's address and a token, is a
-team member's: it never touches SSH. See [team.md](team.md).
+A workstation with no `server`, but the dashboard's address and a token, never
+touches SSH: someone's own, or an agent's. See [team.md](team.md).
 
 ```text
 sitesolide login --url <https://dashboard.zone>   keep the token, check it
@@ -293,11 +319,9 @@ sitesolide deploy                                 build here, upload, follow the
 sitesolide status                                 the projects this token may deploy
 sitesolide logs [--follow]                        the journal of this folder's project
    --lines <n>                                    how many lines back, 50 by default, 500 at most
-sitesolide share                                  who may open this folder's project, and the line to send
-   <email>...                                     share it with these people
-   --domain <domain>                              with everyone at a domain the portal admits
-   --remove <email|domain>                        take a person or a domain off
-   --only-admins                                  back to the admins alone
+sitesolide share                                  this folder's project's general access and people with access
+   <email|@domain>...                             give them Can open: people inside the company's domains, or one of them
+   --remove <email|@domain>...                    take their Can open away
 
 --json, on every one of them: one JSON event per line, see docs/agents.md
 SITESOLIDE_API and SITESOLIDE_TOKEN in the environment win over the files.
@@ -306,9 +330,10 @@ SITESOLIDE_API and SITESOLIDE_TOKEN in the environment win over the files.
 `login` keeps the token in `~/.config/sitesolide/secrets/team-token`, 0600, and
 the address in `config.json` under `api`. `SITESOLIDE_API` and
 `SITESOLIDE_TOKEN` in the environment win over both, for an agent's sandbox.
-A token a member minted for themselves says so: `login` and `status` print
-whose roles bound it, and what it may do is the steward's reading of those
-roles at that moment.
+A person's own token says so: `login` and `status` print whose roles bound
+it, and what it may do is the steward's reading of those roles at that
+moment. `share` gives Can open alone, and never password access, see
+[team.md](team.md#giving-access-to-what-you-deployed).
 
 `deploy` sends the manifest first, so that a refusal arrives before the build,
 then a gzip-compressed tar holding `app/` and `public/`, exactly what rsync
@@ -323,7 +348,7 @@ not carry, and the control API has no route that judges without deploying.
 
 The other commands need the owner's SSH access and say so. The owner, whose
 configuration has a `server`, keeps SSH for every command; `--api` makes one
-go through the dashboard instead, to see what a team member sees.
+go through the dashboard instead, to see what a token's holder sees.
 
 `sitesolide backups` lists the snapshots the machine keeps of the project's
 data folder, on the server and in the bucket, and its last run. It reads and
@@ -370,8 +395,8 @@ bin/deploy-gatekeeper.sh            # bin/cli/fragment.ts
 bin/deploy-installer.sh             # src/installer/, policy.ts, bin/cli/
 ```
 
-Each script checks what it installs. Then the dashboard's *Access* page should
-toggle a test site's portal as before.
+Each script checks what it installs. Then the dashboard's *Access* section
+should switch a test site between Public and Restricted as before.
 
 **3. The Caddyfile**, whose landing, wildcard and customer-domain blocks now hide
 `.git` and `.env*`:

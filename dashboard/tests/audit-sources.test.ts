@@ -17,7 +17,7 @@ import { latest, page, RETURNED_ENTRIES } from "../src/secrets/log";
 import type { LogEntry } from "../src/secrets/protocol";
 import { aggregate } from "../src/audit/aggregate";
 import { readQuery, siteResolver } from "../src/audit/merge";
-import { localSharing } from "../src/sharing";
+import { localPortalAudit } from "../src/portal-audit";
 import type { Raw } from "../src/state";
 
 /**
@@ -358,7 +358,7 @@ describe("GET /api/audit, against a portal, an egress proxy and a steward that r
     session: signedIn,
     readers: createReaders({
       store: control,
-      portal: localSharing(`http://127.0.0.1:${portal.port}`),
+      portal: localPortalAudit(`http://127.0.0.1:${portal.port}`),
       // Nothing listens there: the proxy is not installed, as the steward says.
       egress: localEgress("http://127.0.0.1:9", 1_000),
       steward: localSteward(socket),

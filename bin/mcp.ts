@@ -184,40 +184,39 @@ export const TOOLS: ToolDefinition[] = [
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
   {
-    name: "sharing",
+    name: "access",
     title: "Who may open a project",
     description:
-      "Who may open a deployed project behind the portal with their work account: the mode (the admins alone, a list of people, or everyone at a domain), the people and domains listed, " +
-      "and the message to send to the people it is shared with. Read-only. Sharing gives real people access to the app and to the data it holds: " +
-      "read it before and after share, and show the user who has access.",
+      "A deployed project's general access (Public, Restricted to the people with access, or Anyone with the code) and its people with access, each with their role: " +
+      "Can open (visitor), Viewer, Developer or Admin, people by email, whole domains as @acme.com, password access with its expiry. Read-only. " +
+      "Access gives real people the app and the data it holds: read it before and after share, and show the user who has access.",
     inputSchema: { type: "object", properties: { folder: FOLDER }, required: ["folder"], additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
   {
     name: "share",
-    title: "Share a project",
+    title: "Give or take away access to a project",
     description:
-      "Share a deployed project behind the portal with people, by their work email, or with everyone at a domain, the way a Google Doc is shared. " +
-      "THIS GIVES REAL PEOPLE ACCESS to the app and to the data it holds or shows, from their next request: ask the user before every call, naming the exact addresses and domains, " +
-      "and never add anyone the user did not name. remove takes people or domains off; only_admins closes it back to the admins alone, the lists kept for later. " +
-      "Adding people to a site open to the admins alone also lets back in anyone kept from an earlier sharing: the result says who, as a warning. " +
-      "With a team token, a domain is accepted only among those the portal admits at sign-in. Never public: turning the portal off stays the owner's, from the dashboard. " +
-      "On success the result carries the policy in effect and the message to send to the people added.",
+      "Give people access to a deployed project, by email, or everyone at a domain written @acme.com, with a role: visitor (Can open, the default), viewer, developer or admin; " +
+      "or take access away with remove. THIS GIVES REAL PEOPLE ACCESS to the app and to the data it holds or shows, from their next request: ask the user before every call, " +
+      "naming the exact addresses, domains and role, and never add anyone the user did not name. A person outside the company's domains gets password access, Can open only: " +
+      "the result carries the password once, which the user sends them. With a team token, only Can open, only people inside the company's domains or one of those domains. " +
+      "General access, public or restricted, stays the dashboard's. On success the result carries the people with access and the message to send.",
     inputSchema: {
       type: "object",
       properties: {
         folder: FOLDER,
-        people: { type: "array", items: { type: "string" }, description: "Work email addresses to share it with, exactly as the user gave them." },
-        domain: { type: "string", description: "A domain, like acme.com: everyone whose work email is at it gets in. Subdomains are not included." },
-        remove: { type: "array", items: { type: "string" }, description: "Email addresses or domains to take off." },
-        only_admins: { type: "boolean", description: "Back to the admins alone: the owner's password, the admin emails and guests with a password. Default false.", default: false },
+        who: { type: "array", items: { type: "string" }, description: "Email addresses, or domains written @acme.com, exactly as the user gave them." },
+        role: { type: "string", enum: ["visitor", "viewer", "developer", "admin"], description: "The role to give: visitor (Can open) by default.", default: "visitor" },
+        expires: { type: "string", enum: ["24h", "7d", "30d", "never"], description: "How long password access lasts. Default 7d.", default: "7d" },
+        remove: { type: "array", items: { type: "string" }, description: "Email addresses or @domains whose access to take away." },
       },
       required: ["folder"],
       additionalProperties: false,
     },
     // Destructive: taking people off is a change of its own, and a client
     // should ask before either. Idempotent: the same call twice changes
-    // nothing the second time.
+    // nothing the second time, a password access excepted, which is given once.
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   },
   {
@@ -274,32 +273,29 @@ export function planCall(name: string, args: Record<string, unknown>, cwd = proc
     }
     case "status":
       return { argv: ["status"], cwd: folder };
-    case "sharing":
+    case "access":
       return { argv: ["share"], cwd: folder };
     case "share": {
       const list = (key: string): string[] | string => {
         const value = args[key] ?? [];
         // A leading dash would read as an option of the command, never as an address.
         if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry === "" || entry.startsWith("-") || entry.length > 254)) {
-          return `${key}: a list of ${key === "people" ? "email addresses" : "email addresses or domains"}`;
+          return `${key}: a list of email addresses or @domains`;
         }
         return value as string[];
       };
-      const people = list("people");
+      const who = list("who");
       const remove = list("remove");
-      const onlyAdmins = flag("only_admins");
-      if (typeof people === "string") return { error: people };
+      if (typeof who === "string") return { error: who };
       if (typeof remove === "string") return { error: remove };
-      if (typeof onlyAdmins === "string") return { error: onlyAdmins };
-      const domain = args.domain;
-      if (domain !== undefined && (typeof domain !== "string" || domain === "" || domain.startsWith("-") || domain.length > 253)) return { error: "domain: a domain, like acme.com" };
-      if (people.length === 0 && remove.length === 0 && domain === undefined && !onlyAdmins) {
-        return { error: "share: give people, domain, remove or only_admins; call sharing to read who may open it" };
-      }
-      return {
-        argv: ["share", ...people, ...(domain === undefined ? [] : ["--domain", domain as string]), ...remove.flatMap((entry) => ["--remove", entry]), ...(onlyAdmins ? ["--only-admins"] : [])],
-        cwd: folder,
-      };
+      const role = args.role ?? "visitor";
+      if (role !== "visitor" && role !== "viewer" && role !== "developer" && role !== "admin") return { error: "role: visitor, viewer, developer or admin" };
+      const expires = args.expires;
+      if (expires !== undefined && expires !== "24h" && expires !== "7d" && expires !== "30d" && expires !== "never") return { error: "expires: 24h, 7d, 30d or never" };
+      if (who.length > 0 && remove.length > 0) return { error: "share: give access or take it away, one call each" };
+      if (who.length === 0 && remove.length === 0) return { error: "share: give who or remove; call access to read who may open it" };
+      if (remove.length > 0) return { argv: ["share", "--remove", ...remove], cwd: folder };
+      return { argv: ["share", ...who, "--role", role, ...(expires === undefined ? [] : ["--expires", expires as string])], cwd: folder };
     }
     case "logs": {
       const lines = args.lines ?? 50;

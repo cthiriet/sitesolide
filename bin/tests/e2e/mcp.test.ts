@@ -86,7 +86,7 @@ describe("sitesolide mcp over stdio", () => {
     mcp.send({ jsonrpc: "2.0", method: "notifications/initialized" });
     mcp.send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const list = await mcp.answer(2);
-    expect(list.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["detect", "deploy", "status", "logs", "sharing", "share", "lock_status"]);
+    expect(list.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["detect", "deploy", "status", "logs", "access", "share", "lock_status"]);
 
     mcp.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "detect", arguments: { folder: join(TESTS_ROOT, "..", "infer", "bun-app") } } });
     const detected = await mcp.answer(3);
@@ -141,6 +141,32 @@ describe("sitesolide mcp over stdio", () => {
     expect(events.some((event) => event.type === "planned")).toBe(true);
     // Only reads reached the machine.
     expect(vm!.logs().every((line) => line.startsWith("READ ") || line.startsWith("UNITS "))).toBe(true);
+    expect(await mcp.close()).toBe(0);
+  });
+
+  test("access and share against the fake machine: a read of the steward, then a change it refuses, nothing written", async () => {
+    const mcp = start();
+    vm!.setAccess({ projects: { "sample-bun": { general: "restricted", entries: [] } } });
+    const folder = join(TESTS_ROOT, "projects", "bun-mixed");
+    mcp.send({ jsonrpc: "2.0", id: "a", method: "tools/call", params: { _meta: META, name: "access", arguments: { folder } } });
+    const read = await mcp.answer("a");
+    expect(read.result.isError).toBe(false);
+    expect(read.result.structuredContent.result).toMatchObject({ command: "share", slug: "sample-bun", general: "restricted", entries: [], changed: false });
+    expect(vm!.logs()).toEqual(["ACCESS GET sample-bun"]);
+
+    // The fake machine accepts no write: the change is refused, a tool error with its hint.
+    mcp.send({ jsonrpc: "2.0", id: "s", method: "tools/call", params: { _meta: META, name: "share", arguments: { folder, who: ["alice@acme.test"], role: "viewer" } } });
+    const refused = await mcp.answer("s");
+    expect(refused.result.isError).toBe(true);
+    expect(refused.result.structuredContent.error.message).toBe("cannot reach the server over SSH: nothing was changed");
+    expect(refused.result.structuredContent.error.hint).toContain("ssh <server> true");
+    expect(vm!.access().projects["sample-bun"]!.entries).toEqual([]);
+
+    // Giving and taking away in one call is refused before anything runs.
+    mcp.send({ jsonrpc: "2.0", id: "m", method: "tools/call", params: { _meta: META, name: "share", arguments: { folder, who: ["a@acme.test"], remove: ["b@acme.test"] } } });
+    const mixed = await mcp.answer("m");
+    expect(JSON.stringify(mixed)).toContain("give access or take it away, one call each");
+    expect(vm!.logs().filter((line) => line.startsWith("ACCESS"))).toEqual(["ACCESS GET sample-bun", "ACCESS GET sample-bun"]);
     expect(await mcp.close()).toBe(0);
   });
 

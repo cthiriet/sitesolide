@@ -152,10 +152,10 @@ export type Door = { portal: boolean } | { refusal: string };
  * permission deploys private sites only, an existing public one included: a
  * stolen one publishes nothing. A member's token answers to the member's role
  * instead (src/members/tokens.ts): the door of an existing project was
- * decided by the owner or its Project admin, a deployment never changes it,
+ * decided by the owner or its Admin, a deployment never changes it,
  * and a Developer deploys the project as it stands, in the open if it is.
  * What opens a door, a new project in the open or paths exempted from the
- * portal, still takes the public permission, a Project admin's.
+ * portal, still takes the public permission, an Admin's.
  */
 export function decideDoor(manifest: Manifest, scope: Scope, onMachine: boolean | null, member = false): Door {
   const portal = onMachine ?? (scope.public ? isProtected(manifest) : true);

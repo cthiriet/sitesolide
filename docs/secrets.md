@@ -20,18 +20,19 @@ dashboard already knows the file belongs to the site.
 | Who | Their projects' files | The machine's own |
 |---|---|---|
 | The owner, with the dashboard's password | read, write, create, restore, change a password hash | the same: `dashboard.env`, `portal.env`, `dashboard-monitor.env` |
-| A Project admin, a member | read, write, create, restore | nothing |
-| A Developer, a member | write without reading back: set, replace or remove a variable, replace a file read whole, create a declared file. No value, no size, no previous version ever comes back to them | nothing |
-| A Viewer, a member | nothing: the Secrets section is not theirs | nothing |
+| An Admin of the project | read, write, create, restore | nothing |
+| A Developer of the project | write without reading back: set, replace or remove a variable, replace a file read whole, create a declared file. No value, no size, no previous version ever comes back to them | nothing |
+| A Viewer, or someone who can only open the site | nothing: the Secrets section is not theirs | nothing |
 
-The steward decides every one of these, as root, on its own registry of
-members: a request for a value from a Developer is refused before any file is
-opened, and a compromised dashboard, which relays it, cannot make it pass. No
-member ever changes a password hash, which takes the dashboard's own password,
-nor touches a file of the platform's projects. A member unlocks by signing in
-again with the identity provider, never with a password, for ten minutes: see
-[team.md](team.md#members-beside-tokens) and
-[dashboard/README.md](../dashboard/README.md#members).
+The steward decides every one of these, as root, on its own access registry:
+a request for a value from a Developer is refused before any file is opened,
+and a compromised dashboard, which relays it, cannot make it pass. Nobody but
+the owner ever changes a password hash, which takes the dashboard's own
+password, nor touches a file of the platform's projects. A Developer or an
+Admin unlocks by signing in again with the identity provider, never with a
+password, for ten minutes: see
+[team.md](team.md#people-with-access-beside-tokens) and
+[dashboard/README.md](../dashboard/README.md#access).
 
 ## Where a secret lands, and to whom it belongs
 
@@ -82,7 +83,7 @@ is listed as unmanaged, with the command that repairs it.
 
 **What belongs to no project is not the dashboard's**: `cloudflare.env`, the
 token Caddy reads for its certificates, lives in `/etc/caddy` and is changed on
-the machine. Nor is the key the dashboard's members sign in with: the steward
+the machine. Nor is the key people sign in to the dashboard with: the steward
 draws it and lays its private half in `/etc/sitesolide-portal/`, where only
 the portal's account reads it and the Secrets section never shows it, see
 [dashboard/README.md](../dashboard/README.md#the-key-pair).

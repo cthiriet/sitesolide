@@ -113,7 +113,7 @@ describe("reading a policy from the dashboard", () => {
   });
 });
 
-describe("who a policy lets in", () => {
+describe("who a policy from before the steward lets in", () => {
   test("admins: only the admin emails, as before sharing existed", () => {
     const only = policy({ mode: "admins", people: ["alice@acme.test"], domains: ["acme.test"] });
     expect(identityRole("owner@acme.test", only, ADMINS)).toBe("admin");

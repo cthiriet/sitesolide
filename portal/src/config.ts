@@ -8,8 +8,8 @@ import { join } from "node:path";
 export const PORT = Number(process.env.PORT ?? 3026);
 
 /**
- * The only location this service writes to: the cookie signing key and the
- * guest access database. Frozen at the first import, and that is why
+ * The only location this service writes to: the cookie signing key and its
+ * database, the audit. Frozen at the first import, and that is why
  * tests/setup.ts diverts it before anything loads this file.
  */
 export const DATA_DIR = process.env.DATA_DIR ?? join(import.meta.dir, "..", "data");
@@ -17,6 +17,13 @@ export const DATA_DIR = process.env.DATA_DIR ?? join(import.meta.dir, "..", "dat
 export const KEY_FILE = join(DATA_DIR, "key");
 
 export const DATABASE_FILE = join(DATA_DIR, "portal.db");
+
+/**
+ * Left once the portal has read the steward's access projection: from then
+ * on, a missing projection opens nothing, and the tables from before it are
+ * never read again (src/projection.ts).
+ */
+export const ACCESS_MARK_FILE = join(DATA_DIR, "access-from-steward");
 
 /**
  * In production, the portal only answers through Caddy, therefore on HTTPS:

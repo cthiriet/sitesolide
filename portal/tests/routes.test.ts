@@ -1,13 +1,13 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import type { PasswordGrant, Role } from "../src/access";
 import { DATA_DIR } from "../src/config";
-import type { Guest } from "../src/guests";
 import { deriveKey, issueToken, guestHash, issueIdentityToken } from "../src/gate";
 import { readSignOut } from "../src/handoff";
 import { readSettings } from "../src/oidc";
-import { createRoutes, type Options } from "../src/routes";
-import type { Policy } from "../src/sharing";
-import { memoryAudit, memorySharing, memoryStore } from "./memory";
+import { actorOf, createRoutes, type Options } from "../src/routes";
+import { accessFolder, grant, projection, site } from "./access-file";
+import { memoryAudit, memoryGuests, memorySharing } from "./memory";
 
 // The diversion of DATA_DIR is checked rather than assumed: without it, a test
 // would write the portal's key where the service looks for it.
@@ -19,10 +19,14 @@ const HOST = "kanban.test-zone.invalid";
 const OTHER = "roster.test-zone.invalid";
 const ORIGIN = `https://${HOST}`;
 const PASSWORD = "Xith-G4r4-nRJs-uDMV-KhsD-mzuK";
-const GUEST_PASSWORD = "Ab3d-Ef4h-Jk5m-Np6q";
+const ACCESS_PASSWORD = "Ab3d-Ef4h-Jk5m-Np6q";
 const KEY = deriveKey(new Uint8Array(32).fill(3), "$argon2id$sample")!;
 const DURATION = 30 * 24 * 3600;
 const START = 1_800_000_000_000;
+
+/** A steward that gave access to nobody, what every case without people of its own reads. */
+const NOBODY = accessFolder("routes-nobody");
+NOBODY.write(projection({}));
 
 let hash = "";
 beforeAll(async () => {
@@ -37,7 +41,7 @@ function routes(options: Partial<Options> = {}, clock = () => START) {
       verifyPassword: (submitted) => Bun.password.verify(submitted, hash),
       online: true,
       cookieDurationS: DURATION,
-      guests: memoryStore(),
+      access: NOBODY.reader(),
       ...options,
     },
     clock,
@@ -113,7 +117,7 @@ describe("/verifier", () => {
     expect(routes().verify(verification({ ...base, Origin: ORIGIN })).status).toBe(200);
   });
 
-  test("a well signed guest token with no access behind it does not get through", () => {
+  test("a well signed password access token with no access behind it does not get through", () => {
     const token = issueToken(KEY, HOST, 1_800_000_000 + 60, "AAAAAAAAAAAAAAAA");
     const response = routes().verify(verification({ "X-Portal-Hote": HOST, Cookie: `__Host-portal=${token}` }));
     expect(response.status).toBe(401);
@@ -194,62 +198,71 @@ describe("/_portal/connexion", () => {
   });
 });
 
-describe("a guest access", () => {
-  function withGuest(rest: Partial<Guest> = {}, clock = () => START) {
-    const guests = memoryStore();
-    const guest: Guest = {
-      id: "InViTeInViTe0001",
-      host: HOST,
-      label: "Alice",
-      createdAt: START,
-      expiresAt: null,
-      seenAt: null,
-      ...rest,
-    };
-    guests.create(guest, guestHash(GUEST_PASSWORD));
-    return { guests, r: routes({ guests }, clock) };
+describe("a password access", () => {
+  const ACCESS_ID = "PaSsWoRdAcCeSs01";
+
+  /** A steward that gave one password access, on HOST unless the test says otherwise. */
+  function withGrant(rest: Partial<PasswordGrant> = {}, clock = () => START, host = HOST) {
+    const access = accessFolder("routes-password");
+    const given = grant({ id: ACCESS_ID, hash: guestHash(ACCESS_PASSWORD), ...rest });
+    access.write(projection({ [host]: site(host.split(".")[0]!, { passwords: [given] }) }));
+    return { access, given, r: routes({ access: access.reader() }, clock) };
   }
 
   function visit(r: ReturnType<typeof routes>, cookie: string, host = HOST) {
     return r.verify(verification({ "X-Portal-Hote": host, Cookie: cookie }));
   }
 
-  test("its password opens its site, and it alone", async () => {
-    const { r } = withGuest();
-    const response = await r.signIn(signIn({ motdepasse: GUEST_PASSWORD, retour: "/list" }));
+  test("its password opens its site as visitor, and it alone", async () => {
+    const { r } = withGrant();
+    const response = await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD, retour: "/list" }));
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/list");
 
     const cookie = cookieOf(response);
     expect(cookie.split(".")).toHaveLength(3);
-    expect(visit(r, cookie).status).toBe(200);
+    const opened = visit(r, cookie);
+    expect(opened.status).toBe(200);
+    expect(Object.fromEntries(opened.headers)).toEqual({ "x-sitesolide-role": "visitor" });
     expect(visit(r, cookie, OTHER).status).toBe(401);
   });
 
   test("on another site, its password is worth nothing and counts as a failure", async () => {
-    const { r } = withGuest({ host: OTHER });
-    const response = await r.signIn(signIn({ motdepasse: GUEST_PASSWORD }));
+    const { r } = withGrant({}, () => START, OTHER);
+    const response = await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD }));
     expect(response.status).toBe(401);
     expect(response.headers.get("set-cookie")).toBeNull();
   });
 
-  test("revoking closes the gate from the next request on, cookie in hand", async () => {
-    const { guests, r } = withGuest();
-    const cookie = cookieOf(await r.signIn(signIn({ motdepasse: GUEST_PASSWORD })));
+  test("removed by the steward, it closes at the next request, cookie in hand", async () => {
+    const { access, r } = withGrant();
+    const cookie = cookieOf(await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD })));
     expect(visit(r, cookie).status).toBe(200);
 
-    guests.remove("InViTeInViTe0001");
+    access.write(projection({ [HOST]: site("kanban") }));
     const refused = visit(r, cookie);
     expect(refused.status).toBe(401);
     expect(await refused.text()).toInclude("This access is no longer valid.");
-    expect((await r.signIn(signIn({ motdepasse: GUEST_PASSWORD }))).status).toBe(401);
+    expect((await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD }))).status).toBe(401);
   });
 
-  test("at the deadline, the cookie falls with the access, and the password too", async () => {
+  test("its cookie is read again by its identifier: a new password under a new identifier opens, the old cookie does not", async () => {
+    const { access, given, r } = withGrant();
+    const cookie = cookieOf(await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD })));
+    const NEW_PASSWORD = "Qr7s-Tu8v-Wx9y-Za2b";
+    const drawnAgain = { ...given, id: "PaSsWoRdAcCeSs02", hash: guestHash(NEW_PASSWORD) };
+    access.write(projection({ [HOST]: site("kanban", { passwords: [drawnAgain] }) }));
+    expect(visit(r, cookie).status).toBe(401);
+    expect((await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD }))).status).toBe(401);
+    const renewed = cookieOf(await r.signIn(signIn({ motdepasse: NEW_PASSWORD })));
+    expect(visit(r, renewed).status).toBe(200);
+  });
+
+  test("at its expiry, the cookie falls with the access, and the password too", async () => {
     let now = START;
-    const { r } = withGuest({ expiresAt: START + 3_600_000 }, () => now);
-    const response = await r.signIn(signIn({ motdepasse: GUEST_PASSWORD }));
-    // The browser forgets it at the deadline, without waiting thirty days.
+    const { r } = withGrant({ expiresAt: START + 3_600_000 }, () => now);
+    const response = await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD }));
+    // The browser forgets it at the expiry, without waiting thirty days.
     expect(response.headers.get("set-cookie")).toInclude("Max-Age=3600;");
 
     const cookie = cookieOf(response);
@@ -257,37 +270,28 @@ describe("a guest access", () => {
     expect(visit(r, cookie).status).toBe(200);
     now = START + 3_600_000;
     expect(visit(r, cookie).status).toBe(401);
-    expect((await r.signIn(signIn({ motdepasse: GUEST_PASSWORD }))).status).toBe(401);
+    expect((await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD }))).status).toBe(401);
   });
 
-  test("without the owner's hash, a guest does not get in either", async () => {
-    const guests = memoryStore();
-    guests.create(
-      { id: "InViTeInViTe0001", host: HOST, label: "Alice", createdAt: START, expiresAt: null, seenAt: null },
-      guestHash(GUEST_PASSWORD),
-    );
-    const response = await routes({ key: null, guests }).signIn(signIn({ motdepasse: GUEST_PASSWORD }));
+  test("without the owner's hash, a password access does not get in either", async () => {
+    const { access } = withGrant();
+    const response = await routes({ key: null, access: access.reader() }).signIn(signIn({ motdepasse: ACCESS_PASSWORD }));
     expect(response.status).toBe(401);
   });
 
-  test("its last visit is noted, at most once a minute", async () => {
-    let now = START;
-    const { guests, r } = withGuest({}, () => now);
-    const cookie = cookieOf(await r.signIn(signIn({ motdepasse: GUEST_PASSWORD })));
-
-    visit(r, cookie);
-    expect(guests.byId("InViTeInViTe0001")?.seenAt).toBe(START);
-    now = START + 30_000;
-    visit(r, cookie);
-    expect(guests.byId("InViTeInViTe0001")?.seenAt).toBe(START);
-    now = START + 61_000;
-    visit(r, cookie);
-    expect(guests.byId("InViTeInViTe0001")?.seenAt).toBe(START + 61_000);
+  test("a projection the portal cannot believe closes it, never the owner", async () => {
+    const { access, r } = withGrant();
+    const cookie = cookieOf(await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD })));
+    const owner = cookieOf(await r.signIn(signIn({ motdepasse: PASSWORD })));
+    access.write("{ not json");
+    expect(visit(r, cookie).status).toBe(401);
+    expect(visit(r, owner).status).toBe(200);
+    expect((await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD }))).status).toBe(401);
   });
 
-  test("a POST coming from elsewhere is refused to the guest as to the owner", async () => {
-    const { r } = withGuest();
-    const cookie = cookieOf(await r.signIn(signIn({ motdepasse: GUEST_PASSWORD })));
+  test("a POST coming from elsewhere is refused to a password access as to the owner", async () => {
+    const { r } = withGrant();
+    const cookie = cookieOf(await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD })));
     const request = verification({
       "X-Portal-Hote": HOST,
       Cookie: cookie,
@@ -295,6 +299,16 @@ describe("a guest access", () => {
       Origin: "https://agency.test-zone.invalid",
     });
     expect(r.verify(request).status).toBe(403);
+  });
+
+  test("before the steward writes its projection, a guest of the portal's own table still gets in, as visitor", async () => {
+    const guests = memoryGuests();
+    guests.add({ id: "InViTeInViTe0001", host: HOST, label: "Alice", createdAt: START, expiresAt: null, seenAt: null }, guestHash(ACCESS_PASSWORD));
+    const r = routes({ access: accessFolder("routes-legacy").reader({ guests, sharing: memorySharing() }) });
+    const cookie = cookieOf(await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD })));
+    const opened = visit(r, cookie);
+    expect(opened.status).toBe(200);
+    expect(opened.headers.get("x-sitesolide-role")).toBe("visitor");
   });
 });
 
@@ -361,10 +375,11 @@ describe("an identity on /verifier", () => {
     return `__Host-portal=${issueIdentityToken(KEY, host, NOW_S + 3600, { email, name })}`;
   }
 
-  function withSharing(policy: Policy | null) {
-    const sharing = memorySharing();
-    if (policy !== null) sharing.set(HOST, policy, START);
-    return { sharing, r: routes({ settings: SETTINGS, sharing }) };
+  /** A steward that gave HOST to these people and domains; `null`, a site it never listed. */
+  function withPeople(people: Record<string, Role> | null, domains: string[] = []) {
+    const access = accessFolder("routes-identity");
+    access.write(projection(people === null ? {} : { [HOST]: site("kanban", { people, domains }) }));
+    return { access, r: routes({ settings: SETTINGS, access: access.reader() }) };
   }
 
   function visit(r: ReturnType<typeof routes>, cookie: string) {
@@ -372,7 +387,7 @@ describe("an identity on /verifier", () => {
   }
 
   test("an admin email gets in everywhere, as admin, its email and name passed on", () => {
-    const { r } = withSharing(null);
+    const { r } = withPeople(null);
     const response = visit(r, identityCookie("owner@acme.test", "Owner Name"));
     expect(response.status).toBe(200);
     expect(Object.fromEntries(response.headers)).toEqual({
@@ -382,83 +397,105 @@ describe("an identity on /verifier", () => {
     });
   });
 
-  test("a site never shared lets nobody else in, and says so, offering another account", async () => {
-    const { r } = withSharing(null);
+  test("a site the steward never listed lets nobody else in, and says so, offering another account", async () => {
+    const { r } = withPeople(null);
     const response = visit(r, identityCookie("alice@acme.test"));
     expect(response.status).toBe(401);
     expect(response.headers.get("x-portal")).toBe("connexion");
     expect(response.headers.get("x-sitesolide-user")).toBeNull();
     const page = await response.text();
-    expect(page).toInclude("You are signed in as alice@acme.test, but this site isn&#39;t shared with you.");
+    expect(page).toInclude("You are signed in as alice@acme.test, but you don&#39;t have access to this site.");
     expect(page).toInclude("account=choose");
   });
 
-  test("people: the listed email gets in as member, the others do not", () => {
-    const { r } = withSharing({ mode: "people", people: ["alice@acme.test"], domains: [] });
-    const alice = visit(r, identityCookie("alice@acme.test"));
-    expect(alice.status).toBe(200);
-    expect(alice.headers.get("x-sitesolide-role")).toBe("member");
-    expect(alice.headers.get("x-sitesolide-user")).toBe("alice@acme.test");
-    expect(alice.headers.get("x-sitesolide-user-name")).toBeNull();
-    expect(visit(r, identityCookie("bob@acme.test")).status).toBe(401);
+  test("a person listed gets in with the role of their entry, the others do not", () => {
+    for (const role of ["visitor", "viewer", "developer", "admin"] as const) {
+      const { r } = withPeople({ "alice@acme.test": role });
+      const alice = visit(r, identityCookie("alice@acme.test"));
+      expect(alice.status).toBe(200);
+      expect(alice.headers.get("x-sitesolide-role")).toBe(role);
+      expect(alice.headers.get("x-sitesolide-user")).toBe("alice@acme.test");
+      expect(alice.headers.get("x-sitesolide-user-name")).toBeNull();
+      expect(visit(r, identityCookie("bob@acme.test")).status).toBe(401);
+    }
   });
 
-  test("domain: everyone at the domain gets in", () => {
-    const { r } = withSharing({ mode: "domain", people: [], domains: ["acme.test"] });
-    expect(visit(r, identityCookie("bob@acme.test")).status).toBe(200);
+  test("a domain lets everyone at it in as visitor, and a person listed above that keeps their role", () => {
+    const { r } = withPeople({ "alice@acme.test": "developer" }, ["acme.test"]);
+    const bob = visit(r, identityCookie("bob@acme.test"));
+    expect(bob.status).toBe(200);
+    expect(bob.headers.get("x-sitesolide-role")).toBe("visitor");
+    expect(visit(r, identityCookie("alice@acme.test")).headers.get("x-sitesolide-role")).toBe("developer");
     expect(visit(r, identityCookie("eve@elsewhere.test")).status).toBe(401);
   });
 
-  test("removed from the list, refused at the very next request, cookie in hand", () => {
-    const { sharing, r } = withSharing({ mode: "people", people: ["alice@acme.test"], domains: [] });
+  test("lowered, then removed, at the very next request each time, cookie in hand", () => {
+    const { access, r } = withPeople({ "alice@acme.test": "developer" });
     const cookie = identityCookie("alice@acme.test");
-    expect(visit(r, cookie).status).toBe(200);
-    sharing.set(HOST, { mode: "people", people: [], domains: [] }, START);
+    expect(visit(r, cookie).headers.get("x-sitesolide-role")).toBe("developer");
+    access.write(projection({ [HOST]: site("kanban", { people: { "alice@acme.test": "visitor" } }) }));
+    expect(visit(r, cookie).headers.get("x-sitesolide-role")).toBe("visitor");
+    access.write(projection({ [HOST]: site("kanban") }));
     expect(visit(r, cookie).status).toBe(401);
-    sharing.set(HOST, { mode: "admins", people: ["alice@acme.test"], domains: [] }, START);
-    expect(visit(r, cookie).status).toBe(401);
+  });
+
+  test("a projection the portal cannot believe closes everyone out but the admin emails", () => {
+    const { access, r } = withPeople({ "alice@acme.test": "admin" });
+    access.write("{ not json");
+    expect(visit(r, identityCookie("alice@acme.test")).status).toBe(401);
+    expect(visit(r, identityCookie("owner@acme.test")).status).toBe(200);
   });
 
   test("a domain taken off the allowed ones closes its people out at the next request, the admins excepted", () => {
-    const sharing = memorySharing();
-    sharing.set(HOST, { mode: "domain", people: [], domains: ["acme.test", "partner.test"] }, START);
+    const access = accessFolder("routes-narrowed");
+    access.write(projection({ [HOST]: site("kanban", { people: { "carol@partner.test": "viewer" }, domains: ["acme.test", "partner.test"] }) }));
     const narrowed = { ...SETTINGS, allowedDomains: ["acme.test"] };
-    const r = routes({ settings: narrowed, sharing });
+    const r = routes({ settings: narrowed, access: access.reader() });
     expect(visit(r, identityCookie("bob@acme.test")).status).toBe(200);
     expect(visit(r, identityCookie("carol@partner.test")).status).toBe(401);
-    expect(visit(routes({ settings: { ...narrowed, admins: ["boss@partner.test"] }, sharing }), identityCookie("boss@partner.test")).status).toBe(200);
+    expect(visit(r, identityCookie("dave@partner.test")).status).toBe(401);
+    const admitted = routes({ settings: { ...narrowed, admins: ["boss@partner.test"] }, access: access.reader() });
+    expect(visit(admitted, identityCookie("boss@partner.test")).status).toBe(200);
   });
 
-  test("the identity cookie of another site opens nothing here, shared or not", () => {
-    const { r } = withSharing({ mode: "people", people: ["alice@acme.test"], domains: [] });
+  test("the identity cookie of another site opens nothing here, listed or not", () => {
+    const { r } = withPeople({ "alice@acme.test": "visitor" });
     expect(visit(r, identityCookie("alice@acme.test", null, OTHER)).status).toBe(401);
   });
 
   test("without the provider's settings, an identity cookie opens nothing, an admin's included", () => {
-    const sharing = memorySharing();
-    sharing.set(HOST, { mode: "people", people: ["alice@acme.test"], domains: [] }, START);
-    const r = routes({ sharing });
+    const access = accessFolder("routes-no-provider");
+    access.write(projection({ [HOST]: site("kanban", { people: { "alice@acme.test": "admin" } }) }));
+    const r = routes({ access: access.reader() });
     expect(visit(r, identityCookie("owner@acme.test")).status).toBe(401);
     expect(visit(r, identityCookie("alice@acme.test")).status).toBe(401);
   });
 
-  test("the owner's and a guest's cookies say their role and nobody, with or without a provider", async () => {
+  test("the owner's cookie says admin and nobody, a password access's visitor and nobody, with or without a provider", () => {
+    const access = accessFolder("routes-roles");
+    access.write(projection({ [HOST]: site("kanban", { passwords: [grant({ id: "PaSsWoRdAcCeSs01", hash: guestHash(ACCESS_PASSWORD) })] }) }));
     for (const settings of [null, SETTINGS]) {
-      const guests = memoryStore();
-      guests.create(
-        { id: "InViTeInViTe0001", host: HOST, label: "Alice", createdAt: START, expiresAt: null, seenAt: null },
-        guestHash(GUEST_PASSWORD),
-      );
-      const r = routes({ settings, guests });
+      const r = routes({ settings, access: access.reader() });
       const owner = visit(r, `__Host-portal=${issueToken(KEY, HOST, NOW_S + 60)}`);
       expect(Object.fromEntries(owner.headers)).toEqual({ "x-sitesolide-role": "admin" });
-      const guest = visit(r, `__Host-portal=${issueToken(KEY, HOST, NOW_S + 60, "InViTeInViTe0001")}`);
-      expect(Object.fromEntries(guest.headers)).toEqual({ "x-sitesolide-role": "guest" });
+      const visitor = visit(r, `__Host-portal=${issueToken(KEY, HOST, NOW_S + 60, "PaSsWoRdAcCeSs01")}`);
+      expect(Object.fromEntries(visitor.headers)).toEqual({ "x-sitesolide-role": "visitor" });
     }
   });
 
+  test("before the steward writes its projection, a person the portal's own policy listed gets in, as visitor", () => {
+    const sharing = memorySharing();
+    sharing.put(HOST, { mode: "people", people: ["alice@acme.test"], domains: [] }, START);
+    const r = routes({ settings: SETTINGS, access: accessFolder("routes-legacy-people").reader({ guests: memoryGuests(), sharing }) });
+    const alice = visit(r, identityCookie("alice@acme.test"));
+    expect(alice.status).toBe(200);
+    expect(alice.headers.get("x-sitesolide-role")).toBe("visitor");
+    expect(visit(r, identityCookie("owner@acme.test")).headers.get("x-sitesolide-role")).toBe("admin");
+    expect(visit(r, identityCookie("bob@acme.test")).status).toBe(401);
+  });
+
   test("a POST from elsewhere is refused to an identity as to anyone", () => {
-    const { r } = withSharing(null);
+    const { r } = withPeople(null);
     const request = verification({
       "X-Portal-Hote": HOST,
       Cookie: identityCookie("owner@acme.test"),
@@ -507,18 +544,55 @@ describe("the audit of sign-ins", () => {
     expect(JSON.stringify(audit.events)).not.toInclude(PASSWORD);
   });
 
-  test("a guest is named by their access, not by their password", async () => {
+  test("a password access is named by the email it was given to, never by its password", async () => {
     const audit = memoryAudit();
-    const guests = memoryStore();
-    guests.create(
-      { id: "InViTeInViTe0001", host: HOST, label: "Alice", createdAt: START, expiresAt: null, seenAt: null },
-      guestHash(GUEST_PASSWORD),
+    const access = accessFolder("routes-audit-email");
+    access.write(projection({ [HOST]: site("kanban", { passwords: [grant({ who: "zoe@elsewhere.test", hash: guestHash(ACCESS_PASSWORD) })] }) }));
+    const r = routes({ audit, access: access.reader() });
+    const cookie = cookieOf(await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD })));
+    r.signOut(
+      new Request("http://127.0.0.1:3026/_portal/deconnexion", {
+        method: "POST",
+        headers: { "X-Portal-Hote": HOST, Origin: ORIGIN, Cookie: cookie },
+      }),
     );
-    await routes({ audit, guests }).signIn(signIn({ motdepasse: GUEST_PASSWORD }));
-    expect(audit.events.map(({ actor, detail }) => ({ actor, detail }))).toEqual([
-      { actor: "guest:InViTeInViTe0001", detail: { method: "guest" } },
+    expect(audit.events.map(({ actor, action, detail }) => ({ actor, action, detail }))).toEqual([
+      { actor: "zoe@elsewhere.test", action: "portal.signin", detail: { method: "password-access" } },
+      { actor: "zoe@elsewhere.test", action: "portal.signout", detail: null },
     ]);
-    expect(JSON.stringify(audit.events)).not.toInclude(GUEST_PASSWORD);
+    expect(JSON.stringify(audit.events)).not.toInclude(ACCESS_PASSWORD);
+    expect(JSON.stringify(audit.events)).not.toInclude(guestHash(ACCESS_PASSWORD));
+  });
+
+  test("an access given under a name is named by its identifier, and so is one removed before its sign-out", async () => {
+    const audit = memoryAudit();
+    const access = accessFolder("routes-audit-name");
+    access.write(projection({ [HOST]: site("kanban", { passwords: [grant({ id: "PaSsWoRdAcCeSs07", who: "Bob from the agency", hash: guestHash(ACCESS_PASSWORD) })] }) }));
+    const r = routes({ audit, access: access.reader() });
+    const cookie = cookieOf(await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD })));
+
+    const given = grant({ id: "PaSsWoRdAcCeSs08", who: "zoe@elsewhere.test" });
+    access.write(projection({ [HOST]: site("kanban", { passwords: [given] }) }));
+    r.signOut(
+      new Request("http://127.0.0.1:3026/_portal/deconnexion", {
+        method: "POST",
+        headers: { "X-Portal-Hote": HOST, Origin: ORIGIN, Cookie: cookie },
+      }),
+    );
+    expect(audit.events.map(({ actor, action }) => ({ actor, action }))).toEqual([
+      { actor: "password:PaSsWoRdAcCeSs07", action: "portal.signin" },
+      { actor: "password:PaSsWoRdAcCeSs07", action: "portal.signout" },
+    ]);
+  });
+
+  test("who a cookie names: the owner, the email, the access by who it was given to when it is the same one", () => {
+    const token = (guest: string | null) => ({ guest });
+    expect(actorOf(null)).toBe("anonymous");
+    expect(actorOf(token(null))).toBe("owner");
+    expect(actorOf({ ...token(null), identity: { email: "alice@acme.test", name: null } })).toBe("alice@acme.test");
+    expect(actorOf(token("PaSsWoRdAcCeSs01"), grant())).toBe("alice@elsewhere.test");
+    expect(actorOf(token("PaSsWoRdAcCeSs01"))).toBe("password:PaSsWoRdAcCeSs01");
+    expect(actorOf(token("PaSsWoRdAcCeSs09"), grant())).toBe("password:PaSsWoRdAcCeSs09");
   });
 
   test("a rate-limited attempt writes nothing: the limit bounds the audit too", async () => {

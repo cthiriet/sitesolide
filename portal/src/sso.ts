@@ -8,8 +8,8 @@
  *
  * - `GET /_portal/oidc` draws the binding, seals the flow, leaves for the
  *   portal's host;
- * - `GET /_portal/oidc/complete?code=` redeems the code, judges the site's
- *   policy, sets the site's cookie.
+ * - `GET /_portal/oidc/complete?code=` redeems the code, judges whether the
+ *   person has access to the site, sets the site's cookie.
  *
  * On `portal.<zone>`, reached through the portal manifest's `routes`, where
  * `X-Portal-Hote` means nothing and is never read:
@@ -31,7 +31,7 @@
  * Built around their dependencies, like src/routes.ts: the tests drive them
  * with a provider they run themselves.
  */
-import type { AuditStore, NewEvent, SharingStore } from "./database";
+import type { AuditStore, NewEvent } from "./database";
 import {
   bindingHash,
   drawBinding,
@@ -61,7 +61,8 @@ import {
 } from "./oidc";
 import { portalPage, signInPage } from "./page";
 import { notSharedMessage } from "./routes";
-import { identityRole, maySignIn } from "./sharing";
+import type { AccessReader } from "./projection";
+import { maySignIn } from "./sharing";
 import {
   clearCookie,
   cookieName,
@@ -82,7 +83,8 @@ export type SsoOptions = {
   settings: Settings | null;
   provider: Provider | null;
   online: boolean;
-  sharing: SharingStore;
+  /** Who may open each site, from the steward's projection (src/projection.ts). */
+  access: Pick<AccessReader, "roleOf">;
   audit: AuditStore;
   handoffs: HandoffStore;
   /**
@@ -383,7 +385,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       }
 
       const { identity, returnTo } = redemption.handoff;
-      const role = identityRole(identity.email, options.sharing.get(host), options.settings.admins);
+      const role = options.access.roleOf(host, identity.email, options.settings.admins);
       if (role === null) {
         audit({ actor: identity.email, action: "portal.signin_failed", target: host, detail: { method: "oidc", reason: "not-shared" } }, now);
         return door(returnTo, 403, notSharedMessage(identity.email), spent, true);

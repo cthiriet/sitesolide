@@ -13,7 +13,7 @@ import type { Roles } from "./protocol";
 /**
  * The reading as a member may see it: their sites, the discrepancies of their
  * sites, their sites' audience. The machine's own figures, its memory, disk
- * and load, and its discrepancies that name no site, are the super admin's.
+ * and load, and its discrepancies that name no site, are the owner's.
  */
 export function memberReading(reading: Reading, roles: Roles): Reading {
   if (!reading.present) return reading;

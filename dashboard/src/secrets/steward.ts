@@ -30,6 +30,7 @@ import { isProtected } from "../../borrowed/manifest";
 import { fragmentIsProtected } from "../../borrowed/portal";
 import { isPasswordValid, isAcceptableSubmission } from "../auth";
 import { addressOf, unitOf } from "../state";
+import { reservedReason } from "../control/policy";
 import { generatePassword } from "../password";
 import { portalModifiable, DASHBOARD_SLUG } from "../gatekeeper/rules";
 import type { RandomSource } from "../sessions";
@@ -123,10 +124,13 @@ import type { BackupReader } from "../backup/reader";
 import { createMemberRoutes, type KeyState } from "../members/steward";
 import type { MembersSystem } from "../members/system";
 import { OWNER_ACTOR, type Roles } from "../members/protocol";
-import { createMemberActions, createSharing, type Who } from "../members/actions";
+import { createMemberActions, type Who } from "../members/actions";
 import type { MemberAuthority } from "../control/steward";
 import { machineRefusal, may } from "../members/powers";
-import type { PortalAdmin } from "../members/portal";
+import { portalReading, type PortalAdmin } from "../members/portal";
+import { createAccessRoutes, createAccessStore, type AccessRoutes, type AccessStore } from "../access/steward";
+import type { AccessSystem } from "../access/system";
+import type { GeneralView } from "../access/protocol";
 
 export type StewardOptions = {
   secretsFolder: string;
@@ -173,23 +177,24 @@ export type StewardOptions = {
   /** The backups' folders, read for `/backups`; absent, the routes say backups are not set up. */
   backups?: BackupReader | null;
   /**
-   * The dashboard's members, see src/members/steward.ts. Absent, the member
-   * routes do not exist, as on a steward that predates them, and the owner's
-   * socket answers nothing.
+   * Access and the people who sign in to the dashboard, see src/access/ and
+   * src/members/. Absent, their routes do not exist, as on a steward that
+   * predates them, and the owner's socket answers nothing.
    */
   members?: {
     system: MembersSystem;
+    /** The access registry's files: the registry, the portal's projection, the stores before it. */
+    access: AccessSystem;
     zone: string;
     /**
-     * The portal's admin API through the relay, for a Project admin's sharing
-     * and guests (src/members/portal.ts). Absent, those two say the relay is
-     * missing.
+     * The portal's admin API through the relay (src/members/portal.ts), asked
+     * whether the portal reads the projection. Absent, it is not asked.
      */
     portal?: PortalAdmin | null;
     /**
-     * A member removed: their tokens revoked, `actor` who removed them. The
-     * control routes' (src/control/steward.ts), built after this handler,
-     * hence a function of their own the entry point fills in.
+     * Someone who no longer signs in: their tokens revoked, `actor` who took
+     * them off. The control routes' (src/control/steward.ts), built after
+     * this handler, hence a function of their own the entry point fills in.
      */
     revokeTokens?: (email: string, actor: string) => Promise<number>;
   };
@@ -209,12 +214,14 @@ export type StewardHandler = Handler & {
    * registry, for `sitesolide members` over the owner's SSH.
    */
   owner: Handler;
-  /** The members' key pair, laid if missing: the entry point asks at startup. */
+  /** The sign-in key pair, laid if missing: the entry point asks at startup. */
   ensureMemberKeys: () => Promise<KeyState | null>;
-  /** What the control routes ask of the members for a member's own tokens; null without members. */
+  /** The access registry made if it is missing, its projection written again: the entry point asks at startup. */
+  ensureAccess: () => Promise<void>;
+  /** What the control routes ask of the people for a person's own tokens; null without them. */
   memberAuthority: MemberAuthority | null;
-  /** A team token's sharing, handed to the portal as root through the relay, the token as actor. */
-  shareForToken: (slug: string, policy: Record<string, unknown>, actor: string) => Promise<Response>;
+  /** A token's changes of access, the token judged by the control routes. */
+  accessForToken: AccessRoutes["forToken"] | null;
 };
 
 /**
@@ -546,7 +553,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   /**
    * The same lock for any requester: `still` says, once the turn has come,
-   * whether they may still act, the super admin's token alive, a member's
+   * whether they may still act, the owner's token alive, a member's
    * session, unlock and role still theirs; its refusal goes back as it stands.
    */
   function underLockWith(req: Request, still: () => Promise<Response | null>, task: () => Promise<Response>): Promise<Response> {
@@ -1039,7 +1046,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return underLock(req, body, () => readValueTask(req, body, OWNER));
   }
 
-  /** A variable's value, under the lock, for the super admin or a Project admin. */
+  /** A variable's value, under the lock, for the owner or an Admin. */
   async function readValueTask(_req: Request, body: Body, who: Who): Promise<Response> {
     const found = await target("read", body, who);
     if (found instanceof Response) return found;
@@ -1368,7 +1375,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return underLock(req, body, () => portalTask(req, body, OWNER));
   }
 
-  /** The gatekeeper started for one site's door, under the lock, for the super admin or a Project admin. */
+  /** The gatekeeper started for one site's door, under the lock, for the owner or an Admin. */
   async function portalTask(req: Request, body: Body, who: Who): Promise<Response> {
     const active = body.active === true;
     const direction = active ? "on" : "off";
@@ -1543,7 +1550,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
         return error(found.refusal.error, found.refusal.message);
       }
       const { site } = found;
-      if (site.folder === DASHBOARD_SLUG) return error("out-of-scope", "the dashboard is the super admin's to restart");
+      if (site.folder === DASHBOARD_SLUG) return error("out-of-scope", "the dashboard is the owner's to restart");
       const unit = unitOf(site.folder);
       const text = site.isStatic ? null : await system.readUnit(unit);
       if (text === null) {
@@ -1560,21 +1567,64 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return taken ?? busy();
   }
 
-  // --- Members -----------------------------------------------------------------
+  // --- Access and the people who sign in -----------------------------------------
+
+  // The registry is the access store's (src/access/steward.ts); the people's
+  // sessions, keys and unlocks are the members routes' (src/members/steward.ts),
+  // which read their roles from it at every request.
+  const journalEvent = (event: { operation: Operation; result: "ok" | "rejects"; actor: string; member: string | null; slug?: string; detail: string | null }) =>
+    writeLog(event.operation, event.result, event.slug === undefined ? null : { slug: event.slug }, bounded(event.detail), null, { actor: event.actor, member: event.member });
+
+  const accessStore: AccessStore | null =
+    options.members === undefined
+      ? null
+      : createAccessStore({
+          system: options.members.access,
+          zone: memberZone,
+          hostOf: (slug) => (reservedReason(slug, memberZone) === null ? addressOf(slug, memberZone) : null),
+          journal: journalEvent,
+        });
 
   const members =
-    options.members === undefined
+    options.members === undefined || accessStore === null
       ? null
       : createMemberRoutes({
           system: options.members.system,
+          access: accessStore,
           zone: options.members.zone,
-          isUnlocked: (token) => isValidToken(state, token, system.now()),
           readBody: (req, fields) => readBody(req, fields),
-          journal: (event) =>
-            writeLog(event.operation, event.result, "slug" in event ? { slug: event.slug } : null, bounded(event.detail), null, { actor: event.actor, member: event.member }),
+          journal: journalEvent,
           restart: memberRestart,
           revokeTokens: options.members.revokeTokens,
           random: options.random,
+        });
+
+  /** A project's general access as the machine carries it: the preview lock, the portal, or neither. */
+  async function generalOf(slug: string): Promise<GeneralView | null> {
+    const found = checkSite(await sites(), slug);
+    if ("refusal" in found) return null;
+    const view = await portalView(found.site);
+    if (found.site.manifest?.lock === true) return { access: "code", modifiable: false, reason: "a preview code is set and removed with sitesolide lock, from the project's folder" };
+    return { access: view.requested && view.installed ? "restricted" : "public", modifiable: view.modifiable, reason: view.reason };
+  }
+
+  const access: AccessRoutes | null =
+    members === null || accessStore === null || options.members === undefined
+      ? null
+      : createAccessRoutes({
+          store: accessStore,
+          zone: memberZone,
+          hostOf: (slug) => addressOf(slug, memberZone),
+          projectExists: options.members.system.projectExists,
+          signIn: () => options.members!.system.readPortalSettings(),
+          general: generalOf,
+          portalReading: () => portalReading(options.members?.portal ?? null),
+          isUnlocked: (token) => isValidToken(state, token, system.now()),
+          readBody: (req, fields) => readBody(req, fields),
+          journal: journalEvent,
+          journalRefusal: (event) => members.journalRefusal(event as never),
+          authorize: members.authorize,
+          leave: members.leave,
         });
 
   // --- Backups -----------------------------------------------------------------
@@ -1592,9 +1642,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     uidRoot: checked ? uidRoot : null,
   });
 
-  // --- A member's work on their projects -------------------------------------------
+  // --- A person's work on their projects ------------------------------------------
 
-  // The operations above, with the member as requester: their role judged by
+  // The operations above, with the person as requester: their role judged by
   // src/members/actions.ts, their session, unlock and role asked again under
   // the lock, the machine's own projects and files refused by `target`.
   const memberActions =
@@ -1616,22 +1666,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
             portal: portalTask,
           },
           startRestore: backups.start,
-          portal: options.members?.portal ?? null,
-          sites,
-          portalOf: portalView,
-          hostOf: (slug) => addressOf(slug, memberZone),
           zone: memberZone,
           maxContentBytes: MAX_CONTENT_BODY_BYTES,
         });
-
-  // A team token's sharing takes a Project admin's road to the portal: see
-  // src/members/actions.ts, `createSharing`, and src/control/steward.ts.
-  const tokenSharing = createSharing({
-    portal: options.members?.portal ?? null,
-    sites,
-    portalOf: portalView,
-    hostOf: (slug) => addressOf(slug, memberZone),
-  });
 
   // --- Routing -----------------------------------------------------------------
 
@@ -1646,6 +1683,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   const routes: Record<string, Record<string, (req: Request) => Promise<Response>>> = {
     ...connectorRoutes,
     ...(members?.dashboard ?? {}),
+    ...(access?.dashboard ?? {}),
     ...memberActions,
     "/projects": { GET: listProjects },
     "/log": { GET: readLog },
@@ -1694,8 +1732,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   const handle = serve(routes);
   return Object.assign(handle, {
     isUnlocked: (token: unknown) => isValidToken(state, token, system.now()),
-    owner: serve(members?.owner ?? {}),
+    owner: serve(access?.owner ?? {}),
     ensureMemberKeys: async () => (members === null ? null : members.ensureKeys()),
+    ensureAccess: async () => accessStore?.ensure(),
     memberAuthority:
       members === null
         ? null
@@ -1707,7 +1746,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
             journal: members.journal,
             journalRefusal: members.journalRefusal,
           },
-    shareForToken: (slug: string, policy: Record<string, unknown>, actor: string) => tokenSharing.share(slug, policy, actor, "token"),
+    accessForToken: access?.forToken ?? null,
   });
 }
 

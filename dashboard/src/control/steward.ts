@@ -20,13 +20,14 @@
  * registry when one is minted, and again at every use of it, so that a role
  * lowered, the create right taken back or a member removed holds from the
  * next request. A project a member's token creates makes that member its
- * Project admin, recorded with the token's ownership. And a member removed
+ * Admin, recorded with the token's ownership. And a member removed
  * takes their tokens with them.
  *
- * **A token's sharing reaches the portal from here**, as root, through the
- * relay a Project admin's sharing takes: the portal believes an actor other
- * than `owner` from root alone, so the dashboard can no longer name a token
- * as the author of a change it made itself.
+ * **A token's changes of access are judged here**, the token first, then
+ * the access rules (src/access/rules.ts), which let a token give Can open
+ * alone: the steward writes them, and the portal reads them from its
+ * projection. The journal names the token, never an actor the dashboard
+ * would choose.
  *
  * The order of the checks is the order of the risk, as in src/secrets/steward.ts:
  * shape of the body, token, slug, state of the machine, writing.
@@ -34,8 +35,8 @@
 import type { RandomSource } from "../sessions";
 import { isValidSlug, servicesOf, readManifest as parseManifest } from "../../borrowed/manifest";
 import { unitArgument } from "../../borrowed/unit";
-import { may, powerRefusal, roleDetail } from "../members/powers";
 import type { MemberEvent, MemberPrincipal } from "../members/steward";
+import type { AccessRoutes } from "../access/steward";
 import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../members/tokens";
 import { decideSlug, reservedReason, type SlugDecision } from "./policy";
 import {
@@ -83,7 +84,7 @@ export type MemberAuthority = {
   unlockedUntil: (session: unknown) => Promise<number | null>;
   /** Their rights now; null: no member; a Response: the registry does not read. */
   rights: (email: string) => Promise<MemberRights | null | Response>;
-  /** They become Project admin of what their token creates, journaled; a Response when it cannot be recorded. */
+  /** They become Admin of what their token creates, journaled; a Response when it cannot be recorded. */
   recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | null>;
   journal: (event: MemberEvent) => Promise<void>;
   /** A refusal, bounded per minute. */
@@ -112,11 +113,10 @@ export type ControlStewardOptions = {
    */
   members?: MemberAuthority;
   /**
-   * A token's sharing, handed to the portal as root through the relay, the
-   * actor `token:<id>` (src/members/actions.ts, `createSharing`). Absent,
-   * sharing by token says the relay is missing.
+   * A token's changes of access (src/access/steward.ts), the token judged
+   * here first. Absent, a steward built without the access registry.
    */
-  share?: (slug: string, policy: Record<string, unknown>, actor: string) => Promise<Response>;
+  access?: AccessRoutes["forToken"] | null;
 };
 
 type Handler = (req: Request) => Promise<Response>;
@@ -254,12 +254,12 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     const member = result.identity.member;
     if (member !== null) {
       if (options.members === undefined) {
-        return failure("unauthenticated", "this token is a member's, and this steward does not know members: the owner must run sitesolide upgrade");
+        return failure("unauthenticated", "this token belongs to a person, and this steward does not keep people with access: the owner must run sitesolide upgrade");
       }
       const rights = await options.members.rights(member);
       if (rights instanceof Response) return rights;
       if (rights === null) {
-        return failure("unauthenticated", `this token belongs to ${member}, who is no longer a member of this dashboard: it is refused`);
+        return failure("unauthenticated", `this token belongs to ${member}, who no longer has a role on this dashboard: it is refused`);
       }
       holder = { identity: narrowIdentity(result.identity, rights), rights };
     }
@@ -281,7 +281,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * May this holder deploy this slug, and would it create it? For a member's
    * token, the member's role first, or the create right for a new project,
    * then the token's own rule, its refusals said in a member's words: the
-   * Team page is where they mint another.
+   * Tokens page is where they mint another.
    */
   function judgeSlug(holder: Holder, slug: unknown, state: { exists: boolean; owner: string | null }): SlugDecision {
     const { rights } = holder;
@@ -296,8 +296,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       kind: "refused",
       error: "out-of-scope",
       message: state.exists
-        ? `${String(slug)} is not among this token's projects: mint a token for it from the dashboard's Team page`
-        : "this token may not create projects: mint one that may from the dashboard's Team page",
+        ? `${String(slug)} is not among this token's projects: mint a token for it from the dashboard's Tokens page`
+        : "this token may not create projects: mint one that may from the dashboard's Tokens page",
     };
   }
 
@@ -417,7 +417,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       if (await isActive(unit)) return failure("busy", `a deployment of ${target} is already running: wait for it to finish, then try again`);
 
       if (decision.creating) {
-        // A member's creation first: they become its Project admin before the
+        // A member's creation first: they become its Admin before the
         // token owns it, so that a refusal there leaves no slug held for
         // nobody to deploy.
         if (identity.member !== null && options.members !== undefined) {
@@ -506,33 +506,31 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return Response.json(response);
   }
 
-  // --- sharing ---------------------------------------------------------------------
+  // --- access ----------------------------------------------------------------------
 
   /**
-   * A token's sharing, judged here and handed to the portal as root: the
-   * project the token reaches, and for a member's token the member's own
-   * power to share it, a Project admin's; then the portal's rules, the site's
-   * door and the domains it admits (src/members/actions.ts).
+   * A token's request on a project's access: the token judged, the project
+   * among those it reaches, any other reading as unknown; then the access
+   * rules, the person a token belongs to an Admin of it, Can open alone.
    */
-  async function sharing(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug", "mode", "people", "domains"], bodyTimeoutMs);
+  async function accessRoute(req: Request, fields: string[], run: (holder: Holder, slug: string, body: Body) => Promise<Response>): Promise<Response> {
+    const body = await readBody(req, ["bearer", "slug", ...fields], bodyTimeoutMs);
     if (body instanceof Response) return body;
     const holder = await identify(body.bearer);
     if (holder instanceof Response) return holder;
-    const { identity, rights } = holder;
+    const { identity } = holder;
     const { slug } = body;
     if (typeof slug !== "string" || !isValidSlug(slug)) return failure("invalid", "slug: lowercase letters, digits and dashes");
     if (!identity.owned.includes(slug) && !identity.scope.slugs.includes(slug)) return failure("not-found", `no project ${slug} for this token`);
-    if (rights !== null) {
-      const role = Object.hasOwn(rights.roles, slug) ? rights.roles[slug]! : null;
-      if (!may(role, "sharing")) {
-        await options.members?.journalRefusal({ operation: "sharing", result: "rejects", actor: rights.email, member: rights.email, slug, detail: `token ${identity.id}, ${roleDetail(role)}` });
-        return failure("out-of-scope", powerRefusal(rights.email, role, slug, "sharing"));
-      }
-    }
-    if (options.share === undefined) return failure("not-available", "this steward cannot reach the portal: the owner must run sitesolide upgrade");
-    return options.share(slug, { mode: body.mode, people: body.people, domains: body.domains }, `token:${identity.id}`);
+    if (options.access === undefined || options.access === null) return failure("not-available", "this steward does not carry the access registry: the owner must run sitesolide upgrade");
+    return run(holder, slug, body);
   }
+
+  const granterOf = (holder: Holder) => ({ kind: "token" as const, id: holder.identity.id, email: holder.identity.member, role: null });
+
+  const accessList = (req: Request) => accessRoute(req, [], (holder, slug) => options.access!.list(slug, granterOf(holder)));
+  const accessGrant = (req: Request) => accessRoute(req, ["who", "role"], (holder, slug, body) => options.access!.grant(slug, body.who, body.role, granterOf(holder)));
+  const accessRemove = (req: Request) => accessRoute(req, ["who"], (holder, slug, body) => options.access!.remove(slug, body.who, granterOf(holder)));
 
   // --- a member's own tokens ------------------------------------------------------
 
@@ -579,13 +577,13 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       const registry = await team();
       if (registry instanceof Response) return registry;
       if (liveTokensOf(registry, email, system.now()).length >= MAX_TOKENS_PER_MEMBER) {
-        return failure("invalid", `${MAX_TOKENS_PER_MEMBER} live tokens per member at most: revoke one you no longer use`);
+        return failure("invalid", `${MAX_TOKENS_PER_MEMBER} live tokens per person at most: revoke one you no longer use`);
       }
       const created = await createToken(registry, request, system.now(), options.random, email);
       if ("refusal" in created) return failure("invalid", created.refusal);
       await system.writeTeam(encodeTeam(created.team));
       await members.journal({ operation: "token.create", result: "ok", actor: email, member: email, detail: line(`${created.view.id}: ${scopeText(created.view.scope)}`) });
-      console.log(`control: token ${created.view.id} created by member ${email}`);
+      console.log(`control: token ${created.view.id} created by ${email}`);
       const response: CreatedTokenResponse = { token: created.view, secret: created.secret };
       return Response.json(response, { status: 201 });
     });
@@ -608,7 +606,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       if (result.team !== registry) {
         await system.writeTeam(encodeTeam(result.team));
         await members.journal({ operation: "token.revoke", result: "ok", actor: principal.email, member: principal.email, detail: result.view.id });
-        console.log(`control: token ${result.view.id} revoked by member ${principal.email}`);
+        console.log(`control: token ${result.view.id} revoked by ${principal.email}`);
       }
       return Response.json({ token: result.view });
     });
@@ -623,8 +621,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       if (result.revoked.length === 0) return 0;
       await system.writeTeam(encodeTeam(result.team));
       const ids = result.revoked.map((view) => view.id).join(", ");
-      await members?.journal({ operation: "token.revoke", result: "ok", actor, member: email, detail: line(`${ids}: ${email} is no longer a member`) });
-      console.log(`control: ${result.revoked.length} token(s) of ${email} revoked, no longer a member`);
+      await members?.journal({ operation: "token.revoke", result: "ok", actor, member: email, detail: line(`${ids}: ${email} no longer has a role on this dashboard`) });
+      console.log(`control: ${result.revoked.length} token(s) of ${email} revoked, no role left`);
       return result.revoked.length;
     });
   }
@@ -668,7 +666,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     "/control/deploy": { POST: deploy },
     "/control/deployment": { GET: deploymentResult },
     "/control/logs": { POST: logs },
-    "/control/sharing": { PUT: sharing },
+    "/control/access/list": { POST: accessList },
+    "/control/access": { PUT: accessGrant, DELETE: accessRemove },
     ...(members === undefined
       ? {}
       : {

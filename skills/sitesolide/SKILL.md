@@ -1,7 +1,7 @@
 ---
 name: sitesolide
-description: Deploy a project folder to the user's own sitesolide server, and check on it afterwards. Use when the user asks to deploy, publish, ship or put online a site, an app or a tool, to share it with colleagues, to see whether it is up, or to read its logs, in a setup that has the sitesolide CLI or its MCP server.
-when_to_use: Requests such as "deploy this", "put it online", "publish the site", "share this tool with my team", "is it up?", "why does the site return 500?" or "show me the logs", and any folder holding a sitesolide.json.
+description: Deploy a project folder to the user's own sitesolide server, and check on it afterwards. Use when the user asks to deploy, publish, ship or put online a site, an app or a tool, to give colleagues access to it, to see whether it is up, or to read its logs, in a setup that has the sitesolide CLI or its MCP server.
+when_to_use: Requests such as "deploy this", "put it online", "publish the site", "share this tool with my team", "give alice access", "is it up?", "why does the site return 500?" or "show me the logs", and any folder holding a sitesolide.json.
 ---
 
 # Deploying with sitesolide
@@ -13,7 +13,7 @@ answers over HTTPS. There is no staging: **what you deploy is live, for every
 visitor, at once.**
 
 Use the MCP tools when they are available (`detect`, `deploy`, `status`,
-`logs`, `sharing`, `share`, `lock_status`). Otherwise run the CLI with
+`logs`, `access`, `share`, `lock_status`). Otherwise run the CLI with
 `--json`: every line of standard output is one JSON event, the last one a
 `result` or an `error`.
 
@@ -33,22 +33,26 @@ Use the MCP tools when they are available (`detect`, `deploy`, `status`,
 3. **Dry run.** `deploy` with `dry_run: true` (`sitesolide deploy --dry-run
    --json`). It reads the server, shows the generated unit and block and every
    step, and changes nothing; it does not run the project's build either, which
-   is the folder's own code. Show the user what it plans. With a team token
-   instead of SSH, a dry run is refused: review `sitesolide.json` with the user.
+   is the folder's own code. Show the user what it plans. With a token instead
+   of SSH, a dry run is refused: review `sitesolide.json` with the user.
 4. **Deploy**, once the user agrees: `deploy` (`sitesolide deploy --json`). A
    folder still without a manifest needs `accept_inferred: true` (`--yes`);
-   with a team token, write it first with `sitesolide detect --write`.
+   with a token, write it first with `sitesolide detect --write`.
 5. **Read the result.** On success, give the user the `url`. When
    `manifestWritten` is true, `sitesolide.json` changed on disk (a port chosen,
-   an inferred manifest, a door set from the dashboard): commit it.
-6. **Share it with the people who need it.** A site behind the portal opens to
-   the admins alone. Ask the user who should get in, then `share` with exactly
-   those addresses (`people`) or that domain (`domain`), and nobody else
-   (`sitesolide share alice@acme.com --json`, `--domain acme.com`). Sharing
-   gives real people access to the app and to its data: read `sharing` first,
-   tell the user who will get in, and wait for their yes. Give them the
-   `message` of the result to send. A warning saying someone is let in again,
-   kept from an earlier sharing, goes to the user too; `remove` takes them off.
+   an inferred manifest, general access set from the dashboard): commit it.
+6. **Give access to the people who need it.** A restricted site opens to its
+   people with access alone. Read `access` first (`sitesolide share --json`),
+   ask the user who should get in and with which role, then `share` with
+   exactly those addresses or that domain (`who`), and nobody else
+   (`sitesolide share alice@acme.com --json`, `@acme.com` for everyone at a
+   domain). The role is Can open (`visitor`) unless the user names `viewer`,
+   `developer` or `admin`, which also let the person into the project in the
+   dashboard. Access lets real people into the app and its data: tell the user
+   who will get in, and wait for their yes. Give them the `message` of the
+   result to send. Someone outside the company's domains gets password access:
+   the password comes back once, in the result's `changes`, for the user to
+   send; never store or repeat it. `remove` takes access away.
 
 ## When it fails
 
@@ -57,8 +61,8 @@ Every error carries a `hint`: follow it. The usual ones:
 - **`missing settings`.** Nothing is configured on this workstation. A new
   server is `sitesolide machine create`, then `sitesolide setup`, run only when
   the user asks, with their own tokens from the environment; a server already
-  installed is `sitesolide init`; a team member runs `sitesolide login`. Never
-  guess a server or a zone.
+  installed is `sitesolide init`; someone with a token runs `sitesolide
+  login`. Never guess a server or a zone.
 - **A secret is missing on the server.** The deploy stopped before restarting
   anything. Tell the user to create the file and its values in the dashboard's
   *Secrets* section, at the address the error gives, then deploy again. Never
@@ -76,11 +80,13 @@ Every error carries a `hint`: follow it. The usual ones:
   one and writes it back.
 - **The name already exists on the server.** Another project uses it: pick
   another with `slug` (`--slug`), never deploy over it.
-- **Sharing refused.** `no-portal`: the site is public or not deployed, and
-  only the user puts a site behind the portal, from the dashboard's *Access*
-  section. `out-of-scope` on a domain: a team token opens a site only to the
-  domains the portal admits; share with people by email instead, or ask the
-  owner.
+- **Access refused.** `out-of-scope`: whoever asks may not give that. A token
+  gives Can open alone, to people of the company's domains or one of those
+  domains, never password access; ask the user to give it from the dashboard,
+  or the owner. `not-found`: the project is not deployed, or the person has no
+  access to take away. `steward-outdated` or `not-available`: the machine
+  needs `sitesolide upgrade`, the owner's to run. A warning that the portal
+  still decides from its own tables goes to the user.
 
 ## Never
 
@@ -94,15 +100,16 @@ Every error carries a `hint`: follow it. The usual ones:
   that: those are their commands, not tools.
 - Never retry `setup` in a loop on a refused connection: most likely fail2ban
   banned this workstation, for 10 minutes.
-- Never share with anyone the user did not name, and never make a site public:
-  turning the portal off is theirs, from the dashboard.
+- Never give access to anyone the user did not name, nor a role they did not
+  name, and never make a site Public: general access is theirs, from the
+  dashboard.
 - Never read, print or guess a secret, nor ask the user to paste one.
 
 ## Status and other reads
 
 `status` lists every project on the machine with its service state and
-memory. `sharing` (`sitesolide share --json`) says who may open a project
-behind the portal, and the message to send them. `lock_status` (`sitesolide lock --status --json`) says whether a
+memory. `access` (`sitesolide share --json`) says a project's general access
+and its people with access, with their roles, and the message to send them. `lock_status` (`sitesolide lock --status --json`) says whether a
 preview is closed behind an access code, without revealing the code.
 
 The full reference: `docs/agents.md` in the sitesolide repository, and

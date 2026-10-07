@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment, ZONE_HOST } from "../cli/fragment";
 import type { Manifest } from "../cli/manifest";
 import { PORTAL_PORT } from "../cli/portal";
-import { deriveKey, issueToken } from "../../portal/src/gate";
+import { encodeProjection, PROJECTION_VERSION, type Projection, type SiteAccess } from "../../portal/src/access";
+import { deriveKey, guestHash, issueToken } from "../../portal/src/gate";
 
 /**
  * The generated fragment, in a real Caddy, in front of the real portal.
@@ -16,6 +17,10 @@ import { deriveKey, issueToken } from "../../portal/src/gate";
  * stanza, or a directive slipped into its one `route` before `forward_auth`,
  * and the site would be served without the portal having been consulted.
  * cli-portal-identity-caddy.test.ts measures what that `route` is for.
+ *
+ * Who may open the site is the steward's projection, which the portal reads
+ * again whenever it changes: the test writes it as the steward does, whole,
+ * by a rename, in a file of its own named by ACCESS_FILE.
  *
  * Caddy runs on the workstation with `admin off`, on a free port, and is
  * stopped by its PID. Never `caddy stop`: see the Production section of
@@ -73,6 +78,20 @@ describe.skipIf(CADDY === null)("the fragment of a protected site, in Caddy", ()
   let portal: ReturnType<typeof Bun.spawn> | null = null;
   let caddy: ReturnType<typeof Bun.spawn>;
   let hash = "";
+  const accessFile = join(folder, "access.json");
+  let writtenAt = 0;
+
+  /** The steward's projection, written whole and renamed into place, as the steward writes it. */
+  function project(sites: Record<string, Partial<SiteAccess>>): void {
+    writtenAt += 1;
+    const projection: Projection = {
+      version: PROJECTION_VERSION,
+      writtenAt,
+      sites: Object.fromEntries(Object.entries(sites).map(([host, site]) => [host, { slug: "sample", people: {}, domains: [], passwords: [], ...site }])),
+    };
+    writeFileSync(`${accessFile}.new`, encodeProjection(projection));
+    renameSync(`${accessFile}.new`, accessFile);
+  }
 
   async function startPortal(): Promise<void> {
     portal = Bun.spawn(["bun", "run", join(REPO_ROOT, "portal", "server.ts")], {
@@ -81,6 +100,7 @@ describe.skipIf(CADDY === null)("the fragment of a protected site, in Caddy", ()
         PORT: String(portalPort),
         DATA_DIR: join(folder, "data"),
         PASSWORD_HASH: hash,
+        ACCESS_FILE: accessFile,
         NODE_ENV: "test",
       },
       stdout: "ignore",
@@ -114,6 +134,8 @@ describe.skipIf(CADDY === null)("the fragment of a protected site, in Caddy", ()
     mkdirSync(join(folder, "public"));
     mkdirSync(join(folder, "locks"));
     mkdirSync(join(folder, "data"));
+    // Nobody on the site yet: only the owner's password opens it.
+    project({});
     writeFileSync(join(folder, "public", "style.css"), "body{}");
     writeFileSync(join(folder, "public", "favicon.ico"), "ICO");
 
@@ -293,14 +315,10 @@ describe.skipIf(CADDY === null)("the fragment of a protected site, in Caddy", ()
     return fetch(`http://127.0.0.1:${portalPort}${path}`, init);
   }
 
-  test("a guest access opens the site, and its revocation closes it again at the next request", async () => {
-    const created = await admin("/admin/guests", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ host: HOST, label: "Alice", durationS: 24 * 3600 }),
-    });
-    expect(created.status).toBe(201);
-    const { guest, password } = (await created.json()) as { guest: { id: string }; password: string };
+  test("a password access opens the site, and taking it off the projection closes it again at the next request", async () => {
+    const password = "sample-password-access-for-tests";
+    const expiresAt = (Math.floor(Date.now() / 1000) + 24 * 3600) * 1000;
+    project({ [HOST]: { passwords: [{ id: "AAAAAAAAAAAAAAAA", who: "alice@acme.test", hash: guestHash(password), expiresAt }] } });
 
     const entry = await ask("/_portal/connexion", {
       method: "POST",
@@ -308,7 +326,8 @@ describe.skipIf(CADDY === null)("the fragment of a protected site, in Caddy", ()
       body: new URLSearchParams({ motdepasse: password, retour: "/list" }),
     });
     expect(entry.status).toBe(303);
-    expect(entry.headers.get("set-cookie")).toInclude("Max-Age=86400;");
+    // The cookie lasts no longer than the access.
+    expect(entry.headers.get("set-cookie")).toMatch(/Max-Age=86(399|400);/);
     const cookie = (entry.headers.get("set-cookie") ?? "").split(";")[0]!;
 
     const page = await ask("/list", { cookie });
@@ -316,10 +335,27 @@ describe.skipIf(CADDY === null)("the fragment of a protected site, in Caddy", ()
     expect(await page.json()).toEqual({ site: "/list", method: "GET" });
     expect((await ask("/style.css", { cookie })).status).toBe(200);
 
-    expect((await admin(`/admin/invites/${guest.id}`, { method: "DELETE" })).status).toBe(204);
+    project({});
     const after = await ask("/list", { cookie });
     expect(after.status).toBe(401);
     expect(await after.text()).toInclude("no longer valid");
+  });
+
+  test("an expired password access opens nothing, and the portal no longer gives access itself", async () => {
+    const password = "sample-expired-access-for-tests";
+    project({ [HOST]: { passwords: [{ id: "BBBBBBBBBBBBBBBB", who: "bob@acme.test", hash: guestHash(password), expiresAt: Date.now() - 1000 }] } });
+    const entry = await ask("/_portal/connexion", {
+      method: "POST",
+      headers: { Origin: origin, "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ motdepasse: password, retour: "/list" }),
+    });
+    expect(entry.status).toBe(401);
+    expect(entry.headers.get("set-cookie")).toBeNull();
+    project({});
+    // Giving access is the steward's: the portal's routes that did it answer 410.
+    const created = await admin("/admin/guests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ host: HOST, label: "Alice", durationS: 3600 }) });
+    expect(created.status).toBe(410);
+    expect(await created.json()).toMatchObject({ error: "moved" });
   });
 
   test("the administration is never reached through the site: Caddy does not relay it", async () => {

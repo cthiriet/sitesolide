@@ -2,11 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Role } from "../borrowed/access";
 import { bundle } from "../borrowed/bundle";
 import { BUNDLE_NAME, type InstallerResult } from "../src/control/protocol";
 import { main, pruneResults, RESULT_RETENTION_MS } from "../src/installer/main";
 import { spawn, type Commands } from "../src/installer/real";
 import { INSTALLER } from "./installer-bench";
+import { registryOf, writeRegistry } from "./registry-fixtures";
 
 /**
  * The installer as systemd launches it, `main` with an environment, on a
@@ -112,9 +114,9 @@ describe("main", () => {
     expect(readdirSync(root).sort()).toEqual(["222222222222222222222222.json", "notes.txt"]);
   });
 
-  /** A member's request, the members registry beside it as the steward keeps it, and what the installer made of it. */
+  /** A person's request, the access registry beside it as the steward keeps it, and what the installer made of it. */
   async function memberRun(
-    roles: Record<string, string> | null,
+    roles: Record<string, Role> | null,
     scope: Record<string, unknown>,
     creating: boolean,
     create = false,
@@ -124,8 +126,7 @@ describe("main", () => {
     toClean.push(root);
     for (const folder of ["sites", "units", "secrets", "state/installs", "results", "run", "caddy", `spool/${DEPLOYMENT}`]) mkdirSync(join(root, folder), { recursive: true });
     writeFileSync(join(root, "passwd"), "root:x:0:0::/root:/bin/sh\n");
-    const members = roles === null ? [] : [{ email: "ada@acme.test", roles, create, invitedBy: "owner", createdAt: 1, updatedAt: 1 }];
-    writeFileSync(join(root, "state", "members.json"), JSON.stringify({ members }));
+    writeRegistry(join(root, "state"), registryOf(roles === null ? {} : { "ada@acme.test": roles }, roles !== null && create ? ["ada@acme.test"] : []));
     writeFileSync(
       join(root, "state", "installs", "notes.json"),
       JSON.stringify({
@@ -143,20 +144,27 @@ describe("main", () => {
     return { root, result: JSON.parse(readFileSync(join(root, "results", `${DEPLOYMENT}.json`), "utf8")) as InstallerResult };
   }
 
-  test("a member's token: their role lowered to viewer since the steward wrote the request stops it, nothing written", async () => {
+  test("a person's token: their role lowered to Viewer since the steward wrote the request stops it, nothing written", async () => {
     const { root, result } = await memberRun({ notes: "viewer" }, {}, false);
-    expect(result).toMatchObject({ state: "failed", error: { code: "out-of-scope", message: "ada@acme.test is a viewer on notes: deploying it takes a developer or a project admin: nothing was changed" } });
-    expect(result.log[0]).toBe("-> deployment abcdefabcdefabcdefabcdef of notes, for ada@acme.test (token aaaaaaaaaaaa, a member's own)");
+    expect(result).toMatchObject({ state: "failed", error: { code: "out-of-scope", message: "ada@acme.test is a Viewer on notes: deploying it takes a Developer or an Admin: nothing was changed" } });
+    expect(result.log[0]).toBe("-> deployment abcdefabcdefabcdefabcdef of notes, for ada@acme.test (token aaaaaaaaaaaa, a person's own)");
     expect(readdirSync(join(root, "sites"))).toEqual([]);
   });
 
-  test("a member's token: a member removed since, or a registry that does not read, is refused", async () => {
-    expect((await memberRun(null, {}, false)).result).toMatchObject({ state: "failed", error: { code: "out-of-scope", message: expect.stringContaining("no longer a member") } });
+  test("a person's token: someone with no role left since, Can open alone, or a registry that does not read, is refused", async () => {
+    const gone = "the person who holds this token no longer has a role on this dashboard: nothing was changed";
+    expect((await memberRun(null, {}, false)).result).toMatchObject({ state: "failed", error: { code: "out-of-scope", message: gone } });
+    expect((await memberRun({ notes: "visitor" }, {}, false)).result).toMatchObject({ state: "failed", error: { code: "out-of-scope", message: gone } });
+    const unreadable = await memberRun({ notes: "admin" }, {}, false, false, (root) => {
+      writeFileSync(join(root, "state", "access.json"), "{ not json");
+      return {};
+    });
+    expect(unreadable.result).toMatchObject({ state: "failed", error: { code: "out-of-scope", message: gone } });
     const { result } = await memberRun({ notes: "admin" }, { create: true }, true, false);
     expect(result).toMatchObject({ state: "failed", error: { code: "out-of-scope", message: "ada@acme.test may no longer create projects: nothing was changed" } });
   });
 
-  test("a member's token: a developer's deployment loses the options a project admin's would carry", async () => {
+  test("a person's token: a Developer's deployment loses the options an Admin's would carry", async () => {
     // Public sites asked for, Ada a developer there: the static site would need them, and is refused as private.
     const env = (root: string) => ({ SITES_DIR: join(root, "sites"), BLOCKS_FOLDER: join(root, "caddy"), RUN_FOLDER: join(root, "run"), CHECK_ACCOUNTS: "" });
     const { result } = await memberRun({ notes: "developer" }, { public: true }, false, false, env);

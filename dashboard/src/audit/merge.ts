@@ -47,7 +47,7 @@ export type AuditQuery = {
   /**
    * What a member may read: the rows of their projects, and their own. Never
    * from the address: the route sets it from the session, and null is the
-   * super admin's whole machine.
+   * owner's whole machine.
    */
   restrict: Restriction | null;
 };

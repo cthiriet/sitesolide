@@ -1,8 +1,9 @@
 /**
- * The contract of the dashboard's members: people the super admin invites by
- * email, who sign in with the portal's identity provider and hold a role per
- * project. Shapes and constants only, like the other protocol files: the page
- * imports nothing from here but types.
+ * The contract of the people who sign in to the dashboard: those the access
+ * registry (src/access/) gives a role above Can open on a project, or the
+ * right to create projects. They sign in with the portal's identity provider.
+ * Shapes and constants only, like the other protocol files: the page imports
+ * nothing from here but types.
  *
  * ## Who decides what
  *
@@ -10,53 +11,45 @@
  *   sign-in and signs an assertion (portal/src/assertion.ts).
  * - **The steward** is the one authority on what they may do: it keeps the
  *   registry, checks the assertion with a public key of its own, opens the
- *   member session, and judges every write a member asks for against the
- *   registry it reads at that moment. The actor of its journal is the email
- *   it verified, never one a request names.
+ *   session, and judges every write a person asks for against the registry
+ *   it reads at that moment. The actor of its journal is the email it
+ *   verified, never one a request names.
  * - **The dashboard** carries the assertion and the session, filters what it
- *   shows (it already holds that data), and decides nothing a member could
+ *   shows (it already holds that data), and decides nothing a person could
  *   use to do more.
  *
  * ## The steward's routes
  *
  * On the dashboard's socket, `secretaire.sock`, for site-dashboard:
  *
- *   GET    /members                             -> MembersResponse
  *   GET    /members/key                         -> KeyResponse
- *   PUT    /members/member   PutMemberRequest   -> PutMemberResponse   the live unlock token; `create`, the right to create projects
- *   DELETE /members/member   { email }          -> MemberResponse      no unlock, like revoking a token
  *   POST   /members/signin   { assertion }      -> SignInResponse
  *   POST   /members/whoami   { session }        -> WhoamiResponse
  *   POST   /members/signout  { session }        -> 204
  *   POST   /members/restart  { session, slug }  -> RestartResponse (src/secrets/protocol.ts)
  *   POST   /members/unlock   { session, assertion }                 -> MemberUnlockResponse   a forced sign-in's assertion
  *   POST   /members/lock     { session, token }                     -> 204
- *   PUT    /members/project/member { session, token, slug, email, role } -> ProjectMemberResponse   a Project admin, unlocked
- *   DELETE /members/project/member { session, slug, email }               -> ProjectMemberResponse   a Project admin, no unlock
  *
- * And a member's work on their projects, judged by role (src/members/powers.ts)
+ * And a person's work on their projects, judged by role (src/members/powers.ts)
  * in src/members/actions.ts: `/members/secrets/*`, `/members/portal`,
- * `/members/sharing`, `/members/guests`, `/members/backups/restore`, each
- * carrying the session, and the member's unlock token where the power needs it.
+ * `/members/backups/restore`, each carrying the session, and the person's
+ * unlock token where the power needs it. Their people with access are the
+ * access routes' (src/access/steward.ts), under `/access/person/`.
  *
- * A member's own tokens are the control routes', src/control/steward.ts,
- * under `/team/member/`, which ask these routes for the member's session,
+ * A person's own tokens are the control routes', src/control/steward.ts,
+ * under `/team/member/`, which ask these routes for the person's session,
  * unlock and rights (src/members/tokens.ts).
- *
- * On the owner's socket, `/run/sitesolide-steward-owner/owner.sock`, which
- * only root opens, for `sitesolide members` over the owner's SSH:
- *
- *   GET    /members                                     -> MembersResponse
- *   PUT    /members/member   { email, roles, create? }  -> PutMemberResponse
- *   DELETE /members/member   { email }                  -> MemberResponse     their tokens revoked
  *
  * Every refusal is `{ error, message }`, the message in English, shown as it
  * stands.
  */
-/** The roles a member holds on a project, from the narrowest. */
-export const ROLES = ["viewer", "developer", "admin"] as const;
+import type { Role as AccessRole } from "../access/protocol";
 
-export type Role = (typeof ROLES)[number];
+/** The ladder: Can open (`visitor`), Viewer, Developer, Admin. */
+export type Role = AccessRole;
+
+/** The roles the dashboard shows a project for: Can open shows nothing there. */
+export type DashboardRole = "viewer" | "developer" | "admin";
 
 /** Who acts for the dashboard's password, in every audit. */
 export const OWNER_ACTOR = "owner";
@@ -79,12 +72,6 @@ export const MAX_AUTH_AGE_S = 24 * 60 * 60;
  */
 export const REAUTH_MAX_AGE_S = 5 * 60;
 
-/** Members on one machine: a team, not a directory. */
-export const MAX_MEMBERS = 200;
-
-/** Projects one member holds a role on. */
-export const MAX_ROLES = 100;
-
 /** Live sessions per member: a phone, a laptop, a few tabs signed in again. The oldest goes past it. */
 export const MAX_SESSIONS_PER_MEMBER = 10;
 
@@ -102,41 +89,7 @@ export const PORTAL_KEY_NAME = "assertion.key";
 export const PUBLIC_KEY_NAME = "assertion.pub";
 
 /** What a member may see and do on one project: see src/members/powers.ts. */
-export type Roles = Record<string, Role>;
-
-export type MemberView = {
-  email: string;
-  roles: Roles;
-  /**
-   * May they create projects: a right the super admin alone grants, from the
-   * Members page or `sitesolide members add <email> --may-create`. What they
-   * create, through a token of their own that may create, makes them its
-   * Project admin. A registry written before it reads as false.
-   */
-  create: boolean;
-  /** `owner`, or the email the owner linked: who invited them. */
-  invitedBy: string;
-  createdAt: number;
-  updatedAt: number;
-};
-
-/**
- * What the portal's settings say of signing in, read by the steward in
- * portal.env: whether a provider is configured, and the domains it admits.
- * An invited address outside those domains is refused, as the portal would
- * refuse it at sign-in.
- */
-export type SignInSettings = { configured: boolean; allowedDomains: string[] };
-
-export type MembersResponse = { members: MemberView[]; signIn: SignInSettings };
-
-/** `create` absent: the right as it stands, so that a client from before it changes nothing of it. */
-export type PutMemberRequest = { token?: string; email: string; roles: Roles; create?: boolean };
-
-/** `change`: `invite` for a new member, `role` for a change, `none` when nothing changed. */
-export type PutMemberResponse = { member: MemberView; change: "invite" | "role" | "none" };
-
-export type MemberResponse = { member: MemberView };
+export type Roles = Record<string, DashboardRole>;
 
 export type PublicKeyView = { kty: "OKP"; crv: "Ed25519"; x: string; kid: string };
 
@@ -151,24 +104,6 @@ export type WhoamiResponse = { identity: MemberIdentity; expiresAt: number };
 
 /** A member's unlock token: the dashboard keeps it, attached to their session, and never hands it to the browser. */
 export type MemberUnlockResponse = { token: string; expiresAt: number };
-
-/**
- * A Project admin's change on their project: the member as they may see
- * them, their role on that project alone. `remove`: their last role gone,
- * they are no member any more.
- */
-export type ProjectMemberResponse = { member: MemberView; change: "invite" | "role" | "none" | "remove" };
-
-/** A project's members, for its Project admins: their role there, nothing of their other projects. */
-export type ProjectMembersResponse = {
-  slug: string;
-  members: { email: string; role: Role; invitedBy: string; updatedAt: number }[];
-  signIn: SignInSettings;
-  dashboardUrl: string;
-  providerName: string | null;
-  /** End of this session's unlock, null if locked. */
-  until: number | null;
-};
 
 /**
  * The steward's refusals for members, beside those of src/secrets/protocol.ts:
@@ -190,19 +125,3 @@ export type IdentityView = { kind: "owner" } | { kind: "member"; email: string; 
 export type SsoOffer = { offered: boolean; providerName: string | null };
 
 export type SessionResponse = { open: boolean; configured: boolean; identity: IdentityView | null; sso: SsoOffer };
-
-/** The Members page: the registry, what the portal admits, and what the invitation to send says. */
-export type MembersPageResponse = {
-  available: boolean;
-  /** Why not, when the steward predates members. */
-  reason: string | null;
-  members: MemberView[];
-  signIn: SignInSettings;
-  /** The address to send: the dashboard's own. */
-  dashboardUrl: string;
-  providerName: string | null;
-  /** The projects a role may be given on: the deployed ones, the platform's own left out. */
-  projects: string[];
-  /** End of this session's unlock, null if locked. */
-  until: number | null;
-};

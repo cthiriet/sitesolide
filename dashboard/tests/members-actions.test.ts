@@ -4,27 +4,29 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readPrivateKey, signAssertion, type PrivateKey } from "../borrowed/assertion";
 import { snapshotName } from "../borrowed/backups";
+import { createAccessSystem } from "../src/access/system";
 import { createBackupReader } from "../src/backup/reader";
-import type { PortalAdmin } from "../src/members/portal";
 import { REAUTH_MAX_AGE_S } from "../src/members/protocol";
 import { createMembersSystem, type MembersSystem } from "../src/members/system";
 import { reread } from "../src/secrets/log";
 import type { LogEntry } from "../src/secrets/protocol";
 import { createSteward, type StewardHandler } from "../src/secrets/steward";
 import { createSystem, type Command, type System } from "../src/secrets/system";
+import { registryOf, writeRegistry, type People } from "./registry-fixtures";
 
 /**
- * Every decision the steward takes for a member's work on their projects, as
+ * Every decision the steward takes for a person's work on their projects, as
  * root would take it: on a throwaway tree, with the real files, the real key
- * pair, the real journal, a real backup reader, and a portal of the tests'
- * making behind the relay. `systemctl` alone is simulated.
+ * pair, the real access registry, the real journal and a real backup reader.
+ * `systemctl` alone is simulated.
  *
- * A member unlocks with a forced sign-in for their own email, and their token
- * neither evicts nor is evicted by the super admin's or another member's. A
- * Developer writes and never reads a value back; a Project admin reads, turns
- * the door, shares, gives guest access, restores and invites, on their
- * project alone; the machine's own projects and files are nobody's but the
- * super admin's. The journal names the member the steward verified.
+ * A person unlocks with a forced sign-in for their own email, and their token
+ * neither evicts nor is evicted by the owner's or another person's. A
+ * Developer writes and never reads a value back; an Admin reads, changes the
+ * general access and restores, on their project alone; the machine's own
+ * projects and files are nobody's but the owner's. The journal names the
+ * person the steward verified. Their people with access are the access
+ * tests' business.
  */
 
 const PASSWORD = "Owner-Password-For-The-Tests-1";
@@ -38,22 +40,18 @@ afterEach(() => {
   for (const folder of toClean.splice(0)) rmSync(folder, { recursive: true, force: true });
 });
 
-type PortalCall = { route: string; body: unknown };
-
 type Bench = {
   root: string;
-  /** The token revocations the steward asked for: whose, and under whom. */
-  revoked: [string, string][];
   clock: { t: number };
   dashboard: StewardHandler;
   calls: string[][];
   barrier: { promise: Promise<void> | null };
-  portal: { calls: PortalCall[]; policies: Record<string, unknown>[]; guests: { id: string; host: string; label: string }[] };
   call: (method: string, path: string, body?: unknown) => Promise<Response>;
-  asRoot: (method: string, path: string, body?: unknown) => Promise<Response>;
   journal: () => LogEntry[];
   privateKey: () => PrivateKey;
   file: (name: string) => string;
+  /** The access registry laid as the owner would have left it. */
+  seed: (people: People) => void;
 };
 
 const SNAPSHOT_AGE_MS = 3_600_000;
@@ -95,7 +93,7 @@ async function mount(): Promise<Bench> {
   writeFileSync(join(secrets, "beta.env"), `API_KEY=${SECRET_VALUE}\n`, { mode: 0o600 });
   writeFileSync(join(secrets, "beta-signing.pub"), "ssh-ed25519 AAAA beta\n", { mode: 0o444 });
   writeFileSync(join(secrets, "shop.env"), `API_KEY=${SECRET_VALUE}\n`, { mode: 0o600 });
-  // beta's block carries the portal: it may be shared, and its door turned off.
+  // beta's block carries the portal: its general access is restricted, and may be turned public.
   writeFileSync(join(caddy, "beta.caddy"), "beta.{$SITESOLIDE_ZONE} {\n\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\turi /verifier\n\t}\n}\n");
 
   // A snapshot of beta, and the restore's template: a restore can start.
@@ -145,62 +143,33 @@ async function mount(): Promise<Bench> {
     now: () => clock.t,
   };
 
-  // The portal behind the relay: it records what root asked, and answers as the real one.
-  const portalState: Bench["portal"] = { calls: [], policies: [], guests: [{ id: "GUESTONSHOP00001", host: `shop.${ZONE}`, label: "Someone" }] };
-  const portal: PortalAdmin = {
-    sharing: async () => Response.json({ sso: { configured: true, providerName: "Acme", allowedDomains: ["acme.test"], admins: [] }, sites: [] }),
-    replaceSharing: async (host, body) => {
-      portalState.calls.push({ route: `PUT /admin/sharing/${host}`, body });
-      portalState.policies.push({ host, ...body });
-      return Response.json({ host, policy: { mode: body.mode, people: body.people, domains: body.domains }, updatedAt: clock.t });
-    },
-    guests: async () => Response.json({ guests: portalState.guests }),
-    createGuest: async (body) => {
-      portalState.calls.push({ route: "POST /admin/guests", body });
-      const guest = { id: "GUESTONBETA00001", host: body.host, label: String(body.label) };
-      portalState.guests.push(guest);
-      return Response.json({ guest, password: "drawn-guest-password-1234" }, { status: 201 });
-    },
-    revokeGuest: async (id, actor) => {
-      portalState.calls.push({ route: `DELETE /admin/invites/${id}`, body: { actor } });
-      portalState.guests = portalState.guests.filter((guest) => guest.id !== id);
-      return new Response(null, { status: 204 });
-    },
+  const access = {
+    ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "", portalDataFolder: join(root, "portal-data") }, false),
+    now: () => clock.t,
   };
 
-  const revoked: [string, string][] = [];
   const dashboard = createSteward(system, {
     secretsFolder: secrets,
     checkAccounts: false,
-    members: {
-      system: members,
-      zone: ZONE,
-      portal,
-      revokeTokens: async (email, actor) => {
-        revoked.push([email, actor]);
-        return 0;
-      },
-    },
+    members: { system: members, access, zone: ZONE },
     backups: createBackupReader({ sitesDir: sites, backupFolder: backups, stateFolder: backupState, runFolder: backupRun, unitsFolder: units }),
   });
   await dashboard.ensureMemberKeys();
 
-  const request = (handler: () => StewardHandler["owner"]) => (method: string, path: string, body?: unknown) =>
-    handler()(new Request(`http://steward${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
+  const call = (method: string, path: string, body?: unknown) =>
+    dashboard(new Request(`http://steward${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
 
   return {
     root,
-    revoked,
     clock,
     dashboard,
     calls,
     barrier,
-    portal: portalState,
-    call: request(() => dashboard),
-    asRoot: request(() => dashboard.owner),
+    call,
     journal: () => (existsSync(join(state, "journal.jsonl")) ? reread(readFileSync(join(state, "journal.jsonl"), "utf8")) : []),
     privateKey: () => readPrivateKey(readFileSync(join(portalKey, "assertion.key"), "utf8"))!,
     file: (name) => readFileSync(join(secrets, name), "utf8"),
+    seed: (people) => writeRegistry(state, registryOf(people)),
   };
 }
 
@@ -227,10 +196,11 @@ async function ownerUnlock(bench: Bench): Promise<string> {
   return ((await response.json()) as { token: string }).token;
 }
 
-/** Alice: Developer on alpha, Project admin on beta, Viewer on shop. Bob: Developer on alpha. */
+/** Alice: Developer on alpha, Admin on beta, Viewer on shop. Bob: Developer on alpha. */
+const TEAM: People = { [ALICE]: { alpha: "developer", beta: "admin", shop: "viewer" }, [BOB]: { alpha: "developer" } };
+
 async function team(bench: Bench): Promise<{ alice: string; bob: string }> {
-  expect((await bench.asRoot("PUT", "/members/member", { email: ALICE, roles: { alpha: "developer", beta: "admin", shop: "viewer" } })).status).toBe(201);
-  expect((await bench.asRoot("PUT", "/members/member", { email: BOB, roles: { alpha: "developer" } })).status).toBe(201);
+  bench.seed(TEAM);
   return { alice: await sessionOf(bench, ALICE), bob: await sessionOf(bench, BOB) };
 }
 
@@ -269,13 +239,13 @@ describe("a member's own unlock", () => {
 
   test("a Viewer everywhere has nothing to unlock", async () => {
     const bench = await mount();
-    await bench.asRoot("PUT", "/members/member", { email: ALICE, roles: { shop: "viewer" } });
+    bench.seed({ [ALICE]: { shop: "viewer", beta: "visitor" } });
     const session = await sessionOf(bench, ALICE);
     const response = await bench.call("POST", "/members/unlock", { session, assertion: await assertion(bench, ALICE, { reauth: true }) });
     expect(response.status).toBe(403);
   });
 
-  test("neither the super admin's unlock nor another member's evicts it, nor the other way round", async () => {
+  test("neither the owner's unlock nor another person's evicts it, nor the other way round", async () => {
     const bench = await mount();
     const { alice, bob } = await team(bench);
     const owner = await ownerUnlock(bench);
@@ -291,9 +261,9 @@ describe("a member's own unlock", () => {
     // The owner's new unlock replaced the owner's old one, and only that one.
     expect((await bench.call("POST", "/value", { token: owner, slug: "alpha", file: "alpha.env", variable: "API_KEY" })).status).toBe(401);
     expect((await bench.call("POST", "/value", { token: ownerAgain, slug: "alpha", file: "alpha.env", variable: "API_KEY" })).status).toBe(200);
-    // A member's token opens no route of the super admin's.
+    // A person's token opens no route of the owner's.
     expect((await bench.call("POST", "/value", { token: aliceToken, slug: "alpha", file: "alpha.env", variable: "API_KEY" })).status).toBe(401);
-    // Nor another member's session.
+    // Nor another person's session.
     expect((await set(bob, aliceToken, "c")).status).toBe(401);
   });
 
@@ -311,7 +281,7 @@ describe("a member's own unlock", () => {
     expect((await set(phone, onPhone)).status).toBe(200);
   });
 
-  test("ten minutes, fixed; locked on demand, at sign-out, and when the member is removed", async () => {
+  test("ten minutes, fixed; locked on demand, at sign-out, and when the person is taken off", async () => {
     const bench = await mount();
     const { alice, bob } = await team(bench);
     const set = (session: string, token: string) =>
@@ -331,11 +301,16 @@ describe("a member's own unlock", () => {
     expect((await set(alice, token)).status).toBe(401);
 
     const bobToken = await unlockAs(bench, bob, BOB);
-    await bench.asRoot("DELETE", "/members/member", { email: BOB });
-    expect((await set(bob, bobToken)).status).toBe(401);
+    bench.seed({ [ALICE]: TEAM[ALICE]! });
+    expect(await body(await set(bob, bobToken))).toMatchObject({ error: "signed-out" });
+    // Lowered to Viewer, their unlock opens no write either.
+    const again = await sessionOf(bench, ALICE);
+    token = await unlockAs(bench, again, ALICE);
+    bench.seed({ [ALICE]: { alpha: "viewer", beta: "admin" } });
+    expect(await body(await set(again, token))).toMatchObject({ error: "out-of-scope", message: `${ALICE} is a Viewer on alpha: changing its secrets takes a Developer or an Admin` });
   });
 
-  test("its refusals count per member, under a cap for the whole machine; the owner's counter is untouched", async () => {
+  test("its refusals count per person, under a cap for the whole machine; the owner's counter is untouched", async () => {
     const bench = await mount();
     const { alice, bob } = await team(bench);
     for (let i = 0; i < 4; i++) {
@@ -396,14 +371,14 @@ describe("secrets, by role", () => {
     const value = await bench.call("POST", "/members/secrets/value", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "API_KEY" });
     expect(value.status).toBe(403);
     const refusal = await body(value);
-    expect(refusal).toEqual({ error: "out-of-scope", message: `${ALICE} is a developer on alpha: reading a value back takes a project admin: a developer sets, replaces and removes values, and never reads one` });
+    expect(refusal).toEqual({ error: "out-of-scope", message: `${ALICE} is a Developer on alpha: reading a value back takes an Admin: a Developer sets, replaces and removes values, and never reads one` });
     expect(JSON.stringify(refusal)).not.toContain(SECRET_VALUE);
     expect(bench.journal().at(-1)).toMatchObject({ operation: "read", result: "rejects", actor: ALICE, slug: "alpha", detail: "role developer" });
     expect((await bench.call("POST", "/members/secrets/content", { session: alice, token, slug: "alpha", file: "alpha-signing.pub" })).status).toBe(403);
     expect((await bench.call("POST", "/members/secrets/restore", { session: alice, token, slug: "alpha", file: "alpha.env" })).status).toBe(403);
   });
 
-  test("a Project admin reads their project's values, and the journal names them", async () => {
+  test("an Admin reads their project's values, and the journal names them", async () => {
     const bench = await mount();
     const { alice } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
@@ -415,7 +390,7 @@ describe("secrets, by role", () => {
     expect(await body(content)).toEqual({ content: "ssh-ed25519 AAAA beta\n" });
   });
 
-  test("every unlocked write needs the member's own unlock, the session alone is not enough", async () => {
+  test("every unlocked write needs the person's own unlock, the session alone is not enough", async () => {
     const bench = await mount();
     const { alice } = await team(bench);
     const missing = await bench.call("PUT", "/members/secrets/variable", { session: alice, slug: "alpha", file: "alpha.env", variable: "A", value: "b" });
@@ -424,26 +399,26 @@ describe("secrets, by role", () => {
     expect(await body(wrong)).toMatchObject({ error: "locked" });
   });
 
-  test("another project, a project they view, the platform's projects and files: refused", async () => {
+  test("another project, a project they view or only open, the platform's projects and files: refused", async () => {
     const bench = await mount();
     const { alice } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
     const set = (slug: string, file: string) => bench.call("PUT", "/members/secrets/variable", { session: alice, token, slug, file, variable: "X", value: "y" });
-    expect(await body(await set("shop", "shop.env"))).toMatchObject({ error: "out-of-scope", message: `${ALICE} is a viewer on shop: changing its secrets takes a developer or a project admin` });
+    expect(await body(await set("shop", "shop.env"))).toMatchObject({ error: "out-of-scope", message: `${ALICE} is a Viewer on shop: changing its secrets takes a Developer or an Admin` });
     expect(await body(await set("dashboard", "dashboard.env"))).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("belongs to the platform") });
     expect(await body(await set("portal", "portal.env"))).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("belongs to the platform") });
     // A file of another project named on a project of theirs is out of its scope.
     expect(await body(await set("alpha", "shop.env"))).toMatchObject({ error: "out-of-scope" });
     expect(bench.file("shop.env")).toBe(`API_KEY=${SECRET_VALUE}\n`);
+    // Can open is no role here: it opens the site, and nothing of it in the dashboard.
+    bench.seed({ ...TEAM, [ALICE]: { ...TEAM[ALICE]!, shop: "visitor" } });
+    expect(await body(await set("shop", "shop.env"))).toMatchObject({ error: "out-of-scope", message: `${ALICE} holds no role on shop` });
+    expect(bench.journal().at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: ALICE, slug: "shop", detail: "no role" });
   });
 
   test("a registry edited by hand to name a platform project still opens none of its files", async () => {
     const bench = await mount();
-    await team(bench);
-    const registryFile = join(bench.root, "state", "members.json");
-    const registry = JSON.parse(readFileSync(registryFile, "utf8"));
-    registry.members[0].roles.dashboard = "admin";
-    writeFileSync(registryFile, JSON.stringify(registry));
+    bench.seed({ ...TEAM, [ALICE]: { ...TEAM[ALICE]!, dashboard: "admin" } });
     const alice = await sessionOf(bench, ALICE);
     const token = await unlockAs(bench, alice, ALICE);
     const read = await bench.call("POST", "/members/secrets/value", { session: alice, token, slug: "dashboard", file: "dashboard.env", variable: "PASSWORD_HASH" });
@@ -452,7 +427,7 @@ describe("secrets, by role", () => {
     expect((listed.projects as { slug: string }[]).map((project) => project.slug)).not.toContain("dashboard");
   });
 
-  test("a password hash is never a member's to set or remove", async () => {
+  test("a password hash is never a person's to set or remove", async () => {
     const bench = await mount();
     const { alice } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
@@ -461,7 +436,7 @@ describe("secrets, by role", () => {
     expect(bench.journal().at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: ALICE });
   });
 
-  test("removed while the write waited behind a restart: nothing is written", async () => {
+  test("taken off while the write waited behind a restart: nothing is written", async () => {
     const bench = await mount();
     const { alice } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
@@ -471,7 +446,7 @@ describe("secrets, by role", () => {
     await Bun.sleep(20);
     const write = bench.call("PUT", "/members/secrets/variable", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "LATE", value: "never-written" });
     await Bun.sleep(20);
-    await bench.asRoot("DELETE", "/members/member", { email: ALICE });
+    bench.seed({ [BOB]: TEAM[BOB]! });
     release();
     await restart;
     expect((await write).status).toBe(401);
@@ -479,8 +454,8 @@ describe("secrets, by role", () => {
   });
 });
 
-describe("a Project admin's project", () => {
-  test("turns its door off and on through the gatekeeper, named in the journal; a Developer cannot", async () => {
+describe("an Admin's project", () => {
+  test("turns its general access public and back through the gatekeeper, named in the journal; a Developer cannot", async () => {
     const bench = await mount();
     const { alice, bob } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
@@ -491,43 +466,8 @@ describe("a Project admin's project", () => {
 
     const bobToken = await unlockAs(bench, bob, BOB);
     const refused = await bench.call("POST", "/members/portal", { session: bob, token: bobToken, slug: "alpha", active: true, confirmation: "" });
-    expect(await body(refused)).toMatchObject({ error: "out-of-scope", message: `${BOB} is a developer on alpha: turning its portal on or off takes a project admin` });
+    expect(await body(refused)).toMatchObject({ error: "out-of-scope", message: `${BOB} is a Developer on alpha: changing its general access takes an Admin` });
     expect(bench.journal().at(-1)).toMatchObject({ operation: "portal", result: "rejects", actor: BOB, detail: "role developer" });
-  });
-
-  test("shares it through the portal as root, the actor their email; a domain the portal does not admit, public, and a Developer refused", async () => {
-    const bench = await mount();
-    const { alice, bob } = await team(bench);
-    const share = (session: string, slug: string, policy: Record<string, unknown>) => bench.call("PUT", "/members/sharing", { session, slug, ...policy });
-
-    const shared = await share(alice, "beta", { mode: "people", people: [BOB], domains: [] });
-    expect(shared.status).toBe(200);
-    expect(bench.portal.calls.at(-1)).toEqual({ route: `PUT /admin/sharing/beta.${ZONE}`, body: { mode: "people", people: [BOB], domains: [], actor: ALICE } });
-
-    const elsewhere = await share(alice, "beta", { mode: "domain", people: [], domains: ["gmail.com"] });
-    expect(await body(elsewhere)).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("acme.test") });
-    expect(await body(await share(alice, "beta", { mode: "public", people: [], domains: [] }))).toMatchObject({ error: "out-of-scope" });
-    expect(await body(await share(bob, "alpha", { mode: "people", people: [ALICE], domains: [] }))).toMatchObject({ error: "out-of-scope" });
-    expect(bench.journal().at(-1)).toMatchObject({ operation: "sharing", result: "rejects", actor: BOB, slug: "alpha" });
-    // A site the portal does not guard cannot be shared.
-    await bench.asRoot("PUT", "/members/member", { email: BOB, roles: { alpha: "admin" } });
-    expect((await share(bob, "alpha", { mode: "people", people: [ALICE], domains: [] })).status).toBe(409);
-    expect(bench.portal.calls).toHaveLength(1);
-  });
-
-  test("gives and revokes guest access on its site, never on another project's", async () => {
-    const bench = await mount();
-    const { alice } = await team(bench);
-    const created = await bench.call("POST", "/members/guests", { session: alice, slug: "beta", label: "Client", durationS: 3600 });
-    expect(created.status).toBe(201);
-    expect(bench.portal.calls.at(-1)).toEqual({ route: "POST /admin/guests", body: { host: `beta.${ZONE}`, label: "Client", durationS: 3600, actor: ALICE } });
-    expect((await bench.call("DELETE", "/members/guests", { session: alice, id: "GUESTONBETA00001" })).status).toBe(204);
-    expect(bench.portal.calls.at(-1)).toEqual({ route: "DELETE /admin/invites/GUESTONBETA00001", body: { actor: ALICE } });
-    // shop's guest: Alice is a Viewer there.
-    const refused = await bench.call("DELETE", "/members/guests", { session: alice, id: "GUESTONSHOP00001" });
-    expect(refused.status).toBe(403);
-    expect(bench.journal().at(-1)).toMatchObject({ operation: "guest.revoke", result: "rejects", actor: ALICE, slug: "shop" });
-    expect((await bench.call("DELETE", "/members/guests", { session: alice, id: "NOSUCHGUEST00001" })).status).toBe(404);
   });
 
   test("restores a snapshot of it, the requester the email the steward verified; a Developer cannot", async () => {
@@ -548,65 +488,5 @@ describe("a Project admin's project", () => {
     const refused = await bench.call("POST", "/members/backups/restore", { session: bob, token: bobToken, slug: "alpha", snapshot, confirmation: "alpha" });
     expect(await body(refused)).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("backups") });
     expect(bench.journal().at(-1)).toMatchObject({ operation: "backup.restore", result: "rejects", actor: BOB });
-  });
-});
-
-describe("a Project admin's members", () => {
-  test("invites on their project, unlocked; the registry and the journal name who invited", async () => {
-    const bench = await mount();
-    const { alice } = await team(bench);
-    const carol = "carol@acme.test";
-    expect(await body(await bench.call("PUT", "/members/project/member", { session: alice, token: "x".repeat(43), slug: "beta", email: carol, role: "viewer" }))).toMatchObject({
-      error: "locked",
-    });
-    const token = await unlockAs(bench, alice, ALICE);
-    const invited = await bench.call("PUT", "/members/project/member", { session: alice, token, slug: "beta", email: carol, role: "viewer" });
-    expect(invited.status).toBe(201);
-    expect(await body(invited)).toMatchObject({ change: "invite", member: { email: carol, roles: { beta: "viewer" }, invitedBy: ALICE } });
-    expect(bench.journal().at(-1)).toMatchObject({ operation: "member.invite", result: "ok", actor: ALICE, member: carol, slug: "beta", detail: "beta: viewer" });
-    const registry = await body(await bench.asRoot("GET", "/members"));
-    expect((registry.members as { email: string; roles: unknown; invitedBy: string }[]).find((member) => member.email === carol)).toMatchObject({ roles: { beta: "viewer" }, invitedBy: ALICE });
-  });
-
-  test("refused where they are a Developer, a Viewer or nothing, on the platform, and for an address the portal turns away", async () => {
-    const bench = await mount();
-    const { alice } = await team(bench);
-    const token = await unlockAs(bench, alice, ALICE);
-    const invite = (slug: string, email = "carol@acme.test") => bench.call("PUT", "/members/project/member", { session: alice, token, slug, email, role: "viewer" });
-    expect(await body(await invite("alpha"))).toMatchObject({ error: "out-of-scope", message: `${ALICE} is a developer on alpha: giving people a role on it takes a project admin` });
-    expect(bench.journal().at(-1)).toMatchObject({ operation: "member.invite", result: "rejects", actor: ALICE, slug: "alpha", detail: "role developer" });
-    expect((await invite("shop")).status).toBe(403);
-    expect(await body(await invite("blog"))).toMatchObject({ message: `${ALICE} holds no role on blog` });
-    expect(await body(await invite("dashboard"))).toMatchObject({ message: expect.stringContaining("platform") });
-    expect(await body(await invite("beta", "eve@elsewhere.test"))).toMatchObject({ error: "invalid", message: expect.stringContaining("admits only acme.test") });
-  });
-
-  test("changes a member's role on their project, the others untouched and unseen", async () => {
-    const bench = await mount();
-    const { alice } = await team(bench);
-    const token = await unlockAs(bench, alice, ALICE);
-    const changed = await bench.call("PUT", "/members/project/member", { session: alice, token, slug: "beta", email: BOB, role: "admin" });
-    expect(changed.status).toBe(200);
-    // Bob's role on alpha is not Alice's to learn.
-    expect(await body(changed)).toMatchObject({ change: "role", member: { email: BOB, roles: { beta: "admin" }, invitedBy: "owner" } });
-    const registry = await body(await bench.asRoot("GET", "/members"));
-    expect((registry.members as { email: string; roles: unknown }[]).find((member) => member.email === BOB)?.roles).toEqual({ alpha: "developer", beta: "admin" });
-  });
-
-  test("takes a role away without unlocking; the last one gone, the member goes, their sessions with them", async () => {
-    const bench = await mount();
-    const { alice } = await team(bench);
-    const token = await unlockAs(bench, alice, ALICE);
-    const carol = "carol@acme.test";
-    await bench.call("PUT", "/members/project/member", { session: alice, token, slug: "beta", email: carol, role: "developer" });
-    const carolSession = await sessionOf(bench, carol);
-    const removed = await bench.call("DELETE", "/members/project/member", { session: alice, slug: "beta", email: carol });
-    expect(await body(removed)).toMatchObject({ change: "remove", member: { email: carol } });
-    expect(bench.journal().at(-1)).toMatchObject({ operation: "member.remove", actor: ALICE, member: carol, slug: "beta" });
-    expect((await bench.call("POST", "/members/whoami", { session: carolSession })).status).toBe(401);
-    // Her tokens go with her, revoked under the Project admin who took her last role.
-    expect(bench.revoked).toEqual([[carol, ALICE]]);
-    // Bob keeps alpha when Alice takes nothing of his there.
-    expect((await bench.call("DELETE", "/members/project/member", { session: alice, slug: "alpha", email: BOB })).status).toBe(403);
   });
 });

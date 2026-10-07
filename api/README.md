@@ -7,9 +7,10 @@ scope.
 
 **This service will never receive a form.** Every project handles its own, in
 its own directory and behind its own service. The landing page's contact form
-lived here for a while, and that was an architectural mistake. Sharing a site
-feature means one fault deprives that site of its form at the same time as every
-other, and one compromise hands over every customer's submissions at once. A
+lived here for a while, and that was an architectural mistake. One service
+holding a feature for every site means one fault deprives that site of its
+form at the same time as every other, and one compromise hands over every
+customer's submissions at once. A
 defect should reach only the site that wrote it.
 
 What stays shared is the only two things that genuinely are: certificates, whose

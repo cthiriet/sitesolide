@@ -136,12 +136,16 @@ machine itself dying, and optionally a Slack, Discord or ntfy webhook: five
 minutes, described in [monitor/README.md](../monitor/README.md#alerting-healthchecksio-in-five-minutes).
 What the monitor finds down also shows among the dashboard's Issues.
 
-## 6. Let others deploy, without SSH
+## 6. Let others in, without SSH
 
 Colleagues and agents deploy with a personal token instead of root SSH: create
-one on the dashboard's *Team* page, and send its holder to [team.md](team.md),
-"Deploying as a team member". Setup installed what it needs, unless it ran
-with `--minimal`.
+one on the dashboard's *Tokens* page, and send its holder to [team.md](team.md),
+"People and tokens". Setup installed what it needs, unless it ran with
+`--minimal`. Once signing in with a company account is set up
+([portal/README.md](../portal/README.md#signing-in-with-a-work-account)), give
+colleagues a role on a project instead, `sitesolide share <email> --role
+developer` in its folder: they sign in to the dashboard and mint their own
+tokens, never stronger than their roles.
 
 ## Another DNS provider
 
@@ -260,7 +264,7 @@ each one that lays something it reads.
 
 ```bash
 bin/deploy-backup.sh install && bin/deploy-steward.sh && bin/deploy-backup.sh enable
-bin/deploy-installer.sh        # deploys with a team token
+bin/deploy-installer.sh        # deploys with a token
 bin/deploy-egress.sh && bin/deploy-steward.sh
 ```
 

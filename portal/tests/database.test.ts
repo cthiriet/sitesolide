@@ -56,43 +56,51 @@ describe("openDatabase", () => {
   });
 });
 
-describe("the guest access store", () => {
-  const store = guestStore(openDatabase(join(DATA_DIR, "guests.db")));
+describe("the guest access store, read-only", () => {
+  const db = openDatabase(join(DATA_DIR, "guests.db"));
+  const store = guestStore(db);
+
+  /** A row as the portal wrote it before the steward kept access: nothing writes one any more. */
+  function lay(guest: Guest, hash: string, seenAt: number | null = null): void {
+    db.query("INSERT INTO invites (id, hote, libelle, empreinte, cree_a, expire_a, vu_a) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+      guest.id,
+      guest.host,
+      guest.label,
+      hash,
+      guest.createdAt,
+      guest.expiresAt,
+      seenAt,
+    );
+  }
 
   function guest(id: string, rest: Partial<Guest> = {}): Guest {
     return { id, host: "forum.test-zone.invalid", label: "Alice", createdAt: 1_000, expiresAt: null, seenAt: null, ...rest };
   }
 
-  test("a created access is found back by its identifier and by its hash, never by the password", () => {
-    const created = guest("AAAAAAAAAAAAAAA1", { expiresAt: 5_000 });
-    store.create(created, "e".repeat(64));
-    expect(store.byId(created.id)).toEqual(created);
-    expect(store.byHash("e".repeat(64))).toEqual(created);
+  test("an access is found back by its identifier and by its hash, never by the password", () => {
+    const laid = guest("AAAAAAAAAAAAAAA1", { expiresAt: 5_000 });
+    lay(laid, "e".repeat(64));
+    expect(store.byId(laid.id)).toEqual(laid);
+    expect(store.byHash("e".repeat(64))).toEqual(laid);
     expect(store.byHash("f".repeat(64))).toBeNull();
     expect(store.byId("AAAAAAAAAAAAAAAZ")).toBeNull();
   });
 
-  test("two accesses never share a hash", () => {
-    store.create(guest("AAAAAAAAAAAAAAA2"), "2".repeat(64));
-    expect(() => store.create(guest("AAAAAAAAAAAAAAA3"), "2".repeat(64))).toThrow();
+  test("two accesses never shared a hash", () => {
+    lay(guest("AAAAAAAAAAAAAAA2"), "2".repeat(64), 7_000);
+    expect(() => lay(guest("AAAAAAAAAAAAAAA3"), "2".repeat(64))).toThrow();
+    expect(store.byId("AAAAAAAAAAAAAAA2")?.seenAt).toBe(7_000);
   });
 
   test("the list goes from the most recent to the oldest, without a hash", () => {
-    store.create(guest("AAAAAAAAAAAAAAA4", { createdAt: 9_000 }), "4".repeat(64));
+    lay(guest("AAAAAAAAAAAAAAA4", { createdAt: 9_000 }), "4".repeat(64));
     const rows = store.list();
     expect(rows[0]!.id).toBe("AAAAAAAAAAAAAAA4");
     expect(JSON.stringify(rows)).not.toInclude("4".repeat(64));
   });
 
-  test("the last visit is noted", () => {
-    store.touch("AAAAAAAAAAAAAAA2", 7_000);
-    expect(store.byId("AAAAAAAAAAAAAAA2")?.seenAt).toBe(7_000);
-  });
-
-  test("deleting says whether the access existed", () => {
-    expect(store.remove("AAAAAAAAAAAAAAA2")).toBe(true);
-    expect(store.byId("AAAAAAAAAAAAAAA2")).toBeNull();
-    expect(store.remove("AAAAAAAAAAAAAAA2")).toBe(false);
+  test("offers nothing that writes", () => {
+    expect(Object.keys(store).sort()).toEqual(["byHash", "byId", "list"]);
   });
 });
 
@@ -116,7 +124,7 @@ describe("a database from before sharing", () => {
   });
 });
 
-describe("the sharing store", () => {
+describe("the sharing store, read-only", () => {
   const db = openDatabase(join(DATA_DIR, "sharing.db"));
   const store = sharingStore(db);
   const HOST = "forum.test-zone.invalid";
@@ -125,9 +133,10 @@ describe("the sharing store", () => {
     expect(store.get("never.test-zone.invalid")).toEqual(DEFAULT_POLICY);
   });
 
-  test("a policy replaces the previous one whole", () => {
-    store.set(HOST, { mode: "people", people: ["alice@acme.test"], domains: [] }, 1_000);
-    store.set(HOST, { mode: "domain", people: ["bob@acme.test"], domains: ["acme.test"] }, 2_000);
+  test("reads back a policy as the portal wrote it before the steward kept access", () => {
+    db.run(
+      `INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES ('${HOST}', 'domain', '["bob@acme.test"]', '["acme.test"]', 2000)`,
+    );
     expect(store.get(HOST)).toEqual({ mode: "domain", people: ["bob@acme.test"], domains: ["acme.test"] });
     expect(store.list()).toEqual([
       { host: HOST, policy: { mode: "domain", people: ["bob@acme.test"], domains: ["acme.test"] }, updatedAt: 2_000 },
@@ -139,6 +148,10 @@ describe("the sharing store", () => {
     db.run("INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES ('broken.test-zone.invalid', 'people', 'not json', '[]', 1)");
     expect(store.get("odd.test-zone.invalid")).toEqual(DEFAULT_POLICY);
     expect(store.get("broken.test-zone.invalid")).toEqual(DEFAULT_POLICY);
+  });
+
+  test("offers nothing that writes", () => {
+    expect(Object.keys(store).sort()).toEqual(["get", "list"]);
   });
 });
 
@@ -213,18 +226,18 @@ describe("the audit store", () => {
   test("a sign-in repeated within a minute by the same actor, on the same site, is one row that counts", () => {
     const db = openDatabase(join(DATA_DIR, "audit-collapse.db"));
     const collapsing = auditStore(db);
-    const guest = { actor: "guest:InViTeInViTe0001", action: "portal.signin", target: "forum.test-zone.invalid", detail: { method: "guest" } };
-    for (let i = 0; i < 100; i++) collapsing.record(guest, START + i * 500);
+    const visitor = { actor: "zoe@elsewhere.test", action: "portal.signin", target: "forum.test-zone.invalid", detail: { method: "password-access" } };
+    for (let i = 0; i < 100; i++) collapsing.record(visitor, START + i * 500);
     // Another site, another actor, another action: rows of their own.
-    collapsing.record({ ...guest, target: "roster.test-zone.invalid" }, START + 1_000);
-    collapsing.record({ ...guest, actor: "owner", detail: { method: "password" } }, START + 1_000);
-    collapsing.record({ actor: "guest:InViTeInViTe0001", action: "portal.signout", target: "forum.test-zone.invalid" }, START + 2_000);
-    collapsing.record({ actor: "guest:InViTeInViTe0001", action: "portal.signout", target: "forum.test-zone.invalid" }, START + 3_000);
+    collapsing.record({ ...visitor, target: "roster.test-zone.invalid" }, START + 1_000);
+    collapsing.record({ ...visitor, actor: "owner", detail: { method: "password" } }, START + 1_000);
+    collapsing.record({ actor: "zoe@elsewhere.test", action: "portal.signout", target: "forum.test-zone.invalid" }, START + 2_000);
+    collapsing.record({ actor: "zoe@elsewhere.test", action: "portal.signout", target: "forum.test-zone.invalid" }, START + 3_000);
     expect(collapsing.recent(100).map(({ actor, action, target, detail, at }) => ({ actor, action, target, detail, at }))).toEqual([
-      { actor: guest.actor, action: "portal.signout", target: "forum.test-zone.invalid", detail: { count: 2 }, at: new Date(START + 2_000).toISOString() },
+      { actor: visitor.actor, action: "portal.signout", target: "forum.test-zone.invalid", detail: { count: 2 }, at: new Date(START + 2_000).toISOString() },
       { actor: "owner", action: "portal.signin", target: "forum.test-zone.invalid", detail: { method: "password" }, at: new Date(START + 1_000).toISOString() },
-      { actor: guest.actor, action: "portal.signin", target: "roster.test-zone.invalid", detail: { method: "guest" }, at: new Date(START + 1_000).toISOString() },
-      { actor: guest.actor, action: "portal.signin", target: "forum.test-zone.invalid", detail: { method: "guest", count: 100 }, at: new Date(START).toISOString() },
+      { actor: visitor.actor, action: "portal.signin", target: "roster.test-zone.invalid", detail: { method: "password-access" }, at: new Date(START + 1_000).toISOString() },
+      { actor: visitor.actor, action: "portal.signin", target: "forum.test-zone.invalid", detail: { method: "password-access", count: 100 }, at: new Date(START).toISOString() },
     ]);
   });
 
@@ -233,7 +246,7 @@ describe("the audit store", () => {
     const owner = { actor: "owner", action: "portal.signin", target: "forum.test-zone.invalid", detail: { method: "password" } };
     collapsing.record(owner, START);
     collapsing.record(owner, START + COLLAPSE_WINDOW_MS);
-    collapsing.record({ ...owner, actor: "alice@acme.test", detail: { method: "oidc", role: "member" } }, START + 1);
+    collapsing.record({ ...owner, actor: "alice@acme.test", detail: { method: "oidc", role: "viewer" } }, START + 1);
     collapsing.record({ ...owner, actor: "alice@acme.test", detail: { method: "oidc", role: "admin" } }, START + 2);
     collapsing.record({ actor: "anonymous", action: "portal.signin_failed", target: "forum.test-zone.invalid", detail: { method: "password" } }, START + 3);
     collapsing.record({ actor: "anonymous", action: "portal.signin_failed", target: "forum.test-zone.invalid", detail: { method: "password" } }, START + 4);

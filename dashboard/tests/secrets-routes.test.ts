@@ -169,11 +169,6 @@ function mount(steward?: Steward) {
       online: true,
       sessionDurationMs: SESSION_DURATION_MS,
       stateFile: "/nonexistent/state.json",
-      portal: {
-        list: () => Promise.reject(new Error("portal called")),
-        create: () => Promise.reject(new Error("portal called")),
-        remove: () => Promise.reject(new Error("portal called")),
-      },
       forgetUnlock: secrets.forgetUnlock,
     },
     () => clock,

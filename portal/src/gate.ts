@@ -35,7 +35,8 @@
  * the guests' included, and erasing the draw does too.
  */
 import { isValidId } from "./guests";
-import { cleanEmail, type Role } from "./sharing";
+import type { Role } from "./access";
+import { cleanEmail } from "./sharing";
 
 /** Size of the draw kept in the data folder. */
 export const KEY_BYTES = 32;

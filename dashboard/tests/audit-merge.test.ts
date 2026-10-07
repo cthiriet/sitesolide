@@ -136,8 +136,15 @@ describe("each source's rows, in one shape", () => {
 
   test("every operation the steward journals has its action, and an unknown one is left out", () => {
     expect(Object.keys(STEWARD_ACTIONS).sort()).toEqual([
+      "access.add",
+      "access.change",
+      "access.migrate",
+      "access.remove",
       "backup.restore",
       "create",
+      "dashboard.signin",
+      "dashboard.signin_failed",
+      "dashboard.signout",
       "guest.create",
       "guest.revoke",
       "lock",
@@ -148,6 +155,7 @@ describe("each source's rows, in one shape", () => {
       "member.signin_failed",
       "member.signout",
       "password",
+      "people.create",
       "portal",
       "project.create",
       "project.remove",

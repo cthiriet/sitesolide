@@ -3016,12 +3016,16 @@ describe("integration: dashboard/steward.ts on a socket", () => {
       // The temporary name took the known name: nothing else is left.
       expect(readdirSync(join(root, "run"))).toEqual(["secretaire.sock"]);
 
-      // The owner's socket: root's alone, the members registry and nothing else.
+      // The owner's socket: root's alone, the access registry and nothing else.
       const ownerSocket = join(root, "owner", "owner.sock");
       expect(statSync(join(root, "owner")).mode & 0o777).toBe(0o700);
       expect(statSync(ownerSocket).mode & 0o777).toBe(0o600);
-      expect((await fetch("http://steward/members", { unix: ownerSocket })).status).toBe(200);
+      expect((await fetch("http://steward/people", { unix: ownerSocket })).status).toBe(200);
+      expect((await fetch("http://steward/members", { unix: ownerSocket })).status).toBe(404);
       expect((await fetch("http://steward/projects", { unix: ownerSocket })).status).toBe(404);
+      // The access registry was made at startup, nothing before it, and its projection laid for the portal.
+      expect(existsSync(join(root, "state", "access.json"))).toBe(true);
+      expect(existsSync(join(root, "portal-key", "access.json"))).toBe(true);
       // The key pair was laid at startup, the private half where the portal reads it.
       expect(existsSync(join(root, "portal-key", "assertion.key"))).toBe(true);
       expect(existsSync(join(root, "state", "assertion.pub"))).toBe(true);

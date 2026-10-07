@@ -30,16 +30,21 @@
  *   backup of an interrupted action has remained: its state is unknown. The
  *   messages are those of the real gatekeeper and of the real steward,
  *   imported from src/;
- * - a fake portal on the loopback, which answers `/admin/guests` like
- *   `portal/src/admin.ts`, and `/admin/audit` with sign-ins of every kind;
- * - the dashboard's members, with the steward's own member routes
- *   (src/members/steward.ts) on the fake steward's socket, their registry and
- *   key pair in the temporary directory: alice@example.com is a Developer on
- *   `cms` and a Viewer on `calendar`. *Sign in with Google* on the sign-in
- *   page goes through the fake portal's `/admin/dashboard/flow` to a page of
- *   its own that signs in alice, or stranger@example.com, whom the registry
- *   does not name, then back with a code the fake portal redeems for an
- *   assertion signed with the steward's key, as the real one does;
+ * - a fake portal on the loopback, which answers `/admin/sharing` with how
+ *   people sign in, `/admin/access` like `portal/src/admin.ts`, and
+ *   `/admin/audit` with sign-ins of every kind;
+ * - access, with the steward's own access and sign-in routes
+ *   (src/access/steward.ts, src/members/steward.ts) on the fake steward's
+ *   socket, the registry made by the real migration from a `members.json`
+ *   and a portal database from before it, written in the temporary
+ *   directory: alice@example.com is a Developer on `cms`, an Admin on
+ *   `calendar` and a Viewer on `photos`, people and domains can open `cms`
+ *   and `calendar`, and four password accesses are carried over. *Sign in
+ *   with Google* on the sign-in page goes through the fake portal's
+ *   `/admin/dashboard/flow` to a page of its own that signs in alice, or
+ *   stranger@example.com, whom the registry does not name, then back with a
+ *   code the fake portal redeems for an assertion signed with the steward's
+ *   key, as the real one does;
  * - with the dashboard's own audit of tokens and deployments, written below,
  *   the egress proxy's, the backups' and the steward's, every source of the
  *   Activity page has rows;
@@ -59,8 +64,8 @@
  *   BENCH_PORT=4322          the front end's port, the service takes the next one
  *   BENCH_STALE=1           a snapshot ten minutes old, never rewritten
  *   BENCH_NO_STEWARD=1  no steward: Secrets and Access say 502
- *   BENCH_NO_PORTAL=1     no portal: Guests and Sharing say 502, Activity can't read it
- *   BENCH_NO_SSO=1        a portal with passwords only: Sharing says how to set it up
+ *   BENCH_NO_PORTAL=1     no portal: the sign-in page offers no provider, Activity can't read it
+ *   BENCH_NO_SSO=1        a portal with passwords only: everyone outside gets password access
  *   BENCH_NO_EGRESS=1     no egress proxy: the Connectors page's activity says so, and Activity
  *   BENCH_EMPTY=1             no snapshot at all: the "No snapshot" state
  *   BENCH_SHOWCASE=1          the same fleet healed, for the README's screenshots
@@ -72,8 +77,8 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, normalize, resolve } from "node:path";
-import { GUEST_DURATIONS, cleanLabel, type Guest } from "../borrowed/guests";
-import { readPolicy, type Policy } from "../borrowed/sharing";
+import { Database } from "bun:sqlite";
+import { writeFileSync } from "node:fs";
 import { fixedRefusal } from "../src/gatekeeper/rules";
 import { lockHeldMessage } from "../src/gatekeeper/transaction";
 import { HASH_ONLY, PASSWORD_VARIABLE, MIN_PASSWORD } from "../src/secrets/scope";
@@ -92,6 +97,8 @@ import {
 import { benchBackupRoutes } from "./bench-backups";
 import { readPrivateKey, signAssertion } from "../borrowed/assertion";
 import { createMemberRoutes } from "../src/members/steward";
+import { createAccessRoutes, createAccessStore } from "../src/access/steward";
+import { createAccessSystem } from "../src/access/system";
 import { mintRefusals, scopeText } from "../src/members/tokens";
 import { may, needsUnlock, powerRefusal, type Power } from "../src/members/powers";
 import { createMembersSystem } from "../src/members/system";
@@ -1058,6 +1065,54 @@ const portalKeyFolder = join(folder, "portal-key");
 mkdirSync(membersState, { recursive: true });
 mkdirSync(portalKeyFolder, { recursive: true });
 
+/** How people sign in on the bench: Google, unless BENCH_NO_SSO asks for a portal with passwords only. */
+const sso =
+  process.env.BENCH_NO_SSO === "1"
+    ? { configured: false, providerName: null, portalUrl: null, admins: [] as string[], allowedDomains: [] as string[] }
+    : {
+        configured: true,
+        providerName: "Google",
+        portalUrl: "https://portal.example.com",
+        admins: ["owner@example.com"],
+        allowedDomains: ["example.com"],
+      };
+
+// The stores from before the registry, which the real migration carries over
+// at the first read: alice's roles in members.json, and a portal database
+// whose sharing let people and a domain in, and whose guests had passwords.
+const portalData = join(folder, "portal-data");
+mkdirSync(portalData, { recursive: true });
+writeFileSync(
+  join(membersState, "members.json"),
+  JSON.stringify({ members: [{ email: "alice@example.com", roles: { cms: "developer", calendar: "admin", photos: "viewer" }, create: false, invitedBy: "owner", createdAt: start - 20 * DAY, updatedAt: start - 20 * DAY }] }),
+);
+{
+  // A fixture, written once and read once by the migration's checked copy.
+  const fixture = new Database(join(portalData, "portal.db"), { create: true, strict: true });
+  fixture.run("CREATE TABLE invites (id TEXT PRIMARY KEY, hote TEXT NOT NULL, libelle TEXT NOT NULL, empreinte TEXT NOT NULL UNIQUE, cree_a INTEGER NOT NULL, expire_a INTEGER, vu_a INTEGER)");
+  fixture.run("CREATE TABLE sharing (host TEXT PRIMARY KEY, mode TEXT NOT NULL, people TEXT NOT NULL, domains TEXT NOT NULL, updated_at INTEGER NOT NULL)");
+  const hashOf = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
+  const invite = fixture.query("INSERT INTO invites (id, hote, libelle, empreinte, cree_a, expire_a, vu_a) VALUES (?, ?, ?, ?, ?, ?, NULL)");
+  invite.run("benchGuest000001", "cms.example.com", "client@example.org", hashOf("bench one"), start - 6 * DAY - 19 * HOUR, start + 5 * HOUR);
+  invite.run("benchGuest000002", "calendar.example.com", "Example Accounting", hashOf("bench two"), start - DAY, start + 6 * DAY);
+  invite.run("benchGuest000003", "photos.example.com", "Bob and Carol", hashOf("bench three"), start - 41 * DAY, null);
+  invite.run("benchGuest000004", "library.example.com", "Dave, intern", hashOf("bench four"), start - 32 * DAY, start - 2 * DAY);
+  const policy = fixture.query("INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES (?, ?, ?, ?, ?)");
+  policy.run("cms.example.com", "people", JSON.stringify(["alice@example.com", "editor@example.com"]), "[]", start - 2 * DAY);
+  policy.run("calendar.example.com", "domain", "[]", JSON.stringify(["example.com"]), start - 9 * DAY);
+  fixture.close();
+}
+
+const benchJournal = async (event: { operation: string; result: "ok" | "rejects"; actor: string; member: string | null; slug?: string; detail: string | null }) =>
+  record({ operation: event.operation, result: event.result, actor: event.actor, member: event.member, slug: event.slug ?? null, file: null, variable: null, detail: event.detail });
+
+const accessStore = createAccessStore({
+  system: createAccessSystem({ stateFolder: membersState, portalKeyFolder, groupsFile: "/etc/group", portalGroup: "", portalDataFolder: portalData }, false),
+  zone: "example.com",
+  hostOf: (slug) => `${slug}.example.com`,
+  journal: benchJournal,
+});
+
 const memberRoutes = createMemberRoutes({
   system: {
     ...createMembersSystem({
@@ -1069,31 +1124,46 @@ const memberRoutes = createMemberRoutes({
       portalGroup: "",
     }),
     projectExists: (slug) => FOLDERS.some((one) => one.slug === slug),
-    readPortalSettings: async () => ({ configured: sso.configured, allowedDomains: sso.allowedDomains, admins: sso.admins }),
+    readPortalSettings: async () => ({ configured: sso.configured, allowedDomains: sso.allowedDomains, admins: sso.admins, providerName: sso.providerName }),
   },
+  access: accessStore,
   zone: "example.com",
-  isUnlocked: async (value) => isValidToken({ token: value }),
   readBody: async (req, fields) => {
     const body = await readBody(req);
     return Object.keys(body).every((key) => fields.includes(key)) ? body : refusal(400, "invalid", "unexpected field in the request body");
   },
-  journal: async (event) =>
-    record({
-      operation: event.operation,
-      result: event.result,
-      actor: event.actor,
-      member: event.member,
-      slug: "slug" in event ? (event.slug ?? null) : null,
-      file: null,
-      variable: null,
-      detail: event.detail,
-    }),
+  journal: benchJournal,
   restart: async (_req, slug, actor, allowed) => {
     await Bun.sleep(1500);
     if (!(await allowed())) return refusal(403, "out-of-scope", `${actor} may no longer restart ${slug}`);
     record({ operation: "restart", result: "ok", actor, member: actor, slug, file: null, variable: null, detail: "active, active/running, 0 restarts" });
     return Response.json({ verdict: { kind: "active", state: "active", subState: "running", restarts: 0 } });
   },
+});
+
+const accessRoutes = createAccessRoutes({
+  store: accessStore,
+  zone: "example.com",
+  hostOf: (slug) => `${slug}.example.com`,
+  projectExists: (slug) => FOLDERS.some((one) => one.slug === slug),
+  signIn: async () => ({ configured: sso.configured, allowedDomains: sso.allowedDomains, admins: sso.admins, providerName: sso.providerName }),
+  general: async (slug) => {
+    const found = FOLDERS.find((one) => one.slug === slug);
+    if (found === undefined) return null;
+    const view = PROJECTS.find((project) => project.slug === slug);
+    const restricted = view !== undefined && projectView(view).portal.requested === true && projectView(view).portal.installed === true;
+    return { access: restricted ? "restricted" : "public", modifiable: true, reason: null };
+  },
+  portalReading: async () => ({ reading: "steward", writtenAt: Date.now() }),
+  isUnlocked: async (value) => isValidToken({ token: value }),
+  readBody: async (req, fields) => {
+    const body = await readBody(req);
+    return Object.keys(body).every((key) => fields.includes(key)) ? body : refusal(400, "invalid", "unexpected field in the request body");
+  },
+  journal: benchJournal,
+  journalRefusal: benchJournal,
+  authorize: memberRoutes.authorize,
+  leave: memberRoutes.leave,
 });
 
 /**
@@ -1136,6 +1206,7 @@ const steward =
         unix: socket,
         routes: {
           ...memberRoutes.dashboard,
+          ...accessRoutes.dashboard,
           "/members/secrets/projects": { POST: memberProjects },
           // The owner's fake routes, judged by role first: see memberAction.
           ...(() => {
@@ -1655,40 +1726,6 @@ function draw(length: number, alphabet: string): string {
   return [...bytes].map((byte) => alphabet[byte % alphabet.length]).join("");
 }
 
-const guests: Guest[] = [
-  { id: "benchGuest000001", host: "cms.example.com", label: "Alice", createdAt: start - 6 * DAY - 19 * HOUR, expiresAt: start + 5 * HOUR, seenAt: start - 2 * HOUR },
-  { id: "benchGuest000002", host: "calendar.example.com", label: "Example Accounting", createdAt: start - DAY, expiresAt: start + 6 * DAY, seenAt: null },
-  { id: "benchGuest000003", host: "photos.example.com", label: "Bob and Carol", createdAt: start - 41 * DAY, expiresAt: null, seenAt: start - 3 * DAY },
-  { id: "benchGuest000004", host: "library.example.com", label: "Dave, intern", createdAt: start - 32 * DAY, expiresAt: start - 2 * DAY, seenAt: start - 3 * DAY },
-];
-
-/** How people sign in on the bench: Google, unless BENCH_NO_SSO asks for a portal with passwords only. */
-const sso =
-  process.env.BENCH_NO_SSO === "1"
-    ? { configured: false, providerName: null, portalUrl: null, admins: [], allowedDomains: [] }
-    : {
-        configured: true,
-        providerName: "Google",
-        portalUrl: "https://portal.example.com",
-        admins: ["owner@example.com"],
-        allowedDomains: ["example.com"],
-      };
-
-const sharing = new Map<string, { host: string; policy: Policy; updatedAt: number }>([
-  [
-    "cms.example.com",
-    {
-      host: "cms.example.com",
-      policy: { mode: "people", people: ["alice@example.com", "editor@example.org"], domains: [] },
-      updatedAt: start - 2 * DAY,
-    },
-  ],
-  [
-    "calendar.example.com",
-    { host: "calendar.example.com", policy: { mode: "domain", people: [], domains: ["example.com"] }, updatedAt: start - 9 * DAY },
-  ],
-]);
-
 /** The bench's sign-ins in flight: a flow until a user is picked, a code until it is redeemed. */
 const benchFlows = new Map<string, { binding: string; returnTo: string; reauth: boolean }>();
 const benchCodes = new Map<string, { binding: string; returnTo: string; email: string; reauth: boolean }>();
@@ -1702,50 +1739,10 @@ const portal =
         hostname: "127.0.0.1",
         port: 0,
         routes: {
-          "/admin/guests": {
-            GET: () => Response.json({ guests }),
-            POST: async (req) => {
-              const body = await readBody(req);
-              const label = cleanLabel(body.label);
-              if (label === null) return Response.json({ error: "invalid-label" }, { status: 400 });
-              if (!GUEST_DURATIONS.some((choice) => choice.seconds === body.durationS)) {
-                return Response.json({ error: "invalid-duration" }, { status: 400 });
-              }
-              const durationS = body.durationS as number | null;
-              const now = Date.now();
-              const invite: Guest = {
-                id: draw(16, `${ALPHABET}_-`),
-                host: text(body.host),
-                label,
-                createdAt: now,
-                expiresAt: durationS === null ? null : now + durationS * 1000,
-                seenAt: null,
-              };
-              guests.push(invite);
-              const password = [0, 1, 2, 3].map(() => draw(4, ALPHABET)).join("-");
-              return Response.json({ invite, password }, { status: 201 });
-            },
-          },
-          "/admin/invites/:id": {
-            DELETE: (req) => {
-              const rank = guests.findIndex((invite) => invite.id === req.params.id);
-              if (rank < 0) return Response.json({ error: "unknown-access" }, { status: 404 });
-              guests.splice(rank, 1);
-              return new Response(null, { status: 204 });
-            },
-          },
-          // Sharing, like portal/src/admin.ts: the policy judged with the
-          // portal's own rule, replaced whole.
-          "/admin/sharing": { GET: () => Response.json({ sso, sites: [...sharing.values()] }) },
-          "/admin/sharing/:host": {
-            PUT: async (req) => {
-              const reading = readPolicy(await readBody(req));
-              if ("error" in reading) return Response.json({ error: reading.error }, { status: 400 });
-              const entry = { host: req.params.host, policy: reading.policy, updatedAt: Date.now() };
-              sharing.set(entry.host, entry);
-              return Response.json(entry);
-            },
-          },
+          // How people sign in, and what the portal reads its access from,
+          // like portal/src/admin.ts.
+          "/admin/sharing": { GET: () => Response.json({ sso, sites: [] }) },
+          "/admin/access": { GET: () => Response.json({ reading: "steward", writtenAt: Date.now() }) },
           "/admin/audit": { GET: (req) => Response.json({ events: page(portalEvents, new URL(req.url).searchParams) }) },
 
           // A member's sign-in, as portal/src/dashboard.ts: the flow sealed
@@ -1802,11 +1799,9 @@ const portal =
 
 portalAddress = portal === null ? "" : `http://127.0.0.1:${portal.port}`;
 
-// The member the bench starts with, invited as root would over the owner's SSH.
+// The key pair, and the registry made from the stores above by the real migration.
 await memberRoutes.ensureKeys();
-await memberRoutes.owner["/members/member"]!.PUT!(
-  new Request("http://steward/members/member", { method: "PUT", body: JSON.stringify({ email: "alice@example.com", roles: { cms: "developer", calendar: "admin", photos: "viewer" } }) }),
-);
+await accessStore.ensure();
 
 // --- The service -------------------------------------------------------------
 

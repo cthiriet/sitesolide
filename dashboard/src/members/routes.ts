@@ -3,13 +3,12 @@
  * others: the tests drive them with a simulated steward and portal.
  *
  *   GET    /api/session            who is signed in, and whether the provider is offered
- *   GET    /api/sso/begin          a member's sign-in, through the portal: a top-level navigation;
- *                                  `reauth=1`, a member's unlock, the provider made to ask again
+ *   GET    /api/sso/begin          a person's sign-in, through the portal: a top-level navigation;
+ *                                  `reauth=1`, a person's unlock, the provider made to ask again
  *   GET    /api/sso/complete       where the portal sends the browser back, with a code
- *   GET    /api/members            the Members page, the super admin's
- *   PUT    /api/members/member     invite, or change roles and the create right: unlocked, as creating a token
- *   DELETE /api/members/member     remove: no unlock, as revoking a token
- *   POST   /api/members/restart    a member's restart, judged by the steward
+ *   POST   /api/members/restart    a person's restart, judged by the steward
+ *
+ * Who has access to what, and the People page, are src/access/routes.ts's.
  *
  * **The dashboard decides nothing a member could use.** It checks the origin,
  * the session and the shape of a request, and relays: the steward opens member
@@ -25,9 +24,6 @@
  */
 import { DASHBOARD_AUDIENCE, readPublicKey, verifyAssertion, type PublicKey } from "../../borrowed/assertion";
 import { reach, type Reached } from "../control/client";
-import { reservedReason } from "../control/policy";
-import { read } from "../read";
-import type { SessionReader } from "../routes";
 import { isAcceptableOrigin, setCookie } from "../sessions";
 import type { Tokens } from "../secrets/tokens";
 import type { DashboardPortal, MembersSteward } from "./client";
@@ -44,8 +40,6 @@ export type MembersRoutesDependencies = {
   online: boolean;
   /** Is a password hash in place? The sign-in page says so when it is not. */
   passwordConfigured: boolean;
-  zone: string;
-  stateFile: string;
   steward: MembersSteward;
   portal: DashboardPortal;
   store: {
@@ -54,11 +48,7 @@ export type MembersRoutesDependencies = {
     closeSession: (hash: string) => void;
   };
   resolve: IdentityResolver & { forget: (hash: string) => void };
-  /** The owner's sessions alone: the Members page is the super admin's. */
-  ownerSession: SessionReader;
-  /** The unlock tokens of the Secrets section: inviting asks for the same unlock. */
-  tokens: Tokens;
-  /** The members' own unlock tokens, by session hash: a forced sign-in that checks out lays one here. */
+  /** The people's own unlock tokens, by session hash: a forced sign-in that checks out lays one here. */
   unlocks: Tokens;
   limiter: SignInLimiter;
   ownerDurationMs: number;
@@ -69,9 +59,6 @@ export type MembersRoutes = {
   session: Handler;
   begin: Handler;
   complete: Handler;
-  list: Handler;
-  put: Handler;
-  remove: Handler;
   restart: Handler;
   /** Not a route: what signing out a member asks the steward, never rejecting. */
   signOut: (token: string) => Promise<void>;
@@ -184,8 +171,8 @@ async function readBody(req: Request): Promise<Record<string, unknown> | null> {
   }
 }
 
-/** What the page says when the steward does not carry the member routes yet. */
-export const MEMBERS_NOT_AVAILABLE = "The steward on this machine does not know members yet: run sitesolide upgrade.";
+/** What the page says when the steward does not carry the sign-in routes yet. */
+export const MEMBERS_NOT_AVAILABLE = "The steward on this machine does not know people with access yet: run sitesolide upgrade.";
 
 /** A view of who is signed in, for the page: never a token. */
 function identityView(identity: Identity): Record<string, unknown> {
@@ -202,7 +189,7 @@ function relayRefusal(reached: Reached): Response {
 }
 
 export function createMembersRoutes(dependencies: MembersRoutesDependencies, clock: () => number = Date.now): MembersRoutes {
-  const { publicUrl, online, steward, portal, store, resolve, tokens, limiter } = dependencies;
+  const { publicUrl, online, steward, portal, store, resolve, limiter } = dependencies;
   const pendingUnlocks = new Map<string, PendingUnlock>();
 
   function keepPending(key: string, pending: PendingUnlock, now: number): void {
@@ -250,11 +237,6 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
     } catch {
       return null;
     }
-  }
-
-  async function ownerOnly(req: Request, writing: boolean): Promise<{ hash: string } | Response> {
-    if (writing && !isAcceptableOrigin(req.headers.get("origin"), publicUrl)) return json({ error: "origin-refused" }, 403);
-    return (await dependencies.ownerSession(req, clock())) ?? json({ error: "no-session" }, 401);
   }
 
   return {
@@ -391,53 +373,6 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
       return new Response(null, { status: 303, headers });
     },
 
-    async list(req) {
-      const open = await ownerOnly(req, false);
-      if (open instanceof Response) return open;
-      const now = clock();
-      const reached = await reach(() => steward.list());
-      const until = tokens.read(open.hash)?.expiresAt ?? null;
-      const reading = await read(dependencies.stateFile, now);
-      const projects = reading.present
-        ? reading.snapshot.sites.map((site) => site.slug).filter((slug) => reservedReason(slug, dependencies.zone) === null).sort()
-        : [];
-      const offer = await ssoOffer(now);
-      const base = { dashboardUrl: publicUrl, providerName: offer.providerName, projects, until };
-      if (reached.kind === "unavailable") {
-        return json({ available: false, reason: MEMBERS_NOT_AVAILABLE, members: [], signIn: { configured: offer.offered, allowedDomains: [] }, ...base });
-      }
-      if (reached.kind !== "received" || reached.status !== 200) return relayRefusal(reached);
-      return json({ available: true, reason: null, members: reached.body.members, signIn: reached.body.signIn, ...base });
-    },
-
-    async put(req) {
-      const open = await ownerOnly(req, true);
-      if (open instanceof Response) return open;
-      const body = await readBody(req);
-      if (body === null) return error(400, "invalid", "Unreadable request body.");
-      const kept = tokens.read(open.hash);
-      if (kept === null) return error(423, "locked", "Unlock first: inviting a member needs the dashboard password.");
-      // `create` passes only as a boolean: absent, the steward leaves the right as it stands.
-      const create = typeof body.create === "boolean" ? { create: body.create } : {};
-      const reached = await reach(() => steward.put({ token: kept.token, email: body.email as string, roles: body.roles as Roles, ...create }), [kept.token]);
-      if (reached.kind === "received" && reached.status === 401 && reached.body.error === "locked") {
-        if (tokens.read(open.hash)?.token === kept.token) tokens.forget(open.hash);
-        return error(423, "locked", "Unlock first: inviting a member needs the dashboard password.");
-      }
-      if (reached.kind !== "received" || (reached.status !== 200 && reached.status !== 201)) return relayRefusal(reached);
-      return json({ member: reached.body.member, change: reached.body.change }, reached.status);
-    },
-
-    async remove(req) {
-      const open = await ownerOnly(req, true);
-      if (open instanceof Response) return open;
-      const body = await readBody(req);
-      if (body === null || typeof body.email !== "string") return error(400, "invalid", "Missing or non-text field: email.");
-      const reached = await reach(() => steward.remove(body.email as string));
-      if (reached.kind !== "received" || reached.status !== 200) return relayRefusal(reached);
-      return json({ member: reached.body.member });
-    },
-
     async restart(req) {
       if (!isAcceptableOrigin(req.headers.get("origin"), publicUrl)) return json({ error: "origin-refused" }, 403);
       const now = clock();
@@ -445,7 +380,7 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
       if (resolved === "unreachable") return error(502, "failure", "Can't reach the steward.");
       if (resolved === null) return json({ error: "no-session" }, 401);
       if (resolved.identity.kind !== "member") {
-        return error(403, "out-of-scope", "The super admin restarts a service from its Secrets section, unlocked.");
+        return error(403, "out-of-scope", "The owner restarts a service from its Secrets section, unlocked.");
       }
       const body = await readBody(req);
       if (body === null || typeof body.slug !== "string") return error(400, "invalid", "Missing or non-text field: slug.");

@@ -73,6 +73,9 @@ const BORROWINGS = [
   // The identity assertion: the portal signs it, the steward verifies it
   // before it opens a member session, with this one copy of the format.
   "portal/src/assertion.ts",
+  // The role ladder and the projection of the access registry: the steward
+  // writes it, the portal reads it, both with this one copy of the format.
+  "portal/src/access.ts",
 ];
 
 /** The header of every copied module. */

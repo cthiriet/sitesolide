@@ -44,7 +44,7 @@ import { configPath, defaultPaths, expandHome, projectsRepo, readConfigFile } fr
 import { hintForFailure } from "./hints";
 import { hasServices, isApp, mainPort, missingExclusions, NEVER_SENT, parserComplaint, readManifest, type Manifest } from "./manifest";
 import { eventFor, formatEvent, type OutputEvent } from "./output";
-import { share, SHARE_OPTIONS, type SharingReading, type SharingState, type SharingTransport } from "./sharing";
+import { share, SHARE_OPTIONS, type AccessState, type AccessTransport, type EntryAnswer, type Reading } from "./access";
 import { sourceRefusal } from "./source";
 
 /** Where the token is kept in the vault. */
@@ -388,7 +388,7 @@ export function describeIdentity(identity: Identity): string[] {
     `   may ${may.join(", ")}`,
     `   projects: ${projects.length === 0 ? "none yet" : projects.join(", ")}`,
     ...(identity.expiresAt === null ? [] : [`   expires ${new Date(identity.expiresAt).toISOString().slice(0, 10)}`]),
-    ...(typeof identity.member === "string" ? [`   a member's own token: never more than ${identity.member}'s roles on the dashboard, read at every request`] : []),
+    ...(typeof identity.member === "string" ? [`   a personal token: never more than ${identity.member}'s roles on the dashboard, read at every request`] : []),
   ];
 }
 
@@ -583,42 +583,43 @@ async function logs(remote: Remote, dependencies: RemoteDependencies, follow: bo
 }
 
 /**
- * Sharing through the control API: the dashboard relays to the portal under
- * the token's name, and judges what a token may open. The answer is the
- * API's `ProjectSharing`, the shape the command works on.
- *
- * A dashboard from before these routes answers them from its catch-all,
- * `not-found` "no such route": said as what it is, a machine that does not
- * carry sharing yet, rather than a project the token cannot see.
+ * Access through the control API: the steward judges the token and the
+ * access rules, a token giving Can open alone. A dashboard from before these
+ * routes answers them from its catch-all, `not-found` "no such route": said
+ * as what it is, a machine that does not carry them yet, rather than a
+ * project the token cannot see.
  */
-export function apiSharing(remote: Remote, fetcher?: Fetch): SharingTransport {
-  const path = (slug: string) => `/api/v1/projects/${encodeURIComponent(slug)}/sharing`;
-  const reading = (answer: Answer<{ sharing: SharingState }>): SharingReading => {
-    if (!answer.ok && answer.failure.error === "not-found" && answer.failure.message.startsWith("no such route")) {
-      return {
-        ok: false,
-        failure: { error: "not-available", message: `the dashboard at ${remote.api} does not carry sharing yet: the owner of the machine deploys it from this release (cd dashboard && sitesolide deploy)` },
-      };
-    }
+export function apiAccess(remote: Remote, fetcher?: Fetch): AccessTransport {
+  const path = (slug: string) => `/api/v1/projects/${encodeURIComponent(slug)}/access`;
+  const outdated = (answer: Answer<unknown>): Reading<never> | null =>
+    !answer.ok && answer.failure.error === "not-found" && answer.failure.message.startsWith("no such route")
+      ? { ok: false, failure: { error: "not-available", message: `the dashboard at ${remote.api} does not carry access yet: the owner of the machine runs sitesolide upgrade` } }
+      : null;
+  const change = async (slug: string, method: "PUT" | "DELETE", body: object): Promise<Reading<EntryAnswer>> => {
+    const answer: Answer<EntryAnswer> = await call(remote, path(slug), { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, fetcher);
+    const old = outdated(answer);
+    if (old !== null) return old;
     if (!answer.ok) return { ok: false, failure: answer.failure };
-    const state = answer.body.sharing;
-    if (typeof state !== "object" || state === null || typeof state.url !== "string" || typeof state.policy !== "object") {
-      return { ok: false, failure: { error: "unreadable", message: `${remote.api} answered with something that is not the control API's sharing` } };
+    if (typeof answer.body !== "object" || answer.body === null || typeof answer.body.change !== "string") {
+      return { ok: false, failure: { error: "unreadable", message: `${remote.api} answered with something that is not the control API's access` } };
     }
-    return { ok: true, state };
+    return { ok: true, value: answer.body };
   };
   return {
     via: `through ${remote.api}`,
-    read: async (slug) => reading(await call(remote, path(slug), {}, fetcher)),
-    write: async (state, policy) =>
-      reading(
-        await call(
-          remote,
-          path(state.slug),
-          { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: policy.mode, people: policy.people, domains: policy.domains }) },
-          fetcher,
-        ),
-      ),
+    async list(slug) {
+      const answer: Answer<{ access: AccessState }> = await call(remote, path(slug), {}, fetcher);
+      const old = outdated(answer);
+      if (old !== null) return old;
+      if (!answer.ok) return { ok: false, failure: answer.failure };
+      const state = answer.body.access;
+      if (typeof state !== "object" || state === null || typeof state.url !== "string" || !Array.isArray(state.entries)) {
+        return { ok: false, failure: { error: "unreadable", message: `${remote.api} answered with something that is not the control API's access` } };
+      }
+      return { ok: true, value: state };
+    },
+    give: (slug, who, role) => change(slug, "PUT", { who, role }),
+    remove: (slug, who) => change(slug, "DELETE", { who }),
   };
 }
 
@@ -628,7 +629,7 @@ export function needsSsh(command: string): Failure {
     error: "needs-ssh",
     message: `sitesolide ${command} needs the owner's SSH access to the machine`,
     details: [
-      "with a team token, this workstation runs: deploy, status, logs, share, login",
+      "with a token, this workstation runs: deploy, status, logs, share, login",
       "ask the owner of the machine, who runs it from a workstation configured with sitesolide init",
     ],
   };
@@ -668,7 +669,7 @@ export function unknownOptions(command: string, arguments_: string[]): Failure |
     if (command === "deploy" && option === "--dry-run") {
       return {
         error: "no-dry-run",
-        message: "deploy --dry-run is not available with a team token: nothing was sent",
+        message: "deploy --dry-run is not available with a token: nothing was sent",
         details: [
           "a dry run reads the machine over the owner's SSH access, which a token does not carry",
           "through the API, the machine judges the manifest when the deployment starts, before anything is built or uploaded",
@@ -679,9 +680,9 @@ export function unknownOptions(command: string, arguments_: string[]): Failure |
     const takes = Object.keys(known);
     return {
       error: "unknown-option",
-      message: `${option}: not an option of sitesolide ${command} with a team token: nothing was sent`,
+      message: `${option}: not an option of sitesolide ${command} with a token: nothing was sent`,
       details: [
-        takes.length === 0 ? `with a team token, sitesolide ${command} takes no option` : `with a team token, sitesolide ${command} takes ${takes.join(", ")}`,
+        takes.length === 0 ? `with a token, sitesolide ${command} takes no option` : `with a token, sitesolide ${command} takes ${takes.join(", ")}`,
         ...(option === "--yes" || option === "--slug" ? ["a folder without sitesolide.json: write it first with sitesolide detect --write, review it, then deploy"] : []),
       ],
     };
@@ -690,21 +691,19 @@ export function unknownOptions(command: string, arguments_: string[]): Failure |
 }
 
 /** The commands only the owner's SSH access carries. */
-export const SSH_COMMANDS = ["lock", "unlock", "domain", "remove", "run", "secrets", "members"];
+export const SSH_COMMANDS = ["lock", "unlock", "domain", "remove", "run", "secrets", "people"];
 
 export const REMOTE_USAGE = [
-  "usage, with a team token:",
+  "usage, with a token:",
   "  sitesolide login --url <https://dashboard.zone>   keep the token, check it",
   "     --token-stdin                                  read it from standard input",
   "  sitesolide deploy                                 build here, upload, follow the machine's log",
   "  sitesolide status                                 the projects this token may deploy",
   "  sitesolide logs [--follow]                        the journal of this folder's project",
   "     --lines <n>                                    how many lines back, 50 by default, 500 at most",
-  "  sitesolide share                                  who may open this folder's project, and the line to send",
-  "     <email>...                                     share it with these people",
-  "     --domain <domain>                              with everyone at a domain the portal admits",
-  "     --remove <email|domain>                        take a person or a domain off",
-  "     --only-admins                                  back to the admins alone",
+  "  sitesolide share                                  this folder's project's general access and people with access",
+  "     <email|@domain>...                             give them Can open: people inside the company's domains, or one of them",
+  "     --remove <email|@domain>...                    take their Can open away",
   "",
   "--json, on every one of them: one JSON event per line, see docs/agents.md",
   "SITESOLIDE_API and SITESOLIDE_TOKEN in the environment win over the files.",
@@ -717,7 +716,7 @@ export async function runRemote(command: string, arguments_: string[], dependenc
   if (SSH_COMMANDS.includes(command)) return report(output, needsSsh(command));
   if (!["deploy", "status", "logs", "share"].includes(command)) {
     const [title, ...usage] = REMOTE_USAGE;
-    return report(output, { error: "usage", message: command === "" ? (title ?? "usage") : `unknown command with a team token: ${command}`, details: command === "" ? usage : REMOTE_USAGE });
+    return report(output, { error: "usage", message: command === "" ? (title ?? "usage") : `unknown command with a token: ${command}`, details: command === "" ? usage : REMOTE_USAGE });
   }
   const refused = unknownOptions(command, arguments_);
   if (refused !== null) return report(output, refused);
@@ -737,7 +736,7 @@ export async function runRemote(command: string, arguments_: string[], dependenc
       if (!existsSync(path)) return report(output, { error: "invalid", message: `sitesolide.json not found in ${dependencies.folder}: run this from the project's folder` });
       const { manifest } = checkManifest(readFileSync(path, "utf8"));
       if (manifest === undefined) return report(output, { error: "invalid", message: "sitesolide.json rejected" });
-      return share(arguments_, manifest.slug, apiSharing(remote, dependencies.fetcher), output);
+      return share(arguments_, manifest.slug, apiAccess(remote, dependencies.fetcher), output);
     }
     default:
       return logs(remote, dependencies, arguments_.includes("--follow"), Number(lines));

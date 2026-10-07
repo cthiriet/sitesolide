@@ -20,7 +20,7 @@
  * server does not have: `not-installed`, decided from what the dashboard can
  * already see, never guessed from a silence alone.
  */
-import type { SharingPortal } from "../sharing";
+import type { PortalAudit } from "../portal-audit";
 import type { Steward } from "../secrets/client";
 import { RETURNED_ENTRIES } from "../secrets/log";
 import type { BackupSteward } from "../backup/client";
@@ -136,7 +136,7 @@ function windowed(rows: SourceRow[], listed: number, after: Position | null, siz
 
 export type AuditDependencies = {
   store: Pick<ControlStore, "readAudit">;
-  portal: Pick<SharingPortal, "audit">;
+  portal: PortalAudit;
   egress: Pick<EgressReader, "audit">;
   steward: Pick<Steward, "readLog">;
   backups: Pick<BackupSteward, "readBackupAudit" | "readBackups">;

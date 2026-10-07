@@ -26,7 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HOLDER_NAME, LOCK_NAME } from "../../cli/caddy-lock";
-import { addAccount, DEFAULT_MEMBERS, DEFAULT_PORTAL, readAccounts, SWITCHES, TEST_HOST, type MembersState, type PortalState } from "./fake-ssh";
+import { addAccount, DEFAULT_ACCESS, readAccounts, SWITCHES, TEST_HOST, type AccessRegistry } from "./fake-ssh";
 
 export type FakeVm = {
   /** The folder that stands in for the machine. */
@@ -59,17 +59,17 @@ export type FakeVm = {
   answer(pattern: string, output: string): void;
   /** A unit systemd reads from `file`, a package's own: `caddy`, `/lib/systemd/system/caddy.service`. */
   systemUnit(unit: string, file: string, content?: string): void;
-  /** Lays the portal `share` finds on the loopback, over the default: this release's, Google configured, nothing shared. */
-  setPortal(state: Partial<PortalState>): void;
-  /** The portal's sharing as it stands, after the writes accepted. */
-  portal(): PortalState;
-  /** Lays the steward's members registry `sitesolide members` finds on the owner socket, over the default: nobody, acme.test admitted. */
-  setMembers(state: Partial<MembersState>): void;
+  /**
+   * Lays the steward's access registry `share` and `people` find on the owner
+   * socket, over the default: kanban deployed and restricted, nobody on it,
+   * acme.test the company's domain.
+   */
+  setAccess(state: Partial<AccessRegistry>): void;
+  /** The access registry as it stands, after the writes accepted. */
+  access(): AccessRegistry;
   /** The steward's token ownership, `{ slug: tokenId }`, as a removal finds and leaves it. */
   setOwners(owners: Record<string, string>): void;
   owners(): Record<string, string>;
-  /** The members registry as it stands, after the writes accepted. */
-  members(): MembersState;
   /** Lays a static account the machine already carries, with a system uid unless one is given. */
   addAccount(name: string, uid?: number): void;
   /** The static accounts as /etc/passwd lines: those laid, and those an accepted useradd made. */
@@ -165,15 +165,12 @@ export function createFakeVm(): FakeVm {
       writeFileSync(switchFile, JSON.stringify({ ...laid, [unit]: file }));
       put(file, content);
     },
-    setPortal(state) {
-      writeFileSync(join(root, SWITCHES.portal), JSON.stringify({ ...DEFAULT_PORTAL, ...state }));
+    setAccess(state) {
+      writeFileSync(join(root, SWITCHES.access), JSON.stringify({ ...DEFAULT_ACCESS, ...state }));
     },
-    portal() {
-      const file = join(root, SWITCHES.portal);
-      return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as PortalState) : DEFAULT_PORTAL;
-    },
-    setMembers(state) {
-      writeFileSync(join(root, SWITCHES.members), JSON.stringify({ ...DEFAULT_MEMBERS, ...state }));
+    access() {
+      const file = join(root, SWITCHES.access);
+      return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as AccessRegistry) : structuredClone(DEFAULT_ACCESS);
     },
     setOwners(owners) {
       writeFileSync(join(root, SWITCHES.owners), JSON.stringify(owners));
@@ -181,10 +178,6 @@ export function createFakeVm(): FakeVm {
     owners() {
       const file = join(root, SWITCHES.owners);
       return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Record<string, string>) : {};
-    },
-    members() {
-      const file = join(root, SWITCHES.members);
-      return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as MembersState) : DEFAULT_MEMBERS;
     },
     addAccount(name, uid) {
       addAccount(root, name, uid);

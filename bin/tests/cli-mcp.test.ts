@@ -80,7 +80,7 @@ describe("the legacy handshake", () => {
     await h.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } });
     expect(await h.send({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeUndefined();
     const list = await h.send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    expect(list!.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["detect", "deploy", "status", "logs", "sharing", "share", "lock_status"]);
+    expect(list!.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["detect", "deploy", "status", "logs", "access", "share", "lock_status"]);
     expect(list!.result.resultType).toBeUndefined();
   });
 
@@ -248,29 +248,55 @@ describe("the tools", () => {
     const share = TOOLS.find((tool) => tool.name === "share")!;
     expect(share.description).toContain("THIS GIVES REAL PEOPLE ACCESS to the app and to the data");
     expect(share.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
-    expect(TOOLS.find((tool) => tool.name === "sharing")!.description).toContain("real people access to the app and to the data");
+    expect(TOOLS.find((tool) => tool.name === "access")!.description).toContain("Access gives real people the app and the data it holds");
     for (const tool of TOOLS.filter((candidate) => !["deploy", "share"].includes(candidate.name))) expect(tool.annotations.readOnlyHint).toBe(true);
   });
 
   test("no tool removes a project, locks, switches a domain or forces", () => {
-    // share's `remove` takes a person or a domain off a site's sharing, which
-    // only ever narrows who gets in: the one use of the word allowed.
+    // share's `remove` takes a person or a domain off a project's people with
+    // access, which only ever narrows who gets in: the one use of the word allowed.
     const words = TOOLS.flatMap((tool) => [tool.name, ...Object.keys(tool.inputSchema.properties).filter((key) => !(tool.name === "share" && key === "remove"))]);
     for (const forbidden of ["remove", "unlock", "force", "activate", "confirm", "public"]) expect(words.join(" ")).not.toContain(forbidden);
   });
 
   test("share's command line: the addresses as arguments, never as options", () => {
-    expect(planCall("sharing", { folder: FOLDER })).toEqual({ argv: ["share"], cwd: FOLDER });
-    expect(planCall("share", { folder: FOLDER, people: ["a@acme.test", "b@acme.test"], domain: "acme.test", remove: ["old.test", "c@acme.test"] })).toEqual({
-      argv: ["share", "a@acme.test", "b@acme.test", "--domain", "acme.test", "--remove", "old.test", "--remove", "c@acme.test"],
-      cwd: FOLDER,
-    });
-    expect(planCall("share", { folder: FOLDER, only_admins: true })).toEqual({ argv: ["share", "--only-admins"], cwd: FOLDER });
-    expect(planCall("share", { folder: FOLDER })).toHaveProperty("error");
-    expect(planCall("share", { folder: FOLDER, people: ["--only-admins"] })).toEqual({ error: "people: a list of email addresses" });
-    expect(planCall("share", { folder: FOLDER, people: "a@acme.test" })).toHaveProperty("error");
-    expect(planCall("share", { folder: FOLDER, domain: "--remove" })).toEqual({ error: "domain: a domain, like acme.com" });
-    expect(planCall("share", { folder: FOLDER, public: true })).toHaveProperty("error");
+    expect(planCall("access", { folder: FOLDER })).toEqual({ argv: ["share"], cwd: FOLDER });
+    expect(planCall("share", { folder: FOLDER, who: ["a@acme.test", "@acme.test"] })).toEqual({ argv: ["share", "a@acme.test", "@acme.test", "--role", "visitor"], cwd: FOLDER });
+    expect(planCall("share", { folder: FOLDER, who: ["a@acme.test"], role: "developer" })).toEqual({ argv: ["share", "a@acme.test", "--role", "developer"], cwd: FOLDER });
+    expect(planCall("share", { folder: FOLDER, who: ["e@elsewhere.test"], expires: "24h" })).toEqual({ argv: ["share", "e@elsewhere.test", "--role", "visitor", "--expires", "24h"], cwd: FOLDER });
+    expect(planCall("share", { folder: FOLDER, who: ["e@elsewhere.test"], expires: "never" })).toEqual({ argv: ["share", "e@elsewhere.test", "--role", "visitor", "--expires", "never"], cwd: FOLDER });
+    expect(planCall("share", { folder: FOLDER, remove: ["@old.test", "c@acme.test"] })).toEqual({ argv: ["share", "--remove", "@old.test", "c@acme.test"], cwd: FOLDER });
+  });
+
+  test("share's refusals: give and remove in one call, nothing to do, a value that is not one", () => {
+    expect(planCall("share", { folder: FOLDER, who: ["a@acme.test"], remove: ["b@acme.test"] })).toEqual({ error: "share: give access or take it away, one call each" });
+    expect(planCall("share", { folder: FOLDER })).toEqual({ error: "share: give who or remove; call access to read who may open it" });
+    expect(planCall("share", { folder: FOLDER, who: [], remove: [] })).toHaveProperty("error");
+    expect(planCall("share", { folder: FOLDER, who: ["--remove"] })).toEqual({ error: "who: a list of email addresses or @domains" });
+    expect(planCall("share", { folder: FOLDER, remove: ["-x"] })).toEqual({ error: "remove: a list of email addresses or @domains" });
+    expect(planCall("share", { folder: FOLDER, who: "a@acme.test" })).toEqual({ error: "who: a list of email addresses or @domains" });
+    expect(planCall("share", { folder: FOLDER, who: [""] })).toHaveProperty("error");
+    expect(planCall("share", { folder: FOLDER, who: [`${"a".repeat(250)}@acme.test`] })).toHaveProperty("error");
+    expect(planCall("share", { folder: FOLDER, who: ["a@acme.test"], role: "owner" })).toEqual({ error: "role: visitor, viewer, developer or admin" });
+    expect(planCall("share", { folder: FOLDER, who: ["a@acme.test"], expires: "1y" })).toEqual({ error: "expires: 24h, 7d, 30d or never" });
+    expect(planCall("share", { folder: FOLDER, who: ["a@acme.test"], expires: 86400 })).toEqual({ error: "expires: 24h, 7d, 30d or never" });
+    // The arguments of before are gone.
+    for (const gone of [{ people: ["a@acme.test"] }, { domain: "acme.test" }, { only_admins: true }, { public: true }]) {
+      expect(planCall("share", { folder: FOLDER, ...gone })).toMatchObject({ error: expect.stringContaining("unknown argument") });
+    }
+    expect(planCall("sharing", { folder: FOLDER })).toEqual({ error: "unknown tool: sharing" });
+  });
+
+  test("the share tool's schema: who, role, expires and remove, the role and the expiry from closed lists", () => {
+    const share = TOOLS.find((tool) => tool.name === "share")!;
+    expect(Object.keys(share.inputSchema.properties)).toEqual(["folder", "who", "role", "expires", "remove"]);
+    const properties = share.inputSchema.properties as Record<string, { enum?: string[]; default?: unknown }>;
+    expect(properties.role).toMatchObject({ enum: ["visitor", "viewer", "developer", "admin"], default: "visitor" });
+    expect(properties.expires).toMatchObject({ enum: ["24h", "7d", "30d", "never"] });
+    expect(share.description).toContain("password access");
+    const access = TOOLS.find((tool) => tool.name === "access")!;
+    expect(access.annotations.readOnlyHint).toBe(true);
+    expect(Object.keys(access.inputSchema.properties)).toEqual(["folder"]);
   });
 
   test("each tool's command line", () => {

@@ -4,12 +4,13 @@
  * server, for its part, creates only one.
  */
 import { remainingWait, isAcceptableSubmission } from "../borrowed/auth";
-import type { AuditStore, GuestStore, NewEvent, SharingStore } from "./database";
-import { guestExpiration, guestOpens, type Guest } from "./guests";
+import { grantActor, grantExpiration, type PasswordGrant, type Role } from "./access";
+import type { AuditStore, NewEvent } from "./database";
 import { issueSignOut, IDENTITY_DURATION_S } from "./handoff";
 import type { Settings } from "./oidc";
 import { signedOutPage, signInPage } from "./page";
-import { DEFAULT_POLICY, identityRole, maySignIn, type Role } from "./sharing";
+import type { AccessReader } from "./projection";
+import { maySignIn } from "./sharing";
 import {
   clearCookie,
   issueToken,
@@ -35,29 +36,33 @@ export type Options = {
   verifyPassword: (submitted: string) => Promise<boolean>;
   online: boolean;
   cookieDurationS: number;
-  guests: GuestStore;
+  /** Who may open each site, from the steward's projection (src/projection.ts). */
+  access: AccessReader;
   /**
    * Signing in with the identity provider. Absent or `null`: not offered, and
    * an identity cookie opens nothing, so that removing the settings closes
    * every session they opened.
    */
   settings?: Settings | null;
-  /** Absent: every site keeps `DEFAULT_POLICY`, the admins alone. */
-  sharing?: SharingStore;
   /** Absent: nothing is recorded. */
   audit?: AuditStore;
 };
 
-/** What the sign-in page says to someone the policy does not let in. */
+/** What the sign-in page says to someone who has no access to this site. */
 export function notSharedMessage(email: string): string {
-  return `You are signed in as ${email}, but this site isn't shared with you. Ask its owner, or use another account.`;
+  return `You are signed in as ${email}, but you don't have access to this site. Ask its owner, or use another account.`;
 }
 
-/** Who a valid cookie says its holder is, as the audit names them. */
-export function actorOf(bearer: Bearer | null): string {
+/**
+ * Who a valid cookie says its holder is, as the audit names them: the
+ * owner, the verified email, or a password access by who it was given to,
+ * `password:<id>` when that is not an email or the access is gone.
+ */
+export function actorOf(bearer: Bearer | null, grant: PasswordGrant | null = null): string {
   if (bearer === null) return "anonymous";
   if (bearer.identity !== undefined) return bearer.identity.email;
-  return bearer.guest === null ? "owner" : `guest:${bearer.guest}`;
+  if (bearer.guest === null) return "owner";
+  return grant !== null && grant.id === bearer.guest ? grantActor(grant) : `password:${bearer.guest}`;
 }
 
 export type Routes = {
@@ -66,12 +71,6 @@ export type Routes = {
   signOut: (req: Request) => Response;
   health: () => Response;
 };
-
-/**
- * Beyond that, a guest's last visit is rewritten. Below it, every file of a
- * page would make a write for nothing.
- */
-const TOUCH_STEP_MS = 60_000;
 
 function refuse(text: string, status: number): Response {
   return new Response(text, { status, headers: { "Cache-Control": "no-store" } });
@@ -171,11 +170,11 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       );
       if (bearer === null) return door(returnTo, 401);
 
-      // A guest's access is re-read on every request, and that is what makes
-      // revocation immediate: the cookie stays properly signed, the row is no
-      // longer there. An identity is judged against the site's policy the same
-      // way, every request: removed from the list, refused at the next one.
-      let guest: Guest | null = null;
+      // A password access is read again on every request, and that is what
+      // makes removing it immediate: the cookie stays properly signed, the
+      // access is no longer in the steward's projection. An identity is
+      // judged against the site's people the same way, every request:
+      // removed or lowered, it holds at the next one.
       let identity: Identity | null = null;
       let role: Role = "admin";
       if (bearer.identity !== undefined) {
@@ -184,23 +183,17 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
         if (settings === null || !maySignIn(bearer.identity.email, settings.allowedDomains, settings.admins)) {
           return door(returnTo, 401);
         }
-        const policy = options.sharing?.get(host) ?? DEFAULT_POLICY;
-        const granted = identityRole(bearer.identity.email, policy, settings.admins);
+        const granted = options.access.roleOf(host, bearer.identity.email, settings.admins);
         if (granted === null) return door(returnTo, 401, notSharedMessage(bearer.identity.email), {}, true);
         identity = bearer.identity;
         role = granted;
       } else if (bearer.guest !== null) {
-        guest = options.guests.byId(bearer.guest);
-        if (!guestOpens(guest, host, now)) return door(returnTo, 401, "This access is no longer valid.");
-        role = "guest";
+        if (options.access.passwordById(host, bearer.guest, now) === null) return door(returnTo, 401, "This access is no longer valid.");
+        role = "visitor";
       }
 
       if (!isAcceptableRequest(method, req.headers.get("origin"), host, options.online)) {
         return refuse("portal: origin refused", 403);
-      }
-
-      if (guest !== null && now - (guest.seenAt ?? 0) > TOUCH_STEP_MS) {
-        options.guests.touch(guest.id, now);
       }
       // Caddy copies these onto the request it sends the site, after taking
       // off any the visitor sent: see portalStanza in bin/cli/portal.ts. A
@@ -241,18 +234,18 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       const submitted = form.get("motdepasse");
       if (!isAcceptableSubmission(submitted)) return door(returnTo, 400, "Password missing.");
 
-      // A guest first: their password is found back through its hash,
-      // without argon2id, and a guest must not wait for another verification
-      // to finish. A lapsed access, or one meant for another site, falls back
-      // into the general case and counts as a failure.
+      // Password access first: it is found back through its hash, without
+      // argon2id, and must not wait for another verification to finish. A
+      // lapsed access, or one meant for another site, falls back into the
+      // general case and counts as a failure.
       const nowS = Math.floor(now / 1000);
       if (options.key !== null) {
-        const guest = options.guests.byHash(guestHash(submitted));
-        if (guestOpens(guest, host, now)) {
+        const grant = options.access.passwordByHash(guestHash(submitted), host, now);
+        if (grant !== null) {
           attempts.delete(host);
-          audit({ actor: `guest:${guest.id}`, action: "portal.signin", target: host, detail: { method: "guest" } }, now);
-          const expiration = guestExpiration(guest, nowS, options.cookieDurationS);
-          return open(returnTo, issueToken(options.key, host, expiration, guest.id), expiration - nowS);
+          audit({ actor: grantActor(grant), action: "portal.signin", target: host, detail: { method: "password-access" } }, now);
+          const expiration = grantExpiration(grant, nowS, options.cookieDurationS);
+          return open(returnTo, issueToken(options.key, host, expiration, grant.id), expiration - nowS);
         }
       }
 
@@ -310,7 +303,8 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       const bearer = readToken(token, options.key, host, nowS, options.cookieDurationS, IDENTITY_DURATION_S);
       // Only someone who was in signs out: a stranger posting here, any Origin
       // being easy to forge outside a browser, writes nothing.
-      if (bearer !== null) audit({ actor: actorOf(bearer), action: "portal.signout", target: host }, now);
+      const grant = bearer?.guest === null || bearer?.guest === undefined ? null : options.access.passwordById(host, bearer.guest, now);
+      if (bearer !== null) audit({ actor: actorOf(bearer, grant), action: "portal.signout", target: host }, now);
       // The cookie is erased even if it was no longer valid: a dead cookie
       // would otherwise stay in the browser.
       const cleared = { "Set-Cookie": clearCookie(options.online), "Cache-Control": "no-store" };

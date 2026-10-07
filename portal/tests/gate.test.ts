@@ -328,15 +328,15 @@ describe("a display name", () => {
 });
 
 describe("the identity headers", () => {
-  test("the owner and a guest are a role and nobody", () => {
+  test("the owner and a password access are a role and nobody", () => {
     expect(identityHeaders("admin", null)).toEqual({ "X-Sitesolide-Role": "admin" });
-    expect(identityHeaders("guest", null)).toEqual({ "X-Sitesolide-Role": "guest" });
+    expect(identityHeaders("visitor", null)).toEqual({ "X-Sitesolide-Role": "visitor" });
   });
 
-  test("a person carries the email as is and the name percent-encoded", () => {
-    const headers = identityHeaders("member", { email: "zoe@acme.test", name: "Zoë 李" });
+  test("a person carries their role, the email as is and the name percent-encoded", () => {
+    const headers = identityHeaders("developer", { email: "zoe@acme.test", name: "Zoë 李" });
     expect(headers).toEqual({
-      "X-Sitesolide-Role": "member",
+      "X-Sitesolide-Role": "developer",
       "X-Sitesolide-User": "zoe@acme.test",
       "X-Sitesolide-User-Name": "Zo%C3%AB%20%E6%9D%8E",
     });
@@ -352,7 +352,7 @@ describe("the identity headers", () => {
 
   test("a name the encoding cannot take does not throw, it is carried well formed", () => {
     // Whatever slipped past cleanName, /verifier must answer, not fail.
-    const headers = identityHeaders("member", { email: "a@acme.test", name: "a\ud83d" });
+    const headers = identityHeaders("viewer", { email: "a@acme.test", name: "a\ud83d" });
     expect(headers["X-Sitesolide-User-Name"]).toBe("a%EF%BF%BD");
   });
 
@@ -364,7 +364,7 @@ describe("the identity headers", () => {
   });
 
   test("every value fits in a header", () => {
-    const headers = identityHeaders("member", { email: "a@acme.test", name: cleanName("Ünïcødé ✓ ") });
+    const headers = identityHeaders("visitor", { email: "a@acme.test", name: cleanName("Ünïcødé ✓ ") });
     expect(() => new Headers(headers)).not.toThrow();
   });
 });

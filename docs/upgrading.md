@@ -113,7 +113,73 @@ skipped, and it resumes at the one that failed.
 
 A machine upgrades one release at a time: from 0.1, follow
 [From 0.1 to 0.2](#from-01-to-02) first, then [From 0.2 to 0.3](#from-02-to-03),
-then `sitesolide upgrade` for every release after.
+then `sitesolide upgrade` for every release after, reading the notes below
+for each, [Access: one registry](#access-one-registry) first.
+
+## Access: one registry
+
+Who may do what on a project now lives in one place, the steward's access
+registry, and the portal reads a projection of it. `sitesolide upgrade` is
+all it takes; read this first, for what changes for the sites and for you.
+
+**Before you run it.**
+
+- **An app that reads `X-Sitesolide-Role`** must be updated, and deployed,
+  before the portal is: the header now carries the role, `admin` for the
+  owner's password and the admin emails, `visitor`, `viewer`, `developer` or
+  `admin` for someone signed in with a company account, `visitor` for password
+  access, which carries no `X-Sitesolide-User`. `member` and `guest` are
+  gone. An app that let `guest` read only now tests `role === "visitor" &&
+  user === null`, or better, the role it means.
+- **Everyone with a role above Can open on a project opens its site** when it
+  is restricted: a Developer of a site behind the portal no longer needs to
+  be shared with besides. Read each restricted site's people with access
+  afterwards, `sitesolide share` in its folder.
+- `sitesolide members` is gone: `sitesolide share <email> --role <role>`
+  from a project's folder gives a role, `sitesolide people` lists everyone and
+  `sitesolide people <email> --may-create` gives the right to create projects.
+  `sitesolide share --domain` and `--only-admins` are gone too: a domain is
+  written `@acme.com`, and general access, public or restricted, is the
+  dashboard's.
+
+**What `sitesolide upgrade` runs, in this order.**
+
+1. **The steward.** At its first start it makes the registry, once, from
+   `members.json` and the portal's database, then writes the portal's
+   projection: [migration.md](migration.md#access-the-registry-made-from-the-stores-before-it)
+   says what it carries over, what it sets aside and why. The running portal,
+   the old one, keeps deciding from its own tables, which still say the same.
+   `bin/deploy-steward.sh` ends on `access registry 600 root:root, its
+   projection for the portal 640 root:site-portal`.
+2. **The dashboard.** Its access API speaks to the steward; the old pages,
+   Sharing, Guests and Members, keep working on it until the next release
+   replaces them with one Access section and the People page.
+3. **The team installer**, which reads the registry when it starts.
+4. **The portal**, last: from its first request it decides from the
+   projection, and leaves the mark that keeps it from ever reading its old
+   tables again.
+
+Run them together, as `sitesolide upgrade` does: a change of access made in
+the old dashboard between the steward's step and the dashboard's would go to
+the portal's old tables, which nothing reads any more.
+
+**Check.**
+
+```bash
+sitesolide people
+cd <a project behind the portal> && sitesolide share
+ssh deploy@203.0.113.10 'sudo curl -s http://127.0.0.1:3026/admin/access'
+```
+
+`people` lists everyone with their roles; `share` lists the site's people
+with access and says nothing of the portal; the portal answers `"reading":
+"steward"`. A guest password handed out before the upgrade still opens its
+site, and a cookie set before it is still valid.
+
+**Going back** is the previous commit of the steward, the dashboard, the team
+installer and the portal, which read the old stores as they stood at the
+migration: every change of access made since is lost for them. See
+[migration.md](migration.md#going-back).
 
 ## From 0.2 to 0.3
 
@@ -280,7 +346,7 @@ pushing anything and prints the divergence, cut short after five lines.
 [portal/README.md](../portal/README.md#upgrading) lists what it must be. Then
 run it with `--force`. Check: `curl -s -o /dev/null -w '%{http_code}\n' 'https://portal.<zone>/admin/sharing/..%2f..%2fsante'`
 answers `400`; a protected site still opens with the cookie you already had; a
-guest still gets in.
+password access still opens its site.
 
 ### 5. What you choose to turn on
 
@@ -290,9 +356,9 @@ Each of these is independent and opt-in. None changes a site until you use it.
 |---|---|---|---|
 | alerts when something breaks | `bin/deploy-monitor.sh` | a healthchecks.io URL in the dashboard's *Secrets*, `dashboard-monitor.env` | [monitor/README.md](../monitor/README.md#deployment) |
 | hourly backups of every project's data | `bin/deploy-backup.sh enable` | optional bucket in `dashboard-backup.env` | [dashboard/src/backup/README.md](../dashboard/src/backup/README.md#deployment) |
-| sign-in with a company account, sharing | nothing more | the `OIDC_*` settings in the portal's `portal.env`, *Restart service* | [portal/README.md](../portal/README.md) |
-| deploys by colleagues and agents with a token | `bin/deploy-installer.sh` | a token on the *Team* page | [dashboard/README.md](../dashboard/README.md#deployment-of-the-control-api) |
-| colleagues who sign in to the dashboard with their work account, a role per project: Developers who set secrets without reading them, Project admins who look after their project, each minting tokens of their own within their roles, and creating projects once you grant it | `sitesolide upgrade`, which brings the steward, its portal relay, the dashboard, the installer and the portal up to date | the sign-in with a company account above, then a member on the *Members* page or with `sitesolide members add`, and `--may-create` for the right to create projects | [dashboard/README.md](../dashboard/README.md#members) |
+| sign-in with a company account | nothing more | the `OIDC_*` settings in the portal's `portal.env`, *Restart service* | [portal/README.md](../portal/README.md) |
+| deploys by colleagues and agents with a token | `bin/deploy-installer.sh` | a token on the *Tokens* page | [dashboard/README.md](../dashboard/README.md#deployment-of-the-control-api) |
+| people with access to a project, a role each: Can open, Viewer, Developer who sets secrets without reading them, Admin who looks after the project, each minting tokens of their own within their roles, and creating projects once you grant it | `sitesolide upgrade`, which brings the steward, its portal relay, the dashboard, the installer and the portal up to date | the sign-in with a company account above, then `sitesolide share <email> --role <role>` in a project's folder, and `sitesolide people <email> --may-create` for the right to create projects | [dashboard/README.md](../dashboard/README.md#access) |
 | projects that reach only listed hosts, connectors | `bin/deploy-egress.sh`, then `bin/deploy-steward.sh` again: the steward started before `/etc/sitesolide-egress` existed, and only a restart makes it writable for it | `egress` or `connectors` in a manifest | [egress/README.md](../egress/README.md#deployment) |
 
 ### 6. Each site, when you next deploy it

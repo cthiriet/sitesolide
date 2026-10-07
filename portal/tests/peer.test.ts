@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { createAdmin } from "../src/admin";
+import { createAccessAdmin } from "../src/admin";
 import { callerUidOn, uidOfConnection } from "../src/peer";
-import { memoryAudit, memoryStore } from "./memory";
+import { memoryAudit } from "./memory";
 
 /**
  * Who calls the admin routes, from the kernel's socket tables: the egress
@@ -59,21 +59,28 @@ describe("the uid behind a connection", () => {
 });
 
 describe("the actor rule, end to end of the reading", () => {
-  test("the dashboard's connection naming a member is refused, the relay's is recorded", async () => {
+  test("the dashboard's connection naming a person is refused, the relay's learns that the route moved", async () => {
     const audit = memoryAudit();
     let port = 41234;
-    const routes = createAdmin(memoryStore(), () => 1_800_000_000_000, { drawPassword: () => "Xith-G4r4-nRJs-uDMV", drawId: () => "AAAAAAAAAAAAAAA0" }, audit, callerUidOn(() => ({ address: "127.0.0.1", port }), LOCAL, readings([TABLE, ""])));
+    const routes = createAccessAdmin({
+      access: { state: () => ({ reading: "steward", writtenAt: 1_800_000_000_000 }) },
+      audit,
+      settings: null,
+      callerUid: callerUidOn(() => ({ address: "127.0.0.1", port }), LOCAL, readings([TABLE, ""])),
+    });
     const asking = () =>
       new Request("http://127.0.0.1:3026/admin/guests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ host: "forum.test-zone.invalid", label: "Alice", durationS: 7 * 24 * 3600, actor: "bob@acme.test" }),
       });
-    const refused = await routes.create(asking());
+    const refused = await routes.moved(asking());
     expect(refused.status).toBe(403);
     expect(await refused.json()).toEqual({ error: "actor-not-root" });
     port = 41300;
-    expect((await routes.create(asking())).status).toBe(201);
-    expect(audit.events.map((event) => event.actor)).toEqual(["bob@acme.test"]);
+    const moved = await routes.moved(asking());
+    expect(moved.status).toBe(410);
+    expect(await moved.json()).toMatchObject({ error: "moved" });
+    expect(audit.events).toEqual([]);
   });
 });

@@ -529,6 +529,22 @@ describe("log", () => {
     expect(operationPlace(logEntry({ operation: "set", slug: "", file: "" }))).toEqual({ project: null, file: null })
   })
 
+  test("the access registry's operations and the dashboard's sign-ins are named, with no object of their own", () => {
+    for (const [operation, verb] of [
+      ["access.add", "Give access"],
+      ["access.change", "Change role"],
+      ["access.remove", "Take access away"],
+      ["access.migrate", "Carry access over"],
+      ["people.create", "Create projects"],
+      ["dashboard.signin", "Sign in"],
+      ["dashboard.signin_failed", "Sign-in refused"],
+      ["dashboard.signout", "Sign out"],
+    ] as const) {
+      expect(operationParts(logEntry({ operation }))).toEqual({ verb, object: null, kind: null })
+      expect(operationPlace(logEntry({ operation }))).toEqual({ project: null, file: null })
+    }
+  })
+
   test("replacing a file, changing a password, changing the portal", () => {
     const replacement = logEntry({ operation: "replace", file: "builder-ssh", variable: null, slug: "builder" })
     expect(operationParts(replacement)).toEqual({ verb: "Replace", object: "builder-ssh", kind: "file" })

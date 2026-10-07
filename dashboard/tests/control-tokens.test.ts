@@ -138,8 +138,8 @@ describe("authentication", () => {
     expect(refusalMessage({ kind: "refused", reason: "expired" })).toContain("expired");
     expect(refusalMessage({ kind: "refused", reason: "revoked" })).toContain("revoked");
     expect(refusalMessage({ kind: "refused", reason: "unknown" })).toContain("Authorization: Bearer");
-    // A member's own: mint another, rather than ask the owner.
-    expect(refusalMessage({ kind: "refused", reason: "revoked", member: true })).toContain("mint a new one from the dashboard's Team page");
+    // A person's own: mint another, rather than ask the owner.
+    expect(refusalMessage({ kind: "refused", reason: "revoked", member: true })).toContain("mint a new one from the dashboard's Tokens page if you still have a role there");
     expect(refusalMessage({ kind: "refused", reason: "expired", member: false })).toContain("ask the owner of the machine");
   });
 });

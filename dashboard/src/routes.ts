@@ -4,7 +4,6 @@
  * port or a database. The server, for its part, creates only one.
  */
 import { remainingWait, isPasswordValid, isAcceptableSubmission } from "./auth";
-import { invitableHosts, type Portal } from "./guests";
 import { read } from "./read";
 import { memberReading } from "./members/view";
 import type { Roles } from "./members/protocol";
@@ -37,7 +36,6 @@ export type Options = {
   /** A member's session: half a day, whatever the owner's is. Absent, the owner's. */
   memberSessionDurationMs?: number;
   stateFile: string;
-  portal: Portal;
   /**
    * The roles that bound what a session sees of the snapshot: null for the
    * owner, who sees the whole machine. Absent, everyone sees it whole, as
@@ -69,14 +67,12 @@ export type Routes = {
   signIn: (req: Request) => Promise<Response>;
   signOut: (req: Request) => Promise<Response>;
   state: (req: Request) => Promise<Response>;
-  guests: (req: Request) => Promise<Response>;
-  createGuest: (req: Request) => Promise<Response>;
-  revokeGuest: (req: Request, id: string) => Promise<Response>;
 };
 
 /**
- * The portal's response, returned as it stands to the page. Unreachable, it is
- * said unreachable: an exception here would return a mute 500.
+ * The portal's response, returned as it stands to the page: its audit.
+ * Unreachable, it is said unreachable: an exception here would return a mute
+ * 500.
  */
 export async function relay(call: () => Promise<Response>): Promise<Response> {
   let response: Response;
@@ -102,7 +98,7 @@ export type SessionReader = (req: Request, now: number) => Promise<Session | nul
  * rather than by a copy, which would end up diverging.
  *
  * It reads the owner's sessions and the members' alike: `ownerSessions` keeps
- * the first alone, for every route that is the super admin's.
+ * the first alone, for every route that is the owner's.
  */
 export function createSessionReader(
   store: Pick<Store, "readSession" | "touchSession" | "closeSession">,
@@ -129,7 +125,7 @@ export function createSessionReader(
 
 /**
  * The same reader, for the owner's sessions alone: a member's reads as no
- * session. Every route that is the super admin's takes this one, so that a
+ * session. Every route that is the owner's takes this one, so that a
  * route forgetting to ask who is signed in still refuses a member.
  */
 export function ownerSessions(reader: SessionReader): SessionReader {
@@ -141,8 +137,6 @@ export function ownerSessions(reader: SessionReader): SessionReader {
 
 export function createRoutes(store: Store, options: Options, clock: () => number = Date.now): Routes {
   const session = createSessionReader(store, options);
-  // Guest access is the super admin's: a member's session reads as none.
-  const owner = ownerSessions(session);
 
   /**
    * The password attempts go through one by one, from the reading of the
@@ -270,64 +264,12 @@ export function createRoutes(store: Store, options: Options, clock: () => number
       const roles = options.roles === undefined ? null : await options.roles(req, now);
       if (roles === "no-session") return Response.json({ error: "no-session" }, { status: 401 });
       if (roles === "unreachable") {
-        return Response.json({ error: "failure", message: "Can't reach the steward to say what this member may see." }, { status: 502 });
+        return Response.json({ error: "failure", message: "Can't reach the steward to say what this person may see." }, { status: 502 });
       }
 
       const reading = await read(options.stateFile, now);
       // Nothing in this dashboard is to be kept: it describes an instant.
       return Response.json(roles === null ? reading : memberReading(reading, roles), { headers: { "Cache-Control": "no-store" } });
-    },
-
-    async guests(req) {
-      if ((await owner(req, clock())) === null) {
-        return Response.json({ error: "no-session" }, { status: 401 });
-      }
-      return relay(() => options.portal.list());
-    },
-
-    /**
-     * The origin before the session, as for signing in: it is what stands in
-     * for an anti-CSRF token, see src/sessions.ts.
-     *
-     * The host is confronted with the snapshot, the portal not knowing which
-     * sites it protects: it would sign an access for any name at all. The
-     * label and the duration, for their part, are judged by the portal, which
-     * applies them.
-     */
-    async createGuest(req) {
-      const now = clock();
-      if (!isAcceptableOrigin(req.headers.get("origin"), options.publicUrl)) {
-        return Response.json({ error: "origin-refused" }, { status: 403 });
-      }
-      if ((await owner(req, now)) === null) {
-        return Response.json({ error: "no-session" }, { status: 401 });
-      }
-
-      let body: { host?: unknown; label?: unknown; durationS?: unknown } | null;
-      try {
-        body = (await req.json()) as typeof body;
-      } catch {
-        return Response.json({ error: "unreadable-body" }, { status: 400 });
-      }
-
-      const host = body?.host;
-      const reading = await read(options.stateFile, now);
-      if (typeof host !== "string" || !reading.present || !invitableHosts(reading.snapshot).includes(host)) {
-        return Response.json({ error: "no-portal" }, { status: 400 });
-      }
-
-      return relay(() => options.portal.create({ host, label: body?.label, durationS: body?.durationS }));
-    },
-
-    async revokeGuest(req, id) {
-      const now = clock();
-      if (!isAcceptableOrigin(req.headers.get("origin"), options.publicUrl)) {
-        return Response.json({ error: "origin-refused" }, { status: 403 });
-      }
-      if ((await owner(req, now)) === null) {
-        return Response.json({ error: "no-session" }, { status: 401 });
-      }
-      return relay(() => options.portal.remove(id));
     },
   };
 }

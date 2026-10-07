@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Installs or updates the installer, the root one-shot that deploys one project
-# for a team token. See dashboard/installer.ts and dashboard/README.md, "The
+# for a token. See dashboard/installer.ts and dashboard/README.md, "The
 # control API".
 #
 #   bin/deploy-installer.sh

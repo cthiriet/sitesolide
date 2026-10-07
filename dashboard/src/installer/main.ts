@@ -19,8 +19,9 @@ import { join } from "node:path";
 import { configFrom, type Environment } from "../gatekeeper/main";
 import { createMachine, type Systemctl } from "../gatekeeper/real";
 import { readBounded, writeAtomically } from "../secrets/system";
-import { readRegistry } from "../members/registry";
-import { installScope, rightsOf, type MemberRights } from "../members/tokens";
+import { readRegistry, rightsOf } from "../access/registry";
+import { REGISTRY_NAME } from "../access/protocol";
+import { installScope, type MemberRights } from "../members/tokens";
 import { INSTALLER_RUN_FOLDER, MAX_ENTRIES, MAX_EXTRACTED_BYTES, MAX_LOG_LINE, MAX_LOG_LINES, MAX_PATH_BYTES, type InstallerResult, type InstallRequest } from "../control/protocol";
 import { extract } from "./extract";
 import { readLaunch, readRequest } from "./instance";
@@ -91,13 +92,13 @@ export function createReporter(folder: string, request: InstallRequest, clock: (
 }
 
 /**
- * The rights of the member whose token asked for this deployment, as the
- * members registry reads now, in the steward's state folder: null when the
- * email is no member, or the registry does not read, which refuses rather
- * than guessing.
+ * The rights of the person whose token asked for this deployment, as the
+ * access registry reads now, in the steward's state folder: null when they
+ * no longer sign in to the dashboard, or the registry does not read, which
+ * refuses rather than guessing.
  */
 export function memberRights(stateFolder: string, email: string): MemberRights | null {
-  const examination = readBounded(join(stateFolder, "members.json"), 1024 * 1024);
+  const examination = readBounded(join(stateFolder, REGISTRY_NAME), 8 * 1024 * 1024);
   if (examination.kind === "absent") return null;
   if (examination.bytes === null) return null;
   let text: string;
@@ -177,7 +178,7 @@ export async function main(argv: string[], env: Environment, overrides: { comman
   const resultsFolder = env.INSTALLER_FOLDER ?? INSTALLER_RUN_FOLDER;
   pruneResults(resultsFolder, Date.now());
   const reporter = createReporter(resultsFolder, request, Date.now, (line) => console.log(line));
-  reporter.log(`-> deployment ${request.deployment} of ${slug}, for ${request.token.email} (token ${request.token.id}${request.token.member === null ? "" : `, a member's own`})`);
+  reporter.log(`-> deployment ${request.deployment} of ${slug}, for ${request.token.email} (token ${request.token.id}${request.token.member === null ? "" : `, a person's own`})`);
 
   // A member's token: its scope narrowed once more to the member's roles as
   // the registry reads now, the request's copy being the steward's of a few

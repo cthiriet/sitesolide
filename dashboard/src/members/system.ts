@@ -38,7 +38,7 @@ export type MembersSystemConfig = {
 };
 
 /** What portal.env says of signing in with a provider. */
-export type PortalSettings = { configured: boolean; allowedDomains: string[]; admins: string[] };
+export type PortalSettings = { configured: boolean; allowedDomains: string[]; admins: string[]; providerName: string | null };
 
 export type KeyWrite = "written" | "no-folder" | "no-group";
 
@@ -87,7 +87,7 @@ function readQuietly(path: string): string | null {
 
 /** The sign-in settings of portal.env, every value judged by the portal's own rules. */
 export function portalSettings(bytes: Uint8Array | null): PortalSettings {
-  const none: PortalSettings = { configured: false, allowedDomains: [], admins: [] };
+  const none: PortalSettings = { configured: false, allowedDomains: [], admins: [], providerName: null };
   if (bytes === null) return none;
   const parsed = parseEnvBytes(bytes);
   if (!parsed.ok) return none;
@@ -96,6 +96,9 @@ export function portalSettings(bytes: Uint8Array | null): PortalSettings {
     configured: value("OIDC_ISSUER") !== "" && value("OIDC_CLIENT_ID") !== "" && value("OIDC_CLIENT_SECRET") !== "",
     allowedDomains: readList(value("OIDC_ALLOWED_DOMAINS"), cleanDomain).values,
     admins: readList(value("OIDC_ADMIN_EMAILS"), cleanEmail).values,
+    // The name the button carries, when one is set; the portal names Google
+    // and Microsoft from their issuer otherwise.
+    providerName: /^[\x20-\x7e]{1,60}$/.test(value("OIDC_PROVIDER_NAME")) ? value("OIDC_PROVIDER_NAME") : /accounts\.google\.com/.test(value("OIDC_ISSUER")) ? "Google" : /login\.microsoftonline\.com/.test(value("OIDC_ISSUER")) ? "Microsoft" : null,
   };
 }
 

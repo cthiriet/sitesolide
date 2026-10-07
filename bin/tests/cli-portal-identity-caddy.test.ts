@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment, ZONE_HOST } from "../cli/fragment";
 import { readManifest, type Manifest } from "../cli/manifest";
 import { PORTAL_PORT } from "../cli/portal";
 import { startProvider, type MockProvider } from "../../portal/tests/provider";
+import { encodeProjection, PROJECTION_VERSION, type Projection, type SiteAccess } from "../../portal/src/access";
+import { guestHash } from "../../portal/src/gate";
 
 /**
  * Who is in, as the site behind a real Caddy learns it.
@@ -23,8 +25,9 @@ import { startProvider, type MockProvider } from "../../portal/tests/provider";
  * second one as the release before identities generated it, an open site
  * with its customer domain, and the portal's own block, from
  * portal/sitesolide.json, which a sign-in with the provider goes through. The
- * provider is the tests' own, the portal its real server.ts. Caddy runs with
- * `admin off` on free ports, stopped by its PID.
+ * provider is the tests' own, the portal its real server.ts, who may open a
+ * site the steward's projection, which the test writes as the steward does.
+ * Caddy runs with `admin off` on free ports, stopped by its PID.
  *
  * The underscore spellings, `X_Sitesolide_User`, which some app servers read
  * as the dash form, never arrive: Caddy 2.11.4 drops such a header on
@@ -185,12 +188,19 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     return { status: 200, identity: body.identity };
   }
 
-  function share(host: string, policy: object): Promise<Response> {
-    return fetch(`http://127.0.0.1:${portalPort}/admin/sharing/${host}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(policy),
-    });
+  const accessFile = join(folder, "access.json");
+  let writtenAt = 0;
+
+  /** The steward's projection, written whole and renamed into place: the portal reads it again at the next request. */
+  function project(sites: Record<string, Partial<SiteAccess>>): void {
+    writtenAt += 1;
+    const projection: Projection = {
+      version: PROJECTION_VERSION,
+      writtenAt,
+      sites: Object.fromEntries(Object.entries(sites).map(([host, site]) => [host, { slug: host.split(".")[0]!, people: {}, domains: [], passwords: [], ...site }])),
+    };
+    writeFileSync(`${accessFile}.new`, encodeProjection(projection));
+    renameSync(`${accessFile}.new`, accessFile);
   }
 
   beforeAll(async () => {
@@ -199,6 +209,7 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     Bun.spawnSync(["bun", join(REPO_ROOT, "portal", "scripts", "borrow.ts")], { stdout: "ignore" });
 
     for (const name of ["public", "public-legacy", "public-open", "public-portal", "locks", "data"]) mkdirSync(join(folder, name));
+    project({});
     writeFileSync(join(folder, "public", "style.css"), "body{}");
     writeFileSync(join(folder, "public-legacy", "style.css"), "body{}");
     writeFileSync(join(folder, "public-open", "style.css"), "body{}");
@@ -265,6 +276,7 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
         PORT: String(portalPort),
         DATA_DIR: join(folder, "data"),
         PASSWORD_HASH: hash,
+        ACCESS_FILE: accessFile,
         NODE_ENV: "test",
         PUBLIC_URL: `http://${PORTAL_HOST}:${caddyPort}`,
         OIDC_ISSUER: provider.url,
@@ -313,13 +325,9 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     expect(await received(new Browser(), "/webhook/inbound")).toEqual({ status: 200, identity: {} });
   });
 
-  test("a guest is a guest, not the CEO", async () => {
-    const created = await fetch(`http://127.0.0.1:${portalPort}/admin/guests`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ host: SITE, label: "Alice", durationS: 24 * 3600 }),
-    });
-    const { password } = (await created.json()) as { password: string };
+  test("password access opens the site as a visitor, never as the CEO", async () => {
+    const password = "sample-password-access-for-tests";
+    project({ [SITE]: { passwords: [{ id: "AAAAAAAAAAAAAAAA", who: "eve@elsewhere.test", hash: guestHash(password), expiresAt: Date.now() + 3_600_000 }] } });
     const browser = new Browser();
     const entry = await browser.get(`http://${SITE}/_portal/connexion`, {
       method: "POST",
@@ -327,11 +335,12 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
       body: new URLSearchParams({ motdepasse: password, retour: "/" }),
     });
     expect(entry.status).toBe(303);
-    expect(await received(browser, "/list")).toEqual({ status: 200, identity: { "x-sitesolide-role": "guest" } });
+    expect(await received(browser, "/list")).toEqual({ status: 200, identity: { "x-sitesolide-role": "visitor" } });
+    project({});
   });
 
   test("signed in with the provider, through the portal's own block: the site learns the real person", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    project({ [SITE]: { people: { "alice@acme.test": "developer" } } });
     const browser = new Browser();
     provider.next = { email: "alice@acme.test", name: "Alice Martin" };
     const { url } = await browser.follow(`http://${SITE}/_portal/oidc?retour=%2Flist`);
@@ -342,12 +351,19 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
       identity: {
         "x-sitesolide-user": "alice@acme.test",
         "x-sitesolide-user-name": "Alice%20Martin",
-        "x-sitesolide-role": "member",
+        "x-sitesolide-role": "developer",
       },
     });
 
-    // Removed from the sharing, out at the next request: Caddy was not touched.
-    await share(SITE, { mode: "people", people: [] });
+    // Lowered, the site learns it at the next request.
+    project({ [SITE]: { people: { "alice@acme.test": "visitor" } } });
+    expect((await received(browser, "/list")).identity?.["x-sitesolide-role"]).toBe("visitor");
+    // Everyone at the domain opens it as a visitor.
+    project({ [SITE]: { domains: ["acme.test"] } });
+    expect((await received(browser, "/list")).identity?.["x-sitesolide-role"]).toBe("visitor");
+
+    // Removed from the people with access, out at the next request: Caddy was not touched.
+    project({});
     expect(await received(browser, "/list")).toEqual({ status: 401 });
   });
 
@@ -373,7 +389,7 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
   });
 
   test("signing out of a site ends the portal's session too, through the portal's own block", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    project({ [SITE]: { people: { "alice@acme.test": "visitor" } } });
     const browser = new Browser();
     provider.next = { email: "alice@acme.test", name: "Alice Martin" };
     await browser.follow(`http://${SITE}/_portal/oidc?retour=%2Flist`);
@@ -391,7 +407,7 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     expect(response.status).toBe(401);
     expect(browser.jars.get(PORTAL_HOST)?.has("portal-session")).toBe(false);
     expect(browser.jars.get(PORTAL_HOST)?.get("portal-signed-out")).toBe("1");
-    await share(SITE, { mode: "admins" });
+    project({});
   });
 
   test("a site not behind the portal hands its app nobody, whatever the visitor claims", async () => {
@@ -423,7 +439,7 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     const browser = new Browser();
     expect((await browser.get(`http://${PORTAL_HOST}/oidc/start?flow=x`)).status).toBe(400);
     expect((await browser.get(`http://${PORTAL_HOST}/oidc/signout?ticket=x`)).status).toBe(400);
-    for (const path of ["/_portal/oidc", "/_portal/oidc/complete?code=x", "/admin/sharing", "/admin/audit", "/verifier"]) {
+    for (const path of ["/_portal/oidc", "/_portal/oidc/complete?code=x", "/admin/access", "/admin/sharing", "/admin/audit", "/verifier"]) {
       const response = await browser.get(`http://${PORTAL_HOST}${path}`);
       expect({ path, status: response.status }).toEqual({ path, status: 404 });
     }

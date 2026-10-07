@@ -1,16 +1,17 @@
 /**
- * What a member may do on a project, by role: the steward's one table, and
+ * What a person may do on a project, by role: the steward's one table, and
  * the refusals it says. Pure.
  *
  * | Role | Powers |
  * |---|---|
+ * | Can open (`visitor`) | none here: they open the site when its general access is restricted, and see nothing in the dashboard |
  * | Viewer | none: they see the project, the dashboard filters what they see |
  * | Developer | restart; list the secret files, names and metadata; write: create a declared file, set, replace or remove a variable, replace a whole file. Never a value read back. Deploy it with a token of their own |
- * | Project admin | everything a Developer has, and read a value or a file back, restore a file's previous version, the portal door, sharing, guests, backups and their restore, and the project's members, a role at most their own. A token of theirs may also deploy it in the open, declare a domain for it, and let it reach outside hosts |
+ * | Admin | everything a Developer has, and read a value or a file back, restore a file's previous version, general access, people with access, a role at most their own, backups and their restore. A token of theirs may also deploy it in the open, declare a domain for it, and let it reach outside hosts |
  *
- * Nothing here is a member's for the platform's own projects, the dashboard,
+ * Nothing here is anyone's for the platform's own projects, the dashboard,
  * the portal and the others, nor for a file the machine keeps for root: those
- * stay the super admin's (`machineRefusal`).
+ * stay the owner's (`machineRefusal`).
  *
  * The dashboard reads this table too, to offer what the steward will accept;
  * the steward is the one that refuses.
@@ -25,24 +26,23 @@ export type Power =
   | "secrets.read"
   | "secrets.restore"
   | "door"
-  | "sharing"
-  | "guests"
+  | "access"
   | "backups"
-  | "members"
   | "deploy"
   | "deploy.public"
   | "deploy.domain"
   | "deploy.outbound";
 
 /**
- * `deploy` is what a member's own token does on a project: write its code,
+ * `deploy` is what a person's own token does on a project: write its code,
  * which a Developer already trusts with its secrets. The three others are
  * what a token's scope may add to a deployment (src/control/protocol.ts,
- * `Scope`): a site in the open is the door turned off, and a domain and the
- * network outside widen what the project is; each is a Project admin's, as
- * the door is.
+ * `Scope`): a site in the open is general access turned public, and a domain
+ * and the network outside widen what the project is; each is an Admin's, as
+ * general access is.
  */
 const POWERS: Readonly<Record<Role, readonly Power[]>> = {
+  visitor: [],
   viewer: [],
   developer: ["restart", "secrets.list", "secrets.write", "deploy"],
   admin: [
@@ -52,10 +52,8 @@ const POWERS: Readonly<Record<Role, readonly Power[]>> = {
     "secrets.read",
     "secrets.restore",
     "door",
-    "sharing",
-    "guests",
+    "access",
     "backups",
-    "members",
     "deploy",
     "deploy.public",
     "deploy.domain",
@@ -63,50 +61,48 @@ const POWERS: Readonly<Record<Role, readonly Power[]>> = {
   ],
 };
 
-/** The narrowest first: a role grants what every narrower one does. */
-const RANK: Readonly<Record<Role, number>> = { viewer: 0, developer: 1, admin: 2 };
-
 export function may(role: Role | null, power: Power): boolean {
   return role !== null && POWERS[role].includes(power);
 }
 
+/** Developer and Admin restart their projects' services; a Viewer only looks. */
+export function mayRestart(role: Role | null): boolean {
+  return may(role, "restart");
+}
+
 /**
- * Which powers ask for the member's own unlock, the ten minutes a forced sign-in
- * at the provider opens: whatever reads or writes a secret, takes a door off,
- * puts a project's data back, or hands someone a role. A restart, sharing and
- * guests do not, as for the super admin, whose session alone does them.
+ * Which powers ask for the person's own unlock, the ten minutes a forced
+ * sign-in at the provider opens: whatever reads or writes a secret, changes
+ * general access, puts a project's data back. Giving someone a role above
+ * Can open asks for it too (src/access/rules.ts); a restart, removing
+ * someone, and giving Can open do not, as for the owner, whose session
+ * alone does them.
  */
 export function needsUnlock(power: Power): boolean {
-  return power === "secrets.write" || power === "secrets.read" || power === "secrets.restore" || power === "door" || power === "backups" || power === "members";
+  return power === "secrets.write" || power === "secrets.read" || power === "secrets.restore" || power === "door" || power === "backups";
 }
 
-/** May a member holding `own` on a project give `granted` on it? A Project admin alone, and never more than their own. */
-export function mayGrant(own: Role | null, granted: Role): boolean {
-  return may(own, "members") && RANK[granted] <= RANK[own!];
-}
-
-const ROLE_NAMES: Readonly<Record<Role, string>> = { viewer: "a viewer", developer: "a developer", admin: "a project admin" };
+const ROLE_NAMES: Readonly<Record<Role, string>> = { visitor: "Can open", viewer: "a Viewer", developer: "a Developer", admin: "an Admin" };
 
 const WHAT: Readonly<Record<Power, string>> = {
-  restart: "restarting its service takes a developer or a project admin",
-  "secrets.list": "its secret files are for a developer or a project admin",
-  "secrets.write": "changing its secrets takes a developer or a project admin",
-  "secrets.read": "reading a value back takes a project admin: a developer sets, replaces and removes values, and never reads one",
-  "secrets.restore": "putting a previous version back takes a project admin",
-  door: "turning its portal on or off takes a project admin",
-  sharing: "changing who may open it takes a project admin",
-  guests: "giving or revoking guest access takes a project admin",
-  backups: "its backups and their restore are a project admin's",
-  members: "giving people a role on it takes a project admin",
-  deploy: "deploying it takes a developer or a project admin",
-  "deploy.public": "deploying it in the open, without the portal, takes a project admin",
-  "deploy.domain": "declaring a domain for it takes a project admin",
-  "deploy.outbound": "letting it reach outside hosts takes a project admin",
+  restart: "restarting its service takes a Developer or an Admin",
+  "secrets.list": "its secret files are for a Developer or an Admin",
+  "secrets.write": "changing its secrets takes a Developer or an Admin",
+  "secrets.read": "reading a value back takes an Admin: a Developer sets, replaces and removes values, and never reads one",
+  "secrets.restore": "putting a previous version back takes an Admin",
+  door: "changing its general access takes an Admin",
+  access: "its people with access are its Admin's",
+  backups: "its backups and their restore are an Admin's",
+  deploy: "deploying it takes a Developer or an Admin",
+  "deploy.public": "deploying it in the open, its general access public, takes an Admin",
+  "deploy.domain": "declaring a domain for it takes an Admin",
+  "deploy.outbound": "letting it reach outside hosts takes an Admin",
 };
 
 /** The refusal, in English, shown as it stands. */
 export function powerRefusal(email: string, role: Role | null, slug: string, power: Power): string {
   if (role === null) return `${email} holds no role on ${slug}`;
+  if (role === "visitor") return `${email} can open ${slug} and nothing more: ${WHAT[power]}`;
   return `${email} is ${ROLE_NAMES[role]} on ${slug}: ${WHAT[power]}`;
 }
 
@@ -118,14 +114,14 @@ export function roleDetail(role: Role | null): string {
 /**
  * The files of the machine itself, whoever holds a role where they sit: the
  * dashboard's and the portal's settings, and any file the steward lays for
- * root. A member's role is never on the platform's projects (registry.ts
+ * root. A role is never given on the platform's projects (src/access/rules.ts
  * refuses it), and this is the second lock, judged on the file itself.
  */
 export function machineRefusal(slug: string, file: { name: string; expected: { owner: string } } | null, zone: string): string | null {
-  if (reservedReason(slug, zone) !== null) return `${slug} belongs to the platform, which stays the super admin's`;
+  if (reservedReason(slug, zone) !== null) return `${slug} belongs to the platform, which stays the owner's`;
   if (file === null) return null;
   if (file.expected.owner === "root" || file.name === "dashboard.env" || file.name === "portal.env") {
-    return `${file.name} belongs to the machine, which stays the super admin's`;
+    return `${file.name} belongs to the machine, which stays the owner's`;
   }
   return null;
 }

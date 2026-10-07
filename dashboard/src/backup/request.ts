@@ -39,15 +39,15 @@ export const MESSAGE_MAX = 400;
 
 export const DASHBOARD_REFUSAL = "the dashboard's own data is not restored from the dashboard: see the Backups README to do it by hand";
 export const PORTAL_REFUSAL =
-  "the portal's data is not restored from the dashboard: an old copy would bring back revoked guest access and old sharing policies; see the Backups README to do it by hand";
+  "the portal's data is not restored from the dashboard: an old copy would bring back its old audit and the tables it kept before the access registry; see the Backups README to do it by hand";
 
 /**
  * Why a site is never restored from the dashboard, or null, as the steward
  * and the one-shot both judge it. The dashboard: the page doing it would cut
- * itself off. The portal: its data is who may enter which site, and an old
- * copy would quietly let back in every guest revoked since, under the
- * sharing rules of that day. Both are restored by hand, by someone who knows
- * what they bring back (README).
+ * itself off. The portal: its data holds the key its cookies are signed with,
+ * its audit and the tables it kept before the access registry, and an old copy
+ * would bring all three back as they were. Both are restored by hand, by
+ * someone who knows what they bring back (README).
  */
 export function excludedFromRestore(folder: string): string | null {
   if (folder === DASHBOARD_SLUG) return DASHBOARD_REFUSAL;

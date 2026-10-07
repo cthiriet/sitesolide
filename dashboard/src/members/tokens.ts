@@ -9,14 +9,14 @@
  *
  * | Scope | Takes |
  * |---|---|
- * | a project in `slugs` | a Developer or a Project admin there (`deploy`) |
- * | `create` | the create right, which the super admin grants per member |
- * | `public`, `domain`, `outbound` | a Project admin of every project of the token; with `create`, what they create makes them its Project admin |
+ * | a project in `slugs` | a Developer or an Admin there (`deploy`) |
+ * | `create` | the create right, which the owner grants per member |
+ * | `public`, `domain`, `outbound` | an Admin of every project of the token; with `create`, what they create makes them its Admin |
  *
  * A Viewer everywhere, without the create right, mints nothing. `public` is
  * what opens a door: a new project in the open, paths exempted from the
  * portal. An existing project keeps the door the machine carries, which its
- * Project admin or the owner chose, and a Developer's token deploys it as it
+ * Admin or the owner chose, and a Developer's token deploys it as it
  * stands, in the open if it is (src/control/policy.ts, `decideDoor`).
  *
  * **Narrowed live.** A token's scope is a copy taken when it was minted; the
@@ -27,26 +27,19 @@
  * to Viewer stops that project's deployments at once, the create right taken
  * back stops new projects, and a member removed is refused outright, their
  * tokens revoked with them. The options hold only while the member is
- * Project admin of every project the token reaches: one project lowered turns
+ * Admin of every project the token reaches: one project lowered turns
  * them off for the whole token, the narrower reading, and the member mints
  * another for what they still administer.
  */
 import type { Identity, Scope } from "../control/protocol";
 import { may, powerRefusal, type Power } from "./powers";
 import type { Role, Roles } from "./protocol";
-import { findMember, type Registry } from "./registry";
 
-/** What a member holds now: their roles, and whether they may create projects. */
+/** What a person holds now: their roles above Can open, and whether they may create projects. */
 export type MemberRights = { email: string; roles: Roles; create: boolean };
 
-/** Live tokens one member holds at most: a laptop, a desktop, a few agents. The registry is the team's, not one member's. */
+/** Live tokens one person holds at most: a laptop, a desktop, a few agents. The registry is everyone's, not one person's. */
 export const MAX_TOKENS_PER_MEMBER = 10;
-
-/** A member's rights as this registry reads, or null when the email is no member. */
-export function rightsOf(registry: Registry, email: string): MemberRights | null {
-  const member = findMember(registry, email);
-  return member === null ? null : { email: member.email, roles: { ...member.roles }, create: member.create };
-}
 
 function roleOn(rights: MemberRights, slug: string): Role | null {
   return Object.hasOwn(rights.roles, slug) ? rights.roles[slug]! : null;
@@ -59,7 +52,7 @@ const OPTIONS: readonly (readonly ["public" | "domain" | "outbound", Power])[] =
   ["outbound", "deploy.outbound"],
 ];
 
-const NO_CREATE = "creating projects is a right the super admin grants, from the Members page";
+const NO_CREATE = "creating projects is a right the owner grants, from the People page";
 
 /**
  * Why this member may not mint this scope: every reason at once, each naming
@@ -69,7 +62,7 @@ export function mintRefusals(scope: Scope, rights: MemberRights): string[] {
   const { email } = rights;
   const deploys = Object.values(rights.roles).some((role) => may(role, "deploy"));
   if (!deploys && !rights.create) {
-    return [`${email} is a viewer on every project and may not create projects: a viewer mints no token`];
+    return [`${email} is a Viewer on every project and may not create projects: a Viewer mints no token`];
   }
   const refusals: string[] = [];
   if (scope.slugs.length === 0 && !scope.create) refusals.push("scope.slugs: choose at least one project, or creating projects");
@@ -92,7 +85,7 @@ export function mintRefusals(scope: Scope, rights: MemberRights): string[] {
 /**
  * A member's token as it stands now: its projects, granted or created, kept
  * where the member may still deploy; `create` while they hold the right; each
- * option while they are Project admin of every project it still reaches.
+ * option while they are Admin of every project it still reaches.
  * `member` names them, so that every reader of the identity knows whose
  * rights bound it.
  */
@@ -136,12 +129,12 @@ export function deployRefusal(rights: MemberRights, slug: string, exists: boolea
  * The scope the installer applies to a member's deployment, judged once more
  * when it starts, against the registry as it reads then: the member still
  * there, the create right for a project being created, a Developer or a
- * Project admin role on an existing one, and each option only for a Project
+ * Admin role on an existing one, and each option only for a Project
  * admin. The request's scope, already narrowed by the steward, is only ever
  * narrowed further.
  */
 export function installScope(scope: Scope, rights: MemberRights | null, slug: string, creating: boolean): { scope: Scope } | { refusal: string } {
-  if (rights === null) return { refusal: "the member who holds this token is no longer a member of this dashboard: nothing was changed" };
+  if (rights === null) return { refusal: "the person who holds this token no longer has a role on this dashboard: nothing was changed" };
   if (creating) {
     return rights.create ? { scope } : { refusal: `${rights.email} may no longer create projects: nothing was changed` };
   }

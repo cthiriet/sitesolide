@@ -141,7 +141,8 @@ describe("a member's events in the Activity", () => {
   test("each one in words, the reason of a refusal included", () => {
     expect(auditWords(row("member.invite", { detail: { result: "ok", note: "blog: developer" } }))).toMatchObject({ summary: "Invited alice@acme.test", note: "blog: developer" })
     expect(auditWords(row("member.signin", { actor: "alice@acme.test" })).summary).toBe("Signed in to the dashboard with a work account")
-    expect(auditWords(row("member.signin_failed", { detail: { result: "rejects", note: "not-a-member" } }))).toMatchObject({ note: "not a member", tone: "attention" })
+    // A refusal written before the access registry reads in its words.
+    expect(auditWords(row("member.signin_failed", { detail: { result: "rejects", note: "not-a-member" } }))).toMatchObject({ note: "no role on the dashboard", tone: "attention" })
     expect(auditWords(row("service.restart", { actor: "alice@acme.test", target: "blog", detail: { result: "ok", note: "active, active/running, 0 restarts" } })).summary).toBe("Restarted")
   })
 

@@ -93,19 +93,60 @@ export type {
 export type { Scope, TokenView, DeploymentState, AuditEntry, TeamDeployment, TeamPageResponse, CreatedTokenResponse } from "../../../src/control/protocol"
 
 /**
- * The dashboard's members, from their contract (src/members/protocol.ts). Types
- * only: what a member may do is the steward's to decide.
+ * Who is signed in, from the contract of the people who sign in
+ * (src/members/protocol.ts). Types only: what a person may do is the
+ * steward's to decide.
+ */
+export type { IdentityView, Roles, SessionResponse, SsoOffer, DashboardRole as Role } from "../../../src/members/protocol"
+
+/**
+ * Access, from its contract (src/access/protocol.ts): a project's general
+ * access and people with access, and the machine's People.
  */
 export type {
-  IdentityView,
-  MemberView,
-  MembersPageResponse,
-  ProjectMembersResponse,
-  Role,
-  Roles,
-  SessionResponse,
-  SsoOffer,
-} from "../../../src/members/protocol"
+  AccessPageResponse,
+  EntryResponse,
+  EntryView,
+  GeneralAccess,
+  PeoplePageResponse,
+  PersonResponse,
+  PersonView,
+  Role as AccessRole,
+} from "../../../src/access/protocol"
+
+/**
+ * The shapes the pages written before the access registry read, which
+ * lib/api.ts builds from it: someone with roles above Can open, as the
+ * People page lists them, and a project's, as its Admins see them.
+ */
+export type MemberView = {
+  email: string
+  roles: import("../../../src/members/protocol").Roles
+  create: boolean
+  invitedBy: string
+  createdAt: number
+  updatedAt: number
+}
+
+export type MembersPageResponse = {
+  available: boolean
+  reason: string | null
+  members: MemberView[]
+  signIn: { configured: boolean; allowedDomains: string[] }
+  dashboardUrl: string
+  providerName: string | null
+  projects: string[]
+  until: number | null
+}
+
+export type ProjectMembersResponse = {
+  slug: string
+  members: { email: string; role: import("../../../src/members/protocol").DashboardRole; invitedBy: string; updatedAt: number }[]
+  signIn: { configured: boolean; allowedDomains: string[] }
+  dashboardUrl: string
+  providerName: string | null
+  until: number | null
+}
 
 /**
  * The machine's audit, every component's in one shape (src/audit/protocol.ts).

@@ -25,6 +25,7 @@
  * tokens.ts and policy.ts, pure, and run by the steward and the installer. The
  * page imports nothing from here but types.
  */
+import type { EntryView, GeneralView } from "../access/protocol";
 
 // --- Tokens --------------------------------------------------------------------
 
@@ -224,12 +225,11 @@ export const MAX_JOURNAL_LINES = 500;
  *   busy                409  a deployment of this project is already running, or too many are
  *   too-large           413  the archive or the manifest is over its limit
  *   expired             410  the archive arrived after the upload window
- *   no-portal           409  sharing a site that is not behind the portal, or not deployed yet
- *   not-available       503  the machine does not carry the control API yet, or its portal predates sharing
+ *   not-available       503  the machine does not carry the control API or the access registry yet
  *   failure             500/502  something broke on the machine; the message says where to look
  *
  * And one the public API never returns: `locked`, the steward's answer to a
- * token creation without a live unlock, which the Team page turns into its
+ * token creation without a live unlock, which the Tokens page turns into its
  * unlock prompt, as the Secrets page does.
  */
 export type ControlErrorCode =
@@ -277,7 +277,9 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   POST   /control/deploy        DeployRequest    -> { deployment, slug, creating }   202
 //   GET    /control/deployment?id=<id>             -> { result: InstallerResult }
 //   POST   /control/logs          LogsRequest      -> LogsResponse
-//   PUT    /control/sharing       SharingRequest   -> the portal's answer     a token's sharing, as root
+//   POST   /control/access/list   { bearer, slug }            -> AccessResponse (src/access/protocol.ts)
+//   PUT    /control/access        { bearer, slug, who, role } -> EntryResponse     Can open alone
+//   DELETE /control/access        { bearer, slug, who }       -> EntryResponse
 //
 // A member's own tokens, judged by their session, their unlock to create, and
 // their roles (src/members/tokens.ts):
@@ -296,12 +298,6 @@ export type TeamResponse = { tokens: TokenView[] };
  */
 export type MemberTeamResponse = { tokens: TokenView[]; rights: { roles: Record<string, "viewer" | "developer" | "admin">; create: boolean }; until: number | null };
 export type CreateMemberTokenRequest = { session: string; token: string; label: string; expiresAt: number | null; scope: Scope };
-/**
- * A token's sharing, which the steward hands to the portal as root, through
- * the relay, naming the token as the actor: the portal believes an actor
- * other than `owner` from root alone (portal/src/admin.ts).
- */
-export type SharingRequest = { bearer: string; slug: string; mode: unknown; people: unknown; domains: unknown };
 export type CreateTokenRequest = {
   /** The unlock token of src/secrets: creating a token demands the dashboard unlocked. */
   token: string;
@@ -316,7 +312,7 @@ export type DeployResponse = { deployment: string; slug: string; creating: boole
 export type LogsRequest = { bearer: string; slug: string; lines: number; cursor: string | null };
 export type LogsResponse = { lines: string[]; cursor: string | null };
 
-// --- The Team page's routes, under /api/team, behind the session ----------------
+// --- The Tokens page's routes, under /api/team, behind the session ----------------
 //
 //   GET    /api/team                               -> TeamPageResponse
 //   POST   /api/team/tokens   { label, email, expiresAt, scope }  -> CreatedTokenResponse   (unlocked)
@@ -332,7 +328,7 @@ export type AuditEntry = {
   detail: Record<string, unknown> | null;
 };
 
-/** A deployment as the Team page lists it. */
+/** A deployment as the Tokens page lists it. */
 export type TeamDeployment = {
   id: string;
   tokenId: string;
@@ -371,8 +367,9 @@ export type TeamPageResponse = {
 //   GET    /api/v1/projects                        -> { projects: ProjectStatus[] }
 //   GET    /api/v1/projects/:slug                  -> { project: ProjectStatus }
 //   GET    /api/v1/projects/:slug/logs[?lines=<n>&cursor=<c>] -> LogsResponse
-//   GET    /api/v1/projects/:slug/sharing          -> { sharing: ProjectSharing }
-//   PUT    /api/v1/projects/:slug/sharing   { mode, people, domains } -> { sharing: ProjectSharing }
+//   GET    /api/v1/projects/:slug/access           -> { access: ProjectAccess }
+//   PUT    /api/v1/projects/:slug/access    { who, role }  -> { entry, change, access: ProjectAccess }
+//   DELETE /api/v1/projects/:slug/access    { who }        -> { entry, change, access: ProjectAccess }
 
 export type DeploymentView = {
   id: string;
@@ -408,23 +405,16 @@ export type ProjectStatus = {
 };
 
 /**
- * Who may open a project with their work account, as the portal holds it, and
- * what a token needs to change it: see sharing.ts for the rules. Never the
- * admin emails, which a token has no use for, nor anything of the provider
- * but its name.
+ * A project's general access and people with access, as a token reads them:
+ * never the admin emails, which a token has no use for, nor anything of the
+ * provider but whether it is set up and the company's domains, the only ones
+ * a token may give access to.
  */
-export type ProjectSharing = {
+export type ProjectAccess = {
   slug: string;
   host: string;
   url: string;
-  policy: { mode: "admins" | "people" | "domain"; people: string[]; domains: string[] };
-  /** null: never set, the site has what every site had before sharing, the admins alone. */
-  updatedAt: number | null;
-  sso: { configured: boolean; providerName: string | null };
-  /**
-   * The domains the portal admits at sign-in, `OIDC_ALLOWED_DOMAINS`: the
-   * only ones a token may open the site to. Empty: anyone the provider vouches
-   * for may sign in, and a token may open it to no domain at all.
-   */
-  allowedDomains: string[];
+  general: GeneralView | null;
+  entries: EntryView[];
+  signIn: { configured: boolean; allowedDomains: string[]; providerName: string | null };
 };

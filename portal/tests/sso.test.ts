@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { encodeProjection, type PasswordGrant, type Role, type SiteAccess } from "../src/access";
 import { DASHBOARD_AUDIENCE, encodeKey, generateKeyPair, verifyAssertion } from "../src/assertion";
 import { DATA_DIR } from "../src/config";
-import { deriveKey } from "../src/gate";
+import { deriveKey, guestHash } from "../src/gate";
 import { drawBinding, HANDOFF_PER_EMAIL, IDENTITY_DURATION_S, issueSession } from "../src/handoff";
+import { grant, projection, site } from "./access-file";
 import { makeSigner, startProvider, type MockProvider } from "./provider";
 
 /**
@@ -27,6 +29,8 @@ const OTHER_SITE = "roster.localhost";
 const DASHBOARD = "dashboard.localhost";
 const PASSWORD = "sample-portal-password";
 const FOLDER = join(DATA_DIR, "sso-flow");
+/** The steward's projection, which the portal is pointed at as on the machine. */
+const ACCESS_FILE = join(FOLDER, "access.json");
 
 function freePort(): number {
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
@@ -113,12 +117,26 @@ function admin(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${PORTAL}${path}`, init);
 }
 
-function share(site: string, policy: object): Promise<Response> {
-  return admin(`/admin/sharing/${site}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(policy),
-  });
+let shared: Record<string, SiteAccess> = {};
+let writes = 0;
+
+/**
+ * What the steward does after a change: the whole projection written again,
+ * renamed over the one in place. The site's people, domains and password
+ * access, replaced.
+ */
+function share(host: string, people: Record<string, Role>, domains: string[] = [], passwords: PasswordGrant[] = []): void {
+  shared = { ...shared, [host]: site(host.split(".")[0]!, { people, domains, passwords }) };
+  const draft = join(FOLDER, `.access.json.${writes++}`);
+  writeFileSync(draft, encodeProjection(projection(shared, Date.now())));
+  renameSync(draft, ACCESS_FILE);
+}
+
+/** Both sites listed, with nobody on them: only the owner's password and the admin emails open them. */
+function shareWithNobody(): void {
+  shared = {};
+  share(SITE, {});
+  share(OTHER_SITE, {});
 }
 
 async function events(): Promise<{ actor: string; action: string; target: string | null; detail: Record<string, unknown> | null }[]> {
@@ -138,6 +156,7 @@ beforeAll(async () => {
   hash = await Bun.password.hash(PASSWORD, { algorithm: "argon2id", memoryCost: 8, timeCost: 1 });
   // The key the steward would lay for the portal.
   writeFileSync(join(FOLDER, "assertion.key"), encodeKey(pair.privateKey), { mode: 0o600 });
+  shareWithNobody();
   Bun.spawnSync(["bun", join(import.meta.dir, "..", "scripts", "borrow.ts")], { stdout: "ignore" });
   portal = Bun.spawn(["bun", "run", join(import.meta.dir, "..", "server.ts")], {
     env: {
@@ -155,6 +174,7 @@ beforeAll(async () => {
       OIDC_PROVIDER_NAME: "Acme",
       DASHBOARD_URL: `http://${DASHBOARD}`,
       ASSERTION_KEY_FILE: join(FOLDER, "assertion.key"),
+      ACCESS_FILE,
     },
     stdout: "ignore",
     stderr: "ignore",
@@ -178,8 +198,16 @@ afterAll(() => {
 
 beforeEach(async () => {
   provider.next = {};
-  await share(SITE, { mode: "admins" });
-  await share(OTHER_SITE, { mode: "admins" });
+  shareWithNobody();
+});
+
+describe("where the portal reads who may open a site", () => {
+  test("the steward's projection, as GET /admin/access says, and the portal marks that it read one", async () => {
+    const answer = (await (await admin("/admin/access")).json()) as { reading: string; writtenAt: number | null };
+    expect(answer.reading).toBe("steward");
+    expect(answer.writtenAt).toBeGreaterThan(0);
+    expect(existsSync(join(FOLDER, "access-from-steward"))).toBe(true);
+  });
 });
 
 describe("signing in with the provider, end to end", () => {
@@ -221,8 +249,8 @@ describe("signing in with the provider, end to end", () => {
     expect(recorded).toMatchObject({ target: SITE, detail: { method: "oidc", role: "admin" } });
   });
 
-  test("a person the site is shared with gets in as member, and out at the next request once removed", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+  test("a person given access gets in with their role, lowered and then out at the next request", async () => {
+    share(SITE, { "alice@acme.test": "developer" });
     const browser = new Browser();
     const { url } = await browser.follow(signInAt(SITE));
     expect(url).toBe(`http://${SITE}/board`);
@@ -230,26 +258,30 @@ describe("signing in with the provider, end to end", () => {
     const verified = await browser.verify();
     expect(verified.status).toBe(200);
     expect(verified.headers.get("x-sitesolide-user")).toBe("alice@acme.test");
-    expect(verified.headers.get("x-sitesolide-role")).toBe("member");
+    expect(verified.headers.get("x-sitesolide-role")).toBe("developer");
+    const recorded = (await events()).find((event) => event.action === "portal.signin" && event.actor === "alice@acme.test");
+    expect(recorded).toMatchObject({ target: SITE, detail: { method: "oidc", role: "developer" } });
 
-    await share(SITE, { mode: "people", people: [] });
+    share(SITE, { "alice@acme.test": "visitor" });
+    expect((await browser.verify()).headers.get("x-sitesolide-role")).toBe("visitor");
+
+    share(SITE, {});
     const refused = await browser.verify();
     expect(refused.status).toBe(401);
-    expect(await refused.text()).toInclude("You are signed in as alice@acme.test, but this site isn&#39;t shared with you.");
-
-    const audit = await events();
-    expect(audit[0]).toMatchObject({ actor: "owner", action: "sharing.update", target: SITE, detail: { peopleRemoved: ["alice@acme.test"] } });
+    expect(await refused.text()).toInclude("You are signed in as alice@acme.test, but you don&#39;t have access to this site.");
   });
 
-  test("everyone at the domain gets in when the site is shared with it", async () => {
-    await share(SITE, { mode: "domain", domains: ["acme.test"] });
+  test("everyone at a domain given access gets in, as visitor", async () => {
+    share(SITE, {}, ["acme.test"]);
     const browser = new Browser();
     provider.next = { email: "bob@acme.test" };
     await browser.follow(signInAt(SITE));
-    expect((await browser.verify()).headers.get("x-sitesolide-user")).toBe("bob@acme.test");
+    const verified = await browser.verify();
+    expect(verified.headers.get("x-sitesolide-user")).toBe("bob@acme.test");
+    expect(verified.headers.get("x-sitesolide-role")).toBe("visitor");
   });
 
-  test("someone the site is not shared with is told so, and gets no cookie", async () => {
+  test("someone without access to the site is told so, and gets no cookie", async () => {
     const browser = new Browser();
     const { response, url } = await browser.follow(signInAt(SITE));
     expect(url).toStartWith(`http://${SITE}/_portal/oidc/complete`);
@@ -262,8 +294,8 @@ describe("signing in with the provider, end to end", () => {
   });
 
   test("the next site skips the provider: the portal remembers who signed in", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
-    await share(OTHER_SITE, { mode: "people", people: ["alice@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor" });
+    share(OTHER_SITE, { "alice@acme.test": "visitor" });
     const browser = new Browser();
     expect(providerVisits((await browser.follow(signInAt(SITE))).visited)).toBe(1);
     const second = await browser.follow(signInAt(OTHER_SITE, "/team"));
@@ -273,7 +305,7 @@ describe("signing in with the provider, end to end", () => {
   });
 
   test("another account goes back through the provider and asks which one", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test", "bob@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor", "bob@acme.test": "visitor" });
     const browser = new Browser();
     await browser.follow(signInAt(SITE));
     provider.next = { email: "bob@acme.test" };
@@ -284,7 +316,7 @@ describe("signing in with the provider, end to end", () => {
   });
 
   test("a return path that leads elsewhere comes back to the site's home", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor" });
     const { url } = await new Browser().follow(signInAt(SITE, "//evil.test/x"));
     expect(url).toBe(`http://${SITE}/`);
   });
@@ -339,7 +371,7 @@ describe("signing in to the dashboard, end to end", () => {
   });
 
   test("a dashboard's code signs nobody in on a site", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor" });
     const browser = new Browser();
     const { url } = await begin(browser);
     const code = new URL(url).searchParams.get("code")!;
@@ -479,7 +511,7 @@ describe("the flow's defences", () => {
   });
 
   test("a callback replayed by the browser that made it finds nothing the second time", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor" });
     const browser = new Browser();
     const { visited } = await browser.follow(signInAt(SITE));
     const callback = visited.find((one) => one.includes("/oidc/callback"))!;
@@ -487,7 +519,7 @@ describe("the flow's defences", () => {
   });
 
   test("a handoff code works once, then it is gone", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor" });
     const browser = new Browser();
     const { visited } = await browser.follow(signInAt(SITE));
     const complete = visited.find((one) => one.includes("/_portal/oidc/complete"))!;
@@ -501,7 +533,7 @@ describe("the flow's defences", () => {
 
 
   test("a handoff code sent to someone else's browser signs nobody in: session fixation refused", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor" });
     const attacker = new Browser();
     let url = signInAt(SITE);
     for (let i = 0; i < 4; i++) url = new URL((await attacker.get(url)).headers.get("location")!, url).toString();
@@ -517,8 +549,8 @@ describe("the flow's defences", () => {
   });
 
   test("a handoff code carried to another site is refused there, and burnt", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
-    await share(OTHER_SITE, { mode: "people", people: ["alice@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor" });
+    share(OTHER_SITE, { "alice@acme.test": "visitor" });
     const browser = new Browser();
     let url = signInAt(SITE);
     for (let i = 0; i < 4; i++) url = new URL((await browser.get(url)).headers.get("location")!, url).toString();
@@ -545,7 +577,7 @@ describe("the flow's defences", () => {
   test("on the portal's own host a forged X-Portal-Hote changes nothing: the sealed flow names the site", async () => {
     // Caddy does not overwrite that header on the portal's own block, so the
     // visitor chooses it there. The two steps must never read it.
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor" });
     const browser = new Browser();
     const forged = { "X-Portal-Hote": "bank.localhost" };
     let url = new URL((await browser.get(signInAt(SITE))).headers.get("location")!).toString();
@@ -579,6 +611,31 @@ describe("the flow's defences", () => {
     const verified = await browser.verify();
     expect(verified.headers.get("x-sitesolide-role")).toBe("admin");
     expect(verified.headers.get("x-sitesolide-user")).toBeNull();
+  });
+
+  test("a password access signs in beside the provider, as visitor, and is out once the steward removes it", async () => {
+    const ACCESS_PASSWORD = "Qr7s-Tu8v-Wx9y-Za2b";
+    share(SITE, {}, [], [grant({ who: "zoe@elsewhere.test", hash: guestHash(ACCESS_PASSWORD) })]);
+    const browser = new Browser();
+    const response = await fetch(`${PORTAL}/_portal/connexion`, {
+      method: "POST",
+      headers: { "X-Portal-Hote": SITE, Origin: `http://${SITE}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ motdepasse: ACCESS_PASSWORD, retour: "/" }),
+      redirect: "manual",
+    });
+    expect(response.status).toBe(303);
+    browser.keep(SITE, response);
+    const verified = await browser.verify();
+    expect(verified.status).toBe(200);
+    expect(verified.headers.get("x-sitesolide-role")).toBe("visitor");
+    expect(verified.headers.get("x-sitesolide-user")).toBeNull();
+    const recorded = (await events()).find((event) => event.action === "portal.signin" && event.actor === "zoe@elsewhere.test");
+    expect(recorded).toMatchObject({ target: SITE, detail: { method: "password-access" } });
+
+    share(SITE, {});
+    const refused = await browser.verify();
+    expect(refused.status).toBe(401);
+    expect(await refused.text()).toInclude("This access is no longer valid.");
   });
 });
 
@@ -623,7 +680,7 @@ describe("what a session, a flow and a sign-out may still do", () => {
   }
 
   test("a site's cookie never outlives the portal session that vouched for the person", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor" });
     // Through the provider, the session is new: a day for the site.
     expect(maxAge(await completion(new Browser()), "portal")).toBe(IDENTITY_DURATION_S);
 
@@ -647,7 +704,7 @@ describe("what a session, a flow and a sign-out may still do", () => {
   test("a flow replayed with a portal session mints no second code", async () => {
     // One account replaying one flow used to fill every code in flight, and
     // block every sign-in on every site.
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor" });
     const browser = new Browser();
     await browser.follow(signInAt(SITE));
     const start = await startOf(browser);
@@ -674,8 +731,8 @@ describe("what a session, a flow and a sign-out may still do", () => {
   });
 
   test("signing out of a site ends the portal's session too, and the next sign-in asks which account", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test", "bob@acme.test"] });
-    await share(OTHER_SITE, { mode: "people", people: ["alice@acme.test", "bob@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor", "bob@acme.test": "visitor" });
+    share(OTHER_SITE, { "alice@acme.test": "visitor", "bob@acme.test": "visitor" });
     const browser = new Browser();
     await browser.follow(signInAt(SITE));
     expect(browser.cookie(PORTAL_HOST, "portal-session")).toBeDefined();
@@ -712,7 +769,7 @@ describe("what a session, a flow and a sign-out may still do", () => {
   });
 
   test("a sign-out link forged, expired or replayed elsewhere signs nobody out", async () => {
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    share(SITE, { "alice@acme.test": "visitor" });
     const browser = new Browser();
     await browser.follow(signInAt(SITE));
     for (const ticket of ["", "forged.ticket", "eyJoIjoiYmFuay5sb2NhbGhvc3QiLCJlIjo5OTk5OTk5OTk5fQ.AAAA"]) {
@@ -727,7 +784,7 @@ describe("what a session, a flow and a sign-out may still do", () => {
 describe("what the audit hands to the dashboard", () => {
   test("no row carries a password, the client secret, a code, a verifier or a cookie", async () => {
     // One of each on top of everything above: a password sign-in and a wrong
-    // one, a provider's sign-in and a refused one, a sharing change.
+    // one, a password access's sign-in, a provider's sign-in and a refused one.
     const WRONG = "a-wrong-password-for-the-audit-test";
     const signIn = (password: string) =>
       fetch(`${PORTAL}/_portal/connexion`, {
@@ -744,7 +801,11 @@ describe("what the audit hands to the dashboard", () => {
     await member.follow(signInAt(SITE));
     provider.next = { email: "eve@elsewhere.test" };
     await new Browser().follow(signInAt(SITE));
-    await share(SITE, { mode: "people", people: ["alice@acme.test"] });
+    const ACCESS_PASSWORD = "Ab3d-Ef4h-Jk5m-Np6q";
+    share(SITE, {}, [], [grant({ who: "yan@elsewhere.test", hash: guestHash(ACCESS_PASSWORD) })]);
+    const visitor = new Browser();
+    visitor.keep(SITE, await signIn(ACCESS_PASSWORD));
+    expect(visitor.cookie(SITE, "portal")).toBeDefined();
 
     // Every row the dashboard can read, page after page, as the Activity page does.
     const rows: unknown[] = [];
@@ -758,11 +819,11 @@ describe("what the audit hands to the dashboard", () => {
     }
     const handed = JSON.stringify(rows);
     expect(handed).toInclude("portal.signin_failed");
-    expect(handed).toInclude("sharing.update");
+    expect(handed).toInclude('"actor":"yan@elsewhere.test","action":"portal.signin"');
 
     const codes = provider.tokenRequests.flatMap((request) => [request.body.get("code"), request.body.get("code_verifier")]);
-    const cookies = [owner, member].flatMap((browser) => [...browser.jars.values()].flatMap((jar) => [...jar.values()]));
-    const forbidden = [PASSWORD, WRONG, hash, provider.clientSecret, ...codes, ...cookies].filter((value): value is string => typeof value === "string" && value.length >= 8);
+    const cookies = [owner, member, visitor].flatMap((browser) => [...browser.jars.values()].flatMap((jar) => [...jar.values()]));
+    const forbidden = [PASSWORD, WRONG, ACCESS_PASSWORD, guestHash(ACCESS_PASSWORD), hash, provider.clientSecret, ...codes, ...cookies].filter((value): value is string => typeof value === "string" && value.length >= 8);
     expect(forbidden.length).toBeGreaterThan(4);
     for (const value of forbidden) expect(handed).not.toInclude(value);
   });

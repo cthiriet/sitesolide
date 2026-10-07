@@ -208,7 +208,18 @@ function word(table: Readonly<Record<string, string>>, key: string | null): stri
  */
 type StewardOperation = Exclude<
   Operation,
-  `member.${string}` | "sharing" | "guest.create" | "guest.revoke" | "backup.restore" | "token.create" | "token.revoke" | "project.create" | "project.remove"
+  | `member.${string}`
+  | `access.${string}`
+  | `dashboard.${string}`
+  | "people.create"
+  | "sharing"
+  | "guest.create"
+  | "guest.revoke"
+  | "backup.restore"
+  | "token.create"
+  | "token.revoke"
+  | "project.create"
+  | "project.remove"
 >
 
 /** What a Project admin's change the steward refused tried to do. */
@@ -272,7 +283,8 @@ const TRIED: Readonly<Record<StewardOperation, string>> = {
 
 /** Why the steward refused a member's sign-in, in words. An unknown reason is shown as it is. */
 const MEMBER_REFUSALS: Readonly<Record<string, string>> = {
-  "not-a-member": "not a member",
+  "not-a-member": "no role on the dashboard",
+  "no-role": "no role on the dashboard",
   "replayed-assertion": "sign-in already used",
   "stale-authentication": "sign-in at the provider too old",
   "too-many-sign-ins": "too many sign-ins",
@@ -325,6 +337,25 @@ export function auditWords(row: AuditRow): AuditWords {
   const member = text(detail.member)
 
   switch (row.action) {
+    case "access.add":
+      if (text(detail.result) === "rejects") return { summary: "Tried to give someone access", note: text(detail.note), tone: "attention" }
+      return { summary: "Gave access", note: text(detail.note), tone: "neutral" }
+    case "access.change":
+      return { summary: "Changed someone's role", note: text(detail.note), tone: "neutral" }
+    case "access.remove":
+      if (text(detail.result) === "rejects") return { summary: "Tried to take someone's access away", note: text(detail.note), tone: "attention" }
+      return { summary: "Took access away", note: text(detail.note), tone: "neutral" }
+    case "access.migrate":
+      return { summary: "Carried the people with access over to the steward's registry", note: text(detail.note), tone: "neutral" }
+    case "people.create":
+      return { summary: "Changed who may create projects", note: text(detail.note), tone: "neutral" }
+    case "dashboard.signin":
+      return { summary: "Signed in to the dashboard with a company account", note: null, tone: "neutral" }
+    case "dashboard.signin_failed":
+      return { summary: "Dashboard sign-in refused", note: word(MEMBER_REFUSALS, text(detail.note)), tone: "attention" }
+    case "dashboard.signout":
+      return { summary: "Signed out of the dashboard", note: null, tone: "neutral" }
+    // Rows written before the access registry.
     case "member.invite":
       if (text(detail.result) === "rejects") return { summary: "Tried to invite someone", note: roleNote(text(detail.note)), tone: "attention" }
       return { summary: `Invited ${member ?? row.target ?? "a member"}`, note: text(detail.note), tone: "neutral" }
@@ -369,7 +400,14 @@ export function auditWords(row: AuditRow): AuditWords {
 
     case "portal.signin": {
       const method = text(detail.method)
-      const how = method === "password" ? "with the shared password" : method === "guest" ? "with a guest password" : method === "oidc" ? "with a work account" : null
+      const how =
+        method === "password"
+          ? "with the shared password"
+          : method === "guest" || method === "password-access"
+            ? "with password access"
+            : method === "oidc"
+              ? "with a company account"
+              : null
       const role = text(detail.role)
       const summary = `Signed in${how === null ? "" : ` ${how}`}${role === null ? "" : `, as ${role}`}`
       return { summary, note: times(count(detail.count)), tone: "neutral" }

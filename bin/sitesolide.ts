@@ -9,8 +9,8 @@
  *   sitesolide status               what the VM actually carries
  *   sitesolide logs [--follow]      journalctl for the service
  *   sitesolide backups              the project's data snapshots, read only
- *   sitesolide share [<email>...]   who may open it with a work account
- *   sitesolide members              who signs in to the dashboard, and on what
+ *   sitesolide share [<email|@domain>...]   general access and people with access
+ *   sitesolide people               everyone with access, and who may create projects
  *   sitesolide remove --confirm <slug>  take the project off the machine
  *   sitesolide run -- <command>     load the vault secret and run
  *   sitesolide mcp                  the same commands, as tools for an agent
@@ -198,8 +198,7 @@ import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState
 import { machine } from "./cli/machine";
 import { eventOutput, humanOutput, login, remoteMode, REMOTE_USAGE, runRemote } from "./cli/remote";
 import { KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
-import { share, sshSharing } from "./cli/sharing";
-import { members, sshMembers } from "./cli/members";
+import { people, share, sshAccess, sshPeople } from "./cli/access";
 import {
   foreignUnit,
   listUnitsCommand,
@@ -2834,18 +2833,14 @@ function usage(zone: string | null): string {
     "  sitesolide logs [--follow]      journalctl for this project",
     "     --lines <n>                  how many lines back, 50 by default",
     "  sitesolide backups              this project's data snapshots, read only",
-    "  sitesolide share                who may open this project with their work account, and the line to send",
-    "     <email>...                   share it with these people",
-    "     --domain <domain>            with everyone at this domain",
-    "     --remove <email|domain>      take a person or a domain off",
-    "     --only-admins                back to the admins alone",
-    "  sitesolide members              who signs in to the dashboard with a work account, on which projects",
-    "     add <email> --project <slug> --role <viewer|developer|admin>",
-    "                                  invite them, or set their role; repeat --project and --role",
-    "     add <email> --may-create     let them create projects, with a token of their own",
-    "     remove <email> [--project <slug>]",
-    "                                  take them off, signed out, their tokens revoked, or take projects off them",
-    "     remove <email> --may-create  take the right to create projects back",
+    "  sitesolide share                this project's general access and people with access",
+    "     <email|@domain>...           give them access, Can open by default",
+    "     --role <role>                visitor (Can open), viewer, developer or admin",
+    "     --expires <24h|7d|30d|never> for password access, 7d by default",
+    "     --remove <email|@domain>...  take their access away, from their next request",
+    "  sitesolide people               everyone with access, their roles, who may create projects",
+    "     <email> --may-create         let them create projects, Admin of what they create",
+    "     <email> --no-create          take that right back",
     "  sitesolide lock   [--dry-run]   close the preview behind a code, or show it",
     "     --status                     wanted / installed / measured, without touching",
     "     --new-code                   replace the code in force by a fresh one",
@@ -2859,7 +2854,7 @@ function usage(zone: string | null): string {
     "  sitesolide run -- <command>     load the secret from the vault and run",
     "  sitesolide mcp                  serve these commands to an agent, over MCP on stdio",
     "  sitesolide login --url <https://dashboard.zone>",
-    "                                  a team member: keep a token, deploy without SSH",
+    "                                  a person with a token: deploy without SSH",
     "     --token-stdin                read the token from standard input",
     "  sitesolide machine create|list|destroy --provider hetzner",
     "                                  a VM ordered by API, before setup: sitesolide machine lists the options",
@@ -3060,15 +3055,12 @@ if (import.meta.main) {
       break;
     }
     case "share":
-      // The portal's admin API on the loopback, as root over SSH, after reading
-      // that the site carries the portal: see bin/cli/sharing.ts.
-      process.exit(
-        await share(arguments_, readProject(folder).manifest.slug, sshSharing((remote, input) => executor.execute(config, remote, input), config.zone), remoteOutput),
-      );
-    case "members":
-      // The steward's members registry, on its owner socket, as root over SSH:
-      // see bin/cli/members.ts. It reads no project folder.
-      process.exit(await members(arguments_, dashboardAddress(config.zone), sshMembers((remote, input) => executor.execute(config, remote, input)), remoteOutput));
+      // The steward's access registry, on its owner socket, as root over SSH:
+      // see bin/cli/access.ts.
+      process.exit(await share(arguments_, readProject(folder).manifest.slug, sshAccess((remote, input) => executor.execute(config, remote, input)), remoteOutput));
+    case "people":
+      // The same registry, machine-wide. It reads no project folder.
+      process.exit(await people(arguments_, dashboardAddress(config.zone), sshPeople((remote, input) => executor.execute(config, remote, input)), remoteOutput));
     case "secrets":
       pointToDashboard(config);
     case "lock": {

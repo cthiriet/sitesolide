@@ -19,7 +19,7 @@ import { readQuery, siteResolver, type Restriction } from "./merge";
 export type AuditOptions = {
   session: SessionReader;
   /**
-   * What the session may read: null for the super admin's whole machine, a
+   * What the session may read: null for the owner's whole machine, a
    * member's projects and own rows otherwise. Absent, every session reads it
    * all, as before members.
    */

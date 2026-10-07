@@ -7,7 +7,7 @@
  * `site-dashboard`; the steward, as root, through its relay
  * (`sitesolide-portal-relay`, systemd's own proxy, running as root); and the
  * owner's `sitesolide share` over SSH, as root through `sudo curl`. Only root
- * may say who acts, a Project admin's email or a team token: the steward
+ * may say who acts, an Admin's email or a team token: the steward
  * checked that person's role, or that token, before it asked. The dashboard is
  * assumed compromised everywhere else, and a dashboard that could name any
  * actor would write a member's email on a change it made itself. So it speaks

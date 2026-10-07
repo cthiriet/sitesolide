@@ -11,8 +11,7 @@
  * action without ever touching production, where a mistake here erases a site.
  */
 
-import { OWNER_SOCKET } from "./members";
-import { readCurlAnswer } from "./sharing";
+import { OWNER_SOCKET, readCurlAnswer } from "./access";
 import { secretPath, projectPaths, systemUser, unitArgument } from "./unit";
 
 /**

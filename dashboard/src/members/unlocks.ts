@@ -1,9 +1,9 @@
 /**
  * The members' unlocks, as the steward holds them: one per member session,
- * beside the super admin's own (src/secrets/unlock.ts), which neither
+ * beside the owner's own (src/secrets/unlock.ts), which neither
  * replaces nor is replaced by any of them.
  *
- * - **One principal, one token.** The super admin has one, which a new unlock
+ * - **One principal, one token.** The owner has one, which a new unlock
  *   of theirs replaces, as before. A member has one per session: the same
  *   member unlocking again in that session replaces it, another member, or
  *   the same one in another browser, holds their own. Ten minutes fixed,
@@ -13,7 +13,7 @@
  *   session is (src/members/steward.ts checks it).
  * - **Bounded**: per member, three refusals tolerated, then five seconds
  *   doubling up to an hour, the password's rule; for the whole machine, sixty
- *   attempts a minute, whoever makes them. The super admin's password counter
+ *   attempts a minute, whoever makes them. The owner's password counter
  *   stays its own, on disk: a member's refusals never slow the owner, nor the
  *   other way round.
  *

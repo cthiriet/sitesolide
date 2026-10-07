@@ -5,18 +5,21 @@ import { join } from "node:path";
 import { INSTALLER_TEMPLATE, type Identity, type InstallRequest, type TokenView } from "../src/control/protocol";
 import { createControlSteward, type ControlHandler, type MemberAuthority } from "../src/control/steward";
 import { createControlSystem, type ControlSystem } from "../src/control/system";
-import { recordCreation, removeMember, type Registry } from "../src/members/registry";
+import type { Role } from "../borrowed/access";
+import { mayCreate, putEntry, recordCreation, removePerson, rightsOf, setCreate, type Registry } from "../src/access/registry";
 import type { MemberEvent } from "../src/members/steward";
-import { rightsOf } from "../src/members/tokens";
+import { registryOf } from "./registry-fixtures";
 
 /**
- * A member's own tokens, as the steward's control routes judge them: the real
+ * A person's own tokens, as the steward's control routes judge them: the real
  * registry of tokens on a throwaway tree, `systemctl` simulated, and the
  * members routes reduced to what the control routes ask of them, a session
- * and its unlock, the rights a registry reads, and a creation recorded, on a
- * members registry kept in memory and changed by the test as the super admin
- * would change it. The members routes themselves are members-steward.test.ts's
- * business; the whole road through the dashboard, members-flow.test.ts's.
+ * and its unlock, the rights the access registry reads, and a creation
+ * recorded, on an access registry kept in memory and changed by the test as
+ * the owner would change it. The members routes themselves are
+ * members-steward.test.ts's business; a token's changes of access,
+ * control-access.test.ts's; the whole road through the dashboard,
+ * members-flow.test.ts's.
  */
 
 const ZONE = "test-zone.invalid";
@@ -34,7 +37,6 @@ type Bench = {
   handler: ControlHandler;
   registry: { value: Registry };
   journal: MemberEvent[];
-  shared: { slug: string; policy: Record<string, unknown>; actor: string }[];
   /** Sessions the members routes know, and the one unlocked. */
   sessions: Map<string, string>;
   unlocked: Set<string>;
@@ -46,16 +48,8 @@ function bench(): Bench {
   for (const folder of ["state", "sites", "units", "installer"]) mkdirSync(join(root, folder));
   writeFileSync(join(root, "units", INSTALLER_TEMPLATE), "[Service]\n");
   for (const slug of ["alpha", "beta", "gamma"]) mkdirSync(join(root, "sites", slug));
-  const registry = {
-    value: {
-      members: [
-        { email: ADA, roles: { alpha: "developer", beta: "admin", gamma: "viewer" }, create: false, invitedBy: "owner", createdAt: 1, updatedAt: 1 },
-        { email: BOB, roles: { gamma: "viewer" }, create: false, invitedBy: "owner", createdAt: 1, updatedAt: 1 },
-      ],
-    } as Registry,
-  };
+  const registry = { value: registryOf({ [ADA]: { alpha: "developer", beta: "admin", gamma: "viewer" }, [BOB]: { gamma: "viewer", beta: "visitor" } }) };
   const journal: MemberEvent[] = [];
-  const shared: Bench["shared"] = [];
   const sessions = new Map<string, string>([
     ["ada-session", ADA],
     ["bob-session", BOB],
@@ -107,12 +101,8 @@ function bench(): Bench {
     isUnlocked: async (token) => token === "owner-unlock",
     uidRoot: null,
     members,
-    share: async (slug, policy, actor) => {
-      shared.push({ slug, policy, actor });
-      return Response.json({ host: `${slug}.${ZONE}`, policy, updatedAt: 1 });
-    },
   });
-  return { root, handler, registry, journal, shared, sessions, unlocked };
+  return { root, handler, registry, journal, sessions, unlocked };
 }
 
 function call(b: Bench, method: string, path: string, body?: unknown): Promise<Response> {
@@ -140,14 +130,25 @@ async function message(response: Response): Promise<{ status: number; error: str
   return { status: response.status, ...((await response.json()) as { error: string; message: string; details?: string[] }) };
 }
 
-function setRoles(b: Bench, email: string, roles: Record<string, "viewer" | "developer" | "admin">, create?: boolean) {
-  b.registry.value = {
-    members: b.registry.value.members.map((member) => (member.email === email ? { ...member, roles, create: create ?? member.create } : member)),
-  };
+/** This person's roles replaced, as the owner would set them; the create right kept unless named. */
+function setRoles(b: Bench, email: string, roles: Record<string, Role>, create?: boolean) {
+  const keeps = create ?? mayCreate(b.registry.value, email);
+  let registry = removePerson(b.registry.value, email).registry;
+  for (const [slug, role] of Object.entries(roles)) {
+    const put = putEntry(registry, slug, email, role, "owner", 1);
+    if ("refusal" in put) throw new Error(put.refusal);
+    registry = put.registry;
+  }
+  if (keeps) {
+    const set = setCreate(registry, email, true, "owner", 1);
+    if ("refusal" in set) throw new Error(set.refusal);
+    registry = set.registry;
+  }
+  b.registry.value = registry;
 }
 
-describe("a member mints their own", () => {
-  test("within their roles, under their unlock: their email on it, the member recorded, the journal naming them", async () => {
+describe("a person mints their own", () => {
+  test("within their roles, under their unlock: their email on it, the person recorded, the journal naming them", async () => {
     const b = bench();
     const { token, secret } = await minted(b, { slugs: ["alpha", "beta"] });
     expect(token).toMatchObject({ label: "laptop", email: ADA, member: ADA, scope: { ...SCOPE, slugs: ["alpha", "beta"] }, owned: [] });
@@ -160,7 +161,7 @@ describe("a member mints their own", () => {
     expect(all.tokens.map((one) => [one.id, one.member])).toEqual([[token.id, ADA]]);
   });
 
-  test("an email in the request is not theirs to choose: refused as a field, the token always carries the member's", async () => {
+  test("an email in the request is not theirs to choose: refused as a field, the token always carries the person's", async () => {
     const b = bench();
     const response = await call(b, "POST", "/team/member/tokens", { session: "ada-session", token: "unlock-of-ada-session", label: "x", email: "ceo@acme.test", expiresAt: null, scope: SCOPE });
     expect(response.status).toBe(400);
@@ -178,9 +179,9 @@ describe("a member mints their own", () => {
     const b = bench();
     const viewed = await message(await mint(b, { slugs: ["gamma"] }));
     expect(viewed).toMatchObject({ status: 403, error: "out-of-scope" });
-    expect(viewed.message).toBe("scope.slugs: ada@acme.test is a viewer on gamma: deploying it takes a developer or a project admin");
+    expect(viewed.message).toBe("scope.slugs: ada@acme.test is a Viewer on gamma: deploying it takes a Developer or an Admin");
     const options = await message(await mint(b, { slugs: ["alpha", "beta"], public: true }));
-    expect(options.details).toEqual(["scope.public: ada@acme.test is a developer on alpha: deploying it in the open, without the portal, takes a project admin"]);
+    expect(options.details).toEqual(["scope.public: ada@acme.test is a Developer on alpha: deploying it in the open, its general access public, takes an Admin"]);
     const create = await message(await mint(b, { create: true }));
     expect(create.message).toContain("may not create projects");
     expect(b.journal.map((event) => [event.operation, event.result])).toEqual([
@@ -191,23 +192,23 @@ describe("a member mints their own", () => {
     expect((await (await call(b, "GET", "/team/tokens")).json()) as unknown).toEqual({ tokens: [] });
   });
 
-  test("a viewer everywhere mints nothing", async () => {
+  test("a Viewer everywhere mints nothing, Can open somewhere changing nothing", async () => {
     const b = bench();
     const refused = await message(await mint(b, { slugs: ["gamma"] }, "bob-session"));
-    expect(refused).toMatchObject({ status: 403, error: "out-of-scope", message: "bob@acme.test is a viewer on every project and may not create projects: a viewer mints no token" });
+    expect(refused).toMatchObject({ status: 403, error: "out-of-scope", message: "bob@acme.test is a Viewer on every project and may not create projects: a Viewer mints no token" });
   });
 
-  test("the options where they are project admin, and creating once the right is granted", async () => {
+  test("the options where they are Admin, and creating once the right is granted", async () => {
     const b = bench();
     expect((await mint(b, { slugs: ["beta"], public: true, outbound: true, domain: true })).status).toBe(201);
     setRoles(b, ADA, { alpha: "developer", beta: "admin" }, true);
     expect((await mint(b, { create: true, outbound: true })).status).toBe(201);
   });
 
-  test("ten live tokens per member at most", async () => {
+  test("ten live tokens per person at most", async () => {
     const b = bench();
     for (let i = 0; i < 10; i++) await minted(b, { slugs: ["alpha"] });
-    expect(await message(await mint(b, { slugs: ["alpha"] }))).toMatchObject({ status: 400, error: "invalid", message: "10 live tokens per member at most: revoke one you no longer use" });
+    expect(await message(await mint(b, { slugs: ["alpha"] }))).toMatchObject({ status: 400, error: "invalid", message: "10 live tokens per person at most: revoke one you no longer use" });
   });
 
   test("they list and revoke their own alone; another's reads as unknown", async () => {
@@ -225,18 +226,18 @@ describe("a member mints their own", () => {
     const revoked = await call(b, "POST", "/team/member/revoke", { session: "ada-session", id: own.token.id });
     expect(revoked.status).toBe(200);
     expect(b.journal.at(-1)).toEqual({ operation: "token.revoke", result: "ok", actor: ADA, member: ADA, detail: own.token.id });
-    // A member mints another; an owner's token holder asks the owner.
+    // A person mints another; an owner's token holder asks the owner.
     expect(await message(await call(b, "POST", "/control/authenticate", { bearer: own.secret }))).toMatchObject({
       status: 401,
-      message: "this token was revoked: mint a new one from the dashboard's Team page if you are still a member, then run sitesolide login again",
+      message: "this token was revoked: mint a new one from the dashboard's Tokens page if you still have a role there, then run sitesolide login again",
     });
-    // The owner revokes any token, a member's included.
+    // The owner revokes any token, a person's included.
     expect((await call(b, "POST", "/team/revoke", { id: bobs.token.id })).status).toBe(200);
   });
 });
 
-describe("narrowed to the member's roles at every use", () => {
-  test("the identity a token authenticates with is the member's rights now, not as minted", async () => {
+describe("narrowed to the person's roles at every use", () => {
+  test("the identity a token authenticates with is the person's rights now, not as minted", async () => {
     const b = bench();
     const { secret } = await minted(b, { slugs: ["alpha", "beta"], create: false });
     const before = (await (await call(b, "POST", "/control/authenticate", { bearer: secret })).json()) as { identity: Identity };
@@ -246,7 +247,7 @@ describe("narrowed to the member's roles at every use", () => {
     expect(after.identity.scope.slugs).toEqual(["beta"]);
   });
 
-  test("a role lowered from developer to viewer stops that project's deployments, its logs too, in the steward's words", async () => {
+  test("a role lowered from Developer to Viewer or Can open stops that project's deployments, its logs too, in the steward's words", async () => {
     const b = bench();
     const { secret } = await minted(b, { slugs: ["alpha"] });
     expect((await call(b, "POST", "/control/preflight", { bearer: secret, slug: "alpha" })).status).toBe(200);
@@ -259,9 +260,12 @@ describe("narrowed to the member's roles at every use", () => {
       expect(await message(await call(b, "POST", path, body))).toMatchObject({
         status: 403,
         error: "out-of-scope",
-        message: "ada@acme.test is a viewer on alpha: deploying it takes a developer or a project admin",
+        message: "ada@acme.test is a Viewer on alpha: deploying it takes a Developer or an Admin",
       });
     }
+    // Can open is no role on the dashboard: the project reads as one they hold no role on.
+    setRoles(b, ADA, { alpha: "visitor", beta: "admin" });
+    expect(await message(await call(b, "POST", "/control/preflight", { bearer: secret, slug: "alpha" }))).toMatchObject({ status: 403, message: "ada@acme.test holds no role on alpha" });
     // Nothing was asked of the installer.
     expect(existsSync(join(b.root, "state", "installs", "alpha.json"))).toBe(false);
   });
@@ -275,7 +279,7 @@ describe("narrowed to the member's roles at every use", () => {
     mkdirSync(join(b.root, "sites", "omega"));
     setRoles(b, ADA, { alpha: "developer", omega: "viewer" }, true);
     const refused = await message(await call(b, "POST", "/control/preflight", { bearer: secret, slug: "omega" }));
-    expect(refused).toMatchObject({ status: 403, message: "ada@acme.test is a viewer on omega: deploying it takes a developer or a project admin" });
+    expect(refused).toMatchObject({ status: 403, message: "ada@acme.test is a Viewer on omega: deploying it takes a Developer or an Admin" });
     const identity = (await (await call(b, "POST", "/control/authenticate", { bearer: secret })).json()) as { identity: Identity };
     expect(identity.identity.owned).toEqual([]);
     expect(token.owned).toEqual([]);
@@ -289,36 +293,47 @@ describe("narrowed to the member's roles at every use", () => {
     expect(await message(await call(b, "POST", "/control/preflight", { bearer: secret, slug: "fresh" }))).toMatchObject({ status: 403, message: expect.stringContaining("may not create projects") });
   });
 
-  test("a project not among the token's: said in a member's words, the Team page where they mint another", async () => {
+  test("a project not among the token's: said in a person's words, the Tokens page where they mint another", async () => {
     const b = bench();
     const { secret } = await minted(b, { slugs: ["alpha"] });
     expect((await message(await call(b, "POST", "/control/preflight", { bearer: secret, slug: "beta" }))).message).toBe(
-      "beta is not among this token's projects: mint a token for it from the dashboard's Team page",
+      "beta is not among this token's projects: mint a token for it from the dashboard's Tokens page",
     );
   });
 });
 
-describe("a member removed", () => {
-  test("their tokens are revoked under who removed them, and refused even before", async () => {
+describe("a person who no longer signs in", () => {
+  test("their tokens are revoked under who took them off, and refused even before", async () => {
     const b = bench();
     const one = await minted(b, { slugs: ["alpha"] });
     const two = await minted(b, { slugs: ["beta"] });
     // Off the registry, the tokens are refused at once, revoked or not.
-    const removed = removeMember(b.registry.value, ADA);
-    if ("refusal" in removed) throw new Error(removed.refusal);
-    b.registry.value = removed.registry;
+    b.registry.value = removePerson(b.registry.value, ADA).registry;
     const refused = await message(await call(b, "POST", "/control/authenticate", { bearer: one.secret }));
-    expect(refused).toMatchObject({ status: 401, error: "unauthenticated", message: "this token belongs to ada@acme.test, who is no longer a member of this dashboard: it is refused" });
+    expect(refused).toMatchObject({ status: 401, error: "unauthenticated", message: "this token belongs to ada@acme.test, who no longer has a role on this dashboard: it is refused" });
     expect(await b.handler.revokeMember(ADA, "owner")).toBe(2);
-    expect(b.journal.at(-1)).toEqual({ operation: "token.revoke", result: "ok", actor: "owner", member: ADA, detail: `${one.token.id}, ${two.token.id}: ada@acme.test is no longer a member` });
+    expect(b.journal.at(-1)).toEqual({
+      operation: "token.revoke",
+      result: "ok",
+      actor: "owner",
+      member: ADA,
+      detail: `${one.token.id}, ${two.token.id}: ada@acme.test no longer has a role on this dashboard`,
+    });
     const all = (await (await call(b, "GET", "/team/tokens")).json()) as { tokens: TokenView[] };
     expect(all.tokens.every((token) => token.revokedAt !== null)).toBe(true);
     expect(await b.handler.revokeMember(ADA, "owner")).toBe(0);
   });
+
+  test("lowered to Can open everywhere, their tokens are refused as well", async () => {
+    const b = bench();
+    const { secret } = await minted(b, { slugs: ["alpha"] });
+    setRoles(b, ADA, { alpha: "visitor", beta: "visitor" });
+    expect(await message(await call(b, "POST", "/control/authenticate", { bearer: secret }))).toMatchObject({ status: 401, message: expect.stringContaining("no longer has a role on this dashboard") });
+  });
 });
 
-describe("ownership of what a member's token creates", () => {
-  test("the member becomes project admin of it, before the token owns it, and the installer is told whose token it is", async () => {
+describe("ownership of what a person's token creates", () => {
+  test("the person becomes its Admin, before the token owns it, and the installer is told whose token it is", async () => {
     const b = bench();
     setRoles(b, ADA, { alpha: "developer" }, true);
     const { secret, token } = await minted(b, { create: true });
@@ -331,30 +346,6 @@ describe("ownership of what a member's token creates", () => {
     const request = JSON.parse(readFileSync(join(b.root, "state", "installs", "omega.json"), "utf8")) as InstallRequest;
     expect(request.token).toEqual({ id: token.id, email: ADA, member: ADA });
     expect(request.creating).toBe(true);
-  });
-});
-
-describe("sharing by token, through the steward", () => {
-  test("an owner's token: handed to the portal as root, the token as the actor", async () => {
-    const b = bench();
-    const owner = await call(b, "POST", "/team/tokens", { token: "owner-unlock", label: "ci", email: "ci@acme.test", expiresAt: null, scope: { ...SCOPE, slugs: ["alpha"] } });
-    const { secret, token } = (await owner.json()) as { secret: string; token: TokenView };
-    const response = await call(b, "PUT", "/control/sharing", { bearer: secret, slug: "alpha", mode: "people", people: ["x@acme.test"], domains: [] });
-    expect(response.status).toBe(200);
-    expect(b.shared).toEqual([{ slug: "alpha", policy: { mode: "people", people: ["x@acme.test"], domains: [] }, actor: `token:${token.id}` }]);
-    expect((await call(b, "PUT", "/control/sharing", { bearer: secret, slug: "beta", mode: "admins", people: [], domains: [] })).status).toBe(404);
-  });
-
-  test("a member's token shares only where its member is project admin, now", async () => {
-    const b = bench();
-    const { secret } = await minted(b, { slugs: ["alpha", "beta"] });
-    const refused = await message(await call(b, "PUT", "/control/sharing", { bearer: secret, slug: "alpha", mode: "admins", people: [], domains: [] }));
-    expect(refused).toMatchObject({ status: 403, message: "ada@acme.test is a developer on alpha: changing who may open it takes a project admin" });
-    expect(b.journal.at(-1)).toMatchObject({ operation: "sharing", result: "rejects", actor: ADA, slug: "alpha" });
-    expect((await call(b, "PUT", "/control/sharing", { bearer: secret, slug: "beta", mode: "admins", people: [], domains: [] })).status).toBe(200);
-    setRoles(b, ADA, { alpha: "developer", beta: "developer" });
-    expect((await call(b, "PUT", "/control/sharing", { bearer: secret, slug: "beta", mode: "admins", people: [], domains: [] })).status).toBe(403);
-    expect(b.shared).toHaveLength(1);
   });
 });
 

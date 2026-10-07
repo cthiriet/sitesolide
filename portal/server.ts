@@ -1,9 +1,11 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { isPasswordValid } from "./borrowed/auth";
-import { createAdmin, createSharingAdmin } from "./src/admin";
+import { createAccessAdmin } from "./src/admin";
+import { PROJECTION_FILE } from "./src/access";
+import { createAccessReader } from "./src/projection";
 import { ASSERTION_KEY_FILE, createDashboardAdmin, dashboardOrigin, readKeyFile } from "./src/dashboard";
 import { auditStore, guestStore, openDatabase, sharingStore } from "./src/database";
-import { COOKIE_DURATION_S, PASSWORD_HASH, ONLINE, DATABASE_FILE, KEY_FILE, PORT, PUBLIC_URL } from "./src/config";
+import { COOKIE_DURATION_S, PASSWORD_HASH, ONLINE, DATABASE_FILE, KEY_FILE, ACCESS_MARK_FILE, PORT, PUBLIC_URL } from "./src/config";
 import { deriveKey, KEY_BYTES } from "./src/gate";
 import { handoffStore } from "./src/handoff";
 import { callerUidOn } from "./src/peer";
@@ -50,18 +52,26 @@ if (settings !== null) {
 }
 
 const database = openDatabase(DATABASE_FILE);
-const guests = guestStore(database);
-const sharing = sharingStore(database);
 const audit = auditStore(database);
+
+// Who may open each site: the steward's projection, read again whenever it
+// changes; this portal's own tables, read-only, until the steward first
+// writes it. See src/projection.ts.
+const access = createAccessReader({
+  file: process.env.ACCESS_FILE ?? PROJECTION_FILE,
+  mark: ACCESS_MARK_FILE,
+  legacy: { guests: guestStore(database), sharing: sharingStore(database) },
+});
+const reading = access.state();
+console.log(`access: read from ${reading.reading === "steward" ? "the steward's projection" : reading.reading === "portal" ? "this portal's own tables, until the steward writes its projection" : "nowhere: only the owner's password and the admin emails open a site"}`);
 
 const routes = createRoutes({
   key,
   verifyPassword: (submitted) => isPasswordValid(submitted, PASSWORD_HASH),
   online: ONLINE,
   cookieDurationS: COOKIE_DURATION_S,
-  guests,
+  access,
   settings,
-  sharing,
   audit,
 });
 
@@ -74,7 +84,7 @@ const sso = createSso({
   settings,
   provider: settings === null ? null : createProvider(settings),
   online: ONLINE,
-  sharing,
+  access,
   audit,
   handoffs,
   dashboardOrigin: dashboard,
@@ -92,16 +102,14 @@ const dashboardAdmin = createDashboardAdmin({
 // Whose account opened a connection to the admin routes, read from the
 // kernel: only root may name who acts there. See src/peer.ts.
 const callerUid = callerUidOn((req) => server.requestIP(req), { address: "127.0.0.1", port: PORT });
-const admin = createAdmin(guests, Date.now, undefined, audit, callerUid);
-const sharingAdmin = createSharingAdmin({ sharing, audit, settings, callerUid });
+const admin = createAccessAdmin({ access, audit, settings, callerUid });
 
 const server = Bun.serve({
   port: PORT,
   // Only Caddy and the dashboard, from the same machine, have any business
   // with this service: the loopback rule refuses every other account.
   hostname: "127.0.0.1",
-  // A password and a path: nothing justifies a bigger body. A policy of
-  // PEOPLE_MAX addresses fits too.
+  // A password and a path: nothing justifies a bigger body.
   maxRequestBodySize: 160 * 1024,
 
   // Without a methods object, a route would answer every verb. forward_auth
@@ -122,12 +130,14 @@ const server = Bun.serve({
     "/oidc/callback": { GET: sso.callback },
     "/oidc/signout": { GET: sso.signOut },
 
-    // Never relayed by Caddy: see src/admin.ts.
-    "/admin/guests": { GET: admin.list, POST: admin.create },
-    "/admin/invites/:id": { DELETE: (req) => admin.remove(req, req.params.id) },
-    "/admin/sharing": { GET: sharingAdmin.list },
-    "/admin/sharing/:host": { PUT: (req) => sharingAdmin.replace(req, req.params.host) },
-    "/admin/audit": { GET: sharingAdmin.audit },
+    // Never relayed by Caddy: see src/admin.ts. Who may open a site is the
+    // steward's: the routes that changed it answer 410.
+    "/admin/access": { GET: admin.access },
+    "/admin/sharing": { GET: admin.sso },
+    "/admin/sharing/:host": { PUT: admin.moved },
+    "/admin/guests": { GET: admin.moved, POST: admin.moved },
+    "/admin/invites/:id": { DELETE: admin.moved },
+    "/admin/audit": { GET: admin.audit },
     "/admin/dashboard/flow": { POST: dashboardAdmin.flow },
     "/admin/dashboard/redeem": { POST: dashboardAdmin.redeem },
   },

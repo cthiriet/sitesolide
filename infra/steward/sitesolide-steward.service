@@ -46,14 +46,15 @@ RestartSec=2
 # exists with wrong permissions (bench, measurement 2).
 #
 # /var/lib/sitesolide-steward: previous versions, log, rate limiting of password
-# attempts. Outside /etc/sitesolide so that no service listing that directory
-# learns one more name there. StateDirectory makes it writable despite
+# attempts, the access registry (access.json). Outside /etc/sitesolide so that
+# no service listing that directory learns one more name there. StateDirectory makes it writable despite
 # ProtectSystem=strict, without ReadWritePaths (measured).
 #
 # /run/sitesolide-steward-owner, created the same way: the owner's socket,
-# which only root opens, for `sitesolide members` over the owner's SSH. A
-# folder of its own, since the dashboard's socket needs one of its own; the
-# steward closes it to 0700 and its socket to 0600, root's alone.
+# which only root opens, for `sitesolide share` and `sitesolide people` over
+# the owner's SSH, the access registry's routes. A folder of its own, since the
+# dashboard's socket needs one of its own; the steward closes it to 0700 and
+# its socket to 0600, root's alone.
 #
 # UMask=0077: what it creates belongs to it alone, the socket receives its
 # permissions separately.
@@ -104,12 +105,15 @@ ReadWritePaths=/etc/sitesolide
 # nothing more. The dash: the folder only exists once bin/deploy-egress.sh has
 # run, and a missing one must not fail the unit with 226/NAMESPACE.
 ReadWritePaths=-/etc/sitesolide-egress
-# The key pair members sign in with: the steward draws it, keeps the public
-# half in its own state folder, and lays the private half here,
-# root:site-portal 0640, where the portal reads it and the dashboard cannot.
-# The folder is root's, 0755, created by bin/deploy-steward.sh; the dash: a
-# machine where it is missing starts the steward as before, and members
-# cannot sign in until it exists.
+# The key pair people sign in to the dashboard with: the steward draws it,
+# keeps the public half in its own state folder, and lays the private half
+# here, root:site-portal 0640, where the portal reads it and the dashboard
+# cannot. Beside it, with the same rights for the same reason, access.json,
+# the projection of the access registry the portal decides from, written after
+# every change. The folder is root's, 0755, created by bin/deploy-steward.sh;
+# the dash: a machine where it is missing starts the steward as before, and
+# nobody signs in to the dashboard, nor is the portal told who may open a
+# site, until it exists.
 ReadWritePaths=-/etc/sitesolide-portal
 # The backup component's state (dashboard/src/backup/README.md): the steward
 # writes a restore request there, the one-shot that restores consumes it, and

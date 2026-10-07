@@ -13,7 +13,6 @@ import {
   ZONE,
   missing,
 } from "./src/config";
-import { localPortal } from "./src/guests";
 import { servePublic } from "./src/public";
 import {
   applyRotation,
@@ -34,7 +33,9 @@ import { createSignInLimiter } from "./src/members/limiter";
 import { MEMBER_SESSION_DURATION_MS } from "./src/members/protocol";
 import { createMembersRoutes } from "./src/members/routes";
 import { createMemberRelay } from "./src/members/relay";
-import { createSharingRoutes, localSharing } from "./src/sharing";
+import { createPortalAuditRoute, localPortalAudit } from "./src/portal-audit";
+import { localAccessSteward } from "./src/access/client";
+import { createAccessRoutes } from "./src/access/routes";
 import { DEFAULT_TIMEOUTS, localSteward } from "./src/secrets/client";
 import { createTokens } from "./src/secrets/tokens";
 import { createSecretsRoutes } from "./src/secrets/routes";
@@ -92,7 +93,7 @@ const sessionReader = createSessionReader(store, {
 const ownerReader = ownerSessions(sessionReader);
 
 // The secrets go through the same session check as the rest of the dashboard,
-// and the steward's tokens live only in this process's memory. The Team page
+// and the steward's tokens live only in this process's memory. The Tokens page
 // shares them: one unlock opens both.
 const unlockTokens = createTokens();
 const secrets = createSecretsRoutes({
@@ -113,7 +114,7 @@ const connectors = createConnectorsRoutes({
   withToken: secrets.withToken,
 });
 
-// The control API: deployments by token, under /api/v1/, and the Team page that
+// The control API: deployments by token, under /api/v1/, and the Tokens page that
 // creates and revokes the tokens. The registry is the steward's; this process
 // keeps the deployments it was asked for, the audit, and the archives waiting
 // for the installer in its own data directory. See src/control/.
@@ -130,52 +131,43 @@ const api = createApiRoutes({
   stateFile: STATE_FILE,
   publicUrl: PUBLIC_URL,
   zone: ZONE,
-  // Sharing by token goes to the portal as the Sharing section does.
-  portal: localSharing(PORTAL_URL),
 });
 const team = createTeamRoutes({ session: ownerReader, publicUrl: PUBLIC_URL, steward: controlSteward, tokens: unlockTokens, store: controlStore });
 setInterval(() => void tracker.tick(), 3_000);
 
-// The dashboard's members: they sign in with the portal's provider, the
-// steward opens their sessions and judges their writes, and this process
-// shows each of them their own projects. See src/members/.
+// The people who sign in: with the portal's provider, the steward opens their
+// sessions and judges their writes, and this process shows each of them
+// their own projects. See src/members/.
 const membersSteward = localMembersSteward(STEWARD_SOCKET);
 const identity = createIdentityResolver({ session: sessionReader, online: ONLINE, steward: membersSteward, closeSession });
-// A member's own unlock tokens, by session hash: never the super admin's store,
+// A member's own unlock tokens, by session hash: never the owner's store,
 // so that neither evicts the other.
 const memberUnlocks = createTokens();
 const members = createMembersRoutes({
   publicUrl: PUBLIC_URL,
   online: ONLINE,
   passwordConfigured: PASSWORD_HASH !== "",
-  zone: ZONE,
-  stateFile: STATE_FILE,
   steward: membersSteward,
   portal: localDashboardPortal(PORTAL_URL),
   store: { recordSession, purgeSessions, closeSession },
   resolve: identity,
-  ownerSession: ownerReader,
-  tokens: unlockTokens,
   unlocks: memberUnlocks,
   limiter: createSignInLimiter(),
   ownerDurationMs: SESSION_DURATION_MS,
   memberDurationMs: MEMBER_SESSION_DURATION_MS,
 });
 
-// What a member reaches of a site's Secrets, Access, Sharing, Guests and
-// Backups, and a project's members: the same addresses as the super admin's,
-// relayed to the steward with their session and unlock. See src/members/relay.ts.
+// What a person reaches of a site's Secrets, general access and Backups: the
+// same addresses as the owner's, relayed to the steward with their session
+// and unlock. See src/members/relay.ts.
 const memberRelay = createMemberRelay({
   publicUrl: PUBLIC_URL,
   resolve: identity,
   closeSession,
   steward: membersSteward,
   tokens: memberUnlocks,
-  stateFile: STATE_FILE,
-  portal: { guests: localPortal(PORTAL_URL).list, sharing: localSharing(PORTAL_URL).list },
   secrets: localSteward(STEWARD_SOCKET),
   backups: localBackupSteward(STEWARD_SOCKET),
-  providerName: members.providerName,
   control: controlStore,
 });
 
@@ -186,7 +178,6 @@ const routes = createRoutes(store, {
   sessionDurationMs: SESSION_DURATION_MS,
   memberSessionDurationMs: MEMBER_SESSION_DURATION_MS,
   stateFile: STATE_FILE,
-  portal: localPortal(PORTAL_URL),
   forgetUnlock: secrets.forgetUnlock,
   roles: members.roles,
   memberSignOut: async (token) => {
@@ -195,14 +186,8 @@ const routes = createRoutes(store, {
   },
 });
 
-// Who may open a site with their work account: relayed to the portal like the
-// guests, behind the same session check. See src/sharing.ts.
-const sharing = createSharingRoutes({
-  session: ownerReader,
-  publicUrl: PUBLIC_URL,
-  stateFile: STATE_FILE,
-  portal: localSharing(PORTAL_URL),
-});
+// The portal's audit, read with the owner's session. See src/portal-audit.ts.
+const portalAudit = createPortalAuditRoute({ session: ownerReader, portal: localPortalAudit(PORTAL_URL) });
 
 // The Activity page: every component's audit, read through the very clients
 // above, merged newest first. Read with the session alone. See src/audit/.
@@ -212,7 +197,7 @@ const audit = createAuditRoutes({
   restriction: members.restriction,
   readers: createReaders({
     store: controlStore,
-    portal: localSharing(PORTAL_URL),
+    portal: localPortalAudit(PORTAL_URL),
     egress: localEgress(EGRESS_URL),
     steward: localSteward(STEWARD_SOCKET),
     backups: localBackupSteward(STEWARD_SOCKET),
@@ -247,15 +232,15 @@ function long(
  * The routes a member's session may reach: their session, their sign-in and
  * sign-out, the snapshot and the audit, both filtered to their projects,
  * their restart, a site's Secrets, Access, Sharing, Guests and Backups, and
- * their own tokens on the Team page, which `either()` sends to
- * src/members/relay.ts, where the steward judges each by role. Every other route is the super admin's: `owner()` answers a
+ * their own tokens on the Tokens page, which `either()` sends to
+ * src/members/relay.ts, where the steward judges each by role. Every other route is the owner's: `owner()` answers a
  * member 403 before its handler runs, and the handler itself reads the
  * owner's sessions alone (`ownerReader`), so that a route forgetting the
  * first still refuses a member. The control API is reached with a team
  * token, never a session.
  */
 const ownerOnly = () =>
-  Response.json({ error: "owner-only", message: "This part of the dashboard is the super admin's." }, { status: 403, headers: { "Cache-Control": "no-store" } });
+  Response.json({ error: "owner-only", message: "This part of the dashboard is the owner's." }, { status: 403, headers: { "Cache-Control": "no-store" } });
 
 function owner<R extends Request, S extends { timeout: (req: Request, seconds: number) => void }>(
   handler: (req: R, server: S) => Response | Promise<Response>,
@@ -264,7 +249,7 @@ function owner<R extends Request, S extends { timeout: (req: Request, seconds: n
 }
 
 /**
- * One address, two handlers: the super admin's, which reads the owner's
+ * One address, two handlers: the owner's, which reads the owner's
  * sessions alone, and a member's, which relays to the steward with their
  * session (src/members/relay.ts). The page asks the same routes whoever is
  * signed in; what a member may do there, the steward decides.
@@ -278,6 +263,22 @@ function either<R extends Request, S extends { timeout: (req: Request, seconds: 
     return found !== null && isMemberSession(found) ? memberHandler(req, server) : ownerHandler(req, server);
   };
 }
+
+// Who may do what on each project, and the People page: the steward's access
+// registry, relayed with the session and its unlock. See src/access/.
+const accessRoutes = createAccessRoutes({
+  publicUrl: PUBLIC_URL,
+  zone: ZONE,
+  stateFile: STATE_FILE,
+  steward: localAccessSteward(STEWARD_SOCKET),
+  members: membersSteward,
+  resolve: identity,
+  ownerSession: ownerReader,
+  tokens: unlockTokens,
+  unlocks: memberUnlocks,
+  providerName: members.providerName,
+  togglePortal: (req) => either(secrets.togglePortal, memberRelay.togglePortal)(req, { timeout: () => undefined }),
+});
 
 const server = Bun.serve({
   port: PORT,
@@ -294,21 +295,14 @@ const server = Bun.serve({
     "/api/signin": { POST: routes.signIn },
     "/api/signout": { POST: routes.signOut },
     "/api/state": { GET: routes.state },
-    "/api/guests": { GET: either(routes.guests, memberRelay.guests), POST: either(routes.createGuest, memberRelay.createGuest) },
-    "/api/invites/:id": {
-      DELETE: either(
-        (req) => routes.revokeGuest(req, req.params.id),
-        (req) => memberRelay.revokeGuest(req, req.params.id),
-      ),
-    },
-    "/api/sharing": { GET: either(sharing.list, memberRelay.sharing) },
-    "/api/sharing/:host": {
-      PUT: either(
-        (req) => sharing.replace(req, req.params.host),
-        (req) => memberRelay.replaceSharing(req, req.params.host),
-      ),
-    },
-    "/api/portal/audit": { GET: owner(sharing.audit) },
+    // A project's general access and people with access, for the owner and its
+    // Admins, and the machine's People, the owner's: the steward judges.
+    "/api/access": { GET: accessRoutes.list },
+    "/api/access/entry": { PUT: accessRoutes.put, DELETE: accessRoutes.remove },
+    "/api/access/general": { PUT: (req, server) => long(req, server, accessRoutes.general) },
+    "/api/people": { GET: owner(accessRoutes.people) },
+    "/api/people/person": { PUT: owner(accessRoutes.putPerson), DELETE: owner(accessRoutes.removePerson) },
+    "/api/portal/audit": { GET: owner(portalAudit) },
     "/api/audit": { GET: audit.list },
     "/api/secrets": { GET: either(secrets.dashboard, memberRelay.secrets) },
     "/api/secrets/log": { GET: either(secrets.log, memberRelay.secretsLog) },
@@ -335,7 +329,7 @@ const server = Bun.serve({
       POST: either((req, server) => long(req, server, secrets.readContent), (req, server) => long(req, server, memberRelay.readContent)),
       PUT: either((req, server) => long(req, server, secrets.replaceContent), (req, server) => long(req, server, memberRelay.replaceContent)),
     },
-    // A password hash changes with the dashboard's own password: the super admin's alone.
+    // A password hash changes with the dashboard's own password: the owner's alone.
     "/api/secrets/password": { POST: owner((req, server) => long(req, server, secrets.changePassword)) },
     "/api/secrets/portal": { POST: either((req, server) => long(req, server, secrets.togglePortal), (req, server) => long(req, server, memberRelay.togglePortal)) },
     "/api/secrets/restart": { POST: either((req, server) => long(req, server, secrets.restart), (req, server) => long(req, server, members.restart)) },
@@ -368,9 +362,10 @@ const server = Bun.serve({
     "/api/v1/projects": { GET: api.projects },
     "/api/v1/projects/:slug": { GET: (req) => api.project(req, req.params.slug) },
     "/api/v1/projects/:slug/logs": { GET: (req) => api.projectLogs(req, req.params.slug) },
-    "/api/v1/projects/:slug/sharing": {
-      GET: (req) => api.projectSharing(req, req.params.slug),
-      PUT: (req) => api.replaceProjectSharing(req, req.params.slug),
+    "/api/v1/projects/:slug/access": {
+      GET: (req) => api.projectAccess(req, req.params.slug),
+      PUT: (req) => api.putProjectAccess(req, req.params.slug),
+      DELETE: (req) => api.removeProjectAccess(req, req.params.slug),
     },
     "/api/v1/*": () => failure("not-found", "no such route: see docs/team.md for the control API's routes"),
     // The backups go through the steward too: it reads them as root, and starts
@@ -379,19 +374,10 @@ const server = Bun.serve({
     "/api/backups/audit": { GET: either(secrets.backupAudit, memberRelay.backupAudit) },
     "/api/backups/restore": { POST: either((req, server) => long(req, server, secrets.restoreBackup), (req, server) => long(req, server, memberRelay.restoreBackup)) },
 
-    // The members: their sign-in through the portal, the super admin's page,
-    // and a member's restart, which the steward judges.
+    // Signing in with the provider, and a person's restart, which the steward judges.
     "/api/sso/begin": { GET: members.begin },
     "/api/sso/complete": { GET: members.complete },
-    "/api/members": { GET: owner(members.list) },
-    "/api/members/member": { PUT: owner(members.put), DELETE: owner(members.remove) },
     "/api/members/restart": { POST: (req, server) => long(req, server, members.restart) },
-    // A project's members, for its Project admins: the super admin has the Members page.
-    "/api/members/project": {
-      GET: memberRelay.projectMembers,
-      PUT: memberRelay.putProjectMember,
-      DELETE: memberRelay.removeProjectMember,
-    },
   },
 
   /**

@@ -68,13 +68,6 @@ function options(remaining: Partial<Options> = {}): Options {
     online: true,
     sessionDurationMs: 7 * 24 * 3600 * 1000,
     stateFile: "/nonexistent/state.json",
-    // Guest access has its own tests in guests.test.ts; here, the portal
-    // must never be called.
-    portal: {
-      list: () => Promise.reject(new Error("portal called")),
-      create: () => Promise.reject(new Error("portal called")),
-      remove: () => Promise.reject(new Error("portal called")),
-    },
     ...remaining,
   };
 }

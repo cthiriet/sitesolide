@@ -75,8 +75,8 @@ folder holding `sitesolide.json`.
 For a repository that should carry nothing about its deployment, an open-source
 project for instance: the manifest stays in your sites repository, and
 `sitesolide deploy` runs from there. The build, the exclusions, `publicDir` and
-the upload all start from `source`; a door changed from the dashboard is still
-written back into the manifest, where it lives. Never absolute, which would name
+the upload all start from `source`; general access changed from the dashboard
+is still written back into the manifest, where it lives. Never absolute, which would name
 the workstation that wrote it.
 
 From your sites repository, the one `sites` names in `config.json`, `source` may
@@ -114,7 +114,7 @@ It runs in `app/` as the project's own account, `site-<slug>`, in a transient
 unit with the walls of its service: the network but not the loopback, nothing
 of `/srv` but `app/`, nothing of `/etc/sitesolide`, a throwaway `HOME`, 1G of
 memory and fifteen minutes at most. That holds for a deployment over SSH as for
-one through a team token. A package manager runs lifecycle scripts, the
+one through a token. A package manager runs lifecycle scripts, the
 package's own and those of the dependencies it trusts, and they run there too,
 never with the rights of the account that deploys. A step that writes outside
 `app/`, needs root, or relies on a tool installed into `HOME` fails: it belongs
@@ -141,7 +141,7 @@ program as it is.
 preview or of the portal. A 404 at `/` most often means nothing is served at
 all, so it fails the deployment, even for an app whose other paths work: one
 that answers only `/api/*`, say. For an app, the Caddy step then puts the
-previous configuration back, over SSH as through a team token, and its block
+previous configuration back, over SSH as through a token, and its block
 stays out; a static site's files stay in place, and the failure is reported.
 Serve something at `/` that answers 200. An app without `routes` receives `/`
 itself, even beside a `publicDir` holding an `index.html`, and must answer it;
@@ -407,7 +407,8 @@ already covers it.
 ### `lock`
 
 Written by `sitesolide lock`, not by hand. It says the preview is closed behind
-a code; the code itself lives on the machine and never enters the repository.
+a code, its general access *Anyone with the code*; the code itself lives on the
+machine and never enters the repository.
 
 ### `portal` and `portalExempt`
 
@@ -417,20 +418,22 @@ a code; the code itself lives on the machine and never enters the repository.
 ```
 
 `portal` puts the project behind the shared portal, which Caddy consults before
-every request. `portalExempt` lists the paths that go straight through, signed
-webhooks, mostly, which carry their own proof and have no cookie.
+every request: its general access is then Restricted. `portalExempt` lists the
+paths that go straight through, signed webhooks, mostly, which carry their own
+proof and have no cookie.
 
-**Who gets in** is not in the manifest: the owner's password and guest access,
-and, once the portal knows an identity provider, the people the site is shared
-with from the dashboard's *Sharing* section. **The service learns who came in**
-from three request headers the generated block sets on every request that went
-through the portal:
+**Who gets in** is not in the manifest: the owner's password, the admin emails,
+and the project's people with access, given from the dashboard's *Access*
+section or with `sitesolide share` ([commands.md](commands.md#access-to-a-project)),
+each signing in with their company account or with password access. **The
+service learns who came in** from three request headers the generated block
+sets on every request that went through the portal:
 
 | Header | Value |
 |---|---|
-| `X-Sitesolide-User` | the verified email, lowercase; absent for the owner's password and a guest |
+| `X-Sitesolide-User` | the verified email, lowercase; absent for the owner's password and for password access |
 | `X-Sitesolide-User-Name` | the display name, percent-encoded UTF-8; absent when unknown |
-| `X-Sitesolide-Role` | `admin`, `member` or `guest` |
+| `X-Sitesolide-Role` | `admin` for the owner's password and the admin emails; the person's role otherwise, `visitor` (Can open), `viewer`, `developer` or `admin`; `visitor` for password access. Before the access registry it read `member` or `guest`: an app that compared it with either must be updated |
 
 The block takes any `X-Sitesolide-*` header the visitor sends off every request
 first, exempted paths included, and their underscore spellings, so a protected
@@ -441,9 +444,9 @@ existed, protected or not, keeps working, takes nothing off, and gains them at
 its next `sitesolide deploy`. Reading them in a Bun service:
 [portal/README.md](../portal/README.md#who-came-in-the-identity-headers).
 
-**For a deployed project the machine is the source of truth.** The door is set
-in the dashboard's *Access* section; `sitesolide deploy` reads what the machine
-carries and rewrites the local manifest, which you then commit. Every command
+**For a deployed project the machine is the source of truth.** General access
+is set in the dashboard's *Access* section; `sitesolide deploy` reads what the
+machine carries and rewrites the local manifest, which you then commit. Every command
 refuses to contradict it: a repository that reopened a site the dashboard closed
 would be the worst possible failure.
 
