@@ -190,13 +190,15 @@ export function portalProgress(elapsedMs: number): PortalProgress {
 export type LockCommand = { label: string; command: string }
 
 /**
- * The lock is set and removed from the workstation, through `bin/lock.sh`,
- * which generates the code and shows it once: the dashboard only displays it.
+ * The lock is set and removed from the workstation, with the CLI run in the
+ * project's folder, which generates the code and shows it once: the dashboard
+ * only displays it. Not `bin/lock.sh`: that script is the binary's own, run by
+ * it, and someone who installed the binary has no `bin/` to run it from.
  */
-export function lockCommands(slug: string, closed: boolean): LockCommand[] {
-  if (!closed) return [{ label: "Set a preview lock", command: `bin/lock.sh enable ${slug}` }]
+export function lockCommands(closed: boolean): LockCommand[] {
+  if (!closed) return [{ label: "Set a preview lock", command: "sitesolide lock" }]
   return [
-    { label: "Replace the code", command: `bin/lock.sh code ${slug}` },
-    { label: "Remove the lock", command: `bin/lock.sh disable ${slug}` },
+    { label: "Replace the code", command: "sitesolide lock --new-code" },
+    { label: "Remove the lock", command: "sitesolide unlock" },
   ]
 }

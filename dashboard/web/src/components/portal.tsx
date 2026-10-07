@@ -38,7 +38,7 @@ import { cn } from "@/lib/utils"
 /**
  * A site's door as seen from its Access section: the portal, which the
  * dashboard can turn on or off by going through the steward and the gatekeeper,
- * and the preview lock, which remains `bin/lock.sh`'s business.
+ * and the preview lock, which remains the CLI's business, `sitesolide lock`.
  */
 
 // --- The repository reminder --------------------------------------------------
@@ -204,12 +204,12 @@ export function PortalPanel({
 /**
  * The preview lock, read from the snapshot: its code and its link to copy, and
  * the workstation commands that set or remove it. The dashboard does not write
- * there: `bin/lock.sh` generates the code and shows it once.
+ * there: `sitesolide lock` generates the code and shows it once.
  */
 export function LockPanel({ site }: { site: Site }) {
   const access = siteAccess(site)
   const { closed, code, url } = site.lock
-  const commands = lockCommands(site.slug, closed || code !== null)
+  const commands = lockCommands(closed || code !== null)
   const mismatch = access.kind === "mismatch" && (access.key === "code-without-lock" || access.key === "lock-without-code")
 
   return (
@@ -243,8 +243,8 @@ export function LockPanel({ site }: { site: Site }) {
       </div>
       <div className="grid gap-2 border-t px-4 py-3">
         <p className="text-xs text-pretty text-muted-foreground">
-          A preview lock is set from your computer with bin/lock.sh, which makes the code and shows it once. The
-          dashboard only shows it.
+          A preview lock is set from your computer, in the project's folder, with the sitesolide CLI, which makes
+          the code and shows it once. The dashboard only shows it.
         </p>
         <ul className="grid gap-2">
           {commands.map((command) => (

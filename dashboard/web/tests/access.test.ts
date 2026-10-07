@@ -139,17 +139,19 @@ describe("waiting for the gatekeeper", () => {
 
 describe("preview lock", () => {
   test("absent: set it; set: change the code or remove it, always from the workstation", () => {
-    expect(lockCommands("bakery-martin", false)).toEqual([
-      { label: "Set a preview lock", command: "bin/lock.sh enable bakery-martin" },
-    ])
-    expect(lockCommands("bakery-martin", true).map((command) => command.command)).toEqual([
-      "bin/lock.sh code bakery-martin",
-      "bin/lock.sh disable bakery-martin",
-    ])
+    expect(lockCommands(false)).toEqual([{ label: "Set a preview lock", command: "sitesolide lock" }])
+    expect(lockCommands(true).map((command) => command.command)).toEqual(["sitesolide lock --new-code", "sitesolide unlock"])
   })
 
-  test("the commands are the ones bin/lock.sh documents", async () => {
-    const script = await Bun.file(new URL("../../../bin/lock.sh", import.meta.url)).text()
-    for (const verb of ["enable", "code", "disable"]) expect(script).toContain(`bin/lock.sh ${verb} <slug>`)
+  test("the commands are the CLI's, never a script of bin/ that the binary runs itself", async () => {
+    // The CLI's usage, as `sitesolide help` prints it: each command shown must be
+    // one it lists, with the flag it takes.
+    const cli = await Bun.file(new URL("../../../bin/sitesolide.ts", import.meta.url)).text()
+    expect(cli).toContain('"  sitesolide lock   [--dry-run]')
+    expect(cli).toContain('"     --new-code ')
+    expect(cli).toContain('"  sitesolide unlock [--dry-run]')
+    for (const closed of [false, true]) {
+      for (const { command } of lockCommands(closed)) expect(command).not.toContain("bin/")
+    }
   })
 })
