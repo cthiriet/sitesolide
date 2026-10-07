@@ -16,29 +16,49 @@ Two ways for a colleague to work on the machine, which do not overlap:
 |---|---|---|
 | Is | a person, by their work email | a key, `sst_...`, held by a person or an agent |
 | Signs in | to the dashboard, with their work account, through the portal's identity provider | nowhere: the CLI and the control API present it |
-| Sees | the projects the owner gave them a role on, in the dashboard | the projects it may deploy, through `sitesolide status` |
-| Does | Viewer: the project's state, audience and activity; Developer and Project admin: also restart its service | deploys, reads logs, shares what it deploys |
-| Lasts | half a day per sign-in, until the owner removes them | until it expires or the owner revokes it |
+| Sees | the projects the owner, or a project's Project admin, gave them a role on, in the dashboard | the projects it may deploy, through `sitesolide status` |
+| Does | by role, see below: from looking at a project to looking after all of it | deploys, reads logs, shares what it deploys |
+| Lasts | half a day per sign-in, until the owner removes them; an unlock ten minutes | until it expires or the owner revokes it |
 | In the audit | their email | `token:<id>` |
+
+A member holds a role on each of their projects:
+
+| Role | On that project |
+|---|---|
+| Viewer | its state, audience and activity |
+| Developer | also restarts its service, and sets, replaces and removes its secrets without ever reading one back: the dashboard shows them names, the steward never hands them a value |
+| Project admin | everything of the project: reads its secrets, turns its portal on or off, shares it, gives and revokes guest access, restores its backups, and gives people a role on it, at most their own |
+
+The machine itself stays the owner's: the platform's own projects, the
+dashboard and the portal among them, their settings, the preview locks, the
+tokens, the connectors and every member's roles on other projects.
 
 A member never holds a password, a token or root. The owner invites them from
 the dashboard's *Members* page or with `sitesolide members add <email>
 --project <slug> --role <viewer|developer|admin>` ([commands.md](commands.md#the-dashboards-members)),
 then sends them the line it prints: the dashboard's address, and to sign in
-with their work account. An address outside the portal's
-`OIDC_ALLOWED_DOMAINS` is refused, as the portal would refuse it.
+with their work account. A Project admin invites on their own project, from
+its *Members* section. An address outside the portal's `OIDC_ALLOWED_DOMAINS`
+is refused, as the portal would refuse it.
 
 Signing in goes through the portal: the dashboard sends the browser there,
 the portal runs its usual sign-in with the provider, and hands the dashboard a
 short assertion it signed, which the steward checks as root before it opens
 the session ([dashboard/README.md](../dashboard/README.md#members)). A member
-sees Sites and Activity, each reduced to their projects, and in a project its
-Overview and Audience; the rest of the dashboard is the owner's, hidden and
-refused. Removed, a member is out at their next request.
+sees Sites and Activity, each reduced to their projects, and in a project the
+sections their role opens; the rest of the dashboard is the owner's, hidden
+and refused. Removed, a member is out at their next request.
 
-What a member will gain later, setting a project's variables without reading
-them, sharing it, restoring its data, and tokens of their own no stronger than
-their roles, comes in later releases.
+**Unlocking, for a member, is signing in again.** Whatever reads or writes a
+secret, turns a door, restores data or gives a role asks for the member's own
+unlock: *Unlock* sends them to the identity provider, which asks them to
+prove themselves once more even if they are signed in there, and brings them
+back unlocked for ten minutes, for their session alone. The owner unlocks with
+the dashboard's password, as before; neither unlock replaces the other, nor
+another member's.
+
+Tokens of a member's own, no stronger than their roles, come in a later
+release.
 
 ## What you get from the owner
 

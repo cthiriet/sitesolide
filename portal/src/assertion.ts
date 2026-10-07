@@ -26,7 +26,8 @@
  *   header   { "alg": "EdDSA", "typ": "sitesolide-identity", "kid": "<16 hex>" }
  *   claims   { "iss": "sitesolide-portal", "aud": "dashboard",
  *              "email": "<verified, lowercase>", "name": "<display name>" | null,
- *              "auth_time": <s>, "iat": <s>, "exp": <s>, "nonce": "<43 base64url>" }
+ *              "auth_time": <s>, "iat": <s>, "exp": <s>, "nonce": "<43 base64url>",
+ *              "reauth": true, only after a sign-in the provider was made to ask again }
  *
  * - `aud` names the one reader: an assertion made for something else is
  *   refused, whatever it says;
@@ -35,7 +36,12 @@
  * - `nonce` is drawn for each assertion: the steward accepts each one once;
  * - `auth_time` is when the person last proved themselves at the provider,
  *   which the portal may have remembered for a while: the steward and the
- *   dashboard bound how old it may be.
+ *   dashboard bound how old it may be;
+ * - `reauth` says the portal sent the person to the provider with a forced
+ *   sign-in (`prompt=login`, `max_age=0`) and read back, in the provider's
+ *   own ID token, that they signed in during that very flow: the steward
+ *   unlocks a member's secrets on such an assertion alone. Absent from a
+ *   sign-in, which may ride on the portal's session or the provider's.
  *
  * No import: the dashboard borrows this file as it stands (scripts/borrow.ts),
  * so the portal signs and the steward verifies with one and the same code.
@@ -66,10 +72,12 @@ export type AssertionClaims = {
   iat: number;
   exp: number;
   nonce: string;
+  /** True for a forced sign-in at the provider, read back in its ID token; false otherwise. */
+  reauth: boolean;
 };
 
-/** What the portal puts in, the rest being its own. */
-export type AssertionSubject = { email: string; name: string | null; authTime: number };
+/** What the portal puts in, the rest being its own. `reauth`: a forced sign-in, see the header. */
+export type AssertionSubject = { email: string; name: string | null; authTime: number; reauth?: boolean };
 
 export type AssertionRefusal =
   | "malformed"
@@ -183,7 +191,8 @@ function drawNonce(): string {
 /** An assertion for the dashboard, valid from `nowS` for ASSERTION_LIFETIME_S. */
 export async function signAssertion(privateKey: PrivateKey, subject: AssertionSubject, nowS: number, nonce: string = drawNonce()): Promise<string> {
   const header = encodeJson({ alg: "EdDSA", typ: ASSERTION_TYPE, kid: privateKey.kid });
-  const claims: AssertionClaims = {
+  // `reauth` only when true: a sign-in's assertion is the one it always was.
+  const claims = {
     iss: ASSERTION_ISSUER,
     aud: DASHBOARD_AUDIENCE,
     email: subject.email,
@@ -192,6 +201,7 @@ export async function signAssertion(privateKey: PrivateKey, subject: AssertionSu
     iat: nowS,
     exp: nowS + ASSERTION_LIFETIME_S,
     nonce,
+    ...(subject.reauth === true ? { reauth: true } : {}),
   };
   const signed = `${header}.${encodeJson(claims)}`;
   const key = await crypto.subtle.importKey(
@@ -238,7 +248,7 @@ export async function verifyAssertion(token: unknown, publicKey: PublicKey, expe
   }
   if (!valid) return { refusal: "bad-signature" };
 
-  const { iss, aud, email, name, auth_time, iat, exp, nonce } = claims;
+  const { iss, aud, email, name, auth_time, iat, exp, nonce, reauth } = claims;
   if (iss !== ASSERTION_ISSUER) return { refusal: "wrong-issuer" };
   if (aud !== expected.audience) return { refusal: "wrong-audience" };
   if (!isSeconds(iat) || !isSeconds(exp) || !isSeconds(auth_time)) return { refusal: "malformed" };
@@ -248,5 +258,6 @@ export async function verifyAssertion(token: unknown, publicKey: PublicKey, expe
   if (typeof email !== "string" || email.length > 254 || !EMAIL.test(email)) return { refusal: "bad-email" };
   if (name !== null && (typeof name !== "string" || Array.from(name).length > ASSERTION_NAME_MAX)) return { refusal: "malformed" };
   if (typeof nonce !== "string" || !BASE64URL_32.test(nonce)) return { refusal: "bad-nonce" };
-  return { claims: { iss, aud, email, name, auth_time, iat, exp, nonce } };
+  if (reauth !== undefined && reauth !== true) return { refusal: "malformed" };
+  return { claims: { iss, aud, email, name, auth_time, iat, exp, nonce, reauth: reauth === true } };
 }

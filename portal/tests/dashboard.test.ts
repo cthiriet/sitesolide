@@ -41,9 +41,9 @@ function admin(overrides: Partial<Parameters<typeof createDashboardAdmin>[0]> = 
 }
 
 /** A code minted for the dashboard, as the callback would. */
-function mint(handoffs: HandoffStore, binding: string, email = "alice@acme.test", audience: "site" | "dashboard" = "dashboard"): string {
+function mint(handoffs: HandoffStore, binding: string, email = "alice@acme.test", audience: "site" | "dashboard" = "dashboard", reauth = false): string {
   const minting = handoffs.mint(
-    { host: HOST, binding: bindingHash(binding), identity: { email, name: "Alice" }, returnTo: "/", sessionExpiry: NOW / 1000 + 3600, authTime: NOW / 1000 - 60, audience },
+    { host: HOST, binding: bindingHash(binding), identity: { email, name: "Alice" }, returnTo: "/", sessionExpiry: NOW / 1000 + 3600, authTime: NOW / 1000 - 60, audience, reauth },
     NOW,
   );
   if ("refusal" in minting) throw new Error(minting.refusal);
@@ -72,7 +72,7 @@ describe("POST /admin/dashboard/flow", () => {
     const start = new URL(((await response.json()) as { start: string }).start);
     expect(start.origin + start.pathname).toBe("https://portal.test-zone.invalid/oidc/start");
     const flow = readFlow(KEY, start.searchParams.get("flow"), NOW / 1000);
-    expect(flow).toEqual({ host: HOST, returnTo: "/site/?s=blog", binding: bindingHash(binding), chooseAccount: false, audience: "dashboard" });
+    expect(flow).toEqual({ host: HOST, returnTo: "/site/?s=blog", binding: bindingHash(binding), chooseAccount: false, audience: "dashboard", reauth: false });
   });
 
   test("a return path that leads elsewhere comes back home", async () => {

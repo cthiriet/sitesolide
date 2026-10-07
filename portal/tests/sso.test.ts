@@ -294,9 +294,9 @@ describe("signing in to the dashboard, end to end", () => {
   const json = { "Content-Type": "application/json" };
 
   /** What the dashboard does on a click: draw a binding, have the portal seal the flow, send the browser to it. */
-  async function begin(browser: Browser, chooseAccount = false): Promise<{ binding: string; url: string; visited: string[] }> {
+  async function begin(browser: Browser, chooseAccount = false, reauth = false): Promise<{ binding: string; url: string; visited: string[] }> {
     const binding = drawBinding();
-    const sealed = await admin("/admin/dashboard/flow", { method: "POST", headers: json, body: JSON.stringify({ binding, returnTo: "/activity/", chooseAccount }) });
+    const sealed = await admin("/admin/dashboard/flow", { method: "POST", headers: json, body: JSON.stringify({ binding, returnTo: "/activity/", chooseAccount, reauth }) });
     expect(sealed.status).toBe(200);
     const { start } = (await sealed.json()) as { start: string };
     const { url, visited } = await browser.follow(start);
@@ -356,6 +356,44 @@ describe("signing in to the dashboard, end to end", () => {
     const chosen = await begin(browser, true);
     const authorize = chosen.visited.find((one) => one.startsWith(`${provider.url}/authorize`))!;
     expect(new URL(authorize).searchParams.get("prompt")).toBe("select_account");
+  });
+
+  test("a forced sign-in skips the portal's session, asks the provider for one, and signs an assertion that says so", async () => {
+    const browser = new Browser();
+    const first = await begin(browser);
+    const plain = await verifyAssertion(
+      ((await (await redeem(new URL(first.url).searchParams.get("code"), first.binding)).json()) as { assertion: string }).assertion,
+      pair.publicKey,
+      { audience: DASHBOARD_AUDIENCE, nowS: Math.floor(Date.now() / 1000) },
+    );
+    expect("claims" in plain && plain.claims.reauth).toBe(false);
+
+    // The portal's session would spare the provider: a forced sign-in goes there all the same.
+    const forced = await begin(browser, false, true);
+    expect(providerVisits(forced.visited)).toBe(1);
+    const authorize = new URL(forced.visited.find((one) => one.startsWith(`${provider.url}/authorize`))!).searchParams;
+    expect(authorize.get("prompt")).toBe("login");
+    expect(authorize.get("max_age")).toBe("0");
+    const answer = await redeem(new URL(forced.url).searchParams.get("code"), forced.binding);
+    const body = (await answer.json()) as { assertion: string; reauth: boolean };
+    expect(body.reauth).toBe(true);
+    const reading = await verifyAssertion(body.assertion, pair.publicKey, { audience: DASHBOARD_AUDIENCE, nowS: Math.floor(Date.now() / 1000) });
+    expect("claims" in reading && reading.claims.reauth).toBe(true);
+    expect("claims" in reading && Math.floor(Date.now() / 1000) - reading.claims.auth_time).toBeLessThan(5);
+  });
+
+  test("a provider that ignores the forced sign-in, or does not say when, mints no code", async () => {
+    for (const next of [{ claims: { auth_time: Math.floor(Date.now() / 1000) - 3600 } }, { without: ["auth_time"] }]) {
+      provider.next = next;
+      const { url } = await begin(new Browser(), false, true);
+      expect(new URL(url).pathname).toBe("/oidc/callback");
+      expect((await events())[0]).toMatchObject({ actor: "alice@acme.test", action: "portal.signin_failed", target: DASHBOARD, detail: { reason: "stale-authentication" } });
+    }
+  });
+
+  test("a site's flow cannot carry a forced sign-in", async () => {
+    const response = await admin("/admin/dashboard/flow", { method: "POST", headers: json, body: JSON.stringify({ binding: drawBinding(), returnTo: "/", reauth: "yes" }) });
+    expect(response.status).toBe(400);
   });
 
   test("an account the portal does not admit never reaches the dashboard", async () => {

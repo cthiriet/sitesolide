@@ -68,7 +68,12 @@ const FINGERPRINTED: Record<string, string[]> = {
     "/etc/systemd/system/sitesolide-restore@.service",
   ],
   "deploy-egress.sh": ["/usr/local/lib/sitesolide/egress.js", "/etc/systemd/system/sitesolide-egress.service"],
-  "deploy-steward.sh": ["/usr/local/lib/sitesolide/steward.js", "/etc/systemd/system/sitesolide-steward.service"],
+  "deploy-steward.sh": [
+    "/usr/local/lib/sitesolide/steward.js",
+    "/etc/systemd/system/sitesolide-steward.service",
+    "/etc/systemd/system/sitesolide-portal-relay.socket",
+    "/etc/systemd/system/sitesolide-portal-relay.service",
+  ],
   "deploy-gatekeeper.sh": [
     "/usr/local/lib/sitesolide/gatekeeper.js",
     "/etc/systemd/system/sitesolide-gatekeeper-on@.service",

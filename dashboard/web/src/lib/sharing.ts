@@ -134,8 +134,11 @@ export function sharingLoadFailure(status: number): { title: string; advice: str
 }
 
 /** What a refusal means. The codes stay the API's; an unknown one is shown as is rather than vanishing. */
-export function sharingRefusal(status: number, body: { error?: string } | null): string {
+export function sharingRefusal(status: number, body: { error?: string; message?: string } | null): string {
   if (status === 0) return "Can't reach the dashboard."
+  // A Project admin's change goes through the steward, which says why in words.
+  if (body?.error === "out-of-scope" && typeof body.message === "string") return body.message
+  if (body?.error === "not-available" && typeof body.message === "string") return body.message
   if (status === 502) return "Can't reach the portal."
   if (status === 404 && body?.error === undefined) return PORTAL_TOO_OLD
   switch (body?.error) {

@@ -29,6 +29,10 @@ export const OPERATIONS: Operation[] = [
   "member.signin",
   "member.signin_failed",
   "member.signout",
+  "sharing",
+  "guest.create",
+  "guest.revoke",
+  "backup.restore",
 ];
 
 /**

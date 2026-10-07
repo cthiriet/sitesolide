@@ -164,7 +164,13 @@ export type Operation =
   | "member.remove"
   | "member.signin"
   | "member.signin_failed"
-  | "member.signout";
+  | "member.signout"
+  // A Project admin's change refused by the steward before it reached the
+  // portal or the backups, which record those that go through.
+  | "sharing"
+  | "guest.create"
+  | "guest.revoke"
+  | "backup.restore";
 
 export type OperationResult = "ok" | "rejects" | "failure";
 

@@ -20,6 +20,18 @@
  * the password, and the worst a compromised dashboard does with it is remove
  * everyone. On the owner's socket, root asks, over the owner's SSH: no unlock.
  *
+ * **A member unlocks for themselves.** Not with a password, which they do
+ * not have: with an assertion the portal signed after a forced sign-in at the
+ * provider (`reauth`, `auth_time` within five minutes), for the very email
+ * their session is. The token is theirs, for that session, ten minutes, and
+ * neither replaces the super admin's nor is replaced by it (unlocks.ts).
+ * `authorize` is what every other member route asks: the session, the member
+ * still in the registry, and their unlock when the power needs one.
+ *
+ * **A Project admin invites on their project**, and nowhere else: one role,
+ * at most their own, on a project where they are Project admin, under their
+ * unlock; taking a role away needs no unlock, as for the super admin.
+ *
  * The order of the checks is the order of the risk, as in src/secrets/steward.ts:
  * shape of the body, credential, registry, machine, writing.
  */
@@ -37,27 +49,37 @@ import type { RandomSource } from "../sessions";
 import {
   MAX_AUTH_AGE_S,
   OWNER_ACTOR,
+  REAUTH_MAX_AGE_S,
   type KeyResponse,
   type MemberIdentity,
+  type MemberUnlockResponse,
+  type MemberView,
   type MembersResponse,
+  type ProjectMemberResponse,
   type PutMemberResponse,
+  type Roles,
   type SignInResponse,
   type WhoamiResponse,
 } from "./protocol";
+import { machineRefusal, may, mayGrant, powerRefusal, roleDetail } from "./powers";
 import {
   encodeRegistry,
   findMember,
+  isRole,
   judgeEmail,
   mayRestart,
   putMember,
+  putProjectRole,
   readRegistry,
   readRoles,
   removeMember,
+  removeProjectRole,
   roleOf,
   rolesText,
   views,
   type Registry,
 } from "./registry";
+import { attemptWait, countAttempt, EMPTY_UNLOCKS, failed, grant, isUnlocked, revokeMember, revokeSession, unlockedUntil, type UnlockBook } from "./unlocks";
 import { dropMember, dropSession, encodeBook, findSession, openMemberSession, readBook, spendNonce, type SessionBook } from "./sessions";
 import type { MembersSystem } from "./system";
 
@@ -67,16 +89,31 @@ export type Routes = Record<string, Record<string, Handler>>;
 
 /** What the journal records of a member event: the actor this steward verified, never one a request named. */
 export type MemberEvent = {
-  operation: "member.invite" | "member.role" | "member.remove" | "member.signin" | "member.signin_failed" | "member.signout";
+  operation: "member.invite" | "member.role" | "member.remove" | "member.signin" | "member.signin_failed" | "member.signout" | "unlock" | "lock";
   result: "ok" | "rejects";
   actor: string;
   /** The member the event is about. */
   member: string | null;
   detail: string | null;
+  /** The project a Project admin's change is on. */
+  slug?: string;
 };
 
-/** A member's restart refused before it reached the service: the journal says who tried what. */
-export type RestartRefusal = { operation: "restart"; result: "rejects"; actor: string; member: string; slug: string; detail: string };
+/** Who a member request comes from, as this steward verified it: their session, and their roles now. */
+export type MemberPrincipal = { email: string; roles: Roles; session: string };
+
+/**
+ * A member's request refused by role before it reached anything: the journal
+ * says who tried what, on which project, and their role, never a value.
+ */
+export type RestartRefusal = {
+  operation: "restart" | "read" | "set" | "remove" | "create" | "restore" | "replace" | "portal" | "sharing" | "guest.create" | "guest.revoke" | "backup.restore";
+  result: "rejects";
+  actor: string;
+  member: string;
+  slug: string;
+  detail: string;
+};
 
 export type MemberRoutesDependencies = {
   system: MembersSystem;
@@ -105,6 +142,16 @@ export type MemberRoutes = {
   owner: Routes;
   /** The key pair, laid if missing or mismatched: at startup, and before every use. */
   ensureKeys: () => Promise<KeyState>;
+  /**
+   * Who a member request comes from: the session, the member still in the
+   * registry, and, when `unlock` is not null, that it is the live unlock of
+   * that session. Or the refusal to send back.
+   */
+  authorize: (session: unknown, unlock: unknown | null) => Promise<MemberPrincipal | Response>;
+  /** When this member session's unlock ends, null when locked. */
+  unlockedUntil: (session: unknown) => Promise<number | null>;
+  /** A refusal for the journal, bounded per minute so that a flood cannot push its history out. */
+  journalRefusal: (event: MemberEvent | RestartRefusal) => Promise<void>;
 };
 
 export type KeyState = { kind: "ready"; publicKey: PublicKey } | { kind: "unavailable"; reason: string };
@@ -134,9 +181,19 @@ function errorName(e: unknown): string {
   return e instanceof Error ? e.name : "unknown";
 }
 
+/** A slug's shape, before it enters the journal or a refusal. */
+const SLUG_SHAPE = /^[a-z0-9][a-z0-9.-]{0,62}$/;
+
+/** What a Project admin learns of a member: their role on that project, nothing of the others. */
+function projectView(member: MemberView, slug: string): MemberView {
+  return { ...member, roles: Object.hasOwn(member.roles, slug) ? { [slug]: member.roles[slug]! } : {} };
+}
+
 export function createMemberRoutes(dependencies: MemberRoutesDependencies): MemberRoutes {
   const { system, readBody, journal } = dependencies;
   const failuresPerMinute = dependencies.failuresPerMinute ?? 20;
+  /** The members' unlocks, in memory: a restart locks everyone, as it locks the super admin. */
+  let unlocks: UnlockBook = EMPTY_UNLOCKS;
 
   /**
    * Every change to the registry, the sessions or the keys, one at a time: two
@@ -265,6 +322,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
       await system.writeRegistry(encodeRegistry(result.registry));
       // Their sessions fall with them: the next request of any of them is refused.
       await system.writeBook(encodeBook(dropMember(await book(), result.member.email)));
+      unlocks = revokeMember(unlocks, result.member.email);
       await journal({ operation: "member.remove", result: "ok", actor: OWNER_ACTOR, member: result.member.email, detail: rolesText(result.member.roles) });
       console.log(`members: ${result.member.email} removed`);
       return Response.json({ member: result.member });
@@ -354,6 +412,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
       // 204 even on a session already closed: what is asked is already true.
       if (session === null) return new Response(null, { status: 204 });
       await system.writeBook(encodeBook(dropSession(current, session.hash)));
+      unlocks = revokeSession(unlocks, session.hash);
       await journal({ operation: "member.signout", result: "ok", actor: session.email, member: session.email, detail: null });
       return new Response(null, { status: 204 });
     });
@@ -374,7 +433,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
           ? `${email} holds no role on ${slug}`
           : `${email} is a ${role} on ${slug}: restarting its service takes a developer or a project admin`;
       // A slug of the right shape only enters the journal.
-      if (/^[a-z0-9][a-z0-9.-]{0,62}$/.test(slug)) {
+      if (SLUG_SHAPE.test(slug)) {
         await journalRefusal({ operation: "restart", result: "rejects", actor: email, member: email, slug, detail: role === null ? "no role" : `role ${role}` });
       }
       return fail("out-of-scope", message);
@@ -389,6 +448,191 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
     return dependencies.restart(req, slug, email, allowed);
   }
 
+  // --- a member's own unlock -----------------------------------------------------------
+
+  async function authorize(session: unknown, unlock: unknown | null): Promise<MemberPrincipal | Response> {
+    const found = await member(session);
+    if (found instanceof Response) return found;
+    const principal: MemberPrincipal = { email: found.identity.email, roles: found.identity.roles, session: found.hash };
+    if (unlock === null) return principal;
+    if (!(await isUnlocked(unlocks, found.hash, principal.email, unlock, system.now()))) {
+      return fail("locked", "locked: unlock again, signing in once more with your provider");
+    }
+    return principal;
+  }
+
+  /**
+   * A member's unlock, from an assertion the portal signed after a forced
+   * sign-in: for this session's email, saying `reauth`, the sign-in at the
+   * provider five minutes old at most, its nonce never seen. In the order of
+   * what costs: the session, the counters, the role, the signature, the
+   * claims, the nonce.
+   */
+  async function unlockRoute(req: Request): Promise<Response> {
+    const body = await readBody(req, ["session", "assertion"]);
+    if (body instanceof Response) return body;
+    const found = await member(body.session);
+    if (found instanceof Response) return found;
+    const email = found.identity.email;
+    const now = system.now();
+    const wait = attemptWait(unlocks, email, now);
+    if (wait > 0) {
+      return Response.json({ error: "too-many-attempts", message: "too many attempts, wait before unlocking again", wait: Math.ceil(wait / 1000) }, { status: 429 });
+    }
+    unlocks = countAttempt(unlocks, now);
+    if (!Object.values(found.identity.roles).some((role) => may(role, "secrets.write"))) {
+      return fail("out-of-scope", `${email} is a viewer on every project: there is nothing to unlock`);
+    }
+
+    const refuse = async (reason: string, message: string): Promise<Response> => {
+      unlocks = failed(unlocks, email, system.now());
+      await journalRefusal({ operation: "unlock", result: "rejects", actor: email, member: email, detail: reason });
+      return fail("invalid-assertion", message);
+    };
+    const state = await ensureKeys();
+    if (state.kind === "unavailable") return fail("not-ready", state.reason);
+    const nowS = Math.floor(now / 1000);
+    const reading = await verifyAssertion(body.assertion, state.publicKey, { audience: DASHBOARD_AUDIENCE, nowS });
+    if ("refusal" in reading) return refuse(reading.refusal, `the sign-in could not be verified (${reading.refusal}): unlock again`);
+    const { claims } = reading;
+    if (claims.email !== email) return refuse("another-account", `this sign-in is for another account: unlock again, signing in as ${email}`);
+    if (!claims.reauth) return refuse("not-forced", "your provider was not asked to sign you in again: unlock again from the dashboard");
+    if (nowS - claims.auth_time > REAUTH_MAX_AGE_S) return refuse("stale-authentication", "this sign-in at your provider is too old: unlock again");
+
+    return serially(async () => {
+      const spent = spendNonce(await book(), claims.nonce, claims.exp * 1000, system.now());
+      if (spent === "replayed" || spent === "too-many") return refuse(spent === "replayed" ? "replayed-assertion" : "too-many-sign-ins", "this sign-in was already used: unlock again");
+      // Asked again now: the session may have closed while the assertion was read.
+      const again = await member(body.session);
+      if (again instanceof Response) return again;
+      await system.writeBook(encodeBook(spent));
+      const granted = await grant(unlocks, found.hash, email, system.now(), dependencies.random);
+      unlocks = granted.book;
+      await journal({ operation: "unlock", result: "ok", actor: email, member: email, detail: null });
+      const response: MemberUnlockResponse = { token: granted.token, expiresAt: granted.expiresAt };
+      return Response.json(response);
+    });
+  }
+
+  /** 204 whatever: locking what is already locked is no fault, and a wrong token locks nothing. */
+  async function lockRoute(req: Request): Promise<Response> {
+    const body = await readBody(req, ["session", "token"]);
+    if (body instanceof Response) return body;
+    const found = await member(body.session);
+    if (found instanceof Response) return new Response(null, { status: 204 });
+    if (await isUnlocked(unlocks, found.hash, found.identity.email, body.token, system.now())) {
+      unlocks = revokeSession(unlocks, found.hash);
+      await journal({ operation: "lock", result: "ok", actor: found.identity.email, member: found.identity.email, detail: null });
+    }
+    return new Response(null, { status: 204 });
+  }
+
+  // --- a Project admin's members -------------------------------------------------------
+
+  /** The principal, if they are Project admin of a project of the machine's; or the refusal, journaled. */
+  async function projectAdmin(
+    session: unknown,
+    unlock: unknown | null,
+    slugValue: unknown,
+    operation: MemberEvent["operation"],
+  ): Promise<{ principal: MemberPrincipal; slug: string } | Response> {
+    const principal = await authorize(session, unlock);
+    if (principal instanceof Response) return principal;
+    if (typeof slugValue !== "string" || !SLUG_SHAPE.test(slugValue)) return fail("invalid", "slug: a project's slug");
+    const slug = slugValue;
+    const machine = machineRefusal(slug, null, dependencies.zone);
+    if (machine !== null) return fail("out-of-scope", machine);
+    const own = Object.hasOwn(principal.roles, slug) ? principal.roles[slug]! : null;
+    if (!may(own, "members")) {
+      await journalRefusal({ operation, result: "rejects", actor: principal.email, member: null, detail: roleDetail(own), slug });
+      return fail("out-of-scope", powerRefusal(principal.email, own, slug, "members"));
+    }
+    return { principal, slug };
+  }
+
+  /**
+   * A role on their project, given by its Project admin: someone invited, or
+   * a member's role there set. At most their own, on that project alone, and
+   * judged again once its turn has come: a Project admin demoted while the
+   * request waited gives nothing.
+   */
+  async function putProjectMember(req: Request): Promise<Response> {
+    const body = await readBody(req, ["session", "token", "slug", "email", "role"]);
+    if (body instanceof Response) return body;
+    if (!isRole(body.role)) return fail("invalid", "role: viewer, developer or admin");
+    const role = body.role;
+    const asked = await projectAdmin(body.session, body.token, body.slug, "member.invite");
+    if (asked instanceof Response) return asked;
+    const { slug } = asked;
+    if (!mayGrant(asked.principal.roles[slug] ?? null, role)) {
+      return fail("out-of-scope", `${asked.principal.email} may give ${slug} a role at most their own`);
+    }
+    return serially(async () => {
+      const again = await projectAdmin(body.session, body.token, slug, "member.invite");
+      if (again instanceof Response) return again;
+      const actor = again.principal.email;
+      if (!mayGrant(again.principal.roles[slug] ?? null, role)) return fail("out-of-scope", `${actor} may give ${slug} a role at most their own`);
+      const settings = await system.readPortalSettings();
+      const email = judgeEmail(body.email, settings);
+      if (typeof email !== "string") return fail("invalid", email.refusal);
+      if (!system.projectExists(slug)) return fail("invalid", `roles: ${slug} is not deployed on this machine`);
+      const current = await registry();
+      if (current instanceof Response) return current;
+      const result = putProjectRole(current, email, slug, role, actor, system.now());
+      if ("refusal" in result) return fail("invalid", result.refusal);
+      if (result.change !== "none") {
+        await system.writeRegistry(encodeRegistry(result.registry));
+        await journal({
+          operation: result.change === "invite" ? "member.invite" : "member.role",
+          result: "ok",
+          actor,
+          member: email,
+          detail: `${slug}: ${role}`,
+          slug,
+        });
+        console.log(`members: ${email} ${result.change === "invite" ? "invited" : "changed"} on ${slug} by ${actor}, ${role}`);
+      }
+      const response: ProjectMemberResponse = { member: projectView(result.member, slug), change: result.change };
+      return Response.json(response, { status: result.change === "invite" ? 201 : 200 });
+    });
+  }
+
+  /**
+   * A role on their project taken away by its Project admin, no unlock, as
+   * for the super admin: closing someone out never waits. Their last role
+   * gone, the member goes, their sessions with them.
+   */
+  async function removeProjectMember(req: Request): Promise<Response> {
+    const body = await readBody(req, ["session", "slug", "email"]);
+    if (body instanceof Response) return body;
+    const asked = await projectAdmin(body.session, null, body.slug, "member.role");
+    if (asked instanceof Response) return asked;
+    return serially(async () => {
+      const again = await projectAdmin(body.session, null, asked.slug, "member.role");
+      if (again instanceof Response) return again;
+      const { slug } = again;
+      const current = await registry();
+      if (current instanceof Response) return current;
+      const result = removeProjectRole(current, body.email, slug, system.now());
+      if ("refusal" in result) return fail(result.refusal.includes("holds no role") ? "not-found" : "invalid", result.refusal);
+      await system.writeRegistry(encodeRegistry(result.registry));
+      if (result.removed) {
+        await system.writeBook(encodeBook(dropMember(await book(), result.member.email)));
+        unlocks = revokeMember(unlocks, result.member.email);
+      }
+      await journal({
+        operation: result.removed ? "member.remove" : "member.role",
+        result: "ok",
+        actor: again.principal.email,
+        member: result.member.email,
+        detail: `${slug}: removed`,
+        slug,
+      });
+      const response: ProjectMemberResponse = { member: projectView(result.member, slug), change: result.removed ? "remove" : "role" };
+      return Response.json(response);
+    });
+  }
+
   return {
     dashboard: {
       "/members": { GET: list },
@@ -398,11 +642,20 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
       "/members/whoami": { POST: whoami },
       "/members/signout": { POST: signOut },
       "/members/restart": { POST: restart },
+      "/members/unlock": { POST: unlockRoute },
+      "/members/lock": { POST: lockRoute },
+      "/members/project/member": { PUT: putProjectMember, DELETE: removeProjectMember },
     },
     owner: {
       "/members": { GET: list },
       "/members/member": { PUT: put(true), DELETE: remove },
     },
     ensureKeys,
+    authorize,
+    unlockedUntil: async (session) => {
+      const found = await member(session);
+      return found instanceof Response ? null : unlockedUntil(unlocks, found.hash, system.now());
+    },
+    journalRefusal,
   };
 }

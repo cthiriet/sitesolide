@@ -2,8 +2,8 @@
  * Signing in to the dashboard with a work account: the two admin routes the
  * dashboard calls over the loopback, on either side of the provider.
  *
- *   POST /admin/dashboard/flow    { binding, returnTo, chooseAccount } -> { start }
- *   POST /admin/dashboard/redeem  { code, binding }                    -> { assertion, returnTo }
+ *   POST /admin/dashboard/flow    { binding, returnTo, chooseAccount, reauth } -> { start }
+ *   POST /admin/dashboard/redeem  { code, binding }                            -> { assertion, returnTo, reauth }
  *
  * The dashboard has no network and cannot sit behind the portal: it cannot run
  * a sign-in itself, and must not be believed when it names someone. So the
@@ -20,6 +20,10 @@
  * - `redeem` burns the code, checks it was minted for the dashboard, on its
  *   host, for this binding, judges the address against the allowed domains
  *   again, and signs.
+ * - `reauth`: a member unlocking their projects' secrets. The flow skips the
+ *   portal's session and forces a sign-in at the provider, whose ID token
+ *   must say it happened during the flow (src/sso.ts); the assertion then
+ *   carries `reauth`, which the steward demands before it unlocks.
  *
  * Both answer only on the loopback, like every admin route: the request
  * Caddy relays is refused (`X-Forwarded-For`, `X-Portal-Hote`), and the
@@ -132,8 +136,13 @@ export function createDashboardAdmin(options: DashboardAdminOptions, clock: () =
       const refusal = unavailable();
       if (refusal !== null) return refusal;
       const body = await readBody(req);
-      if (body === null || !isBinding(body.binding) || (body.chooseAccount !== undefined && typeof body.chooseAccount !== "boolean")) {
-        return respond({ error: "invalid", message: "binding: 32 drawn bytes in base64url; chooseAccount: true or false" }, 400);
+      if (
+        body === null ||
+        !isBinding(body.binding) ||
+        (body.chooseAccount !== undefined && typeof body.chooseAccount !== "boolean") ||
+        (body.reauth !== undefined && typeof body.reauth !== "boolean")
+      ) {
+        return respond({ error: "invalid", message: "binding: 32 drawn bytes in base64url; chooseAccount and reauth: true or false" }, 400);
       }
       const flow = issueFlow(
         options.key!,
@@ -143,6 +152,7 @@ export function createDashboardAdmin(options: DashboardAdminOptions, clock: () =
           binding: bindingHash(body.binding),
           chooseAccount: body.chooseAccount === true,
           audience: "dashboard",
+          reauth: body.reauth === true,
         },
         Math.floor(clock() / 1000),
       );
@@ -170,7 +180,7 @@ export function createDashboardAdmin(options: DashboardAdminOptions, clock: () =
 
       // The settings are judged again: an address taken off the allowed
       // domains since the code was minted does not sign in.
-      const { identity, authTime, returnTo } = redemption.handoff;
+      const { identity, authTime, returnTo, reauth } = redemption.handoff;
       if (!maySignIn(identity.email, options.settings!.allowedDomains, options.settings!.admins)) {
         record({ actor: identity.email, action: "portal.signin_failed", target: host, detail: { method: "oidc", reason: "domain-not-allowed" } }, now);
         return respond({ error: "domain-not-allowed", message: "this account's domain isn't allowed to sign in here" }, 403);
@@ -179,8 +189,8 @@ export function createDashboardAdmin(options: DashboardAdminOptions, clock: () =
       if (privateKey === null) {
         return respond({ error: "no-key", message: "the portal has no key to sign with yet: the steward lays it, see dashboard/README.md" }, 503);
       }
-      const assertion = await signAssertion(privateKey, { email: identity.email, name: identity.name, authTime }, Math.floor(now / 1000));
-      return respond({ assertion, returnTo });
+      const assertion = await signAssertion(privateKey, { email: identity.email, name: identity.name, authTime, reauth }, Math.floor(now / 1000));
+      return respond({ assertion, returnTo, reauth });
     },
   };
 }

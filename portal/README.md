@@ -41,6 +41,8 @@ dashboard (site-dashboard) --> portal 127.0.0.1:3026 /admin/guests, /admin/shari
                                /admin/dashboard/flow, /admin/dashboard/redeem
                                never through Caddy
 root, over the owner's SSH --> portal 127.0.0.1:3026 /admin/sharing, for `sitesolide share`
+root, the steward's relay   --> portal 127.0.0.1:3026 /admin/sharing, /admin/guests, /admin/invites/:id,
+                               for a Project admin of the dashboard, with their email as actor
 ```
 
 Signing in happens on the site itself, at `/_portal/connexion` for a password,
@@ -361,6 +363,20 @@ Secrets section reads after an unlock: a compromised dashboard would read the
 key there and forge assertions. Missing, a redemption answers `no-key` and
 nobody signs in to the dashboard; the sites are untouched.
 
+**A forced sign-in, for a member's unlock.** A member of the dashboard reads
+or writes their projects' secrets, turns a door or invites someone only
+unlocked, and they unlock by signing in again (dashboard/README.md, "A
+member's unlock"). The dashboard then asks for a flow with `reauth`: the
+portal's session spares nothing, the provider is asked for `max_age=0`, and
+for `prompt=login` unless it is Google, which documents no such prompt. By
+the OpenID Connect specification a provider asked for `max_age` says in the
+ID token's `auth_time` when the person signed in; the callback reads it, and
+mints a code only when that time falls within the flow and five minutes
+(`freshReauth` in src/oidc.ts). An older sign-in coming back, a provider that
+ignored the request, or no `auth_time` at all, refuses it, recorded as
+`stale-authentication`. The assertion then says `reauth`, which the steward
+demands before it unlocks; a sign-in's never does.
+
 **The dashboard's address follows from this one's.** The manifest names the
 portal `https://{slug}.{zone}`; the dashboard is `https://dashboard.{zone}`.
 A portal whose address does not start with `portal.` offers no dashboard
@@ -390,6 +406,7 @@ it rather than doing it a second way.
 |---|---|---|
 | the owner | the dashboard's *Sharing* section | anything but public, recorded as `owner` |
 | the owner | `sitesolide share` in the project's folder, over SSH: root asks this port on the loopback, after reading on the machine that the site's manifest asks for the portal and its block carries it | the same, recorded as `owner` |
+| a Project admin of the dashboard | its *Sharing* section, for their project: the steward checks their role and asks this port as root, through its relay | their project only; people at any address; a domain only among `OIDC_ALLOWED_DOMAINS`; recorded under their email |
 | a team member or an agent | `sitesolide share` with a team token, or `GET` and `PUT /api/v1/projects/<slug>/sharing`: the dashboard relays, as for its own section | only the projects its token may deploy; people at any address; a domain only among `OIDC_ALLOWED_DOMAINS`, none when that list is empty; recorded as `token:<id>` |
 
 A token is narrower on domains because its holder is not the one who chose
@@ -477,17 +494,19 @@ share` over the owner's SSH, which reads and replaces policies alone:
 
 | Route | What it does |
 |---|---|
-| `GET /admin/guests`, `POST /admin/guests`, `DELETE /admin/invites/:id` | guest access |
+| `GET /admin/guests`, `POST /admin/guests`, `DELETE /admin/invites/:id` | guest access; `actor` in the body, a Project admin's email from the steward, `owner` when absent |
 | `GET /admin/sharing` | how people sign in (configured or not, the provider's name, the portal's address, the admin emails and allowed domains, never the client secret nor its identifier), and every site whose policy was set |
 | `PUT /admin/sharing/:host` | replaces a site's policy: `{ "mode", "people", "domains" }`, one bad entry refusing the whole change |
 | `GET /admin/audit?limit=&before=` | the audit, most recent first, by pages |
-| `POST /admin/dashboard/flow` | `{ binding, returnTo, chooseAccount }`: a flow sealed for the dashboard's host, and the address to send the browser to; `not-offered` without a provider |
-| `POST /admin/dashboard/redeem` | `{ code, binding }`: the code burnt, and, minted for the dashboard on this binding, an assertion signed for it and the path to come back to |
+| `POST /admin/dashboard/flow` | `{ binding, returnTo, chooseAccount, reauth }`: a flow sealed for the dashboard's host, a forced sign-in with `reauth`, and the address to send the browser to; `not-offered` without a provider |
+| `POST /admin/dashboard/redeem` | `{ code, binding }`: the code burnt, and, minted for the dashboard on this binding, an assertion signed for it, the path to come back to, and `reauth` |
 
 They have no secret, and that is deliberate: the only accounts that can reach
 that port are root, Caddy and `site-dashboard`, through the exception
 `bin/cli/loopback.ts` adds to the loopback rule, and a shared secret would
-protect nothing more. The dashboard checks its session, its origin for a change,
+protect nothing more. The steward, which keeps no network, comes as root
+through `sitesolide-portal-relay`, a socket only root opens, behind which
+systemd's proxy forwards to this port and nowhere else. The dashboard checks its session, its origin for a change,
 and that the host carries the portal in its snapshot, before relaying; for a
 team token, the token instead of the session, its scope, and the domains it may
 open. The CLI over SSH reads the deposited manifest and the block in service
@@ -517,7 +536,8 @@ of the repository shares (`id`, `at` in ISO 8601 UTC, `actor`, `action`,
 | `portal.signin` | `owner`, `guest:<access>` or the email | `method`: `password`, `guest` or `oidc`, and the `role` for an identity; `count` when repeated |
 | `portal.signin_failed` | `anonymous`, or the email when the provider named one | `method`, and for a provider the `reason`: `bad-signature`, `wrong-audience`, `expired`, `wrong-nonce`, `unverified-email`, `unusable-email`, `domain-not-allowed`, `unmanaged-account`, `not-shared`, `wrong-browser`, `expired-session`...; a dashboard's sign-in refused here names the dashboard's host, and a code carried to the wrong side reads `wrong-audience` too |
 | `portal.signout` | who the cookie names | none, or `count` when repeated |
-| `sharing.update` | `owner`, or `token:<id>` for a change made with a team token | the new and previous mode, the people and domains added and removed |
+| `sharing.update` | `owner`, `token:<id>` for a change made with a team token, or a Project admin's email, which the steward sends | the new and previous mode, the people and domains added and removed |
+| `guest.create`, `guest.revoke` | `owner`, or a Project admin's email, which the steward sends | the guest's id, label and expiry, never the password |
 
 Never a password, a code or a token. What a stranger can cause is bounded where
 it happens: failed password attempts by the rate limiting, a row per attempt
@@ -614,7 +634,9 @@ another account*, which asks the provider to choose.
   as any member, within their roles; it can neither invite anyone nor change a
   role, which the steward keeps.
 - A compromised dashboard can create guest access on a personal site, and share
-  one with anyone. During an unlock it can also take the door off a site,
+  one with anyone, and record either under a member's email: the actor of the
+  admin API is its caller's word, the steward's for a Project admin, the
+  dashboard's otherwise. During an unlock it can also take the door off a site,
   retyping the slug only guards against a misclick, and make it public; and it
   can rewrite the provider's settings in `portal.env`, pointing the portal at a
   provider it controls and naming itself admin, which opens every protected site
@@ -762,7 +784,10 @@ bun test ../bin/tests/cli-portal-identity-caddy.test.ts  # the identity headers,
 `tests/sso.test.ts` runs this server and an identity provider of the tests'
 making, `tests/provider.ts`, through real HTTP: the whole flow, the second site
 that skips the provider, a dashboard's sign-in redeemed for an assertion the
-steward's key verifies, a dashboard's code refused on a site, and every refusal, a token signed by another key, for
+steward's key verifies, a dashboard's code refused on a site, a forced sign-in
+that skips the portal's session, asks the provider for `prompt=login` and
+`max_age=0` and signs an assertion saying `reauth`, one refused when the
+provider answers with an older `auth_time` or none, and every refusal, a token signed by another key, for
 another client, expired, with another nonce, an unverified email, a disallowed
 domain, a callback or a code opened in another browser, a code replayed or
 carried to another host, a flow altered on the way or replayed for a second

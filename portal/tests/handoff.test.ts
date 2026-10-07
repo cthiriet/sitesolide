@@ -8,6 +8,7 @@ import {
   SIGN_OUT_DURATION_S,
   bindingHash,
   drawBinding,
+  flowStartedAt,
   handoffStore,
   isBinding,
   issueFlow,
@@ -32,7 +33,7 @@ const NOW = NOW_S * 1000;
 const ALICE = { email: "alice@acme.test", name: "Alice" };
 
 const BINDING = drawBinding();
-const FLOW: Flow = { host: HOST, returnTo: "/board?week=3", binding: bindingHash(BINDING), chooseAccount: false, audience: "site" };
+const FLOW: Flow = { host: HOST, returnTo: "/board?week=3", binding: bindingHash(BINDING), chooseAccount: false, audience: "site", reauth: false };
 const DASHBOARD_HOST = "dashboard.test-zone.invalid";
 
 describe("the binding", () => {
@@ -61,6 +62,21 @@ describe("the flow", () => {
     expect(readFlow(KEY, earlier, NOW_S)?.audience).toBe("site");
     const forged = seal(purposeKey(KEY, "flow"), { h: HOST, r: "/", b: bindingHash(BINDING), a: false, d: "yes", e: NOW_S + 60 });
     expect(readFlow(KEY, forged, NOW_S)).toBeNull();
+  });
+
+  test("a forced sign-in is a dashboard's alone, and says when its flow began", () => {
+    const forced: Flow = { ...FLOW, host: DASHBOARD_HOST, audience: "dashboard", reauth: true };
+    const token = issueFlow(KEY, forced, NOW_S);
+    expect(readFlow(KEY, token, NOW_S)).toEqual(forced);
+    expect(flowStartedAt(KEY, token)).toBe(NOW_S);
+    // A site's flow asked for one is sealed without it.
+    expect(readFlow(KEY, issueFlow(KEY, { ...FLOW, reauth: true }, NOW_S), NOW_S)?.reauth).toBe(false);
+    // Sealed by hand on a site's flow, or with another value: not one of ours.
+    const onSite = seal(purposeKey(KEY, "flow"), { h: HOST, r: "/", b: bindingHash(BINDING), a: false, u: true, e: NOW_S + 60 });
+    expect(readFlow(KEY, onSite, NOW_S)).toBeNull();
+    const odd = seal(purposeKey(KEY, "flow"), { h: HOST, r: "/", b: bindingHash(BINDING), a: false, d: true, u: 1, e: NOW_S + 60 });
+    expect(readFlow(KEY, odd, NOW_S)).toBeNull();
+    expect(flowStartedAt(OTHER_KEY, token)).toBeNull();
   });
 
   test("expires with the sign-in it carries", () => {
@@ -143,6 +159,7 @@ describe("the handoff codes", () => {
     sessionExpiry: NOW_S + 60,
     authTime: NOW_S - 30,
     audience: "site",
+    reauth: false,
   };
 
   /** A handoff of a flow of its own, as each sign-in has. */

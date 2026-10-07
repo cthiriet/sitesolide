@@ -8,7 +8,8 @@
  * connectors the egress proxy lends, and the team, whose tokens deploy
  * without SSH. A
  * site's: seven sections, Overview, Audience, Secrets, Guests, Sharing, Access
- * and Backups, the site as a parameter.
+ * and Backups, the site as a parameter, and an eighth, Members, for a
+ * project's Project admins.
  *
  * Every page is a file of the build, `site/secrets/index.html` for
  * `/site/secrets/`: Caddy serves `public/` through `file_server`, with no
@@ -23,11 +24,11 @@
  * `/guests/`, keep their file so bookmarks keep working: they are read like
  * their equivalent, and navigation replaces the address with the new one.
  */
-import type { IdentityView } from "./types"
+import type { IdentityView, Role } from "./types"
 import type { Verdict } from "./verdict"
 
 /** A site's sections, in the order of the sidebar and the tabs. */
-export type Section = "overview" | "audience" | "secrets" | "guests" | "sharing" | "access" | "backups"
+export type Section = "overview" | "audience" | "secrets" | "guests" | "sharing" | "access" | "backups" | "members"
 
 /** The pages of the machine level. */
 export type MachinePage = "home" | "activity" | "team" | "connectors" | "members"
@@ -48,14 +49,30 @@ export const MACHINE_PAGES: readonly MachineEntry[] = [
 
 /**
  * What a member sees: their projects on the home page, the activity of their
- * projects, and in a site its Overview and Audience. The rest is the super
- * admin's, hidden here and refused by the service.
+ * projects, and in a site the sections their role there opens, the steward's
+ * own table (src/members/powers.ts): a Viewer its Overview and Audience; a
+ * Developer its Secrets too, values write-only; a Project admin everything of
+ * the site, and its Members. The rest is the super admin's, hidden here and
+ * refused by the service.
  */
 const MEMBER_PAGES: readonly MachinePage[] = ["home", "activity"]
-const MEMBER_SECTIONS: readonly Section[] = ["overview", "audience"]
+const ROLE_SECTIONS: Readonly<Record<Role, readonly Section[]>> = {
+  viewer: ["overview", "audience"],
+  developer: ["overview", "audience", "secrets"],
+  admin: ["overview", "audience", "secrets", "guests", "sharing", "access", "backups", "members"],
+}
 
-function isMemberIdentity(identity: IdentityView | null): boolean {
+/** The super admin keeps a project's members on the machine's Members page. */
+const OWNER_SECTIONS: readonly Section[] = ["overview", "audience", "secrets", "guests", "sharing", "access", "backups"]
+
+function isMemberIdentity(identity: IdentityView | null): identity is Extract<IdentityView, { kind: "member" }> {
   return identity !== null && identity.kind === "member"
+}
+
+/** The member's role on a project, null when they hold none or are the super admin. */
+export function roleIn(identity: IdentityView | null, slug: string): Role | null {
+  if (!isMemberIdentity(identity)) return null
+  return Object.hasOwn(identity.roles, slug) ? identity.roles[slug]! : null
 }
 
 /** The machine's pages this person may open, in the sidebar's order. */
@@ -63,15 +80,22 @@ export function machinePagesFor(identity: IdentityView | null): readonly Machine
   return isMemberIdentity(identity) ? MACHINE_PAGES.filter((entry) => MEMBER_PAGES.includes(entry.name)) : MACHINE_PAGES
 }
 
-/** A site's sections this person may open, in the sidebar's order. */
-export function sectionsFor(identity: IdentityView | null): readonly SectionEntry[] {
-  return isMemberIdentity(identity) ? SECTIONS.filter((entry) => MEMBER_SECTIONS.includes(entry.section)) : SECTIONS
+function allowedSections(identity: IdentityView | null, slug: string): readonly Section[] {
+  if (!isMemberIdentity(identity)) return OWNER_SECTIONS
+  const role = roleIn(identity, slug)
+  return role === null ? ROLE_SECTIONS.viewer : ROLE_SECTIONS[role]
 }
 
-/** May this person open this page? A member asking for one of the super admin's is told it is not theirs. */
+/** A site's sections this person may open, in the sidebar's order. */
+export function sectionsFor(identity: IdentityView | null, slug: string): readonly SectionEntry[] {
+  const allowed = allowedSections(identity, slug)
+  return SECTIONS.filter((entry) => allowed.includes(entry.section))
+}
+
+/** May this person open this page? A member asking for one that is not theirs is told so. */
 export function mayOpen(page: Page, identity: IdentityView | null): boolean {
-  if (!isMemberIdentity(identity)) return true
-  return page.name === "site" ? MEMBER_SECTIONS.includes(page.section) : MEMBER_PAGES.includes(page.name)
+  if (page.name === "site") return allowedSections(identity, page.slug).includes(page.section)
+  return !isMemberIdentity(identity) || MEMBER_PAGES.includes(page.name)
 }
 
 /** The order of the sidebar and the tabs, inside a site. */
@@ -83,6 +107,7 @@ export const SECTIONS: readonly SectionEntry[] = [
   { section: "sharing", title: "Sharing", path: "/site/sharing/" },
   { section: "access", title: "Access", path: "/site/access/" },
   { section: "backups", title: "Backups", path: "/site/backups/" },
+  { section: "members", title: "Members", path: "/site/members/" },
 ]
 
 /** The parameter that names the site: `/site/secrets/?s=cms`. */

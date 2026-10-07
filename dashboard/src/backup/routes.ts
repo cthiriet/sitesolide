@@ -44,6 +44,12 @@ export type BackupRoutes = {
   list: (req: Request) => Promise<Response>;
   restore: (req: Request) => Promise<Response>;
   audit: (req: Request) => Promise<Response>;
+  /**
+   * The restore itself, under a lock its caller already holds, the body
+   * judged and its requester set: a Project admin's, through
+   * src/members/actions.ts, with the email the steward verified.
+   */
+  start: (req: Request, body: Record<string, unknown>) => Promise<Response>;
 };
 
 export const NOT_INSTALLED_REASON = "backups are not set up on this server: run sitesolide setup again for this machine, without --minimal";
@@ -193,66 +199,70 @@ export function createBackupRoutes(dependencies: BackupRouteDependencies): Backu
     async restore(req) {
       const body = await dependencies.bodyWithToken(req, ["slug", "snapshot", "confirmation", "actor"]);
       if (body instanceof Response) return body;
-
-      return dependencies.underLock(req, body, async () => {
-        if (reader === null || !reader.installed()) return fail("not-found", NOT_INSTALLED_REASON);
-        const found = checkSite(await sites(), body.slug);
-        if ("refusal" in found) return fail(found.refusal.error, found.refusal.message);
-        const { site } = found;
-        const folder = site.folder;
-        const excluded = excludedFromRestore(folder);
-        if (excluded !== null) return fail("out-of-scope", excluded);
-
-        const name = body.snapshot as string;
-        if (readSnapshotName(folder, name) === null) return fail("invalid", `not a snapshot of ${folder}`);
-        const snapshots = snapshotsOf(folder);
-        if (!snapshots.some((snapshot) => snapshot.name === name)) return fail("not-found", `no such snapshot of ${folder} any more`);
-        // A restore replaces the data in service: the slug is retyped.
-        if (body.confirmation !== folder) return fail("invalid", `type ${folder} to confirm the restore`);
-        if (!isActor(body.actor)) return fail("invalid", "the requester is not one the audit can record");
-
-        const reason = refusalReason(site, await restoreView(folder), snapshots);
-        if (reason === RUNNING_REASON) return fail("already-present", reason);
-        if (reason !== null) return fail("unmanaged", reason);
-        // Checked again just before the start: a restore launched for a
-        // requester who has gone would change the site with nobody watching.
-        if (req.signal.aborted) return fail("failure", "request abandoned");
-
-        const unit = restoreUnit(folder)!;
-        const request = {
-          nonce: [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => byte.toString(16).padStart(2, "0")).join(""),
-          snapshot: name,
-          actor: body.actor as string,
-          requestedAt: now(),
-        };
-        try {
-          reader.writeRequest(folder, request);
-        } catch (error) {
-          const code = (error as { code?: unknown } | null)?.code;
-          console.error(`backups: restore request not written (${typeof code === "string" ? code : "unknown"})`);
-          return fail(
-            "failure",
-            code === "EROFS"
-              ? "the steward cannot write restore requests yet: it started before the backup component was installed, run sitesolide upgrade to start it again"
-              : "the restore request could not be written, see the steward's journal",
-          );
-        }
-        let started: Command;
-        try {
-          started = await dependencies.systemctl(["start", "--no-block", unit], START_TIMEOUT_MS);
-        } catch {
-          started = { code: 1, output: "" };
-        }
-        if (started.code !== 0) {
-          reader.removeRequest(folder);
-          return fail("failure", `the restore could not be started: is ${unit.replace(`@${folder}`, "@")} installed?`);
-        }
-        console.log(`backups: restore of ${folder} started from ${name}`);
-        const response: RestoreResponse = {
-          restore: { state: "running", message: "Starting the restore.", snapshot: name, preRestore: null, actor: request.actor, startedAt: request.requestedAt, at: request.requestedAt },
-        };
-        return Response.json(response, { status: 202 });
-      });
+      return dependencies.underLock(req, body, () => start(req, body));
     },
+
+    start: (req, body) => start(req, body),
   };
+
+  /** The restore asked for, once the lock is held: the order of the risk, as for the secrets. */
+  async function start(req: Request, body: Body): Promise<Response> {
+    if (reader === null || !reader.installed()) return fail("not-found", NOT_INSTALLED_REASON);
+    const found = checkSite(await sites(), body.slug);
+    if ("refusal" in found) return fail(found.refusal.error, found.refusal.message);
+    const { site } = found;
+    const folder = site.folder;
+    const excluded = excludedFromRestore(folder);
+    if (excluded !== null) return fail("out-of-scope", excluded);
+
+    const name = body.snapshot as string;
+    if (readSnapshotName(folder, name) === null) return fail("invalid", `not a snapshot of ${folder}`);
+    const snapshots = snapshotsOf(folder);
+    if (!snapshots.some((snapshot) => snapshot.name === name)) return fail("not-found", `no such snapshot of ${folder} any more`);
+    // A restore replaces the data in service: the slug is retyped.
+    if (body.confirmation !== folder) return fail("invalid", `type ${folder} to confirm the restore`);
+    if (!isActor(body.actor)) return fail("invalid", "the requester is not one the audit can record");
+
+    const reason = refusalReason(site, await restoreView(folder), snapshots);
+    if (reason === RUNNING_REASON) return fail("already-present", reason);
+    if (reason !== null) return fail("unmanaged", reason);
+    // Checked again just before the start: a restore launched for a
+    // requester who has gone would change the site with nobody watching.
+    if (req.signal.aborted) return fail("failure", "request abandoned");
+
+    const unit = restoreUnit(folder)!;
+    const request = {
+      nonce: [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => byte.toString(16).padStart(2, "0")).join(""),
+      snapshot: name,
+      actor: body.actor as string,
+      requestedAt: now(),
+    };
+    try {
+      reader.writeRequest(folder, request);
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      console.error(`backups: restore request not written (${typeof code === "string" ? code : "unknown"})`);
+      return fail(
+        "failure",
+        code === "EROFS"
+          ? "the steward cannot write restore requests yet: it started before the backup component was installed, run sitesolide upgrade to start it again"
+          : "the restore request could not be written, see the steward's journal",
+      );
+    }
+    let started: Command;
+    try {
+      started = await dependencies.systemctl(["start", "--no-block", unit], START_TIMEOUT_MS);
+    } catch {
+      started = { code: 1, output: "" };
+    }
+    if (started.code !== 0) {
+      reader.removeRequest(folder);
+      return fail("failure", `the restore could not be started: is ${unit.replace(`@${folder}`, "@")} installed?`);
+    }
+    console.log(`backups: restore of ${folder} started from ${name}`);
+    const response: RestoreResponse = {
+      restore: { state: "running", message: "Starting the restore.", snapshot: name, preRestore: null, actor: request.actor, startedAt: request.requestedAt, at: request.requestedAt },
+    };
+    return Response.json(response, { status: 202 });
+  }
 }

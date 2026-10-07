@@ -20,8 +20,11 @@ function Content({ site }: { site: Site }) {
     <>
       <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
         How visitors get into {site.slug}: through the shared portal, with a preview code, or freely. Changes to the
-        portal go through the steward, which asks for the dashboard password.
+        portal go through the steward, which{" "}
+        {actions.member ? "asks you to sign in again with your provider." : "asks for the dashboard password."}
       </p>
+
+      {actions.unlockNotice !== null && <Banner tone="error">{actions.unlockNotice}</Banner>}
 
       {change !== null && (
         <Banner tone="attention">
@@ -52,7 +55,7 @@ function Content({ site }: { site: Site }) {
             onToggle={(action) => actions.togglePortal(site.slug, action.active)}
           />
         )}
-        <LockPanel site={site} />
+        <LockPanel site={site} member={actions.member} />
       </div>
     </>
   )

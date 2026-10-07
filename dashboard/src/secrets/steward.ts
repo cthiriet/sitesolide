@@ -29,7 +29,7 @@
 import { isProtected } from "../../borrowed/manifest";
 import { fragmentIsProtected } from "../../borrowed/portal";
 import { isPasswordValid, isAcceptableSubmission } from "../auth";
-import { unitOf } from "../state";
+import { addressOf, unitOf } from "../state";
 import { generatePassword } from "../password";
 import { portalModifiable, DASHBOARD_SLUG } from "../gatekeeper/rules";
 import type { RandomSource } from "../sessions";
@@ -122,7 +122,10 @@ import { createBackupRoutes } from "../backup/routes";
 import type { BackupReader } from "../backup/reader";
 import { createMemberRoutes, type KeyState } from "../members/steward";
 import type { MembersSystem } from "../members/system";
-import { OWNER_ACTOR } from "../members/protocol";
+import { OWNER_ACTOR, type Roles } from "../members/protocol";
+import { createMemberActions, type Who } from "../members/actions";
+import { machineRefusal, may } from "../members/powers";
+import type { PortalAdmin } from "../members/portal";
 
 export type StewardOptions = {
   secretsFolder: string;
@@ -173,7 +176,16 @@ export type StewardOptions = {
    * routes do not exist, as on a steward that predates them, and the owner's
    * socket answers nothing.
    */
-  members?: { system: MembersSystem; zone: string };
+  members?: {
+    system: MembersSystem;
+    zone: string;
+    /**
+     * The portal's admin API through the relay, for a Project admin's sharing
+     * and guests (src/members/portal.ts). Absent, those two say the relay is
+     * missing.
+     */
+    portal?: PortalAdmin | null;
+  };
 };
 
 export type Handler = (req: Request) => Promise<Response>;
@@ -339,6 +351,9 @@ async function readStream(req: Request, max: number, timeoutMs: number): Promise
 
 type Body = Record<string, unknown>;
 
+/** The dashboard's password: whoever unlocked with it. */
+const OWNER: Who = { actor: OWNER_ACTOR, member: null };
+
 /** What the log can carry of a request: a well-formed name, never the raw text of a field. */
 function safeName(value: unknown, shape: RegExp, max: number): string | null {
   return typeof value === "string" && value.length <= max && shape.test(value) ? value : null;
@@ -381,6 +396,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   const schedule = options.schedule ?? (() => Bun.sleep(SCHEDULED_DELAY_MS));
   const checked = options.checkAccounts;
   const { secretsFolder } = options;
+  /** The served zone: it names the landing's folder, which, like every platform project, is never a member's. */
+  const memberZone = options.members?.zone ?? "";
 
   let state = INITIAL_STATE;
 
@@ -423,7 +440,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     body: Body | null,
     detail: string | null,
     variable: string | null = null,
-    who: { actor: string; member: string | null } = { actor: OWNER_ACTOR, member: null },
+    who: Who = OWNER,
   ): Promise<void> {
     const entry: LogEntry = {
       a: system.now(),
@@ -445,8 +462,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /** `variable`: only a name already present in the file, or declared as a password. */
-  async function refuse(operation: Operation, body: Body, refusal: Refusal, variable: string | null = null): Promise<Response> {
-    await writeLog(operation, "rejects", body, refusal.error, variable);
+  async function refuse(operation: Operation, body: Body, refusal: Refusal, variable: string | null = null, who: Who = OWNER): Promise<Response> {
+    await writeLog(operation, "rejects", body, refusal.error, variable, who);
     return error(refusal.error, refusal.message);
   }
 
@@ -509,11 +526,23 @@ export function createSteward(system: System, options: StewardOptions): StewardH
    * waiting is no longer there to see the result: nothing is done.
    */
   function underLock(req: Request, body: Body, task: () => Promise<Response>): Promise<Response> {
+    return underLockWith(
+      req,
+      async () => ((await isValidToken(state, body.token, system.now())) ? null : error("locked", "locked, unlock again")),
+      task,
+    );
+  }
+
+  /**
+   * The same lock for any requester: `still` says, once the turn has come,
+   * whether they may still act, the super admin's token alive, a member's
+   * session, unlock and role still theirs; its refusal goes back as it stands.
+   */
+  function underLockWith(req: Request, still: () => Promise<Response | null>, task: () => Promise<Response>): Promise<Response> {
     const taken = exclusive(async () => {
       if (req.signal.aborted) return abandoned();
-      if (!(await isValidToken(state, body.token, system.now()))) {
-        return error("locked", "locked, unlock again");
-      }
+      const refusal = await still();
+      if (refusal !== null) return refusal;
       return task();
     });
     return taken ?? Promise.resolve(busy());
@@ -560,11 +589,20 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return readSites(await system.listProjects(), await system.listSecrets());
   }
 
-  async function target(operation: Operation, body: Body): Promise<Target | Response> {
+  /**
+   * The site and the file a request names, within the scope. For a member,
+   * never the machine's own: a platform project, or a file kept for root,
+   * whatever role a hand-edited registry would claim (src/members/powers.ts).
+   */
+  async function target(operation: Operation, body: Body, who: Who = OWNER): Promise<Target | Response> {
     const found = checkSite(await sites(), body.slug);
-    if ("refusal" in found) return refuse(operation, body, found.refusal);
+    if ("refusal" in found) return refuse(operation, body, found.refusal, null, who);
     const file = checkFile(found.site, body.file, secretsFolder);
-    if ("refusal" in file) return refuse(operation, body, file.refusal);
+    if ("refusal" in file) return refuse(operation, body, file.refusal, null, who);
+    if (who.member !== null) {
+      const machine = machineRefusal(found.site.folder, file.declaration, memberZone);
+      if (machine !== null) return refuse(operation, body, { error: "out-of-scope", message: machine }, null, who);
+    }
     return { site: found.site, declaration: file.declaration, path: file.path };
   }
 
@@ -623,14 +661,14 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /** A file that is present and managed, or the refusal that says so. */
-  async function managedFile(operation: Operation, body: Body, c: Target, variable: string | null = null): Promise<Managed | Response> {
+  async function managedFile(operation: Operation, body: Body, c: Target, variable: string | null = null, who: Who = OWNER): Promise<Managed | Response> {
     const parsed = await examineTarget(c);
     const name = c.declaration.name;
     if (parsed.kind === "absent") {
-      return refuse(operation, body, { error: "not-found", message: `${name} does not exist, create it first` }, variable);
+      return refuse(operation, body, { error: "not-found", message: `${name} does not exist, create it first` }, variable, who);
     }
     if (parsed.kind === "unmanaged") {
-      return refuse(operation, body, { error: "unmanaged", message: `${name} is not managed here: ${parsed.reason}` }, variable);
+      return refuse(operation, body, { error: "unmanaged", message: `${name} is not managed here: ${parsed.reason}` }, variable, who);
     }
     return parsed.managed;
   }
@@ -725,9 +763,15 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     };
   }
 
-  async function fileResponse(c: Target): Promise<Response> {
+  /**
+   * The file's view after a write. To a member who may not read it back, as
+   * the listing shows it: no size, no previous version, write-only.
+   */
+  async function fileResponse(c: Target, who: Who = OWNER): Promise<Response> {
     const service = await readService(c.site);
-    const body: FileResponse = { file: await fileView(c, service.startedUs) };
+    let file = await fileView(c, service.startedUs);
+    if (who.member !== null && who.readsBack !== true) file = { ...file, readable: false, previous: false, bytes: null };
+    const body: FileResponse = { file };
     return Response.json(body);
   }
 
@@ -816,26 +860,45 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   // --- The routes ------------------------------------------------------------
 
+  /** A project as the page shows it: its service, the files given, and its portal. */
+  async function projectView(site: Site, declarations: readonly Declaration[] = site.files): Promise<ProjectView> {
+    const service = await readService(site);
+    const files: FileView[] = [];
+    for (const declaration of declarations) {
+      const path = pathUnder(secretsFolder, declaration.name) ?? declaration.name;
+      try {
+        files.push(await fileView({ site, declaration, path }, service.startedUs));
+      } catch (e) {
+        // An unreadable file does not bring the whole list down.
+        console.error(`projects: ${declaration.name} unreadable (${errorName(e)})`);
+        files.push(unreadableView(declaration));
+      }
+    }
+    return { slug: site.folder, service: service.view, files, portal: await portalView(site) };
+  }
+
   async function listProjects(): Promise<Response> {
-    const seen = await Promise.all(
-      [...(await sites()).values()].map(async (site): Promise<ProjectView> => {
-        const service = await readService(site);
-        const files: FileView[] = [];
-        for (const declaration of site.files) {
-          const path = pathUnder(secretsFolder, declaration.name) ?? declaration.name;
-          try {
-            files.push(await fileView({ site, declaration, path }, service.startedUs));
-          } catch (e) {
-            // An unreadable file does not bring the whole list down.
-            console.error(`projects: ${declaration.name} unreadable (${errorName(e)})`);
-            files.push(unreadableView(declaration));
-          }
-        }
-        return { slug: site.folder, service: service.view, files, portal: await portalView(site) };
-      }),
-    );
+    const seen = await Promise.all([...(await sites()).values()].map((site) => projectView(site)));
     const body: ProjectsResponse = { projects: seen };
     return Response.json(body);
+  }
+
+  /**
+   * What a member lists of their projects: those where their role lets them
+   * see the files, never a platform project nor a file kept for root. To a
+   * Developer every file is write-only: no value, no size, no previous version
+   * offered, since none of it is theirs to read back.
+   */
+  async function memberProjects(roles: Roles): Promise<ProjectView[]> {
+    const all = await sites();
+    const views: ProjectView[] = [];
+    for (const [slug, role] of Object.entries(roles).sort(([a], [b]) => a.localeCompare(b))) {
+      const site = all.get(slug);
+      if (site === undefined || !may(role, "secrets.list") || machineRefusal(slug, null, memberZone) !== null) continue;
+      const view = await projectView(site, site.files.filter((declaration) => machineRefusal(slug, declaration, memberZone) === null));
+      views.push(may(role, "secrets.read") ? view : { ...view, files: view.files.map((file) => ({ ...file, readable: false, previous: false, bytes: null })) });
+    }
+    return views;
   }
 
   async function readLog(req: Request): Promise<Response> {
@@ -962,28 +1025,30 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   async function readValue(req: Request): Promise<Response> {
     const body = await bodyWithToken(req, ["slug", "file", "variable"]);
     if (body instanceof Response) return body;
+    return underLock(req, body, () => readValueTask(req, body, OWNER));
+  }
 
-    return underLock(req, body, async () => {
-      const found = await target("read", body);
-      if (found instanceof Response) return found;
-      const kind = kindRefusal(found, "variables");
-      if (kind !== null) return refuse("read", body, kind);
-      // Before any reading of the file: a hash is never read back.
-      if (isPassword(found.declaration, body.variable)) {
-        const message = `${body.variable as string} is never read back, change it with Change password`;
-        return refuse("read", body, { error: "out-of-scope", message }, body.variable as string);
-      }
-      const managed = await managedFile("read", body, found);
-      if (managed instanceof Response) return managed;
+  /** A variable's value, under the lock, for the super admin or a Project admin. */
+  async function readValueTask(_req: Request, body: Body, who: Who): Promise<Response> {
+    const found = await target("read", body, who);
+    if (found instanceof Response) return found;
+    const kind = kindRefusal(found, "variables");
+    if (kind !== null) return refuse("read", body, kind, null, who);
+    // Before any reading of the file: a hash is never read back.
+    if (isPassword(found.declaration, body.variable)) {
+      const message = `${body.variable as string} is never read back, change it with Change password`;
+      return refuse("read", body, { error: "out-of-scope", message }, body.variable as string, who);
+    }
+    const managed = await managedFile("read", body, found, null, who);
+    if (managed instanceof Response) return managed;
 
-      const value = envValue(managed.document!, body.variable as string);
-      if (value === null) {
-        return refuse("read", body, { error: "not-found", message: `no such variable in ${found.declaration.name}` });
-      }
-      await writeLog("read", "ok", body, null, body.variable as string);
-      const response: ValueResponse = { value };
-      return Response.json(response);
-    });
+    const value = envValue(managed.document!, body.variable as string);
+    if (value === null) {
+      return refuse("read", body, { error: "not-found", message: `no such variable in ${found.declaration.name}` }, null, who);
+    }
+    await writeLog("read", "ok", body, null, body.variable as string, who);
+    const response: ValueResponse = { value };
+    return Response.json(response);
   }
 
   /** The refusal of an ordinary route on a hash, for setting as for removing. */
@@ -995,98 +1060,102 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   async function setVariable(req: Request): Promise<Response> {
     const body = await bodyWithToken(req, ["slug", "file", "variable", "value"]);
     if (body instanceof Response) return body;
+    return underLock(req, body, () => setVariableTask(req, body, OWNER));
+  }
 
-    return underLock(req, body, async () => {
-      const found = await target("set", body);
-      if (found instanceof Response) return found;
-      const kind = kindRefusal(found, "variables");
-      if (kind !== null) return refuse("set", body, kind);
-      const password = passwordRefusal(found, body.variable);
-      if (password !== null) return refuse("set", body, password, body.variable as string);
-      const foreign = outsideHashRefusal(found.declaration.name, body.variable);
-      if (foreign !== null) return refuse("set", body, foreign);
-      const managed = await managedFile("set", body, found);
-      if (managed instanceof Response) return managed;
+  /** Sets a variable, under the lock. The answer is the file's view, never the value written. */
+  async function setVariableTask(_req: Request, body: Body, who: Who): Promise<Response> {
+    const found = await target("set", body, who);
+    if (found instanceof Response) return found;
+    const kind = kindRefusal(found, "variables");
+    if (kind !== null) return refuse("set", body, kind, null, who);
+    const password = passwordRefusal(found, body.variable);
+    if (password !== null) return refuse("set", body, password, body.variable as string, who);
+    const foreign = outsideHashRefusal(found.declaration.name, body.variable);
+    if (foreign !== null) return refuse("set", body, foreign, null, who);
+    const managed = await managedFile("set", body, found, null, who);
+    if (managed instanceof Response) return managed;
 
-      const variable = body.variable as string;
-      const value = body.value as string;
-      const known = knownVariable(managed.document, body);
-      const keyReason = checkKey(variable, await setKeys(found.site));
-      if (keyReason !== null) return refuse("set", body, { error: "invalid", message: keyReason }, known);
-      const valueReason = checkValue(value);
-      if (valueReason !== null) return refuse("set", body, { error: "invalid", message: valueReason }, known);
+    const variable = body.variable as string;
+    const value = body.value as string;
+    const known = knownVariable(managed.document, body);
+    const keyReason = checkKey(variable, await setKeys(found.site));
+    if (keyReason !== null) return refuse("set", body, { error: "invalid", message: keyReason }, known, who);
+    const valueReason = checkValue(value);
+    if (valueReason !== null) return refuse("set", body, { error: "invalid", message: valueReason }, known, who);
 
-      const refusal = await rewrite(found, managed, set(managed.document!, variable, value));
-      if (refusal !== null) {
-        await writeLog("set", "rejects", body, "invalid", known);
-        return refusal;
-      }
-      await writeLog("set", "ok", body, null, variable);
-      return fileResponse(found);
-    });
+    const refusal = await rewrite(found, managed, set(managed.document!, variable, value));
+    if (refusal !== null) {
+      await writeLog("set", "rejects", body, "invalid", known, who);
+      return refusal;
+    }
+    await writeLog("set", "ok", body, null, variable, who);
+    return fileResponse(found, who);
   }
 
   async function removeVariable(req: Request): Promise<Response> {
     const body = await bodyWithToken(req, ["slug", "file", "variable"]);
     if (body instanceof Response) return body;
+    return underLock(req, body, () => removeVariableTask(req, body, OWNER));
+  }
 
-    return underLock(req, body, async () => {
-      const found = await target("remove", body);
-      if (found instanceof Response) return found;
-      const kind = kindRefusal(found, "variables");
-      if (kind !== null) return refuse("remove", body, kind);
-      const password = passwordRefusal(found, body.variable);
-      if (password !== null) return refuse("remove", body, password, body.variable as string);
-      const managed = await managedFile("remove", body, found);
-      if (managed instanceof Response) return managed;
+  async function removeVariableTask(_req: Request, body: Body, who: Who): Promise<Response> {
+    const found = await target("remove", body, who);
+    if (found instanceof Response) return found;
+    const kind = kindRefusal(found, "variables");
+    if (kind !== null) return refuse("remove", body, kind, null, who);
+    const password = passwordRefusal(found, body.variable);
+    if (password !== null) return refuse("remove", body, password, body.variable as string, who);
+    const managed = await managedFile("remove", body, found, null, who);
+    if (managed instanceof Response) return managed;
 
-      const variable = body.variable as string;
-      if (envValue(managed.document!, variable) === null) {
-        return refuse("remove", body, { error: "not-found", message: `no such variable in ${found.declaration.name}` });
-      }
-      // A reserved key that is already present can be removed: that is repairing, not setting.
-      await rewrite(found, managed, remove(managed.document!, variable));
-      await writeLog("remove", "ok", body, null, variable);
-      return fileResponse(found);
-    });
+    const variable = body.variable as string;
+    if (envValue(managed.document!, variable) === null) {
+      return refuse("remove", body, { error: "not-found", message: `no such variable in ${found.declaration.name}` }, null, who);
+    }
+    // A reserved key that is already present can be removed: that is repairing, not setting.
+    await rewrite(found, managed, remove(managed.document!, variable));
+    await writeLog("remove", "ok", body, null, variable, who);
+    return fileResponse(found, who);
   }
 
   async function createFile(req: Request): Promise<Response> {
     const body = await bodyWithToken(req, ["slug", "file"]);
     if (body instanceof Response) return body;
+    return underLock(req, body, () => createFileTask(req, body, OWNER));
+  }
 
-    return underLock(req, body, async () => {
-      const found = await target("create", body);
-      if (found instanceof Response) return found;
-      const { declaration } = found;
+  async function createFileTask(_req: Request, body: Body, who: Who): Promise<Response> {
+    const found = await target("create", body, who);
+    if (found instanceof Response) return found;
+    const { declaration } = found;
 
-      // The steward never creates a directory in /etc/sitesolide: a
-      // subdirectory is put in place by hand, as root, as the deployment does.
-      const folder = await subFolderState(declaration.name);
-      if (folder.kind === "absent") {
-        return refuse("create", body, { error: "not-found", message: `${folder.path} does not exist on the server` });
-      }
-      if (folder.kind === "rejects") {
-        return refuse("create", body, { error: "unmanaged", message: `${declaration.name} is not managed here: ${folder.reason}` });
-      }
+    // The steward never creates a directory in /etc/sitesolide: a
+    // subdirectory is put in place by hand, as root, as the deployment does.
+    const folder = await subFolderState(declaration.name);
+    if (folder.kind === "absent") {
+      return refuse("create", body, { error: "not-found", message: `${folder.path} does not exist on the server` }, null, who);
+    }
+    if (folder.kind === "rejects") {
+      return refuse("create", body, { error: "unmanaged", message: `${declaration.name} is not managed here: ${folder.reason}` }, null, who);
+    }
 
-      if ((await system.examineSecret(declaration.name)).kind !== "absent") {
-        return refuse("create", body, { error: "already-present", message: `${declaration.name} already exists` });
-      }
+    if ((await system.examineSecret(declaration.name)).kind !== "absent") {
+      return refuse("create", body, { error: "already-present", message: `${declaration.name} already exists` }, null, who);
+    }
 
-      const account = await realAccount(declaration);
-      if (account === null) {
-        const message = `account ${declaration.expected.owner} does not exist, deploy the site first`;
-        return refuse("create", body, { error: "not-found", message });
-      }
+    const account = await realAccount(declaration);
+    if (account === null) {
+      const message = `account ${declaration.expected.owner} does not exist, deploy the site first`;
+      return refuse("create", body, { error: "not-found", message }, null, who);
+    }
 
-      const created = await system.createEmptySecret(declaration.name, expectedPermissions(declaration, account ?? null));
-      if (!created) {
-        return refuse("create", body, { error: "already-present", message: `${declaration.name} already exists` });
-      }
-      await writeLog("create", "ok", body, null);
-      return fileResponse(found);
-    });
+    const created = await system.createEmptySecret(declaration.name, expectedPermissions(declaration, account ?? null));
+    if (!created) {
+      return refuse("create", body, { error: "already-present", message: `${declaration.name} already exists` }, null, who);
+    }
+    await writeLog("create", "ok", body, null, null, who);
+    return fileResponse(found, who);
   }
 
   /**
@@ -1101,40 +1170,41 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   async function restore(req: Request): Promise<Response> {
     const body = await bodyWithToken(req, ["slug", "file"]);
     if (body instanceof Response) return body;
+    return underLock(req, body, () => restoreTask(req, body, OWNER));
+  }
 
-    return underLock(req, body, async () => {
-      const found = await target("restore", body);
-      if (found instanceof Response) return found;
-      const { declaration } = found;
-      // A hash-only file, before even reading it.
-      const fixed = restoreRefusal(declaration, []);
-      if (fixed !== null) return refuse("restore", body, fixed);
-      const managed = await managedFile("restore", body, found);
-      if (managed instanceof Response) return managed;
-      const { name } = declaration;
+  async function restoreTask(_req: Request, body: Body, who: Who): Promise<Response> {
+    const found = await target("restore", body, who);
+    if (found instanceof Response) return found;
+    const { declaration } = found;
+    // A hash-only file, before even reading it.
+    const fixed = restoreRefusal(declaration, []);
+    if (fixed !== null) return refuse("restore", body, fixed, null, who);
+    const managed = await managedFile("restore", body, found, null, who);
+    if (managed instanceof Response) return managed;
+    const { name } = declaration;
 
-      const current = restoreRefusal(declaration, managed.document === null ? [] : keys(managed.document));
-      if (current !== null) return refuse("restore", body, current);
+    const current = restoreRefusal(declaration, managed.document === null ? [] : keys(managed.document));
+    if (current !== null) return refuse("restore", body, current, null, who);
 
-      const kept = await system.examinePrevious(name);
-      if (kept.kind === "absent") {
-        return refuse("restore", body, { error: "not-found", message: `no previous version of ${name}` });
-      }
-      const keptRefusal = restoreRefusal(declaration, previousKeys(declaration, kept));
-      if (keptRefusal !== null) return refuse("restore", body, keptRefusal);
-      const reason = previousReason(kept.info, managed.real, found.declaration.expected.owner);
-      const readable =
-        kept.bytes !== null &&
-        (found.declaration.kind === "variables" ? parseEnvBytes(kept.bytes).ok : "text" in readContent(kept.bytes));
-      if (reason !== null || !readable) {
-        const message = reason ?? `the previous version of ${name} is not in a form managed here`;
-        return refuse("restore", body, { error: "unmanaged", message });
-      }
+    const kept = await system.examinePrevious(name);
+    if (kept.kind === "absent") {
+      return refuse("restore", body, { error: "not-found", message: `no previous version of ${name}` }, null, who);
+    }
+    const keptRefusal = restoreRefusal(declaration, previousKeys(declaration, kept));
+    if (keptRefusal !== null) return refuse("restore", body, keptRefusal, null, who);
+    const reason = previousReason(kept.info, managed.real, found.declaration.expected.owner);
+    const readable =
+      kept.bytes !== null &&
+      (found.declaration.kind === "variables" ? parseEnvBytes(kept.bytes).ok : "text" in readContent(kept.bytes));
+    if (reason !== null || !readable) {
+      const message = reason ?? `the previous version of ${name} is not in a form managed here`;
+      return refuse("restore", body, { error: "unmanaged", message }, null, who);
+    }
 
-      await writeKeepingPrevious(found, managed, kept.bytes!);
-      await writeLog("restore", "ok", body, null);
-      return fileResponse(found);
-    });
+    await writeKeepingPrevious(found, managed, kept.bytes!);
+    await writeLog("restore", "ok", body, null, null, who);
+    return fileResponse(found, who);
   }
 
   /**
@@ -1145,44 +1215,46 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   async function readFileContent(req: Request): Promise<Response> {
     const body = await bodyWithToken(req, ["slug", "file"]);
     if (body instanceof Response) return body;
+    return underLock(req, body, () => readContentTask(req, body, OWNER));
+  }
 
-    return underLock(req, body, async () => {
-      const found = await target("read", body);
-      if (found instanceof Response) return found;
-      const kind = kindRefusal(found, "content");
-      if (kind !== null) return refuse("read", body, kind);
-      if (!found.declaration.readable) {
-        const message = `${found.declaration.name} is write-only, it can be replaced but never read back`;
-        return refuse("read", body, { error: "out-of-scope", message });
-      }
-      const managed = await managedFile("read", body, found);
-      if (managed instanceof Response) return managed;
+  async function readContentTask(_req: Request, body: Body, who: Who): Promise<Response> {
+    const found = await target("read", body, who);
+    if (found instanceof Response) return found;
+    const kind = kindRefusal(found, "content");
+    if (kind !== null) return refuse("read", body, kind, null, who);
+    if (!found.declaration.readable) {
+      const message = `${found.declaration.name} is write-only, it can be replaced but never read back`;
+      return refuse("read", body, { error: "out-of-scope", message }, null, who);
+    }
+    const managed = await managedFile("read", body, found, null, who);
+    if (managed instanceof Response) return managed;
 
-      await writeLog("read", "ok", body, null);
-      const response: ContentResponse = { content: managed.text! };
-      return Response.json(response);
-    });
+    await writeLog("read", "ok", body, null, null, who);
+    const response: ContentResponse = { content: managed.text! };
+    return Response.json(response);
   }
 
   /** Replaces a file managed as one block, byte for byte, and keeps the previous version. */
   async function replaceContent(req: Request): Promise<Response> {
     const body = await bodyWithToken(req, ["slug", "file", "content"], [], MAX_CONTENT_BODY_BYTES);
     if (body instanceof Response) return body;
+    return underLock(req, body, () => replaceContentTask(req, body, OWNER));
+  }
 
-    return underLock(req, body, async () => {
-      const found = await target("replace", body);
-      if (found instanceof Response) return found;
-      const kind = kindRefusal(found, "content");
-      if (kind !== null) return refuse("replace", body, kind);
-      const reason = checkContent(body.content as string);
-      if (reason !== null) return refuse("replace", body, { error: "invalid", message: reason });
-      const managed = await managedFile("replace", body, found);
-      if (managed instanceof Response) return managed;
+  async function replaceContentTask(_req: Request, body: Body, who: Who): Promise<Response> {
+    const found = await target("replace", body, who);
+    if (found instanceof Response) return found;
+    const kind = kindRefusal(found, "content");
+    if (kind !== null) return refuse("replace", body, kind, null, who);
+    const reason = checkContent(body.content as string);
+    if (reason !== null) return refuse("replace", body, { error: "invalid", message: reason }, null, who);
+    const managed = await managedFile("replace", body, found, null, who);
+    if (managed instanceof Response) return managed;
 
-      await writeKeepingPrevious(found, managed, encoder.encode(body.content as string));
-      await writeLog("replace", "ok", body, null);
-      return fileResponse(found);
-    });
+    await writeKeepingPrevious(found, managed, encoder.encode(body.content as string));
+    await writeLog("replace", "ok", body, null, null, who);
+    return fileResponse(found, who);
   }
 
   /**
@@ -1282,22 +1354,30 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     const body = await bodyWithToken(req, ["slug", "confirmation"], ["active"]);
     if (body instanceof Response) return body;
     if (typeof body.active !== "boolean") return error("invalid", "active must be a boolean");
-    const active = body.active;
-    const direction = active ? "on" : "off";
+    return underLock(req, body, () => portalTask(req, body, OWNER));
+  }
 
-    return underLock(req, body, async () => {
+  /** The gatekeeper started for one site's door, under the lock, for the super admin or a Project admin. */
+  async function portalTask(req: Request, body: Body, who: Who): Promise<Response> {
+    const active = body.active === true;
+    const direction = active ? "on" : "off";
+    {
       const found = checkSite(await sites(), body.slug);
-      if ("refusal" in found) return refuse("portal", body, found.refusal);
+      if ("refusal" in found) return refuse("portal", body, found.refusal, null, who);
       const { site } = found;
+      if (who.member !== null) {
+        const machine = machineRefusal(site.folder, null, memberZone);
+        if (machine !== null) return refuse("portal", body, { error: "out-of-scope", message: machine }, null, who);
+      }
 
       const { modifiable, reason } = await portalView(site);
       const unit = gatekeeperUnitOf(active, site.folder);
       if (!modifiable || unit === null) {
-        return refuse("portal", body, { error: "out-of-scope", message: reason ?? "the portal of this site cannot be changed" });
+        return refuse("portal", body, { error: "out-of-scope", message: reason ?? "the portal of this site cannot be changed" }, null, who);
       }
       // Taking away the portal makes the site public: the name is retyped.
       if (!active && body.confirmation !== site.folder) {
-        return refuse("portal", body, { error: "invalid", message: `type ${site.folder} to confirm removing the portal` });
+        return refuse("portal", body, { error: "invalid", message: `type ${site.folder} to confirm removing the portal` }, null, who);
       }
       // Checked again just before the launch: re-reading the site and its block
       // took time, and a gatekeeper launched for a requester who has gone would
@@ -1323,7 +1403,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
         console.error(`portal: result unreadable (${errorName(e)})`);
       }
       const { result, message } = judgeGatekeeperResult(examination, launch, checked ? uidRoot : null);
-      await writeLog("portal", result, body, `${direction}, ${result}`);
+      await writeLog("portal", result, body, `${direction}, ${result}`, null, who);
 
       // A refusal from the gatekeeper, Caddy being changed from the workstation
       // included: nothing has moved, the message says what to do.
@@ -1332,7 +1412,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       const reread = (await sites()).get(site.folder) ?? site;
       const response: PortalResponse = { portal: await portalView(reread), detail: message };
       return Response.json(response);
-    });
+    }
   }
 
   /** Eight seconds of readings after a restart, and the verdict that comes out of them. */
@@ -1500,6 +1580,38 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     uidRoot: checked ? uidRoot : null,
   });
 
+  // --- A member's work on their projects -------------------------------------------
+
+  // The operations above, with the member as requester: their role judged by
+  // src/members/actions.ts, their session, unlock and role asked again under
+  // the lock, the machine's own projects and files refused by `target`.
+  const memberActions =
+    members === null
+      ? {}
+      : createMemberActions({
+          members,
+          readBody: (req, fields, max) => readBody(req, fields, max),
+          underLock: underLockWith,
+          ops: {
+            projects: memberProjects,
+            readValue: readValueTask,
+            setVariable: setVariableTask,
+            removeVariable: removeVariableTask,
+            createFile: createFileTask,
+            restoreFile: restoreTask,
+            readContent: readContentTask,
+            replaceContent: replaceContentTask,
+            portal: portalTask,
+          },
+          startRestore: backups.start,
+          portal: options.members?.portal ?? null,
+          sites,
+          portalOf: portalView,
+          hostOf: (slug) => addressOf(slug, memberZone),
+          zone: memberZone,
+          maxContentBytes: MAX_CONTENT_BODY_BYTES,
+        });
+
   // --- Routing -----------------------------------------------------------------
 
   // The connectors of the egress proxy, written under the same unlock and the
@@ -1513,6 +1625,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   const routes: Record<string, Record<string, (req: Request) => Promise<Response>>> = {
     ...connectorRoutes,
     ...(members?.dashboard ?? {}),
+    ...memberActions,
     "/projects": { GET: listProjects },
     "/log": { GET: readLog },
     "/unlock": { POST: unlock },

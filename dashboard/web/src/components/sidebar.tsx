@@ -40,6 +40,7 @@ export const SECTION_ICONS: Record<Section, LucideIcon> = {
   sharing: Share2,
   access: ShieldCheck,
   backups: DatabaseBackup,
+  members: Contact,
 }
 
 
@@ -75,7 +76,7 @@ function useNavEntries(): NavEntry[] {
       now,
       serverNow: now + offset,
     })
-    return sectionsFor(identity).map((entry) => ({
+    return sectionsFor(identity, page.slug).map((entry) => ({
       key: entry.section,
       target: { name: "site", slug: page.slug, section: entry.section },
       title: entry.title,

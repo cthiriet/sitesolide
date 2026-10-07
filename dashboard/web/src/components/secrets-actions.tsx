@@ -5,6 +5,7 @@ import { PortalDialog, type ToggleState } from "@/components/portal"
 import { ContentDialog } from "@/components/secrets-content"
 import {
   ConfirmDialog,
+  MemberUnlockDialog,
   UnlockDialog,
   RestartDialog,
   VariableDialog,
@@ -36,6 +37,7 @@ import {
   type UnlockStatus,
   type Refusal,
 } from "@/lib/secrets"
+import { isMember, reauthUrl, unlockFailure } from "@/lib/members"
 
 /**
  * The actions on a site's secrets and portal, and their dialogs, shared by
@@ -59,6 +61,13 @@ export type SecretsActions = {
   locking: boolean
   /** The refusal of a lock, to be shown at the top of the page. */
   lockError: string
+  /** A member's unlock that came back without unlocking, and why, to be shown at the top of the page. */
+  unlockNotice: string | null
+  /**
+   * A member signed in, not the super admin: they unlock through a forced
+   * sign-in at the provider, and their role decides what the steward accepts.
+   */
+  member: boolean
   /** Changes after every operation: the log is read again. */
   revision: number
   /** The key of the file whose creation is in flight. */
@@ -118,7 +127,8 @@ const pause = (ms: number) => new Promise((done) => window.setTimeout(done, ms))
 
 export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   const announce = useAnnounce()
-  const { secrets: data, guests, now, offset, sessionExpired, refresh } = useData()
+  const { secrets: data, guests, now, offset, sessionExpired, refresh, identity, sso } = useData()
+  const member = isMember(identity)
   const state = unlockStatus(data.until, now, offset)
   const serverNow = now + offset
   const { projects, reload, setUnlockedUntil, reportUnreachable } = data
@@ -138,7 +148,19 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   const [fileErrors, setFileErrors] = useState<Record<string, string>>({})
   const [locking, setLocking] = useState(false)
   const [lockError, setLockError] = useState("")
+  const [unlockNotice, setUnlockNotice] = useState<string | null>(null)
   const [revision, setRevision] = useState(0)
+
+  // A member's unlock comes back to this page, with why when it did not go
+  // through: said once, and taken off the address.
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    const reason = url.searchParams.get("unlock")
+    if (reason === null) return
+    setUnlockNotice(unlockFailure(reason))
+    url.searchParams.delete("unlock")
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`)
+  }, [])
 
   /** The element an action starts from, where focus returns when its dialog closes. */
   const origin = useRef<HTMLElement | null>(null)
@@ -463,6 +485,12 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   // --- Restarting
 
   function askRestart(slug: string) {
+    // A member restarts with their session alone, the steward judging their
+    // role; the super admin restarts from an unlocked Secrets section.
+    if (member) {
+      rememberOrigin()
+      return setRestartState({ ...NEW_RESTART, slug, open: true })
+    }
     require(() => setRestartState({ ...NEW_RESTART, slug, open: true }))
   }
 
@@ -542,6 +570,8 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     serverNow,
     locking,
     lockError,
+    unlockNotice,
+    member,
     revision,
     creation,
     errors: fileErrors,
@@ -572,13 +602,23 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     <ActionsContext.Provider value={actions}>
       {children}
 
-      <UnlockDialog
-        open={unlockOpen}
-        onClose={() => setUnlockOpen(false)}
-        onUnlocked={unlocked}
-        onRefusal={onRefusal}
-        focusReturn={returnFocus}
-      />
+      {member ? (
+        <MemberUnlockDialog
+          open={unlockOpen}
+          providerName={sso.providerName}
+          href={reauthUrl(window.location.pathname, window.location.search)}
+          onClose={() => setUnlockOpen(false)}
+          focusReturn={returnFocus}
+        />
+      ) : (
+        <UnlockDialog
+          open={unlockOpen}
+          onClose={() => setUnlockOpen(false)}
+          onUnlocked={unlocked}
+          onRefusal={onRefusal}
+          focusReturn={returnFocus}
+        />
+      )}
 
       <VariableDialog
         target={editing}

@@ -3,6 +3,9 @@ import {
   CLOCK_SKEW_S,
   FLOW_DURATION_S,
   authorizationUrl,
+  freshReauth,
+  REAUTH_MAX_AGE_S,
+  REAUTH_SKEW_S,
   candidateKeys,
   claimsRefusal,
   codeChallenge,
@@ -157,6 +160,30 @@ describe("the authorization request", () => {
 
   test("asks which account only when the person wants another one", () => {
     expect(new URL(authorizationUrl(discovery, settings, secrets, true)).searchParams.get("prompt")).toBe("select_account");
+  });
+
+  test("a forced sign-in asks every provider for max_age=0, and prompt=login all but Google", () => {
+    const forced = new URL(authorizationUrl(discovery, settings, secrets, false, true)).searchParams;
+    expect(forced.get("max_age")).toBe("0");
+    expect(forced.get("prompt")).toBe("login");
+    expect(new URL(authorizationUrl(discovery, settings, secrets, true, true)).searchParams.get("prompt")).toBe("select_account login");
+    const google = { ...settings, issuer: "https://accounts.google.com" };
+    const atGoogle = new URL(authorizationUrl(discovery, google, secrets, false, true)).searchParams;
+    expect(atGoogle.get("max_age")).toBe("0");
+    expect(atGoogle.get("prompt")).toBeNull();
+    expect(new URL(authorizationUrl(discovery, settings, secrets, false)).searchParams.has("max_age")).toBe(false);
+  });
+
+  test("a forced sign-in is believed from the provider's auth_time, within the flow and five minutes", () => {
+    const now = 1_800_000_000;
+    const started = now - 120;
+    expect(freshReauth(now - 30, started, now)).toBe(true);
+    expect(freshReauth(started - REAUTH_SKEW_S, started, now)).toBe(true);
+    expect(freshReauth(null, started, now)).toBe(false);
+    // Older than the flow: the provider rode on the sign-in it already had.
+    expect(freshReauth(started - REAUTH_SKEW_S - 1, started, now)).toBe(false);
+    expect(freshReauth(now - REAUTH_MAX_AGE_S - 1, now - 3600, now)).toBe(false);
+    expect(freshReauth(now + REAUTH_SKEW_S + 1, started, now)).toBe(false);
   });
 
   test("the challenge is RFC 7636's own example", () => {
@@ -380,7 +407,7 @@ describe("the provider, over HTTP", () => {
 
   test("exchanges a code for a verified identity, the secret sent in a Basic header", async () => {
     const result = await completeSignIn(createProvider(settings), settings, { code: await code(verifier, nonce), verifier, nonce }, Math.floor(Date.now() / 1000));
-    expect(result).toEqual({ identity: { email: "alice@acme.test", name: "Alice Martin" } });
+    expect(result).toEqual({ identity: { email: "alice@acme.test", name: "Alice Martin" }, authTime: null });
     const last = provider.tokenRequests.at(-1)!;
     expect(last.auth).toStartWith("Basic ");
     expect(last.body.get("client_secret")).toBeNull();
@@ -409,7 +436,7 @@ describe("the provider, over HTTP", () => {
       expect(tooSoon).toEqual({ refusal: "bad-signature", email: null });
       clock += 61_000;
       const result = await completeSignIn(client, settings, { code: await code(verifier, nonce), verifier, nonce }, Math.floor(Date.now() / 1000));
-      expect(result).toEqual({ identity: { email: "alice@acme.test", name: "Alice Martin" } });
+      expect(result).toEqual({ identity: { email: "alice@acme.test", name: "Alice Martin" }, authTime: null });
     } finally {
       provider.signers = provider.signers.slice(1);
     }

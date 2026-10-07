@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
-import { CircleCheck, CircleX, Dices, Eye, EyeOff, LoaderCircle } from "lucide-react"
+import { CircleCheck, CircleX, Dices, Eye, EyeOff, LoaderCircle, LockOpen } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -10,7 +10,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Dialog,
   DialogClose,
@@ -91,6 +91,51 @@ export function UnlockDialog({
           onUnlocked={onUnlocked}
           onRefusal={onRefusal}
         />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * A member's unlock: no password, which they do not have, but a forced sign-in
+ * at the provider, which the page leaves for and comes back from. The steward
+ * opens ten minutes for that member's session alone.
+ */
+export function MemberUnlockDialog({
+  open,
+  providerName,
+  href,
+  onClose,
+  focusReturn,
+}: {
+  open: boolean
+  providerName: string | null
+  href: string
+  onClose: () => void
+  focusReturn: FocusReturn
+}) {
+  const provider = providerName ?? "your identity provider"
+  const action = useRef<HTMLAnchorElement>(null)
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent initialFocus={action} finalFocus={focusReturn} className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Unlock your projects</DialogTitle>
+          <DialogDescription>
+            Sign in again with {provider}: it asks you to prove it's you once more, even if you're signed in there, then
+            brings you back here, unlocked for ten minutes. Only your session is unlocked, and only for what your role
+            allows.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <a ref={action} href={href} className={buttonVariants({ variant: "default" })}>
+            <LockOpen />
+            Sign in again
+          </a>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

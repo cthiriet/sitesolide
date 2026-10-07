@@ -15,6 +15,16 @@ export type MembersSteward = {
   whoami: (session: string) => Promise<Response>;
   signOut: (session: string) => Promise<Response>;
   restart: (session: string, slug: string) => Promise<Response>;
+  /** A member's unlock, from a forced sign-in's assertion. */
+  unlock: (session: string, assertion: string) => Promise<Response>;
+  lock: (session: string, token: string) => Promise<Response>;
+  /**
+   * A member's work on their projects (src/members/actions.ts) and a Project
+   * admin's members: the route and the body as the relay builds them, the
+   * session and the member's token inside. `long`: a route that waits under
+   * the steward's lock, a restart or a door.
+   */
+  act: (method: "POST" | "PUT" | "DELETE", path: string, body: object, long?: boolean) => Promise<Response>;
 };
 
 /** Every route answers within seconds, but a restart: its observation, and the lock it may wait for. */
@@ -41,13 +51,17 @@ export function localMembersSteward(socket: string): MembersSteward {
     whoami: (session) => call("POST", "/members/whoami", { session }),
     signOut: (session) => call("POST", "/members/signout", { session }),
     restart: (session, slug) => call("POST", "/members/restart", { session, slug }, RESTART_TIMEOUT_MS),
+    unlock: (session, assertion) => call("POST", "/members/unlock", { session, assertion }),
+    lock: (session, token) => call("POST", "/members/lock", { session, token }),
+    act: (method, path, body, long = false) => call(method, path, body, long ? RESTART_TIMEOUT_MS : MEMBERS_TIMEOUT_MS),
   };
 }
 
 export type DashboardPortal = {
   /** How people sign in: the portal's `GET /admin/sharing`, of which the dashboard reads `sso`. */
   sso: () => Promise<Response>;
-  flow: (body: { binding: string; returnTo: string; chooseAccount: boolean }) => Promise<Response>;
+  /** `reauth`: a member unlocking, whom the provider must sign in again; a portal that predates it signs in as usual, and the steward refuses the unlock. */
+  flow: (body: { binding: string; returnTo: string; chooseAccount: boolean; reauth?: boolean }) => Promise<Response>;
   redeem: (body: { code: string; binding: string | null }) => Promise<Response>;
 };
 

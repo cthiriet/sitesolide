@@ -355,7 +355,8 @@ export function MembersPage() {
       <PageBody>
         <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
           A member signs in to this dashboard with their work account, through the portal's identity provider, and sees only
-          the projects you give them a role on. A Developer or a Project admin also restarts their projects' services.
+          the projects you give them a role on. A Developer also restarts their services and sets their secrets without
+          reading them back; a Project admin looks after everything of their projects, giving people a role on them included.
         </p>
 
         {loaded.state === "loading" && <PanelSkeleton lines={4} />}

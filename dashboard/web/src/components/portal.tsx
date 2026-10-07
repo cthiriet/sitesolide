@@ -206,7 +206,7 @@ export function PortalPanel({
  * the workstation commands that set or remove it. The dashboard does not write
  * there: `sitesolide lock` generates the code and shows it once.
  */
-export function LockPanel({ site }: { site: Site }) {
+export function LockPanel({ site, member = false }: { site: Site; member?: boolean }) {
   const access = siteAccess(site)
   const { closed, code, url } = site.lock
   const commands = lockCommands(closed || code !== null)
@@ -241,20 +241,29 @@ export function LockPanel({ site }: { site: Site }) {
           </div>
         )}
       </div>
-      <div className="grid gap-2 border-t px-4 py-3">
-        <p className="text-xs text-pretty text-muted-foreground">
-          A preview lock is set from your computer, in the project's folder, with the sitesolide CLI, which makes
-          the code and shows it once. The dashboard only shows it.
-        </p>
-        <ul className="grid gap-2">
-          {commands.map((command) => (
-            <li key={command.command} className="grid gap-1">
-              <span className="text-xs text-muted-foreground">{command.label}</span>
-              <Command text={command.command} />
-            </li>
-          ))}
-        </ul>
-      </div>
+      {member ? (
+        <div className="border-t px-4 py-3">
+          <p className="text-xs text-pretty text-muted-foreground">
+            A preview lock is the super admin's: they set it from their computer with the sitesolide CLI, and the dashboard
+            only shows it.
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-2 border-t px-4 py-3">
+          <p className="text-xs text-pretty text-muted-foreground">
+            A preview lock is set from your computer, in the project's folder, with the sitesolide CLI, which makes
+            the code and shows it once. The dashboard only shows it.
+          </p>
+          <ul className="grid gap-2">
+            {commands.map((command) => (
+              <li key={command.command} className="grid gap-1">
+                <span className="text-xs text-muted-foreground">{command.label}</span>
+                <Command text={command.command} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </Panel>
   )
 }

@@ -92,6 +92,7 @@ import {
 import { benchBackupRoutes } from "./bench-backups";
 import { readPrivateKey, signAssertion } from "../borrowed/assertion";
 import { createMemberRoutes } from "../src/members/steward";
+import { may, needsUnlock, powerRefusal, type Power } from "../src/members/powers";
 import { createMembersSystem } from "../src/members/system";
 
 const PASSWORD = "demo";
@@ -925,7 +926,15 @@ async function readBody(req: Request): Promise<Record<string, unknown>> {
 
 const text = (value: unknown) => (typeof value === "string" ? value : "");
 
+/**
+ * What a member's request carries once the bench's steward judged their role
+ * (see `memberAction`): the fake routes below take it for an unlock, as the
+ * real steward hands a member's request to the very operations of the owner's.
+ */
+const MEMBER_PASS = `member-${crypto.randomUUID()}`;
+
 function isValidToken(requested: Record<string, unknown>): boolean {
+  if (requested.token === MEMBER_PASS) return true;
   return token !== null && requested.token === token.value && Date.now() < token.expiresAt;
 }
 
@@ -1069,7 +1078,7 @@ const memberRoutes = createMemberRoutes({
       result: event.result,
       actor: event.actor,
       member: event.member,
-      slug: "slug" in event ? event.slug : null,
+      slug: "slug" in event ? (event.slug ?? null) : null,
       file: null,
       variable: null,
       detail: event.detail,
@@ -1082,6 +1091,39 @@ const memberRoutes = createMemberRoutes({
   },
 });
 
+/**
+ * A member's work on their projects, as src/members/actions.ts judges it: the
+ * session, the member's unlock where the power needs one, the role, then the
+ * owner's fake operation. Enough for the page; the real decisions are tested
+ * in tests/members-actions.test.ts.
+ */
+function memberAction(power: Power, operation: (req: Request) => Response | Promise<Response>) {
+  return async (req: Request): Promise<Response> => {
+    const body = await readBody(req);
+    const principal = await memberRoutes.authorize(body.session, needsUnlock(power) ? body.token : null);
+    if (principal instanceof Response) return principal;
+    const slug = text(body.slug);
+    const role = Object.hasOwn(principal.roles, slug) ? principal.roles[slug]! : null;
+    if (!may(role, power)) return refusal(403, "out-of-scope", powerRefusal(principal.email, role, slug, power));
+    const { session: _session, token: _token, ...rest } = body;
+    return operation(new Request(req.url, { method: req.method, body: JSON.stringify({ ...rest, token: MEMBER_PASS }) }));
+  };
+}
+
+/** A member's projects in the Secrets section, write-only to a Developer. */
+async function memberProjects(req: Request): Promise<Response> {
+  const body = await readBody(req);
+  const principal = await memberRoutes.authorize(body.session, null);
+  if (principal instanceof Response) return principal;
+  const projects = PROJECTS.filter((p) => may(principal.roles[p.slug] ?? null, "secrets.list")).map((p) => {
+    const view = projectView(p);
+    return may(principal.roles[p.slug] ?? null, "secrets.read")
+      ? view
+      : { ...view, files: view.files.map((file: Record<string, unknown>) => ({ ...file, readable: false, previous: false, bytes: null })) };
+  });
+  return Response.json({ projects, until: await memberRoutes.unlockedUntil(body.session) });
+}
+
 const steward =
   process.env.BENCH_NO_STEWARD === "1"
     ? null
@@ -1089,6 +1131,21 @@ const steward =
         unix: socket,
         routes: {
           ...memberRoutes.dashboard,
+          "/members/secrets/projects": { POST: memberProjects },
+          // The owner's fake routes, judged by role first: see memberAction.
+          ...(() => {
+            // Through the bench's own socket: the owner's route, as it stands.
+            const owner = (path: string, method: string) => async (req: Request) =>
+              fetch(`http://steward${path}`, { unix: socket, method, headers: { "Content-Type": "application/json" }, body: await req.text() });
+            return {
+              "/members/secrets/value": { POST: memberAction("secrets.read", owner("/value", "POST")) },
+              "/members/secrets/variable": { PUT: memberAction("secrets.write", owner("/variable", "PUT")), DELETE: memberAction("secrets.write", owner("/variable", "DELETE")) },
+              "/members/secrets/file": { POST: memberAction("secrets.write", owner("/file", "POST")) },
+              "/members/secrets/restore": { POST: memberAction("secrets.restore", owner("/restore", "POST")) },
+              "/members/secrets/content": { POST: memberAction("secrets.read", owner("/content", "POST")), PUT: memberAction("secrets.write", owner("/content", "PUT")) },
+              "/members/portal": { POST: memberAction("door", owner("/portal", "POST")) },
+            };
+          })(),
           // The backups, their troubles and a simulated restore: scripts/bench-backups.ts.
           ...benchBackupRoutes({ start, folders: FOLDERS, isValidToken }),
           "/projects": { GET: () => Response.json({ projects: PROJECTS.map(projectView) }) },
@@ -1578,8 +1635,8 @@ const sharing = new Map<string, { host: string; policy: Policy; updatedAt: numbe
 ]);
 
 /** The bench's sign-ins in flight: a flow until a user is picked, a code until it is redeemed. */
-const benchFlows = new Map<string, { binding: string; returnTo: string }>();
-const benchCodes = new Map<string, { binding: string; returnTo: string; email: string }>();
+const benchFlows = new Map<string, { binding: string; returnTo: string; reauth: boolean }>();
+const benchCodes = new Map<string, { binding: string; returnTo: string; email: string; reauth: boolean }>();
 /** The fake portal's own address, where the browser goes to sign in; set once it listens. */
 let portalAddress = "";
 
@@ -1644,7 +1701,7 @@ const portal =
               if (!sso.configured) return Response.json({ error: "not-offered", message: "no provider" }, { status: 404 });
               const body = await readBody(req);
               const id = draw(24, ALPHABET);
-              benchFlows.set(id, { binding: text(body.binding), returnTo: text(body.returnTo).startsWith("/") ? text(body.returnTo) : "/" });
+              benchFlows.set(id, { binding: text(body.binding), returnTo: text(body.returnTo).startsWith("/") ? text(body.returnTo) : "/", reauth: body.reauth === true });
               return Response.json({ start: `${portalAddress}/oidc/start?flow=${id}` });
             },
           },
@@ -1675,7 +1732,13 @@ const portal =
               const key = readPrivateKey(readFileSync(join(portalKeyFolder, "assertion.key"), "utf8"));
               if (key === null) return Response.json({ error: "no-key", message: "no key" }, { status: 503 });
               const nowS = Math.floor(Date.now() / 1000);
-              return Response.json({ assertion: await signAssertion(key, { email: minted.email, name: null, authTime: nowS }, nowS), returnTo: minted.returnTo });
+              // A member's unlock: the bench's page stands for a forced sign-in, fresh, and says so.
+              const reauth = minted.reauth === true;
+              return Response.json({
+                assertion: await signAssertion(key, { email: minted.email, name: null, authTime: nowS, reauth }, nowS),
+                returnTo: minted.returnTo,
+                reauth,
+              });
             },
           },
         },
@@ -1687,7 +1750,7 @@ portalAddress = portal === null ? "" : `http://127.0.0.1:${portal.port}`;
 // The member the bench starts with, invited as root would over the owner's SSH.
 await memberRoutes.ensureKeys();
 await memberRoutes.owner["/members/member"]!.PUT!(
-  new Request("http://steward/members/member", { method: "PUT", body: JSON.stringify({ email: "alice@example.com", roles: { cms: "developer", calendar: "viewer" } }) }),
+  new Request("http://steward/members/member", { method: "PUT", body: JSON.stringify({ email: "alice@example.com", roles: { cms: "developer", calendar: "admin", photos: "viewer" } }) }),
 );
 
 // --- The service -------------------------------------------------------------

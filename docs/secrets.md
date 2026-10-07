@@ -15,6 +15,24 @@ declares is on the machine, and when one is not, it stops and names the
 dashboard where to create it. By then the manifest is deposited, so the
 dashboard already knows the file belongs to the site.
 
+## Who reads and who writes
+
+| Who | Their projects' files | The machine's own |
+|---|---|---|
+| The owner, with the dashboard's password | read, write, create, restore, change a password hash | the same: `dashboard.env`, `portal.env`, `dashboard-monitor.env` |
+| A Project admin, a member | read, write, create, restore | nothing |
+| A Developer, a member | write without reading back: set, replace or remove a variable, replace a file read whole, create a declared file. No value, no size, no previous version ever comes back to them | nothing |
+| A Viewer, a member | nothing: the Secrets section is not theirs | nothing |
+
+The steward decides every one of these, as root, on its own registry of
+members: a request for a value from a Developer is refused before any file is
+opened, and a compromised dashboard, which relays it, cannot make it pass. No
+member ever changes a password hash, which takes the dashboard's own password,
+nor touches a file of the platform's projects. A member unlocks by signing in
+again with the identity provider, never with a password, for ten minutes: see
+[team.md](team.md#members-beside-tokens) and
+[dashboard/README.md](../dashboard/README.md#members).
+
 ## Where a secret lands, and to whom it belongs
 
 From its name and its site, with no file to keep up to date:

@@ -28,7 +28,7 @@ import { cleanEmail, readPolicy, type Policy } from "./sharing";
 export type Admin = {
   list: (req: Request) => Response;
   create: (req: Request) => Promise<Response>;
-  remove: (req: Request, id: string) => Response;
+  remove: (req: Request, id: string) => Promise<Response>;
 };
 
 export type AdminTools = {
@@ -58,15 +58,18 @@ export function createAdmin(
 ): Admin {
   /**
    * Who may see a site changes here as much as in the sharing: a guest access
-   * is a door handed to one person. The dashboard is the only caller, from the
-   * owner's session, hence the actor. The label is a name, never the password.
+   * is a door handed to one person. The actor is the caller's word, as for a
+   * sharing: `owner` from the dashboard's own session, a Project admin's
+   * email from the steward, which checked their role and speaks for them as
+   * root (dashboard/README.md, "Members"). The label is a name, never the
+   * password.
    */
-  function record(action: "guest.create" | "guest.revoke", guest: Guest, now: number): void {
+  function record(action: "guest.create" | "guest.revoke", guest: Guest, now: number, actor: string): void {
     if (audit === null) return;
     try {
       audit.record(
         {
-          actor: "owner",
+          actor,
           action,
           target: guest.host,
           detail: { guest: guest.id, label: guest.label, expiresAt: guest.expiresAt },
@@ -91,12 +94,14 @@ export function createAdmin(
     async create(req) {
       if (isRelayed(req)) return respond({ error: "relayed-request" }, 403);
 
-      let body: { host?: unknown; label?: unknown; durationS?: unknown } | null;
+      let body: { host?: unknown; label?: unknown; durationS?: unknown; actor?: unknown } | null;
       try {
         body = (await req.json()) as typeof body;
       } catch {
         return respond({ error: "unreadable-body" }, 400);
       }
+      const actor = readActor(body?.actor);
+      if (actor === null) return respond({ error: "invalid-actor" }, 400);
 
       const host = typeof body?.host === "string" ? body.host.toLowerCase() : "";
       if (!isValidHost(host)) return respond({ error: "invalid-host" }, 400);
@@ -120,17 +125,31 @@ export function createAdmin(
         seenAt: null,
       };
       guests.create(guest, guestHash(password));
-      record("guest.create", guest, now);
+      record("guest.create", guest, now, actor);
 
       return respond({ guest, password }, 201);
     },
 
-    /** Immediate: the gate re-reads the access on every request, the next one is refused. */
-    remove(req, id) {
+    /**
+     * Immediate: the gate re-reads the access on every request, the next one is
+     * refused. A body is optional, `{ actor }` alone, the dashboard sending none.
+     */
+    async remove(req, id) {
       if (isRelayed(req)) return respond({ error: "relayed-request" }, 403);
+      let actor: string | null = "owner";
+      const text = await req.text().catch(() => "");
+      if (text !== "") {
+        try {
+          const body: unknown = JSON.parse(text);
+          actor = typeof body === "object" && body !== null && !Array.isArray(body) ? readActor((body as { actor?: unknown }).actor) : null;
+        } catch {
+          return respond({ error: "unreadable-body" }, 400);
+        }
+      }
+      if (actor === null) return respond({ error: "invalid-actor" }, 400);
       const guest = isValidId(id) ? guests.list().find((one) => one.id === id) : undefined;
       if (guest === undefined || !guests.remove(id)) return respond({ error: "unknown-access" }, 404);
-      record("guest.revoke", guest, clock());
+      record("guest.revoke", guest, clock(), actor);
       return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
     },
   };
@@ -170,9 +189,10 @@ export function ssoView(settings: Settings | null): SsoView {
 }
 
 /**
- * Who made a change, as the dashboard says: `owner` by default, the one
- * password it knows, or an email or a `token:<id>` once something else speaks
- * through it. Anything else is refused rather than written into the audit.
+ * Who made a change, as the caller says: `owner` by default, the one password
+ * the dashboard knows, a `token:<id>` the dashboard relays for, or a member's
+ * email, which the steward sends once it has checked their role. Anything
+ * else is refused rather than written into the audit.
  */
 function readActor(actor: unknown): string | null {
   if (actor === undefined || actor === "owner") return "owner";

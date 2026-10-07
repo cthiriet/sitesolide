@@ -81,6 +81,19 @@ describe("an assertion", () => {
     expect(reading.claims.nonce).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
+  test("says a forced sign-in only when the portal made one, and a forged reauth does not read", async () => {
+    const plain = await verifyAssertion(await signAssertion(pair.privateKey, SUBJECT, NOW_S), pair.publicKey, expected());
+    expect("claims" in plain && plain.claims.reauth).toBe(false);
+    const token = await signAssertion(pair.privateKey, { ...SUBJECT, reauth: true }, NOW_S);
+    const forced = await verifyAssertion(token, pair.publicKey, expected());
+    expect("claims" in forced && forced.claims.reauth).toBe(true);
+    // A sign-in's assertion carries no reauth at all, as before this claim.
+    const [, claims] = (await signAssertion(pair.privateKey, SUBJECT, NOW_S)).split(".");
+    expect(JSON.parse(Buffer.from(claims!, "base64url").toString())).not.toHaveProperty("reauth");
+    // Signed with a value other than true: not one of ours.
+    expect(await verifyAssertion(await forge(pair.privateKey, goodClaims({ reauth: "yes" })), pair.publicKey, expected())).toEqual({ refusal: "malformed" });
+  });
+
   test("each one draws its own nonce", async () => {
     const one = await verifyAssertion(await signAssertion(pair.privateKey, SUBJECT, NOW_S), pair.publicKey, expected());
     const two = await verifyAssertion(await signAssertion(pair.privateKey, SUBJECT, NOW_S), pair.publicKey, expected());

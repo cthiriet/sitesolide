@@ -22,7 +22,7 @@
  *     STATE_FOLDER=$E/state CADDY_FOLDER=$E/caddy GATEKEEPER_FOLDER=$E/gatekeeper \
  *     BACKUP_FOLDER=$E/backups BACKUP_STATE_FOLDER=$E/backup-state BACKUP_RUN_FOLDER=$E/backup-run \
  *     SOCKET=$E/run/steward.sock OWNER_SOCKET=$E/owner/owner.sock PORTAL_KEY_FOLDER=$E/portal-key \
- *     SOCKET_GROUP= OWNERS= SYSTEMCTL=false \
+ *     PORTAL_RELAY_SOCKET= SOCKET_GROUP= OWNERS= SYSTEMCTL=false \
  *     bun steward.ts
  *   curl --unix-socket $E/run/steward.sock http://steward/projects
  *
@@ -45,6 +45,7 @@ import { BACKUP_FOLDER } from "./borrowed/backups";
 import { createBackupReader } from "./src/backup/reader";
 import { createMembersSystem } from "./src/members/system";
 import { OWNER_SOCKET, PORTAL_KEY_FOLDER } from "./src/members/protocol";
+import { PORTAL_RELAY_SOCKET, relayedPortal } from "./src/members/portal";
 
 const SITES_DIR = process.env.SITES_DIR ?? "/srv/sites";
 const SECRETS_FOLDER = process.env.SECRETS_FOLDER ?? "/etc/sitesolide";
@@ -90,6 +91,14 @@ const OWNER_SOCKET_PATH = process.env.OWNER_SOCKET ?? OWNER_SOCKET;
  */
 const PORTAL_KEY_DIR = process.env.PORTAL_KEY_FOLDER ?? PORTAL_KEY_FOLDER;
 const PORTAL_GROUP = process.env.PORTAL_GROUP ?? "site-portal";
+
+/**
+ * The relay to the portal's admin API, for a Project admin's sharing and
+ * guests: a Unix socket root's alone, behind which systemd-socket-proxyd
+ * reaches the portal's port on the loopback. This unit keeps no network.
+ * Empty: no relay, sharing and guests say so.
+ */
+const PORTAL_RELAY = process.env.PORTAL_RELAY_SOCKET ?? PORTAL_RELAY_SOCKET;
 
 /**
  * The check of the owners. Empty: neither uid check nor chown, and no check at
@@ -180,6 +189,7 @@ const handler = createSteward(system, {
       portalGroup: OWNERS === "" ? "" : PORTAL_GROUP,
     }),
     zone: process.env.SITESOLIDE_ZONE ?? "",
+    portal: PORTAL_RELAY === "" ? null : relayedPortal(PORTAL_RELAY),
   },
 });
 

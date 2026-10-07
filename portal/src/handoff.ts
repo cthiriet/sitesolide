@@ -64,6 +64,11 @@
  * person closed at the provider is out of the dashboard a day after they last
  * proved themselves there, as out of every site.
  *
+ * A member who unlocks their projects' secrets goes through a flow sealed
+ * with `reauth`: the portal's session spares nothing then, the provider is
+ * asked for a forced sign-in, and the code carries that the provider's own ID
+ * token said the person signed in during this flow (src/sso.ts).
+ *
  * Pure apart from the store, which holds the codes in memory and takes its
  * time and its draw as parameters.
  */
@@ -152,6 +157,12 @@ export type Flow = {
   /** Ask the provider which account, instead of taking the one signed in. */
   chooseAccount: boolean;
   audience: Audience;
+  /**
+   * A forced sign-in at the provider, for a member unlocking their secrets:
+   * never the portal's session, and the provider's `auth_time` read back. A
+   * dashboard's flow alone carries it.
+   */
+  reauth: boolean;
 };
 
 export function issueFlow(key: Uint8Array, flow: Flow, nowS: number): string {
@@ -162,6 +173,7 @@ export function issueFlow(key: Uint8Array, flow: Flow, nowS: number): string {
     a: flow.chooseAccount,
     // Only a dashboard's flow says so: a site's is sealed as it always was.
     ...(flow.audience === "dashboard" ? { d: true } : {}),
+    ...(flow.audience === "dashboard" && flow.reauth ? { u: true } : {}),
     e: nowS + FLOW_DURATION_S,
   });
 }
@@ -170,13 +182,20 @@ export function issueFlow(key: Uint8Array, flow: Flow, nowS: number): string {
 export function readFlow(key: Uint8Array, token: string | null, nowS: number): Flow | null {
   const fields = unseal(purposeKey(key, "flow"), token);
   if (fields === null) return null;
-  const { h, r, b, a, d, e } = fields;
+  const { h, r, b, a, d, u, e } = fields;
   if (typeof e !== "number" || e <= nowS || e > nowS + FLOW_DURATION_S) return null;
   if (typeof h !== "string" || !isValidHost(h)) return null;
   if (typeof r !== "string" || safeReturnTo(r) !== r) return null;
   if (!isBinding(b) || typeof a !== "boolean") return null;
   if (d !== undefined && d !== true) return null;
-  return { host: h, returnTo: r, binding: b, chooseAccount: a, audience: d === true ? "dashboard" : "site" };
+  if (u !== undefined && (u !== true || d !== true)) return null;
+  return { host: h, returnTo: r, binding: b, chooseAccount: a, audience: d === true ? "dashboard" : "site", reauth: u === true };
+}
+
+/** When a flow sealed by this portal began, from its expiry: the earliest a forced sign-in in it can date from. */
+export function flowStartedAt(key: Uint8Array, token: string | null): number | null {
+  const fields = unseal(purposeKey(key, "flow"), token);
+  return fields === null || typeof fields.e !== "number" ? null : fields.e - FLOW_DURATION_S;
 }
 
 // --- The provider transaction ------------------------------------------------------
@@ -260,6 +279,8 @@ export type Handoff = {
   authTime: number;
   /** What the code is redeemed for: a site's cookie, or the dashboard's assertion. */
   audience: Audience;
+  /** The provider was made to ask again, and said so in its ID token: see `Flow.reauth`. */
+  reauth: boolean;
 };
 
 export type Redemption =

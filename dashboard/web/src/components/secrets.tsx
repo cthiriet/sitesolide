@@ -188,7 +188,7 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
               const variableTarget = { ...target, variable }
               const rowOffer = variableOffer(file, variable)
               if (rowOffer === "password") {
-                return <PasswordRow key={variable} name={variable} onChangePassword={() => actions.changePassword(variableTarget)} />
+                return <PasswordRow key={variable} name={variable} onChangePassword={actions.member ? null : () => actions.changePassword(variableTarget)} />
               }
               return (
                 <VariableRow

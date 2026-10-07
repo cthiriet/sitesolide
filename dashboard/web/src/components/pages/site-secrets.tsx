@@ -8,6 +8,7 @@ import { useSecretsActions } from "@/components/secrets-actions"
 import { SecretsLog } from "@/components/secrets-log"
 import { SitePage, useSite } from "@/components/site"
 import { UNREACHABLE } from "@/lib/secrets"
+import { roleOn } from "@/lib/members"
 
 /*
  * Nothing here knows any site in particular. The platform deploys sites whose
@@ -18,6 +19,36 @@ import { UNREACHABLE } from "@/lib/secrets"
 
 function Code({ children }: { children: string }) {
   return <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-xs whitespace-nowrap">{children}</code>
+}
+
+/** What unlocking means, for whoever is signed in. */
+function Intro({ slug }: { slug: string }) {
+  const { identity, sso } = useData()
+  const role = roleOn(identity, slug)
+  const provider = sso.providerName ?? "your identity provider"
+  if (role === "developer") {
+    return (
+      <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
+        As a Developer on {slug}, you set, replace and remove its values, and never read one back: the steward shows you
+        names alone. To change one, unlock by signing in again with {provider}; a change reaches {slug} only after a
+        restart.
+      </p>
+    )
+  }
+  if (role === "admin") {
+    return (
+      <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
+        {slug} reads these files when it starts. Values stay hidden until you unlock by signing in again with {provider},
+        and a change reaches {slug} only after a restart.
+      </p>
+    )
+  }
+  return (
+    <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
+      {slug} reads these files when it starts. Values stay hidden until you unlock with the dashboard password, and a
+      change reaches {slug} only after a restart.
+    </p>
+  )
 }
 
 function Content({ slug }: { slug: string }) {
@@ -38,13 +69,9 @@ function Content({ slug }: { slug: string }) {
 
   return (
     <>
-      {(project === null || project.files.length > 0) && (
-        <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-          {slug} reads these files when it starts. Values stay hidden until you unlock with the dashboard password, and
-          a change reaches {slug} only after a restart.
-        </p>
-      )}
+      {(project === null || project.files.length > 0) && <Intro slug={slug} />}
 
+      {actions.unlockNotice !== null && <Banner tone="error">{actions.unlockNotice}</Banner>}
       {actions.lockError !== "" && <Banner tone="error">Couldn't lock secrets. {actions.lockError}</Banner>}
 
       {problem !== null && projects !== null && (

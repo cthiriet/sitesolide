@@ -52,7 +52,7 @@ component (active, enabled, its files present), plus:
 | Caddy's drop-in | `override.conf` differs from the release's | setup's own step: the drop-in installed, `daemon-reload`, `systemctl restart caddy` |
 | backups | `backup.js` or one of its three units differs | `bin/deploy-backup.sh install`; the timer stays as it is |
 | egress proxy | `egress.js` or its unit differs | `bin/deploy-egress.sh` |
-| steward | `steward.js` or its unit differs, or it started before the egress proxy's unit was last laid, or before the backups' folder existed | `bin/deploy-steward.sh` |
+| steward | `steward.js`, its unit or the portal relay's two units differ, or it started before the egress proxy's unit was last laid, or before the backups' folder existed | `bin/deploy-steward.sh` |
 | dashboard | `sitesolide deploy --dry-run --compare` finds a difference: a file to send or delete, its manifest, a missing unit, its Caddy block | `sitesolide deploy` in `dashboard/` |
 | collector | one of its two units differs | `bin/deploy-collector.sh` |
 | gatekeeper | `gatekeeper.js` or one of its templates differs, or the single template from before is still there | `bin/deploy-gatekeeper.sh` |
@@ -292,7 +292,7 @@ Each of these is independent and opt-in. None changes a site until you use it.
 | hourly backups of every project's data | `bin/deploy-backup.sh enable` | optional bucket in `dashboard-backup.env` | [dashboard/src/backup/README.md](../dashboard/src/backup/README.md#deployment) |
 | sign-in with a company account, sharing | nothing more | the `OIDC_*` settings in the portal's `portal.env`, *Restart service* | [portal/README.md](../portal/README.md) |
 | deploys by colleagues and agents with a token | `bin/deploy-installer.sh` | a token on the *Team* page | [dashboard/README.md](../dashboard/README.md#deployment-of-the-control-api) |
-| colleagues who sign in to the dashboard with their work account, a role per project | `sitesolide upgrade`, which brings the steward, the dashboard and the portal up to date | the sign-in with a company account above, then a member on the *Members* page or with `sitesolide members add` | [dashboard/README.md](../dashboard/README.md#members) |
+| colleagues who sign in to the dashboard with their work account, a role per project: Developers who set secrets without reading them, Project admins who look after their project | `sitesolide upgrade`, which brings the steward, its portal relay, the dashboard and the portal up to date | the sign-in with a company account above, then a member on the *Members* page or with `sitesolide members add` | [dashboard/README.md](../dashboard/README.md#members) |
 | projects that reach only listed hosts, connectors | `bin/deploy-egress.sh`, then `bin/deploy-steward.sh` again: the steward started before `/etc/sitesolide-egress` existed, and only a restart makes it writable for it | `egress` or `connectors` in a manifest | [egress/README.md](../egress/README.md#deployment) |
 
 ### 6. Each site, when you next deploy it

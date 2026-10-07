@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test"
 import {
   invitationLine,
   isMember,
+  isProjectAdmin,
   mayRestart,
+  reauthUrl,
+  roleOn,
+  unlockFailure,
   memberRefusal,
   rolesFromRows,
   rolesSummary,
@@ -16,21 +20,27 @@ import { auditWords } from "../src/lib/audit"
 import type { AuditRow, IdentityView } from "../src/lib/types"
 
 const OWNER: IdentityView = { kind: "owner" }
-const ALICE: IdentityView = { kind: "member", email: "alice@acme.test", name: null, roles: { blog: "developer", shop: "viewer" }, expiresAt: 0 }
+const ALICE: IdentityView = { kind: "member", email: "alice@acme.test", name: null, roles: { blog: "developer", shop: "viewer", cms: "admin" }, expiresAt: 0 }
 
 describe("what a member sees of the page", () => {
-  test("Sites and Activity, and in a site its Overview and Audience; the owner, everything", () => {
+  test("Sites and Activity, and in a site the sections their role there opens; the owner, every section but a project's Members", () => {
     expect(machinePagesFor(ALICE).map((entry) => entry.name)).toEqual(["home", "activity"])
-    expect(sectionsFor(ALICE).map((entry) => entry.section)).toEqual(["overview", "audience"])
+    expect(sectionsFor(ALICE, "shop").map((entry) => entry.section)).toEqual(["overview", "audience"])
+    expect(sectionsFor(ALICE, "blog").map((entry) => entry.section)).toEqual(["overview", "audience", "secrets"])
+    expect(sectionsFor(ALICE, "cms").map((entry) => entry.section)).toEqual(["overview", "audience", "secrets", "guests", "sharing", "access", "backups", "members"])
     expect(machinePagesFor(OWNER)).toEqual(MACHINE_PAGES)
-    expect(sectionsFor(null)).toEqual(SECTIONS)
+    expect(sectionsFor(null, "blog")).toEqual(SECTIONS.filter((entry) => entry.section !== "members"))
   })
 
-  test("a page of the super admin's, reached by its address, is not theirs", () => {
+  test("a page that is not theirs, reached by its address, says so", () => {
     for (const path of ["/team/", "/members/", "/connectors/"]) expect(mayOpen(pageFromUrl(path), ALICE)).toBe(false)
-    expect(mayOpen(pageFromUrl("/site/secrets/", "?s=blog"), ALICE)).toBe(false)
+    expect(mayOpen(pageFromUrl("/site/secrets/", "?s=shop"), ALICE)).toBe(false)
+    expect(mayOpen(pageFromUrl("/site/secrets/", "?s=blog"), ALICE)).toBe(true)
+    expect(mayOpen(pageFromUrl("/site/access/", "?s=blog"), ALICE)).toBe(false)
+    expect(mayOpen(pageFromUrl("/site/members/", "?s=cms"), ALICE)).toBe(true)
     expect(mayOpen(pageFromUrl("/site/audience/", "?s=blog"), ALICE)).toBe(true)
     expect(mayOpen(pageFromUrl("/members/"), OWNER)).toBe(true)
+    expect(mayOpen(pageFromUrl("/site/members/", "?s=cms"), OWNER)).toBe(false)
     expect(pageFromUrl("/members/")).toEqual({ name: "members" })
   })
 
@@ -40,6 +50,29 @@ describe("what a member sees of the page", () => {
     expect(mayRestart(ALICE, "notes")).toBe(false)
     expect(mayRestart(OWNER, "blog")).toBe(false)
     expect(isMember(ALICE) && !isMember(OWNER) && !isMember(null)).toBe(true)
+  })
+})
+
+describe("a member's unlock", () => {
+  test("leaves for a forced sign-in and comes back to the page, a previous refusal's note left off", () => {
+    expect(reauthUrl("/site/secrets/", "?s=blog&unlock=refused")).toBe("/api/sso/begin?reauth=1&return=%2Fsite%2Fsecrets%2F%3Fs%3Dblog")
+    expect(reauthUrl("/site/access/", "")).toBe("/api/sso/begin?reauth=1&return=%2Fsite%2Faccess%2F")
+  })
+
+  test("an unlock that came back without unlocking says why in words", () => {
+    expect(unlockFailure(null)).toBeNull()
+    expect(unlockFailure("refused")).toContain("didn't confirm")
+    expect(unlockFailure("another-account")).toContain("another account")
+    expect(unlockFailure("nothing-to-unlock")).toContain("viewer on every project")
+    expect(unlockFailure("whatever")).toContain("isn't available")
+  })
+
+  test("the role on a project, and who is its Project admin", () => {
+    expect(roleOn(ALICE, "blog")).toBe("developer")
+    expect(roleOn(ALICE, "nowhere")).toBeNull()
+    expect(roleOn(OWNER, "blog")).toBeNull()
+    expect(isProjectAdmin(ALICE, "cms")).toBe(true)
+    expect(isProjectAdmin(ALICE, "blog")).toBe(false)
   })
 })
 
@@ -100,5 +133,15 @@ describe("a member's events in the Activity", () => {
     expect(auditWords(row("member.signin", { actor: "alice@acme.test" })).summary).toBe("Signed in to the dashboard with a work account")
     expect(auditWords(row("member.signin_failed", { detail: { result: "rejects", note: "not-a-member" } }))).toMatchObject({ note: "not a member", tone: "attention" })
     expect(auditWords(row("service.restart", { actor: "alice@acme.test", target: "blog", detail: { result: "ok", note: "active, active/running, 0 restarts" } })).summary).toBe("Restarted")
+  })
+
+  test("a Project admin's change names the member, and a refusal by role says the role", () => {
+    const byAdmin = { actor: "bob@acme.test", target: "beta", detail: { result: "ok", note: "beta: viewer", member: "carol@acme.test" } }
+    expect(auditWords(row("member.invite", byAdmin))).toMatchObject({ summary: "Invited carol@acme.test", note: "beta: viewer" })
+    const refused = { actor: "alice@acme.test", target: "alpha", detail: { result: "rejects", note: "role developer" } }
+    expect(auditWords(row("member.invite", refused))).toMatchObject({ summary: "Tried to invite someone", note: "Refused: developer here", tone: "attention" })
+    expect(auditWords(row("sharing.update", refused))).toMatchObject({ summary: "Tried to change who gets in", tone: "attention" })
+    expect(auditWords(row("secrets.read", refused))).toMatchObject({ summary: "Tried to read" })
+    expect(auditWords(row("backup.restore", { ...refused, detail: { result: "rejects", note: "no role" } }))).toMatchObject({ note: "Refused: no role on this project" })
   })
 })

@@ -450,6 +450,10 @@ const OPERATION_NAMES: Record<Operation, string> = {
   "member.signin": "Sign in",
   "member.signin_failed": "Sign-in refused",
   "member.signout": "Sign out",
+  sharing: "Change sharing",
+  "guest.create": "Give guest access",
+  "guest.revoke": "Revoke guest access",
+  "backup.restore": "Restore backup",
 }
 
 /**

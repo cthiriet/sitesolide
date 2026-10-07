@@ -35,6 +35,7 @@ import type { AuditStore, NewEvent, SharingStore } from "./database";
 import {
   bindingHash,
   drawBinding,
+  flowStartedAt,
   issueFlow,
   issueSession,
   issueTransaction,
@@ -52,6 +53,7 @@ import {
   authorizationUrl,
   completeSignIn,
   drawFlowSecrets,
+  freshReauth,
   isFlowText,
   FLOW_DURATION_S,
   type Provider,
@@ -127,6 +129,7 @@ export const SIGNED_OUT_DURATION_S = 30 * 24 * 3600;
  */
 const REFUSALS: Record<string, string> = {
   "domain-not-allowed": "This account's domain isn't allowed to sign in here.",
+  "stale-authentication": "Your identity provider didn't ask you to sign in again. Go back to the dashboard and unlock again; if it keeps happening, your provider ignores forced sign-ins.",
   "unmanaged-account": "This account isn't one of your organization's: sign in with your work account.",
   "unverified-email": "Your identity provider didn't confirm this account's email address.",
   "no-email": "Your identity provider didn't share this account's email address.",
@@ -209,6 +212,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
     authTime: number,
     now: number,
     cookies: string[],
+    reauth = false,
   ): Response {
     // A dashboard's flow goes back to the dashboard's own address, the one the
     // portal knows, whatever host the flow names.
@@ -216,7 +220,10 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
     if (flow.audience === "dashboard" && dashboard === null) {
       return page(404, "Not available.", "Signing in to the dashboard with a work account isn't available on this server.", null, cookies);
     }
-    const minting = options.handoffs.mint({ host: flow.host, binding: flow.binding, returnTo: flow.returnTo, identity, sessionExpiry, authTime, audience: flow.audience }, now);
+    const minting = options.handoffs.mint(
+      { host: flow.host, binding: flow.binding, returnTo: flow.returnTo, identity, sessionExpiry, authTime, audience: flow.audience, reauth },
+      now,
+    );
     if ("refusal" in minting) {
       return minting.refusal === "spent-flow"
         ? page(400, "This sign-in link was already used.", "Go back to the site and sign in again.", flow, cookies)
@@ -242,7 +249,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       const binding = drawBinding();
       const flow = issueFlow(
         options.key,
-        { host, returnTo, binding: bindingHash(binding), chooseAccount: params.get("account") === "choose", audience: "site" },
+        { host, returnTo, binding: bindingHash(binding), chooseAccount: params.get("account") === "choose", audience: "site", reauth: false },
         Math.floor(now / 1000),
       );
       const start = `${options.settings.portalOrigin}/oidc/start?${new URLSearchParams({ flow })}`;
@@ -271,7 +278,8 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       // half that: a member session lasts as long again, see DASHBOARD_REAUTH_S.
       const authTime = known === null ? 0 : known.expiry - IDENTITY_DURATION_S;
       const recent = flow.audience !== "dashboard" || nowS - authTime <= DASHBOARD_REAUTH_S;
-      if (known !== null && allowed && recent && !flow.chooseAccount) {
+      // A forced sign-in never rides on this session: the provider is asked.
+      if (known !== null && allowed && recent && !flow.chooseAccount && !flow.reauth) {
         return handOver(flow, known.identity, known.expiry, authTime, now, []);
       }
       // After a sign-out on this browser, the provider is asked which account,
@@ -293,7 +301,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
         { state: secrets.state, nonce: secrets.nonce, verifier: secrets.verifier, flow: sealed },
         nowS,
       );
-      return redirect(authorizationUrl(discovery, options.settings, secrets, chooseAccount), [
+      return redirect(authorizationUrl(discovery, options.settings, secrets, chooseAccount, flow.reauth), [
         setCookie(transaction, online, FLOW_DURATION_S, transactionSuffix(secrets.state)),
       ]);
     },
@@ -342,10 +350,18 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
         return fail(result.refusal, result.email, result.refusal === "provider-unreachable" ? 502 : 403);
       }
 
+      // A forced sign-in is believed from the provider's own word: its ID token
+      // says when the person signed in, and that must fall within this flow.
+      // A provider that ignored the request hands back its old sign-in.
+      if (flow.reauth && !freshReauth(result.authTime, flowStartedAt(options.key, transaction.flow) ?? nowS, nowS)) {
+        return fail("stale-authentication", result.identity.email);
+      }
+
       // A new session, and this browser no longer counts as signed out.
       const session = setCookie(issueSession(options.key, result.identity, nowS), online, IDENTITY_DURATION_S, SESSION_SUFFIX);
       const cookies = [...spent, session, clearCookie(online, SIGNED_OUT_SUFFIX)];
-      return handOver(flow, result.identity, nowS + IDENTITY_DURATION_S, nowS, now, cookies);
+      const authTime = flow.reauth ? result.authTime! : nowS;
+      return handOver(flow, result.identity, nowS + IDENTITY_DURATION_S, authTime, now, cookies, flow.reauth);
     },
 
     complete(req) {

@@ -136,7 +136,10 @@ describe("each source's rows, in one shape", () => {
 
   test("every operation the steward journals has its action, and an unknown one is left out", () => {
     expect(Object.keys(STEWARD_ACTIONS).sort()).toEqual([
+      "backup.restore",
       "create",
+      "guest.create",
+      "guest.revoke",
       "lock",
       "member.invite",
       "member.remove",
@@ -152,6 +155,7 @@ describe("each source's rows, in one shape", () => {
       "restart",
       "restore",
       "set",
+      "sharing",
       "unlock",
     ]);
     expect(fromJournal([{ a: T, operation: "constructor", result: "ok", slug: null, file: null, variable: null, detail: null }])).toEqual([]);

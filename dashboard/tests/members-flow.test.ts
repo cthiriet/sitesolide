@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readPrivateKey, signAssertion } from "../borrowed/assertion";
+import type { PortalAdmin } from "../src/members/portal";
 import { createMembersSystem } from "../src/members/system";
 import { createSteward, type StewardHandler } from "../src/secrets/steward";
 import { createSystem, type Command } from "../src/secrets/system";
@@ -20,6 +21,7 @@ import { createSystem, type Command } from "../src/secrets/system";
  */
 
 const PASSWORD = "Owner-Password-For-The-Flow-1";
+const SECRET_VALUE = "a-value-only-a-project-admin-reads-1";
 const ZONE = "test-zone.invalid";
 const ALICE = "alice@acme.test";
 
@@ -40,24 +42,52 @@ const dashboardPort = freePort();
 const DASHBOARD = `http://127.0.0.1:${dashboardPort}`;
 let PORTAL = "";
 
-/** Who the portal signs in next, as the provider would after the person typed their password. */
-const next = { email: ALICE };
+/**
+ * Who the portal signs in next, as the provider would after the person typed
+ * their password; `ignoreReauth`, a provider that does not sign them in again
+ * when asked, and the portal that then says nothing of a forced sign-in.
+ */
+const next = { email: ALICE, ignoreReauth: false };
+
+/** What reached the portal's admin API, and from whom: the steward's relay, or the dashboard. */
+const portalCalls: { route: string; body: Record<string, unknown> }[] = [];
 
 /** The portal's side, reduced to what the dashboard sees of it. */
 function startPortal(): ReturnType<typeof Bun.serve> {
-  const flows = new Map<string, { binding: string; returnTo: string }>();
-  const codes = new Map<string, { binding: string; returnTo: string; email: string }>();
+  const flows = new Map<string, { binding: string; returnTo: string; reauth: boolean }>();
+  const codes = new Map<string, { binding: string; returnTo: string; email: string; reauth: boolean }>();
+  const policies: { host: string; policy: unknown; updatedAt: number }[] = [];
+  const guests: { id: string; host: string; label: string }[] = [{ id: "GUESTONBLOG00001", host: `blog.${ZONE}`, label: "Not shop's" }];
   return Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
     routes: {
-      "/admin/sharing": () => Response.json({ sso: { configured: true, providerName: "Acme", allowedDomains: ["acme.test"], admins: [], portalUrl: PORTAL }, sites: [] }),
+      "/admin/sharing": () => Response.json({ sso: { configured: true, providerName: "Acme", allowedDomains: ["acme.test"], admins: [], portalUrl: PORTAL }, sites: policies }),
+      "/admin/sharing/:host": {
+        PUT: async (req) => {
+          const body = (await req.json()) as Record<string, unknown>;
+          portalCalls.push({ route: `PUT /admin/sharing/${req.params.host}`, body });
+          const policy = { mode: body.mode, people: body.people, domains: body.domains };
+          policies.push({ host: req.params.host, policy, updatedAt: Date.now() });
+          return Response.json({ host: req.params.host, policy, updatedAt: Date.now() });
+        },
+      },
+      "/admin/guests": {
+        GET: () => Response.json({ guests }),
+        POST: async (req) => {
+          const body = (await req.json()) as Record<string, unknown>;
+          portalCalls.push({ route: "POST /admin/guests", body });
+          const guest = { id: "GUESTONSHOP00001", host: String(body.host), label: String(body.label) };
+          guests.push(guest);
+          return Response.json({ guest, password: "drawn-guest-password-0001" }, { status: 201 });
+        },
+      },
       "/admin/audit": () => Response.json({ events: [] }),
       "/admin/dashboard/flow": {
         POST: async (req) => {
-          const body = (await req.json()) as { binding: string; returnTo: string };
+          const body = (await req.json()) as { binding: string; returnTo: string; reauth?: boolean };
           const id = crypto.randomUUID();
-          flows.set(id, { binding: body.binding, returnTo: body.returnTo });
+          flows.set(id, { binding: body.binding, returnTo: body.returnTo, reauth: body.reauth === true });
           return Response.json({ start: `${PORTAL}/oidc/start?flow=${id}` });
         },
       },
@@ -65,7 +95,7 @@ function startPortal(): ReturnType<typeof Bun.serve> {
         const flow = flows.get(new URL(req.url).searchParams.get("flow") ?? "");
         if (flow === undefined) return new Response("unknown flow", { status: 400 });
         const code = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
-        codes.set(code, { ...flow, email: next.email });
+        codes.set(code, { ...flow, email: next.email, reauth: flow.reauth && !next.ignoreReauth });
         return new Response(null, { status: 303, headers: { Location: `${DASHBOARD}/api/sso/complete?code=${code}` } });
       },
       "/admin/dashboard/redeem": {
@@ -76,13 +106,27 @@ function startPortal(): ReturnType<typeof Bun.serve> {
           if (minted === undefined || minted.binding !== body.binding) return Response.json({ error: "wrong-browser" }, { status: 400 });
           const key = readPrivateKey(readFileSync(join(root, "portal-key", "assertion.key"), "utf8"))!;
           const nowS = Math.floor(Date.now() / 1000);
-          const assertion = await signAssertion(key, { email: minted.email, name: null, authTime: nowS }, nowS);
-          return Response.json({ assertion, returnTo: minted.returnTo });
+          // A sign-in rides on an older proof; a forced one is fresh, and says so.
+          const assertion = await signAssertion(key, { email: minted.email, name: null, authTime: minted.reauth ? nowS : nowS - 3600, reauth: minted.reauth }, nowS);
+          return Response.json({ assertion, returnTo: minted.returnTo, reauth: minted.reauth });
         },
       },
     },
     fetch: () => new Response("not found", { status: 404 }),
   });
+}
+
+/** The steward's relay to the portal, as a function of the portal's port: root's road, not the dashboard's. */
+function relayTo(url: () => string): PortalAdmin {
+  const call = (method: string, path: string, body?: object) =>
+    fetch(`${url()}${path}`, { method, ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }) });
+  return {
+    sharing: () => call("GET", "/admin/sharing"),
+    replaceSharing: (host, body) => call("PUT", `/admin/sharing/${encodeURIComponent(host)}`, body),
+    guests: () => call("GET", "/admin/guests"),
+    createGuest: (body) => call("POST", "/admin/guests", body),
+    revokeGuest: (id, actor) => call("DELETE", `/admin/invites/${id}`, { actor }),
+  };
 }
 
 class Browser {
@@ -103,10 +147,18 @@ class Browser {
     }
   }
 
-  /** Only the dashboard's cookies are kept: the portal's host has its own, which this portal does not use. */
+  /**
+   * Only the dashboard's cookies are kept: the portal's host has its own,
+   * which this portal does not use. The way back from the provider is a
+   * cross-site navigation, as with a real provider on another domain: the
+   * session cookie, `SameSite=Strict`, does not travel with it, the binding,
+   * `Lax`, does.
+   */
   async get(url: string): Promise<Response> {
     const ours = url.startsWith(DASHBOARD);
-    const response = await fetch(url, { redirect: "manual", headers: ours ? { Cookie: this.cookies() } : {} });
+    const crossSite = ours && new URL(url).pathname === "/api/sso/complete";
+    const cookie = crossSite ? [...this.jar.entries()].filter(([name]) => name === "sso").map(([name, value]) => `${name}=${value}`).join("; ") : this.cookies();
+    const response = await fetch(url, { redirect: "manual", headers: ours ? { Cookie: cookie } : {} });
     if (ours) this.keep(response);
     return response;
   }
@@ -135,9 +187,16 @@ class Browser {
 
 async function signInAs(email: string, returnTo = "/"): Promise<{ browser: Browser; landed: string }> {
   next.email = email;
+  next.ignoreReauth = false;
   const browser = new Browser();
   const landed = await browser.follow(`${DASHBOARD}/api/sso/begin?return=${encodeURIComponent(returnTo)}`);
   return { browser, landed };
+}
+
+/** A member's unlock: the dashboard sends them through a forced sign-in, and back where they were. */
+async function unlockAs(browser: Browser, email: string, returnTo = "/site/secrets/?s=blog"): Promise<string> {
+  next.email = email;
+  return browser.follow(`${DASHBOARD}/api/sso/begin?reauth=1&return=${encodeURIComponent(returnTo)}`);
 }
 
 const asRoot = (method: string, path: string, body?: unknown) =>
@@ -156,14 +215,18 @@ beforeAll(async () => {
   const state = folder("state");
   const data = folder("data");
   folder("portal-key");
-  const app = (slug: string, port: number) => {
+  const app = (slug: string, port: number, extra: Record<string, unknown> = {}) => {
     mkdirSync(join(sites, slug), { recursive: true });
-    const manifest = { slug, start: "/usr/local/bin/bun run server.ts", port, publicDir: "public" };
+    const manifest = { slug, start: "/usr/local/bin/bun run server.ts", port, publicDir: "public", secrets: [`${slug}.env`], ...extra };
     writeFileSync(join(sites, slug, "sitesolide.json"), JSON.stringify(manifest));
     writeFileSync(join(units, `${slug}.service`), "[Service]\nExecStart=/usr/local/bin/bun run server.ts\n");
+    writeFileSync(join(secrets, `${slug}.env`), `API_KEY=${SECRET_VALUE}\n`, { mode: 0o600 });
     return manifest;
   };
-  const manifests = [app("blog", 3040), app("shop", 3041), app("secret-project", 3042)];
+  const manifests = [app("blog", 3040), app("shop", 3041, { portal: true }), app("secret-project", 3042)];
+  // shop's block carries the portal: it may be shared, and given guests.
+  const guarded = "shop.{$SITESOLIDE_ZONE} {\n\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\turi /verifier\n\t}\n}\n";
+  writeFileSync(join(folder("caddy"), "shop.caddy"), guarded);
   const hash = await Bun.password.hash(PASSWORD, { algorithm: "bcrypt", cost: 4 });
   writeFileSync(join(secrets, "dashboard.env"), `PASSWORD_HASH=${hash}\n`, { mode: 0o600 });
   writeFileSync(join(secrets, "portal.env"), "OIDC_ISSUER=https://login.test-zone.invalid\nOIDC_CLIENT_ID=c\nOIDC_CLIENT_SECRET=s\nOIDC_ALLOWED_DOMAINS=acme.test\n", { mode: 0o600 });
@@ -178,7 +241,7 @@ beforeAll(async () => {
       codes: null,
       domains: null,
       ports: [],
-      blocks: {},
+      blocks: { shop: guarded },
       machine: { memoryTotal: 1, memoryAvailable: 1, diskTotal: 1, diskFree: 1, load1: 0, load5: 0, load15: 0, cores: 1 },
       previous: null,
     }),
@@ -191,7 +254,7 @@ beforeAll(async () => {
     stateFolder: state,
     hashFile: join(secrets, "dashboard.env"),
     accountsFile: join(root, "passwd"),
-    caddyFolder: folder("caddy"),
+    caddyFolder: join(root, "caddy"),
     gatekeeperFolder: folder("gatekeeper"),
     systemctl: "/path/that/does/not/exist",
   });
@@ -215,6 +278,7 @@ beforeAll(async () => {
       members: {
         system: createMembersSystem({ stateFolder: state, sitesDir: sites, secretsFolder: secrets, portalKeyFolder: join(root, "portal-key"), groupsFile: join(root, "group"), portalGroup: "" }),
         zone: ZONE,
+        portal: relayTo(() => PORTAL),
       },
     },
   );
@@ -286,12 +350,17 @@ describe("a member, end to end", () => {
 
   test("cannot open the super admin's pages, whatever the route", async () => {
     const { browser } = await signInAs(ALICE);
-    for (const path of ["/api/team", "/api/members", "/api/connectors", "/api/secrets", "/api/guests", "/api/sharing", "/api/backups?slug=blog"]) {
+    for (const path of ["/api/team", "/api/members", "/api/connectors", "/api/portal/audit"]) {
       const response = await browser.api(path);
       expect([path, response.status]).toEqual([path, 403]);
       expect(await response.json()).toMatchObject({ error: "owner-only" });
     }
-    expect((await browser.api("/api/secrets/unlock", { method: "POST", body: { password: PASSWORD } })).status).toBe(403);
+    // A member never unlocks with the dashboard's password, nor changes a password hash.
+    const unlock = await browser.api("/api/secrets/unlock", { method: "POST", body: { password: PASSWORD } });
+    expect(unlock.status).toBe(400);
+    expect(await unlock.json()).toMatchObject({ error: "reauthenticate" });
+    const password = await browser.api("/api/secrets/password", { method: "POST", body: { slug: "blog", file: "blog.env", variable: "PASSWORD_HASH", dashboardPassword: PASSWORD, newPassword: null } });
+    expect(password.status).toBe(403);
     expect((await browser.api("/api/members/member", { method: "PUT", body: { email: "x@acme.test", roles: {} } })).status).toBe(403);
   });
 
@@ -359,5 +428,114 @@ describe("the owner, beside the members", () => {
     expect(locked.status).toBe(423);
     // The member's restart route is a member's: the owner restarts from Secrets, unlocked.
     expect((await browser.api("/api/members/restart", { method: "POST", body: { slug: "blog" } })).status).toBe(403);
+  });
+});
+
+describe("a member's secrets, door and project, end to end", () => {
+  async function json(response: Response): Promise<Record<string, unknown>> {
+    return (await response.json()) as Record<string, unknown>;
+  }
+
+  test("a Developer sees names, unlocks through a forced sign-in, writes, and is refused a read by the steward", async () => {
+    await asRoot("PUT", "/members/member", { email: ALICE, roles: { blog: "developer", shop: "viewer" } });
+    const { browser } = await signInAs(ALICE);
+    const listed = await json(await browser.api("/api/secrets"));
+    expect((listed.projects as { slug: string }[]).map((project) => project.slug)).toEqual(["blog"]);
+    expect((listed.projects as { files: { readable: boolean; variables: string[] }[] }[])[0]!.files[0]).toMatchObject({ readable: false, variables: ["API_KEY"] });
+    expect(JSON.stringify(listed)).not.toContain(SECRET_VALUE);
+    expect(listed.until).toBeNull();
+
+    const write = { slug: "blog", file: "blog.env", variable: "FEATURE", value: "on-from-a-developer" };
+    const locked = await browser.api("/api/secrets/variable", { method: "PUT", body: write });
+    expect(locked.status).toBe(423);
+
+    const landed = await unlockAs(browser, ALICE);
+    expect(landed).toBe(`${DASHBOARD}/site/secrets/?s=blog`);
+    expect(((await json(await browser.api("/api/secrets"))).until as number) > Date.now()).toBe(true);
+    const written = await browser.api("/api/secrets/variable", { method: "PUT", body: write });
+    expect(written.status).toBe(200);
+    expect(readFileSync(join(root, "secrets", "blog.env"), "utf8")).toContain("FEATURE=on-from-a-developer");
+
+    const read = await browser.api("/api/secrets/value", { method: "POST", body: { slug: "blog", file: "blog.env", variable: "API_KEY" } });
+    expect(read.status).toBe(403);
+    const refusal = await json(read);
+    expect(refusal.message).toContain("never reads one");
+    expect(JSON.stringify(refusal)).not.toContain(SECRET_VALUE);
+
+    // The activity names them for the write and for the refused read.
+    const rows = ((await json(await browser.api("/api/audit?source=steward"))).rows as { actor: string; action: string; target: string; detail: { result?: string } }[]);
+    expect(rows.some((row) => row.actor === ALICE && row.action === "secrets.set" && row.target === "blog" && row.detail.result === "ok")).toBe(true);
+    expect(rows.some((row) => row.actor === ALICE && row.action === "secrets.read" && row.detail.result === "rejects")).toBe(true);
+    expect(rows.some((row) => row.actor === ALICE && row.action === "secrets.unlock")).toBe(true);
+  });
+
+  test("a sign-in that was not forced at the provider unlocks nothing", async () => {
+    const { browser } = await signInAs(ALICE);
+    next.ignoreReauth = true;
+    const landed = await unlockAs(browser, ALICE);
+    expect(landed).toBe(`${DASHBOARD}/site/secrets/?s=blog&unlock=refused`);
+    expect((await browser.api("/api/secrets/variable", { method: "PUT", body: { slug: "blog", file: "blog.env", variable: "A", value: "b" } })).status).toBe(423);
+  });
+
+  test("another account's forced sign-in does not unlock this member's session", async () => {
+    await asRoot("PUT", "/members/member", { email: "dan@acme.test", roles: { blog: "developer" } });
+    const { browser } = await signInAs(ALICE);
+    const landed = await unlockAs(browser, "dan@acme.test");
+    expect(landed).toBe(`${DASHBOARD}/site/secrets/?s=blog&unlock=another-account`);
+  });
+
+  test("the super admin's unlock and a member's live side by side", async () => {
+    await asRoot("PUT", "/members/member", { email: "gus@acme.test", roles: { blog: "developer" } });
+    const { browser } = await signInAs("gus@acme.test");
+    await unlockAs(browser, "gus@acme.test");
+    const signIn = await fetch(`${DASHBOARD}/api/signin`, { method: "POST", headers: { Origin: DASHBOARD, "Content-Type": "application/json" }, body: JSON.stringify({ password: PASSWORD }) });
+    const owner = new Browser();
+    owner.keep(signIn);
+    expect((await owner.api("/api/secrets/unlock", { method: "POST", body: { password: PASSWORD } })).status).toBe(200);
+    expect((await browser.api("/api/secrets/variable", { method: "PUT", body: { slug: "blog", file: "blog.env", variable: "SIDE", value: "by-side" } })).status).toBe(200);
+    expect((await owner.api("/api/secrets/value", { method: "POST", body: { slug: "blog", file: "blog.env", variable: "SIDE" } })).status).toBe(200);
+  });
+
+  test("a Project admin reads, shares and gives guest access on their project, the portal told their email by the steward", async () => {
+    const HAL = "hal@acme.test";
+    await asRoot("PUT", "/members/member", { email: HAL, roles: { blog: "developer", shop: "admin" } });
+    const { browser } = await signInAs(HAL);
+    await unlockAs(browser, HAL, "/site/secrets/?s=shop");
+    const read = await browser.api("/api/secrets/value", { method: "POST", body: { slug: "shop", file: "shop.env", variable: "API_KEY" } });
+    expect(await json(read)).toEqual({ value: SECRET_VALUE });
+
+    const before = portalCalls.length;
+    const shared = await browser.api(`/api/sharing/shop.${ZONE}`, { method: "PUT", body: { mode: "people", people: ["bob@acme.test"], domains: [] } });
+    expect(shared.status).toBe(200);
+    expect(portalCalls.at(-1)).toEqual({ route: `PUT /admin/sharing/shop.${ZONE}`, body: { mode: "people", people: ["bob@acme.test"], domains: [], actor: HAL } });
+    // blog is not behind the portal, and Alice is no admin there.
+    expect((await browser.api(`/api/sharing/blog.${ZONE}`, { method: "PUT", body: { mode: "people", people: [], domains: [] } })).status).toBe(400);
+
+    const guest = await browser.api("/api/guests", { method: "POST", body: { host: `shop.${ZONE}`, label: "Client", durationS: 3600 } });
+    expect(guest.status).toBe(201);
+    expect(portalCalls.at(-1)).toMatchObject({ route: "POST /admin/guests", body: { host: `shop.${ZONE}`, actor: HAL } });
+    expect(portalCalls.length).toBe(before + 2);
+    // The guests they see: shop's alone.
+    const listed = await json(await browser.api("/api/guests"));
+    expect((listed.guests as { host: string }[]).every((one) => one.host === `shop.${ZONE}`)).toBe(true);
+  });
+
+  test("a Project admin invites on their project, under their unlock, and is refused on another", async () => {
+    const IVY = "ivy@acme.test";
+    await asRoot("PUT", "/members/member", { email: IVY, roles: { blog: "developer", shop: "admin" } });
+    const { browser } = await signInAs(IVY);
+    expect((await browser.api("/api/members/project", { method: "PUT", body: { slug: "shop", email: "erin@acme.test", role: "viewer" } })).status).toBe(423);
+    await unlockAs(browser, IVY, "/site/members/?s=shop");
+    const invited = await browser.api("/api/members/project", { method: "PUT", body: { slug: "shop", email: "erin@acme.test", role: "viewer" } });
+    expect(invited.status).toBe(201);
+    const page = await json(await browser.api("/api/members/project?slug=shop"));
+    const roles = (page.members as { email: string; role: string; roles?: unknown }[]).map((member) => [member.email, member.role]);
+    expect(roles).toEqual(expect.arrayContaining([["erin@acme.test", "viewer"], [IVY, "admin"]]));
+    // Their role on shop alone: nothing of the projects they hold elsewhere.
+    expect((page.members as Record<string, unknown>[]).every((member) => !("roles" in member))).toBe(true);
+    const refused = await browser.api("/api/members/project", { method: "PUT", body: { slug: "blog", email: "erin@acme.test", role: "viewer" } });
+    expect(refused.status).toBe(403);
+    expect((await browser.api("/api/members/project?slug=blog")).status).toBe(403);
+    expect((await browser.api("/api/members/project", { method: "DELETE", body: { slug: "shop", email: "erin@acme.test" } })).status).toBe(200);
   });
 });

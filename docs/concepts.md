@@ -71,7 +71,8 @@ more.
 | The shared service (`api/`) | its own account | answer `ask` for on-demand TLS, generate preview locks |
 | The dashboard | `site-dashboard` | read a snapshot file, relay to the steward, call the portal |
 | The portal | `site-portal` | answer Caddy's `forward_auth`, sign people in with the identity provider, sign the dashboard's identity assertions |
-| The steward | root | write `/etc/sitesolide`, restart services, command the gatekeeper, keep the dashboard's members and judge what they do |
+| The steward | root | write `/etc/sitesolide`, restart services, command the gatekeeper, keep the dashboard's members and judge what they do, ask the portal for a Project admin through its relay |
+| The portal relay | root, no capability, on demand | forward the steward's connections to the portal's admin API, and to nothing else |
 | The gatekeeper | root, one-shot | rewrite one project's block, reload Caddy, probe, roll back |
 | The installer | root, one-shot | deploy one project for a team token, the archive read by the project's own account |
 | The collector | root, on a timer | read the machine, drop a snapshot where the dashboard can read it |
@@ -106,6 +107,19 @@ their roles; it can neither make a member nor widen one. What a member sees,
 the dashboard filters from data it already holds. See
 [dashboard/README.md](../dashboard/README.md#members).
 
+Their roles: a Viewer looks; a Developer also restarts the project's service
+and writes its secrets without ever reading one back; a Project admin looks
+after all of the project, its secrets read, its door, sharing, guests,
+backups, and its members, a role at most their own. **A member's secret read,
+a door, a restore, a role given, each waits for the member's own unlock**: a
+forced sign-in at the provider, which the portal asks for (`prompt=login`,
+`max_age=0`) and reads back in the provider's own ID token, and the steward
+checks again, for ten minutes and that member's session alone. The steward
+never hands a Developer a value, whatever the dashboard relays. A Project
+admin's sharing and guests reach the portal from the steward, as root,
+through a relay: the steward keeps no network, and the portal records the
+email the steward verified.
+
 **Everything that reloads Caddy shares one lock**, `/run/sitesolide-gatekeeper/caddy.lock`.
 The CLI, the deploy scripts and the gatekeeper all take it. Without it, a door
 set from the dashboard between a read and a write was silently overwritten, and
@@ -125,7 +139,11 @@ One exception, deliberate: the dashboard may reach the portal, where it creates
 and revokes guest access, sets each site's sharing, reads the portal's audit,
 and has its members' sign-ins sealed and redeemed.
 Those routes have no other guard than this rule, and a test refuses any fragment
-that would expose them.
+that would expose them. Root reaches them too: `sitesolide share` over the
+owner's SSH, and the steward for a Project admin, through
+`sitesolide-portal-relay`, a systemd proxy that forwards a socket only root
+opens to the portal's port and to nothing else, so that the steward's own
+unit keeps no network at all.
 
 And one set: a project that declares several `services` reaches its own ports,
 and nobody else's. Its front calls its API, its API its worker, and a neighbour
@@ -277,23 +295,24 @@ keeps its rows is in [dashboard/README.md](../dashboard/README.md#the-audit).
 | `portal.signin` | portal | `owner`, `guest:<id>` or an email | host | a sign-in with the shared password, a guest password or a work account, its role; repeats within a minute counted on one row |
 | `portal.signin_failed` | portal | `anonymous` or an email | host | a wrong password, or a work account refused and why |
 | `portal.signout` | portal | as it signed in | host | a sign-out |
-| `sharing.update` | portal | `owner` | host | who gets in changed: the mode, the people and domains added and removed |
-| `guest.create`, `guest.revoke` | portal | `owner` | host | a guest access given or revoked, the guest's label and expiry, never the password |
+| `sharing.update` | portal | `owner`, `token:<id>` or a Project admin's email | host | who gets in changed: the mode, the people and domains added and removed |
+| `guest.create`, `guest.revoke` | portal | `owner` or a Project admin's email | host | a guest access given or revoked, the guest's label and expiry, never the password |
+| `sharing.update`, `guest.create`, `guest.revoke`, `backup.restore` | steward | a member's email | slug | a member's change refused before it reached the portal or the backups: their role, or a domain the portal does not admit |
 | `egress.denied` | egress | `system` | slug, or none | connections refused, by destination and reason, counted by the minute |
 | `connector.use` | egress | `system` | slug | a connector's calls, counted by the minute, and how many failed |
 | `connector.update` | egress | `owner` | connector | a connector created, changed or removed; a replaced value is said, never shown |
 | `connector.grant` | egress | `owner` | slug | a connector granted to a site, or withdrawn |
 | `backup.run` | backups | `system` | none | an hourly run: snapshots taken and pruned, the offsite copy, the sites that failed |
-| `backup.restore` | backups | `owner` | slug | a restore, its snapshot and how it ended |
-| `member.invite`, `member.role`, `member.remove` | steward | `owner` | the member's email | a member invited, their roles changed, or removed, with their roles |
+| `backup.restore` | backups | `owner` or a Project admin's email | slug | a restore, its snapshot and how it ended |
+| `member.invite`, `member.role`, `member.remove` | steward | `owner`, or a Project admin's email | the member's email, or the project for a Project admin's change, the member in the detail | a member invited, their roles changed, or removed, with their roles; a Project admin's change refused, with their role |
 | `member.signin` | steward | the member's email | the member's email | a member's session opened, from an assertion it verified |
 | `member.signin_failed` | steward | the email, or `anonymous` when the assertion did not verify | the email, or none | a sign-in refused: not a member, an assertion replayed, signed by another key, expired, too old; a minute holds twenty at most |
 | `member.signout` | steward | the member's email | the member's email | a member signed out |
-| `secrets.unlock`, `secrets.lock` | steward | `owner` | none | the secrets unlocked, or the password refused, and locked |
-| `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner` | slug | a variable read, set or removed, by its name |
-| `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner` | slug | a secret file created, put back to its previous version, or replaced |
+| `secrets.unlock`, `secrets.lock` | steward | `owner`, or a member's email | none, or the member's email | the secrets unlocked, or the password or the forced sign-in refused, and locked |
+| `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner`, or a member's email | slug | a variable read, set or removed, by its name; a member's refused by role, with that role |
+| `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner`, or a member's email | slug | a secret file created, put back to its previous version, or replaced |
 | `secrets.password` | steward | `owner` | slug | a password hash changed |
-| `door.update` | steward | `owner` | slug | a site's portal turned on or off from *Access* |
+| `door.update` | steward | `owner`, or a Project admin's email | slug | a site's portal turned on or off from *Access* |
 | `service.restart` | steward | `owner`, or a member's email | slug | a service restarted from *Secrets*, or by a Developer or Project admin, with its verdict; a member's refused restart, with their role |
 
 The steward's rows say how each operation ended, `ok`, `rejects` or `failure`,

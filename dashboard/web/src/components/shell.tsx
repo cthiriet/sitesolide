@@ -19,6 +19,7 @@ import { AudienceSection } from "@/components/pages/site-audience"
 import { GuestsSection } from "@/components/pages/site-guests"
 import { SharingSection } from "@/components/pages/site-sharing"
 import { SecretsSection } from "@/components/pages/site-secrets"
+import { ProjectMembersSection } from "@/components/pages/site-members"
 import { SecretsActionsProvider } from "@/components/secrets-actions"
 import { SIDEBAR_WIDTH, readCollapsed, storeCollapsed } from "@/lib/sidebar"
 import { PAGE_TITLE_ID, mayOpen, pendingTitle, documentTitle, pageTitle, pageUrl, type Page } from "@/lib/pages"
@@ -40,22 +41,39 @@ function Section({ page }: { page: Extract<Page, { name: "site" }> }) {
       return <AccessSection slug={page.slug} />
     case "backups":
       return <BackupsSection slug={page.slug} />
+    case "members":
+      return <ProjectMembersSection slug={page.slug} />
   }
 }
 
 /**
- * What a member reads where the page is the super admin's: the service refuses
- * it too, this only says so instead of showing an error.
+ * What someone reads where the page is not theirs: a member on the super
+ * admin's pages, or on a section their role there does not open, the super
+ * admin on a project's Members. The service refuses it too, this only says so
+ * instead of showing an error.
  */
 function NotYours({ page }: { page: Page }) {
+  const { identity } = useData()
+  const member = identity !== null && identity.kind === "member"
   return (
     <>
       <PageHeader title={pageTitle(page)} />
       <PageBody>
         <Panel>
-          <EmptyState icon={ShieldOff} title="Not available to members">
-            This part of the dashboard is the super admin's. You see the projects you hold a role on, from Sites.
-          </EmptyState>
+          {!member ? (
+            <EmptyState icon={ShieldOff} title="On the Members page">
+              A project's members are its Project admins' to look after here. As the super admin, you see every member on
+              the machine's Members page.
+            </EmptyState>
+          ) : page.name === "site" ? (
+            <EmptyState icon={ShieldOff} title="Not part of your role">
+              Your role on {page.slug} doesn't open this section. Ask its Project admin, or the super admin, for another role.
+            </EmptyState>
+          ) : (
+            <EmptyState icon={ShieldOff} title="Not available to members">
+              This part of the dashboard is the super admin's. You see the projects you hold a role on, from Sites.
+            </EmptyState>
+          )}
         </Panel>
       </PageBody>
     </>

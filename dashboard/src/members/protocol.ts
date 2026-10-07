@@ -29,6 +29,15 @@
  *   POST   /members/whoami   { session }        -> WhoamiResponse
  *   POST   /members/signout  { session }        -> 204
  *   POST   /members/restart  { session, slug }  -> RestartResponse (src/secrets/protocol.ts)
+ *   POST   /members/unlock   { session, assertion }                 -> MemberUnlockResponse   a forced sign-in's assertion
+ *   POST   /members/lock     { session, token }                     -> 204
+ *   PUT    /members/project/member { session, token, slug, email, role } -> ProjectMemberResponse   a Project admin, unlocked
+ *   DELETE /members/project/member { session, slug, email }               -> ProjectMemberResponse   a Project admin, no unlock
+ *
+ * And a member's work on their projects, judged by role (src/members/powers.ts)
+ * in src/members/actions.ts: `/members/secrets/*`, `/members/portal`,
+ * `/members/sharing`, `/members/guests`, `/members/backups/restore`, each
+ * carrying the session, and the member's unlock token where the power needs it.
  *
  * On the owner's socket, `/run/sitesolide-steward-owner/owner.sock`, which
  * only root opens, for `sitesolide members` over the owner's SSH:
@@ -59,6 +68,13 @@ export const MEMBER_SESSION_DURATION_MS = 12 * 60 * 60 * 1000;
 /** An assertion whose sign-in at the provider is older than this opens no session. */
 export const MAX_AUTH_AGE_S = 24 * 60 * 60;
 
+/**
+ * A member's unlock: the forced sign-in at the provider behind it is five
+ * minutes old at most. The portal checks it against the provider's own
+ * `auth_time` (portal/src/oidc.ts), the steward against the assertion's.
+ */
+export const REAUTH_MAX_AGE_S = 5 * 60;
+
 /** Members on one machine: a team, not a directory. */
 export const MAX_MEMBERS = 200;
 
@@ -81,7 +97,7 @@ export const PORTAL_KEY_NAME = "assertion.key";
 /** The public half, in the steward's own state folder. */
 export const PUBLIC_KEY_NAME = "assertion.pub";
 
-/** What a member may see and do on one project. Phase 1: Developer and Project admin restart. */
+/** What a member may see and do on one project: see src/members/powers.ts. */
 export type Roles = Record<string, Role>;
 
 export type MemberView = {
@@ -120,6 +136,27 @@ export type MemberIdentity = { kind: "member"; email: string; name: string | nul
 export type SignInResponse = { session: string; expiresAt: number; identity: MemberIdentity };
 
 export type WhoamiResponse = { identity: MemberIdentity; expiresAt: number };
+
+/** A member's unlock token: the dashboard keeps it, attached to their session, and never hands it to the browser. */
+export type MemberUnlockResponse = { token: string; expiresAt: number };
+
+/**
+ * A Project admin's change on their project: the member as they may see
+ * them, their role on that project alone. `remove`: their last role gone,
+ * they are no member any more.
+ */
+export type ProjectMemberResponse = { member: MemberView; change: "invite" | "role" | "none" | "remove" };
+
+/** A project's members, for its Project admins: their role there, nothing of their other projects. */
+export type ProjectMembersResponse = {
+  slug: string;
+  members: { email: string; role: Role; invitedBy: string; updatedAt: number }[];
+  signIn: SignInSettings;
+  dashboardUrl: string;
+  providerName: string | null;
+  /** End of this session's unlock, null if locked. */
+  until: number | null;
+};
 
 /**
  * The steward's refusals for members, beside those of src/secrets/protocol.ts:

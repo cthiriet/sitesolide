@@ -130,5 +130,6 @@ export function siteIndicators(sources: SiteSources): Record<Section, Indicator 
   // Sharing reports nothing either: who a site is shared with is a choice,
   // not a problem. Backups neither: their state is read by the section itself,
   // and a failed run reaches the monitor.
-  return { overview: discrepancyIndicator(discrepancies), audience: null, secrets, guests: guestsIndicator, sharing: null, access, backups: null }
+  // Members neither: who holds a role is a choice too.
+  return { overview: discrepancyIndicator(discrepancies), audience: null, secrets, guests: guestsIndicator, sharing: null, access, backups: null, members: null }
 }

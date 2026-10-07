@@ -98,15 +98,15 @@ describe("listing and revoking", () => {
     const { store, routes } = admin();
     await routes.create(creation(VALID));
     const request = () => new Request("http://127.0.0.1:3026/admin/invites/AAAAAAAAAAAAAAA0", { method: "DELETE" });
-    expect(routes.remove(request(), "AAAAAAAAAAAAAAA0").status).toBe(204);
+    expect((await routes.remove(request(), "AAAAAAAAAAAAAAA0")).status).toBe(204);
     expect(store.rows.size).toBe(0);
-    expect(routes.remove(request(), "AAAAAAAAAAAAAAA0").status).toBe(404);
+    expect((await routes.remove(request(), "AAAAAAAAAAAAAAA0")).status).toBe(404);
   });
 
-  test("a malformed identifier is unknown", () => {
+  test("a malformed identifier is unknown", async () => {
     const { routes } = admin();
     const request = new Request("http://127.0.0.1:3026/admin/invites/x", { method: "DELETE" });
-    expect(routes.remove(request, "../../x").status).toBe(404);
+    expect((await routes.remove(request, "../../x")).status).toBe(404);
   });
 });
 
@@ -121,7 +121,7 @@ describe("a request that came through Caddy reaches nothing", () => {
         method: "DELETE",
         headers: carried,
       });
-      expect(routes.remove(removal, "AAAAAAAAAAAAAAA0").status).toBe(403);
+      expect((await routes.remove(removal, "AAAAAAAAAAAAAAA0")).status).toBe(403);
       expect(store.rows.size).toBe(0);
     });
   }
@@ -285,14 +285,34 @@ describe("the audit of guest accesses", () => {
     expect(JSON.stringify(audit.events)).not.toContain(guestHash(PASSWORD));
   });
 
+  test("records the actor its caller names: a Project admin's email, as the steward sends it", async () => {
+    const { routes, audit } = audited();
+    expect((await routes.create(creation({ ...VALID, actor: "bob@acme.test" }))).status).toBe(201);
+    const del = new Request("http://127.0.0.1:3026/admin/invites/AAAAAAAAAAAAAAA0", { method: "DELETE", body: JSON.stringify({ actor: "bob@acme.test" }) });
+    expect((await routes.remove(del, "AAAAAAAAAAAAAAA0")).status).toBe(204);
+    expect(audit.events.map((event) => [event.actor, event.action])).toEqual([
+      ["bob@acme.test", "guest.create"],
+      ["bob@acme.test", "guest.revoke"],
+    ]);
+  });
+
+  test("an actor the audit cannot record refuses the change, and records nothing", async () => {
+    const { routes, audit } = audited();
+    expect((await routes.create(creation({ ...VALID, actor: "Bob <bob@acme.test>" }))).status).toBe(400);
+    await routes.create(creation(VALID));
+    const del = new Request("http://127.0.0.1:3026/admin/invites/AAAAAAAAAAAAAAA0", { method: "DELETE", body: JSON.stringify({ actor: 42 }) });
+    expect((await routes.remove(del, "AAAAAAAAAAAAAAA0")).status).toBe(400);
+    expect(audit.events.map((event) => event.action)).toEqual(["guest.create"]);
+  });
+
   test("revoking it records the host it opened, and an unknown access records nothing", async () => {
     const { routes, audit } = audited();
     await routes.create(creation(VALID));
     const del = (id: string) => new Request(`http://127.0.0.1:3026/admin/invites/${id}`, { method: "DELETE" });
-    expect(routes.remove(del("AAAAAAAAAAAAAAA0"), "AAAAAAAAAAAAAAA0").status).toBe(204);
+    expect((await routes.remove(del("AAAAAAAAAAAAAAA0"), "AAAAAAAAAAAAAAA0")).status).toBe(204);
     expect(audit.events.map((e) => e.action)).toEqual(["guest.create", "guest.revoke"]);
     expect(audit.events[1]).toMatchObject({ actor: "owner", target: "forum.test-zone.invalid" });
-    expect(routes.remove(del("AAAAAAAAAAAAAAA9"), "AAAAAAAAAAAAAAA9").status).toBe(404);
+    expect((await routes.remove(del("AAAAAAAAAAAAAAA9"), "AAAAAAAAAAAAAAA9")).status).toBe(404);
     expect(audit.events).toHaveLength(2);
   });
 });

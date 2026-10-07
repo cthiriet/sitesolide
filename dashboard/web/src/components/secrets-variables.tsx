@@ -378,24 +378,27 @@ export function VariableRow({
  * no edit, no removal. The steward keeps a hash, which nobody reads back or
  * pastes.
  */
-export function PasswordRow({ name, onChangePassword }: { name: string; onChangePassword: () => void }) {
+/**
+ * A password hash: never shown, changed only with the dashboard's own
+ * password, which is the super admin's. `onChangePassword` null: a member,
+ * who sees the name and nothing to do with it.
+ */
+export function PasswordRow({ name, onChangePassword }: { name: string; onChangePassword: (() => void) | null }) {
   return (
     <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 py-1.5 pr-2 pl-4 @xl/file:min-h-11 @xl/file:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto] @xl/file:gap-x-4">
       <code className="font-mono text-[0.8125rem] wrap-anywhere">{name}</code>
       <span className="col-span-2 row-start-2 pb-1 text-xs text-pretty text-muted-foreground @xl/file:col-span-1 @xl/file:col-start-2 @xl/file:row-start-1 @xl/file:pb-0 @xl/file:text-sm">
-        A password hash. It never shows: change the password instead.
+        {onChangePassword === null
+          ? "A password hash. It never shows, and only the super admin changes it."
+          : "A password hash. It never shows: change the password instead."}
       </span>
       <div className="col-start-2 row-start-1 flex justify-end @xl/file:col-start-3">
-        <Button
-          variant="outline"
-          size="sm"
-          data-password-variable={name}
-          onClick={onChangePassword}
-          className="max-md:h-10"
-        >
-          <KeyRound />
-          Change password
-        </Button>
+        {onChangePassword !== null && (
+          <Button variant="outline" size="sm" data-password-variable={name} onClick={onChangePassword} className="max-md:h-10">
+            <KeyRound />
+            Change password
+          </Button>
+        )}
       </div>
     </li>
   )

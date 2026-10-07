@@ -234,8 +234,16 @@ export function isFlowText(value: unknown): value is string {
  * Where the browser goes to sign in. `select_account` when the person asked to
  * use another account: the provider would otherwise hand back the one already
  * signed in, without asking.
+ *
+ * `reauth`: a member unlocking their secrets in the dashboard, who must prove
+ * themselves again now. `max_age=0` asks every provider to sign them in
+ * afresh and, by the OpenID Connect specification, to say when in the ID
+ * token's `auth_time`, which the callback reads back: a provider that ignores
+ * the request hands back an old `auth_time`, and the unlock is refused rather
+ * than believed. `prompt=login` says the same in the words most providers
+ * know; Google documents no such prompt, and gets `max_age` alone.
  */
-export function authorizationUrl(discovery: Discovery, settings: Settings, secrets: FlowSecrets, chooseAccount: boolean): string {
+export function authorizationUrl(discovery: Discovery, settings: Settings, secrets: FlowSecrets, chooseAccount: boolean, reauth = false): string {
   const url = new URL(discovery.authorizationEndpoint);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", settings.clientId);
@@ -245,8 +253,32 @@ export function authorizationUrl(discovery: Discovery, settings: Settings, secre
   url.searchParams.set("nonce", secrets.nonce);
   url.searchParams.set("code_challenge", codeChallenge(secrets.verifier));
   url.searchParams.set("code_challenge_method", "S256");
-  if (chooseAccount) url.searchParams.set("prompt", "select_account");
+  const google = issuedBy(settings.issuer, GOOGLE_HOST);
+  const prompts = [...(chooseAccount ? ["select_account"] : []), ...(reauth && !google ? ["login"] : [])];
+  if (prompts.length > 0) url.searchParams.set("prompt", prompts.join(" "));
+  if (reauth) url.searchParams.set("max_age", "0");
   return url.toString();
+}
+
+/**
+ * A forced sign-in tolerates this much between the provider's clock and the
+ * portal's: the two are different machines.
+ */
+export const REAUTH_SKEW_S = 60;
+
+/** How old a forced sign-in may be when it comes back: the steward wants five minutes at most. */
+export const REAUTH_MAX_AGE_S = 300;
+
+/**
+ * Did the provider sign the person in during this flow? Its own `auth_time`,
+ * not the portal's clock: null, older than the flow, or older than five
+ * minutes, and the forced sign-in did not happen.
+ */
+export function freshReauth(authTime: number | null, flowStartedAt: number, nowS: number): boolean {
+  if (authTime === null) return false;
+  if (authTime < flowStartedAt - REAUTH_SKEW_S) return false;
+  if (authTime > nowS + REAUTH_SKEW_S) return false;
+  return nowS - authTime <= REAUTH_MAX_AGE_S;
 }
 
 // --- The ID token ----------------------------------------------------------------
@@ -546,7 +578,8 @@ export function createProvider(settings: Settings, fetcher: Fetcher = fetch, clo
   return { discovery, keys, exchange };
 }
 
-export type SignInResult = { identity: Identity } | { refusal: string; email: string | null };
+/** `authTime`: the ID token's `auth_time`, when the provider sent one; null otherwise. */
+export type SignInResult = { identity: Identity; authTime: number | null } | { refusal: string; email: string | null };
 
 /**
  * The whole verification of a callback: the code exchanged, the token's
@@ -590,7 +623,8 @@ export async function completeSignIn(
   if (!isHostedAccount(parts.claims, settings, identity.email)) {
     return { refusal: "unmanaged-account", email: identity.email };
   }
-  return { identity };
+  const authTime = parts.claims.auth_time;
+  return { identity, authTime: typeof authTime === "number" && Number.isSafeInteger(authTime) && authTime >= 0 ? authTime : null };
 }
 
 /**

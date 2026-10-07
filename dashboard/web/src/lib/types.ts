@@ -100,6 +100,7 @@ export type {
   IdentityView,
   MemberView,
   MembersPageResponse,
+  ProjectMembersResponse,
   Role,
   Roles,
   SessionResponse,

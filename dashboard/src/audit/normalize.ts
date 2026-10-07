@@ -147,6 +147,10 @@ export const STEWARD_ACTIONS: Readonly<Record<string, string>> = {
   "member.signin": "member.signin",
   "member.signin_failed": "member.signin_failed",
   "member.signout": "member.signout",
+  sharing: "sharing.update",
+  "guest.create": "guest.create",
+  "guest.revoke": "guest.revoke",
+  "backup.restore": "backup.restore",
 };
 
 /**

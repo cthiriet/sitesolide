@@ -11,8 +11,12 @@ import type { IdentityView, Role, Roles } from "./types"
 
 export const ROLE_CHOICES: readonly { role: Role; label: string; help: string }[] = [
   { role: "viewer", label: "Viewer", help: "Sees the project: its state, its audience, its activity." },
-  { role: "developer", label: "Developer", help: "Also restarts its service." },
-  { role: "admin", label: "Project admin", help: "Also restarts its service. More powers come in a later release." },
+  { role: "developer", label: "Developer", help: "Also restarts its service, and sets, replaces and removes its secrets without ever reading one back." },
+  {
+    role: "admin",
+    label: "Project admin",
+    help: "Everything of the project: reads its secrets, turns its portal on or off, shares it, gives guest access, restores its backups, and gives people a role on it.",
+  },
 ]
 
 export function roleLabel(role: Role): string {
@@ -28,6 +32,54 @@ export function mayRestart(identity: IdentityView | null, slug: string): boolean
 
 export function isMember(identity: IdentityView | null): identity is Extract<IdentityView, { kind: "member" }> {
   return identity !== null && identity.kind === "member"
+}
+
+/** The member's role on a project, null for none or for the super admin. */
+export function roleOn(identity: IdentityView | null, slug: string): Role | null {
+  if (!isMember(identity)) return null
+  return Object.hasOwn(identity.roles, slug) ? identity.roles[slug]! : null
+}
+
+/** A Project admin of this project: the one member who reads its secrets, its door, sharing, guests, backups and members. */
+export function isProjectAdmin(identity: IdentityView | null, slug: string): boolean {
+  return roleOn(identity, slug) === "admin"
+}
+
+/**
+ * Where a member's unlock begins: a forced sign-in at the provider, coming
+ * back to this page. A previous refusal's note is left off the way back.
+ */
+export function reauthUrl(path: string, search: string): string {
+  const params = new URLSearchParams(search)
+  params.delete("unlock")
+  const query = params.toString()
+  return `/api/sso/begin?${new URLSearchParams({ reauth: "1", return: `${path}${query === "" ? "" : `?${query}`}` })}`
+}
+
+/**
+ * What an unlock that came back without unlocking means, from the reason the
+ * dashboard put in the address (`?unlock=<reason>`).
+ */
+export function unlockFailure(reason: string | null): string | null {
+  switch (reason) {
+    case null:
+    case "":
+      return null
+    case "refused":
+      return "The unlock didn't go through: your identity provider didn't confirm that you just signed in again. Try once more."
+    case "another-account":
+      return "You signed in again with another account than this session's. Unlock with your own account."
+    case "busy":
+      return "Too many unlock attempts. Wait a minute, then try again."
+    case "nothing-to-unlock":
+      return "You're a viewer on every project: there's nothing to unlock."
+    case "outdated":
+      return "This server's steward doesn't know members' unlocks yet. Ask the super admin to run sitesolide upgrade."
+    case "expired":
+      return "This unlock took too long, or was finished in another browser. Unlock again."
+    default:
+      return "Unlocking isn't available right now. Try again in a moment."
+  }
 }
 
 /** `blog: Developer, shop: Viewer`. */

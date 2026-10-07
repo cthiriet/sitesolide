@@ -10,6 +10,10 @@
  * a portal skipping one of them fails here. And it misbehaves on demand,
  * through `next`: another key, another audience, an expired token, a nonce of
  * its own, an address it did not verify.
+ *
+ * Asked for `max_age`, it says when the person signed in, `auth_time`, as the
+ * specification requires: now, since it signs them in at once. A test makes
+ * it lie with `next.claims`, or keep quiet with `next.without`.
  */
 import type { Server } from "bun";
 
@@ -80,7 +84,7 @@ export async function startProvider(
   options: { alg?: Algorithm; tokenAuth?: string[] } = {},
 ): Promise<MockProvider> {
   const signer = await makeSigner(options.alg ?? "RS256", "key-1");
-  const codes = new Map<string, { nonce: string; challenge: string; redirectUri: string; next: Next }>();
+  const codes = new Map<string, { nonce: string; challenge: string; redirectUri: string; maxAge: string | null; next: Next }>();
   const tokenRequests: MockProvider["tokenRequests"] = [];
   let server: Server<undefined> | null = null;
 
@@ -131,6 +135,7 @@ export async function startProvider(
             nonce: params.get("nonce") ?? "",
             challenge: params.get("code_challenge") ?? "",
             redirectUri,
+            maxAge: params.get("max_age"),
             next,
           });
           back.searchParams.set("code", code);
@@ -180,6 +185,7 @@ export async function startProvider(
             nonce: grant.nonce,
             iat: now,
             exp: now + 300,
+            ...(grant.maxAge === null ? {} : { auth_time: now }),
             ...next.claims,
           };
           for (const name of next.without ?? []) delete claims[name];

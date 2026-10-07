@@ -6,7 +6,7 @@ import { PanelSkeleton } from "@/components/page"
 import { SiteSecretsPanel } from "@/components/secrets-site"
 import { SiteState, SectionLink, SitePage, useSite } from "@/components/site"
 import { SiteDiscrepancies, AccessPanel, AddressesPanel, ServicePanel, ServicesPanel, StoragePanel } from "@/components/site-card"
-import { isMember, mayRestart } from "@/lib/members"
+import { isMember, mayRestart, roleOn } from "@/lib/members"
 import { siteAddress } from "@/lib/sites"
 import type { Discrepancy, Site } from "@/lib/types"
 
@@ -49,9 +49,13 @@ function OverviewSkeleton() {
  */
 export function OverviewSection({ slug }: { slug: string }) {
   const { now, identity } = useData()
-  // A member sees the site, not its guests nor its secrets, and restarts its
+  // A member sees what their role on the site opens: its secrets from
+  // Developer up, its door and guests as Project admin, and restarts its
   // service as a Developer or a Project admin; the steward decides.
   const member = isMember(identity)
+  const role = roleOn(identity, slug)
+  const admin = !member || role === "admin"
+  const secrets = !member || role === "developer" || role === "admin"
   const { site, discrepancies } = useSite(slug)
   return (
     <SitePage
@@ -71,9 +75,9 @@ export function OverviewSection({ slug }: { slug: string }) {
               <StoragePanel site={snapshot} now={now} />
             </div>
             <div className="grid min-w-0 gap-6">
-              <AccessPanel site={snapshot} actions={member ? undefined : <SectionLink slug={slug} section="access" />} />
-              {!member && <SiteGuestsPanel slug={slug} />}
-              {!member && <SiteSecretsPanel slug={slug} />}
+              <AccessPanel site={snapshot} actions={admin ? <SectionLink slug={slug} section="access" /> : undefined} />
+              {admin && <SiteGuestsPanel slug={slug} />}
+              {secrets && <SiteSecretsPanel slug={slug} />}
             </div>
           </div>
         </>

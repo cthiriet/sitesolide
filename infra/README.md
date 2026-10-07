@@ -9,7 +9,7 @@ others. The architecture they carry is described in
 |---|---|---|
 | `caddy/` | the Caddyfile, its snippets, the drop-in `caddy.service.d/override.conf` | `bin/deploy-caddy.sh`, `sitesolide setup` |
 | `gatekeeper/` | the units that alone touch Caddy from the machine | `bin/deploy-gatekeeper.sh` |
-| `steward/` | the root daemon that writes secrets for the dashboard | `bin/deploy-steward.sh` |
+| `steward/` | the root daemon that writes secrets for the dashboard, and its relay to the portal's admin API | `bin/deploy-steward.sh` |
 | `collector/` | the timer that snapshots the machine for the dashboard | `bin/deploy-collector.sh` |
 | `loopback/` | the nftables rule that isolates services on the loopback | `bin/deploy-loopback.sh` |
 | `monitor/` | the monitor's unit and timer | `bin/deploy-monitor.sh` |

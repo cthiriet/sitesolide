@@ -133,7 +133,9 @@ describe("a unit hands over what its service demands", () => {
     }
     // The loopback unit runs nft with a file, no service of ours and no
     // setting to hand over.
-    const exempt = new Set(["infra/loopback/sitesolide-loopback.service"]);
+    // The steward's relay to the portal runs systemd's own proxy, configured on
+    // its command line: no service of ours either.
+    const exempt = new Set(["infra/loopback/sitesolide-loopback.service", "infra/steward/sitesolide-portal-relay.service"]);
     expect(found.filter((path) => !listed.has(path) && !exempt.has(path))).toEqual([]);
     expect(found.length).toBeGreaterThan(0);
   });

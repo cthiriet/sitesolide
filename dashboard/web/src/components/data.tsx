@@ -101,7 +101,7 @@ export function useSecrets(generation: number, onSessionExpired: () => void, ena
     return tache
   }, [onSessionExpired])
 
-  // A member reads no secret: the route is the super admin's.
+  // Read only by whom it concerns: a member who is a Viewer everywhere has none.
   useEffect(() => {
     if (enabled) void reload()
   }, [reload, generation, enabled])
@@ -149,7 +149,7 @@ export function useGuests(generation: number, onSessionExpired: () => void, enab
     [onSessionExpired],
   )
 
-  // A member reads no guest access: the route is the super admin's.
+  // Read only by whom it concerns: the super admin, a Project admin.
   useEffect(() => {
     if (enabled) void reload()
   }, [reload, generation, enabled])
@@ -186,6 +186,8 @@ export type Data = {
   signOut: () => void
   /** Who is signed in: the owner, or a member and their roles. */
   identity: IdentityView | null
+  /** Whether the portal offers its provider, and under which name: a member unlocks through it. */
+  sso: SsoOffer
 }
 
 const DataContext = createContext<Data | null>(null)
@@ -304,8 +306,12 @@ function OpenSession({
     void postSignOut().then(() => onClosed(currentConfigured))
   }, [onClosed, currentConfigured])
 
-  const secrets = useSecrets(generation, sessionExpired, !member)
-  const guests = useGuests(generation, sessionExpired, !member)
+  // A member reads the secrets of the projects where they are a Developer or
+  // a Project admin, and the guests of those where they are a Project admin;
+  // the steward and the service decide what comes back.
+  const roles = currentIdentity !== null && currentIdentity.kind === "member" ? Object.values(currentIdentity.roles) : []
+  const secrets = useSecrets(generation, sessionExpired, !member || roles.some((role) => role !== "viewer"))
+  const guests = useGuests(generation, sessionExpired, !member || roles.includes("admin"))
   const bySite = useMemo(() => secretsBySite(secrets.projects), [secrets.projects])
 
   const reading = received?.reading ?? null
@@ -330,8 +336,9 @@ function OpenSession({
       sessionExpired,
       signOut,
       identity: currentIdentity,
+      sso: currentSso,
     }
-  }, [reading, receivedAt, now, failure, inProgress, generation, refresh, secrets, bySite, guests, sessionExpired, signOut, currentIdentity])
+  }, [reading, receivedAt, now, failure, inProgress, generation, refresh, secrets, bySite, guests, sessionExpired, signOut, currentIdentity, currentSso])
 
   // Signed in again: who it is may have changed, a member in the owner's place.
   const open = useCallback(() => {

@@ -201,8 +201,28 @@ function word(table: Readonly<Record<string, string>>, key: string | null): stri
   return key !== null && Object.hasOwn(table, key) ? table[key]! : key
 }
 
-/** The steward's operations on secrets, doors and services, as distinct from its members' events. */
-type StewardOperation = Exclude<Operation, `member.${string}`>
+/**
+ * The steward's operations on secrets, doors and services, as distinct from
+ * its members' events and from a Project admin's change it refused before it
+ * reached the portal or the backups, which record those that go through.
+ */
+type StewardOperation = Exclude<Operation, `member.${string}` | "sharing" | "guest.create" | "guest.revoke" | "backup.restore">
+
+/** What a Project admin's change the steward refused tried to do. */
+const REFUSED_CHANGES: Readonly<Record<string, string>> = {
+  "sharing.update": "Tried to change who gets in",
+  "guest.create": "Tried to give a guest access",
+  "guest.revoke": "Tried to revoke a guest access",
+  "backup.restore": "Tried to restore a snapshot",
+}
+
+/** A member's role, or its absence, as the steward journals a refusal by role. */
+function roleNote(note: string | null): string | null {
+  if (note === null) return null
+  if (note === "no role") return "Refused: no role on this project"
+  const role = note.startsWith("role ") ? note.slice("role ".length) : null
+  return role === null ? `Refused: ${note}` : `Refused: ${role === "admin" ? "project admin" : role} here`
+}
 
 /** The steward's operation behind an action, for the words its own Activity always used. */
 const STEWARD_OPERATIONS: Readonly<Record<string, StewardOperation>> = {
@@ -295,14 +315,21 @@ function stewardWords(row: AuditRow, operation: StewardOperation): AuditWords {
 export function auditWords(row: AuditRow): AuditWords {
   const detail = row.detail ?? {}
   if (Object.hasOwn(STEWARD_OPERATIONS, row.action) && row.source === "steward") return stewardWords(row, STEWARD_OPERATIONS[row.action]!)
+  if (Object.hasOwn(REFUSED_CHANGES, row.action) && row.source === "steward") {
+    return { summary: REFUSED_CHANGES[row.action]!, note: roleNote(text(detail.note)), tone: "attention" }
+  }
+  // A Project admin's change of a member: the project is the target, the member in the detail.
+  const member = text(detail.member)
 
   switch (row.action) {
     case "member.invite":
-      return { summary: `Invited ${row.target ?? "a member"}`, note: text(detail.note), tone: "neutral" }
+      if (text(detail.result) === "rejects") return { summary: "Tried to invite someone", note: roleNote(text(detail.note)), tone: "attention" }
+      return { summary: `Invited ${member ?? row.target ?? "a member"}`, note: text(detail.note), tone: "neutral" }
     case "member.role":
-      return { summary: `Changed the roles of ${row.target ?? "a member"}`, note: text(detail.note), tone: "neutral" }
+      if (text(detail.result) === "rejects") return { summary: "Tried to change someone's role", note: roleNote(text(detail.note)), tone: "attention" }
+      return { summary: `Changed the roles of ${member ?? row.target ?? "a member"}`, note: text(detail.note), tone: "neutral" }
     case "member.remove":
-      return { summary: `Removed the member ${row.target ?? ""}`.trim(), note: null, tone: "neutral" }
+      return { summary: `Removed the member ${member ?? row.target ?? ""}`.trim(), note: null, tone: "neutral" }
     case "member.signin":
       return { summary: "Signed in to the dashboard with a work account", note: null, tone: "neutral" }
     case "member.signin_failed":

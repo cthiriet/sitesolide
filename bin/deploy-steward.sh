@@ -34,6 +34,14 @@ OWNER_FOLDER="/run/$UNIT-owner"
 OWNER_SOCKET="$OWNER_FOLDER/owner.sock"
 # Where the steward lays the private key the portal signs members' sign-ins with.
 PORTAL_KEY_FOLDER="/etc/sitesolide-portal"
+# The steward's relay to the portal's admin API, for a Project admin's sharing
+# and guests: a socket root's alone, and systemd-socket-proxyd behind it. The
+# steward's own unit keeps no network.
+RELAY="sitesolide-portal-relay"
+RELAY_SOCKET_SOURCE="$REPO_ROOT/infra/steward/$RELAY.socket"
+RELAY_SERVICE_SOURCE="$REPO_ROOT/infra/steward/$RELAY.service"
+RELAY_FOLDER="/run/$RELAY"
+RELAY_SOCKET="$RELAY_FOLDER/portal.sock"
 
 fail() {
   echo "!! $1" >&2
@@ -50,7 +58,9 @@ case "${1:-}" in
   *) echo "usage: bin/deploy-steward.sh [--fingerprint]" >&2; exit 2 ;;
 esac
 
-[ -f "$UNIT_SOURCE" ] || { echo "unit not found: $UNIT_SOURCE" >&2; exit 1; }
+for source in "$UNIT_SOURCE" "$RELAY_SOCKET_SOURCE" "$RELAY_SERVICE_SOURCE"; do
+  [ -f "$source" ] || { echo "unit not found: $source" >&2; exit 1; }
+done
 
 echo "-> local build"
 LOCAL="$(mktemp -d)"
@@ -68,6 +78,8 @@ echo "   steward.js, fingerprint ${FINGERPRINT:0:12}"
 if [ -n "$FINGERPRINT_ONLY" ]; then
   echo "$FINGERPRINT  $TARGET_JS"
   sitesolide_fingerprint "$UNIT_SOURCE" "/etc/systemd/system/$UNIT.service"
+  sitesolide_fingerprint "$RELAY_SOCKET_SOURCE" "/etc/systemd/system/$RELAY.socket"
+  sitesolide_fingerprint "$RELAY_SERVICE_SOURCE" "/etc/systemd/system/$RELAY.service"
   exit 0
 fi
 
@@ -82,6 +94,11 @@ fi
 # ReadWritePaths on a missing folder makes the unit fail with 226/NAMESPACE.
 if ! ssh -n "$SITESOLIDE_SERVER" "sudo test -d /etc/sitesolide && test -x /usr/local/bin/bun && test -x /usr/bin/systemctl"; then
   echo "!! /etc/sitesolide, /usr/local/bin/bun or /usr/bin/systemctl missing from the machine" >&2
+  exit 1
+fi
+# The relay runs systemd's own proxy, part of the systemd package.
+if ! ssh -n "$SITESOLIDE_SERVER" "test -x /usr/lib/systemd/systemd-socket-proxyd"; then
+  echo "!! /usr/lib/systemd/systemd-socket-proxyd missing from the machine: the portal relay needs it" >&2
   exit 1
 fi
 
@@ -123,7 +140,7 @@ echo "-> sending"
 # A folder whose name is drawn by mktemp rather than predictable: what comes out
 # of it is installed as root.
 REMOTE="$(ssh -n "$SITESOLIDE_SERVER" "mktemp -d")"
-rsync -a "$LOCAL/steward.js" "$UNIT_SOURCE" "$SITESOLIDE_SERVER:$REMOTE/"
+rsync -a "$LOCAL/steward.js" "$UNIT_SOURCE" "$RELAY_SOCKET_SOURCE" "$RELAY_SERVICE_SOURCE" "$SITESOLIDE_SERVER:$REMOTE/"
 
 echo "-> installation"
 ssh -n "$SITESOLIDE_SERVER" "
@@ -131,11 +148,18 @@ ssh -n "$SITESOLIDE_SERVER" "
   sudo install -d -m 0755 -o root -g root $PORTAL_KEY_FOLDER
   sudo install -D -m 0644 -o root -g root $REMOTE/steward.js $TARGET_JS
   sudo install -m 0644 -o root -g root $REMOTE/$UNIT.service /etc/systemd/system/$UNIT.service
+  sudo install -m 0644 -o root -g root $REMOTE/$RELAY.socket /etc/systemd/system/$RELAY.socket
+  sudo install -m 0644 -o root -g root $REMOTE/$RELAY.service /etc/systemd/system/$RELAY.service
   rm -rf $REMOTE
   sudo systemctl daemon-reload
   sudo systemctl enable $UNIT.service
   sudo systemctl reset-failed $UNIT.service 2>/dev/null || true
   sudo systemctl restart $UNIT.service
+  # The relay: the proxy stopped first, idle as a rule, so that the socket
+  # takes any change of its unit; the next connection starts it again.
+  sudo systemctl stop $RELAY.service 2>/dev/null || true
+  sudo systemctl enable $RELAY.socket
+  sudo systemctl restart $RELAY.socket
 "
 
 echo "-> verifications"
@@ -219,4 +243,16 @@ case "$key" in
   *) fail "$PORTAL_KEY_FOLDER/assertion.key is '$key', expected 640 root:site-portal" ;;
 esac
 
-echo "   active, socket 660 root:site-dashboard, open to the dashboard and closed to the others; the owner's socket root's alone"
+# The relay to the portal: root's alone, as the owner's socket, and root
+# reaches the portal's admin API through it once the portal is deployed.
+permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $RELAY_FOLDER $RELAY_SOCKET 2>/dev/null | tr '\n' ' '")"
+[ "$permissions" = "700 root:root 600 root:root " ] || fail "$RELAY_FOLDER and its socket are '$permissions', expected 700 root:root and 600 root:root"
+code="$(ssh -n "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $RELAY_SOCKET http://portal/admin/sharing" || true)"
+[ "$code" = "000" ] || fail "site-dashboard reaches the portal relay (code ${code:-nothing}): it must be root's alone"
+code="$(ssh -n "$SITESOLIDE_SERVER" "sudo curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $RELAY_SOCKET http://portal/admin/sharing" || true)"
+case "$code" in
+  200) echo "   portal relay: root reaches the portal's admin API, 600 root:root" ;;
+  *) echo "   note: the portal does not answer through its relay yet (code ${code:-nothing}): Project admins cannot share nor give guest access until it is deployed" ;;
+esac
+
+echo "   active, socket 660 root:site-dashboard, open to the dashboard and closed to the others; the owner's socket and the portal relay root's alone"

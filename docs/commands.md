@@ -169,10 +169,13 @@ domain: see [team.md](team.md#sharing-what-you-deployed).
 People who sign in to the dashboard itself with their work account, through
 the portal's identity provider, and see only the projects the owner gives
 them a role on: Viewer (the project's state, audience and activity),
-Developer (also restarts its service) and Project admin (the same for now;
-more comes in a later release). They never get a password, a token or root.
-`sitesolide members` is the owner's way to manage them, from any folder, over
-SSH; the dashboard's *Members* page is the other.
+Developer (also restarts its service, and sets its secrets without ever
+reading one back) and Project admin (everything of the project: its secrets,
+its portal door, sharing, guests, backups, and giving people a role on it, at
+most their own). They never get a password, a token or root. `sitesolide
+members` is the owner's way to manage them, from any folder, over SSH; the
+dashboard's *Members* page is the other, and a Project admin has their
+project's own, see [team.md](team.md#members-beside-tokens).
 
 ```console
 $ sitesolide members add alice@acme.com --project notes --role developer --project shop --role viewer

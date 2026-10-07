@@ -1114,8 +1114,10 @@ describe("localSteward, on a real Unix socket", () => {
       const entry = tail.slice(0, finish === -1 ? undefined : finish);
       const verbes = entry.match(/\b(GET|POST|PUT|DELETE):/g) ?? [];
       expect(verbes.length).toBeGreaterThan(0);
-      // Every verb of the route goes through `long`, which sets the idle timeout.
-      expect({ path, longs: entry.match(/long\(req, server, /g)?.length ?? 0 }).toEqual({ path, longs: verbes.length });
+      // Every verb of the route goes through `long`, which sets the idle
+      // timeout: the super admin's handler, and a member's beside it where
+      // `either()` gives one that waits on the steward's lock.
+      expect({ path, enough: (entry.match(/long\(req, server, /g)?.length ?? 0) >= verbes.length }).toEqual({ path, enough: true });
     }
   });
 

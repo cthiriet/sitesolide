@@ -1,0 +1,50 @@
+# The relay behind sitesolide-portal-relay.socket: systemd's own proxy, which
+# forwards every connection the steward opens to the portal's admin API, and
+# to nothing else. Started by the socket on the first connection, it stops
+# after five idle minutes.
+#
+# Root, because the loopback rule (bin/cli/loopback.ts) leaves the portal's
+# port to Caddy, root and the dashboard alone, and the portal must see a
+# caller the dashboard cannot be: the portal records the actor the steward
+# names. Root with no capability at all, the system read-only, and the
+# loopback alone: what it may reach is 127.0.0.1, and what it asks for is the
+# one port on its command line, the portal's (PORTAL_PORT in
+# bin/cli/portal.ts).
+
+[Unit]
+Description=Relay from the steward to the portal's admin API
+Requires=sitesolide-portal-relay.socket
+After=sitesolide-portal-relay.socket
+
+[Service]
+Type=notify
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd --exit-idle-time=5min 127.0.0.1:3026
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# AF_UNIX for the socket handed over by systemd, AF_INET for the loopback.
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1
+MemoryMax=32M

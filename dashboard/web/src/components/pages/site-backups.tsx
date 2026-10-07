@@ -558,6 +558,7 @@ function RestoreDialog({
 
 function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnType<typeof useBackups>; onRestore: (snapshot: SnapshotView) => void }) {
   const { now, offset } = useData()
+  const actions = useSecretsActions()
   const serverNow = now + offset
   const { load, reload } = backups
   const [rereading, setRereading] = useState(false)
@@ -647,8 +648,10 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
     <>
       <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
         The server saves {slug}'s data folder every hour. Restoring puts a snapshot in place of the current data, which is
-        saved first, so a restore can be undone. It asks for the dashboard password.
+        saved first, so a restore can be undone. {actions.member ? "It asks you to sign in again with your provider." : "It asks for the dashboard password."}
       </p>
+
+      {actions.unlockNotice !== null && <Banner tone="error">{actions.unlockNotice}</Banner>}
 
       {restore?.state === "running" && (
         <Banner tone="attention" icon={ArchiveRestore}>

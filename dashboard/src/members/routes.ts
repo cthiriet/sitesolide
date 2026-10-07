@@ -3,7 +3,8 @@
  * others: the tests drive them with a simulated steward and portal.
  *
  *   GET    /api/session            who is signed in, and whether the provider is offered
- *   GET    /api/sso/begin          a member's sign-in, through the portal: a top-level navigation
+ *   GET    /api/sso/begin          a member's sign-in, through the portal: a top-level navigation;
+ *                                  `reauth=1`, a member's unlock, the provider made to ask again
  *   GET    /api/sso/complete       where the portal sends the browser back, with a code
  *   GET    /api/members            the Members page, the super admin's
  *   PUT    /api/members/member     invite, or change roles: unlocked, as creating a token
@@ -57,6 +58,8 @@ export type MembersRoutesDependencies = {
   ownerSession: SessionReader;
   /** The unlock tokens of the Secrets section: inviting asks for the same unlock. */
   tokens: Tokens;
+  /** The members' own unlock tokens, by session hash: a forced sign-in that checks out lays one here. */
+  unlocks: Tokens;
   limiter: SignInLimiter;
   ownerDurationMs: number;
   memberDurationMs: number;
@@ -76,6 +79,8 @@ export type MembersRoutes = {
   restriction: (req: Request, now: number) => Promise<Restriction | null>;
   /** Not a route: the roles that bound what a session sees, null for the owner, `unreachable` when the steward is mute. */
   roles: (req: Request, now: number) => Promise<Roles | null | "no-session" | "unreachable">;
+  /** Not a route: the provider's name as the portal gives it, null when none is offered. */
+  providerName: (now: number) => Promise<string | null>;
 };
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -89,6 +94,28 @@ const error = (status: number, code: string, message: string) => json({ error: c
 /** The binding cookie of a sign-in in flight: on the dashboard's host alone, for the ten minutes a flow lasts. */
 const BINDING_SUFFIX = "sso";
 const BINDING_DURATION_S = 10 * 60;
+/**
+ * What the binding cookie carries after the binding when the flow is a
+ * member's unlock: whatever the portal answers, the assertion then goes to
+ * the steward's unlock, which refuses one that is not a forced sign-in,
+ * rather than opening a session the member already has.
+ */
+const REAUTH_MARK = ".reauth";
+
+/**
+ * Unlocks in flight, the member's session kept here from the moment they left
+ * for the provider. The session cookie is `SameSite=Strict`, and the way back
+ * from a provider on another site is a cross-site navigation, which never
+ * carries it: the binding, which does travel (`Lax`), finds the session again.
+ * A minute's handful at most; past the bound, the oldest goes.
+ */
+const MAX_PENDING_UNLOCKS = 1000;
+
+type PendingUnlock = { token: string; hash: string; email: string; expiresAt: number };
+
+function bindingKey(binding: string): string {
+  return new Bun.CryptoHasher("sha256").update(binding).digest("hex");
+}
 
 /** How long what the portal says of its provider is kept: the sign-in page asks for it on every visit. */
 const SSO_CACHE_MS = 30_000;
@@ -133,6 +160,14 @@ function refused(reason: string, cookies: string[] = []): Response {
   return new Response(null, { status: 303, headers });
 }
 
+/** Back to the page a member unlocked from, with why not when the unlock did not go through. */
+function backTo(returnTo: string, reason: string | null, cookies: string[]): Response {
+  const location = reason === null ? returnTo : `${returnTo}${returnTo.includes("?") ? "&" : "?"}unlock=${encodeURIComponent(reason)}`;
+  const headers = new Headers({ ...NO_STORE, Location: location });
+  for (const cookie of cookies) headers.append("Set-Cookie", cookie);
+  return new Response(null, { status: 303, headers });
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -168,6 +203,19 @@ function relayRefusal(reached: Reached): Response {
 
 export function createMembersRoutes(dependencies: MembersRoutesDependencies, clock: () => number = Date.now): MembersRoutes {
   const { publicUrl, online, steward, portal, store, resolve, tokens, limiter } = dependencies;
+  const pendingUnlocks = new Map<string, PendingUnlock>();
+
+  function keepPending(key: string, pending: PendingUnlock, now: number): void {
+    for (const [held, entry] of pendingUnlocks) if (entry.expiresAt <= now) pendingUnlocks.delete(held);
+    if (pendingUnlocks.size >= MAX_PENDING_UNLOCKS) pendingUnlocks.delete(pendingUnlocks.keys().next().value!);
+    pendingUnlocks.set(key, pending);
+  }
+
+  function takePending(key: string, now: number): PendingUnlock | null {
+    const pending = pendingUnlocks.get(key) ?? null;
+    pendingUnlocks.delete(key);
+    return pending !== null && pending.expiresAt > now ? pending : null;
+  }
 
   let sso: { at: number; value: { offered: boolean; providerName: string | null } } | null = null;
   /** Whether the portal offers its provider, and under which name; nothing offered when it cannot say. */
@@ -225,10 +273,19 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
     async begin(req) {
       const params = new URL(req.url).searchParams;
       const returnTo = safeReturn(params.get("return"));
+      // A member's unlock: a forced sign-in at the provider, for a session that
+      // is theirs already. Anyone else goes back to signing in.
+      const reauth = params.get("reauth") === "1";
       const binding = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+      if (reauth) {
+        const now = clock();
+        const resolved = await resolve(req, now);
+        if (resolved === "unreachable" || resolved === null || resolved.identity.kind !== "member") return refused("expired");
+        keepPending(bindingKey(binding), { token: resolved.token, hash: resolved.session.hash, email: resolved.identity.email, expiresAt: now + BINDING_DURATION_S * 1000 }, now);
+      }
       let start: string | null = null;
       try {
-        const response = await portal.flow({ binding, returnTo, chooseAccount: params.get("account") === "choose" });
+        const response = await portal.flow({ binding, returnTo, chooseAccount: params.get("account") === "choose", ...(reauth ? { reauth: true } : {}) });
         const body: unknown = await response.json();
         if (response.status === 200 && isObject(body) && typeof body.start === "string") start = body.start;
       } catch {
@@ -243,14 +300,16 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
       }
       if (url === null || !(url.protocol === "https:" || (!online && url.protocol === "http:"))) return refused("unavailable");
       const headers = new Headers({ ...NO_STORE, Location: url.toString(), "Referrer-Policy": "no-referrer" });
-      headers.append("Set-Cookie", bindingCookie(binding, online, BINDING_DURATION_S));
+      headers.append("Set-Cookie", bindingCookie(reauth ? `${binding}${REAUTH_MARK}` : binding, online, BINDING_DURATION_S));
       return new Response(null, { status: 303, headers });
     },
 
     async complete(req) {
       const now = clock();
       const spent = [bindingCookie("", online, 0)];
-      const binding = readNamedCookie(req.headers.get("cookie"), bindingCookieName(online));
+      const carried = readNamedCookie(req.headers.get("cookie"), bindingCookieName(online));
+      const reauth = carried !== null && carried.endsWith(REAUTH_MARK);
+      const binding = carried === null ? null : reauth ? carried.slice(0, -REAUTH_MARK.length) : carried;
       const code = new URL(req.url).searchParams.get("code") ?? "";
       if (binding === null) return refused("expired", spent);
       if (limiter.global(now) > 0) return refused("busy", spent);
@@ -281,6 +340,30 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
         return refused("invalid", spent);
       }
       const email = reading.claims.email;
+
+      // A forced sign-in comes back for a session that is open: it unlocks that
+      // member's secrets, never opens a session. The steward checks it all
+      // again, the email, the forced sign-in, its age, and decides.
+      if (reauth) {
+        // The session the member left from, kept at begin: the way back from
+        // the provider carries no Strict cookie.
+        const pending = takePending(bindingKey(binding), now);
+        if (pending === null) return backTo(returnTo, "expired", spent);
+        if (pending.email !== email) return backTo(returnTo, "another-account", spent);
+        const unlocked = await reach(() => steward.unlock(pending.token, assertion!), [pending.token]);
+        if (unlocked.kind !== "received") return backTo(returnTo, unlocked.kind === "unavailable" ? "outdated" : "unavailable", spent);
+        const token = unlocked.body.token;
+        const expiresAt = unlocked.body.expiresAt;
+        if (unlocked.status === 200 && typeof token === "string" && /^[A-Za-z0-9_-]{43}$/.test(token) && typeof expiresAt === "number") {
+          dependencies.unlocks.set(pending.hash, { token, expiresAt });
+          return backTo(returnTo, null, spent);
+        }
+        if (unlocked.status === 401 && unlocked.body.error === "signed-out") return refused("expired", spent);
+        const reason = unlocked.status === 429 ? "busy" : unlocked.status === 403 ? "nothing-to-unlock" : unlocked.body.error === "invalid-assertion" ? "refused" : "failed";
+        return backTo(returnTo, reason, spent);
+      }
+      // A sign-in, which opens a session: counted per email. An unlock opens
+      // none, and the steward counts its own per member.
       if (limiter.identity(email, now) > 0) return refused("busy", spent);
 
       const reached = await reach(() => steward.signIn(assertion!));
@@ -397,5 +480,7 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
       if (resolved === "unreachable") return "unreachable";
       return resolved.identity.kind === "owner" ? null : resolved.identity.roles;
     },
+
+    providerName: async (now) => (await ssoOffer(now)).providerName,
   };
 }

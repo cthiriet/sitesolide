@@ -15,6 +15,7 @@
 import { cleanEmail, maySignIn } from "../../borrowed/sharing";
 import { isValidSlug } from "../../borrowed/manifest";
 import { reservedReason } from "../control/policy";
+import { may } from "./powers";
 import { MAX_MEMBERS, MAX_ROLES, ROLES, type MemberView, type Role, type Roles } from "./protocol";
 
 export type MemberRecord = MemberView;
@@ -33,9 +34,9 @@ export function isRole(value: unknown): value is Role {
   return typeof value === "string" && (ROLES as readonly string[]).includes(value);
 }
 
-/** Developer and Project admin restart their projects' services; a Viewer only looks. */
+/** Developer and Project admin restart their projects' services; a Viewer only looks. See powers.ts. */
 export function mayRestart(role: Role | null): boolean {
-  return role === "developer" || role === "admin";
+  return may(role, "restart");
 }
 
 const isDate = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -181,4 +182,46 @@ export function removeMember(registry: Registry, value: unknown): { registry: Re
   const found = findMember(registry, email);
   if (found === null) return { refusal: `${email} is not a member` };
   return { registry: { members: registry.members.filter((member) => member.email !== email) }, member: viewOf(found) };
+}
+
+// --- what a Project admin asks for, on their project alone ------------------------
+
+/**
+ * One role on one project, given by a Project admin: a person invited with
+ * that role alone, or a member's role on that project set, their other
+ * projects untouched. `invitedBy` names the Project admin for someone new; a
+ * member already there keeps who invited them. The caller has judged that
+ * the Project admin may give this role here (powers.ts, `mayGrant`).
+ */
+export function putProjectRole(registry: Registry, email: string, slug: string, role: Role, invitedBy: string, now: number): Put | Refusal {
+  const found = findMember(registry, email);
+  if (found === null) return putMember(registry, email, { [slug]: role }, invitedBy, now);
+  if (!Object.hasOwn(found.roles, slug) && Object.keys(found.roles).length >= MAX_ROLES) {
+    return { refusal: `a member may hold a role on ${MAX_ROLES} projects at most` };
+  }
+  return putMember(registry, email, { ...found.roles, [slug]: role }, found.invitedBy, now);
+}
+
+/**
+ * A member's role on one project taken away by its Project admin. Their last
+ * one gone, they are no member any more: a member with no project sees
+ * nothing, and is removed rather than kept as an empty name.
+ */
+export function removeProjectRole(
+  registry: Registry,
+  value: unknown,
+  slug: string,
+  now: number,
+): { registry: Registry; member: MemberView; removed: boolean } | Refusal {
+  const email = cleanEmail(value);
+  if (email === null) return { refusal: "email: the address of the member" };
+  const found = findMember(registry, email);
+  if (found === null || !Object.hasOwn(found.roles, slug)) return { refusal: `${email} holds no role on ${slug}` };
+  const roles = { ...found.roles };
+  delete roles[slug];
+  if (Object.keys(roles).length === 0) {
+    return { registry: { members: registry.members.filter((member) => member.email !== email) }, member: viewOf(found), removed: true };
+  }
+  const changed: MemberRecord = { ...found, roles, updatedAt: now };
+  return { registry: { members: registry.members.map((member) => (member.email === email ? changed : member)) }, member: viewOf(changed), removed: false };
 }

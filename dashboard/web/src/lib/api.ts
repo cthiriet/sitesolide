@@ -32,6 +32,8 @@ import type {
   RestoreResponse,
   MembersPageResponse,
   MemberView,
+  ProjectMembersResponse,
+  Role,
   Roles,
   SessionResponse,
 } from "./types"
@@ -292,5 +294,31 @@ export function restartAsMember(slug: string) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ slug }),
+  })
+}
+
+// --- A project's members, for its Project admins ------------------------------------
+//
+// The routes of `src/members/relay.ts`. Giving a role needs the member's own
+// unlock, a forced sign-in; taking one away does not. The steward judges each
+// change: a role at most theirs, on this project alone.
+
+export function readProjectMembers(slug: string) {
+  return callApi<ProjectMembersResponse & SecretsRefusal>(`/api/members/project?slug=${encodeURIComponent(slug)}`)
+}
+
+export function putProjectMember(slug: string, email: string, role: Role) {
+  return callApi<{ member: MemberView; change: "invite" | "role" | "none" } & SecretsRefusal>("/api/members/project", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug, email, role }),
+  })
+}
+
+export function removeProjectMember(slug: string, email: string) {
+  return callApi<{ member: MemberView; change: "role" | "remove" } & SecretsRefusal>("/api/members/project", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug, email }),
   })
 }

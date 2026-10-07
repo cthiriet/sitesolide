@@ -1,0 +1,30 @@
+# The steward's one road to the portal: a Unix socket only root opens, behind
+# which systemd-socket-proxyd reaches the portal's admin API on the loopback.
+# See sitesolide-portal-relay.service and dashboard/src/members/portal.ts.
+#
+# Why a relay rather than a network for the steward: the steward holds every
+# secret of the machine as root, and its unit keeps no network at all,
+# PrivateNetwork=true and AF_UNIX alone, measured on the bench. On the
+# loopback it would also reach Caddy's admin API and every project's port. A
+# Project admin's sharing and guests need the portal, and the portal only:
+# the steward connects here, the proxy forwards to one port, and nothing of
+# the steward's own unit changes.
+#
+# Placed by bin/deploy-steward.sh, beside the steward.
+
+[Unit]
+Description=Relay from the steward to the portal's admin API
+
+[Socket]
+# A runtime folder of its own, created 0700 root:root, and the socket 0600
+# root:root: root alone connects, as root alone opens the owner's socket. The
+# steward runs as root; under ProtectSystem=strict, /run reads only, which a
+# connect() to a socket does not need to write.
+ListenStream=/run/sitesolide-portal-relay/portal.sock
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0700
+
+[Install]
+WantedBy=sockets.target
