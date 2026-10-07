@@ -300,7 +300,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       if (named !== target) return failure("invalid", `manifest: its slug must be ${target}`);
 
       if (!(await system.installerInstalled())) {
-        return failure("not-available", "the installer is not installed on this machine yet: the owner must run bin/deploy-installer.sh");
+        return failure("not-available", "the installer is not installed on this machine yet: the owner must run sitesolide setup again for this machine, without --minimal");
       }
       const unit = installerUnit(target);
       if (await isActive(unit)) return failure("busy", `a deployment of ${target} is already running: wait for it to finish, then try again`);

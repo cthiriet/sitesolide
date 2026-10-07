@@ -23,6 +23,7 @@ would.
 | share a project behind the portal with people or a domain, and read who may open it | make a site public, which is turning its portal off |
 | list the machines sitesolide created at a cloud provider | destroy one, unless you asked for that machine to be destroyed |
 | check a machine with `setup --dry-run`, and install it when you asked | replace DNS records that point elsewhere (`setup --dns-replace`), unless you decided it |
+| list what a new release would change with `upgrade --dry-run`, and upgrade when you asked | redeploy a component by hand, or force over a file edited on the machine |
 | | read, set or guess a secret, a provider's token included |
 
 Secrets are set in the dashboard's *Secrets* section, by you. A deploy that
@@ -165,7 +166,7 @@ $ sitesolide deploy --dry-run --json
 | `file` | `name`, `content` | a generated systemd unit or Caddy block |
 | `inferred` | `kind`, `manifest`, `reasons`, `notes` | the manifest inferred for a folder without one |
 | `log` | `at`, `unit`, `priority`, `message` | one journal entry, for `logs` |
-| `check` | `step`, `status` (`done`, `ok`, `skip`, `todo`, `fail`), `title`, `detail` | one line of `setup`'s checklist |
+| `check` | `step`, `status` (`done`, `ok`, `skip`, `todo`, `fail`), `title`, `detail` | one line of `setup`'s or `upgrade`'s checklist |
 | `result` | `ok`, `command`, and the command's data | the end of a run that succeeded |
 | `error` | `message`, `details`, `hint` | the end of a run that failed |
 
@@ -173,7 +174,7 @@ What `result` carries:
 
 | Command | Fields |
 |---|---|
-| `deploy` | `slug`, `kind` (`static`, `service`, `services`), `dryRun`, `port`, `portChosen` (`kept`, `free`) when chosen, `portal`, `inferred` when the manifest was, `manifestWritten`, `url`, `status` (HTTP, null in a dry run) |
+| `deploy` | `slug`, `kind` (`static`, `service`, `services`), `dryRun`, `port`, `portChosen` (`kept`, `free`) when chosen, `portal`, `inferred` when the manifest was, `manifestWritten`, `url`, `status` (HTTP, null in a dry run); with `--compare`, `compared`, `changes` (what would change on the server, empty when nothing would) and `kept` (units edited on the machine, which deploy leaves) |
 | `detect` | `kind`, `manifest`, `reasons`, `notes`, `written` |
 | `status` | `projects` (each with its `services`), `ports`, `memory`, in megabytes |
 | `logs` | `slug`, `units`, `entries` |
@@ -185,6 +186,13 @@ What `result` carries:
 | `machine list` | `provider`, `machines`, each with `name`, `type`, `location`, `status`, `ipv4`, `ipv6`, `ipv6Network`, `monthlyPrice` (`net`, `gross`, `currency`), `backups`, `managed` |
 | `machine destroy` | `provider`, `name`, `removed`, `kept`, `dns` |
 | `setup` | `dryRun`, `server`, `zone`, `steps` (each `step`, `status`, `detail`); after a real run also `dashboard`, `portal`, `configuration`, `ran`, `already`, `skipped`, `passwords`, `next` |
+| `upgrade` | `dryRun`, `server`, `zone`, `release`, `components` (each `component`, `title`, `state`: `up-to-date`, `out-of-date`, `missing`, `upgraded`, `failed`, `detail`, `run`), `upgraded`, `upToDate`, `outOfDate`, `missing`, `next` (the `setup` command that installs what is missing) |
+
+**`upgrade` changes the machine in service.** `--dry-run` only reads it, and
+says what would run; the run itself redeploys live components, the dashboard,
+the portal, Caddy's configuration, and is the user's decision, never an
+agent's own. It never reads a secret nor draws a password. A component it
+reports `missing` is `setup`'s to install, on the same decision.
 
 **`setup` never puts a password in an event.** The dashboard's and the
 portal's, when a run draws them, go to standard error once, for the person at
@@ -224,8 +232,9 @@ by each command.
 | `share` | `folder`, `people`, `domain`, `remove`, `only_admins` | **yes**, who may open the app and its data |
 | `lock_status` | `folder` | no |
 
-`folder` is an absolute path. `deploy`'s description says first that it
-changes the live server, and `share`'s that it gives real people access: leave
+`setup` and `upgrade` are not tools: they change the machine itself, and run
+through the CLI, when the user asked. `folder` is an absolute path.
+`deploy`'s description says first that it changes the live server, and `share`'s that it gives real people access: leave
 both on "ask" in your client rather than allowing them once and for all, so
 that every real deploy, and every person let in, is yours to approve.
 

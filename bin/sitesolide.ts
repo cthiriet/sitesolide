@@ -3,6 +3,7 @@
  * Deploys a project onto the machine from any repository.
  *
  *   sitesolide setup <user@host>    install the machine itself, see bin/cli/setup.ts
+ *   sitesolide upgrade [--dry-run]  bring its components to this release, see bin/cli/upgrade.ts
  *   sitesolide detect [--write]     the manifest a folder without one implies
  *   sitesolide deploy [--dry-run]   prepare, build, push, install, verify
  *   sitesolide status               what the VM actually carries
@@ -95,7 +96,7 @@ import { resolve4, resolve6 } from "node:dns/promises";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { compareDirectives, sameDirectives, summariseDivergence } from "./cli/comparison";
+import { compareDirectives, countItemized, sameDirectives, summariseDivergence } from "./cli/comparison";
 import {
   adoptLegacyKeys,
   composeConfig,
@@ -812,16 +813,25 @@ async function checkRemoteBlock(
  */
 let buildInDryRun = false;
 
-/** Whether this run executes the build: always for real, in a dry run only with --build. */
+/**
+ * `--compare`, with --dry-run: the build runs, as with --build, and the dry
+ * run then measures on the server what this deployment would change there,
+ * changing nothing. What `sitesolide upgrade` asks of the platform's own
+ * components, the dashboard and the portal, to redeploy only those that
+ * differ. See compareWithServer.
+ */
+let compareInDryRun = false;
+
+/** Whether this run executes the build: always for real, in a dry run only with --build or --compare. */
 function buildRuns(project: Project, executor: Executor): boolean {
-  return project.manifest.build !== undefined && (!executor.simulated || buildInDryRun);
+  return project.manifest.build !== undefined && (!executor.simulated || buildInDryRun || compareInDryRun);
 }
 
 async function runBuild(project: Project, executor: Executor): Promise<void> {
   const { build } = project.manifest;
   if (build === undefined) return;
   if (!buildRuns(project, executor)) {
-    say(`   [dry-run] build (${build}), not run: it is this folder's code, run here only for real or with --dry-run --build`);
+    say(`   [dry-run] build (${build}), not run: it is this folder's code, run here only for real or with --dry-run --build or --compare`);
     return;
   }
   step(`build (${build})`);
@@ -883,6 +893,50 @@ export function directoryCommands(slug: string, isApplication: boolean, owner: s
   ];
 }
 
+/**
+ * The rsync that sends an application's code into app/: the command a
+ * deployment runs, and the one `--compare` runs in a dry run. Its options come
+ * first, so that the comparison can add its own after `-a`.
+ */
+function codeSync(project: Project, config: Config): string[] {
+  const { manifest } = project;
+  const exclusions = (manifest.exclude ?? []).flatMap((name) => ["--exclude", name]);
+  const also = manifest.publicDir === undefined ? [] : ["--exclude", manifest.publicDir];
+  return [
+    "rsync",
+    "-a",
+    "--delete",
+    ...exclusions,
+    ...also,
+    // .git and every .env, at any depth: see NEVER_SENT.
+    ...NEVER_SENT.flatMap((pattern) => ["--exclude", pattern]),
+    // The manifest is already deposited at the project's root, where the
+    // service reads it: a second copy in app/ would make two of them diverge,
+    // and nothing would say which one is authoritative.
+    "--exclude",
+    MANIFEST_NAME,
+    `${project.code}/`,
+    `${config.server}:${projectPaths(manifest.slug).app}/`,
+  ];
+}
+
+/** The rsync that sends the public files, as codeSync for app/. */
+function publicSync(publicDir: string, project: Project, config: Config): string[] {
+  return [
+    "rsync",
+    "-a",
+    "--delete",
+    // Neither .git nor a .env is ever served: excluded here, at any depth,
+    // and removed from the machine if an earlier deployment left one there,
+    // which a mere exclusion would protect from --delete. The public tree
+    // has no other exclusion this could reach.
+    "--delete-excluded",
+    ...NEVER_SENT.flatMap((pattern) => ["--exclude", pattern]),
+    `${publicDir}/`,
+    `${config.server}:${projectPaths(project.manifest.slug).publicDir}/`,
+  ];
+}
+
 async function deploy(
   rawProject: Project,
   config: Config,
@@ -928,6 +982,10 @@ async function deploy(
 
   await runBuild(project, executor);
   checkPublicFolder(project, executor);
+  if (executor.simulated && compareInDryRun) {
+    await compareWithServer(project, config, executor, doorConfirmed);
+    return;
+  }
 
   // The lock shared with the gatekeeper, taken just before the first deposit of
   // the manifest or of the block, and the door read again under it: it is that
@@ -968,44 +1026,14 @@ async function deploy(
 
   if (isApplication) {
     step("application code");
-    const exclusions = (manifest.exclude ?? []).flatMap((name) => ["--exclude", name]);
-    const publicDir = manifest.publicDir;
-    const also = publicDir === undefined ? [] : ["--exclude", publicDir];
-    await executor.run([
-      "rsync",
-      "-a",
-      "--delete",
-      ...exclusions,
-      ...also,
-      // .git and every .env, at any depth: see NEVER_SENT.
-      ...NEVER_SENT.flatMap((pattern) => ["--exclude", pattern]),
-      // The manifest is already deposited at the project's root, where the
-      // service reads it: a second copy in app/ would make two of them diverge,
-      // and nothing would say which one is authoritative.
-      "--exclude",
-      MANIFEST_NAME,
-      `${project.code}/`,
-      `${config.server}:${paths.app}/`,
-    ]);
+    await executor.run(codeSync(project, config));
     await executor.ssh(config, sentModesCommand(paths.app));
   }
 
   const publicDir = publicFolder(project);
   if (publicDir !== null) {
     step("public files");
-    await executor.run([
-      "rsync",
-      "-a",
-      "--delete",
-      // Neither .git nor a .env is ever served: excluded here, at any depth,
-      // and removed from the machine if an earlier deployment left one there,
-      // which a mere exclusion would protect from --delete. The public tree
-      // has no other exclusion this could reach.
-      "--delete-excluded",
-      ...NEVER_SENT.flatMap((pattern) => ["--exclude", pattern]),
-      `${publicDir}/`,
-      `${config.server}:${paths.publicDir}/`,
-    ]);
+    await executor.run(publicSync(publicDir, project, config));
     await executor.ssh(config, sentModesCommand(paths.publicDir));
   }
 
@@ -1062,6 +1090,120 @@ async function deploy(
     say(`   commit ${MANIFEST_NAME}:`);
     say("   the dashboard changed the portal, and git should say what the server does.");
   }
+}
+
+/**
+ * `deploy --dry-run --compare`: what this deployment would change on the
+ * server, read there and changed nowhere. Each measure is the deployment's
+ * own decision, made on what the server carries:
+ *
+ *   the code and the public files   the deployment's very rsync, in a dry run
+ *                                   that compares contents (--checksum): an
+ *                                   entry it would send or delete is a change,
+ *                                   a time or a mode alone is not, the modes
+ *                                   being set again on the machine anyway
+ *   the manifest                    the deposited one, against the one leaving
+ *   the units                       missing, or left by an earlier release's
+ *                                   generator to be removed; one that differs
+ *                                   is reported, never counted: deploy leaves it
+ *                                   as it is without --force
+ *   the Caddy block                 any difference, deploy-caddy.sh depositing
+ *                                   what differs by a byte; one edited by hand
+ *                                   is refused, as deploy refuses it
+ *
+ * A project the server does not carry yet is one change, everything to send,
+ * and rsync is not asked. What it never measures: a secret, whose content no
+ * command reads, and the Caddyfile, which `sitesolide upgrade` compares on its
+ * own.
+ */
+async function compareWithServer(project: Project, config: Config, executor: Executor, doorConfirmed: boolean): Promise<void> {
+  const { manifest } = project;
+  const slug = manifest.slug;
+  const paths = projectPaths(slug);
+  step("compare with the server: read there, changed nowhere");
+  const changes: string[] = [];
+  const kept: string[] = [];
+
+  const manifestPath = `${paths.root}/${MANIFEST_NAME}`;
+  const deposited = await readRemoteFile(config, executor, manifestPath);
+  if (deposited.kind === "unreadable") {
+    die(`cannot tell whether ${manifestPath} is there`, ["the server answered neither an absence nor a manifest", "nothing was changed"]);
+  }
+  // A project the server does not carry yet has no tree to compare with:
+  // everything would be sent, and rsync would only fail on the missing folders.
+  if (deposited.kind === "absent") {
+    changes.push(`${paths.root}: not on the server yet, everything would be sent`);
+  } else {
+    if (isApp(manifest)) {
+      const count = await itemizedChanges(codeSync(project, config), paths.app);
+      if (count > 0) changes.push(`${paths.app}: ${count} entr${count === 1 ? "y" : "ies"} to send or delete`);
+    }
+    const publicDir = publicFolder(project);
+    if (publicDir !== null) {
+      const count = await itemizedChanges(publicSync(publicDir, project, config), paths.publicDir);
+      if (count > 0) changes.push(`${paths.publicDir}: ${count} entr${count === 1 ? "y" : "ies"} to send or delete`);
+    }
+    if (deposited.content !== project.raw) changes.push(manifestPath);
+  }
+
+  if (isApp(manifest)) {
+    for (const { unit, text } of generateUnits(manifest)) {
+      const path = unitPath(unit);
+      const reading = await readRemoteFile(config, executor, path);
+      if (reading.kind === "unreadable") {
+        die(`cannot tell whether ${path} is there`, ["the server answered neither an absence nor a unit file", "nothing was changed"]);
+      }
+      const action = decideUnit({ installed: reading.kind === "present" ? reading.content : "", generated: text, replace: false });
+      if (action === "install") changes.push(path);
+      if (action === "diverged") kept.push(path);
+    }
+    const listing = readUnitsAnswer(await executor.read(config, listUnitsCommand(slug)), slug);
+    if (listing.kind === "unreadable") {
+      die(`cannot tell whether other units of ${slug} are there`, ["the server did not answer the listing", "nothing was changed"]);
+    }
+    for (const unit of staleUnits(manifest, listing.units)) changes.push(`${unitPath(unit)}, no longer declared`);
+
+    const generated = generateFragment(manifest);
+    if (generated !== null) {
+      const path = blockPath(slug);
+      const reading = await readRemoteFile(config, executor, path);
+      if (reading.kind === "unreadable") {
+        die(`cannot tell whether ${path} is there`, ["the server answered neither an absence nor a block", "nothing was changed"]);
+      }
+      const inService = reading.kind === "present" ? reading.content : null;
+      if (decideBlock({ manifest, inService, replace: false, doorConfirmed }) === "diverged") refuseDivergence(path, inService ?? "", generated);
+      if (inService !== generated) changes.push(path);
+    }
+  }
+
+  note({ compared: true, changes, kept });
+  for (const change of changes) say(`   differs    ${change}`);
+  for (const path of kept) say(`   differs    ${path}, left as it is: deploy replaces it only with --force`);
+  say(changes.length === 0 ? "-> nothing would change on the server" : `-> ${changes.length} difference(s) with the server, nothing was changed`);
+}
+
+/**
+ * How many entries an rsync would send or delete: the command given, run in a
+ * dry run that compares contents and lists what it would do. Read only on the
+ * server. An entry whose time or mode alone differs is listed with a leading
+ * dot, and does not count.
+ */
+async function itemizedChanges(command: string[], destination: string): Promise<number> {
+  const [program, archive, ...rest] = command;
+  const proc = Bun.spawn([program!, archive!, "--dry-run", "--itemize-changes", "--checksum", ...rest], {
+    env: childEnvironment(),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [output, error] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+  const code = await proc.exited;
+  if (code !== 0) {
+    die(`cannot compare ${destination} with the server: rsync failed (${code})`, [
+      ...error.trim().split("\n").filter((line) => line.trim() !== "").slice(-3),
+      "nothing was changed",
+    ]);
+  }
+  return countItemized(output);
 }
 
 /**
@@ -2661,6 +2803,8 @@ function usage(zone: string | null): string {
     "     --any-os                     go on with a system other than Debian 13, at your own risk",
     "     --config-dir <dir>           another installation's own configuration folder",
     "     --dry-run                    check every step, change nothing",
+    "  sitesolide upgrade              bring every installed component to this release's code, resumable",
+    "     --dry-run                    list each component, up to date, out of date or missing, change nothing",
     "  sitesolide init                 write ~/.config/sitesolide/config.json",
     "     --server <user@host> --zone <dns.zone> --email <you@example.com>",
     "     --contact <you@example.com>   shown on a locked preview's door",
@@ -2670,6 +2814,7 @@ function usage(zone: string | null): string {
     "  sitesolide deploy               prepare, build, push, install, restart, verify",
     "     --dry-run                    show the unit and the fragment, install nothing, build nothing",
     "     --build                      with --dry-run: run the build too, the folder's own code, here",
+    "     --compare                    with --dry-run: build, then list what would change on the server",
     "     --force                      switch a hand-written unit to the generated one",
     "     --yes [--slug <name>]        no sitesolide.json: write the inferred one, then deploy",
     "  sitesolide status               what the server actually runs",
@@ -2738,6 +2883,7 @@ if (import.meta.main) {
   const executor = new Executor(dryRun);
   chooseOutput(arguments_);
   buildInDryRun = arguments_.includes("--build");
+  compareInDryRun = arguments_.includes("--compare");
 
   // `init` prompts and `run` hands the terminal to the command it launches:
   // neither has events to print.
@@ -2807,6 +2953,14 @@ if (import.meta.main) {
     process.exit(await (await import("./cli/setup")).setupCommand(arguments_.slice(1)));
   }
 
+  // `upgrade` brings the components setup installed to this release's code,
+  // through setup's own runner, checks and scripts: it reads the
+  // configuration itself, and needs the owner's SSH access. See
+  // bin/cli/upgrade.ts.
+  if (command === "upgrade") {
+    process.exit(await (await import("./cli/upgrade")).upgradeCommand(arguments_.slice(1)));
+  }
+
   // A team member's workstation has no server and no root: `login`, and the
   // commands the dashboard's control API carries, go through it instead of
   // SSH. The owner's path below is untouched. See bin/cli/remote.ts.
@@ -2855,6 +3009,9 @@ if (import.meta.main) {
 
   switch (command) {
     case "deploy":
+      if (compareInDryRun && !dryRun) {
+        die("--compare needs --dry-run", ["it measures what a deployment would change on the server, and changes nothing there"]);
+      }
       await deploy(
         await projectToDeploy(folder, config, executor, arguments_.includes("--yes"), optionValue(arguments_, "--slug")),
         config,

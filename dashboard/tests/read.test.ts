@@ -23,7 +23,7 @@ describe("snapshot analysis", () => {
   test("a missing file says what to run", () => {
     const reading = analyse(null, NOW);
     expect(reading.present).toBe(false);
-    if (!reading.present) expect(reading.reason).toContain("deploy-collector.sh");
+    if (!reading.present) expect(reading.reason).toContain("sitesolide setup");
   });
 
   test("a truncated file says so instead of throwing", () => {

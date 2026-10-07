@@ -39,7 +39,7 @@ export function analyse(content: string | null, now: number): Reading {
   if (content === null) {
     return {
       present: false,
-      reason: "No snapshot: the collector has never run, see bin/deploy-collector.sh",
+      reason: "No snapshot: the collector has never run; sitesolide setup installs it",
     };
   }
 

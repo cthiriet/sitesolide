@@ -186,7 +186,7 @@ describe("the backups", () => {
 
   test("a steward from before the backups answers `no such route`: outdated", async () => {
     const old = dependencies({ backups: { readBackupAudit: () => json({ error: "not-found", message: "no such route" }, 404), readBackups: () => json({}) } });
-    expect(failure(await createReaders(old).backups.read(null, 10))).toEqual({ state: "outdated", message: "The steward on this server predates backups. Run bin/deploy-steward.sh." });
+    expect(failure(await createReaders(old).backups.read(null, 10))).toEqual({ state: "outdated", message: "The steward on this server predates backups. Run sitesolide upgrade." });
   });
 
   test("a steward that cannot be reached is unavailable", async () => {

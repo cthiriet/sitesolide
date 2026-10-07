@@ -56,7 +56,7 @@ function error(code: ErrorCode, message: string): Response {
   return Response.json(body, { status: STATUSES[code] ?? 400 });
 }
 
-const NOT_INSTALLED = "the egress proxy is not installed on this server: run bin/deploy-egress.sh";
+const NOT_INSTALLED = "the egress proxy is not installed on this server: run sitesolide setup again for this machine, without --minimal";
 
 export function createConnectorRoutes(store: ConnectorStore, tools: StewardTools): Record<string, Record<string, Handler>> {
   /** The page's view, read again after every write: what the files say now. */

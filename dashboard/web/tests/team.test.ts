@@ -76,7 +76,7 @@ describe("the form", () => {
       message: "dashboard is reserved for the platform: pick another slug",
     })
     expect(tokenRefusal(400, { error: "invalid", message: "email: the address" }).field).toBe("email")
-    expect(tokenRefusal(503, { error: "not-available", message: "run bin/deploy-steward.sh" })).toEqual({ field: null, message: "run bin/deploy-steward.sh" })
+    expect(tokenRefusal(503, { error: "not-available", message: "run sitesolide upgrade" })).toEqual({ field: null, message: "run sitesolide upgrade" })
     expect(tokenRefusal(0, null).message).toBe("Can't reach the dashboard.")
   })
 })

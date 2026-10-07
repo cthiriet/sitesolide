@@ -164,7 +164,7 @@ export async function main(argv: string[], env: Environment, overrides: { comman
   // whoever extracted them.
   const deployAccount = env.DEPLOY_ACCOUNT ?? "";
   if ((env.CHECK_ACCOUNTS ?? "yes") !== "" && deployAccount === "") {
-    reporter.finish({ ok: false, code: "misconfigured", message: "DEPLOY_ACCOUNT is missing from /etc/sitesolide-installer.env: the owner must run bin/deploy-installer.sh", allocated: [] });
+    reporter.finish({ ok: false, code: "misconfigured", message: "DEPLOY_ACCOUNT is missing from /etc/sitesolide-installer.env: the owner must run sitesolide upgrade", allocated: [] });
     return 0;
   }
   const host = createHost({

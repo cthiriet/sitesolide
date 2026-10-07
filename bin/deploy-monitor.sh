@@ -4,6 +4,7 @@
 # its timer. See monitor/README.md.
 #
 #   bin/deploy-monitor.sh
+#   bin/deploy-monitor.sh --fingerprint   what it would install, nothing sent
 #
 # Nothing watches the machine until this script has run once: the monitor is
 # opt-in, and placing it changes nothing else. It touches neither Caddy, nor
@@ -43,6 +44,13 @@ fail() {
   exit 1
 }
 
+FINGERPRINT_ONLY=""
+case "${1:-}" in
+  "") ;;
+  --fingerprint) FINGERPRINT_ONLY=yes ;;
+  *) echo "usage: bin/deploy-monitor.sh [--fingerprint]" >&2; exit 2 ;;
+esac
+
 for file in "$SOURCE/$UNIT.service" "$SOURCE/$UNIT.timer"; do
   [ -f "$file" ] || { echo "not found: $file" >&2; exit 1; }
 done
@@ -54,6 +62,16 @@ trap 'rm -rf "$LOCAL"' EXIT
 [ -s "$LOCAL/monitor.js" ] || { echo "!! bun build produced nothing" >&2; exit 1; }
 FINGERPRINT="$(shasum -a 256 < "$LOCAL/monitor.js" | cut -d' ' -f1)"
 echo "   monitor.js, fingerprint ${FINGERPRINT:0:12}"
+
+# --fingerprint: builds, prints what it would install as sha256sum prints it,
+# the local fingerprint then the path on the machine, and stops there, before
+# any connection. `sitesolide upgrade` compares those lines with the machine.
+if [ -n "$FINGERPRINT_ONLY" ]; then
+  echo "$FINGERPRINT  $TARGET_JS"
+  sitesolide_fingerprint "$SOURCE/$UNIT.service" "/etc/systemd/system/$UNIT.service"
+  sitesolide_fingerprint "$SOURCE/$UNIT.timer" "/etc/systemd/system/$UNIT.timer"
+  exit 0
+fi
 
 echo "-> preliminary check"
 # The zone file has no dash in the unit: missing, the unit would fail at every

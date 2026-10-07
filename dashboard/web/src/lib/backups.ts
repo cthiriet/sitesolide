@@ -64,7 +64,7 @@ export function freshness(view: Pick<BackupsView, "lastRun" | "snapshots" | "exc
   }
   const age = serverNow - newest.takenAt
   if (view.excluded === null && age > STALE_SNAPSHOT_MS) {
-    return { tone: "attention", label: `No snapshot for ${duration(age)}`, detail: "The hourly timer may be stopped: bin/deploy-backup.sh state" }
+    return { tone: "attention", label: `No snapshot for ${duration(age)}`, detail: "The hourly timer may be stopped: sitesolide setup, run again for this server, starts it" }
   }
   return { tone: "ok", label: `Last snapshot ${ago(age)}`, detail: null }
 }

@@ -588,8 +588,8 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
         <ErrorState title={load.message} onRetry={() => void retry()} inProgress={rereading}>
           {load.outdated ? (
             <div className="grid gap-2">
-              <span>Update it from the platform's repository, then come back:</span>
-              <Command text="bin/deploy-steward.sh" />
+              <span>Bring it up to date from your workstation, then come back:</span>
+              <Command text="sitesolide upgrade" />
             </div>
           ) : (
             <>
@@ -607,9 +607,11 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
       <Panel>
         <EmptyState icon={CloudOff} title="Backups aren't set up on this server">
           <div className="grid gap-2 text-left">
-            <span>Install them from the platform's repository, then take a first snapshot and turn on the hourly timer:</span>
-            <Command text="bin/deploy-backup.sh install" />
-            <Command text="bin/deploy-backup.sh enable" />
+            <span>
+              Install them from your workstation: run setup again for this server, without <code className="font-mono text-xs">--minimal</code>. It
+              takes a first snapshot and turns on the hourly timer.
+            </span>
+            <Command text="sitesolide setup <user@host> --zone <zone> --email <address>" />
           </div>
         </EmptyState>
       </Panel>

@@ -1,6 +1,7 @@
 /**
- * The step engine of `sitesolide setup`: a list of steps, each with a check
- * that only reads and a run that changes, gone through in order.
+ * The step engine of `sitesolide setup`, and of `sitesolide upgrade`: a list of
+ * steps, each with a check that only reads and a run that changes, gone
+ * through in order.
  *
  * WHAT MAKES SETUP RESUMABLE, AND A NO-OP ON A MACHINE ALREADY INSTALLED. A
  * step whose check says done is not run, whatever happened before: a second
@@ -83,6 +84,8 @@ export type EngineOptions<C> = {
   report: (report: StepReport) => void;
   /** Called before a step runs, with what its check found missing. */
   starting?: (step: Step<C>, missing: string[]) => void;
+  /** How a report words what a check found missing; `was missing: ...` unless given. */
+  describe?: (missing: readonly string[]) => string;
 };
 
 function describe(error: unknown): { message: string; details: string[] } {
@@ -102,6 +105,7 @@ export function missingLine(missing: readonly string[]): string {
  */
 export async function runSteps<C>(steps: readonly Step<C>[], context: C, options: EngineOptions<C>): Promise<Outcome> {
   const reports: StepReport[] = [];
+  const describeMissing = options.describe ?? missingLine;
   const record = (step: Step<C>, status: StepStatus, detail: string | null): void => {
     const report = { step: step.id, title: step.title, status, detail };
     reports.push(report);
@@ -130,7 +134,7 @@ export async function runSteps<C>(steps: readonly Step<C>[], context: C, options
       continue;
     }
     if (options.checkOnly) {
-      record(step, "todo", found.state === "missing" ? missingLine(found.missing) : `unreadable: ${found.reason}`);
+      record(step, "todo", found.state === "missing" ? describeMissing(found.missing) : `unreadable: ${found.reason}`);
       continue;
     }
     if (found.state === "unreadable") {
@@ -156,7 +160,7 @@ export async function runSteps<C>(steps: readonly Step<C>[], context: C, options
       if (after.state === "missing") return fail(step, `ran, but still missing: ${after.missing.join(", ")}`, []);
       if (after.state === "unreadable") return fail(step, `ran, but could not be checked afterwards: ${after.reason}`, []);
     }
-    record(step, "ok", typeof said === "string" ? said : missingLine(found.missing));
+    record(step, "ok", typeof said === "string" ? said : describeMissing(found.missing));
   }
   return { reports, failure: null };
 }
@@ -167,7 +171,8 @@ export async function runSteps<C>(steps: readonly Step<C>[], context: C, options
 export type Condition = { label: string; test: string };
 
 const LABEL = /^[a-z0-9][a-z0-9:@.-]*$/;
-const TAG = /^setup:[a-z0-9-]+:[a-z]+$/;
+/** `setup:<step>:<verb>`, or `upgrade:<component>:<verb>` for `sitesolide upgrade`'s own checks. */
+const TAG = /^(setup|upgrade):[a-z0-9-]+:[a-z]+$/;
 
 /**
  * The script a check sends: every condition tested, its output thrown away,
@@ -199,7 +204,7 @@ export function scriptLabels(script: string): string[] {
 
 /** The tag a script carries on its first line. */
 export function scriptTag(script: string): string | null {
-  return /^# sitesolide (setup:[a-z0-9-]+:[a-z]+)\n/.exec(script)?.[1] ?? null;
+  return /^# sitesolide ((?:setup|upgrade):[a-z0-9-]+:[a-z]+)\n/.exec(script)?.[1] ?? null;
 }
 
 /**

@@ -50,6 +50,17 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^setup stopped at ssh: /, "sshd was not left half changed, `details` say how it stands: check that `ssh <deploy user>@<host> sudo -n true` works, then run the same command again; never edit sshd's configuration by hand to get past this"],
   [/^setup stopped at /, "read `details`: they name what failed and the command that shows more; fix that cause, then run the same setup command again, which resumes at that step; never change the machine by hand to get past a check"],
 
+  // --- upgrade: the same machinery as setup, on a machine in service
+  [/^usage: sitesolide upgrade/, "run `sitesolide upgrade --dry-run` to see what would change, then `sitesolide upgrade` on the owner's decision; another installation is chosen with SITESOLIDE_CONFIG_DIR=<dir> before the command, never with an option"],
+  [/has no sudo without a password, which upgrade needs$/, "check that the configuration names the account setup made, deploy by default, which has sudo without a password; never type a password for it, and never change sudo's configuration on the machine to get past this"],
+  [/^the configured server is not user@host/, "the owner sets the server as user@host with `sitesolide init --server <user@host> --zone <dns.zone> --email <address>`; never guess the account"],
+  [/^cannot read what .* has installed/, READ_FAILED],
+  [/^nothing of sitesolide is installed on /, "upgrade only brings installed components up to date: check that the configuration names the intended machine, and ask the owner; installing a machine is `sitesolide setup`, on the owner's decision; never point the configuration at another machine to get past this"],
+  [/^upgrade stopped at [a-z0-9-]+: the connection to the machine was refused or dropped/, "the machine stopped answering ssh: never retry in a loop; wait 10 minutes for a possible fail2ban ban to lapse, then run `sitesolide upgrade` once"],
+  [/^upgrade stopped at [a-z0-9-]+: could not tell whether it is done/, "a read failed, nothing was changed by that component: run `sitesolide upgrade` again; if it fails twice, read `details` and check that `ssh <server> true` connects without a prompt"],
+  [/^upgrade stopped at [a-z0-9-]+: .*no longer matches the manifest/, "do not re-run with --force on your own: a file on the server was edited by hand; show the differing lines in `details` to the owner, who decides"],
+  [/^upgrade stopped at /, "read `details`: they name the component, the end of what its script printed and the command that shows more; fix that cause, then run `sitesolide upgrade` again, which resumes at that component; never change the machine by hand to get past a check"],
+
   // --- the project folder and its manifest
   [/^no sitesolide\.json in .*: inferred one shown above/, "review the manifest shown in the `inferred` event, then run `sitesolide deploy --yes` to write it and deploy, or `sitesolide detect --write` to write it without deploying"],
   [/already exists on the server, and this folder has no sitesolide\.json/, "pick another name with --slug <name>; never deploy over a project you did not create"],
@@ -65,6 +76,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^exclude: .* present on disk and not excluded/, "add the names listed in `details` to `exclude` in sitesolide.json, then run deploy again"],
   [/^port: required, and only deploy chooses one/, "run `sitesolide deploy`: it picks a free port on the server and writes it into sitesolide.json"],
   [/^--json is not available for /, "run that command without --json"],
+  [/^--compare needs --dry-run/, "run `sitesolide deploy --dry-run --compare`: it builds, then lists what would change on the server, changing nothing there"],
   [/^--slug: /, "pass a slug made of lowercase letters, digits and dashes, 63 characters at most"],
   [/^--lines: /, "pass a whole number of lines between 1 and 1000"],
   [/^unknown command/, "run `sitesolide` with no argument to list the commands"],
@@ -88,6 +100,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^cannot read the system users/, READ_FAILED],
   [/^cannot read the loopback's project set/, READ_FAILED],
   [/^cannot tell whether/, READ_FAILED],
+  [/^cannot compare .* with the server/, READ_FAILED],
   [/^read refused by the server/, READ_FAILED],
 
   // --- the door and the lock, shared with the dashboard

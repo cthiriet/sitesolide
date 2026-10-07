@@ -112,7 +112,7 @@ export function failure(code: ControlErrorCode, message: string, extra: { detail
 
 const unreachable = () => failure("failure", "the dashboard cannot reach the steward on the machine: try again in a minute, then tell the owner of the machine", { status: 502 });
 const unavailable = () =>
-  failure("not-available", "this machine does not carry the control API yet: the owner must update the steward (bin/deploy-steward.sh) and install the installer (bin/deploy-installer.sh)");
+  failure("not-available", "this machine does not carry the control API yet: the owner must run sitesolide upgrade, then sitesolide setup again for this machine, without --minimal if the team installer is missing");
 const unreadable = () => failure("failure", "the steward sent an unreadable answer: tell the owner of the machine", { status: 502 });
 const portalUnreachable = () =>
   failure("failure", "the dashboard cannot reach the portal, which keeps who may sign in: try again in a minute, then tell the owner of the machine (systemctl status portal)", { status: 502 });

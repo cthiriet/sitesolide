@@ -6,6 +6,7 @@
 #   bin/deploy-backup.sh install   builds, installs the code and the three units, starts nothing
 #   bin/deploy-backup.sh enable    a first run by hand, its status read back, then the hourly timer
 #   bin/deploy-backup.sh state     the timer, the last run, the room the snapshots take
+#   bin/deploy-backup.sh --fingerprint   what install would lay, nothing sent
 #
 # Like the steward and the gatekeeper, its code does not travel with the
 # dashboard: a root component that reads every project's data only changes by
@@ -34,8 +35,8 @@ STATUS="/var/lib/sitesolide-backup/last-run.json"
 MODE="${1:-}"
 
 case "$MODE" in
-  install|enable|state) ;;
-  *) sed -n '6,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  install|enable|state|--fingerprint) ;;
+  *) sed -n '6,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac
 
 fail() {
@@ -104,6 +105,15 @@ sitesolide_borrow dashboard
 [ -s "$LOCAL/backup.js" ] || fail "bun build produced nothing"
 FINGERPRINT="$(shasum -a 256 < "$LOCAL/backup.js" | cut -d' ' -f1)"
 echo "   backup.js, fingerprint ${FINGERPRINT:0:12}"
+
+# --fingerprint: builds, prints what it would install as sha256sum prints it,
+# the local fingerprint then the path on the machine, and stops there, before
+# any connection. `sitesolide upgrade` compares those lines with the machine.
+if [ "$MODE" = --fingerprint ]; then
+  echo "$FINGERPRINT  $TARGET_JS"
+  for unit in "${UNITS[@]}"; do sitesolide_fingerprint "$REPO_ROOT/infra/backup/$unit" "$UNITS_FOLDER/$unit"; done
+  exit 0
+fi
 
 echo "-> preliminary check"
 # Absolute paths of the units, and systemd-run with --pipe (systemd 235 and

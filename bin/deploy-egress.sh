@@ -5,6 +5,7 @@
 # dashboard granted. See egress/README.md.
 #
 #   bin/deploy-egress.sh
+#   bin/deploy-egress.sh --fingerprint   what it would install, nothing sent
 #
 # Like the steward, its code does not travel with any project: the script
 # builds a single file on the workstation, installs it as root:root under
@@ -38,6 +39,13 @@ fail() {
   exit 1
 }
 
+FINGERPRINT_ONLY=""
+case "${1:-}" in
+  "") ;;
+  --fingerprint) FINGERPRINT_ONLY=yes ;;
+  *) echo "usage: bin/deploy-egress.sh [--fingerprint]" >&2; exit 2 ;;
+esac
+
 [ -f "$UNIT_SOURCE" ] || { echo "unit not found: $UNIT_SOURCE" >&2; exit 1; }
 
 echo "-> local build"
@@ -47,6 +55,15 @@ trap 'rm -rf "$LOCAL"' EXIT
 [ -s "$LOCAL/egress.js" ] || { echo "!! bun build produced nothing" >&2; exit 1; }
 FINGERPRINT="$(shasum -a 256 < "$LOCAL/egress.js" | cut -d' ' -f1)"
 echo "   egress.js, fingerprint ${FINGERPRINT:0:12}"
+
+# --fingerprint: builds, prints what it would install as sha256sum prints it,
+# the local fingerprint then the path on the machine, and stops there, before
+# any connection. `sitesolide upgrade` compares those lines with the machine.
+if [ -n "$FINGERPRINT_ONLY" ]; then
+  echo "$FINGERPRINT  $TARGET_JS"
+  sitesolide_fingerprint "$UNIT_SOURCE" "/etc/systemd/system/$UNIT.service"
+  exit 0
+fi
 
 echo "-> preliminary check"
 if ! ssh -n "$SITESOLIDE_SERVER" "test -x /usr/local/bin/bun && test -d /srv/sites"; then

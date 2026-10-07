@@ -121,7 +121,7 @@ describe("listing", () => {
     const bench = await mount({ installed: false });
     const view = (await bench.call("GET", "/connectors")).body as unknown as ConnectorsView;
     expect(view.installed).toBe(false);
-    expect(view.reason).toContain("bin/deploy-egress.sh");
+    expect(view.reason).toContain("sitesolide setup");
     const token = await bench.unlock();
     const refused = await bench.call("PUT", "/connector", chat(token));
     expect(refused.status).toBe(404);

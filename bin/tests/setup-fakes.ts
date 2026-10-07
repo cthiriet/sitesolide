@@ -1,6 +1,7 @@
 /**
- * What the tests of `sitesolide setup` put in place of a machine, of the kit's
- * scripts, of the workstation's resolver and of the terminal. Nothing here
+ * What the tests of `sitesolide setup`, and of `sitesolide upgrade`, put in
+ * place of a machine, of the kit's scripts, of the workstation's resolver and
+ * of the terminal. Nothing here
  * opens a connection: the machine is a model, the scripts are recorded, the
  * resolver reads the records the Cloudflare mock holds.
  *
@@ -113,7 +114,7 @@ export class FakeMachine implements Machine {
     if (command === "true") return this.answer(0);
     if (command === "sudo -n true") return this.answer(this.sudo.has(account) ? 0 : 1, "", "sudo: a password is required");
 
-    const match = /^(sudo -n )?sh -s (setup:[a-z0-9-]+:[a-z]+)$/.exec(command);
+    const match = /^(sudo -n )?sh -s ((?:setup|upgrade):[a-z0-9-]+:[a-z]+)$/.exec(command);
     if (match === null || match[2] !== scriptTag(input)) return this.answer(127, "", `fake machine: unexpected command: ${command}`);
     if (match[1] !== undefined && !this.sudo.has(account)) return this.answer(1, "", "sudo: a password is required");
     const [, step = "", verb = ""] = match[2].split(":");

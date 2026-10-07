@@ -61,7 +61,7 @@ describe("reading", () => {
     });
     const response = await routes.list(request("GET"));
     expect(response.status).toBe(404);
-    expect(((await response.json()) as { message: string }).message).toContain("run bin/deploy-steward.sh");
+    expect(((await response.json()) as { message: string }).message).toContain("run sitesolide upgrade");
   });
 
   test("an unreachable steward or an answer the page could not read is a 502", async () => {

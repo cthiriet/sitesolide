@@ -21,7 +21,7 @@ export type ConnectorRequest = { slug: string; connectors: string[] };
 export type ConnectorsView = {
   /**
    * The egress proxy's folder exists on the server. False: nothing can be
-   * written, and the page says to run bin/deploy-egress.sh.
+   * written, and the page says to run `sitesolide setup` without --minimal.
    */
   installed: boolean;
   /**
@@ -47,7 +47,7 @@ export type ConnectorsView = {
 //   PUT    /grant       GrantWrite             -> ConnectorsView
 //
 // A steward deployed before these routes answers 404 `no such route`: the
-// relay passes it on, and the page says to run bin/deploy-steward.sh.
+// relay passes it on, and the page says to run `sitesolide upgrade`.
 
 export type ConnectorWrite = {
   token: string;

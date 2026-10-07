@@ -350,7 +350,7 @@ describe("an older steward, without the control routes", () => {
       });
       const response = await routes.whoami(new Request("http://x/api/v1/whoami", { headers: { Authorization: `Bearer ${secret}` } }));
       expect(response.status).toBe(503);
-      expect(await response.json()).toMatchObject({ error: "not-available", message: expect.stringContaining("bin/deploy-steward.sh") });
+      expect(await response.json()).toMatchObject({ error: "not-available", message: expect.stringContaining("sitesolide upgrade") });
     } finally {
       old.stop(true);
     }

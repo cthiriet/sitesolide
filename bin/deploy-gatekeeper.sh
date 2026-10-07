@@ -4,6 +4,7 @@
 # site's portal for the dashboard. See dashboard/gatekeeper.ts.
 #
 #   bin/deploy-gatekeeper.sh
+#   bin/deploy-gatekeeper.sh --fingerprint   what it would install, nothing sent
 #
 # Like the steward, its code does not travel with the dashboard: a root
 # component that rewrites a Caddy block and reloads Caddy only changes by this
@@ -47,6 +48,13 @@ fail() {
   exit 1
 }
 
+FINGERPRINT_ONLY=""
+case "${1:-}" in
+  "") ;;
+  --fingerprint) FINGERPRINT_ONLY=yes ;;
+  *) echo "usage: bin/deploy-gatekeeper.sh [--fingerprint]" >&2; exit 2 ;;
+esac
+
 for unit in "${UNITS[@]}"; do
   [ -f "$REPO_ROOT/infra/gatekeeper/$unit" ] || fail "unit not found: $REPO_ROOT/infra/gatekeeper/$unit"
 done
@@ -74,6 +82,15 @@ sitesolide_borrow dashboard
 [ -s "$LOCAL/gatekeeper.js" ] || fail "bun build produced nothing"
 FINGERPRINT="$(shasum -a 256 < "$LOCAL/gatekeeper.js" | cut -d' ' -f1)"
 echo "   gatekeeper.js, fingerprint ${FINGERPRINT:0:12}"
+
+# --fingerprint: builds, prints what it would install as sha256sum prints it,
+# the local fingerprint then the path on the machine, and stops there, before
+# any connection. `sitesolide upgrade` compares those lines with the machine.
+if [ -n "$FINGERPRINT_ONLY" ]; then
+  echo "$FINGERPRINT  $TARGET_JS"
+  for unit in "${UNITS[@]}"; do sitesolide_fingerprint "$REPO_ROOT/infra/gatekeeper/$unit" "$UNITS_FOLDER/$unit"; done
+  exit 0
+fi
 
 echo "-> preliminary check"
 # ReadWritePaths or RequiresMountsFor on a missing path make the unit fail with

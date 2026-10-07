@@ -5,6 +5,7 @@
 # control API".
 #
 #   bin/deploy-installer.sh
+#   bin/deploy-installer.sh --fingerprint   what it would install, nothing sent
 #
 # Like the steward and the gatekeeper, its code does not travel with the
 # dashboard: a root component that creates accounts, writes units and reloads
@@ -42,6 +43,13 @@ fail() {
   exit 1
 }
 
+FINGERPRINT_ONLY=""
+case "${1:-}" in
+  "") ;;
+  --fingerprint) FINGERPRINT_ONLY=yes ;;
+  *) echo "usage: bin/deploy-installer.sh [--fingerprint]" >&2; exit 2 ;;
+esac
+
 [ -f "$UNIT_SOURCE" ] || fail "unit not found: $UNIT_SOURCE"
 # The account that owns the served trees, the one the SSH path deploys as: the
 # installer hands every tree it places to it, so that an owner deploying the
@@ -60,6 +68,16 @@ sitesolide_borrow dashboard
 FINGERPRINT="$(shasum -a 256 < "$LOCAL/installer.js" | cut -d' ' -f1)"
 echo "   installer.js, fingerprint ${FINGERPRINT:0:12}"
 printf 'DEPLOY_ACCOUNT=%s\n' "$DEPLOY_USER" > "$LOCAL/sitesolide-installer.env"
+
+# --fingerprint: builds, prints what it would install as sha256sum prints it,
+# the local fingerprint then the path on the machine, and stops there, before
+# any connection. `sitesolide upgrade` compares those lines with the machine.
+if [ -n "$FINGERPRINT_ONLY" ]; then
+  echo "$FINGERPRINT  $TARGET_JS"
+  sitesolide_fingerprint "$UNIT_SOURCE" "$UNITS_FOLDER/$UNIT"
+  sitesolide_fingerprint "$LOCAL/sitesolide-installer.env" "$ENV_FILE"
+  exit 0
+fi
 
 echo "-> preliminary check"
 # The absolute paths the unit and the code use must exist: a missing one fails

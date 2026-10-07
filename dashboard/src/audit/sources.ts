@@ -197,7 +197,7 @@ export function createReaders(dependencies: AuditDependencies): Readers {
         if (await egressNotInstalled()) return failed("not-installed", "The egress proxy isn't installed on this server.");
         return failed("unavailable", "Can't reach the egress proxy.");
       }
-      if (answer.status === 404) return failed("outdated", "The egress proxy on this server predates its audit. Run bin/deploy-egress.sh.");
+      if (answer.status === 404) return failed("outdated", "The egress proxy on this server predates its audit. Run sitesolide upgrade.");
       if (answer.status !== 200) {
         const why = said(answer.body);
         return failed("unavailable", why === null ? `The egress proxy refused the dashboard (status ${answer.status}).` : `The egress proxy refused the dashboard: ${why}.`);
@@ -237,12 +237,12 @@ export function createReaders(dependencies: AuditDependencies): Readers {
       const asked = Math.min(size, PAGE_MAX);
       const answer = await receive(() => backups.readBackupAudit(null, { limit: asked, before: after?.[0] ?? null }));
       if (answer.kind === "unreachable") return failed("unavailable", "Can't reach the steward.");
-      if (answer.status !== 200) return stewardRefusal(answer, "The steward on this server predates backups. Run bin/deploy-steward.sh.");
+      if (answer.status !== 200) return stewardRefusal(answer, "The steward on this server predates backups. Run sitesolide upgrade.");
       const entries = answer.body?.entries;
       const rows = readRows("backups", entries, "The steward");
       if (!Array.isArray(rows)) return rows;
       if (after === null && rows.length === 0 && (await backupsNotInstalled())) {
-        return failed("not-installed", "Backups aren't set up on this server. Run bin/deploy-backup.sh install, then enable.");
+        return failed("not-installed", "Backups aren't set up on this server. Run sitesolide setup again for this machine, without --minimal.");
       }
       const listed = (entries as unknown[]).length;
       if (answer.body?.paged === true) return { kind: "rows", rows, end: listed < asked, window: null };
@@ -260,7 +260,7 @@ export function createReaders(dependencies: AuditDependencies): Readers {
       const asked = Math.min(size, PAGE_MAX);
       const answer = await receive(() => steward.readLog(null, { limit: asked, before: after === null ? null : after[0] + 1 }));
       if (answer.kind === "unreachable") return failed("unavailable", "Can't reach the steward.");
-      if (answer.status !== 200) return stewardRefusal(answer, "The steward on this server predates its log. Run bin/deploy-steward.sh.");
+      if (answer.status !== 200) return stewardRefusal(answer, "The steward on this server predates its log. Run sitesolide upgrade.");
       const entries = answer.body?.entries;
       const rows = readRows("steward", entries, "The steward");
       if (!Array.isArray(rows)) return rows;

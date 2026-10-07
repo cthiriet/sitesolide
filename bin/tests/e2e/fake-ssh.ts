@@ -5,7 +5,8 @@
  * It only answers the tests' host, `sample@invalid.local`, and only the
  * commands it recognises word for word: the empty connection of
  * bin/deploy-caddy.sh, the reading of the deposited manifests, the lock shared
- * with the gatekeeper, the fingerprints and the list of the blocks in service.
+ * with the gatekeeper, the fingerprints, the list of the blocks in service,
+ * and a deposited manifest or a unit, read as `deploy --compare` reads them.
  * **All the rest is refused**, writes included, and recorded: a code path that
  * forgot the dry run mode fails loudly instead of speaking to anything at all,
  * and the test reads the log back to make sure that not a single write was
@@ -128,6 +129,13 @@ export const LIST_BLOCKS =
 const READ_BLOCK = new RegExp(
   `^if sudo test -f (/etc/caddy/sites/([a-z0-9-]+)\\.caddy); then echo ${MARKER_PRESENT}; sudo cat \\1; else echo ${MARKER_ABSENT}; fi$`,
 );
+/**
+ * A deposited manifest or a unit, read the same way by `deploy --dry-run
+ * --compare`, which measures what a deployment would change.
+ */
+const READ_FILE = new RegExp(
+  `^if sudo test -f (/srv/sites/[a-z0-9-]+/sitesolide\\.json|/etc/systemd/system/[a-z0-9.-]+\\.service); then echo ${MARKER_PRESENT}; sudo cat \\1; else echo ${MARKER_ABSENT}; fi$`,
+);
 /** What bin/deploy-caddy.sh reads to tell a first install, before its guard. */
 export const FIRST_INSTALL_FILES = "test -f /etc/caddy/sitesolide.env && test -f /etc/caddy/domaines.map";
 /** The guard of bin/deploy-caddy.sh, which checks that the unit loads the zone variables. */
@@ -143,8 +151,8 @@ const LOCK = /^sudo sh -c ': caddy-lock (take|retake|release|verify) ([^;']*);/;
 const ACCOUNT_READING = /^SYSTEMD_NSS_DYNAMIC_BYPASS=1 getent passwd ([a-z][a-z0-9-]*) \|\| echo missing$/;
 /** An account made, its name last on the line, as every deploy script writes useradd. */
 const USERADD = /\buseradd .* ([a-z][a-z0-9-]*)$/;
-/** A script of `sitesolide setup`, on standard input, named by its tag: see bin/cli/harden.ts. */
-const SETUP_SCRIPT = /^(sudo -n )?sh -s setup:[a-z0-9-]+:[a-z]+$/;
+/** A script of `sitesolide setup` or `upgrade`, on standard input, named by its tag: see bin/cli/harden.ts. */
+const SETUP_SCRIPT = /^(sudo -n )?sh -s (setup|upgrade):[a-z0-9-]+:[a-z]+$/;
 
 if (import.meta.main) {
   const vm = process.env.FAKE_VM ?? "";
@@ -385,6 +393,13 @@ if (import.meta.main) {
     record(`BLOCK ${block[2]}`);
     const file = join(vm, block[1]!);
     process.stdout.write(existsSync(file) ? `${MARKER_PRESENT}\n${readFileSync(file, "utf8")}` : `${MARKER_ABSENT}\n`);
+    process.exit(0);
+  }
+  const file = READ_FILE.exec(command);
+  if (file !== null) {
+    record(`FILE ${file[1]}`);
+    const path = join(vm, file[1]!);
+    process.stdout.write(existsSync(path) ? `${MARKER_PRESENT}\n${readFileSync(path, "utf8")}` : `${MARKER_ABSENT}\n`);
     process.exit(0);
   }
 

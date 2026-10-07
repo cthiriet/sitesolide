@@ -65,7 +65,9 @@ missing. The output is a checklist: `[done]` already there, `[ok]` done now,
 `--minimal` leaves out the last three; running setup again without it adds
 them. Caddy is only ever touched through `bin/deploy-caddy.sh` and
 `systemctl`, never `caddy stop` nor `caddy start`. A component already active
-is never deployed again: upgrading stays [upgrading.md](upgrading.md)'s.
+is never deployed again: bringing the installed components to a newer
+release's code is `sitesolide upgrade`'s, with these same checks and scripts,
+see [upgrading.md](upgrading.md).
 
 The records are made at the start, so that they propagate while the machine
 installs; the scripts that follow probe the sites by name from your

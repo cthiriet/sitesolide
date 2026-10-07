@@ -17,8 +17,9 @@
  * run on an installed machine reads everything and changes nothing, no Caddy
  * reload, no component redeployed, no password drawn again; a run after a
  * failure finds the steps before it done and starts at the one that failed.
- * A component already active is never deployed again here: upgrading stays
- * docs/upgrading.md's.
+ * A component already active is never deployed again here: bringing one to a
+ * newer release's code is `sitesolide upgrade`'s, see bin/cli/upgrade.ts,
+ * which reuses these checks, these scripts and this runner.
  *
  * NEVER A MACHINE IN SERVICE BY MISTAKE. Before anything leaves the
  * workstation, the configuration is read: one that names another server,
@@ -79,7 +80,7 @@ import {
 import { hintFor } from "./hints";
 import { isCompiled, kitEnv, kitRoot } from "./kit";
 import { eventFor, forEachLine, formatEvent, type OutputEvent } from "./output";
-import { runSteps, StepFailure, type Check, type Step, type StepReport } from "./steps";
+import { runSteps, StepFailure, type Check, type Condition, type Step, type StepReport } from "./steps";
 
 // --- the command line ----------------------------------------------------------
 
@@ -496,10 +497,14 @@ export function chooseAddresses(host: string, facts: Pick<Facts, "ipv4" | "ipv6"
 
 // --- what setup depends on -------------------------------------------------------
 
-/** A script of the kit's bin/, or `sitesolide deploy` in one of its folders. */
+/**
+ * A script of the kit's bin/, or `sitesolide deploy` in one of its folders,
+ * with the options given. `quiet`: what it prints is kept for the caller,
+ * never shown.
+ */
 export type KitTask =
   | { kind: "script"; name: string; args: string[]; quiet?: boolean; passwordOnStderr?: boolean }
-  | { kind: "deploy"; folder: "dashboard" | "portal" };
+  | { kind: "deploy"; folder: "dashboard" | "portal"; args?: string[]; quiet?: boolean };
 
 /** Runs a task with this environment; never throws. `output` holds what it printed when quiet. */
 export type KitRunner = (task: KitTask, environment: Record<string, string>) => Promise<{ code: number; output: string }>;
@@ -591,8 +596,8 @@ const TOKEN = /^[A-Za-z0-9_-]{20,200}$/;
 
 // --- the install steps ------------------------------------------------------------
 
-const LIB = "/usr/local/lib/sitesolide";
-const UNITS = "/etc/systemd/system";
+export const LIB = "/usr/local/lib/sitesolide";
+export const UNITS = "/etc/systemd/system";
 
 /**
  * A check run as root through the operator: the deploy account once the ssh
@@ -604,15 +609,15 @@ function installCheck(tag: string, conditions: Parameters<typeof machineCheck>[1
   return (context: SetupContext): Promise<Check> => rootCheck(context.machine, context.operator, tag, machineCheck(tag, conditions, prelude));
 }
 
-function active(label: string, unit: string) {
+export function active(label: string, unit: string): Condition {
   return { label, test: `systemctl is-active --quiet ${unit}` };
 }
 
-function enabled(label: string, unit: string) {
+export function enabled(label: string, unit: string): Condition {
   return { label, test: `systemctl is-enabled --quiet ${unit}` };
 }
 
-function present(label: string, path: string) {
+export function present(label: string, path: string): Condition {
   return { label, test: `test -f ${path}` };
 }
 
@@ -632,14 +637,47 @@ async function deployFolder(context: SetupContext, folder: "dashboard" | "portal
 }
 
 /** The steward started after `path` was last written: the folder it opened to it then exists for it. */
-function stewardAfter(label: string, path: string) {
+export function stewardAfter(label: string, path: string): Condition {
   return {
     label,
     test: `started=$(systemctl show -p ActiveEnterTimestamp --value sitesolide-steward) && [ -n "$started" ] && [ "$(date -d "$started" +%s)" -ge "$(stat -c %Y ${path})" ]`,
   };
 }
 
-const CADDY_DROP_IN = "/etc/systemd/system/caddy.service.d/override.conf";
+export const CADDY_DROP_IN = "/etc/systemd/system/caddy.service.d/override.conf";
+
+/**
+ * What a component looks like once its step is done, condition by condition:
+ * the checks of the steps below, and of `sitesolide upgrade`, which brings a
+ * component that passes them to the code of a newer release and must leave it
+ * passing them still. A run of setup after an upgrade then finds every step
+ * done, and an upgrade never leaves behind a state setup would redo.
+ */
+export const COMPONENT_CONDITIONS = {
+  "caddy-unit": [
+    present("drop-in", CADDY_DROP_IN),
+    { label: "restart-always", test: `[ "$(systemctl show caddy -p Restart --value)" = always ]` },
+    { label: "zone-variables", test: "systemctl show caddy -p EnvironmentFiles --value | grep -q /etc/caddy/sitesolide.env" },
+    active("caddy-active", "caddy"),
+  ],
+  "caddy-config": [{ label: "caddyfile", test: "grep -q SITESOLIDE_ZONE /etc/caddy/Caddyfile" }, active("caddy-active", "caddy")],
+  api: [active("api-active", "sitesolide-api"), enabled("api-enabled", "sitesolide-api")],
+  gatekeeper: [
+    present("gatekeeper-code", `${LIB}/gatekeeper.js`),
+    present("gatekeeper-on", `${UNITS}/sitesolide-gatekeeper-on@.service`),
+    present("gatekeeper-off", `${UNITS}/sitesolide-gatekeeper-off@.service`),
+  ],
+  dashboard: [active("dashboard-active", "dashboard")],
+  steward: [active("steward-active", "sitesolide-steward"), present("steward-code", `${LIB}/steward.js`)],
+  collector: [enabled("collector-enabled", "sitesolide-collector.timer"), active("collector-active", "sitesolide-collector.timer")],
+  portal: [active("portal-active", "portal")],
+  monitor: [enabled("monitor-enabled", "sitesolide-monitor.timer"), active("monitor-active", "sitesolide-monitor.timer")],
+  "backups-installed": [present("backup-code", `${LIB}/backup.js`), present("backup-timer", `${UNITS}/sitesolide-backup.timer`)],
+  backups: [enabled("backup-enabled", "sitesolide-backup.timer"), active("backup-active", "sitesolide-backup.timer")],
+  installer: [present("installer-code", `${LIB}/installer.js`), present("installer-unit", `${UNITS}/sitesolide-installer@.service`)],
+  "egress-proxy": [active("egress-active", "sitesolide-egress")],
+  "steward-after-egress": [stewardAfter("steward-after-egress", `${UNITS}/sitesolide-egress.service`)],
+} satisfies Record<string, Condition[]>;
 
 function caddyRun(): string {
   return runScript(
@@ -866,12 +904,7 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "caddy-unit",
       title: "Caddy's drop-in",
-      check: installCheck("setup:caddy-unit:check", [
-        present("drop-in", CADDY_DROP_IN),
-        { label: "restart-always", test: `[ "$(systemctl show caddy -p Restart --value)" = always ]` },
-        { label: "zone-variables", test: "systemctl show caddy -p EnvironmentFiles --value | grep -q /etc/caddy/sitesolide.env" },
-        active("caddy-active", "caddy"),
-      ]),
+      check: installCheck("setup:caddy-unit:check", COMPONENT_CONDITIONS["caddy-unit"]),
       run: async (context) => {
         const dropIn = readFileSync(join(kitRoot(), "infra", "caddy", "caddy.service.d", "override.conf"), "utf8");
         await rootRun(context.machine, context.operator, "setup:caddy-unit:run", caddyUnitRun(dropIn), "Caddy did not restart with its drop-in");
@@ -882,25 +915,21 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "caddy-config",
       title: "the Caddyfile",
-      check: installCheck("setup:caddy-config:check", [{ label: "caddyfile", test: "grep -q SITESOLIDE_ZONE /etc/caddy/Caddyfile" }, active("caddy-active", "caddy")]),
+      check: installCheck("setup:caddy-config:check", COMPONENT_CONDITIONS["caddy-config"]),
       run: (context) => script(context, "deploy-caddy.sh"),
       inspect: (context) => journal(context, "caddy"),
     },
     {
       id: "api",
       title: "shared service",
-      check: installCheck("setup:api:check", [active("api-active", "sitesolide-api"), enabled("api-enabled", "sitesolide-api")]),
+      check: installCheck("setup:api:check", COMPONENT_CONDITIONS.api),
       run: (context) => script(context, "deploy-api.sh"),
       inspect: (context) => journal(context, "sitesolide-api"),
     },
     {
       id: "gatekeeper",
       title: "gatekeeper",
-      check: installCheck("setup:gatekeeper:check", [
-        present("gatekeeper-code", `${LIB}/gatekeeper.js`),
-        present("gatekeeper-on", `${UNITS}/sitesolide-gatekeeper-on@.service`),
-        present("gatekeeper-off", `${UNITS}/sitesolide-gatekeeper-off@.service`),
-      ]),
+      check: installCheck("setup:gatekeeper:check", COMPONENT_CONDITIONS.gatekeeper),
       run: (context) => script(context, "deploy-gatekeeper.sh"),
       inspect: (context) => `ssh ${context.server} 'ls -l ${LIB} ${UNITS}/sitesolide-gatekeeper-*'`,
     },
@@ -920,21 +949,21 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "dashboard",
       title: "dashboard",
-      check: installCheck("setup:dashboard:check", [active("dashboard-active", "dashboard")]),
+      check: installCheck("setup:dashboard:check", COMPONENT_CONDITIONS.dashboard),
       run: (context) => deployFolder(context, "dashboard"),
       inspect: (context) => journal(context, "dashboard"),
     },
     {
       id: "steward",
       title: "steward",
-      check: installCheck("setup:steward:check", [active("steward-active", "sitesolide-steward"), present("steward-code", `${LIB}/steward.js`)]),
+      check: installCheck("setup:steward:check", COMPONENT_CONDITIONS.steward),
       run: (context) => script(context, "deploy-steward.sh"),
       inspect: (context) => journal(context, "sitesolide-steward"),
     },
     {
       id: "collector",
       title: "collector",
-      check: installCheck("setup:collector:check", [enabled("collector-enabled", "sitesolide-collector.timer"), active("collector-active", "sitesolide-collector.timer")]),
+      check: installCheck("setup:collector:check", COMPONENT_CONDITIONS.collector),
       run: (context) => script(context, "deploy-collector.sh"),
       inspect: (context) => journal(context, "sitesolide-collector"),
     },
@@ -957,7 +986,7 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "portal",
       title: "portal",
-      check: installCheck("setup:portal:check", [active("portal-active", "portal")]),
+      check: installCheck("setup:portal:check", COMPONENT_CONDITIONS.portal),
       run: (context) => deployFolder(context, "portal"),
       inspect: (context) => journal(context, "portal"),
     },
@@ -974,7 +1003,7 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "monitor",
       title: "monitor",
-      check: installCheck("setup:monitor:check", [enabled("monitor-enabled", "sitesolide-monitor.timer"), active("monitor-active", "sitesolide-monitor.timer")]),
+      check: installCheck("setup:monitor:check", COMPONENT_CONDITIONS.monitor),
       run: (context) => script(context, "deploy-monitor.sh"),
       inspect: (context) => journal(context, "sitesolide-monitor"),
     },
@@ -982,11 +1011,11 @@ export function installSteps(): Step<SetupContext>[] {
       id: "backups",
       title: "backups",
       skip: optional,
-      check: installCheck("setup:backups:check", [enabled("backup-enabled", "sitesolide-backup.timer"), active("backup-active", "sitesolide-backup.timer")]),
+      check: installCheck("setup:backups:check", COMPONENT_CONDITIONS.backups),
       // install, then the steward, whose unit opens /var/lib/sitesolide-backup
       // only if it exists when it starts, then the first run and the timer.
       run: async (context) => {
-        const installed = await installCheck("setup:backups:installed", [present("backup-code", `${LIB}/backup.js`), present("backup-timer", `${UNITS}/sitesolide-backup.timer`)])(context);
+        const installed = await installCheck("setup:backups:installed", COMPONENT_CONDITIONS["backups-installed"])(context);
         if (installed.state !== "done") await script(context, "deploy-backup.sh", ["install"]);
         await script(context, "deploy-steward.sh");
         await script(context, "deploy-backup.sh", ["enable"]);
@@ -998,7 +1027,7 @@ export function installSteps(): Step<SetupContext>[] {
       id: "installer",
       title: "team installer",
       skip: optional,
-      check: installCheck("setup:installer:check", [present("installer-code", `${LIB}/installer.js`), present("installer-unit", `${UNITS}/sitesolide-installer@.service`)]),
+      check: installCheck("setup:installer:check", COMPONENT_CONDITIONS.installer),
       run: (context) => script(context, "deploy-installer.sh"),
       inspect: (context) => `ssh ${context.server} 'ls -l ${LIB}/installer.js'`,
     },
@@ -1006,7 +1035,7 @@ export function installSteps(): Step<SetupContext>[] {
       id: "egress",
       title: "egress proxy",
       skip: optional,
-      check: installCheck("setup:egress:check", [active("egress-active", "sitesolide-egress"), stewardAfter("steward-after-egress", `${UNITS}/sitesolide-egress.service`)]),
+      check: installCheck("setup:egress:check", [...COMPONENT_CONDITIONS["egress-proxy"], ...COMPONENT_CONDITIONS["steward-after-egress"]]),
       // The steward after the proxy, so that it may write the connectors'
       // folder the proxy's script makes.
       run: async (context, missing) => {
@@ -1343,7 +1372,7 @@ async function collect(stream: ReadableStream<Uint8Array>, onLine: ((line: strin
   return lines.join("\n");
 }
 
-function sshMachine(host: string, environment: Record<string, string>, output: SetupOutput): Machine {
+export function sshMachine(host: string, environment: Record<string, string>, output: SetupOutput): Machine {
   return {
     async exec(account, command, options = {}) {
       const proc = Bun.spawn(["ssh", ...SSH_OPTIONS, `${account}@${host}`, command], {
@@ -1386,17 +1415,21 @@ export function selfCommand(...arguments_: string[]): string[] {
  * mode they write to the terminal as they always do; under --json their lines
  * become `output` events. The dashboard's password goes to standard error in
  * both, never through an event.
+ *
+ * `capture`, for `sitesolide upgrade`: every line is relayed rather than
+ * handed the terminal, in human mode too, and kept, so that a failure can
+ * quote the end of what the script said. Nothing it runs reads the keyboard.
  */
-function kitRunner(output: SetupOutput): KitRunner {
+export function kitRunner(output: SetupOutput, options: { capture?: boolean } = {}): KitRunner {
   return async (task, environment) => {
     const root = kitRoot();
-    const command = task.kind === "script" ? ["bash", join(root, "bin", task.name), ...task.args] : selfCommand("deploy");
-    const quiet = task.kind === "script" && task.quiet === true;
-    const toTerminal = !output.json && !quiet;
+    const command = task.kind === "script" ? ["bash", join(root, "bin", task.name), ...task.args] : selfCommand("deploy", ...(task.args ?? []));
+    const quiet = task.quiet === true;
+    const toTerminal = !output.json && !quiet && options.capture !== true;
     const proc = Bun.spawn(command, {
       cwd: task.kind === "deploy" ? componentFolder(task.folder) : root,
       env: environment,
-      stdin: output.json ? "ignore" : "inherit",
+      stdin: output.json || options.capture === true ? "ignore" : "inherit",
       stdout: toTerminal ? "inherit" : "pipe",
       stderr: toTerminal || (task.kind === "script" && task.passwordOnStderr === true) ? "inherit" : "pipe",
     });
@@ -1464,7 +1497,7 @@ function humanCheck(report: StepReport): string {
   return `${`[${report.status}]`.padEnd(7)}${report.title.padEnd(36)}${report.detail ?? ""}`.trimEnd();
 }
 
-export function setupOutput(json: boolean, write: (line: string) => void = (line) => console.log(line)): SetupOutput {
+export function setupOutput(json: boolean, write: (line: string) => void = (line) => console.log(line), command = "setup"): SetupOutput {
   const emit = (event: OutputEvent): void => write(formatEvent(event));
   return {
     json,
@@ -1484,7 +1517,7 @@ export function setupOutput(json: boolean, write: (line: string) => void = (line
       for (const line of details) console.error(`   ${line}`);
     },
     result: (fields) => {
-      if (json) emit({ type: "result", ok: true, command: "setup", ...fields });
+      if (json) emit({ type: "result", ok: true, command, ...fields });
     },
   };
 }

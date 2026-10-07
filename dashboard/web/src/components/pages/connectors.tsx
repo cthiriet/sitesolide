@@ -794,17 +794,18 @@ export function ConnectorsPage() {
 
         {list.state === "error" &&
           (list.stewardOutdated ? (
-            <Banner tone="attention" action={<Command text="bin/deploy-steward.sh" />}>
-              The steward on the server predates connectors. Update it from your workstation.
+            <Banner tone="attention" action={<Command text="sitesolide upgrade" />}>
+              The steward on the server predates connectors. Bring it up to date from your workstation.
             </Banner>
           ) : (
             <ErrorState title={list.message} onRetry={() => void retry()} inProgress={retrying} />
           ))}
 
         {ready !== null && !ready.installed && (
-          <Banner tone="attention" action={<Command text="bin/deploy-egress.sh" />}>
-            The egress proxy isn't installed on this server, so nothing can be lent yet. Install it from your workstation, then run{" "}
-            <code className="font-mono text-xs">bin/deploy-steward.sh</code>.
+          <Banner tone="attention" action={<Command text="sitesolide setup <user@host> --zone <zone> --email <address>" />}>
+            The egress proxy isn't installed on this server, so nothing can be lent yet. Install it from your workstation: run{" "}
+            <code className="font-mono text-xs">sitesolide setup</code> again for this server, without{" "}
+            <code className="font-mono text-xs">--minimal</code>. It installs the proxy, then restarts the steward.
           </Banner>
         )}
         {ready !== null && ready.installed && ready.state === "unmanaged" && (

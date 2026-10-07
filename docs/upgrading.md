@@ -1,7 +1,119 @@
 # Upgrading a running installation
 
+## The operator's path: `sitesolide upgrade`
+
+From 0.3 on, bringing a machine to a new release is two commands, run from the
+workstation by the person who owns the machine. Read the notes of every
+release in between first: a release that asks for more than this says so
+below, under its own heading.
+
+1. **The CLI.** Install the new binary, or `git pull` a checkout and run
+   `bin/test.sh` there. Both read the same `~/.config/sitesolide/config.json`.
+
+   ```bash
+   curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/install.sh | sh
+   ```
+
+2. **What would change.** It reads the machine and changes nothing there:
+
+   ```bash
+   sitesolide upgrade --dry-run
+   ```
+
+   Every component is listed `up to date`, `out of date` with what differs and
+   what would run, or `missing`. A component is out of date when what this
+   release would install differs from what is installed, measured on both
+   sides, never assumed from version numbers.
+
+3. **The upgrade.** It redeploys the components found out of date, and only
+   those, one after the other:
+
+   ```bash
+   sitesolide upgrade
+   ```
+
+   Run it again afterwards: every component reads `up to date`, and nothing
+   changes on the machine. Another installation is upgraded with
+   `SITESOLIDE_CONFIG_DIR=<dir>` before the command, as for every command.
+
+Upgrade the CLI when traffic is lowest: a dashboard, a portal or a Caddyfile
+redeployed reloads Caddy, which resets the connections being opened at that
+instant, for about a tenth of a second; a new drop-in restarts it.
+
+### What it compares, and what it runs
+
+Each component is checked first, reading only, then redeployed only if the
+check found a difference, through the very script or `sitesolide deploy` that
+`sitesolide setup` runs for it. The check is what setup checks for the
+component (active, enabled, its files present), plus:
+
+| Component | Out of date when | Redeployed by |
+|---|---|---|
+| Caddy's drop-in | `override.conf` differs from the release's | setup's own step: the drop-in installed, `daemon-reload`, `systemctl restart caddy` |
+| backups | `backup.js` or one of its three units differs | `bin/deploy-backup.sh install`; the timer stays as it is |
+| egress proxy | `egress.js` or its unit differs | `bin/deploy-egress.sh` |
+| steward | `steward.js` or its unit differs, or it started before the egress proxy's unit was last laid, or before the backups' folder existed | `bin/deploy-steward.sh` |
+| dashboard | `sitesolide deploy --dry-run --compare` finds a difference: a file to send or delete, its manifest, a missing unit, its Caddy block | `sitesolide deploy` in `dashboard/` |
+| collector | one of its two units differs | `bin/deploy-collector.sh` |
+| gatekeeper | `gatekeeper.js` or one of its templates differs, or the single template from before is still there | `bin/deploy-gatekeeper.sh` |
+| team installer | `installer.js`, its template or its environment file differs | `bin/deploy-installer.sh` |
+| the Caddyfile | `/etc/caddy/Caddyfile` differs from the release's | `bin/deploy-caddy.sh`, which validates, reloads, verifies and restores on failure |
+| shared service | the release in service differs from `api/`, file by file, or its unit does | `bin/deploy-api.sh` |
+| portal | as the dashboard | `sitesolide deploy` in `portal/` |
+| monitor | `monitor.js`, its unit or its timer differs | `bin/deploy-monitor.sh` |
+
+A component built by its script, the steward or the monitor for instance, is
+measured by the script itself: `--fingerprint` builds it exactly as it would to
+install it and prints the SHA-256 of every file it would lay, which the check
+compares with `sha256sum` on the machine, the measure the script verifies after
+installing. The same sources built by the same Bun give the same bytes; a
+binary and a checkout built with another Bun may differ, and then upgrade
+redeploys what they build, once.
+
+The order is the one this page has always given: the backup install before the
+steward, whose unit opens the backups' folder only if it exists when the
+steward starts; the egress proxy before the steward too, which starts again
+after it so that it may write the connectors' folder; the root components that
+only listen before the dashboard, which they accept old and new; the collector,
+the gatekeeper and the installer after the dashboard; the Caddyfile, the shared
+service, the portal and the monitor last.
+
+### What it never does
+
+- **Install a component.** One the machine does not carry is reported
+  `missing`, and left alone: `sitesolide setup`, run again for that machine,
+  installs it, the backups, the team installer and the egress proxy of a
+  machine set up with `--minimal` for instance.
+- **Touch a secret.** No file of `/etc/sitesolide` is read, no password is drawn
+  nor rotated: those are setup's first install and the dashboard's.
+- **Force.** A unit or a Caddy block someone edited on the machine stays as
+  `sitesolide deploy` leaves it: a unit is reported and kept, a block stops the
+  component with the differing lines. `sitesolide deploy --force` in that
+  component's folder of a checkout replaces it, on your decision.
+- **Stop or start Caddy** but through `bin/deploy-caddy.sh` and `systemctl`;
+  never `caddy stop` nor `caddy start`.
+
+### When it stops
+
+A failure stops at its component and says which, the end of what its script
+printed, and the command that shows more, such as
+`ssh deploy@203.0.113.10 'sudo journalctl -u sitesolide-steward -n 50'`. The
+components before it are upgraded, the ones after it untouched. Fix the cause,
+then run `sitesolide upgrade` again: the components already up to date are
+skipped, and it resumes at the one that failed.
+
+### What stays by hand
+
+- **Each site.** A site is redeployed by `sitesolide deploy` in its folder,
+  when you next deploy it; upgrade only brings the platform's own components.
+- **The loopback rule.** Setup lays it; a release that changes it says so in
+  its notes, and `bin/deploy-loopback.sh close` lays it again, from a checkout
+  or from the kit the binary unpacked into `~/.cache/sitesolide/<version>-<hash>/`.
+  It changes what every service may reach, and keeps its own safety net.
+
 A machine upgrades one release at a time: from 0.1, follow
-[From 0.1 to 0.2](#from-01-to-02) first, then [From 0.2 to 0.3](#from-02-to-03).
+[From 0.1 to 0.2](#from-01-to-02) first, then [From 0.2 to 0.3](#from-02-to-03),
+then `sitesolide upgrade` for every release after.
 
 ## From 0.2 to 0.3
 
@@ -34,15 +146,20 @@ machine. Nothing there needs to be redeployed, and no site reloads.
    ```bash
    sitesolide setup deploy@203.0.113.10 --zone example.com --email you@example.com --dry-run
    ```
+4. **`sitesolide upgrade --dry-run`**, then `sitesolide upgrade`, as
+   [above](#the-operators-path-sitesolide-upgrade): a binary builds the
+   components with its own Bun, and may find some of them to redeploy.
 
 New machines are made with `sitesolide machine create` and `sitesolide setup`:
 see [install.md](install.md).
 
 ## From 0.1 to 0.2
 
-How to bring a machine that runs 0.1 to 0.2 without any site going down. Every
-command runs from the workstation, by the person who owns the machine, in this
-order. Each step works without the next, so the upgrade can stop anywhere and
+How to bring a machine that runs 0.1 to 0.2 without any site going down, from
+a 0.2 checkout: `sitesolide upgrade` came later, and this jump also asks for
+gestures it never makes, a portal deployed with `--force` and components
+installed for the first time. Every command runs from the workstation, by the
+person who owns the machine, in this order. Each step works without the next, so the upgrade can stop anywhere and
 resume another day; each one says what to check and how to go back.
 
 This order was rehearsed on a test machine installed from 0.1 and serving the

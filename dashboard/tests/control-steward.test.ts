@@ -190,7 +190,7 @@ describe("starting the installer", () => {
     const { secret } = await newToken(s);
     const response = await call(s, "POST", "/control/deploy", { bearer: secret, deployment: DEPLOYMENT, slug: "shop", manifest });
     expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ error: "not-available", message: expect.stringContaining("bin/deploy-installer.sh") });
+    expect(await response.json()).toMatchObject({ error: "not-available", message: expect.stringContaining("sitesolide setup") });
   });
 
   test("a manifest for another slug, a bad deployment id, a token without scope", async () => {

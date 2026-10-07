@@ -111,3 +111,17 @@ export function summariseDivergence(divergence: Divergence, limit = 4): string[]
   }
   return lines;
 }
+
+/**
+ * How many entries an rsync run with `--dry-run --itemize-changes` would send
+ * or delete, read from what it lists: one line per entry, its first character
+ * saying what would happen. `<` and `>` a file sent, `c` an entry created
+ * there, `h` a hard link, `*deleting` an entry removed. A line opening with a
+ * dot is an entry whose time, mode or owner alone differs: not a change of
+ * what is served, the modes being set again on the machine after every send
+ * (sentModesCommand in bin/sitesolide.ts). Read on GNU rsync 3 and on the
+ * openrsync macOS ships, which word their lines alike.
+ */
+export function countItemized(output: string): number {
+  return output.split("\n").filter((line) => /^(\*deleting\s|[<>ch][fdLDS])/.test(line)).length;
+}

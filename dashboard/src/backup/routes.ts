@@ -46,7 +46,7 @@ export type BackupRoutes = {
   audit: (req: Request) => Promise<Response>;
 };
 
-export const NOT_INSTALLED_REASON = "backups are not set up on this server: bin/deploy-backup.sh install, then enable";
+export const NOT_INSTALLED_REASON = "backups are not set up on this server: run sitesolide setup again for this machine, without --minimal";
 export const DASHBOARD_REASON = DASHBOARD_REFUSAL;
 export const PORTAL_REASON = PORTAL_REFUSAL;
 export const RUNNING_REASON = "a restore of this site is in progress";
@@ -233,7 +233,7 @@ export function createBackupRoutes(dependencies: BackupRouteDependencies): Backu
           return fail(
             "failure",
             code === "EROFS"
-              ? "the steward cannot write restore requests yet: run bin/deploy-steward.sh again, now that the backup component is installed"
+              ? "the steward cannot write restore requests yet: it started before the backup component was installed, run sitesolide upgrade to start it again"
               : "the restore request could not be written, see the steward's journal",
           );
         }

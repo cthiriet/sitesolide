@@ -64,6 +64,15 @@ sitesolide_borrow() {
   (cd "$REPO_ROOT/$1" && bun run borrow > /dev/null)
 }
 
+# One line of what a deploy script would install, as sha256sum prints it: the
+# fingerprint of the local file, two spaces, its path on the machine. What
+# `--fingerprint` prints, and nothing else reads the machine for it: `sitesolide
+# upgrade` compares those lines with the installed files, read only, and runs
+# the script only for a component whose files differ. See bin/cli/upgrade.ts.
+sitesolide_fingerprint() {
+  printf '%s  %s\n' "$(shasum -a 256 < "$1" | cut -d' ' -f1)" "$2"
+}
+
 sitesolide_require_config() {
   local missing=()
   [ -n "${SITESOLIDE_SERVER:-}" ] || missing+=("server")

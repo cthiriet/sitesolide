@@ -231,7 +231,7 @@ describe("when a source lets the page down", () => {
       query("source=backups,steward"),
       readers({
         backups: { read: async () => ({ kind: "failed", state: "not-installed", message: "Backups aren't set up on this server." }) },
-        steward: { read: async () => ({ kind: "failed", state: "outdated", message: "Run bin/deploy-steward.sh." }) },
+        steward: { read: async () => ({ kind: "failed", state: "outdated", message: "Run sitesolide upgrade." }) },
       }),
     );
     expect(answer.sources.map((source) => [source.name, source.state])).toEqual([

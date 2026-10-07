@@ -72,7 +72,7 @@ async function explainOldSteward(pending: Promise<Response>): Promise<Response> 
   }
   if (body.message !== "no such route") return new Response(text, { status: 404, headers: response.headers });
   return Response.json(
-    { error: "not-found", message: "The steward on the server predates connectors: run bin/deploy-steward.sh." },
+    { error: "not-found", message: "The steward on the server predates connectors: run sitesolide upgrade." },
     { status: 404 },
   );
 }

@@ -39,6 +39,8 @@ cd your-project && sitesolide deploy
 One executable, no Bun and no clone. `setup` hardens the machine, creates the
 DNS records and installs everything, and can be run again at any time.
 [docs/install.md](docs/install.md) explains each step and the tokens they read.
+A new release later: install it the same way, then `sitesolide upgrade`
+redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
 
 ## What you get
 

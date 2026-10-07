@@ -60,7 +60,7 @@ async function readBody(req: Request): Promise<Record<string, unknown> | null> {
 
 /** What the page says when the steward does not carry the control routes yet. */
 export const NOT_AVAILABLE_REASON =
-  "The steward on this machine does not have the control API yet: run bin/deploy-steward.sh, then bin/deploy-installer.sh.";
+  "The steward on this machine does not have the control API yet: run sitesolide upgrade, then sitesolide setup again for this machine, without --minimal if the team installer is missing.";
 
 export function createTeamRoutes(dependencies: TeamDependencies, clock: () => number = Date.now): TeamRoutes {
   const { session, publicUrl, steward, tokens, store } = dependencies;

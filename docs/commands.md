@@ -1,7 +1,7 @@
 # Commands
 
 Every command runs from a project's folder, the one holding its
-`sitesolide.json`, except `setup`, `init`, `machine`, `help` and
+`sitesolide.json`, except `setup`, `upgrade`, `init`, `machine`, `help` and
 `--version`. This is what `sitesolide --help` prints.
 
 ```text
@@ -16,6 +16,8 @@ sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a 
    --any-os                     go on with a system other than Debian 13, at your own risk
    --config-dir <dir>           another installation's own configuration folder
    --dry-run                    check every step, change nothing
+sitesolide upgrade              bring every installed component to this release's code, resumable
+   --dry-run                    list each component, up to date, out of date or missing, change nothing
 sitesolide help                 this list, with or without a configuration; --help after any command
 sitesolide --version            the release this binary was built from, dev from a checkout
 sitesolide init                 write ~/.config/sitesolide/config.json
@@ -27,6 +29,7 @@ sitesolide detect               the sitesolide.json this folder implies, written
 sitesolide deploy               prepare, build, push, install, restart, verify
    --dry-run                    show the unit and the fragment, install nothing, build nothing
    --build                      with --dry-run: run the build too, the folder's own code, here
+   --compare                    with --dry-run: build, then list what would change on the server
    --force                      switch a hand-written unit to the generated one
    --yes [--slug <name>]        no sitesolide.json: write the inferred one, then deploy
 sitesolide status               what the server actually runs
@@ -65,15 +68,58 @@ the portal of a deployed site is set from the dashboard too: deploy follows the 
 
 `sitesolide setup` is the whole base install of [install.md](install.md),
 hardening and DNS records included, in one command that can be run again at
-any time: see [setup.md](setup.md). `SITESOLIDE_CONFIG_DIR` points every
-command at another configuration folder than `~/.config/sitesolide`, for a
-second installation driven from the same workstation.
+any time: see [setup.md](setup.md). `sitesolide upgrade` is its other half,
+for a machine in service: it brings the components setup installed to the
+code of the binary or the checkout it runs from, and redeploys only those
+that differ, see [Upgrading the machine](#upgrading-the-machine).
+`SITESOLIDE_CONFIG_DIR` points every command at another configuration folder
+than `~/.config/sitesolide`, for a second installation driven from the same
+workstation.
 
 `sitesolide run` loads the files the manifest declares from
 `~/.config/sitesolide/secrets/`, the few credentials your workstation presents
 to production itself, then runs the command. See [secrets.md](secrets.md).
 
 `sitesolide logs` shows every service of a project, interleaved by time.
+
+`deploy --dry-run --compare` runs the build, as `--build` does, then measures
+on the server what this deployment would change there, and changes nothing:
+the files its rsync would send or delete (compared by content, a time or a
+mode alone does not count), the deposited manifest, a missing unit, a Caddy
+block that differs. A unit edited on the machine is reported and never
+counted, deploy leaving it as it is without `--force`; a block edited there is
+refused, as deploy refuses it. `upgrade` asks exactly this of the dashboard and
+the portal.
+
+## Upgrading the machine
+
+`sitesolide upgrade` runs from anywhere, against the machine the configuration
+names, as the account that deploys:
+
+```console
+$ sitesolide upgrade --dry-run
+-> upgrade of deploy@203.0.113.10, zone example.com, to the code of release v0.4.0, dry run: nothing is changed on the machine
+up to date   Caddy's drop-in
+up to date   backups
+up to date   egress proxy
+out of date  steward             differs: steward.js; would run bin/deploy-steward.sh
+   dashboard/: sitesolide deploy --dry-run --compare, which builds it first
+out of date  dashboard           differs: /srv/sites/dashboard/public: 18 entries to send or delete; would run sitesolide deploy in dashboard/
+...
+missing      team installer      not installed: sitesolide setup installs it
+```
+
+Each component is checked first, reading only: what setup checks for it, and
+the fingerprint of what would be installed against what is, the SHA-256 the
+deploy script itself verifies after installing. Only a component that differs
+is redeployed, through the script or the `sitesolide deploy` setup runs for it,
+in the order [upgrading.md](upgrading.md) gives. A component the machine does
+not carry is reported missing, and `sitesolide setup` installs it. A failure
+stops at its component, quotes the end of what its script printed and the
+command that shows more; the same command again resumes there. A second run
+right after a successful one finds everything up to date and changes nothing.
+It never reads nor rotates a secret, and never touches Caddy but through
+`bin/deploy-caddy.sh` and `systemctl`. See [upgrading.md](upgrading.md).
 
 ## Sharing a project
 
@@ -163,7 +209,8 @@ root@<ipv4> --zone <your zone> --email <you>`, once port 22 answers.
 `--json` prints one JSON event per line on standard output, nothing else, and
 ends with a `result` or an `error` carrying a `hint`. `sitesolide mcp` serves
 `detect`, `deploy`, `status`, `logs`, `share` (and `sharing`, its read alone)
-and `lock --status` as tools to an MCP client. Both are described in
+and `lock --status` as tools to an MCP client; `setup` and `upgrade`, which
+change the machine itself, are not tools. Both are described in
 [agents.md](agents.md).
 
 ## With a team token
@@ -217,7 +264,9 @@ saves the current data first. See
 
 A release of the CLI that closes holes found in review: what an agent, a token
 or a cloned folder could make `deploy` do. It changes how some deployments
-behave, listed below. The commands are yours to run, in this order.
+behave, listed below. The commands are yours to run, in this order. It came
+before `sitesolide upgrade`, which now does steps 2 and 3 on its own, only for
+what differs: see [Upgrading the machine](#upgrading-the-machine).
 
 **What changes for you.**
 

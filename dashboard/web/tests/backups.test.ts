@@ -58,7 +58,12 @@ describe("the schedule", () => {
 
   test("fresh, stale, failed or never taken", () => {
     expect(freshness(view(), NOW)).toEqual({ tone: "ok", label: "Last snapshot 1h ago", detail: null })
-    expect(freshness(view({ snapshots: [snapshot({ takenAt: NOW - STALE_SNAPSHOT_MS - 60_000 })] }), NOW)).toMatchObject({ tone: "attention", label: "No snapshot for 2h" })
+    expect(freshness(view({ snapshots: [snapshot({ takenAt: NOW - STALE_SNAPSHOT_MS - 60_000 })] }), NOW)).toMatchObject({
+      tone: "attention",
+      label: "No snapshot for 2h",
+      // The binary's command, not a script of a checkout: setup starts a stopped timer again.
+      detail: expect.stringContaining("sitesolide setup"),
+    })
     expect(
       freshness(view({ lastRun: { startedAt: NOW, finishedAt: NOW, ok: false, snapshot: null, error: "not enough disk space" } }), NOW),
     ).toEqual({ tone: "error", label: "Last run failed", detail: "not enough disk space" })

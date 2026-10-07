@@ -76,6 +76,20 @@ here, since the fake answers a check the same way every time; that sequence
 runs in `bin/tests/cli-setup.test.ts`, against a model of the machine whose
 state is what the checks report.
 
+## Upgrade
+
+`upgrade.test.ts` runs `sitesolide upgrade` in front of the same fake machine:
+a refusal with no configuration or an unknown option before any connection,
+a machine without sitesolide refused after one read, and `--dry-run`, the
+survey and each installed component's check sent through `sudo -n sh -s
+upgrade:<component>:check`, answered from what the test lays, nothing run.
+Its components measured from files alone, the Caddyfile and the shared
+service's tree, need no build. The whole sequence, runs and failures included,
+is `bin/tests/cli-upgrade.test.ts`'s, against the model machine of
+`setup-fakes.ts`. The same file runs `deploy --dry-run --compare`: the
+deployment's rsync in a dry run, the only command the fake accepts that is not
+a recognised read, and the deposited manifest read back.
+
 ## Agents
 
 `agents.test.ts` drives the CLI as an agent does: `--json`, whose standard

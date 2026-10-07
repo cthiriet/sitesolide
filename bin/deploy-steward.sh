@@ -4,6 +4,7 @@
 # for the dashboard and commands the gatekeeper. See dashboard/README.md.
 #
 #   bin/deploy-steward.sh
+#   bin/deploy-steward.sh --fingerprint   what it would install, nothing sent
 #
 # Unlike the collector, its code does not travel with the dashboard: a root
 # daemon that writes secrets only changes by this deliberate gesture. The script
@@ -37,6 +38,13 @@ fail() {
   exit 1
 }
 
+FINGERPRINT_ONLY=""
+case "${1:-}" in
+  "") ;;
+  --fingerprint) FINGERPRINT_ONLY=yes ;;
+  *) echo "usage: bin/deploy-steward.sh [--fingerprint]" >&2; exit 2 ;;
+esac
+
 [ -f "$UNIT_SOURCE" ] || { echo "unit not found: $UNIT_SOURCE" >&2; exit 1; }
 
 echo "-> local build"
@@ -48,6 +56,15 @@ sitesolide_borrow dashboard
 [ -s "$LOCAL/steward.js" ] || { echo "!! bun build produced nothing" >&2; exit 1; }
 FINGERPRINT="$(shasum -a 256 < "$LOCAL/steward.js" | cut -d' ' -f1)"
 echo "   steward.js, fingerprint ${FINGERPRINT:0:12}"
+
+# --fingerprint: builds, prints what it would install as sha256sum prints it,
+# the local fingerprint then the path on the machine, and stops there, before
+# any connection. `sitesolide upgrade` compares those lines with the machine.
+if [ -n "$FINGERPRINT_ONLY" ]; then
+  echo "$FINGERPRINT  $TARGET_JS"
+  sitesolide_fingerprint "$UNIT_SOURCE" "/etc/systemd/system/$UNIT.service"
+  exit 0
+fi
 
 echo "-> preliminary check"
 # Without the group, the steward would refuse to start and Restart=always

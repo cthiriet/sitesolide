@@ -62,8 +62,9 @@ const JOURNALCTL = process.env.JOURNALCTL ?? "/usr/bin/journalctl";
 
 /**
  * The egress proxy's connectors and grants, and the group that reads them. The
- * folder is created by bin/deploy-egress.sh; missing, the Connectors page says
- * the proxy is not installed and nothing is written.
+ * folder is created by bin/deploy-egress.sh, which `sitesolide setup` runs;
+ * missing, the Connectors page says the proxy is not installed and nothing is
+ * written.
  */
 const EGRESS_FOLDER = process.env.EGRESS_FOLDER ?? EGRESS_CONFIG_DIR;
 const EGRESS_GROUP = process.env.EGRESS_GROUP ?? EGRESS_ACCOUNT;
