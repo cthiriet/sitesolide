@@ -112,7 +112,7 @@ export function ContentReveal({
 
   const lockedTitle = "Unlock to use"
   return (
-    <div className="grid gap-2 px-4 pb-3">
+    <div className="grid gap-2 px-4 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="outline"

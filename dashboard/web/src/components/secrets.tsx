@@ -154,7 +154,7 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
       </div>
 
       {file.state === "absent" && (
-        <p className="max-w-prose px-4 pb-3 text-sm text-pretty text-muted-foreground">
+        <p className="max-w-prose px-4 py-3 text-sm text-pretty text-muted-foreground">
           Declared for {slug}, but not on the server, so {slug} starts without it. Create file makes it empty, owned by{" "}
           <Terminal>{file.expected}</Terminal>
           {file.kind === "content" ? ", then Replace fills it." : ", then add its variables."}
@@ -162,7 +162,7 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
       )}
 
       {reason !== null && (
-        <div className="grid max-w-2xl gap-2 px-4 pb-4">
+        <div className="grid max-w-2xl gap-2 px-4 pt-3 pb-4">
           <p className="text-sm text-pretty">{reason.text}</p>
           {reason.command !== null && <Command text={reason.command} />}
           <p className="text-xs text-pretty text-muted-foreground">
@@ -173,7 +173,7 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
       )}
 
       {file.state === "managed" && file.kind === "content" && !file.readable && (
-        <p className="max-w-prose px-4 pb-3 text-sm text-pretty text-muted-foreground">
+        <p className="max-w-prose px-4 py-3 text-sm text-pretty text-muted-foreground">
           The server replaces this file but never reads it back, so its content can't be shown or copied, not even
           here. Keep the original where you made it.
         </p>
