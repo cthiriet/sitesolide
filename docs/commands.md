@@ -40,7 +40,7 @@ sitesolide share                this project's general access and people with ac
    <email|@domain>...           give them access, Can open by default
    --role <role>                can-open, viewer, developer or admin
    --expires <24h|7d|30d|never> for password access, 7d by default
-   --remove <email|@domain>...  take their access away, from their next request
+   --remove <email|@domain>...  take their access away; password access by the name it is listed under
 sitesolide people               everyone with access, their roles, who may create projects
    <email> --may-create         let them create projects, Admin of what they create
    <email> --no-create          take that right back
@@ -143,7 +143,7 @@ $ sitesolide share
      alice@acme.com      Developer
      @acme.com           Can open
      client@example.org  Can open, password access until 2026-11-07 09:00 UTC
-   Also open it: the owner, and owner@acme.com (an admin email set on the server; sites see them as admin).
+   Also open it without being listed: the owner, and owner@acme.com, set on the server to open every site.
 
 $ sitesolide share bob@acme.com carol@acme.com --role developer
 -> access to notes, https://notes.example.com/, over SSH, as the owner

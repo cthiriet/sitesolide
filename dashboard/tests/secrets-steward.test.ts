@@ -44,7 +44,7 @@ import {
   type StewardOptions,
 } from "../src/secrets/steward";
 import { createSystem, isTemporary, readAccount, readGroup, type Command, type SystemConfig, type System } from "../src/secrets/system";
-import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_READ_BYTES, ACCESS_RETENTION_MS, encodeEntry, reread } from "../src/secrets/log";
+import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_READ_BYTES, ACCESS_RETENTION_MS, createHistory, encodeEntry, inWindow, MAX_ENTRY_BYTES, page, reread, type AccessWindow } from "../src/secrets/log";
 
 /**
  * The steward set up on a throwaway tree: real files, real atomic writes, but a
@@ -2882,14 +2882,14 @@ describe("the real system", () => {
       // A flood a day old, pushed past the read bound by rows nothing refuses,
       // then one recent row at the end.
       const old = line(NOW - DAY, { operation: "portal", detail: "on, ok" });
-      const flood = old.repeat(Math.ceil((ACCESS_READ_BYTES + 1024 * 1024) / old.length));
+      const flood = old.repeat(Math.ceil((Math.max(ACCESS_READ_BYTES, ACCESS_PRUNE_BYTES) + 1024 * 1024) / old.length));
       writeFileSync(accessLog(root), flood + line(NOW, { detail: "the newest" }), { mode: 0o600 });
       writeFileSync(join(root, "state", "journal.jsonl"), "", { mode: 0o600 });
       const system = systemOn(root);
       await system.prepareAccessLog(NOW);
       expect(statSync(accessLog(root)).size).toBeGreaterThan(ACCESS_READ_BYTES);
       expect(await system.accessLogFull(NOW)).toBe(true);
-      // Its newest 16 MB, from a whole line: the latest change is there.
+      // Its newest megabyte, whole lines: the latest change is there.
       const read = (await system.readAccessLog())!;
       expect(read.length).toBeLessThanOrEqual(ACCESS_READ_BYTES);
       expect(read.startsWith("{")).toBe(true);
@@ -2908,6 +2908,89 @@ describe("the real system", () => {
       writeFileSync(accessLog(root), `${"y".repeat(200_000)}\nnot json\n${line(NOW - DAY, { detail: "kept" })}${line(NOW - ACCESS_RETENTION_MS - 1, { detail: "old" })}`, { mode: 0o600 });
       await systemOn(root).prepareAccessLog(NOW);
       expect(readFileSync(accessLog(root), "utf8")).toBe(line(NOW - DAY, { detail: "kept" }));
+    });
+
+    /**
+     * The window GET /log reads, worked out the plain way: every line, then
+     * from the newest back, `need` of them at least, as many more as fit.
+     */
+    function expectedWindow(text: string, window: AccessWindow): string {
+      const kept: string[] = [];
+      let bytes = 0;
+      const lines = text.split("\n").filter((one) => one !== "" && one.length <= MAX_ENTRY_BYTES && inWindow(one, window));
+      for (const one of lines.reverse()) {
+        if (kept.length >= window.need && bytes + one.length + 1 > ACCESS_READ_BYTES) break;
+        kept.push(one);
+        bytes += one.length + 1;
+      }
+      return kept.length === 0 ? "" : `${kept.reverse().join("\n")}\n`;
+    }
+
+    test("GET /log reads a window ending at the page's date, of the site named, a megabyte or the rows the answer needs", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "state"));
+      // Some 3 MB of rows of every length, sites mixed, a line longer than any
+      // entry and a torn one among them, so that lines straddle every piece read.
+      const rows: string[] = [];
+      let size = 0;
+      for (let i = 0; size < 3 * 1024 * 1024; i++) {
+        const slug = i % 97 === 0 ? "rare" : i % 3 === 0 ? "shop" : "blog";
+        const row = line(NOW - 10 * DAY + i * 1000, { slug, member: `p${i}@acme.test`, detail: `p${i}@acme.test: Can open ${"x".repeat((i * 37) % 150)}`.slice(0, 160) });
+        rows.push(i === 5000 ? `${"y".repeat(70_000)}\n` : i === 6000 ? "{torn\n" : row);
+        size += row.length;
+      }
+      const text = rows.join("");
+      writeFileSync(accessLog(root), text, { mode: 0o600 });
+      const system = systemOn(root);
+      const windows: AccessWindow[] = [
+        { before: null, slug: null, need: 50 },
+        { before: null, slug: "rare", need: 50 },
+        { before: NOW - 10 * DAY + 4_000_000, slug: null, need: 500 },
+        { before: NOW - 10 * DAY + 4_000_000, slug: "shop", need: 500 },
+        { before: NOW - 10 * DAY + 3_000, slug: null, need: 500 },
+        { before: NOW - 20 * DAY, slug: null, need: 500 },
+        { before: null, slug: "nowhere", need: 50 },
+      ];
+      for (const window of windows) {
+        const read = (await system.readAccessLog(window))!;
+        expect(read).toBe(expectedWindow(text, window));
+        expect(read.length).toBeLessThanOrEqual(ACCESS_READ_BYTES + 500 * MAX_ENTRY_BYTES);
+      }
+      // A page further back: the newest rows before its date, at least what it asks for.
+      const back = reread((await system.readAccessLog({ before: NOW - 10 * DAY + 4_000_000, slug: null, need: 500 }))!);
+      expect(back.length).toBeGreaterThanOrEqual(500);
+      expect(back.every((one) => one.a < NOW - 10 * DAY + 4_000_000)).toBe(true);
+      expect(back.at(-1)?.a).toBe(NOW - 10 * DAY + 3_999_000);
+      // A rare site's fifty, however far back they lie.
+      const rare = reread((await system.readAccessLog({ before: null, slug: "rare", need: 50 }))!);
+      expect(rare.length).toBeGreaterThanOrEqual(50);
+      expect(rare.every((one) => one.slug === "rare")).toBe(true);
+    });
+
+    test("a burst of GET /log over a 12 MB access log holds one window at a time, and keeps none", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "state"));
+      const row = (i: number) => line(NOW - DAY + i, { member: `${"m".repeat(60)}${i}@acme-industries.com`, slug: "customer-portal-staging", detail: `${"m".repeat(60)}@acme-industries.com: Can open` });
+      const parts: string[] = [];
+      for (let i = 0, size = 0; size < 12 * 1024 * 1024; i++) {
+        const one = row(i);
+        parts.push(one);
+        size += one.length;
+      }
+      writeFileSync(accessLog(root), parts.join(""), { mode: 0o600 });
+      writeFileSync(join(root, "state", "journal.jsonl"), "", { mode: 0o600 });
+      parts.length = 0;
+      const system = systemOn(root);
+      const history = createHistory({ readJournal: () => system.readLog(), readAccessLog: (window) => system.readAccessLog(window) });
+      Bun.gc(true);
+      const before = process.memoryUsage().rss;
+      const pages = await Promise.all(
+        Array.from({ length: 16 }, (_, i) => history.read({ before: NOW - i * 1000, slug: null, need: 500 }, (entries) => page(entries, { limit: 500, before: NOW - i * 1000 }).length)),
+      );
+      Bun.gc(true);
+      expect(pages).toEqual(Array(16).fill(500));
+      // A megabyte's window, parsed once at a time: a few megabytes at most.
+      expect(process.memoryUsage().rss - before).toBeLessThan(24 * 1024 * 1024);
     });
 
     test("counted as it grows: below its cap, it has room; at it, it is full", async () => {

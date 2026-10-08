@@ -318,9 +318,11 @@ const ANOMALY_DETAILS: Record<Mismatch, string> = {
 /**
  * A site's general access for its card: its name, what it does to the visitor,
  * and each setting at play from both sides, so that a disagreement reads without having to
- * go back to the discrepancy's message.
+ * go back to the discrepancy's message. `plain`: for a Viewer or a Developer,
+ * who never touch the machine, Restricted reads Applied or Not applied; the
+ * owner and Admins read where it is applied, the live Caddy block.
  */
-export function readAccess(site: Pick<Site, "type" | "portal" | "lock">): AccessReading {
+export function readAccess(site: Pick<Site, "type" | "portal" | "lock">, plain = false): AccessReading {
   const access = siteAccess(site)
   const { portal, lock } = site
   const checks: Check[] = []
@@ -328,7 +330,7 @@ export function readAccess(site: Pick<Site, "type" | "portal" | "lock">): Access
     checks.push({
       setting: "Restricted",
       requested: portal.wanted ? "Requested" : "Not requested",
-      applied: portal.installed ? "In the live Caddy block" : "Missing from the live Caddy block",
+      applied: plain ? (portal.installed ? "Applied" : "Not applied") : portal.installed ? "In the live Caddy block" : "Missing from the live Caddy block",
       tone: portal.wanted === portal.installed ? "ok" : "error",
     })
   }

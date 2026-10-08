@@ -2838,7 +2838,7 @@ function usage(zone: string | null): string {
     "     <email|@domain>...           give them access, Can open by default",
     "     --role <role>                can-open, viewer, developer or admin",
     "     --expires <24h|7d|30d|never> for password access, 7d by default",
-    "     --remove <email|@domain>...  take their access away, from their next request",
+    "     --remove <email|@domain>...  take their access away; password access by the name it is listed under",
     "  sitesolide people               everyone with access, their roles, who may create projects",
     "     <email> --may-create         let them create projects, Admin of what they create",
     "     <email> --no-create          take that right back",

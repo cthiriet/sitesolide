@@ -7,7 +7,10 @@ import {
   accessLogSeed,
   accessLogTopUp,
   createHistory,
+  inWindow,
   isAccessChange,
+  lineDate,
+  type AccessWindow,
   isAccessLogFull,
   mergeLogs,
   pruneAccessLog,
@@ -399,72 +402,62 @@ describe("the access log", () => {
   });
 });
 
-describe("GET /log's history, a full access log behind it", () => {
+describe("GET /log's history, read anew for each request", () => {
   const NOW = 1_800_000_000_000;
-  /** A row of the longest kind a change of access writes: every field near its bound. */
-  const row = (i: number): LogEntry => ({
+  const row = (i: number, others: Partial<LogEntry> = {}): LogEntry => ({
     a: NOW - 3_600_000 + i,
     operation: "access.add",
     result: "ok",
-    actor: `token:${"t".repeat(60)}`,
-    member: `person${i}@${"acme-corporation".repeat(6)}.example`.slice(0, 150),
-    slug: "some-project-with-a-long-name",
+    actor: "owner",
+    member: `person${i}@acme.test`,
+    slug: "blog",
     file: null,
     variable: null,
-    detail: `person${i}@acme-corporation.example: Can open, password access until 2027-01-01 00:00 UTC`.padEnd(150, "."),
+    detail: `person${i}@acme.test: Can open`,
+    ...others,
   });
-  const full = Array.from({ length: ACCESS_MAX_LINES }, (_, i) => encodeEntry(row(i))).join("");
 
-  function source(accessText: string) {
+  function source(accessText: string | null) {
     const counts = { journal: 0, access: 0 };
-    let stamp = 1;
-    let journalStamp = 1;
+    const windows: AccessWindow[] = [];
     return {
       counts,
-      touch: () => void stamp++,
-      touchJournal: () => void journalStamp++,
+      windows,
       source: {
-        stamps: () => ({ journal: `j${journalStamp}`, access: String(stamp) }),
         readJournal: async () => {
           counts.journal++;
           return encodeEntry({ ...row(0), operation: "unlock", member: null, slug: null, detail: null });
         },
-        readAccessLog: async () => {
+        readAccessLog: async (window: AccessWindow) => {
           counts.access++;
+          windows.push(window);
           return accessText;
         },
       },
     };
   }
 
-  test("each file parsed once per change of its own, however many read it, and read again once it changes", async () => {
-    const bench = source(full);
+  test("each request reads the journal and its own window of the access log, and nothing is kept between two", async () => {
+    const bench = source(Array.from({ length: 60 }, (_, i) => encodeEntry(row(i))).join(""));
     const history = createHistory(bench.source);
-    const answers = await Promise.all(Array.from({ length: 8 }, () => history.read((entries) => latest(entries, 50).length)));
-    expect(answers).toEqual(Array(8).fill(50));
-    expect(bench.counts).toEqual({ journal: 1, access: 1 });
-    bench.touch();
-    expect(await history.read((entries) => entries.length)).toBe(ACCESS_MAX_LINES + 1);
-    expect(bench.counts).toEqual({ journal: 1, access: 2 });
-  });
-
-  test("a line added to the journal, which every unlock and sign-in writes, parses the journal again and never the access log", async () => {
-    const bench = source(full);
-    const history = createHistory(bench.source);
-    for (let n = 0; n < 20; n++) {
-      bench.touchJournal();
-      expect(await history.read((entries) => entries.length)).toBe(ACCESS_MAX_LINES + 1);
-    }
-    expect(bench.counts).toEqual({ journal: 20, access: 1 });
+    expect(await history.read({ before: null, slug: null, need: 50 }, (entries) => latest(entries, 50).length)).toBe(50);
+    expect(await history.read({ before: NOW, slug: "blog", need: 500 }, (entries) => entries.length)).toBe(61);
+    expect(bench.counts).toEqual({ journal: 2, access: 2 });
+    expect(bench.windows).toEqual([
+      { before: null, slug: null, need: 50 },
+      { before: NOW, slug: "blog", need: 500 },
+    ]);
+    // No access log yet: the journal alone, as before it.
+    expect(await createHistory(source(null).source).read({ before: null, slug: null, need: 50 }, (entries) => entries.map((one) => one.operation))).toEqual(["unlock"]);
   });
 
   test("one read at a time: a burst never runs two in parallel", async () => {
-    const history = createHistory(source(full).source);
+    const history = createHistory(source("").source);
     let running = 0;
     let most = 0;
     await Promise.all(
       Array.from({ length: 16 }, () =>
-        history.read(async () => {
+        history.read({ before: null, slug: null, need: 50 }, async () => {
           running++;
           most = Math.max(most, running);
           await Bun.sleep(1);
@@ -475,16 +468,37 @@ describe("GET /log's history, a full access log behind it", () => {
     expect(most).toBe(1);
   });
 
-  test("a burst of reads over a full access log stays well under the steward's 128M", async () => {
-    expect(full.length).toBeGreaterThan(5 * 1024 * 1024);
-    const history = createHistory(source(full).source);
-    Bun.gc(true);
-    const before = process.memoryUsage().rss;
-    const pages = await Promise.all(Array.from({ length: 16 }, (_, i) => history.read((entries) => page(entries, { limit: 500, before: NOW - i * 1000 }))));
-    Bun.gc(true);
-    const grown = process.memoryUsage().rss - before;
-    expect(pages.every((one) => one.length === 500)).toBe(true);
-    // One parsed copy and the pages handed out, in the tens of megabytes at most.
-    expect(grown).toBeLessThan(48 * 1024 * 1024);
+  test("a line is dated where encodeEntry writes the date, without being parsed, and parsed when written otherwise", () => {
+    expect(lineDate(encodeEntry(row(5)))).toBe(NOW - 3_600_000 + 5);
+    expect(lineDate(JSON.stringify({ operation: "sharing", a: 42 }))).toBe(42);
+    expect(lineDate('{"a":"soon"}')).toBeNull();
+    expect(lineDate("{torn")).toBeNull();
+    expect(lineDate("[]")).toBeNull();
+  });
+
+  test("a window takes the rows dated before its date, of its site when it names one", () => {
+    const blog = encodeEntry(row(1)).trimEnd();
+    const shop = encodeEntry(row(2, { slug: "shop", detail: '"slug":"blog" in a detail' })).trimEnd();
+    expect(inWindow(blog, { before: null, slug: null })).toBe(true);
+    expect(inWindow(blog, { before: row(1).a, slug: null })).toBe(false);
+    expect(inWindow(blog, { before: row(1).a + 1, slug: "blog" })).toBe(true);
+    // A slug quoted inside a detail is escaped there: it never matches.
+    expect(inWindow(shop, { before: null, slug: "blog" })).toBe(false);
+    expect(inWindow(shop, { before: null, slug: "shop" })).toBe(true);
+    // Written in another order, by an earlier steward: parsed, and judged the same.
+    const earlier = JSON.stringify({ operation: "sharing", result: "ok", slug: "blog", file: null, variable: null, detail: "on", a: 7 });
+    expect(inWindow(earlier, { before: 8, slug: "blog" })).toBe(true);
+    expect(inWindow(earlier, { before: 8, slug: "shop" })).toBe(false);
+    expect(inWindow("not json", { before: null, slug: null })).toBe(false);
+  });
+
+  test("an access log topped up from a walk over its lines finds the same as from its text", () => {
+    const seeded = encodeEntry(row(1, { detail: "seeded" }));
+    const journal = encodeEntry(row(1, { detail: "seeded" })) + encodeEntry(row(2, { detail: "journal only" }));
+    const lines: string[] = [];
+    const walked = accessLogTopUp(journal, (visit) => seeded.split("\n").forEach((line) => (lines.push(line), visit(line))), NOW);
+    expect(walked).toBe(accessLogTopUp(journal, seeded, NOW));
+    expect(reread(walked).map((one) => one.detail)).toEqual(["journal only"]);
+    expect(lines.length).toBeGreaterThan(0);
   });
 });

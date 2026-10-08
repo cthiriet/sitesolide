@@ -356,9 +356,9 @@ People with a role above Can open on a project, Viewer, Developer or Admin, or
 the right to create projects, sign in to the dashboard with the same provider,
 through this same portal ([dashboard/README.md](../dashboard/README.md#access)).
 Someone with Can open alone, by name or through a domain, does not: the
-steward refuses them with `can-open-only`, which the dashboard says as "You
-can open the sites shared with you. The dashboard is for Viewers and above:
-ask an Admin of the project if you need more." Someone on no list is refused
+steward refuses them with `can-open-only`, which the dashboard says as "This
+account can open some sites, but the dashboard starts at Viewer. Ask an Admin
+of the project if you need more." Someone on no list is refused
 with `no-role`: "This account has no access to any project here. Ask the
 owner, or an Admin of the project, to add you." The dashboard is never
 restricted and has no network: it cannot run a sign-in, and must not be believed when it

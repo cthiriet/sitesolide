@@ -114,7 +114,7 @@ export const SHARE_USAGE = [
   "   <email|@domain>...            give them access, Can open by default",
   "   --role <role>                 can-open, viewer, developer or admin",
   "   --expires <24h|7d|30d|never>  for password access, 7d by default",
-  "   --remove <email|@domain>...   take their access away; a name given before, as it is listed",
+  "   --remove <email|@domain>...   take their access away; password access by the name it is listed under",
 ];
 
 export const PEOPLE_USAGE = [
@@ -260,7 +260,7 @@ const GENERAL: Readonly<Record<"public" | "restricted" | "code", string>> = {
  */
 export function alsoOpens(admins: readonly string[]): string {
   if (admins.length === 0) return "The owner also opens it.";
-  return `Also open it: the owner, and ${admins.join(", ")} (${admins.length > 1 ? "admin emails" : "an admin email"} set on the server; sites see them as admin).`;
+  return `Also open it without being listed: the owner, and ${admins.join(", ")}, set on the server to open every site.`;
 }
 
 /**

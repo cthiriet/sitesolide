@@ -63,7 +63,7 @@ describe("a person's unlock and sign-in", () => {
     expect(signInFailure(null)).toBeNull()
     expect(signInFailure("no-role")).toBe("This account has no access to any project here. Ask the owner, or an Admin of the project, to add you.")
     expect(signInFailure("not-a-member")).toContain("no access to any project")
-    expect(signInFailure("can-open-only")).toBe("You hold Can open alone: you open the sites you can open, and the dashboard is for Viewers and above. Ask an Admin of the project if you need more.")
+    expect(signInFailure("can-open-only")).toBe("This account can open some sites, but the dashboard starts at Viewer. Ask an Admin of the project if you need more.")
     expect(signInFailure("something-new")).toContain("didn't go through")
   })
 })

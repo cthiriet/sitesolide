@@ -9,6 +9,7 @@
  */
 import { callApi } from "./api"
 import { activityLine } from "./connectors"
+import { dateTime } from "./format"
 import { operationOutcome, operationParts } from "./secrets"
 import type { Tone } from "./tones"
 import type { AuditResponse, AuditRow, AuditSource, LogEntry, Operation, SourceStatus } from "./types"
@@ -385,7 +386,20 @@ function splitNote(note: string | null, member: string | null): { who: string; r
  * their role and the site: "Gave dana@example.com Developer on cms",
  * "Changed dana@example.com from Developer to Can open on cms".
  */
-function accessWords(row: AuditRow): AuditWords {
+/**
+ * A password access's end as the journal writes it, "until 2026-10-15 05:38
+ * UTC", said as the rest of the dashboard says a time: local, its zone named.
+ * Anything else, "no expiry" among others, as it was written.
+ */
+export function expiryNote(until: string, timeZone?: string): string | null {
+  if (until === "") return null
+  const found = /^until (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) UTC$/.exec(until)
+  const ms = found === null ? Number.NaN : Date.parse(`${found[1]}T${found[2]}:00Z`)
+  if (Number.isFinite(ms)) return `Until ${dateTime(ms, timeZone)}`
+  return until.charAt(0).toUpperCase() + until.slice(1)
+}
+
+function accessWords(row: AuditRow, timeZone?: string): AuditWords {
   const detail = row.detail ?? {}
   const site = row.site ?? row.target ?? "a project"
   const member = text(detail.member)
@@ -410,7 +424,7 @@ function accessWords(row: AuditRow): AuditWords {
   }
   if (rest?.startsWith("Can open, password access") === true) {
     const until = rest.slice("Can open, password access".length).trim()
-    return { summary: `Gave ${who} password access to ${site}`, note: until === "" ? null : until.charAt(0).toUpperCase() + until.slice(1), tone: "neutral" }
+    return { summary: `Gave ${who} password access to ${site}`, note: expiryNote(until, timeZone), tone: "neutral" }
   }
   if (who.startsWith("@")) return { summary: `Let everyone at ${who.slice(1)} open ${site}`, note: null, tone: "neutral" }
   if (rest === "Can open") return { summary: `Let ${who} open ${site}`, note: null, tone: "neutral" }
@@ -419,9 +433,10 @@ function accessWords(row: AuditRow): AuditWords {
 
 /**
  * A row in words. An action this page does not know yet is shown as it is,
- * its detail below: a component updated before the page loses nothing.
+ * its detail below: a component updated before the page loses nothing. The
+ * time zone is a parameter for the tests; the page takes the browser's.
  */
-export function auditWords(row: AuditRow): AuditWords {
+export function auditWords(row: AuditRow, timeZone?: string): AuditWords {
   const detail = row.detail ?? {}
   if (Object.hasOwn(STEWARD_OPERATIONS, row.action) && row.source === "steward") return stewardWords(row, STEWARD_OPERATIONS[row.action]!)
   if (Object.hasOwn(REFUSED_CHANGES, row.action) && row.source === "steward") {
@@ -434,7 +449,7 @@ export function auditWords(row: AuditRow): AuditWords {
     case "access.add":
     case "access.change":
     case "access.remove":
-      return accessWords(row)
+      return accessWords(row, timeZone)
     case "access.migrate":
       return { summary: "Carried who has access over to one registry", note: text(detail.note), tone: "neutral" }
     case "people.create": {

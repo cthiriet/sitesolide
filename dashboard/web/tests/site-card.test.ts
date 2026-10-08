@@ -238,6 +238,9 @@ describe("a site's door", () => {
       tone: "neutral",
       checks: [{ setting: "Restricted", requested: "Requested", applied: "In the live Caddy block", tone: "ok" }],
     })
+    // A Viewer or a Developer reads whether it applies, not where.
+    expect(readAccess(site({ portal: portal(true, true) }), true).checks).toEqual([{ setting: "Restricted", requested: "Requested", applied: "Applied", tone: "ok" }])
+    expect(readAccess(site({ portal: portal(true, false) }), true).checks).toEqual([{ setting: "Restricted", requested: "Requested", applied: "Not applied", tone: "error" }])
   })
 
   test("the preview code, requested and in effect", () => {

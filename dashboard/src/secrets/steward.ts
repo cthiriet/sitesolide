@@ -950,14 +950,13 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return views;
   }
 
-  /** The journal and the access log as one history, parsed once per change and read one request at a time (log.ts). */
+  /** The journal and a window of the access log as one history, read one request at a time and kept by none (log.ts). */
   const history = createHistory({
-    stamps: () => system.logStamps(),
     readJournal: async () => {
       await accessLogPrepared;
       return system.readLog();
     },
-    readAccessLog: () => system.readAccessLog(),
+    readAccessLog: (window) => system.readAccessLog(window),
   });
 
   async function readLog(req: Request): Promise<Response> {
@@ -971,7 +970,10 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     // One history, the journal's and the access log's, sorted by date before
     // `latest` takes its last lines or `page` its dates.
     await accessLogPrepared;
-    const body: LogResponse = await history.read((entries) => (asked === null ? { entries: latest(entries, RETURNED_ENTRIES, slug) } : { entries: page(entries, asked, slug), paged: true }));
+    // The access log's window: the newest rows before the page's date, of the
+    // site when one is named, as many as the answer holds at least.
+    const window = asked === null ? { before: null, slug, need: RETURNED_ENTRIES } : { before: asked.before, slug, need: asked.limit };
+    const body: LogResponse = await history.read(window, (entries) => (asked === null ? { entries: latest(entries, RETURNED_ENTRIES, slug) } : { entries: page(entries, asked, slug), paged: true }));
     return Response.json(body);
   }
 
@@ -1822,6 +1824,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
             authorize: members.authorize,
             unlockedUntil: members.unlockedUntil,
             rights: members.rights,
+            rightless: members.rightless,
             recordCreation: members.recordCreation,
             leave: members.leave,
             journal: members.journal,

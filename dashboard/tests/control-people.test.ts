@@ -70,6 +70,7 @@ function bench(): Bench {
     },
     unlockedUntil: async (session) => (unlocked.has(session as string) ? 1_900_000_000_000 : null),
     rights: async (email) => rightsOf(registry.value, email),
+    rightless: async (emails) => emails.filter((email) => rightsOf(registry.value, email) === null),
     async recordCreation(slug, email, tokenId) {
       const result = recordCreation(registry.value, email, slug, Date.now());
       if ("refusal" in result) return refuse("out-of-scope", result.refusal, 403);

@@ -1117,7 +1117,7 @@ describe("the pure parts", () => {
     );
     // The admin emails set on the server, named once under the list, as the dashboard says it.
     expect(describeAccess(state({ signIn: { configured: true, allowedDomains: ["acme.test"], admins: ["root@acme.test"] } })).at(-1)).toBe(
-      "   Also open it: the owner, and root@acme.test (an admin email set on the server; sites see them as admin).",
+      "   Also open it without being listed: the owner, and root@acme.test, set on the server to open every site.",
     );
     expect(describeAccess(state({ general: null }))[0]).toBe("   general access: not deployed: its people with access are kept, its site serves nothing");
     const open = describeAccess(state({ general: { access: "public", modifiable: true, reason: null }, entries: [entry("@acme.test"), entry("a-very-long-address@acme.test", "admin")] }));

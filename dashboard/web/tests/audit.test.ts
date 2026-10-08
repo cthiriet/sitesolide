@@ -181,15 +181,18 @@ describe("a row in words", () => {
   })
 
   test("the steward's access registry: given, changed, taken away, carried over, and who may create projects", () => {
-    const steward = (action: string, detail: Record<string, unknown>, actor = "owner") => auditWords(row({ source: "steward", actor, action, target: "kanban", site: "kanban", detail }))
+    const steward = (action: string, detail: Record<string, unknown>, actor = "owner") => auditWords(row({ source: "steward", actor, action, target: "kanban", site: "kanban", detail }), "UTC")
     expect(steward("access.add", { result: "ok", note: "alice@acme.test: Developer", member: "alice@acme.test" })).toEqual({ summary: "Gave alice@acme.test Developer on kanban", note: null, tone: "neutral" })
     expect(steward("access.add", { result: "ok", note: "dana@acme.test: Can open", member: "dana@acme.test" }).summary).toBe("Let dana@acme.test open kanban")
     expect(steward("access.add", { result: "ok", note: "@acme.test: Can open" }).summary).toBe("Let everyone at acme.test open kanban")
     expect(steward("access.add", { result: "ok", note: "eve@elsewhere.test: Can open, password access until 2026-10-14 10:00 UTC" })).toEqual({
       summary: "Gave eve@elsewhere.test password access to kanban",
-      note: "Until 2026-10-14 10:00 UTC",
+      note: "Until Oct 14, 10:00 UTC",
       tone: "neutral",
     })
+    // Local time with its zone, as the rest of the dashboard says it; what is not a date, as written.
+    expect(auditWords(row({ source: "steward", actor: "owner", action: "access.add", target: "kanban", site: "kanban", detail: { result: "ok", note: "eve@elsewhere.test: Can open, password access until 2026-10-14 10:00 UTC" } }), "Europe/Paris").note).toBe("Until Oct 14, 12:00 GMT+2")
+    expect(steward("access.add", { result: "ok", note: "eve@elsewhere.test: Can open, password access no expiry" }).note).toBe("No expiry")
     expect(steward("access.add", { result: "rejects", note: "bob@acme.test may give at most Developer on kanban", member: "eve@acme.test" }, "bob@acme.test")).toEqual({
       summary: "Tried to give eve@acme.test access to kanban",
       note: "bob@acme.test may give at most Developer on kanban",

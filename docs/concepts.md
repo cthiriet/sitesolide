@@ -345,7 +345,7 @@ rotates by line count: a refusal stays in the journal.
 | Event | Source | Actor | Target | What it records |
 |---|---|---|---|---|
 | `token.create`, `token.revoke` | dashboard | `owner` | none | a token created or revoked from the owner's *Tokens* page, its label, email and scope |
-| `token.create`, `token.revoke` | steward | a person's email, or who took their last role; `system` at the upgrade | none | a person's own token created or revoked, its id and scope; one refused above their roles, with the steward's reason; the tokens of someone who no longer signs in, revoked under the owner or the Admin who took their last role above Can open; a token from before made a person's, once, at the upgrade |
+| `token.create`, `token.revoke` | steward | a person's email, or who took their last role; `system` at the upgrade, and for the sweep | none | a person's own token created or revoked, its id and scope; one refused above their roles, with the steward's reason; the tokens of someone who no longer signs in, revoked under the owner or the Admin who took their last role above Can open; the live tokens of anyone the registry gives no rights, revoked by the sweep every 30 seconds; a token from before made a person's, once, at the upgrade |
 | `project.create` | steward | a person's email | slug | a project a person's own token created, which made them its Admin; the token in the detail |
 | `project.remove` | steward | `owner` | slug | a project `sitesolide remove` took off the machine: the name its token owned, free again for another token; that token in the detail |
 | `deploy.start` | dashboard | `token:<id>` | slug | a token's deployment handed to the installer; the person's email in the `member` field, for a person's own token |

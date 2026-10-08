@@ -344,7 +344,7 @@ describe("signing in", () => {
     for (const email of [carol, BOB]) {
       const response = await signIn(bench, await assertion(bench, email));
       expect([email, response.status]).toEqual([email, 403]);
-      expect(await response.json()).toMatchObject({ error: "can-open-only", message: expect.stringContaining("holds Can open alone") });
+      expect(await response.json()).toMatchObject({ error: "can-open-only", message: "This account can open some sites, but the dashboard starts at Viewer. Ask an Admin of the project if you need more." });
     }
     expect(bench.journal().at(-1)).toMatchObject({ operation: "dashboard.signin_failed", actor: BOB, detail: "can-open-only" });
     const nobody = await signIn(bench, await assertion(bench, dora));

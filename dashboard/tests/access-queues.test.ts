@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAccessRoutes, createAccessStore } from "../src/access/steward";
@@ -98,7 +98,7 @@ async function wire(registry: Registry, sites: string[]) {
       zone: ZONE,
       isUnlocked: async (token) => token === "owner-unlock",
       uidRoot: null,
-      members: { authorize: members.authorize, unlockedUntil: members.unlockedUntil, rights: members.rights, recordCreation: members.recordCreation, leave: members.leave, journal: members.journal, journalRefusal: members.journalRefusal },
+      members: { authorize: members.authorize, unlockedUntil: members.unlockedUntil, rights: members.rights, rightless: members.rightless, recordCreation: members.recordCreation, leave: members.leave, journal: members.journal, journalRefusal: members.journalRefusal },
       access: access.forToken,
       forgetAccess: access.forgetProject,
     },
@@ -112,8 +112,13 @@ async function wire(registry: Registry, sites: string[]) {
     if (made.status !== 201) throw new Error(await made.text());
     return (await made.json()) as { token: { id: string }; secret: string };
   };
-  const pending = (creations: { deployment: string; slug: string; email: string; token: string }[]) =>
+  // Noted as the deployment notes them, the token owning each name from its start.
+  const pending = (creations: { deployment: string; slug: string; email: string; token: string }[]) => {
     writeFileSync(join(root, "state", "creations.json"), JSON.stringify({ creations: creations.map((one) => ({ ...one, at: Date.now() - 1000 })) }));
+    const team = JSON.parse(readFileSync(join(root, "state", "team.json"), "utf8")) as { owners: Record<string, string> };
+    for (const one of creations) team.owners[one.slug] = one.token;
+    writeFileSync(join(root, "state", "team.json"), JSON.stringify(team), { mode: 0o600 });
+  };
   const succeeded = (deployment: string, slug: string) => {
     const result: InstallerResult = { deployment, slug, state: "succeeded", startedAt: Date.now(), updatedAt: Date.now(), finishedAt: Date.now(), log: [], error: null, url: null, allocated: [] };
     writeFileSync(join(root, "installer", `${deployment}.json`), JSON.stringify(result), { mode: 0o600 });

@@ -40,6 +40,7 @@ import {
   platformText,
   planAddition,
   raiseNeedsUnlock,
+  sendsLine,
   readWho,
   readingProblem,
   refusalText,
@@ -103,6 +104,15 @@ describe("the roles", () => {
     expect(raiseNeedsUnlock("developer", "visitor")).toBe(false)
     expect(lowers("admin", "developer")).toBe(true)
     expect(lowers("viewer", "admin")).toBe(false)
+  })
+
+  test("raised from their row to Viewer or above, someone gets the line to send, as when added; never when lowered or left at Can open", () => {
+    expect(sendsLine("visitor", "viewer")).toBe(true)
+    expect(sendsLine("viewer", "developer")).toBe(true)
+    expect(sendsLine("developer", "admin")).toBe(true)
+    expect(sendsLine("admin", "viewer")).toBe(false)
+    expect(sendsLine("developer", "visitor")).toBe(false)
+    expect(sendsLine("viewer", "viewer")).toBe(false)
   })
 })
 
@@ -395,8 +405,8 @@ describe("the people with access", () => {
   })
 
   test("who opens the site without being on its list, said once under it", () => {
-    expect(alsoOpens(["owner@acme.test"])).toBe("Also open it: the owner, and owner@acme.test (an admin email set on the server; sites see them as admin).")
-    expect(alsoOpens(["a@acme.test", "b@acme.test"])).toBe("Also open it: the owner, and a@acme.test, b@acme.test (admin emails set on the server; sites see them as admin).")
+    expect(alsoOpens(["owner@acme.test"])).toBe("Also open it without being listed: the owner, and owner@acme.test, set on the server to open every site.")
+    expect(alsoOpens(["a@acme.test", "b@acme.test"])).toBe("Also open it without being listed: the owner, and a@acme.test, b@acme.test, set on the server to open every site.")
     expect(alsoOpens([])).toBe("The owner also opens it.")
   })
 

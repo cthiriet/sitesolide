@@ -268,14 +268,25 @@ void handler
       console.log(`steward: tokens not made someone's yet, tried again in ${Math.round(wait / 1000)} s`);
       await Bun.sleep(wait);
     }
+    // Once made someone's: the tokens of anyone with no rights left go now.
+    await control.sweepTokens();
   })
   .catch((e: unknown) => console.error(`steward: access registry not ready (${(e as Error).name})`));
 
 // A person becomes Admin of what their token created once its installer has
 // finished and the machine carries the project: the dashboard's tracker reads
 // every result within seconds, which settles it; this settles it too when
-// nobody reads.
-setInterval(() => void control.settleCreations().catch((e: unknown) => console.error(`steward: creations not settled (${(e as Error).name})`)), 30_000);
+// nobody reads. Then the live tokens of anyone the registry gives no rights
+// are revoked: none comes back to life with a role given again.
+setInterval(
+  () =>
+    void control
+      .settleCreations()
+      .catch((e: unknown) => console.error(`steward: creations not settled (${(e as Error).name})`))
+      .then(() => control.sweepTokens())
+      .catch((e: unknown) => console.error(`steward: tokens not swept (${(e as Error).name})`)),
+  30_000,
+);
 
 /**
  * A restart is observed for eight seconds, a portal takes up to ninety, and a

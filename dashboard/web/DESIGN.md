@@ -558,9 +558,9 @@ three only for projects they administer. The token is then shown once, with
 <provider>*, an outline link to `/api/sso/begin` and not a form, the flow
 leaving for the portal's host; then a rule with *or with the owner's
 password* in its middle. A sign-in that came back without a session says why
-above both, in `destructive`: `can-open-only`, "You hold Can open alone: you
-open the sites you can open, and the dashboard is for Viewers and above. Ask
-an Admin of the project if you need more."; `no-role`, "This account has no access to any project
+above both, in `destructive`: `can-open-only`, "This account can open some
+sites, but the dashboard starts at Viewer. Ask an Admin of the project if you
+need more."; `no-role`, "This account has no access to any project
 here. Ask the owner, or an Admin of the project, to add you."; a domain not
 allowed, expired, not available.
 
@@ -678,17 +678,18 @@ owner, once unlocked, finds the addition made; a person, back from signing in
 again at their provider, finds the field and the role as they left them, and
 "Unlocked. Press Add to finish." After adding, "dana@example.com can now open
 cms." or "dana@example.com is now Viewer on cms.", with the line to send and
-*Copy*, since no email is sent, cleared when that row changes; from Viewer up
+*Copy*, since no email is sent; raising someone from their row to Viewer or
+above shows the same, and any other change of that row clears it; from Viewer up
 it names the dashboard too, "calendar is at https://calendar.example.com/,
 and in the dashboard at https://dashboard.example.com. Sign in with your
 Google account.", and from Developer up adds "To deploy, create a token on
 the Tokens page, then run sitesolide login --url
 https://dashboard.example.com.";
 for password access, a dialog with the address, the password and its end, and
-*Copy message*. Under the field, *What each role can do*, a disclosure,
-closed for the owner and Admins, open for a Viewer or a Developer: Can open
-to Admin, each including the ones below it, the reader's own marked *(your
-role)*. A Viewer or a Developer finds, in place of the field, whom to ask:
+*Copy message*. Under the field, *What each role can do*, a disclosure
+open for everyone, the owner and Admins included, who give the roles: Can
+open to Admin, each including the ones below it, the reader's own marked
+*(your role)*. A Viewer or a Developer finds, in place of the field, whom to ask:
 "To add someone, ask an Admin: bruno@example.com.", or "To add someone, ask
 the owner."
 

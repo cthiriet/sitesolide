@@ -29,7 +29,7 @@ function Intro({ slug }: { slug: string }) {
   if (role === "developer") {
     return (
       <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-        As a Developer on {slug}, you set, replace and remove its values, and never read one back: the steward shows you
+        As a Developer on {slug}, you set, replace and remove its values, and never read one back: the server shows you
         names alone. To change one, unlock by signing in again with {provider}; a change reaches {slug} only after a
         restart.
       </p>

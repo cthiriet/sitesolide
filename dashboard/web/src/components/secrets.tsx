@@ -161,7 +161,7 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
           <p className="text-sm text-pretty">{reason.text}</p>
           {reason.command !== null && <Command text={reason.command} />}
           <p className="text-xs text-pretty text-muted-foreground">
-            The steward expects <Terminal>{file.expected}</Terminal>. It lists this file but never rewrites it: fix
+            The server expects <Terminal>{file.expected}</Terminal>. It lists this file but never rewrites it: fix
             it on the server, then refresh this page.
           </p>
         </div>
@@ -169,7 +169,7 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
 
       {file.state === "managed" && file.kind === "content" && !file.readable && (
         <p className="max-w-prose px-4 pb-3 text-sm text-pretty text-muted-foreground">
-          The steward replaces this file but never reads it back, so its content can't be shown or copied, not even
+          The server replaces this file but never reads it back, so its content can't be shown or copied, not even
           here. Keep the original where you made it.
         </p>
       )}

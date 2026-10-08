@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   mintableProjects,
+  noProjectText,
   optionsAllowed,
   validatePersonTokenForm,
   auditLine,
@@ -134,6 +135,13 @@ describe("a person's own token", () => {
       { slug: "beta", role: "admin" },
     ])
     expect(mintableProjects({ gamma: "viewer" })).toEqual([])
+  })
+
+  test("nothing to offer: no project yet, or a Viewer on each, and the create right said when it is held", () => {
+    expect(noProjectText({ roles: {}, create: false }, null)).toBe("No project yet.")
+    expect(noProjectText({ roles: {}, create: true }, "maya@example.com")).toBe("maya@example.com has no project yet. It may still create projects.")
+    expect(noProjectText({ roles: { gamma: "viewer" }, create: false }, null)).toBe("None of your projects: you are a Viewer on each.")
+    expect(noProjectText({ roles: { gamma: "viewer" }, create: true }, "maya@example.com")).toBe("None of maya@example.com's projects: a Viewer on each. It may still create projects.")
   })
 
   test("the options: an Admin of every project chosen, or a token that only creates", () => {

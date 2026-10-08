@@ -483,16 +483,16 @@ projects**. A person who holds it mints a token that may create projects,
 and becomes Admin of each one it creates. And `OIDC_ADMIN_EMAILS` keeps its
 meaning: those addresses open every restricted site, as `admin`. *People*
 shows them as such, and a project's *Access* names them to everyone who reads
-it, Viewer and above, in one line: "Also open it: the owner, and
-owner@example.com (an admin email set on the server; sites see them as
-admin).", or "The owner also opens it." with none. A token never reads them.
+it, Viewer and above, in one line: "Also open it without being listed: the
+owner, and owner@example.com, set on the server to open every site.", or "The
+owner also opens it." with none. A token never reads them.
 
 **Who signs in to the dashboard**: someone with a role above Can open on a
 project, or the create right. Someone with Can open alone, by name or through
 a domain, opens sites and nothing more: the steward refuses their sign-in with
-`can-open-only`, and the page says "You can open the sites shared with you.
-The dashboard is for Viewers and above: ask an Admin of the project if you
-need more." Someone on no list is refused with `no-role`: "This account has
+`can-open-only`, and the page says "This account can open some sites, but the
+dashboard starts at Viewer. Ask an Admin of the project if you need more."
+Someone on no list is refused with `no-role`: "This account has
 no access to any project here. Ask the owner, or an Admin of the project, to
 add you." When someone's last role above Can open goes, removed or lowered,
 and they do not hold the create right, their dashboard sessions close and
@@ -843,10 +843,18 @@ steward.js         src/control/steward.ts: the session and the unlock asked of t
   machine carries the project, whether it succeeded or failed after serving
   it, a secret missing for instance, so that they can deploy it again: in the
   registry's queue, where their create right is read again, journaled as
-  `project.create` under their email. A creation undone, nothing left on the
-  machine, makes nobody Admin and is dropped. Only a result started after the
-  creation was noted counts, and a deployment id is used once: a deployment
-  naming an id that already has a result is refused.
+  `project.create` under their email, and only while that token still owns
+  the name. A creation undone, nothing left on the machine, makes nobody
+  Admin, is dropped, and gives its name back. One whose installer never left
+  a final result within 24 hours is dropped too, nobody made Admin, and
+  `sitesolide remove` drops the creation of the project it removes: what the
+  machine carries under that name by then may be the owner's own. Only a
+  result started after the creation was noted counts, and a deployment id is
+  used once: a deployment naming an id that already has a result is refused.
+  A token holds 20 names of projects the machine does not carry at most,
+  creations still running or undone, and creates nothing new past that
+  (`too-many-attempts`, 429), so that `team.json` never grows by a name per
+  attempt.
 - **Access by a person's token** gives Can open alone, and only where the
   person is Admin now: see [Access by token](#access-by-token).
 - **Someone who no longer signs in takes their tokens with them.** Their
@@ -856,6 +864,11 @@ steward.js         src/control/steward.ts: the session and the unlock asked of t
   role back meanwhile keeps their tokens. Each is journaled as `token.revoke`
   under the owner or the Admin who took their last role above Can open; and a
   token whose person the registry no longer lets sign in is refused anyway.
+  Every 30 seconds, and once the tokens from before are made someone's, the
+  steward also revokes the live tokens of anyone the registry gives no
+  rights, journaled under `system`: someone taken out while their tokens could
+  not be revoked, or out of a registry restored by hand, never finds them
+  alive again when given a role back.
   Revoking one of their own needs no unlock; the owner's *Tokens* page lists
   every token and who made it, and revokes any.
 
@@ -1198,7 +1211,7 @@ of the others, and forgets nothing of its own.
 | `portal` | `audit` in `portal.db` | 180 days; past 100,000 rows the oldest go, those of the last 30 days excepted; sign-ins and sign-outs repeated within a minute make one row | all of it, by pages |
 | `egress` | `audit` in `/var/lib/sitesolide-egress/` | 90 days, pruned every hour; refusals and connector calls counted by the minute | all of it, by pages |
 | `backups` | `audit` in `/var/lib/sitesolide-backup/backup.db` | everything, never pruned: one row per hourly run, some 8,800 a year, and one per restore | all of it, by pages, from a steward that knows pages; the latest 50 from an older one |
-| `steward` | `/var/lib/sitesolide-steward/journal.jsonl`, and beside it `access-log.jsonl` | the journal, the last 500 to 1,000 operations: past 1,000 lines, the file keeps its last 500; the access log, every accepted change of access for 180 days, never pushed out younger, pruned by age every hour | both as one history, by pages, from a steward that knows pages, the access log's newest 16 MB; the latest 50 from an older one |
+| `steward` | `/var/lib/sitesolide-steward/journal.jsonl`, and beside it `access-log.jsonl` | the journal, the last 500 to 1,000 operations: past 1,000 lines, the file keeps its last 500; the access log, every accepted change of access for 180 days, never pushed out younger, pruned by age every hour | both as one history, by pages, from a steward that knows pages, the access log a megabyte at a time, a page further back reading the megabyte that ends at its date; the latest 50 from an older one |
 
 **Changes of access are the steward's to record now.** Before the access
 registry the portal recorded them, `sharing.update`, `guest.create` and
@@ -1212,8 +1225,12 @@ and never pushed out younger. Once it holds 20,000 rows younger than that, or
 an older row out (see [Granting, changing,
 removing](#granting-changing-removing)). It is pruned by age, line by line
 whatever its size, at most once an hour on the append that follows, at the
-steward's start, and on the next append once it passes 12 MB; `GET /log` reads
-its newest 16 MB. A file of its own because the journal rotates by line count
+steward's start, and on the next append once it passes 12 MB. `GET /log` reads
+a window of it, never the whole: its newest megabyte, or for a page further
+back the megabyte that ends at that page's date, the rows the answer needs at
+least, parsed for that one request and let go, so that a full log and the 64
+MiB of an unlock fit the steward's 128 MB together; the start's top-up goes
+through it line by line. A file of its own because the journal rotates by line count
 and every unlock, read and sign-in writes to it: a busy week would push a
 month-old change of access out. A refusal is no change and stays in the
 journal, bounded per minute, rotated with the rest. Both files hold lines of

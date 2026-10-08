@@ -168,6 +168,8 @@ export type MemberRoutes = {
   journal: (event: MemberEvent) => Promise<void>;
   /** A person's rights as the registry reads now; null: they do not sign in; a Response: the registry does not read. */
   rights: (email: string) => Promise<MemberRights | null | Response>;
+  /** Of these people, those the registry gives no rights now, read once; a Response: the registry does not read. */
+  rightless: (emails: readonly string[]) => Promise<string[] | Response>;
   /**
    * A project a person's token created, the installer done: they become its
    * Admin, alone, and the journal says so under their email. Once recorded,
@@ -365,7 +367,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
         // Someone who may open a site, and nothing more, is told so: the dashboard starts at Viewer.
         if (opensASite(again, claims.email)) {
           await journalFailure(claims.email, "can-open-only");
-          return fail("can-open-only", `${claims.email} holds Can open alone: they open the sites they can open, and the dashboard starts at Viewer; ask an Admin of the project for more`);
+          return fail("can-open-only", "This account can open some sites, but the dashboard starts at Viewer. Ask an Admin of the project if you need more.");
         }
         await journalFailure(claims.email, "no-role");
         return fail("no-role", `${claims.email} has no access to any project here: ask the owner, or an Admin of the project, to add them`);
@@ -528,6 +530,12 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
     return rightsOf(current, email);
   }
 
+  async function rightless(emails: readonly string[]): Promise<string[] | Response> {
+    const current = await registry();
+    if (current instanceof Response) return current;
+    return emails.filter((email) => rightsOf(current, email) === null);
+  }
+
   /**
    * A project created by a person's token, once the installer succeeded: its
    * creator becomes its Admin, alone, in the registry's queue, where the
@@ -583,6 +591,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
     journalRefusal,
     journal: (event) => journal(event),
     rights,
+    rightless,
     recordCreation,
     leave,
   };

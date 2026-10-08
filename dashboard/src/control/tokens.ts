@@ -20,7 +20,9 @@
  * **Dead tokens do not pile up.** A revoked or expired token is kept 90 days
  * for the Tokens page, then dropped, sooner when the file needs the room, the
  * oldest first; one that created a project is kept as long as its name is
- * its own (`pruneTeam`).
+ * its own (`pruneTeam`). Nor do names: a creation undone before anything was
+ * laid gives its name back, and a token holds `MAX_UNCARRIED_NAMES` the
+ * machine does not carry at most.
  *
  * Pure: the registry comes in as a value, a new one goes out; the clock and the
  * random source are parameters. Reading and writing the file belong to
@@ -476,3 +478,13 @@ export function recordOwnership(team: Team, slug: string, id: string): Team | nu
   if (team.owners[slug] === id) return null;
   return { version: team.version, tokens: team.tokens, owners: { ...team.owners, [slug]: id } };
 }
+
+/**
+ * The names one token may hold that the machine does not carry: creations
+ * still running, or undone before anything was laid. Past it, the token
+ * creates nothing new until some are settled (src/control/steward.ts), so
+ * that `owners` never grows by one name per attempt: pruneTeam keeps every
+ * token it names, and a registry past what it is read with refuses every
+ * write, a revocation included.
+ */
+export const MAX_UNCARRIED_NAMES = 20;

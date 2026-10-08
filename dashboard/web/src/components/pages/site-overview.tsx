@@ -99,6 +99,7 @@ export function OverviewSection({ slug }: { slug: string }) {
             <div className="grid min-w-0 gap-6">
               <AccessPanel
                 site={snapshot}
+                plain={isPerson(identity) && role !== "admin"}
                 actions={
                   <>
                     {summary !== null && <span className="text-xs text-muted-foreground">{summary} ·</span>}

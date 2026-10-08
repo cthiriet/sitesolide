@@ -56,9 +56,12 @@ import {
   ACCESS_RETENTION_MS,
   accessLogSeed,
   accessLogTopUp,
+  inWindow,
   isAccessLogFull,
   isRecentLine,
+  MAX_ENTRY_BYTES,
   truncate,
+  type AccessWindow,
 } from "./log";
 import {
   pathUnder,
@@ -133,8 +136,12 @@ export type System = {
   removePrevious: (name: string) => Promise<void>;
   readLog: () => Promise<string>;
   appendLog: (line: string) => Promise<void>;
-  /** The access log's text (log.ts), null while there is none yet. */
-  readAccessLog: () => Promise<string | null>;
+  /**
+   * A window of the access log (log.ts, `AccessWindow`), oldest first; its
+   * newest `ACCESS_READ_BYTES` when none is named; null while there is no
+   * access log yet.
+   */
+  readAccessLog: (window?: AccessWindow) => Promise<string | null>;
   /**
    * Appends to the access log, seeded from the journal first if it does not
    * exist yet, then pruned when the last pruning is an hour old or the file
@@ -149,8 +156,6 @@ export type System = {
   prepareAccessLog: (now: number) => Promise<void>;
   /** Does the access log hold as many rows younger than its retention as it keeps? Pruned first when due. */
   accessLogFull: (now: number) => Promise<boolean>;
-  /** The identity of the journal and of the access log as they lie, inode, size and modification time: a reader caches what it parsed by it. */
-  logStamps: () => { journal: string | null; access: string | null };
   readRateLimit: () => Promise<RateLimitRead>;
   writeRateLimit: (text: string) => Promise<void>;
   /** The file that carries PASSWORD_HASH, with its rights. */
@@ -343,28 +348,74 @@ export function eachLine(path: string, visit: (line: Uint8Array) => void): "abse
 }
 
 /**
- * The last `max` bytes of a file, from the first whole line in them: the
- * newest part of a log bigger than what is read at once. Null when absent.
+ * The newest lines of a log that `keep` accepts, read from its end backwards
+ * a megabyte at a time, oldest first, each newline included: `need` of them
+ * at least when the file holds as many, then as many more as fit in `max`
+ * bytes. What is held at once is one piece of the file and the lines kept,
+ * whatever the file's size. A line longer than `MAX_ENTRY_BYTES` is no row
+ * of a log, and is passed over. Null when absent.
  */
-export function readTail(path: string, max: number): Uint8Array | null | "not-plain" {
+export function readWindow(path: string, max: number, need: number, keep: (line: string) => boolean): string | null | "not-plain" {
   const fd = openPlain(path);
   if (fd === "absent") return null;
   if (fd === "not-plain") return fd;
   try {
-    const size = fstatSync(fd).size;
-    const from = Math.max(0, size - max);
-    const buffer = new Uint8Array(size - from);
-    let read = 0;
-    while (read < buffer.length) {
-      const n = readSync(fd, buffer, read, buffer.length - read, from + read);
-      if (n === 0) break;
-      read += n;
+    const lenient = new TextDecoder();
+    const buffer = new Uint8Array(1024 * 1024);
+    /** Newest first, as they are met. */
+    const kept: string[] = [];
+    let bytes = 0;
+    let full = false;
+    /** The end of a line whose start lies further back. */
+    let carry: Uint8Array<ArrayBuffer> = new Uint8Array(0);
+    /** The line being gone through is past any entry's length: its start is passed over too. */
+    let overlong = false;
+    const visit = (line: Uint8Array) => {
+      if (line.length === 0 || line.length > MAX_ENTRY_BYTES) return;
+      const text = lenient.decode(line);
+      if (!keep(text)) return;
+      if (kept.length >= need && bytes + line.length + 1 > max) {
+        full = true;
+        return;
+      }
+      kept.push(text);
+      bytes += line.length + 1;
+    };
+    let position = fstatSync(fd).size;
+    while (position > 0 && !full) {
+      const from = Math.max(0, position - buffer.length);
+      let read = 0;
+      while (read < position - from) {
+        const n = readSync(fd, buffer, read, position - from - read, from + read);
+        if (n === 0) break;
+        read += n;
+      }
+      position = from;
+      const piece = buffer.subarray(0, read);
+      const chunk = carry.length === 0 ? piece : joined(piece, carry);
+      let end = chunk.length;
+      let first = true;
+      for (let newline = chunk.lastIndexOf(10, end - 1); newline !== -1 && !full; newline = end === 0 ? -1 : chunk.lastIndexOf(10, end - 1)) {
+        // The first line met in a piece ends where the previous piece began:
+        // when that line was overlong, this is its start, passed over too.
+        if (!(first && overlong)) visit(chunk.subarray(newline + 1, end));
+        first = false;
+        overlong = false;
+        end = newline;
+      }
+      if (full) break;
+      const rest = chunk.subarray(0, end);
+      if (first && overlong) {
+        carry = new Uint8Array(0);
+      } else if (rest.length > MAX_LINE_BYTES) {
+        carry = new Uint8Array(0);
+        overlong = true;
+      } else {
+        carry = rest.slice();
+      }
+      if (position === 0 && carry.length > 0 && !overlong) visit(carry);
     }
-    const bytes = buffer.subarray(0, read);
-    if (from === 0) return bytes;
-    // Cut into a line: it starts after the first newline.
-    const newline = bytes.indexOf(10);
-    return newline === -1 ? new Uint8Array(0) : bytes.subarray(newline + 1);
+    return kept.length === 0 ? "" : `${kept.reverse().join("\n")}\n`;
   } finally {
     closeSync(fd);
   }
@@ -613,15 +664,6 @@ export function createSystem(config: SystemConfig): System {
     return accessPrunedAt === null || now - accessPrunedAt >= ACCESS_PRUNE_INTERVAL_MS || now < accessPrunedAt;
   }
 
-  function stamp(path: string): string | null {
-    try {
-      const info = lstatSync(path);
-      return `${info.ino}:${info.size}:${info.mtimeMs}`;
-    } catch {
-      return null;
-    }
-  }
-
   /** The directories where a temporary file of ours can remain: each root, and its secrets subdirectories. */
   function tempFolders(): string[] {
     const folders: string[] = [];
@@ -770,11 +812,10 @@ export function createSystem(config: SystemConfig): System {
       if (truncated !== null) writeAtomically(config.stateFolder, "journal.jsonl", encoder.encode(truncated), aRoot);
     },
 
-    async readAccessLog() {
-      // Its newest part when it has grown past what is read at once (log.ts).
-      const tail = readTail(accessLogFile, ACCESS_READ_BYTES);
-      if (tail === null) return null;
-      return tail === "not-plain" ? "" : decoder.decode(tail);
+    async readAccessLog(window = { before: null, slug: null, need: 0 }) {
+      // A window of it, however big it has grown (log.ts).
+      const read = readWindow(accessLogFile, ACCESS_READ_BYTES, window.need, (line) => inWindow(line, window));
+      return read === "not-plain" ? "" : read;
     },
 
     async appendAccessLog(line, now) {
@@ -797,12 +838,18 @@ export function createSystem(config: SystemConfig): System {
       seedAccessLog();
       if (existed) {
         // Seeded by an earlier steward, whose changes of access were fewer:
-        // what the journal still holds of the others joins it, once.
-        const examination = readBounded(accessLogFile, ACCESS_READ_BYTES);
-        if (examination.kind === "present" && examination.bytes !== null) {
-          const added = accessLogTopUp(readJournal(), decoder.decode(examination.bytes), now);
-          if (added !== "") appendFileSync(accessLogFile, added, { mode: 0o600 });
-        }
+        // what the journal still holds of the others joins it, once. The
+        // access log gone through line by line, never held whole.
+        const lenient = new TextDecoder();
+        let plain = true;
+        const added = accessLogTopUp(
+          readJournal(),
+          (visit) => {
+            plain = eachLine(accessLogFile, (line) => visit(lenient.decode(line))) === "read";
+          },
+          now,
+        );
+        if (plain && added !== "") appendFileSync(accessLogFile, added, { mode: 0o600 });
       }
       pruneAccess(now);
     },
@@ -815,7 +862,6 @@ export function createSystem(config: SystemConfig): System {
       return isAccessLogFull(accessCount ?? { lines: 0, bytes: 0 });
     },
 
-    logStamps: () => ({ journal: stamp(logFile), access: stamp(accessLogFile) }),
 
     async readRateLimit() {
       try {

@@ -43,7 +43,7 @@ Admin the highest, and each role includes the ones below it:
 
 | Role | On that project |
 |---|---|
-| Can open (`visitor`) | opens its site when its general access is Restricted, and nothing in the dashboard |
+| Can open (`can-open` in the CLI, `visitor` in the API) | opens its site when its general access is Restricted, and nothing in the dashboard |
 | Viewer | also sees the project in the dashboard: its state, audience and activity |
 | Developer | also deploys it with a token of their own, restarts its service, and sets, replaces and removes its secrets without ever reading one back: the dashboard shows them names, the server never hands them a value |
 | Admin | everything of the project: reads its secrets, switches its general access between Public and Restricted, gives people access to it, a role at most their own, and restores its backups |
@@ -60,9 +60,9 @@ expiry chosen then, 24 hours, 7 days (the default), 30 days or none
 **Who signs in to the dashboard**: someone with a role above Can open on at
 least one project, or the right to create projects, with their company
 account. Someone with Can open alone, by name or through a domain, opens sites
-and nothing more: their sign-in is refused with `can-open-only`, "You can open
-the sites shared with you. The dashboard is for Viewers and above: ask an
-Admin of the project if you need more." Someone on no list is refused with
+and nothing more: their sign-in is refused with `can-open-only`, "This account
+can open some sites, but the dashboard starts at Viewer. Ask an Admin of the
+project if you need more." Someone on no list is refused with
 `no-role`, "This account has no access to any project here. Ask the owner, or
 an Admin of the project, to add you."
 When their last role above Can open goes, removed or lowered, and they do not

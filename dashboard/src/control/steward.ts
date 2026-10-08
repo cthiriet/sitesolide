@@ -25,16 +25,23 @@
  * from the next request, and a person removed takes every token of theirs
  * with them, whoever made it. A project a person's token creates makes that
  * person its Admin once the installer has finished and the machine carries
- * it, succeeded or failed after serving it (`settleCreations`), and the token
- * owns its name from its first deployment. The tokens from before every
- * token belonged to someone are made someone's once (`migrateTokens`).
+ * it, succeeded or failed after serving it, and only while that token still
+ * owns its name (`settleCreations`); the token owns its name from its first
+ * deployment. A creation whose installer never left a final result is
+ * dropped, nobody made Admin: whatever the machine carries under that name by
+ * then may be someone else's. One undone, nothing laid, gives its name back.
+ * The tokens from before every token belonged to someone are made someone's
+ * once (`migrateTokens`), and the live tokens of anyone the registry gives no
+ * rights are revoked every 30 seconds (`sweepTokens`), so that a person given
+ * a role again never finds old tokens alive.
  *
  * **Two queues here**, the tokens' and the creations', in the order
  * src/people/steward.ts sets for every queue of this steward: the tokens'
  * may wait on the creations', which may wait on the registry's, never the
  * other way. So a creation recorded hands back whoever it took out of the
  * dashboard, seen off (`leave`, then `revokeMember`) once the creations'
- * turn is over.
+ * turn is over, and a creation undone gives its name back in the tokens'
+ * queue, once the creations' turn is over too.
  *
  * **team.json stays readable.** Revoked and expired tokens are kept 90 days,
  * then dropped, sooner when room is needed, the oldest first; a token that
@@ -75,6 +82,7 @@ import {
   type InstallRequest,
   type LogsResponse,
   type TeamResponse,
+  type TokenView,
   OWNER_HOLDER,
 } from "./protocol";
 import { cleanLine, interrupted, judgeResult } from "./results";
@@ -84,7 +92,9 @@ import {
   encodeTeam,
   forgetOwnership,
   liveTokensOf,
+  MAX_UNCARRIED_NAMES,
   migrateTeam,
+  ownedBy,
   pruneTeam,
   readHolder,
   readTeam,
@@ -110,6 +120,8 @@ export type MemberAuthority = {
   unlockedUntil: (session: unknown) => Promise<number | null>;
   /** Their rights now; null: they do not sign in; a Response: the registry does not read. */
   rights: (email: string) => Promise<MemberRights | null | Response>;
+  /** Of these people, those the registry gives no rights now, read once; a Response: the registry does not read. */
+  rightless: (emails: readonly string[]) => Promise<string[] | Response>;
   /**
    * They become Admin of what their token created, the installer done,
    * journaled; whoever that took out of the dashboard, to see off with
@@ -172,6 +184,8 @@ export type ControlHandler = Handler & {
   migrateTokens: () => Promise<boolean>;
   /** The creations whose installer has finished, settled: the person Admin of what succeeded. */
   settleCreations: () => Promise<void>;
+  /** The live tokens of anyone the registry gives no rights, revoked; the ones revoked. */
+  sweepTokens: () => Promise<LeavingToken[]>;
 };
 
 /** Who a bearer is, narrowed to their person's rights for a person's token. */
@@ -502,6 +516,20 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       if (await isActive(unit)) return failure("busy", `a deployment of ${target} is already running: wait for it to finish, then try again`);
 
       if (decision.creating) {
+        // A name per attempt would grow the registry until nothing reads it:
+        // a token holds a bounded number the machine does not carry.
+        const held = await team();
+        if (held instanceof Response) return held;
+        const uncarried: string[] = [];
+        for (const name of ownedBy(held, identity.id)) {
+          if (name !== target && !(await system.projectExists(name))) uncarried.push(name);
+        }
+        if (uncarried.length >= MAX_UNCARRIED_NAMES) {
+          return failure(
+            "too-many-attempts",
+            `this token already holds ${uncarried.length} names of projects the machine does not carry, creations still running or undone: wait for those running to finish, then try again; the owner frees the others with sitesolide remove --confirm <name>`,
+          );
+        }
         // The token owns the name from its first deployment; a person
         // becomes its Admin once the installer has finished, noted here so
         // that it is settled then, even across a restart of this steward.
@@ -758,6 +786,11 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * ownership, and running it again finishes both. Journaled under `owner`,
    * the token in the detail. On the owner's socket alone: a compromised
    * dashboard cannot hand a project's name to another token.
+   *
+   * A creation of that name still waiting for its installer goes too, in
+   * the creations' turn, which this queue may wait on: settled later, it
+   * would make its person Admin of whatever the machine carries under that
+   * name by then, the owner's own project included.
    */
   async function forgetProject(req: Request): Promise<Response> {
     const body = await readBody(req, ["slug"], bodyTimeoutMs);
@@ -768,6 +801,10 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       if (await system.projectExists(slug)) {
         return failure("busy", `${slug} is still on the machine: remove it first, with sitesolide remove --confirm ${slug}`);
       }
+      // The creation first: a removal stopped between the two, run again,
+      // finds the ownership still there and finishes.
+      const dropped = await dropPending(slug);
+      if (dropped instanceof Response) return dropped;
       const registry = await team();
       if (registry instanceof Response) return registry;
       const forgotten = forgetOwnership(registry, slug);
@@ -829,22 +866,45 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     });
   }
 
+  /** The creations of this slug dropped, in the creations' turn: the project they were for is gone. How many; a refusal when the file does not read. */
+  function dropPending(slug: string): Promise<number | Response> {
+    return inCreationsTurn(async () => {
+      const current = await pending();
+      if (current instanceof Response) return current;
+      const kept = current.filter((one) => one.slug !== slug);
+      if (kept.length === current.length) return 0;
+      await system.writeCreations(encodeCreations(kept));
+      for (const one of current.filter((creation) => creation.slug === slug)) {
+        console.log(`control: the creation of ${slug} by ${one.email} dropped, the project removed from the machine`);
+      }
+      return current.length - kept.length;
+    });
+  }
+
   /**
-   * Every creation whose installer has finished, or never will: when the
-   * machine carries the project, succeeded or failed after serving it, its
-   * person made Admin, in the registry's queue, where their create right is
-   * read again; when it does not, the creation undone, dropped. Only a result
-   * started after the creation was noted counts: an earlier one, of a project
-   * of that name removed since, is another deployment's. A result not there
-   * yet waits for the next call. Whoever a creation took out of the
-   * dashboard leaves once this turn is over: see the queues above.
+   * Every creation whose installer has finished, or never will. Finished,
+   * the machine carrying the project, succeeded or failed after serving it,
+   * and the token that started it owning its name still: its person made
+   * Admin, in the registry's queue, where their create right is read again.
+   * Finished with nothing on the machine: undone, dropped, and its name given
+   * back. Never finished within `CREATION_MAX_AGE_MS`, the installer killed
+   * or its result gone with a reboot: dropped, nobody made Admin, since
+   * whatever the machine carries under that name by then may be someone
+   * else's. Only a result started after the creation was noted counts: an
+   * earlier one, of a project of that name removed since, is another
+   * deployment's. A result not there yet waits for the next call. Whoever a
+   * creation took out of the dashboard leaves, and the names come back, once
+   * this turn is over: see the queues above.
    */
   async function settleCreations(): Promise<void> {
     const leaving: { email: string; actor: string }[] = [];
+    const undone: PendingCreation[] = [];
     await inCreationsTurn(async () => {
       const current = await pending();
       if (current instanceof Response || current.length === 0) return;
       const left: PendingCreation[] = [];
+      /** The token registry, read once, when a creation needs it. */
+      let held: Team | Response | null = null;
       for (const creation of current) {
         const judgement = judgeResult(await system.readResult(creation.deployment), creation.deployment, options.uidRoot);
         const result = judgement.kind === "read" && judgement.result.slug === creation.slug && judgement.result.startedAt >= creation.at ? judgement.result : null;
@@ -854,8 +914,20 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
           left.push(creation);
           continue;
         }
-        if (!(await system.projectExists(creation.slug)) || options.members === undefined) {
+        const carried = await system.projectExists(creation.slug);
+        if (!carried) undone.push(creation);
+        if (!finished || !carried || options.members === undefined) {
           console.log(`control: the creation of ${creation.slug} by ${creation.email} ${finished ? "undone" : "never finished"}: dropped, nobody made Admin`);
+          continue;
+        }
+        held ??= await team();
+        // The registry of tokens being unreadable: tried again at the next call.
+        if (held instanceof Response) {
+          left.push(creation);
+          continue;
+        }
+        if (held.owners[creation.slug] !== creation.token) {
+          console.log(`control: the creation of ${creation.slug} by ${creation.email} dropped, nobody made Admin: its name is no longer token ${creation.token}'s`);
           continue;
         }
         const recorded = await options.members.recordCreation(creation.slug, creation.email, creation.token);
@@ -873,6 +945,69 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       if (left.length !== current.length) await system.writeCreations(encodeCreations(left));
     });
     for (const one of leaving) await options.members?.leave(one.email, one.actor);
+    if (undone.length > 0) await giveNamesBack(undone);
+  }
+
+  /**
+   * The names of creations undone given back, in the tokens' queue: each one
+   * still its token's and still not on the machine, checked once the turn
+   * has come, so that a project laid meanwhile keeps its owner. Otherwise
+   * `owners` would grow by one name per attempt.
+   */
+  function giveNamesBack(undone: readonly PendingCreation[]): Promise<void> {
+    return serially(async () => {
+      let registry = await team();
+      if (registry instanceof Response) return;
+      const given: string[] = [];
+      for (const creation of undone) {
+        if (registry.owners[creation.slug] !== creation.token || (await system.projectExists(creation.slug))) continue;
+        const forgotten = forgetOwnership(registry, creation.slug);
+        if (forgotten === null) continue;
+        registry = forgotten.team;
+        given.push(creation.slug);
+      }
+      if (given.length === 0) return;
+      if ((await save(registry)) !== null) return;
+      console.log(`control: name${given.length === 1 ? "" : "s"} given back, creation undone: ${given.join(", ")}`);
+    });
+  }
+
+  /**
+   * The live tokens of anyone the registry gives no rights, revoked in this
+   * queue, journaled under `system`. Someone taken out while their tokens
+   * could not be revoked, the registry not reading then, or out of a
+   * registry restored or edited by hand, would otherwise find them alive
+   * again the day they are given a role back. A registry that does not read
+   * revokes nothing: their tokens are refused meanwhile.
+   */
+  function sweepTokens(): Promise<LeavingToken[]> {
+    if (members === undefined) return Promise.resolve([]);
+    return serially(async () => {
+      const registry = await team();
+      if (registry instanceof Response) return [];
+      const now = system.now();
+      const holders = [...new Set(registry.tokens.flatMap((record) => (record.member === undefined ? [] : [record.member])))].filter(
+        (email) => liveTokensOf(registry, email, now).length > 0,
+      );
+      if (holders.length === 0) return [];
+      const gone = await members.rightless(holders);
+      if (gone instanceof Response || gone.length === 0) return [];
+      let next = registry;
+      const revoked: { email: string; views: TokenView[] }[] = [];
+      for (const email of gone) {
+        const result = revokeMemberTokens(next, email, now);
+        if (result.revoked.length === 0) continue;
+        next = result.team;
+        revoked.push({ email, views: result.revoked });
+      }
+      if (revoked.length === 0 || (await save(next)) !== null) return [];
+      for (const { email, views } of revoked) {
+        const ids = views.map((view) => view.id).join(", ");
+        await members.journal({ operation: "token.revoke", result: "ok", actor: "system", member: email, detail: line(`${ids}: ${email} has no role on this dashboard`) });
+        console.log(`control: ${views.length} token(s) of ${email} revoked, no role on this dashboard`);
+      }
+      return revoked.flatMap(({ views }) => views.map(leavingToken));
+    });
   }
 
   /**
@@ -965,6 +1100,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     owner: serve({ "/tokens/project": { DELETE: forgetProject }, "/team/project": { DELETE: forgetProject } }),
     migrateTokens,
     settleCreations,
+    sweepTokens,
   });
 }
 

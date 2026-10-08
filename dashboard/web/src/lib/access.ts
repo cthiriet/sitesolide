@@ -490,6 +490,15 @@ export function lowers(from: AccessRole, to: AccessRole): boolean {
   return rank(to) < rank(from)
 }
 
+/**
+ * Does a change made from someone's row bring the line to send them, as
+ * adding them does: raised to Viewer or above, a dashboard they now reach. A
+ * lowering, or a role below Viewer, gives them nothing new to open.
+ */
+export function sendsLine(from: AccessRole, to: AccessRole): boolean {
+  return rank(to) > rank(from) && rank(to) >= rank("viewer")
+}
+
 /** Who gave an entry, in the quiet words of its row. */
 export function byText(by: string, you: Viewer): string {
   if (by === "owner") return you.kind === "owner" ? "you" : "the owner"
@@ -583,7 +592,7 @@ export function sortEntries(entries: readonly EntryView[], now: number): EntryVi
  */
 export function alsoOpens(admins: readonly string[]): string {
   if (admins.length === 0) return "The owner also opens it."
-  return `Also open it: the owner, and ${admins.join(", ")} (${admins.length > 1 ? "admin emails" : "an admin email"} set on the server; sites see them as admin).`
+  return `Also open it without being listed: the owner, and ${admins.join(", ")}, set on the server to open every site.`
 }
 
 /** For someone who may not add people: whom to ask, by name. */

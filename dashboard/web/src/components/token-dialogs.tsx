@@ -25,6 +25,7 @@ import {
   messageText,
   loginCommand,
   mintableProjects,
+  noProjectText,
   optionsAllowed,
   parseSlugs,
   tokenRefusal,
@@ -288,7 +289,7 @@ export function CreateTokenDialog({
               <fieldset aria-describedby={errors.slugs !== undefined ? `${slugsId}-error` : `${slugsId}-help`}>
                 <legend className="mb-2 text-sm leading-none font-medium">Projects it may deploy</legend>
                 {mintable.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">{person !== null ? "None of your projects: you are a Viewer on each." : `None of ${holderEmail}'s projects: a Viewer on each.`}{target.create ? " It may still create projects." : ""}</p>
+                  <p className="text-xs text-muted-foreground">{noProjectText(target, person !== null ? null : holderEmail)}</p>
                 ) : (
                   <div className="grid gap-2 sm:grid-cols-2">
                     {mintable.map(({ slug, role }) => (

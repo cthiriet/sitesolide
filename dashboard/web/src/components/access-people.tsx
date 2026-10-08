@@ -39,6 +39,7 @@ import {
   roleLabel,
   selfChangeWarning,
   sendLine,
+  sendsLine,
   sortEntries,
   type EntryRow,
 } from "@/lib/access"
@@ -177,12 +178,13 @@ function SendNotice({ notice, slug, onClose }: { notice: Notice; slug: string; o
 
 /**
  * What each role can do, from Can open to Admin, each including the ones
- * below: a disclosure a newcomer opens once, open from the start for whoever
- * only reads the list. The viewer's own rung is marked.
+ * below: a disclosure open from the start for everyone, the owner and the
+ * Admins who give the roles first among them, closed with one click. The
+ * viewer's own rung is marked.
  */
-function RolesDisclosure({ yours, open }: { yours: AccessRole | null; open: boolean }) {
+function RolesDisclosure({ yours }: { yours: AccessRole | null }) {
   return (
-    <details open={open} className="group text-xs">
+    <details open className="group text-xs">
       <summary className="-mx-1 inline-flex cursor-pointer list-none items-center gap-1 rounded-sm px-1 text-muted-foreground outline-none select-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <ChevronRight aria-hidden="true" className="size-3.5 transition-transform group-open:rotate-90 motion-reduce:transition-none" />
         What each role can do
@@ -561,7 +563,9 @@ export function PeopleWithAccess({
     const { status, body } = await putAccess(page.slug, entry.who, role)
     if (status === 200 && body !== null) {
       announce(grantSentence(entry.who, role, page.slug))
-      if (notice?.who === entry.who) setNotice(null)
+      // Raised to Viewer or above: the same line to send them as adding them gives.
+      if (sendsLine(entry.role, role)) setNotice({ who: entry.who, role, line: sendLine({ ...entry, role }, page) })
+      else if (notice?.who === entry.who) setNotice(null)
       onChanged()
       return null
     }
@@ -639,7 +643,7 @@ export function PeopleWithAccess({
         ) : (
           <p className="text-sm text-pretty wrap-break-word">{askAnAdmin(page.entries)}</p>
         )}
-        <RolesDisclosure yours={yours} open={!manages} />
+        <RolesDisclosure yours={yours} />
       </div>
       {notice !== null && <SendNotice notice={notice} slug={page.slug} onClose={() => setNotice(null)} />}
       {rowError !== "" && (

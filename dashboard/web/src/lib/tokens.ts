@@ -247,6 +247,24 @@ export function mintableProjects(roles: Roles): { slug: string; role: Exclude<Ro
 }
 
 /**
+ * What the token dialog says when the person it is for has no project it
+ * may deploy: no project at all yet, or a Viewer on each; then that it may
+ * still create projects, when it may. `holder`: the person, when the owner
+ * makes it for them; null for one's own.
+ */
+export function noProjectText(target: { roles: Roles; create: boolean }, holder: string | null): string {
+  const first =
+    Object.keys(target.roles).length === 0
+      ? holder === null
+        ? "No project yet."
+        : `${holder} has no project yet.`
+      : holder === null
+        ? "None of your projects: you are a Viewer on each."
+        : `None of ${holder}'s projects: a Viewer on each.`
+  return target.create ? `${first} It may still create projects.` : first
+}
+
+/**
  * May a person's token carry the options, public sites, a domain, outbound
  * network: only when they are Admin of every project chosen; with
  * none chosen, only for a token that creates, whose projects make them

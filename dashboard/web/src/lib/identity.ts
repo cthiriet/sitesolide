@@ -85,7 +85,7 @@ export function signInFailure(reason: string | null): string | null {
     case "not-a-member":
       return "This account has no access to any project here. Ask the owner, or an Admin of the project, to add you."
     case "can-open-only":
-      return "You hold Can open alone: you open the sites you can open, and the dashboard is for Viewers and above. Ask an Admin of the project if you need more."
+      return "This account can open some sites, but the dashboard starts at Viewer. Ask an Admin of the project if you need more."
     case "domain-not-allowed":
       return "This account's domain isn't allowed to sign in here."
     case "expired":

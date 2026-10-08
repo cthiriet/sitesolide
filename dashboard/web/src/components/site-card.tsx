@@ -379,9 +379,13 @@ const ACCESS_ICONS: Record<"code" | "portal" | "open" | "mismatch", LucideIcon> 
   mismatch: ShieldX,
 }
 
-/** The site's general access as the snapshot sees it, on its Overview; `actions` leads to its Access section. */
-export function AccessPanel({ site, actions }: { site: Site; actions?: ReactNode }) {
-  const reading = readAccess(site)
+/**
+ * The site's general access as the snapshot sees it, on its Overview;
+ * `actions` leads to its Access section. `plain`: a Viewer or a Developer
+ * reads Applied rather than the Caddy block.
+ */
+export function AccessPanel({ site, actions, plain = false }: { site: Site; actions?: ReactNode; plain?: boolean }) {
+  const reading = readAccess(site, plain)
   const { access } = reading
   const Icon = ACCESS_ICONS[access.kind]
   const error = reading.tone === "error"

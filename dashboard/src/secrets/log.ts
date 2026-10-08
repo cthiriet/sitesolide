@@ -386,27 +386,49 @@ export const ACCESS_PRUNE_INTERVAL_MS = 3600 * 1000;
 
 /**
  * Past this size it is pruned on the next append whatever the hour, and
- * counted full: rows of the longest kind would otherwise take the file past
- * what it is read with before its count of lines is reached.
+ * counted full: rows of the longest kind would otherwise let the file grow
+ * far past its usual size before its count of lines is reached.
  */
 export const ACCESS_PRUNE_BYTES = 12 * 1024 * 1024;
 
 /**
- * What `GET /log` reads of the access log: its newest 16 MB, a third above
- * the size that has it counted full. The rows a full log still takes, those
- * that narrow and the owner's over SSH, may carry it past that: the oldest
- * are then left out of the page, never out of the file, which is pruned by
- * age line by line, whatever its size.
+ * What `GET /log` reads of the access log at once: its newest megabyte, some
+ * 4,000 rows of a usual length, many times the fifty it answers or the page
+ * of 500 it hands out at most. A page further back reads the megabyte that
+ * ends at its date (`AccessWindow`), so the whole history is still read, a
+ * page at a time. Never more than that, and parsed for the one request alone:
+ * the steward runs under MemoryMax=128M, an argon2id verification takes 64
+ * MiB of it, and a parse of a full log kept between requests left the owner
+ * unable to unlock.
  */
-export const ACCESS_READ_BYTES = 16 * 1024 * 1024;
+export const ACCESS_READ_BYTES = 1024 * 1024;
+
+/** No row the steward writes comes near this: a longer line is no entry, and is not read into a window. */
+export const MAX_ENTRY_BYTES = 8 * 1024;
+
+/**
+ * What one `GET /log` reads of the access log: the newest rows dated before
+ * `before` (all of them when null), of `slug` alone when it is named, `need`
+ * of them at least when the file holds as many, then as many more as fit in
+ * `ACCESS_READ_BYTES`.
+ */
+export type AccessWindow = { before: number | null; slug: string | null; need: number };
 
 /** Does this line belong in the access log rather than the journal: an accepted change of access. */
 export function isAccessChange(entry: LogEntry): boolean {
   return ACCESS_OPERATIONS.has(entry.operation) && entry.result === "ok";
 }
 
+/** Where encodeEntry writes the date: first, so that a line is dated without being parsed. */
+const LEADING_DATE = /^\{"a":(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)[,}]/;
+
 /** The date of a line as it was written, null for one that does not parse or carries none. */
-function lineDate(line: string): number | null {
+export function lineDate(line: string): number | null {
+  const leading = LEADING_DATE.exec(line);
+  if (leading !== null) {
+    const a = Number(leading[1]);
+    return Number.isFinite(a) ? a : null;
+  }
   try {
     const parsed: unknown = JSON.parse(line);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
@@ -457,12 +479,28 @@ export function entryKey(entry: LogEntry): string {
  * younger than the retention, encoded: what an access log seeded by an
  * earlier steward, whose changes of access were fewer, is topped up with,
  * once, when this steward starts. Empty when there is nothing to add.
+ *
+ * The access log comes as its text, or as a walk over its lines
+ * (src/secrets/system.ts, `eachLine`), which the steward hands so that a log
+ * of any size is gone through without being held: a line older than the
+ * journal's oldest change is dated and left, and only the keys of the
+ * journal's changes are kept.
  */
-export function accessLogTopUp(journalText: string, accessText: string, now: number, retentionMs: number = ACCESS_RETENTION_MS): string {
+export function accessLogTopUp(journalText: string, access: string | ((visit: (line: string) => void) => void), now: number, retentionMs: number = ACCESS_RETENTION_MS): string {
   const changes = reread(journalText).filter((entry) => isAccessChange(entry) && entry.a >= now - retentionMs);
   if (changes.length === 0) return "";
   const since = Math.min(...changes.map((entry) => entry.a));
-  const held = new Set(reread(accessText).filter((entry) => entry.a >= since).map(entryKey));
+  const wanted = new Set(changes.map(entryKey));
+  const held = new Set<string>();
+  const walk = typeof access === "string" ? (visit: (line: string) => void) => access.split("\n").forEach(visit) : access;
+  walk((line) => {
+    const a = lineDate(line);
+    if (a === null || a < since) return;
+    for (const entry of reread(line)) {
+      const key = entryKey(entry);
+      if (wanted.has(key)) held.add(key);
+    }
+  });
   return changes.filter((entry) => !held.has(entryKey(entry))).map(encodeEntry).join("");
 }
 
@@ -501,51 +539,41 @@ export function mergeLogs(journal: LogEntry[], accessLog: LogEntry[] | null): Lo
   return [...kept, ...accessLog].sort((x, y) => x.a - y.a);
 }
 
-/** Where `GET /log` reads its two files from, and their identities as they lie (src/secrets/system.ts). */
+/** Does this line of the access log belong to a window: dated before its `before`, of its slug when it names one? */
+export function inWindow(line: string, window: Pick<AccessWindow, "before" | "slug">): boolean {
+  const a = lineDate(line);
+  if (a === null || (window.before !== null && !(a < window.before))) return false;
+  if (window.slug === null) return true;
+  // Where encodeEntry writes it, without parsing; a line written otherwise is parsed.
+  if (LEADING_DATE.test(line)) return line.includes(`"slug":${JSON.stringify(window.slug)}`);
+  return reread(line).some((entry) => entry.slug === window.slug);
+}
+
+/** Where `GET /log` reads its two files from (src/secrets/system.ts). */
 export type HistorySource = {
-  stamps: () => { journal: string | null; access: string | null };
   readJournal: () => Promise<string>;
-  readAccessLog: () => Promise<string | null>;
+  /** The access log's rows of this window, oldest first; null while there is no access log. */
+  readAccessLog: (window: AccessWindow) => Promise<string | null>;
 };
 
 /**
- * The journal and the access log as one history, each file parsed once per
- * change of its own and kept, then read one request at a time: a burst of
- * `GET /log`, a compromised dashboard's included, never holds more than one
- * parsed copy of a full access log; a line added to the journal, which every
- * unlock and sign-in writes, parses the journal again and merges, never the
- * access log; a page asked again costs a `stat` and a slice. `use` runs on
- * the history in turn and must not keep it.
+ * The journal and the access log as one history, read one request at a time
+ * and kept by none: each request reads the journal, bounded by its rotation,
+ * and the window of the access log it asks for, `ACCESS_READ_BYTES` or a
+ * little more, parses both, and lets go of them once `use` has answered. A
+ * burst of `GET /log`, a compromised dashboard's included, therefore never
+ * holds more than one window at once, and nothing stays between two. `use`
+ * runs on the history in turn and must not keep it.
  */
-export function createHistory(source: HistorySource): { read: <T>(use: (entries: LogEntry[]) => T) => Promise<T> } {
-  let accessLog: { stamp: string; entries: LogEntry[] | null } | null = null;
-  let journal: { stamp: string; entries: LogEntry[] } | null = null;
-  let merged: { key: string; entries: LogEntry[] } | null = null;
+export function createHistory(source: HistorySource): { read: <T>(window: AccessWindow, use: (entries: LogEntry[]) => T) => Promise<T> } {
   let turn: Promise<unknown> = Promise.resolve();
-
-  async function entries(): Promise<LogEntry[]> {
-    const stamps = source.stamps();
-    const accessStamp = stamps.access ?? "-";
-    const journalStamp = stamps.journal ?? "-";
-    const key = `${journalStamp}|${accessStamp}`;
-    if (merged !== null && merged.key === key) return merged.entries;
-    merged = null;
-    if (accessLog === null || accessLog.stamp !== accessStamp) {
-      // The old copy let go before the new one is read: never two at once.
-      accessLog = null;
-      const text = await source.readAccessLog();
-      accessLog = { stamp: accessStamp, entries: text === null ? null : reread(text) };
-    }
-    if (journal === null || journal.stamp !== journalStamp) {
-      journal = { stamp: journalStamp, entries: reread(await source.readJournal()) };
-    }
-    merged = { key, entries: mergeLogs(journal.entries, accessLog.entries) };
-    return merged.entries;
-  }
-
   return {
-    read<T>(use: (entries: LogEntry[]) => T): Promise<T> {
-      const next = turn.then(async () => use(await entries()));
+    read<T>(window: AccessWindow, use: (entries: LogEntry[]) => T): Promise<T> {
+      const next = turn.then(async () => {
+        const accessText = await source.readAccessLog(window);
+        const accessLog = accessText === null ? null : reread(accessText);
+        return use(mergeLogs(reread(await source.readJournal()), accessLog));
+      });
       turn = next.catch(() => undefined);
       return next;
     },
