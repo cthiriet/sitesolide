@@ -12,16 +12,17 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Who } from "@/components/access-word"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { InternalLink } from "@/components/navigation"
 import { Banner, EmptyState, ErrorState, PageBody, PageHeader, Panel, PanelSkeleton } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
-import { readPeople, removePerson, setCreate } from "@/lib/api"
-import { refusalText } from "@/lib/access"
+import { readPeople, readTokens, removeAccess, removePerson, setCreate } from "@/lib/api"
+import { ACCESS_UNREACHABLE, refusalText } from "@/lib/access"
 import { siteUrl } from "@/lib/pages"
-import { createFieldError, createRefusal, domainGroups, mayRemove, projectRoles } from "@/lib/people"
+import { createFieldError, createRefusal, domainGroups, expiredAccesses, mayRemove, projectRoles, revokedTokensLine } from "@/lib/people"
 import { refusalOf } from "@/lib/secrets"
 import { TONE_TEXT } from "@/lib/tones"
 import type { PeoplePageResponse, PersonView } from "@/lib/types"
@@ -34,7 +35,8 @@ import { cn } from "@/lib/utils"
  * projects, and takes someone off every project at once.
  *
  * Giving the create right waits for the unlock, as giving a role does;
- * taking it away, or taking someone off, never waits.
+ * taking it away, taking someone off, or clearing the password accesses that
+ * ended, never waits.
  */
 
 /** By email, ignoring case: a name carried over from before the registry may start with a capital. */
@@ -94,9 +96,11 @@ function PersonRow({
   return (
     <li className={cn(ROW, "py-3")}>
       <div className="grid min-w-0 gap-1">
-        <span className="font-medium wrap-anywhere">{person.who}</span>
+        <span className="font-medium wrap-break-word">
+          <Who value={person.who} />
+        </span>
         <Roles person={person} now={now} />
-        {person.admin && <span className="text-xs text-muted-foreground">Opens every restricted site: set on the server, in OIDC_ADMIN_EMAILS.</span>}
+        {person.admin && <span className="text-xs text-muted-foreground">Every site, as admin: set on the server in OIDC_ADMIN_EMAILS.</span>}
       </div>
       <div className="flex items-center @max-2xl:col-start-1 @max-2xl:row-start-2 @2xl:justify-center">
         {offered ? (
@@ -207,12 +211,14 @@ export function PeoplePage() {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" })
   const [busy, setBusy] = useState<string | null>(null)
   const [rowError, setRowError] = useState("")
-  const [removing, setRemoving] = useState<{ person: PersonView | null; open: boolean; inProgress: boolean; error: string }>({
+  const [removing, setRemoving] = useState<{ person: PersonView | null; tokens: string | null; open: boolean; inProgress: boolean; error: string }>({
     person: null,
+    tokens: null,
     open: false,
     inProgress: false,
     error: "",
   })
+  const [clearing, setClearing] = useState<{ open: boolean; inProgress: boolean; error: string }>({ open: false, inProgress: false, error: "" })
 
   const reload = useCallback(
     async (showLoading = false) => {
@@ -220,7 +226,7 @@ export function PeoplePage() {
       const { status, body } = await readPeople()
       if (status === 401) return sessionExpired()
       if (status === 200 && body !== null && Array.isArray(body.people)) return setLoaded({ state: "ready", page: body })
-      const message = status === 502 ? "Can't reach the steward." : refusalText(status, body)
+      const message = status === 502 ? ACCESS_UNREACHABLE : refusalText(status, body)
       setLoaded((previous) => (previous.state === "ready" && !showLoading ? previous : { state: "failed", message }))
     },
     [sessionExpired],
@@ -247,6 +253,29 @@ export function PeoplePage() {
     }
   }
 
+  /** The removal's confirmation, with the tokens it revokes: read first, so that the owner sees them before choosing. */
+  async function askRemoval(person: PersonView) {
+    const { status, body } = await readTokens()
+    if (status === 401) return sessionExpired()
+    const tokens = status === 200 && body !== null && Array.isArray(body.tokens) ? revokedTokensLine(body.tokens, person.who, serverNow) : null
+    setRemoving({ person, tokens, open: true, inProgress: false, error: "" })
+  }
+
+  /** Every password access that ended, taken off its project one by one: none of them opens anything any more. */
+  async function clearExpired(expired: { slug: string; who: string }[]) {
+    setClearing({ open: true, inProgress: true, error: "" })
+    for (const { slug, who } of expired) {
+      const { status, body } = await removeAccess(slug, who)
+      if (status === 200) continue
+      const message = actions.refusal(refusalOf(status, body))
+      setClearing({ open: message !== null, inProgress: false, error: message === null ? "" : `${who} on ${slug}: ${message}` })
+      return void reload()
+    }
+    setClearing({ open: false, inProgress: false, error: "" })
+    announce(`${expired.length === 1 ? "1 expired password access" : `${expired.length} expired password accesses`} removed.`)
+    void reload()
+  }
+
   async function remove() {
     const person = removing.person
     if (person === null) return
@@ -264,6 +293,7 @@ export function PeoplePage() {
 
   const page = loaded.state === "ready" ? loaded.page : null
   const domains = page === null ? [] : domainGroups(page.domains)
+  const expired = page === null ? [] : expiredAccesses(page.people, serverNow)
 
   return (
     <>
@@ -293,7 +323,18 @@ export function PeoplePage() {
         {rowError !== "" && <Banner tone="error">{rowError}</Banner>}
 
         {page !== null && page.available && (
-          <Panel title="People" count={page.people.length} full>
+          <Panel
+            title="People"
+            count={page.people.length}
+            full
+            actions={
+              expired.length > 0 ? (
+                <Button variant="outline" size="sm" onClick={() => setClearing({ open: true, inProgress: false, error: "" })} className="max-md:h-10">
+                  Remove expired
+                </Button>
+              ) : undefined
+            }
+          >
             {page.people.length === 0 ? (
               <EmptyState icon={UsersRound} title="Nobody has access to a project yet">
                 Add people from a project's Access section.
@@ -314,7 +355,7 @@ export function PeoplePage() {
                     now={serverNow}
                     busy={busy === person.who}
                     onCreate={(create) => void changeCreate(person, create)}
-                    onRemove={() => setRemoving({ person, open: true, inProgress: false, error: "" })}
+                    onRemove={() => void askRemoval(person)}
                   />
                 ))}
                 </ul>
@@ -367,10 +408,13 @@ export function PeoplePage() {
       >
         <AlertDialogContent className="sm:max-w-md">
           <AlertDialogHeader className="text-left max-sm:place-items-start">
-            <AlertDialogTitle className="wrap-anywhere">Remove {removing.person?.who} from every project?</AlertDialogTitle>
+            <AlertDialogTitle className="wrap-break-word">
+              Remove <Who value={removing.person?.who ?? ""} /> from every project?
+            </AlertDialogTitle>
             <AlertDialogDescription className="text-pretty">
               They lose every role and password access at their next request, may no longer create projects, and are
-              signed out of the dashboard. Their tokens are revoked.
+              signed out of the dashboard.
+              {removing.tokens !== null && ` ${removing.tokens}`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {removing.error !== "" && <Banner tone="error">{removing.error}</Banner>}
@@ -378,6 +422,31 @@ export function PeoplePage() {
             <AlertDialogCancel className="max-sm:h-11">Cancel</AlertDialogCancel>
             <AlertDialogAction variant="destructive" disabled={removing.inProgress} onClick={() => void remove()} className="max-sm:h-11">
               {removing.inProgress ? "Removing…" : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={clearing.open}
+        onOpenChange={(next) => {
+          if (!next && !clearing.inProgress) setClearing({ open: false, inProgress: false, error: "" })
+        }}
+      >
+        <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogHeader className="text-left max-sm:place-items-start">
+            <AlertDialogTitle>
+              Remove {expired.length === 1 ? "1 expired password access" : `${expired.length} expired password accesses`}?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-pretty wrap-break-word">
+              They already open nothing: {expired.map(({ slug, who }) => `${who} on ${slug}`).join(", ")}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {clearing.error !== "" && <Banner tone="error">{clearing.error}</Banner>}
+          <AlertDialogFooter>
+            <AlertDialogCancel className="max-sm:h-11">Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={clearing.inProgress || expired.length === 0} onClick={() => void clearExpired(expired)} className="max-sm:h-11">
+              {clearing.inProgress ? "Removing…" : "Remove expired"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

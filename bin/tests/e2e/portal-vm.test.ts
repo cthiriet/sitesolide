@@ -144,7 +144,7 @@ describe("deploy reads the door on the VM", () => {
 
     const r = await run(folder, ["deploy", "--dry-run"], { vm });
     expect(r.code).toBe(1);
-    expect(r.error).toContain("cannot tell whether the portal of sample-door was changed from the dashboard");
+    expect(r.error).toContain("cannot tell whether the general access of sample-door was changed from the dashboard");
     expect(r.all).not.toContain("[dry-run]");
     expect(vm.logs()).toEqual(["READ sample-door"]);
   });
@@ -380,9 +380,9 @@ describe("deploy-caddy.sh does not contradict the VM", () => {
     const r = await runDeployCaddy(caddy);
     expect(r.code).toBe(1);
     expect(r.error).toContain(
-      "portal of tool changed from the dashboard: run `sitesolide deploy` in its folder first",
+      "general access of tool changed from the dashboard: run `sitesolide deploy` in its folder first",
     );
-    expect(r.error).not.toContain("portal of cms");
+    expect(r.error).not.toContain("general access of cms");
     // The guard reads under the lock, and the refusal gives it back.
     expect(vm.logs()).toEqual(["CONNECT", "LOCK take deploy-caddy", "READ *", "LOCK release deploy-caddy"]);
     expect(vm.lock()).toBeNull();
@@ -419,7 +419,7 @@ describe("deploy-caddy.sh does not contradict the VM", () => {
     const r = await runDeployCaddy(caddy);
     expect(r.code).toBe(1);
     expect(r.error).toContain(
-      "portal of cms changed from the dashboard: run `sitesolide deploy` in its folder first",
+      "general access of cms changed from the dashboard: run `sitesolide deploy` in its folder first",
     );
     expect(vm.logs()).toEqual(["CONNECT", "LOCK take deploy-caddy", "READ *", "LOCK release deploy-caddy"]);
   });
@@ -481,7 +481,7 @@ describe("bin/lock.sh does not deposit a stale door", () => {
 
     const r = await runLock("enable", folder);
     expect(r.code).toBe(1);
-    expect(r.error).toContain(`${SHOWCASE.slug} is behind the portal: turn it off from the dashboard first`);
+    expect(r.error).toContain(`${SHOWCASE.slug} is restricted: make it public from the dashboard's Access section first`);
     // The guard reads under the lock shared with the gatekeeper, and the
     // refusal gives it back.
     expect(vm.logs()).toEqual(["LOCK take lock", `READ ${SHOWCASE.slug}`, "LOCK release lock"]);
@@ -497,7 +497,7 @@ describe("bin/lock.sh does not deposit a stale door", () => {
     const r = await runLock("disable", folder);
     expect(r.code).toBe(1);
     expect(r.error).toContain(
-      `portal of ${SHOWCASE.slug} changed from the dashboard: run \`sitesolide deploy\` in its folder first`,
+      `general access of ${SHOWCASE.slug} changed from the dashboard: run \`sitesolide deploy\` in its folder first`,
     );
     expect(vm.logs()).toEqual(["LOCK take lock", `READ ${SHOWCASE.slug}`, "LOCK release lock"]);
   });
@@ -525,7 +525,7 @@ describe("bin/lock.sh does not deposit a stale door", () => {
     vm.forceAnswer("PRESENT\n");
     const r = await runLock("enable", project(SHOWCASE));
     expect(r.code).toBe(1);
-    expect(r.error).toContain(`cannot tell whether the portal of ${SHOWCASE.slug}`);
+    expect(r.error).toContain(`cannot tell whether the general access of ${SHOWCASE.slug}`);
     expect(vm.logs()).toEqual(["LOCK take lock", `READ ${SHOWCASE.slug}`, "LOCK release lock"]);
   });
 });
@@ -540,7 +540,7 @@ describe("sitesolide domain does not deposit a stale door", () => {
 
     const r = await run(folder, ["domain", "--deactivate", "--dry-run"], { vm });
     expect(r.code).toBe(1);
-    expect(r.error).toContain(`${SHOWCASE.slug} is behind the portal: turn it off from the dashboard first`);
+    expect(r.error).toContain(`${SHOWCASE.slug} is restricted: make it public from the dashboard's Access section first`);
     // Only the lock, which precedes the guard, is announced.
     expect(r.all.split("\n").filter((line) => line.includes("[dry-run]"))).toEqual([
       "   [dry-run] take the Caddy lock shared with the dashboard's gatekeeper",
@@ -555,7 +555,7 @@ describe("sitesolide domain does not deposit a stale door", () => {
 
     const r = await run(project(inactive), ["domain", "--activate", "--dry-run"], { vm });
     expect(r.code).toBe(1);
-    expect(r.error).toContain("turn it off from the dashboard first");
+    expect(r.error).toContain("make it public from the dashboard's Access section first");
     expect(r.all).not.toContain("does not resolve");
   });
 
@@ -572,7 +572,7 @@ describe("sitesolide domain does not deposit a stale door", () => {
     vm.forceAnswer("");
     const r = await run(project(ACTIVE), ["domain", "--deactivate", "--dry-run"], { vm });
     expect(r.code).toBe(1);
-    expect(r.error).toContain(`cannot tell whether the portal of ${SHOWCASE.slug}`);
+    expect(r.error).toContain(`cannot tell whether the general access of ${SHOWCASE.slug}`);
     expect(r.all.split("\n").filter((line) => line.includes("[dry-run]"))).toEqual([
       "   [dry-run] take the Caddy lock shared with the dashboard's gatekeeper",
     ]);
@@ -643,7 +643,7 @@ describe("sitesolide remove also removes the block laid from the dashboard", () 
     vm.forceAnswer("DONE\ncut\n");
     const r = await run(project(SHOWCASE), ["remove", "--confirm", SHOWCASE.slug, "--dry-run"], { vm });
     expect(r.code).toBe(1);
-    expect(r.error).toContain(`cannot tell whether ${SHOWCASE.slug} is behind the portal`);
+    expect(r.error).toContain(`cannot tell whether ${SHOWCASE.slug} is restricted`);
     // Only the lock, which precedes the reading, is announced.
     const announcements = r.all.split("\n").filter((line) => line.includes("[dry-run]"));
     expect(announcements).toEqual(["   [dry-run] take the Caddy lock shared with the dashboard's gatekeeper"]);

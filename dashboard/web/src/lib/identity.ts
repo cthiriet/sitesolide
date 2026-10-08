@@ -63,7 +63,7 @@ export function unlockFailure(reason: string | null): string | null {
     case "nothing-to-unlock":
       return "You're a Viewer on every project: there's nothing to unlock."
     case "outdated":
-      return "This server's steward can't unlock for you yet. Ask the owner to run sitesolide upgrade."
+      return "This server can't unlock for you yet. Ask the owner to run sitesolide upgrade."
     case "expired":
       return "This unlock took too long, or was finished in another browser. Unlock again."
     default:
@@ -83,7 +83,9 @@ export function signInFailure(reason: string | null): string | null {
     case "no-role":
     // An address from before the reason was renamed, in a bookmark or history.
     case "not-a-member":
-      return "This account has no role on any project here. Ask the owner, or an Admin of the project, to add you."
+      return "This account has no access to any project here. Ask the owner, or an Admin of the project, to add you."
+    case "can-open-only":
+      return "You can open the sites shared with you. The dashboard is for Viewers and above: ask an Admin of the project if you need more."
     case "domain-not-allowed":
       return "This account's domain isn't allowed to sign in here."
     case "expired":

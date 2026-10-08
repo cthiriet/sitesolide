@@ -76,7 +76,6 @@ export type SecretsActions = {
   /** Per file, the refusal of a creation. */
   errors: Readonly<Record<string, string>>
   /** The last successful change of this site's general access, which the repository has to follow. */
-  accessChanged: { target: "public" | "restricted" } | null
   /** The header's lock button, where focus returns after a forced lock. */
   lockButtonRef: (element: HTMLButtonElement | null) => void
   unlock: () => void
@@ -91,7 +90,8 @@ export type SecretsActions = {
   replace: (target: FileTarget) => void
   changePassword: (target: VariableTarget) => void
   restart: (slug: string) => void
-  changeAccess: (slug: string, target: "public" | "restricted") => void
+  /** `warning`, said in the confirmation: who still opens a site restricted with nobody on its list. */
+  changeAccess: (slug: string, target: "public" | "restricted", warning?: string | null) => void
   /** The common fate of a refusal: the session handed to the sign-in, the unlock asked again; the message to show otherwise. */
   refusal: OnRefusal
 }
@@ -146,7 +146,6 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   const [replacement, setReplacement] = useState<Opening<FileTarget> | null>(null)
   const [password, setPassword] = useState<Opening<VariableTarget> | null>(null)
   const [accessChange, setAccessChange] = useState<ChangeState | null>(null)
-  const [accessChanged, setAccessChanged] = useState<{ target: "public" | "restricted" } | null>(null)
   const [creation, setCreation] = useState<string | null>(null)
   const [fileErrors, setFileErrors] = useState<Record<string, string>>({})
   const [locking, setLocking] = useState(false)
@@ -553,15 +552,20 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
 
   // --- General access
 
-  function changeAccess(slug: string, target: "public" | "restricted") {
-    require(() => {
+  function changeAccess(slug: string, target: "public" | "restricted", warning: string | null = null) {
+    const open = () => {
       openings.current += 1
-      setAccessChange({ slug, target, open: true, opening: openings.current })
-    })
+      setAccessChange({ slug, target, warning, open: true, opening: openings.current })
+    }
+    // Restricting lets nobody new in: it waits for no unlock. Making a site public does.
+    if (target === "restricted") {
+      rememberOrigin()
+      return open()
+    }
+    require(open)
   }
 
-  function onAccessChanged(target: "public" | "restricted") {
-    setAccessChanged({ target })
+  function onAccessChanged() {
     afterAction()
     // The snapshot follows the Caddy block at the next reading: reading it again straight away costs nothing.
     refresh()
@@ -577,7 +581,6 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     revision,
     creation,
     errors: fileErrors,
-    accessChanged,
     lockButtonRef,
     unlock: () => {
       rememberOrigin()

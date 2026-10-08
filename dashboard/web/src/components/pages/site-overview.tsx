@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { useData } from "@/components/data"
 import { RestartButton } from "@/components/restart-button"
 import { ExternalLink } from "@/components/link"
@@ -5,6 +6,8 @@ import { PanelSkeleton } from "@/components/page"
 import { SiteSecretsPanel } from "@/components/secrets-site"
 import { SiteState, SectionLink, SitePage, useSite } from "@/components/site"
 import { SiteDiscrepancies, AccessPanel, AddressesPanel, ServicePanel, ServicesPanel, StoragePanel } from "@/components/site-card"
+import { readAccess } from "@/lib/api"
+import { accessSummary, isPlatform } from "@/lib/access"
 import { isPerson, mayRestart, roleOn } from "@/lib/identity"
 import { siteAddress } from "@/lib/sites"
 import type { Discrepancy, Site } from "@/lib/types"
@@ -21,6 +24,27 @@ function Summary({ site, discrepancies }: { site: Site; discrepancies: readonly 
       </ExternalLink>
     </div>
   )
+}
+
+/**
+ * Who has access, in a few words, beside the way to the Access section: read
+ * with the snapshot, and nothing said until it answers or for the platform's
+ * own projects, which nobody is given a role on.
+ */
+function useAccessSummary(slug: string, enabled: boolean): string | null {
+  const { generation } = useData()
+  const [summary, setSummary] = useState<string | null>(null)
+  useEffect(() => {
+    if (!enabled) return
+    let current = true
+    void readAccess(slug).then(({ status, body }) => {
+      if (current && status === 200 && body !== null && Array.isArray(body.entries)) setSummary(accessSummary(body.entries))
+    })
+    return () => {
+      current = false
+    }
+  }, [slug, enabled, generation])
+  return enabled ? summary : null
 }
 
 function OverviewSkeleton() {
@@ -47,13 +71,14 @@ function OverviewSkeleton() {
  * for a site that has none.
  */
 export function OverviewSection({ slug }: { slug: string }) {
-  const { now, identity } = useData()
+  const { now, identity, snapshot: data } = useData()
   // A person sees what their role on the site opens: its secrets from
   // Developer up, and its service's restart as a Developer or an Admin; the
   // steward decides. Everyone with a role sees who has access.
   const role = roleOn(identity, slug)
   const secrets = !isPerson(identity) || role === "developer" || role === "admin"
   const { site, discrepancies } = useSite(slug)
+  const summary = useAccessSummary(slug, !isPlatform(slug, data?.zone ?? null))
   return (
     <SitePage
       slug={slug}
@@ -72,7 +97,15 @@ export function OverviewSection({ slug }: { slug: string }) {
               <StoragePanel site={snapshot} now={now} />
             </div>
             <div className="grid min-w-0 gap-6">
-              <AccessPanel site={snapshot} actions={<SectionLink slug={slug} section="access" />} />
+              <AccessPanel
+                site={snapshot}
+                actions={
+                  <>
+                    {summary !== null && <span className="text-xs text-muted-foreground">{summary} ·</span>}
+                    <SectionLink slug={slug} section="access" />
+                  </>
+                }
+              />
               {secrets && <SiteSecretsPanel slug={slug} />}
             </div>
           </div>

@@ -14,11 +14,12 @@ import {
   parseSlugs,
   reachedProjects,
   scopeSummary,
+  liveReach,
+  madeByLine,
   tokenRefusal,
   tokenStatus,
   validateTokenForm,
   tokenHolders,
-  tokenOwnerLine,
 } from "../src/lib/tokens"
 
 const NOW = 1_800_000_000_000
@@ -36,13 +37,13 @@ describe("a token's state", () => {
     expect(isLive({ revokedAt: null, expiresAt: NOW }, NOW)).toBe(false)
   })
 
-  test("the scope in words, the door first", () => {
-    expect(scopeSummary(SCOPE)).toEqual(["Restricted sites only"])
+  test("the scope in words, only what is on", () => {
+    expect(scopeSummary(SCOPE)).toEqual([])
     expect(scopeSummary({ ...SCOPE, public: true, create: true, outbound: true, domain: true })).toEqual([
-      "Public sites allowed",
-      "Creates projects",
-      "Outbound network",
-      "Own domains",
+      "Can create projects",
+      "Can deploy public sites",
+      "Can declare a domain",
+      "Can use outbound network",
     ])
   })
 
@@ -141,11 +142,6 @@ describe("a person's own token", () => {
     expect(optionsAllowed(roles, [], false)).toBe(false)
   })
 
-  test("a person's token makes no site public without the option, which says it better than restricted sites only", () => {
-    expect(scopeSummary({ slugs: ["alpha"], create: false, outbound: false, domain: false, public: false }, true)[0]).toBe("Makes no site public")
-    expect(scopeSummary({ slugs: ["alpha"], create: false, outbound: false, domain: false, public: false })[0]).toBe("Restricted sites only")
-  })
-
   test("the form: a name, and something to deploy", () => {
     expect(validatePersonTokenForm({ label: "", slugs: ["alpha"], create: false })).toHaveProperty("label")
     expect(validatePersonTokenForm({ label: "laptop", slugs: [], create: false })).toHaveProperty("slugs")
@@ -175,12 +171,25 @@ describe("whose a token is", () => {
     ])
   })
 
-  test("each row says whose it is and who made it, to the owner and to the person", () => {
-    expect(tokenOwnerLine({ member: null, by: "owner", email: "owner" }, "owner")).toBe("Yours")
-    expect(tokenOwnerLine({ member: null, by: "owner", email: "bob@elsewhere.test" }, "owner")).toBe("Yours, made for bob@elsewhere.test")
-    expect(tokenOwnerLine({ member: "alice@acme.test", by: "owner", email: "alice@acme.test" }, "owner")).toBe("Made by you for alice@acme.test")
-    expect(tokenOwnerLine({ member: "alice@acme.test", by: "alice@acme.test", email: "alice@acme.test" }, "owner")).toBe("alice@acme.test's own")
-    expect(tokenOwnerLine({ member: "alice@acme.test", by: "owner", email: "alice@acme.test" }, "person")).toBe("Made by the owner for you")
-    expect(tokenOwnerLine({ member: "alice@acme.test", by: "alice@acme.test", email: "alice@acme.test" }, "person")).toBe("Yours")
+  test("each row says who made it, and for whom, to the owner and to the person", () => {
+    expect(madeByLine({ member: null, by: "owner", email: "owner" }, "owner")).toBe("Made by you")
+    expect(madeByLine({ member: null, by: "owner", email: "bob@elsewhere.test" }, "owner")).toBe("Made by you for bob@elsewhere.test")
+    expect(madeByLine({ member: "alice@acme.test", by: "owner", email: "alice@acme.test" }, "owner")).toBe("Made by you for alice@acme.test")
+    expect(madeByLine({ member: "alice@acme.test", by: "alice@acme.test", email: "alice@acme.test" }, "owner")).toBe("Made by alice@acme.test")
+    expect(madeByLine({ member: "alice@acme.test", by: "owner", email: "alice@acme.test" }, "person")).toBe("Made by the owner for you")
+    expect(madeByLine({ member: "alice@acme.test", by: "alice@acme.test", email: "alice@acme.test" }, "person")).toBe("Made by you")
+  })
+
+  test("a person's token deploys where their role is Developer or Admin today, and is paused elsewhere", () => {
+    const token = { owned: ["notes"], scope: { ...SCOPE, slugs: ["calendar", "cms", "photos"] }, member: "alice@acme.test" }
+    expect(liveReach(token, { calendar: "admin", cms: "viewer", notes: "admin" }).map((one) => one.text)).toEqual([
+      "notes (Admin)",
+      "calendar (Admin)",
+      "cms (paused: Viewer now)",
+      "photos (paused: no role now)",
+    ])
+    expect(liveReach(token, { cms: "visitor" }).find((one) => one.slug === "cms")).toEqual({ slug: "cms", text: "cms (paused: Can open now)", paused: true })
+    // The owner's own token: which projects it created.
+    expect(liveReach({ ...token, member: null }, null).map((one) => one.text)).toEqual(["notes (created)", "calendar", "cms", "photos"])
   })
 })

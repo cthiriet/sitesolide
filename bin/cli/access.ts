@@ -241,10 +241,20 @@ export function entryText(entry: EntryView): string {
 }
 
 const GENERAL: Readonly<Record<"public" | "restricted" | "code", string>> = {
-  public: "Public: anyone opens it",
-  restricted: "Restricted: only the people with access open it",
-  code: "Anyone with the code: the preview code opens it, `sitesolide lock` sets it",
+  public: "Public: anyone can open it.",
+  restricted: "Restricted: visitors are asked to sign in.",
+  code: "Anyone with the code: the preview code opens it, set with sitesolide lock.",
 };
+
+/**
+ * Who opens a restricted site without being on its list, said once under
+ * it, in the dashboard's words: the owner, and the admin emails set on the
+ * server.
+ */
+export function alsoOpens(admins: readonly string[]): string {
+  if (admins.length === 0) return "The owner also opens it.";
+  return `Also open it: the owner, and ${admins.join(", ")} (${admins.length > 1 ? "admin emails" : "an admin email"} set on the server; sites see them as admin).`;
+}
 
 /** The line to send someone given access with an account: where to go, with what. */
 export function accessMessage(state: AccessState): string | null {
@@ -261,10 +271,10 @@ export function describeAccess(state: AccessState): string[] {
     `   general access: ${state.general === null ? "not deployed: its people with access are kept, its site serves nothing" : GENERAL[state.general.access]}`,
     state.entries.length === 0 ? "   people with access: nobody yet" : "   people with access:",
     ...state.entries.map((entry) => `     ${entry.who.padEnd(width)}  ${entryText(entry)}`),
-    "   also open it when restricted: the owner's password, and the admin emails (OIDC_ADMIN_EMAILS)",
+    `   ${alsoOpens(state.signIn.admins ?? [])}`,
   ];
   if (state.general?.access === "public" && state.entries.some((entry) => entry.role === "visitor")) {
-    lines.push("   its general access is Public: Can open matters once it is Restricted, from the dashboard's Access section");
+    lines.push(`   ${state.slug} is public, so anyone can open it. Viewer, Developer and Admin still apply; Can open matters once you restrict it.`);
   }
   return lines;
 }
@@ -321,8 +331,6 @@ export async function share(arguments_: string[], slug: string, transport: Acces
 
   if (request.action === "list") {
     for (const line of describeAccess(before)) output.say(line);
-    const message = accessMessage(before);
-    if (message !== null && before.entries.some((entry) => entry.password === null && entry.kind === "person")) output.say(`   send: ${message}`);
     output.succeeded("share", resultFields(before, { changed: false }));
     return 0;
   }
@@ -387,8 +395,15 @@ export function personText(person: PersonView): string {
     return password === undefined ? `${slug}: ${ROLE_WORDS[role]}` : `${slug}: ${ROLE_WORDS[role]}, password access ${password.expiresAt === null ? "with no expiry" : `${password.expired ? "expired" : "until"} ${day(password.expiresAt)}`}`;
   });
   const text = parts.length === 0 ? "no project" : parts.join(", ");
-  const extra = [person.create ? "may create projects" : null, person.admin ? "admin email, opens every restricted site" : null].filter((one): one is string => one !== null);
+  const extra = [person.create ? "may create projects" : null, person.admin ? "every site, as admin: set on the server in OIDC_ADMIN_EMAILS" : null].filter((one): one is string => one !== null);
   return extra.length === 0 ? text : `${text}; ${extra.join("; ")}`;
+}
+
+/** Each domain with access once, and the projects it opens, as the dashboard's People lists them. */
+export function domainGroups(domains: readonly { slug: string; domain: string }[]): { domain: string; slugs: string[] }[] {
+  const groups = new Map<string, string[]>();
+  for (const { slug, domain } of domains) groups.set(domain, [...(groups.get(domain) ?? []), slug]);
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([domain, slugs]) => ({ domain, slugs: slugs.sort() }));
 }
 
 export function describePeople(state: PeopleState): string[] {
@@ -397,7 +412,7 @@ export function describePeople(state: PeopleState): string[] {
     state.people.length === 0
       ? ["   nobody yet: sitesolide share <email> --role <role>, from a project's folder"]
       : state.people.map((person) => `   ${person.who.padEnd(width)}  ${personText(person)}`);
-  if (state.domains.length > 0) lines.push(`   domains, Can open: ${state.domains.map((one) => `${one.slug}: ${one.domain}`).join(", ")}`);
+  for (const { domain, slugs } of domainGroups(state.domains)) lines.push(`   ${domain.padEnd(width)}  Can open: ${slugs.join(", ")}`);
   if (!state.signIn.configured) {
     lines.push("!! signing in with a company account is not set up on this machine: only password access opens a site, and nobody signs in to the dashboard but the owner (portal/README.md)");
   } else if (state.signIn.allowedDomains.length > 0) {

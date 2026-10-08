@@ -221,7 +221,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     const application = isApp(manifest);
     const behindPortal = final.portal;
     for (const { service, port } of allocated) host.log(`   port ${port} chosen for ${service === null ? "the service" : `service ${service}`}`);
-    host.log(`   project ${slug}, ${application ? `${servicesOf(manifest).length > 1 ? `${servicesOf(manifest).length} services` : "service"}` : "static"}, ${behindPortal ? "behind the portal" : "public"}`);
+    host.log(`   project ${slug}, ${application ? `${servicesOf(manifest).length > 1 ? `${servicesOf(manifest).length} services` : "service"}` : "static"}, ${behindPortal ? "restricted" : "public"}`);
 
     // --- 2. the machine, read before anything is written -----------------------
     host.log("-> the machine");
@@ -426,8 +426,8 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     const url = `https://${slug}.${zone}/`;
     const answer = await host.machine.probe(`${slug}.${zone}`, "/", TIMEOUTS.probeConfig);
     if (behindPortal) {
-      if (!fromPortal(answer)) throw new Stop("verify-failed", `${url} should answer the portal's 401, got ${describe(answer)}: the site is declared behind the portal and is not; tell the owner of the machine now`);
-      host.log(`   ${url} 401, behind the portal: unknown visitors get the sign-in page`);
+      if (!fromPortal(answer)) throw new Stop("verify-failed", `${url} should answer the portal's 401, got ${describe(answer)}: sitesolide.json says Restricted, and the site answers anyone; tell the owner of the machine now`);
+      host.log(`   ${url} 401, restricted: visitors are asked to sign in`);
     } else {
       if (!answers(answer)) {
         // The rule of `deploy`, said the same way: docs/manifest.md, under `start`.

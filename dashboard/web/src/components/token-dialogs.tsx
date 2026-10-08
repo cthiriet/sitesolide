@@ -244,7 +244,7 @@ export function CreateTokenDialog({
 
             <div className={cn("grid gap-4", person === null && "sm:grid-cols-2")}>
               {person === null && (
-                <Field id={holderId} labelText="Whose token" help="Yours, for your agents; or a person's, never beyond their roles.">
+                <Field id={holderId} labelText="Whose token" help="Mine, for your agents; or someone's from People, never beyond their roles.">
                   <select
                     id={holderId}
                     value={holder}
@@ -257,7 +257,7 @@ export function CreateTokenDialog({
                     aria-describedby={`${holderId}-help`}
                     className="h-10 rounded-lg border border-input bg-transparent px-2.5 text-sm sm:h-9"
                   >
-                    <option value="owner">Yours</option>
+                    <option value="owner">Mine</option>
                     {holders.map((one) => (
                       <option key={one.email} value={one.email}>
                         {one.email}

@@ -1563,11 +1563,11 @@ async function verify(manifest: Manifest, config: Config, executor: Executor): P
   // 401, recognisable by its header, says that the door is in place.
   if (isProtected(manifest)) {
     if (code === 401 && door === "connexion") {
-      say("   behind the portal: unknown visitors get the login page");
+      say("   Restricted: visitors are asked to sign in.");
       return;
     }
     die(`${address} should answer the portal's 401, got ${code}`, [
-      "the site is declared behind the portal, and is not",
+      "sitesolide.json says Restricted, and the site answers anyone",
     ]);
   }
 
@@ -2475,7 +2475,7 @@ async function remove(
   // an erased site, and nothing would say so any more.
   const deposited = await readDepositedDoor(slug, config, executor);
   if (deposited.kind === "unreadable") {
-    die(`cannot tell whether ${slug} is behind the portal on the server`, [
+    die(`cannot tell whether ${slug} is restricted on the server`, [
       `${depositedManifestPath(slug)}: ${deposited.reason}`,
       "nothing was removed: a Caddy block set from the dashboard could be left behind",
     ]);

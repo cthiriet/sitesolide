@@ -5,6 +5,9 @@ import { ExternalLink } from "@/components/link"
 import { InternalLink, useNavigation } from "@/components/navigation"
 import { SeverityIcon, Panel, Status } from "@/components/page"
 import { AccessWord } from "@/components/access-word"
+import { useData } from "@/components/data"
+import { roleLabel } from "@/lib/access"
+import { roleOn } from "@/lib/identity"
 import { ago, size } from "@/lib/format"
 import { BAR_CLASSES } from "@/lib/gauges"
 import { siteUrl } from "@/lib/pages"
@@ -54,6 +57,19 @@ function SiteName({ slug }: { slug: string }) {
     >
       {slug}
     </InternalLink>
+  )
+}
+
+/** A person's role on the site, beside its name: what they may do there, read at a glance. The owner sees none. */
+function RoleTag({ slug }: { slug: string }) {
+  const { identity } = useData()
+  const role = roleOn(identity, slug)
+  if (role === null) return null
+  return (
+    <span title="Your role" className="inline-flex h-5 shrink-0 items-center rounded-md bg-secondary px-1.5 text-xs font-medium text-secondary-foreground">
+      <span className="sr-only">Your role: </span>
+      {roleLabel(role)}
+    </span>
   )
 }
 
@@ -155,6 +171,7 @@ function SiteRow({ site, severity, now }: RowProps) {
           <div className="grid min-w-0 gap-0.5">
             <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <SiteName slug={site.slug} />
+              <RoleTag slug={site.slug} />
               {site.restartPending === true && <PendingPill />}
             </span>
             {site.description !== null && (
@@ -172,8 +189,8 @@ function SiteRow({ site, severity, now }: RowProps) {
         <div className="grid justify-items-start gap-0.5">
           <AccessWord site={site} />
           {access.kind === "portal" && access.exemptions.length > 0 && (
-            <span className="text-xs text-muted-foreground" title="Paths anyone can open, guarded by the app alone">
-              <span className="font-mono">{access.exemptions.join(" ")}</span> public
+            <span className="text-xs text-muted-foreground" title="Open to anyone, guarded by the app alone">
+              <span className="font-mono">{access.exemptions.join(" ")}</span> open to anyone
             </span>
           )}
         </div>
@@ -212,6 +229,7 @@ function SiteEntry({ site, severity, now }: RowProps) {
         <div className="flex items-start justify-between gap-3">
           <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <SiteName slug={site.slug} />
+            <RoleTag slug={site.slug} />
             {site.restartPending === true && <PendingPill />}
           </span>
           <ServiceWord site={site} className="shrink-0" />

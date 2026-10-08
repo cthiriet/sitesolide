@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createFieldError, createRefusal, domainGroups, mayGetCreate, mayRemove, projectRoles } from "../src/lib/people"
+import { createFieldError, createRefusal, domainGroups, expiredAccesses, mayGetCreate, mayRemove, projectRoles, revokedTokensLine } from "../src/lib/people"
 import type { SignIn } from "../src/lib/access"
 
 const NOW = 1_791_000_000_000
@@ -36,5 +36,39 @@ describe("the People page", () => {
       { domain: "@acme.test", slugs: ["blog", "shop"] },
       { domain: "@beta.test", slugs: ["cms"] },
     ])
+  })
+
+  test("the password accesses that ended, across projects, for Remove expired", () => {
+    const people = [
+      { who: "Example Accounting", passwords: [{ slug: "cms", expiresAt: NOW - HOUR, expired: true }, { slug: "shop", expiresAt: null, expired: false }] },
+      { who: "eve@out.test", passwords: [{ slug: "blog", expiresAt: NOW - 1, expired: false }] },
+      { who: "bob@acme.test", passwords: [] },
+    ]
+    expect(expiredAccesses(people, NOW)).toEqual([
+      { slug: "blog", who: "eve@out.test" },
+      { slug: "cms", who: "Example Accounting" },
+    ])
+  })
+
+  test("removing someone from every project says which tokens go with them, and who made each", () => {
+    const token = (label: string, fields: Partial<{ member: string | null; by: string; revokedAt: number | null; expiresAt: number | null }> = {}) => ({
+      label,
+      member: "alice@acme.test",
+      by: "owner",
+      revokedAt: null,
+      expiresAt: null,
+      ...fields,
+    })
+    const tokens = [
+      token("Alice's laptop"),
+      token("alice-ci", { by: "alice@acme.test" }),
+      token("old", { revokedAt: NOW - HOUR }),
+      token("lapsed", { expiresAt: NOW - HOUR }),
+      token("bob's", { member: "bob@acme.test" }),
+      token("agent", { member: null }),
+    ]
+    expect(revokedTokensLine(tokens, "alice@acme.test", NOW)).toBe("Also revokes 2 tokens: Alice's laptop (made by you), alice-ci (made by them).")
+    expect(revokedTokensLine(tokens, "bob@acme.test", NOW)).toBe("Also revokes 1 token: bob's (made by you).")
+    expect(revokedTokensLine(tokens, "carol@acme.test", NOW)).toBeNull()
   })
 })

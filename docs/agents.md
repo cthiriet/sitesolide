@@ -42,8 +42,8 @@ tools, and one command behind both:
   (Public, Restricted to the people with access, or Anyone with the code), its
   people with access, each with their role, and the line to send them;
 - `share` (`sitesolide share <who>... --json`) gives people access, by email
-  or a whole domain written `@acme.com`, with a role: `visitor` (Can open, the
-  default), `viewer`, `developer` or `admin`, each including the ones before
+  or a whole domain written `@acme.com`, with a role: `can-open` (Can open, the
+  default), `viewer`, `developer` or `admin`, each including the ones below
   it; or takes it away, with `remove`. One direction per call.
 
 **Giving access lets real people into the app and the data it holds**, from
@@ -64,10 +64,10 @@ lasts, `24h`, `7d` (the default), `30d` or `never`.
 $ sitesolide share alice@acme.com --json
 {"type":"step","message":"access to notes, https://notes.example.com/, over SSH, as the owner"}
 {"type":"step","message":"alice@acme.com: Can open on notes"}
-{"type":"info","message":"general access: Restricted: only the people with access open it"}
+{"type":"info","message":"general access: Restricted: visitors are asked to sign in."}
 ...
 {"type":"info","message":"send: Open https://notes.example.com/ and sign in with your Google account."}
-{"type":"result","ok":true,"command":"share","slug":"notes","url":"https://notes.example.com/","general":"restricted","entries":[{"who":"@acme.com","kind":"domain","role":"visitor","by":"owner","createdAt":1791450000000,"updatedAt":1791450000000,"password":null},{"who":"alice@acme.com","kind":"person","role":"visitor","by":"owner","createdAt":1791450000000,"updatedAt":1791450000000,"password":null}],"signIn":{"configured":true,"allowedDomains":["acme.com"]},"message":"Open https://notes.example.com/ and sign in with your Google account.","changed":true,"changes":[{"who":"alice@acme.com","change":"add","role":"visitor"}]}
+{"type":"result","ok":true,"command":"share","slug":"notes","url":"https://notes.example.com/","general":"restricted","entries":[{"who":"@acme.com","kind":"domain","role":"can-open","by":"owner","createdAt":1791450000000,"updatedAt":1791450000000,"password":null},{"who":"alice@acme.com","kind":"person","role":"can-open","by":"owner","createdAt":1791450000000,"updatedAt":1791450000000,"password":null}],"signIn":{"configured":true,"allowedDomains":["acme.com"]},"message":"Open https://notes.example.com/ and sign in with your Google account.","changed":true,"changes":[{"who":"alice@acme.com","change":"add","role":"can-open"}]}
 ```
 
 `entries` lists every entry as it stands after the change: `who`, `kind`
@@ -77,9 +77,10 @@ password access, null otherwise. `changes` says what this call did, each
 `{ who, change, role }`, `change` being `add`, `role`, `none` or `remove`
 (`role` null then), with `password` for password access just given.
 `message` is the line to send people who sign in with a company account, null
-until that is set up. A `warning` that the portal still decides from its own
-tables means the machine is halfway through an upgrade: tell the user, whose
-owner runs `sitesolide upgrade`; what was given is kept.
+until that is set up; the `send:` event comes only after a change that gives
+someone access with an account. A `warning` that the portal still decides
+from its own tables means the machine is halfway through an upgrade: tell the
+user, whose owner runs `sitesolide upgrade`; what was given is kept.
 
 Never done this way: making a site Public, its general access, which is the
 dashboard's; the preview code, `sitesolide lock`, the owner's. With a token,

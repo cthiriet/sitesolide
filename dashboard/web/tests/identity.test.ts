@@ -61,7 +61,9 @@ describe("a person's unlock and sign-in", () => {
     expect(signInUrl("/site/?s=blog")).toBe("/api/sso/begin?return=%2Fsite%2F%3Fs%3Dblog")
     expect(signInUrl("/", true)).toBe("/api/sso/begin?return=%2F&account=choose")
     expect(signInFailure(null)).toBeNull()
-    expect(signInFailure("not-a-member")).toContain("no role on any project")
+    expect(signInFailure("no-role")).toBe("This account has no access to any project here. Ask the owner, or an Admin of the project, to add you.")
+    expect(signInFailure("not-a-member")).toContain("no access to any project")
+    expect(signInFailure("can-open-only")).toBe("You can open the sites shared with you. The dashboard is for Viewers and above: ask an Admin of the project if you need more.")
     expect(signInFailure("something-new")).toContain("didn't go through")
   })
 })
@@ -80,19 +82,19 @@ describe("access in the Activity", () => {
   })
 
   test("today's changes in the spec's words", () => {
-    expect(auditWords(row("access.add", { detail: { result: "ok", note: "bob@acme.test: Viewer" } }))).toMatchObject({ summary: "Gave access", note: "bob@acme.test: Viewer" })
-    expect(auditWords(row("access.change")).summary).toBe("Changed someone's role")
-    expect(auditWords(row("access.remove")).summary).toBe("Took access away")
-    expect(auditWords(row("access.add", { detail: { result: "rejects", note: "refused" } }))).toMatchObject({ summary: "Tried to give someone access", tone: "attention" })
+    expect(auditWords(row("access.add", { detail: { result: "ok", note: "bob@acme.test: Viewer" } }))).toMatchObject({ summary: "Gave bob@acme.test Viewer on cms", note: null })
+    expect(auditWords(row("access.change", { detail: { result: "ok", note: "dana@acme.test: Developer -> Can open" } })).summary).toBe("Changed dana@acme.test from Developer to Can open on cms")
+    expect(auditWords(row("access.remove", { detail: { result: "ok", note: "bob@acme.test: was Viewer" } })).summary).toBe("Removed bob@acme.test from cms")
+    expect(auditWords(row("access.add", { detail: { result: "rejects", note: "refused" } }))).toMatchObject({ summary: "Tried to give someone access to cms", tone: "attention" })
     expect(auditWords(row("people.create")).summary).toBe("Changed who may create projects")
-    expect(auditWords(row("access.general", { detail: { result: "ok", note: "on, ok" } })).summary).toBe("Restricted it")
-    expect(auditWords(row("access.general", { detail: { result: "failure", note: "off, failure" } })).summary).toBe("Tried to make it public")
+    expect(auditWords(row("access.general", { detail: { result: "ok", note: "on, ok" } })).summary).toBe("Restricted cms")
+    expect(auditWords(row("access.general", { detail: { result: "failure", note: "off, failure" } })).summary).toBe("Tried to make cms public")
   })
 
   test("rows written before the access registry read in today's words", () => {
     expect(auditWords(row("member.invite", { target: "carol@acme.test", detail: { result: "ok", note: "beta: viewer" } }))).toMatchObject({ summary: "Gave carol@acme.test a role", note: "beta: viewer" })
     expect(auditWords(row("member.signin", { actor: "alice@acme.test" })).summary).toBe("Signed in to the dashboard with a company account")
-    expect(auditWords(row("member.signin_failed", { detail: { result: "rejects", note: "not-a-member" } }))).toMatchObject({ note: "no role on the dashboard", tone: "attention" })
+    expect(auditWords(row("member.signin_failed", { detail: { result: "rejects", note: "not-a-member" } }))).toMatchObject({ note: "no access to any project", tone: "attention" })
     const refused = { actor: "alice@acme.test", target: "alpha", detail: { result: "rejects", note: "role developer" } }
     expect(auditWords(row("member.invite", refused))).toMatchObject({ summary: "Tried to give someone a role", note: "Refused: Developer here", tone: "attention" })
     expect(auditWords(row("sharing.update", refused))).toMatchObject({ summary: "Tried to change who can open it", tone: "attention" })

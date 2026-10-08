@@ -9,7 +9,7 @@
  */
 import { cleanEmail } from "../../../borrowed/sharing"
 import { passwordExpiry, roleLabel, signsInWithAccount, type Expiry, type SignIn } from "./access"
-import type { AccessRole, PersonView } from "./types"
+import type { AccessRole, PersonView, TokenView } from "./types"
 
 export type ProjectRole = { slug: string; role: AccessRole; label: string; password: Expiry | null }
 
@@ -57,4 +57,23 @@ export function createFieldError(text: string, signIn: SignIn): string | null {
   const email = cleanEmail(text)
   if (email === null) return "Enter their company email, like name@company.com."
   return createRefusal(email, signIn)
+}
+
+/** Every password access that has ended, across projects: what "Remove expired" takes off. */
+export function expiredAccesses(people: readonly Pick<PersonView, "who" | "passwords">[], now: number): { slug: string; who: string }[] {
+  return people
+    .flatMap((person) => person.passwords.filter((one) => one.expired || (one.expiresAt !== null && one.expiresAt <= now)).map((one) => ({ slug: one.slug, who: person.who })))
+    .sort((a, b) => a.slug.localeCompare(b.slug, "en") || a.who.localeCompare(b.who, "en"))
+}
+
+/**
+ * The tokens taken off with someone removed from every project: every live
+ * token of theirs, whoever made it, said with who did, in one sentence.
+ * Null when they have none.
+ */
+export function revokedTokensLine(tokens: readonly Pick<TokenView, "label" | "member" | "by" | "revokedAt" | "expiresAt">[], email: string, now: number): string | null {
+  const theirs = tokens.filter((token) => token.member === email && token.revokedAt === null && (token.expiresAt === null || now < token.expiresAt))
+  if (theirs.length === 0) return null
+  const named = theirs.map((token) => `${token.label} (made by ${token.by === "owner" ? "you" : "them"})`)
+  return `Also revokes ${theirs.length === 1 ? "1 token" : `${theirs.length} tokens`}: ${named.join(", ")}.`
 }

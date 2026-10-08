@@ -53,7 +53,7 @@ import {
 } from "./protocol";
 import { may, mayRestart, powerRefusal } from "./powers";
 import type { AccessStore } from "../access/steward";
-import { emailOf, isDashboardPerson, recordCreation as creationRecorded, rightsOf, rolesText, type Registry } from "../access/registry";
+import { emailOf, isDashboardPerson, opensASite, recordCreation as creationRecorded, rightsOf, rolesText, type Registry } from "../access/registry";
 import type { AccessEvent } from "../access/steward";
 import type { MemberRights } from "./tokens";
 import { attemptWait, countAttempt, EMPTY_UNLOCKS, failed, grant, isUnlocked, revokeMember, revokeSession, unlockedUntil, type UnlockBook } from "./unlocks";
@@ -174,6 +174,7 @@ const STATUSES: Record<string, number> = {
   "signed-out": 401,
   "invalid-assertion": 401,
   "no-role": 403,
+  "can-open-only": 403,
   "out-of-scope": 403,
   "not-found": 404,
   "too-many-attempts": 429,
@@ -338,8 +339,13 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
       if (identity === null) {
         // The nonce stays spent: the same assertion is not tried again.
         await system.writeBook(encodeBook(spent));
+        // Someone who may open a site, and nothing more, is told so: the dashboard starts at Viewer.
+        if (opensASite(again, claims.email)) {
+          await journalFailure(claims.email, "can-open-only");
+          return fail("can-open-only", `${claims.email} can open the sites shared with them, and the dashboard starts at Viewer: ask an Admin of the project for more`);
+        }
         await journalFailure(claims.email, "no-role");
-        return fail("no-role", `${claims.email} has no role on this dashboard: ask its owner, or the Admin of a project, for access`);
+        return fail("no-role", `${claims.email} has no access to any project here: ask the owner, or an Admin of the project, to add them`);
       }
       const opened = await openMemberSession(spent, claims.email, now, dependencies.random);
       await system.writeBook(encodeBook(opened.book));

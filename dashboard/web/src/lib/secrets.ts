@@ -80,7 +80,7 @@ export function unlockStatus(until: number | null, now: number, offset = 0): Unl
   const remainingMs = until - (now + offset)
   if (remainingMs <= 0) return { open: false, expired: true, label: "Locked" }
   const remainingText = remainingLabel(remainingMs)
-  return { open: true, remainingMs, remainingText, label: `Unlocked, ${remainingText}` }
+  return { open: true, remainingMs, remainingText, label: `Changes unlocked, ${remainingText}` }
 }
 
 /** What a revealed value says about its remasking: "Hides in 24s", never "in 0s". */
@@ -433,8 +433,8 @@ export function siteOperations(entries: readonly LogEntry[], slug: string): LogE
 }
 
 const OPERATION_NAMES: Record<Operation, string> = {
-  unlock: "Unlock",
-  lock: "Lock",
+  unlock: "Unlock changes",
+  lock: "Lock changes",
   read: "Read",
   set: "Set",
   remove: "Remove",

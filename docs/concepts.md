@@ -94,7 +94,7 @@ each can only write into `/srv/sites/%i`: a compromised gatekeeper holds the one
 site you named it for.
 
 **People with access are judged as root.** Per project, each person or
-domain with access holds a role, each including the ones below: *Can open*
+domain with access holds a role, each including the ones below it: *Can open*
 opens the site when its general access is restricted; *Viewer* also sees the
 project in the dashboard; *Developer* also deploys it, restarts it and writes
 its secrets without ever reading one back; *Admin* also reads its secrets,
@@ -122,16 +122,16 @@ dashboard acts only for the people whose sessions pass through it, within
 their roles, and raises nobody above Can open without an unlock. What a person
 sees, the dashboard filters from data it already holds.
 
-**A secret read, a change of general access, a restore, a role above Can open
-given, password access given, a token minted, each waits for the person's own
+**A secret read, a site made public, a restore, a role above Can open given,
+password access given, a token minted, each waits for the person's own
 unlock**: a forced sign-in at the provider, which the portal asks for
 (`prompt=login`, `max_age=0`) and reads back in the provider's own ID token,
 and the steward checks again, for ten minutes and that person's session
 alone. The owner's unlock is the dashboard's password, retyped. Password
 access waits because it lets in someone from outside the company, whom no
 company account vouches for. Giving Can open to a company account or a
-domain, and taking access away, never wait for either: closing someone out
-must not wait for a password.
+domain, restricting a site, and taking access away, never wait for either:
+closing someone out must not wait for a password.
 The steward never hands a Developer a value, whatever the dashboard relays.
 
 **A person's own tokens are never stronger than the person.** A Developer
@@ -156,7 +156,7 @@ An nftables rule reserves ports 3000 to 3099, **and Caddy's admin API on 2019**,
 to Caddy and root. That API authenticates nobody: a service that could reach it
 would open every restricted site at once, or stop Caddy.
 
-This is what makes a project behind the portal able to trust Caddy. It has no
+This is what makes a restricted project able to trust Caddy. It has no
 sign-in of its own; it trusts the header Caddy puts on the request, and that trust
 is only founded because nothing else on the machine can forge it.
 
@@ -296,7 +296,7 @@ signing in with their company account, Google Workspace, Microsoft Entra or
 any OpenID Connect provider, named by email or as a whole domain, each with a
 role; people outside the company with **password access**, one password per
 person and per site, drawn by the steward, shown once, until an expiry chosen
-when it is given; and everywhere, the owner with the shared password, and the
+when it is given; and everywhere, the owner with the owner's password, and the
 admin emails. They are given from a site's *Access* in the dashboard, or with
 `sitesolide share` from a project's folder, over the owner's SSH, or with a
 token through the dashboard and the steward, which lets a token give Can open
@@ -304,7 +304,7 @@ alone, to the company's people and domains. Every change goes to the steward's
 registry and its projection, never to Caddy, and holds from the next request;
 switching between public and restricted is what goes through the gatekeeper.
 
-A project behind the portal writes no sign-in of its own. It trusts Caddy,
+A restricted project writes no sign-in of its own. It trusts Caddy,
 which is sound only because of the loopback rule. It also learns who came in,
 from three request headers, `X-Sitesolide-User`, `X-Sitesolide-User-Name` and
 `X-Sitesolide-Role`: the role on the project, from `visitor` (Can open) to
@@ -312,8 +312,8 @@ from three request headers, `X-Sitesolide-User`, `X-Sitesolide-User-Name` and
 access comes as `visitor` with no `X-Sitesolide-User`, the email having been
 typed by whoever gave it, not verified by a provider. Its block takes the
 visitor's own headers off every request before copying the portal's on, so a
-site can trust them once its block has been deployed with them. A site not
-behind the portal has them taken off too, and learns nobody. See
+site can trust them once its block has been deployed with them. A public site
+has them taken off too, and learns nobody. See
 [portal/README.md](../portal/README.md).
 
 ## Audit
@@ -356,9 +356,9 @@ rotates by line count: a refusal stays in the journal.
 | `access.migrate` | steward | `system` | none | the registry made, once, from the stores before it: the counts carried over and set aside |
 | `people.create` | steward | `owner` | the person's email | the right to create projects given or taken back |
 | `dashboard.signin` | steward | the person's email | the person's email | a session opened, from an assertion it verified, with their roles and create right |
-| `dashboard.signin_failed` | steward | the email, or `anonymous` when the assertion did not verify | the email, or none | a sign-in refused: no role above Can open, an assertion replayed, signed by another key, expired, too old; a minute holds twenty refusals at most |
+| `dashboard.signin_failed` | steward | the email, or `anonymous` when the assertion did not verify | the email, or none | a sign-in refused: `can-open-only` for someone who only opens sites, `no-role` for someone on no list, an assertion replayed, signed by another key, expired, too old; a minute holds twenty refusals at most |
 | `dashboard.signout` | steward | the person's email | the person's email | a person signed out |
-| `portal.signin` | portal | `owner`, an email, or `password:<id>` | host | a sign-in with the shared password, a company account, or password access (`method: "password-access"`, under the email it was given to), its role; `guest:<id>` on rows of before; repeats within a minute counted on one row |
+| `portal.signin` | portal | `owner`, an email, or `password:<id>` | host | a sign-in with the owner's password, a company account, or password access (`method: "password-access"`, under the email it was given to, or `password:<id>` with its `name` in the detail), its role; `guest:<id>` on rows of before; repeats within a minute counted on one row |
 | `portal.signin_failed` | portal | `anonymous` or an email | host | a wrong password, or a company account refused and why |
 | `portal.signout` | portal | as it signed in | host | a sign-out |
 | `sharing.update` | portal | `owner`, `token:<id>` or an email | host | written before the access registry only: who could open a site changed, the mode, the people and domains added and removed |
@@ -372,7 +372,7 @@ rotates by line count: a refusal stays in the journal.
 | `backup.restore` | backups | `owner` or an Admin's email | slug | a restore, its snapshot and how it ended |
 | `backup.restore` | steward | a person's email | slug | a restore refused by role before it reached the backups |
 | `member.invite`, `member.role`, `member.remove`, `member.signin`, `member.signin_failed`, `member.signout` | steward | as they were written | as they were written | written before the access registry only: the dashboard's people of then, their roles and sign-ins |
-| `secrets.unlock`, `secrets.lock` | steward | `owner`, or a person's email | none, or the person's email | the secrets unlocked, or the password or the forced sign-in refused, and locked |
+| `secrets.unlock`, `secrets.lock` | steward | `owner`, or a person's email | none, or the person's email | changes unlocked, or the password or the forced sign-in refused, and locked again |
 | `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner`, or a person's email | slug | a variable read, set or removed, by its name; a person's refused by role, with that role |
 | `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner`, or a person's email | slug | a secret file created, put back to its previous version, or replaced |
 | `secrets.password` | steward | `owner` | slug | a password hash changed |
@@ -386,14 +386,16 @@ the journal written before it named its actor reads as `owner`, the only one
 it acted for then.
 
 The *Activity* page shows the owner the whole machine; a person, the rows of
-their projects and their own.
+their projects and their own. Each row reads as a sentence, "Gave
+dana@example.com Developer on cms", and *Access changes* narrows it to the
+changes of access.
 
 ## What the deploy actually does
 
 In order, and the order is the point:
 
 1. Read the manifest, refuse it if anything is wrong. Nothing has been sent yet.
-2. Read the machine: does the dashboard say this project is behind the portal?
+2. Read the machine: does the dashboard say this project is restricted?
    Is the block in service one the generator would write, or one edited by hand
    there, which stops everything without `--force`? Does systemd already run a
    service of that name that deploy did not write? Does another project already
@@ -412,7 +414,7 @@ In order, and the order is the point:
 9. Restart every service, check each one is active, and write the block.
 10. Verify over HTTPS that the site answers.
 
-For a project behind the portal, the portal goes in front **before** its files,
+For a restricted project, the portal goes in front **before** its files,
 and comes off **after** them. Placed the other way around, its files would be served
 in the clear by the wildcard block for the length of the deployment, and
 indefinitely if the command was interrupted.
@@ -434,7 +436,7 @@ runs on the machine, in the installer, with the same decisions: see
 - [infra/README.md](../infra/README.md), the machine itself
 - [dashboard/README.md](../dashboard/README.md), the dashboard, the steward and the gatekeeper
 - [dashboard/src/backup/README.md](../dashboard/src/backup/README.md), the data snapshots and their restore
-- [portal/README.md](../portal/README.md), the shared password, password access, signing in with a company account, the projection it decides from and the identity headers
+- [portal/README.md](../portal/README.md), the owner's password, password access, signing in with a company account, the projection it decides from and the identity headers
 - [analytics/README.md](../analytics/README.md), how a visit is counted, and why it is anonymous
 - [monitor/README.md](../monitor/README.md), what is checked every minute, and who hears of it
 - [egress/README.md](../egress/README.md), the hosts a project may reach, and the credentials it is lent

@@ -368,7 +368,7 @@ describe("sitesolide deploy takes the lock before its first deposit", () => {
     const r = await waitFor(deploy());
     expect(r.code).toBe(1);
     expect(r.error).toContain(
-      "portal of sample-lock changed from the dashboard during this deploy: run `sitesolide deploy` again",
+      "general access of sample-lock changed from the dashboard during this deploy: run `sitesolide deploy` again",
     );
     expect(vm.logs()).not.toContain(INSTALL);
     expect(vm.logs().at(-1)).toBe("LOCK release deploy");
@@ -666,7 +666,7 @@ describe("sitesolide deploy leaves the other sites' blocks alone", () => {
     const folder = project(APP, "touch built");
     const r = await run(folder, ["deploy", "--dry-run", "--build"], { vm, cli: join(repo, "bin", "sitesolide.ts") });
     expect(r.code).toBe(0);
-    expect(r.all).not.toContain("portal of tool");
+    expect(r.all).not.toContain("general access of tool");
     expect(existsSync(join(folder, "built"))).toBe(true);
     // Its manifest is read with every other one, for the ports it declares;
     // its block is not.

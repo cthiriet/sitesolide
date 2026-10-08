@@ -129,8 +129,8 @@ It never reads nor rotates a secret, and never touches Caddy but through
 
 Who may open a project, and who may do what on it, is one list per project,
 its people with access, which the steward keeps: each entry an email or a
-whole domain, `@acme.com`, with a role, Can open (`visitor`), Viewer,
-Developer or Admin, each including the ones before it.
+whole domain, `@acme.com`, with a role, Can open (`can-open`), Viewer,
+Developer or Admin, each including the ones below it.
 [access.md](access.md#people-with-access-beside-tokens) says what each role does.
 `sitesolide share`, in the project's folder, reads the list and changes it;
 the dashboard's *Access* section is the other way.
@@ -138,13 +138,12 @@ the dashboard's *Access* section is the other way.
 ```console
 $ sitesolide share
 -> access to notes, https://notes.example.com/, over SSH, as the owner
-   general access: Restricted: only the people with access open it
+   general access: Restricted: visitors are asked to sign in.
    people with access:
      alice@acme.com      Developer
      @acme.com           Can open
      client@example.org  Can open, password access until 2026-11-07 09:00 UTC
-   also open it when restricted: the owner's password, and the admin emails (OIDC_ADMIN_EMAILS)
-   send: Open https://notes.example.com/ and sign in with your Google account.
+   Also open it: the owner, and owner@acme.com (an admin email set on the server; sites see them as admin).
 
 $ sitesolide share bob@acme.com carol@acme.com --role developer
 -> access to notes, https://notes.example.com/, over SSH, as the owner
@@ -167,8 +166,8 @@ $ sitesolide share --remove @acme.com
 ```
 
 With no argument it shows the project's general access, its people with
-access, each with their role and password access with its expiry, who else
-opens it when it is restricted, and the line to send. Emails and `@domain`s
+access, each with their role and password access with its expiry, and who
+else opens it without being on the list. Emails and `@domain`s
 are given access, Can open unless `--role` names another; someone already on
 the list gets the role named, raised or lowered, and someone who has it
 already is left as they are. A domain is Can open only, and only once signing
@@ -179,8 +178,9 @@ access lasts what `--expires` says, 7 days by default. `--remove` takes access
 away, from the person's next request. Several people are handled one by one:
 a refusal stops before the next, and says who was already given access.
 
-Nothing is sent to anyone: the command prints the line to send, and a
-password once. Two things are never done here: general access, Public or
+Nothing is sent to anyone: after giving someone access with an account, the
+command prints the line to send, `send:`, and for password access the
+password, once. Two things are never done here: general access, Public or
 Restricted, from the dashboard's *Access* section, and the preview code,
 `sitesolide lock`. `--domain` and `--only-admins`, from before, are refused
 with a pointer: a domain is written `@acme.com`.
@@ -195,7 +195,7 @@ or `remove`, and `password` for password access just given:
 ```console
 $ sitesolide share dana@example.net --json
 ...
-{"type":"result","ok":true,"command":"share","slug":"notes","url":"https://notes.example.com/","general":"restricted","entries":[...,{"who":"dana@example.net","kind":"password","role":"visitor","by":"owner","createdAt":1791450000000,"updatedAt":1791450000000,"password":{"expiresAt":1792054800000,"expired":false}}],"signIn":{"configured":true,"allowedDomains":["acme.com"]},"message":"Open https://notes.example.com/ and sign in with your Google account.","changed":true,"changes":[{"who":"dana@example.net","change":"add","role":"visitor","password":"Xith-G4r4-nRJs-uDMV"}]}
+{"type":"result","ok":true,"command":"share","slug":"notes","url":"https://notes.example.com/","general":"restricted","entries":[...,{"who":"dana@example.net","kind":"password","role":"can-open","by":"owner","createdAt":1791450000000,"updatedAt":1791450000000,"password":{"expiresAt":1792054800000,"expired":false}}],"signIn":{"configured":true,"allowedDomains":["acme.com"]},"message":"Open https://notes.example.com/ and sign in with your Google account.","changed":true,"changes":[{"who":"dana@example.net","change":"add","role":"can-open","password":"Xith-G4r4-nRJs-uDMV"}]}
 ```
 
 The owner's `share` runs over SSH: root on the machine asks the steward on
@@ -213,9 +213,9 @@ portal that reads the registry.
 ## People
 
 Everyone with access, machine-wide, for the owner, from any folder: their
-roles per project, their password access, who may create projects, the admin
-emails (`OIDC_ADMIN_EMAILS`, which open every restricted site) and the
-domains. The dashboard's *People* page is the other way. Roles are given per
+roles per project, their password access, who may create projects, the
+domains, and the admin emails, which open every site as admin, set on the
+server in `OIDC_ADMIN_EMAILS`. The dashboard's *People* page is the other way. Roles are given per
 project, with `sitesolide share`; `people` grants the right to create
 projects.
 
@@ -224,8 +224,8 @@ $ sitesolide people
 -> people of https://dashboard.example.com, over SSH, as the owner
    alice@acme.com      notes: Developer, shop: Viewer
    client@example.org  notes: Can open, password access until 2026-11-07 09:00 UTC
-   you@acme.com        no project; admin email, opens every restricted site
-   domains, Can open: notes: @acme.com
+   you@acme.com        no project; every site, as admin: set on the server in OIDC_ADMIN_EMAILS
+   @acme.com           Can open: blog, notes
    the company's domains: acme.com; anyone else gets password access
 
 $ sitesolide people alice@acme.com --may-create
@@ -242,8 +242,9 @@ someone then left with no role above Can open no longer signs in to the
 dashboard, their sessions closed and their tokens revoked.
 
 With `--json`, the listing's `result` carries `people` (each `who`, `roles` by
-project, `create`, `passwords`, each `slug`, `expiresAt`, `expired`, and
-`admin`), `domains` (each `slug`, `domain`), `signIn` and `changed: false`;
+project, `can-open` for Can open, `create`, `passwords`, each `slug`,
+`expiresAt`, `expired`, and `admin`), `domains` (each `slug`, `domain`),
+`signIn` and `changed: false`;
 `--may-create` and `--no-create`, `email`, `create`, `roles`, `change`
 (`create` or `none`) and `changed`.
 

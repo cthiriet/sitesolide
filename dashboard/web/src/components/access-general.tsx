@@ -10,14 +10,18 @@ import { CodeChip } from "@/components/access-word"
 import { Track, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { setGeneralAccess } from "@/lib/api"
 import {
-  DEPLOY_COMMAND,
+  CHANGE_DURATION,
+  DEPLOY_NOTE,
   changeProgress,
+  changeResult,
   changeTexts,
   codeCommands,
   confirmationValid,
-  gatekeeperSteps,
+  generalLine,
+  generalNote,
   removalConfirmation,
   type ChoiceOption,
+  type GeneralReader,
   type GeneralState,
 } from "@/lib/access"
 import { refusalOf, succeeded } from "@/lib/secrets"
@@ -33,62 +37,78 @@ import { cn } from "@/lib/utils"
  * dashboard only shows it.
  */
 
-// --- The repository reminder --------------------------------------------------
-
-/** The reminder after a change: the machine has changed, the repository has to follow. */
-export function DeployReminder({ slug }: { slug: string }) {
-  return (
-    <div className="grid gap-2">
-      <p className="text-sm text-pretty">
-        <span className="font-medium">Commit the change:</span>{" "}
-        <span className="font-mono text-[0.8125rem]">{DEPLOY_COMMAND}</span> in the {slug} folder updates
-        sitesolide.json, so the next deploy keeps it.
-      </p>
-      <Command text={DEPLOY_COMMAND} />
-    </div>
-  )
-}
-
 // --- The panel ---------------------------------------------------------------------
 
 const ICONS: Record<GeneralAccess, LucideIcon> = { public: Globe, restricted: ShieldCheck, code: KeyRound }
 
-/** What a choice's button says it will do. */
-const ACTIONS: Record<"public" | "restricted", string> = { public: "Make public", restricted: "Restrict" }
+/** The paths a restricted site leaves to the app alone, in the words used everywhere. */
+function Exemptions({ paths }: { paths: readonly string[] }) {
+  return (
+    <p className="text-xs text-pretty text-muted-foreground">
+      Open to anyone, guarded by the app alone:{" "}
+      {paths.map((path, index) => (
+        <span key={path}>
+          {index > 0 && " "}
+          <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs">{path}</code>
+        </span>
+      ))}
+    </p>
+  )
+}
 
 /**
  * The three ways a site opens, the current one marked as the sidebar marks
- * the current page. Each other way says what choosing it does: a button
- * that names the change, a command to run from the project's folder, or why
- * not. Nothing changes until the confirmation.
+ * the current page. For the owner and the project's Admins, each other way
+ * says what choosing it does, with a button that names the change; what
+ * cannot change here is said once, under the choices. Whoever only reads it
+ * gets one line. Nothing changes until the confirmation.
  */
 export function GeneralAccessPanel({
   slug,
   state,
   options,
-  readOnlyNote,
+  reader,
   stewardReason,
+  failedNote,
   onChoose,
 }: {
   slug: string
   state: GeneralState
   options: ChoiceOption[]
-  /** For who may not change it: who may. */
-  readOnlyNote: string | null
+  reader: GeneralReader
   /** The steward's reason when the site may not change from here, said once under the choices. */
   stewardReason: string | null
+  /** When who has access could not be read: the choices wait for the server. */
+  failedNote: string | null
   onChoose: (target: "public" | "restricted") => void
 }) {
-  const commands = state.current === "code" ? codeCommands(true) : []
+  const problem =
+    state.problem === null ? null : (
+      <div className="border-b p-3">
+        <Banner tone="error">
+          <span className="font-medium">{state.problem.title}.</span> {state.problem.detail}
+        </Banner>
+      </div>
+    )
+
+  if (reader === "reader") {
+    return (
+      <Panel title="General access" full>
+        {problem}
+        <div className="grid gap-2 px-4 py-3">
+          <p className="text-pretty">{generalLine(state, slug)}</p>
+          {state.current === "code" && state.code !== null && <CodeChip slug={slug} code={state.code.code} url={state.code.url} large />}
+          {state.current === "restricted" && state.exemptions.length > 0 && <Exemptions paths={state.exemptions} />}
+        </div>
+      </Panel>
+    )
+  }
+
+  const commands = state.current === "code" && reader === "owner" ? codeCommands(true) : []
+  const note = generalNote(state, reader)
   return (
     <Panel title="General access" full>
-      {state.problem !== null && (
-        <div className="border-b p-3">
-          <Banner tone="error">
-            <span className="font-medium">{state.problem.title}.</span> {state.problem.detail}
-          </Banner>
-        </div>
-      )}
+      {problem}
       <ul className="divide-y divide-divider" aria-label={`How ${slug} opens`}>
         {options.map((option) => {
           const Icon = ICONS[option.access]
@@ -102,11 +122,15 @@ export function GeneralAccessPanel({
               <div className="grid min-w-0 flex-1 basis-56 gap-0.5">
                 <p className={cn("flex flex-wrap items-center gap-x-2", option.current ? "font-semibold text-strong" : "font-medium")}>
                   {option.title}
-                  {option.current && (
-                    <span className="inline-flex items-center gap-1 text-xs font-normal text-muted-foreground">
-                      <Check aria-hidden="true" className="size-3.5" />
-                      Current
-                    </span>
+                  {option.side !== null ? (
+                    <span className="text-xs font-normal text-muted-foreground">{option.side}</span>
+                  ) : (
+                    option.current && (
+                      <span className="inline-flex items-center gap-1 text-xs font-normal text-muted-foreground">
+                        <Check aria-hidden="true" className="size-3.5" />
+                        Current
+                      </span>
+                    )
                   )}
                 </p>
                 <p className="text-pretty text-muted-foreground">{option.sentence}</p>
@@ -116,29 +140,12 @@ export function GeneralAccessPanel({
                   </div>
                 )}
                 {option.current && option.access === "restricted" && state.exemptions.length > 0 && (
-                  <p className="mt-1 text-xs text-pretty text-muted-foreground">
-                    Open to anyone, guarded by the app alone:{" "}
-                    {state.exemptions.map((path, index) => (
-                      <span key={path}>
-                        {index > 0 && " "}
-                        <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs">{path}</code>
-                      </span>
-                    ))}
-                  </p>
-                )}
-                {option.reason !== null && option.reason !== stewardReason && (
-                  <p className="mt-1 text-xs text-pretty text-muted-foreground">
-                    {option.reason}
-                    {option.command !== null && (
-                      <>
-                        {" "}
-                        <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">{option.command}</code>
-                      </>
-                    )}
-                  </p>
+                  <div className="mt-1">
+                    <Exemptions paths={state.exemptions} />
+                  </div>
                 )}
               </div>
-              {option.available && option.access !== "code" && (
+              {option.available && option.action !== null && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -146,7 +153,7 @@ export function GeneralAccessPanel({
                   onClick={() => onChoose(option.access as "public" | "restricted")}
                   className="max-md:h-10"
                 >
-                  {ACTIONS[option.access as "public" | "restricted"]}
+                  {option.action}
                 </Button>
               )}
             </li>
@@ -154,20 +161,19 @@ export function GeneralAccessPanel({
         })}
       </ul>
 
-      {commands.length > 0 && (
+      {(note !== null || commands.length > 0) && (
         <div className="grid gap-2 border-t px-4 py-3">
-          <p className="text-xs text-pretty text-muted-foreground">
-            The preview code is drawn and shown once by the sitesolide CLI, in the project's folder. The dashboard only
-            shows it.
-          </p>
-          <ul className="grid gap-2 sm:grid-cols-2">
-            {commands.map((command) => (
-              <li key={command.command} className="grid gap-1">
-                <span className="text-xs text-muted-foreground">{command.label}</span>
-                <Command text={command.command} />
-              </li>
-            ))}
-          </ul>
+          {note !== null && <p className="text-xs text-pretty text-muted-foreground">{note}</p>}
+          {commands.length > 0 && (
+            <ul className="grid gap-2 sm:grid-cols-2">
+              {commands.map((command) => (
+                <li key={command.command} className="grid gap-1">
+                  <span className="text-xs text-muted-foreground">{command.label}</span>
+                  <Command text={command.command} />
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -181,14 +187,21 @@ export function GeneralAccessPanel({
         </p>
       )}
 
-      {readOnlyNote !== null && <p className="border-t px-4 py-3 text-xs text-pretty text-muted-foreground">{readOnlyNote}</p>}
+      {failedNote !== null && <p className="border-t px-4 py-3 text-xs text-pretty text-muted-foreground">{failedNote}</p>}
     </Panel>
   )
 }
 
 // --- The dialog ----------------------------------------------------------------------
 
-export type ChangeState = { slug: string; target: "public" | "restricted"; open: boolean; opening: number }
+export type ChangeState = {
+  slug: string
+  target: "public" | "restricted"
+  /** Said before restricting a site nobody is on the list of: who will still open it. */
+  warning: string | null
+  open: boolean
+  opening: number
+}
 
 type Phase =
   | { phase: "confirmation" }
@@ -199,8 +212,8 @@ type Phase =
 /**
  * A change of general access: a confirmation stating what is about to
  * happen, the slug retyped to make a site public, then the wait, which
- * neither closes nor cancels, and finally the gatekeeper's result and the
- * repository reminder. The form remounts on every opening.
+ * neither closes nor cancels, and finally the gatekeeper's result in plain
+ * words and the repository reminder. The form remounts on every opening.
  */
 export function GeneralAccessDialog({
   state,
@@ -274,8 +287,9 @@ function ChangeFlow({
     announce(texts.runningTitle)
     const { status, body } = await setGeneralAccess(slug, target, opening ? removalConfirmation(entry) : "")
     if (succeeded(status) && body !== null && typeof body.detail === "string") {
-      setPhase({ phase: "succeeded", detail: body.detail })
-      announce(`${texts.succeeded}. ${body.detail}`)
+      const detail = changeResult(target, body.detail)
+      setPhase({ phase: "succeeded", detail })
+      announce(`${texts.succeeded}. ${detail}`)
       return onChanged(target)
     }
     const message = onRefusal(refusalOf(status, body))
@@ -296,7 +310,7 @@ function ChangeFlow({
           </DialogTitle>
           <DialogDescription className="text-pretty">{success ? phase.detail : phase.message}</DialogDescription>
         </DialogHeader>
-        {success && <DeployReminder slug={slug} />}
+        {success && <p className="text-sm text-pretty text-muted-foreground">{DEPLOY_NOTE}</p>}
         <DialogFooter>
           <DialogClose render={<Button ref={closeButton} className="max-sm:h-11" />}>Close</DialogClose>
         </DialogFooter>
@@ -319,17 +333,9 @@ function ChangeFlow({
         </Banner>
       )}
 
-      <div className="grid gap-2">
-        <p className="text-sm font-medium">What the server does</p>
-        <ol className="grid list-decimal gap-1 pl-5 text-sm marker:text-muted-foreground">
-          {gatekeeperSteps(slug).map((step) => (
-            <li key={step}>{step}</li>
-          ))}
-        </ol>
-        <p className="text-xs text-pretty text-muted-foreground">
-          If any step fails, everything is put back as it was. It can take up to about a minute.
-        </p>
-      </div>
+      {!opening && !inProgress && state.warning !== null && <Banner tone="attention">{state.warning}</Banner>}
+
+      <p className="text-xs text-pretty text-muted-foreground">{CHANGE_DURATION}</p>
 
       {inProgress && <ChangeWait start={phase.start} />}
 

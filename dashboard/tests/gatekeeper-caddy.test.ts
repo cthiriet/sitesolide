@@ -369,7 +369,7 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
   test("setting it again: nothing to do, Caddy is not reloaded", async () => {
     const pidBefore = caddy!.pid;
     const result = await run(machine, { slug: "sample", active: true, zone: ZONE });
-    expect(result).toMatchObject({ result: "ok", message: "already behind the portal", installed: true });
+    expect(result).toMatchObject({ result: "ok", message: "already restricted", installed: true });
     expect(caddy!.pid).toBe(pidBefore);
   });
 

@@ -416,7 +416,7 @@ describe("a person, end to end", () => {
     expect(browser.jar.has("session")).toBe(false);
     await give("vera@acme.test", { shop: "visitor" });
     const visitor = await signInAs("vera@acme.test");
-    expect(visitor.landed).toBe(`${DASHBOARD}/?signin=no-role`);
+    expect(visitor.landed).toBe(`${DASHBOARD}/?signin=can-open-only`);
     expect(visitor.browser.jar.has("session")).toBe(false);
     await takeOff("vera@acme.test");
   });

@@ -3,6 +3,8 @@ import { KeySquare, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
+import { Who } from "@/components/access-word"
+import { InternalLink } from "@/components/navigation"
 import { Banner, EmptyState, ErrorState, PageBody, PageHeader, Panel, PanelSkeleton, Status } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
@@ -10,8 +12,9 @@ import { CreateTokenDialog, RevokeTokenDialog } from "@/components/token-dialogs
 import { readPeople, readTokens, revokeToken } from "@/lib/api"
 import { isPerson } from "@/lib/identity"
 import { ago, dateTime } from "@/lib/format"
-import { auditLine, deploymentLabel, deploymentTone, isLive, reachedProjects, scopeSummary, tokenHolders, tokenOwnerLine, tokenStatus } from "@/lib/tokens"
-import type { Roles, TeamPageResponse, TokenView } from "@/lib/types"
+import { auditLine, deploymentLabel, deploymentTone, isLive, liveReach, madeByLine, scopeSummary, tokenHolders, tokenStatus } from "@/lib/tokens"
+import type { AccessRole, Roles, TeamPageResponse, TokenView } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 /**
  * The tokens that deploy without SSH, what each may do, and what they did.
@@ -30,27 +33,50 @@ import type { Roles, TeamPageResponse, TokenView } from "@/lib/types"
 
 type Loaded = { state: "loading" } | { state: "failed" } | { state: "ready"; list: TeamPageResponse }
 
-function TokenRow({ token, now, mine, onRevoke }: { token: TokenView; now: number; mine: boolean; onRevoke: (token: TokenView) => void }) {
+const LINK =
+  "rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
+
+/**
+ * A token: its label, who made it and for whom, its state; what it may do
+ * beyond deploying, only what is on; and where it deploys, a person's with
+ * their role there today, paused below Developer.
+ */
+function TokenRow({
+  token,
+  now,
+  mine,
+  roles,
+  onRevoke,
+}: {
+  token: TokenView
+  now: number
+  mine: boolean
+  /** The roles of the person the token belongs to, as they are now; null when not known. */
+  roles: Readonly<Record<string, AccessRole>> | null
+  onRevoke: (token: TokenView) => void
+}) {
   const status = tokenStatus(token, now)
-  const projects = reachedProjects(token)
+  const reach = liveReach(token, roles)
+  const scope = scopeSummary(token.scope)
   const live = isLive(token, now)
   return (
     <li className="flex flex-wrap items-start gap-x-4 gap-y-2 px-4 py-3">
       <div className="grid min-w-0 flex-1 basis-64 gap-1">
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
           <span className="font-medium wrap-anywhere">{token.label}</span>
-          <span className="text-muted-foreground wrap-anywhere">{tokenOwnerLine(token, mine ? "person" : "owner")}</span>
           <Status tone={status.tone}>{status.label}</Status>
         </div>
-        <p className="text-xs text-muted-foreground">{scopeSummary(token.scope, token.member !== null).join(" · ")}</p>
+        <p className="text-xs text-muted-foreground wrap-break-word">
+          <Who value={madeByLine(token, mine ? "person" : "owner")} />
+        </p>
+        {scope.length > 0 && <p className="text-xs text-muted-foreground">{scope.join(" · ")}</p>}
         <p className="text-xs text-muted-foreground">
-          {projects.length === 0
+          {reach.length === 0
             ? "No project yet."
-            : projects.map(({ slug, how }, index) => (
+            : reach.map(({ slug, text, paused }, index) => (
                 <span key={slug}>
                   {index > 0 && ", "}
-                  <span className="text-foreground">{slug}</span>
-                  {how === "created" ? " (created)" : ""}
+                  <span className={cn(paused ? "text-muted-foreground" : "text-foreground")}>{text}</span>
                 </span>
               ))}
         </p>
@@ -78,6 +104,8 @@ export function TokensPage() {
   const serverNow = now + offset
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" })
   const [holders, setHolders] = useState<{ email: string; roles: Roles; create: boolean }[]>([])
+  // Every person's roles now, for the owner: where each person's token deploys today.
+  const [people, setPeople] = useState<ReadonlyMap<string, Readonly<Record<string, AccessRole>>>>(new Map())
   const [creating, setCreating] = useState<{ open: boolean; opening: number }>({ open: false, opening: 0 })
   const [revoking, setRevoking] = useState<{ token: TokenView | null; open: boolean; inProgress: boolean; error: string }>({
     token: null,
@@ -85,6 +113,15 @@ export function TokensPage() {
     inProgress: false,
     error: "",
   })
+
+  /** The owner's People: whom a token may be made for, and everyone's roles now. */
+  const readHolders = useCallback(async () => {
+    const { status, body } = await readPeople()
+    if (status === 401) return sessionExpired()
+    if (status !== 200 || body === null || !Array.isArray(body.people)) return
+    setHolders(tokenHolders(body.people))
+    setPeople(new Map(body.people.map((one) => [one.who, one.roles])))
+  }, [sessionExpired])
 
   const reload = useCallback(async () => {
     const { status, body } = await readTokens()
@@ -94,7 +131,8 @@ export function TokensPage() {
       return
     }
     setLoaded({ state: "ready", list: body })
-  }, [sessionExpired])
+    if (body.member === null) void readHolders()
+  }, [sessionExpired, readHolders])
 
   useEffect(() => {
     void reload()
@@ -104,11 +142,7 @@ export function TokensPage() {
     // The unlock first, as for a secret: the dialog would only end in a 423.
     if (!actions.state.open) return actions.unlock()
     // The owner may make a token for a person of People: who they are, and their roles now.
-    if (!signedPerson) {
-      const { status, body } = await readPeople()
-      if (status === 401) return sessionExpired()
-      setHolders(status === 200 && body !== null && Array.isArray(body.people) ? tokenHolders(body.people) : [])
-    }
+    if (!signedPerson) await readHolders()
     setCreating((previous) => ({ open: true, opening: previous.opening + 1 }))
   }
 
@@ -132,8 +166,9 @@ export function TokensPage() {
 
   const knownSlugs = snapshot?.sites.map((site) => site.slug) ?? []
   const list = loaded.state === "ready" ? loaded.list : null
-  const live = list?.tokens.filter((token) => isLive(token, serverNow)).length ?? 0
   const person = list?.member ?? null
+  const rolesOf = (token: TokenView): Readonly<Record<string, AccessRole>> | null =>
+    token.member === null ? null : person !== null ? person.roles : (people.get(token.member) ?? null)
 
   return (
     <>
@@ -141,15 +176,15 @@ export function TokensPage() {
       <PageBody>
         <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
           {signedPerson
-            ? "Your tokens let your CLI or an agent deploy over HTTPS with sitesolide deploy, without SSH. A token deploys only projects where you are a Developer or an Admin, creates projects only if you may, and never does more than your roles do now."
-            : "A token lets your agents, or a person, deploy over HTTPS with sitesolide deploy, without SSH and without root. Every token is someone's: yours deploys what you grant it and what it creates; a person's, made by them or by you, never does more than their roles, and goes with them."}
+            ? "Your tokens let your CLI or an agent deploy with sitesolide deploy, without SSH. A token never does more than your roles do now: below Developer on a project, it is paused there."
+            : "A token lets your agents, or a person, deploy with sitesolide deploy, without SSH. Every token is someone's: yours deploys what you allow it; a person's never does more than their roles, and goes with them."}
         </p>
 
         {loaded.state === "loading" && <PanelSkeleton lines={4} />}
         {loaded.state === "failed" && (
           <Panel title="Tokens">
             <ErrorState title="Can't read the tokens" onRetry={() => void reload()}>
-              The dashboard did not answer, or the steward did not.
+              The dashboard did not answer, or the service behind it did not. Retry in a moment; if it persists, run sitesolide status.
             </ErrorState>
           </Panel>
         )}
@@ -159,7 +194,7 @@ export function TokensPage() {
         {list !== null && list.available && (
           <Panel
             title="Tokens"
-            count={live}
+            count={list.tokens.length}
             full
             actions={
               <Button size="sm" onClick={() => void openCreation()} className="max-md:h-10">
@@ -182,6 +217,7 @@ export function TokensPage() {
                     token={token}
                     now={serverNow}
                     mine={person !== null}
+                    roles={rolesOf(token)}
                     onRevoke={(chosen) => setRevoking({ token: chosen, open: true, inProgress: false, error: "" })}
                   />
                 ))}
@@ -213,7 +249,15 @@ export function TokensPage() {
                 </ul>
               )}
             </Panel>
-            <Panel title="Activity" full>
+            <Panel
+              title="Token activity"
+              full
+              actions={
+                <InternalLink href="/activity/" className={cn(LINK, "text-xs text-muted-foreground hover:text-foreground")}>
+                  All activity
+                </InternalLink>
+              }
+            >
               {list.audit.length === 0 ? (
                 <EmptyState compact title="Nothing yet" />
               ) : (

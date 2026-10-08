@@ -521,12 +521,13 @@ export function PageHeader({
             <MobileMenu />
           </div>
 
-          <div className="flex basis-full items-center gap-2 md:hidden">
+          {/* On a phone, the actions share the verdict's row when they fit, rather than taking one of their own. */}
+          <div className="flex basis-full flex-wrap items-center gap-x-1.5 gap-y-2 md:hidden">
             <Verdict />
             <Age short />
+            {actions !== undefined && <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>}
           </div>
           {description !== undefined && <div className="basis-full text-sm text-muted-foreground">{description}</div>}
-          {actions !== undefined && <div className="flex basis-full flex-wrap items-center gap-2 md:hidden">{actions}</div>}
         </div>
       </header>
       <ShellBanners />

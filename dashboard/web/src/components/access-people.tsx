@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
-import { Check, ChevronDown, Copy, UserRoundPlus, X } from "lucide-react"
+import { Check, ChevronDown, ChevronRight, Copy, UserRoundPlus, X } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -13,28 +13,32 @@ import {
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Who } from "@/components/access-word"
 import { CopyFallback, useAnnounce, useCopy } from "@/components/copy"
 import { Banner, EmptyState, INPUT_DIALOG, Panel } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { putAccess, removeAccess } from "@/lib/api"
 import {
   DEFAULT_PASSWORD_DURATION_S,
-  OWNER_TEXT,
   PASSWORD_DURATIONS,
   ROLE_TEXTS,
+  alsoOpens,
+  askAnAdmin,
   closeOutcome,
   entryRow,
+  grantSentence,
   inertNote,
   needsUnlock,
   passwordMessage,
+  lowers,
   raiseNeedsUnlock,
   planAddition,
   plannedEnd,
   roleLabel,
+  selfChangeWarning,
   sendLine,
   sortEntries,
   type EntryRow,
-  type RoleText,
 } from "@/lib/access"
 import { dateTime } from "@/lib/format"
 import { refusalOf } from "@/lib/secrets"
@@ -44,14 +48,14 @@ import { cn } from "@/lib/utils"
 
 /**
  * People with access, as a "Share" dialog lays them out: the field that adds
- * someone at the top, then everyone who has access to the project and their
- * role, a menu on each row and its removal. The owner first, who is on no
- * list, and the emails the server lets into every restricted site last, so
- * that the whole answer to "who can do what" is on one screen.
+ * someone at the top, then everyone on the project's list and their role, a
+ * menu on each row and its removal. Under the list, once, who opens the site
+ * without being on it: the owner, and the admin emails set on the server.
  *
  * The page sends each change as it is made; the steward judges it and its
  * refusal is shown as it stands. Giving a role above Can open, or password
- * access, waits for the unlock; removing and lowering never do.
+ * access, waits for the unlock; removing and lowering never do. A Viewer or
+ * a Developer reads the same list, without a control, and whom to ask.
  */
 
 /** The native select the page styles, a field's look: see DESIGN.md, "a hand-drawn control takes a field's". */
@@ -101,15 +105,15 @@ type Created = { who: string; password: string; expiresAt: number | null }
 
 type Notice = { who: string; role: AccessRole; line: string | null }
 
-/** The line to send after adding someone, copied as it is. */
-function SendNotice({ notice, onClose }: { notice: Notice; onClose: () => void }) {
+/** What was just given, and the line to send, copied as it is. */
+function SendNotice({ notice, slug, onClose }: { notice: Notice; slug: string; onClose: () => void }) {
   const { state, copy, reset } = useCopy("Message copied")
   return (
     <div role="status" className="grid gap-2 border-b bg-muted/40 px-4 py-3">
       <div className="flex items-start gap-2">
         <Check aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", TONE_TEXT.ok)} />
-        <p className="min-w-0 flex-1 text-pretty">
-          <span className="font-medium wrap-anywhere">{notice.who}</span> added as {roleLabel(notice.role)}.
+        <p className="min-w-0 flex-1 text-pretty wrap-break-word">
+          {grantSentence(notice.who, notice.role, slug)}
           {notice.line !== null && " No email is sent: send them this."}
         </p>
         <Button variant="ghost" size="icon-sm" aria-label="Dismiss" onClick={onClose} className="-my-1 text-muted-foreground max-md:size-10">
@@ -129,6 +133,33 @@ function SendNotice({ notice, onClose }: { notice: Notice; onClose: () => void }
           </div>
         ))}
     </div>
+  )
+}
+
+/**
+ * What each role can do, from Can open to Admin, each including the ones
+ * below: a disclosure a newcomer opens once, open from the start for whoever
+ * only reads the list. The viewer's own rung is marked.
+ */
+function RolesDisclosure({ yours, open }: { yours: AccessRole | null; open: boolean }) {
+  return (
+    <details open={open} className="group text-xs">
+      <summary className="-mx-1 inline-flex cursor-pointer list-none items-center gap-1 rounded-sm px-1 text-muted-foreground outline-none select-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        <ChevronRight aria-hidden="true" className="size-3.5 transition-transform group-open:rotate-90 motion-reduce:transition-none" />
+        What each role can do
+      </summary>
+      <dl className="mt-2 grid gap-1.5 border-l pl-3">
+        {(Object.keys(ROLE_TEXTS) as AccessRole[]).map((role) => (
+          <div key={role} className="grid gap-0.5 @xl:grid-cols-[6.5rem_minmax(0,1fr)] @xl:gap-3">
+            <dt className="font-medium text-foreground">
+              {ROLE_TEXTS[role].label}
+              {role === yours && <span className="font-normal text-muted-foreground"> (your role)</span>}
+            </dt>
+            <dd className="text-pretty text-muted-foreground">{ROLE_TEXTS[role].can}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
   )
 }
 
@@ -154,13 +185,17 @@ function AddPeople({
 
   const plan = planAddition(text, page)
   const chosen: AccessRole = plan.state === "ready" && !plan.roles.includes(role) ? "visitor" : role
+  // A domain and password access can only open the site: a word, not a menu.
+  const onlyOpen = plan.kind === "domain" || (plan.state === "ready" ? plan.roles.length === 1 : page.grantable.length === 1)
+  const covered = plan.state === "ready" && chosen === "visitor" ? plan.covered : null
+  const offered = plan.state !== "blocked" && plan.state !== "existing" && covered === null
   const unlockFirst = plan.state === "ready" && needsUnlock(chosen, plan.password) && !actions.state.open
   // What the field holds is said as it is typed, a fault only once Add was pressed.
   const fault = plan.state === "blocked" || plan.state === "existing" || (tried && plan.state === "invalid")
 
   async function add(event: SyntheticEvent) {
     event.preventDefault()
-    if (inProgress) return
+    if (inProgress || !offered) return
     setTried(true)
     setError("")
     if (plan.state !== "ready" || plan.who === null) return field.current?.focus()
@@ -187,7 +222,7 @@ function AddPeople({
 
   const hintId = `${id}-hint`
   return (
-    <form noValidate onSubmit={(event) => void add(event)} className="grid gap-2 border-b p-4">
+    <form noValidate onSubmit={(event) => void add(event)} className="grid gap-2">
       <label htmlFor={id} className="text-sm leading-none font-medium">
         Add people
       </label>
@@ -209,13 +244,19 @@ function AddPeople({
           aria-describedby={hintId}
           className="h-10 min-w-0 flex-1 basis-60 sm:h-9"
         />
-        <Select label="Role" value={chosen} onChange={(value) => setRole(value as AccessRole)} className="w-36 shrink-0">
-          {page.grantable.map((option) => (
-            <option key={option} value={option} disabled={plan.state === "ready" && !plan.roles.includes(option)} className="text-foreground">
-              {roleLabel(option)}
-            </option>
-          ))}
-        </Select>
+        {onlyOpen ? (
+          <span className="flex h-10 w-36 shrink-0 items-center rounded-lg border border-transparent px-2.5 text-sm text-secondary-foreground sm:h-9">
+            {roleLabel("visitor")}
+          </span>
+        ) : (
+          <Select label="Role" value={chosen} onChange={(value) => setRole(value as AccessRole)} className="w-36 shrink-0">
+            {page.grantable.map((option) => (
+              <option key={option} value={option} disabled={plan.state === "ready" && !plan.roles.includes(option)} className="text-foreground">
+                {roleLabel(option)}
+              </option>
+            ))}
+          </Select>
+        )}
         {plan.state === "ready" && plan.password && (
           <Select label="Password access lasts" value={duration} onChange={setDuration} className="w-32 shrink-0">
             {PASSWORD_DURATIONS.map((option) => (
@@ -225,24 +266,27 @@ function AddPeople({
             ))}
           </Select>
         )}
-        <Button type="submit" variant={unlockFirst ? "outline" : "default"} disabled={inProgress} className="h-10 shrink-0 sm:h-9">
+        <Button type="submit" variant={unlockFirst ? "outline" : "default"} disabled={inProgress || !offered} className="h-10 shrink-0 sm:h-9">
           <UserRoundPlus />
           {inProgress ? "Adding…" : unlockFirst ? "Unlock to add" : "Add"}
         </Button>
       </div>
-      <div id={hintId} className="grid gap-0.5 text-xs text-pretty">
+      <div id={hintId} className="grid gap-0.5 text-xs text-pretty wrap-break-word">
         {error !== "" ? (
           <p role="alert" className="text-destructive">
             {error}
           </p>
+        ) : covered !== null ? (
+          <p className="text-muted-foreground">{covered}</p>
         ) : (
           <p role={fault ? "alert" : undefined} className={fault ? "text-destructive" : "text-muted-foreground"}>
             {plan.state === "invalid" && !tried ? "Keep typing: an email, or a domain with its @." : plan.hint}
           </p>
         )}
-        {plan.state === "ready" && plan.limit !== null && <p className="text-muted-foreground">{plan.limit}</p>}
-        {plan.state === "ready" && plan.password && <p className="text-muted-foreground tabular-nums">{plannedEnd(fromChoice(duration), now)}</p>}
-        {unlockFirst && (
+        {plan.state === "ready" && plan.password && error === "" && (
+          <p className="text-muted-foreground tabular-nums">{plannedEnd(fromChoice(duration), now)}</p>
+        )}
+        {unlockFirst && offered && error === "" && (
           <p className="text-muted-foreground">
             {plan.password ? "Password access lets someone from outside the company in" : `${roleLabel(chosen)} is more than opening the site`}: it waits for
             the unlock.
@@ -258,12 +302,15 @@ function EntryLine({
   row,
   slug,
   busy,
+  spacer,
   onRole,
   onRemove,
 }: {
   row: EntryRow
   slug: string
   busy: boolean
+  /** Keep the removal's place when there is none on this row, so that the roles stay aligned. */
+  spacer: boolean
   onRole: (role: AccessRole) => void
   onRemove: () => void
 }) {
@@ -271,18 +318,18 @@ function EntryLine({
   return (
     <li className={LINE}>
       <div className="grid min-w-0 gap-0.5">
-        <span className="font-medium wrap-anywhere">
-          {entry.who}
+        <span className={cn("font-medium wrap-break-word", row.muted && "text-muted-foreground")}>
+          <Who value={entry.who} />
           {row.self && <span className="font-normal text-muted-foreground"> (you)</span>}
         </span>
         {row.what !== null && (
-          <span className={cn("text-xs", row.whatTone === "attention" ? TONE_TEXT.attention : "text-muted-foreground")}>{row.what}</span>
+          <span className={cn("text-xs", row.whatTone === "attention" && !row.muted ? TONE_TEXT.attention : "text-muted-foreground")}>{row.what}</span>
         )}
-        <span className="text-xs text-muted-foreground">{row.added}</span>
+        {row.added !== null && <span className="text-xs text-muted-foreground">{row.added}</span>}
       </div>
       <div className="flex items-center gap-1">
         {row.roles === null ? (
-          <span className={cn(ROLE_WIDTH, "px-2.5 text-sm text-secondary-foreground")}>{roleLabel(entry.role)}</span>
+          <span className={cn(ROLE_WIDTH, "px-2.5 text-sm", row.muted ? "text-muted-foreground" : "text-secondary-foreground")}>{row.word}</span>
         ) : (
           <Select label={`Role of ${entry.who} on ${slug}`} value={entry.role} disabled={busy} onChange={(value) => onRole(value as AccessRole)} className={ROLE_WIDTH}>
             {row.roles.map((option) => (
@@ -305,24 +352,8 @@ function EntryLine({
             <X />
           </Button>
         ) : (
-          <span aria-hidden="true" className="size-8 max-md:size-10" />
+          spacer && <span aria-hidden="true" className="size-8 max-md:size-10" />
         )}
-      </div>
-    </li>
-  )
-}
-
-/** Someone who is on no list of this project and has access all the same: the owner, the server's own emails. */
-function FixedLine({ who, detail, label }: { who: string; detail: string; label: string }) {
-  return (
-    <li className={LINE}>
-      <div className="grid min-w-0 gap-0.5">
-        <span className="font-medium wrap-anywhere">{who}</span>
-        <span className="text-xs text-muted-foreground">{detail}</span>
-      </div>
-      <div className="flex items-center gap-1">
-        <span className={cn(ROLE_WIDTH, "px-2.5 text-sm text-secondary-foreground")}>{label}</span>
-        <span aria-hidden="true" className="size-8 max-md:size-10" />
       </div>
     </li>
   )
@@ -370,7 +401,9 @@ function PasswordDialog({ created, url, onClose }: { created: Created | null; ur
         {created !== null && (
           <>
             <DialogHeader>
-              <DialogTitle className="pr-8 leading-snug wrap-anywhere">Password access for {created.who}</DialogTitle>
+              <DialogTitle className="pr-8 leading-snug wrap-break-word">
+                Password access for <Who value={created.who} />
+              </DialogTitle>
               <DialogDescription className="text-pretty">
                 Send them the address and this password: it opens the site, and nothing in the dashboard. It is shown
                 only once.
@@ -425,9 +458,13 @@ function PasswordDialog({ created, url, onClose }: { created: Created | null; ur
   )
 }
 
+/** A change waiting for its confirmation: someone's removal, or an Admin lowering their own role. */
+type Pending = { entry: EntryView; role: AccessRole | null; open: boolean; inProgress: boolean; error: string }
+
 /**
  * The project's people with access. `page` is the steward's answer to
- * `/api/access`; `onChanged` reads it again after each change.
+ * `/api/access`; `onChanged` reads it again after each change. Whoever may
+ * give no role reads the list as it is, and whom to ask.
  */
 export function PeopleWithAccess({
   page,
@@ -447,161 +484,157 @@ export function PeopleWithAccess({
   const [created, setCreated] = useState<Created | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [rowError, setRowError] = useState("")
-  const [removing, setRemoving] = useState<{ entry: EntryView | null; open: boolean; inProgress: boolean; error: string }>({
-    entry: null,
-    open: false,
-    inProgress: false,
-    error: "",
-  })
+  const [pending, setPending] = useState<Pending | null>(null)
 
   const manages = page.grantable.length > 0
-  const entries = sortEntries(page.entries)
-  const listed = new Set(entries.map((entry) => entry.who))
-  const always = page.signIn.admins.filter((email) => !listed.has(email))
+  const entries = sortEntries(page.entries, now)
+  const yours = page.you.kind === "person" ? page.you.role : null
+  const own = (entry: EntryView) => page.you.kind === "person" && entry.who === page.you.email
+
+  async function sendRole(entry: EntryView, role: AccessRole): Promise<string | null> {
+    const { status, body } = await putAccess(page.slug, entry.who, role)
+    if (status === 200 && body !== null) {
+      announce(grantSentence(entry.who, role, page.slug))
+      if (notice?.who === entry.who) setNotice(null)
+      onChanged()
+      return null
+    }
+    return actions.refusal(refusalOf(status, body))
+  }
 
   async function changeRole(entry: EntryView, role: AccessRole) {
     if (role === entry.role) return
     setRowError("")
     if (raiseNeedsUnlock(entry.role, role) && !actions.state.open) return actions.unlock()
+    // An Admin lowering themselves gives up managing the project: said first.
+    if (own(entry) && entry.role === "admin" && lowers(entry.role, role)) {
+      return setPending({ entry, role, open: true, inProgress: false, error: "" })
+    }
     setBusy(entry.who)
     try {
-      const { status, body } = await putAccess(page.slug, entry.who, role)
-      if (status === 200 && body !== null) {
-        announce(`${entry.who} is now ${roleLabel(role)} on ${page.slug}.`)
-        return onChanged()
-      }
-      const message = actions.refusal(refusalOf(status, body))
+      const message = await sendRole(entry, role)
       if (message !== null) setRowError(`${entry.who}: ${message}`)
     } finally {
       setBusy(null)
     }
   }
 
-  async function remove() {
-    const entry = removing.entry
-    if (entry === null) return
-    setRemoving((previous) => ({ ...previous, inProgress: true, error: "" }))
+  async function confirm() {
+    if (pending === null) return
+    const { entry, role } = pending
+    setPending({ ...pending, inProgress: true, error: "" })
+    if (role !== null) {
+      const message = await sendRole(entry, role)
+      if (message === null) return setPending({ ...pending, open: false, inProgress: false })
+      return setPending({ ...pending, inProgress: false, error: message })
+    }
     const { status, body } = await removeAccess(page.slug, entry.who)
     if (status === 200) {
-      setRemoving((previous) => ({ ...previous, open: false, inProgress: false }))
+      setPending({ ...pending, open: false, inProgress: false })
       announce(`${entry.who} no longer has access to ${page.slug}.`)
       if (notice?.who === entry.who) setNotice(null)
       return onChanged()
     }
     const message = actions.refusal(refusalOf(status, body))
-    if (message === null) return setRemoving((previous) => ({ ...previous, open: false, inProgress: false }))
-    setRemoving((previous) => ({ ...previous, inProgress: false, error: message }))
+    if (message === null) return setPending({ ...pending, open: false, inProgress: false })
+    setPending({ ...pending, inProgress: false, error: message })
   }
 
   const count = entries.length
+  const removing = pending !== null && pending.role === null
+  const self = pending !== null && own(pending.entry) && pending.entry.role === "admin"
 
   return (
-    <Panel title="People with access" count={count > 0 ? count : undefined} description={inertNote(page.slug, general) ?? undefined} full>
-      {manages && (
-        <AddPeople
-          page={page}
-          now={now}
-          onAdded={({ entry, password }) => {
-            if (password !== null) {
-              setNotice(null)
-              setCreated({ who: entry.who, password, expiresAt: entry.password?.expiresAt ?? null })
-              announce(`Password access given to ${entry.who}. Copy the password now: it won't be shown again.`)
-            } else {
-              setNotice({ who: entry.who, role: entry.role, line: sendLine(entry, page) })
-              announce(`${entry.who} added as ${roleLabel(entry.role)}.`)
-            }
-            onChanged()
-          }}
-        />
-      )}
-      {notice !== null && <SendNotice notice={notice} onClose={() => setNotice(null)} />}
+    <Panel title="People with access" count={count > 0 ? count : undefined} description={inertNote(page.slug, general, manages) ?? undefined} full>
+      <div className="@container grid gap-3 border-b p-4">
+        {manages ? (
+          <AddPeople
+            page={page}
+            now={now}
+            onAdded={({ entry, password }) => {
+              if (password !== null) {
+                setNotice(null)
+                setCreated({ who: entry.who, password, expiresAt: entry.password?.expiresAt ?? null })
+                announce(`Password access given to ${entry.who}. Copy the password now: it won't be shown again.`)
+              } else {
+                setNotice({ who: entry.who, role: entry.role, line: sendLine(entry, page) })
+                announce(grantSentence(entry.who, entry.role, page.slug))
+              }
+              onChanged()
+            }}
+          />
+        ) : (
+          <p className="text-sm text-pretty wrap-break-word">{askAnAdmin(page.entries)}</p>
+        )}
+        <RolesDisclosure yours={yours} open={!manages} />
+      </div>
+      {notice !== null && <SendNotice notice={notice} slug={page.slug} onClose={() => setNotice(null)} />}
       {rowError !== "" && (
         <div className="border-b p-3">
           <Banner tone="error">{rowError}</Banner>
         </div>
       )}
 
-      <ul className="divide-y divide-divider" aria-label={`Who has access to ${page.slug}`}>
-        <FixedLine who="Owner" detail="Signs in with the dashboard's password" label={OWNER_TEXT.label} />
-        {entries.map((entry) => (
-          <EntryLine
-            key={entry.who}
-            row={entryRow(entry, page, now)}
-            slug={page.slug}
-            busy={busy === entry.who}
-            onRole={(role) => void changeRole(entry, role)}
-            onRemove={() => setRemoving({ entry, open: true, inProgress: false, error: "" })}
-          />
-        ))}
-        {always.map((email) => (
-          <FixedLine key={email} who={email} detail="Opens every restricted site: set on the server by the owner" label="Can open" />
-        ))}
-      </ul>
-
-      {count === 0 && (
+      {count === 0 ? (
         <EmptyState compact title={`Nobody else has access to ${page.slug} yet`}>
-          {manages
-            ? "Add people above: they open the site when its access is restricted, and with a role they see or manage it here."
-            : `Only the owner can open ${page.slug} when its access is restricted.`}
+          {manages ? "Add people above: they open the site when its access is restricted, and with a role they see or manage it here." : null}
         </EmptyState>
+      ) : (
+        <ul className="divide-y divide-divider" aria-label={`Who has access to ${page.slug}`}>
+          {entries.map((entry) => (
+            <EntryLine
+              key={entry.who}
+              row={entryRow(entry, page, now)}
+              slug={page.slug}
+              busy={busy === entry.who}
+              spacer={manages}
+              onRole={(role) => void changeRole(entry, role)}
+              onRemove={() => setPending({ entry, role: null, open: true, inProgress: false, error: "" })}
+            />
+          ))}
+        </ul>
       )}
+
+      <p className="border-t px-4 py-3 text-xs text-pretty text-muted-foreground wrap-break-word">{alsoOpens(page.signIn.admins)}</p>
 
       <PasswordDialog created={created} url={page.url} onClose={() => setCreated(null)} />
 
       <AlertDialog
-        open={removing.open}
+        open={pending?.open ?? false}
         onOpenChange={(next) => {
-          if (!next && !removing.inProgress) setRemoving((previous) => ({ ...previous, open: false }))
+          if (!next && pending !== null && !pending.inProgress) setPending({ ...pending, open: false })
         }}
       >
         <AlertDialogContent className="sm:max-w-md">
           <AlertDialogHeader className="text-left max-sm:place-items-start">
-            <AlertDialogTitle className="wrap-anywhere">
-              Remove {removing.entry?.who} from {page.slug}?
+            <AlertDialogTitle className="wrap-break-word">
+              {removing ? (
+                <>
+                  Remove {self ? "yourself" : <Who value={pending.entry.who} />} from {page.slug}?
+                </>
+              ) : (
+                `Become ${pending === null || pending.role === null ? "" : roleLabel(pending.role)} on ${page.slug}?`
+              )}
             </AlertDialogTitle>
             <AlertDialogDescription className="text-pretty">
-              {removing.entry?.kind === "domain"
-                ? `Everyone at ${removing.entry.who.slice(1)} loses access at their next request, except the people added by name.`
-                : removing.entry?.kind === "password"
-                  ? "Their password stops opening the site at their next request."
-                  : `They lose access to ${page.slug} at their next request, on the site and in the dashboard.`}
+              {self
+                ? selfChangeWarning(page.slug)
+                : pending?.entry.kind === "domain"
+                  ? `Everyone at ${pending.entry.who.slice(1)} loses access at their next request, except the people added by name.`
+                  : pending?.entry.kind === "password"
+                    ? "Their password stops opening the site at their next request."
+                    : `They lose access to ${page.slug} at their next request, on the site and in the dashboard.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {removing.error !== "" && <Banner tone="error">{removing.error}</Banner>}
+          {pending !== null && pending.error !== "" && <Banner tone="error">{pending.error}</Banner>}
           <AlertDialogFooter>
             <AlertDialogCancel className="max-sm:h-11">Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" disabled={removing.inProgress} onClick={() => void remove()} className="max-sm:h-11">
-              {removing.inProgress ? "Removing…" : "Remove"}
+            <AlertDialogAction variant="destructive" disabled={pending?.inProgress ?? false} onClick={() => void confirm()} className="max-sm:h-11">
+              {pending?.inProgress ? (removing ? "Removing…" : "Saving…") : removing ? "Remove" : "Change my role"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Panel>
-  )
-}
-
-/**
- * What each role can do, from the lowest: the ladder a newcomer reads once,
- * with their own rung marked.
- */
-export function RolesPanel({ yours }: { yours: AccessRole | "owner" | null }) {
-  const rungs: { key: AccessRole | "owner"; text: RoleText }[] = [
-    ...(Object.keys(ROLE_TEXTS) as AccessRole[]).map((role) => ({ key: role, text: ROLE_TEXTS[role] })),
-    { key: "owner" as const, text: OWNER_TEXT },
-  ]
-  return (
-    <Panel title="What each role can do" full>
-      <dl className="divide-y divide-divider">
-        {rungs.map(({ key, text }) => (
-          <div key={key} className={cn("grid gap-0.5 px-4 py-2.5", key === yours && "shadow-[inset_2px_0_0_var(--primary)]")}>
-            <dt className="flex items-center gap-2 font-medium">
-              {text.label}
-              {key === yours && <span className="text-xs font-normal text-muted-foreground">Your role</span>}
-            </dt>
-            <dd className="text-xs text-pretty text-muted-foreground">{text.can}</dd>
-          </div>
-        ))}
-      </dl>
     </Panel>
   )
 }

@@ -92,7 +92,8 @@ services on the loopback, the monitor, backups, the installer that deploys
 with a token, and the egress proxy. It writes `~/.config/sitesolide/config.json`, which every other
 command reads.
 
-It shows two passwords, once each: the dashboard's and the portal's. Store
+It shows two passwords, once each: the dashboard's, and the portal's, the
+owner's password at the sign-in of restricted sites. Store
 them in a password manager before the terminal scrolls them away; both are
 changed from the dashboard afterwards.
 

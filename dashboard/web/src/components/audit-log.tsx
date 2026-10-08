@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { InternalLink } from "@/components/navigation"
 import { Banner, Status } from "@/components/page"
-import { SOURCES, actorLabel, auditWords, detailLines, sourceLabel, sourceWords, type AuditFilters } from "@/lib/audit"
+import { ACCESS_ACTION, SOURCES, accessOnly, actorLabel, auditWords, detailLines, sourceLabel, sourceWords, type AuditFilters } from "@/lib/audit"
 import { ABSENT, ago, dateTime } from "@/lib/format"
 import { siteUrl } from "@/lib/pages"
 import type { AuditRow, AuditSource, SourceStatus } from "@/lib/types"
@@ -82,6 +82,26 @@ function SourceChips({ value, onValue }: { value: AuditSource | null; onValue: (
   )
 }
 
+/** One more segment, beside the sources: the access changes alone, from every source that keeps them. */
+function AccessChip({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <div className="inline-flex rounded-lg border bg-card p-0.5 dark:bg-background">
+      <button
+        type="button"
+        aria-pressed={on}
+        title="Who was given access, changed or removed, and general access"
+        onClick={() => onChange(!on)}
+        className={cn(
+          "inline-flex h-9 items-center justify-center rounded-md px-2.5 text-[0.8125rem] whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-[1.875rem]",
+          on ? "bg-muted font-medium text-strong" : "text-secondary-foreground hover:bg-muted/60 hover:text-strong",
+        )}
+      >
+        Access changes
+      </button>
+    </div>
+  )
+}
+
 function FilterField({ label, children, id, className }: { label: string; id: string; className?: string; children: ReactNode }) {
   return (
     <div className={cn("grid min-w-0 content-start gap-1.5", className)}>
@@ -119,6 +139,7 @@ export function AuditFilterBar({
     <section aria-label="Filters" className="grid gap-3">
       <div className="flex flex-wrap items-center gap-3">
         <SourceChips value={filters.source} onValue={(source) => onFilters({ ...filters, source })} />
+        <AccessChip on={accessOnly(filters)} onChange={(on) => onFilters({ ...filters, action: on ? ACCESS_ACTION : "" })} />
         {narrowed && (
           <Button variant="ghost" size="sm" onClick={onClear} className="text-muted-foreground hover:text-foreground max-md:h-9">
             Clear filters
@@ -182,7 +203,8 @@ function Target({ row, known, compact = false }: { row: AuditRow; known: Readonl
   if (compact) return <span className="wrap-anywhere">{site}</span>
   return (
     <span className="grid min-w-0 gap-0.5">
-      <span className="wrap-anywhere">{site}</span>
+      {/* A slug keeps its letters together: the column never narrows below it. */}
+      <span className="wrap-break-word">{site}</span>
       {row.site !== null && row.target.toLowerCase() !== row.site && <span className="text-xs text-muted-foreground wrap-anywhere">{row.target}</span>}
     </span>
   )

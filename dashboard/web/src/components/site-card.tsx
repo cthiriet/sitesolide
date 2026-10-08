@@ -411,7 +411,7 @@ export function AccessPanel({ site, actions }: { site: Site; actions?: ReactNode
         {access.kind === "portal" && (
           <div className="grid gap-1.5 pl-7">
             <p className="text-xs text-muted-foreground">
-              {access.exemptions.length === 0 ? "Every path asks to sign in." : "Paths anyone can open, guarded by the app alone"}
+              {access.exemptions.length === 0 ? "Every path asks to sign in." : "Open to anyone, guarded by the app alone:"}
             </p>
             {access.exemptions.length > 0 && (
               <ul className="flex flex-wrap gap-1.5">

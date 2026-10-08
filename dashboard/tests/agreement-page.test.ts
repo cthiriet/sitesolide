@@ -165,8 +165,8 @@ test("the snapshot covers every case", () => {
 describe("the page and the server say the same thing", () => {
   test("general access out of agreement is an anomaly on both sides", () => {
     const rules: Record<Mismatch, string> = {
-      "portal-absent": "Restricted in sitesolide.json but not in",
-      "portal-extra": "Restricted in the live Caddy block although",
+      "portal-absent": "Restricted in sitesolide.json, public on the server",
+      "portal-extra": "Restricted on the server, public in sitesolide.json",
       "code-without-lock": "Preview code in effect although",
       "lock-without-code": "Preview code requested but none is valid",
     };

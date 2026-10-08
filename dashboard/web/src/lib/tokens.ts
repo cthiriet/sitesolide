@@ -45,16 +45,15 @@ export function isLive(token: Pick<TokenView, "revokedAt" | "expiresAt">, now: n
 }
 
 /**
- * What the token may do, in a few words: general access first, which is what
- * the owner worries about. A person's token deploys its projects with the
- * general access they have, public for one that is, and makes none public
- * without the option.
+ * What the token may do beyond deploying its projects, in words, only what
+ * is on: nothing is said of what is off, which is every token's default.
  */
-export function scopeSummary(scope: Scope, personal = false): string[] {
-  const parts = [scope.public ? "Public sites allowed" : personal ? "Makes no site public" : "Restricted sites only"]
-  if (scope.create) parts.push("Creates projects")
-  if (scope.outbound) parts.push("Outbound network")
-  if (scope.domain) parts.push("Own domains")
+export function scopeSummary(scope: Scope): string[] {
+  const parts: string[] = []
+  if (scope.create) parts.push("Can create projects")
+  if (scope.public) parts.push("Can deploy public sites")
+  if (scope.domain) parts.push("Can declare a domain")
+  if (scope.outbound) parts.push("Can use outbound network")
   return parts
 }
 
@@ -99,7 +98,7 @@ export function firstTokenField(errors: TokenErrors): TokenField | null {
 }
 
 /** Who a token may be made for by the owner: the people who sign in, a role above Can open or the right to create projects. */
-export function tokenHolders(people: readonly { who: string; roles: Record<string, Role | "visitor">; create: boolean }[]): { email: string; roles: Roles; create: boolean }[] {
+export function tokenHolders(people: readonly { who: string; roles: Readonly<Record<string, Role | "visitor">>; create: boolean }[]): { email: string; roles: Roles; create: boolean }[] {
   return people
     .map((person) => ({
       email: person.who,
@@ -111,15 +110,37 @@ export function tokenHolders(people: readonly { who: string; roles: Record<strin
 }
 
 /**
- * Whose a token is and who made it, as a row says it: the owner's own; a
- * person's, made by the owner for them, or by themselves. `viewer`: who reads
- * the row, the owner or the person it belongs to.
+ * Who made a token, and for whom, as a row says it: "Made by you", "Made by
+ * you for alice@example.com", "Made by alice@example.com". `viewer`: who
+ * reads the row, the owner or the person it belongs to.
  */
-export function tokenOwnerLine(token: Pick<TokenView, "member" | "by" | "email">, viewer: "owner" | "person"): string {
-  if (token.member === null) return token.email === "owner" ? "Yours" : `Yours, made for ${token.email}`
-  if (viewer === "person") return token.by === "owner" ? "Made by the owner for you" : "Yours"
-  return token.by === "owner" ? `Made by you for ${token.member}` : `${token.member}'s own`
+export function madeByLine(token: Pick<TokenView, "member" | "by" | "email">, viewer: "owner" | "person"): string {
+  if (token.member === null) return token.email === "owner" ? "Made by you" : `Made by you for ${token.email}`
+  if (viewer === "person") return token.by === "owner" ? "Made by the owner for you" : "Made by you"
+  return token.by === "owner" ? `Made by you for ${token.member}` : `Made by ${token.member}`
 }
+
+export type Reach = { slug: string; text: string; paused: boolean }
+
+/**
+ * Where a person's token deploys now: each project it was given or created,
+ * with that person's role there today. Below Developer, it is paused there
+ * until the role comes back: "calendar (Admin)", "cms (paused: Viewer now)".
+ * The owner's own token says which projects it created.
+ */
+export function liveReach(token: Pick<TokenView, "owned" | "scope" | "member">, roles: Readonly<Record<string, Role | "visitor">> | null): Reach[] {
+  const projects = reachedProjects(token)
+  if (token.member === null || roles === null) {
+    return projects.map(({ slug, how }) => ({ slug, text: how === "created" ? `${slug} (created)` : slug, paused: false }))
+  }
+  return projects.map(({ slug }) => {
+    const role = Object.hasOwn(roles, slug) ? roles[slug]! : null
+    if (role === "developer" || role === "admin") return { slug, text: `${slug} (${ROLE_WORDS[role]})`, paused: false }
+    return { slug, text: `${slug} (paused: ${role === null ? "no role" : ROLE_WORDS[role]} now)`, paused: true }
+  })
+}
+
+const ROLE_WORDS: Readonly<Record<Role | "visitor", string>> = { visitor: "Can open", viewer: "Viewer", developer: "Developer", admin: "Admin" }
 
 /** The command the holder runs, without the token: typed at its prompt, it never lands in a shell history. */
 export function loginCommand(origin: string): string {

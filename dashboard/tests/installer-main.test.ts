@@ -170,7 +170,7 @@ describe("main", () => {
     const { result } = await memberRun({ notes: "developer" }, { public: true }, false, false, env);
     expect(result.state).toBe("failed");
     expect(result.error?.code).not.toBe("misconfigured");
-    expect(JSON.stringify(result.error)).toContain("your token may only deploy private sites");
+    expect(JSON.stringify(result.error)).toContain("your token may only deploy restricted sites");
   });
 
   test("a machine whose environment file lost DEPLOY_ACCOUNT refuses, and says so in the result", async () => {

@@ -209,7 +209,7 @@ export function decidePortal(slug: string, local: boolean, reading: DepositedRea
   if (reading.kind === "unreadable") {
     return {
       kind: "rejects",
-      message: `cannot tell whether the portal of ${slug} was changed from the dashboard`,
+      message: `cannot tell whether the general access of ${slug} was changed from the dashboard`,
       details: [
         `${depositedManifestPath(slug)}: ${reading.reason}`,
         "nothing was sent: the portal is never decided on a reading that failed,",
@@ -245,7 +245,7 @@ export function confirmDoorUnderLock(slug: string, applied: boolean, reading: De
   if (reading.kind === "unreadable") {
     return {
       kind: "rejects",
-      message: `cannot tell whether the portal of ${slug} was changed from the dashboard`,
+      message: `cannot tell whether the general access of ${slug} was changed from the dashboard`,
       details: [
         `${depositedManifestPath(slug)}: ${reading.reason}`,
         "neither the manifest nor the Caddy block was deposited: nothing is decided on a reading that failed",
@@ -255,7 +255,7 @@ export function confirmDoorUnderLock(slug: string, applied: boolean, reading: De
   if (reading.kind === "absent" || reading.portal === applied) return { kind: "agreed" };
   return {
     kind: "rejects",
-    message: `portal of ${slug} changed from the dashboard during this deploy: run \`sitesolide deploy\` again`,
+    message: `general access of ${slug} changed from the dashboard during this deploy: run \`sitesolide deploy\` again`,
     details: [
       `this deploy was turning the portal ${applied ? "on" : "off"}, the server now has it ${reading.portal ? "on" : "off"}`,
       "neither the manifest nor the Caddy block was deposited",
@@ -319,7 +319,7 @@ export function guardDepositedManifest(
   if (reading.kind === "unreadable") {
     return {
       kind: "rejects",
-      message: `cannot tell whether the portal of ${slug} was changed from the dashboard`,
+      message: `cannot tell whether the general access of ${slug} was changed from the dashboard`,
       details: [
         `${depositedManifestPath(slug)}: ${reading.reason}`,
         "nothing was written: the manifest is never deposited on a reading that failed",
@@ -331,11 +331,11 @@ export function guardDepositedManifest(
   if (reading.portal && action !== "unlock") {
     return {
       kind: "rejects",
-      message: `${slug} is behind the portal: turn it off from the dashboard first`,
+      message: `${slug} is restricted: make it public from the dashboard's Access section first`,
       details: [
         action === "lock"
-          ? "a site behind the portal takes no preview lock"
-          : "a site behind the portal cannot switch to its own domain yet",
+          ? "a restricted site takes no preview code"
+          : "a restricted site cannot switch to its own domain yet",
         // The local manifest still asking for the door would contradict it once
         // removed: `deploy` makes it catch up.
         ...(local ? ["then run `sitesolide deploy` in its folder, so that the repository follows"] : []),
@@ -346,7 +346,7 @@ export function guardDepositedManifest(
   if (reading.portal !== local) {
     return {
       kind: "rejects",
-      message: `portal of ${slug} changed from the dashboard: run \`sitesolide deploy\` in its folder first`,
+      message: `general access of ${slug} changed from the dashboard: run \`sitesolide deploy\` in its folder first`,
       details: [
         `depositing this sitesolide.json would turn the portal ${local ? "back on" : "back off"}`,
         "nothing was written",
@@ -417,10 +417,10 @@ export function guardPortals(blocks: RepoBlock[], output: string, removeSlug = "
     const portal = portals.get(block.slug);
     if (portal === undefined || portal === block.isProtected) continue;
     lines.push(
-      `portal of ${block.slug} changed from the dashboard: run \`sitesolide deploy\` in its folder first`,
+      `general access of ${block.slug} changed from the dashboard: run \`sitesolide deploy\` in its folder first`,
       block.isProtected
-        ? `  the repository block is behind the portal, the server's manifest is not`
-        : `  the server's manifest is behind the portal, the repository block is not`,
+        ? `  the repository block is restricted, the server's manifest is not`
+        : `  the server's manifest is restricted, the repository block is not`,
     );
   }
 

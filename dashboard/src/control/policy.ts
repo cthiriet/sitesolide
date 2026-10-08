@@ -165,8 +165,8 @@ export function decideDoor(manifest: Manifest, scope: Scope, onMachine: boolean 
   if (portal && !isApp(manifest)) {
     return {
       refusal: scope.public
-        ? "a static site cannot sit behind the portal yet: it is behind it on the machine, ask the owner of the machine"
-        : "a static site cannot sit behind the portal yet, and your token may only deploy private sites: add a start command, or ask the owner of the machine to allow public sites",
+        ? "a static site cannot be restricted yet: it is restricted on the machine, ask the owner of the machine"
+        : "a static site cannot be restricted yet, and your token may only deploy restricted sites: add a start command, or ask the owner of the machine to allow public sites",
     };
   }
   return { portal };

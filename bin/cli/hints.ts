@@ -108,8 +108,8 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/try again in a moment/, LOCK_BUSY],
   [/is not a workstation lock holder line/, "unset CADDY_LOCK_HELD in this environment, then run the command again"],
   [/changed from the dashboard during this deploy/, "the server changed while deploy ran: run `sitesolide deploy` again"],
-  [/^portal of .* changed from the dashboard/, "run `sitesolide deploy` in the project's folder first, so that sitesolide.json follows the server, then run this command again"],
-  [/is behind the portal: turn it off from the dashboard first/, "ask the owner to turn the portal off in the dashboard's Access section, then run `sitesolide deploy` in this folder, then this command"],
+  [/^general access of .* changed from the dashboard/, "run `sitesolide deploy` in the project's folder first, so that sitesolide.json follows the server, then run this command again"],
+  [/is restricted: make it public from the dashboard's Access section first/, "ask the owner, or an Admin of the project, to make it public in the dashboard's Access section, then run `sitesolide deploy` in this folder, then this command"],
   [/^the portal is not ready/, "the portal has to be deployed before a site can sit behind it: ask the owner, or remove `portal` from sitesolide.json"],
   [/^interrupted by /, "the run was interrupted between two steps: run the same command again"],
 
@@ -123,7 +123,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   // --- after the push
   [/^install failed/, "read the `output` events just before this error: install runs as the project's account, in the walls `details` describe; run the command in the project folder to reproduce it, move a step that writes outside app/ into build, then deploy again"],
   [/^write refused/, "the server refused a write over SSH: check that the deployment account still has sudo, then run the same command again"],
-  [/should answer the portal's 401/, "the site is served in the clear although declared behind the portal: tell the owner at once, and deploy nothing else until it is fixed"],
+  [/should answer the portal's 401/, "the site answers anyone although sitesolide.json says Restricted: tell the owner at once, and deploy nothing else until it is fixed"],
   [/answered 404: nothing is served at the site's root/, "make / answer 200: an app without `routes` receives / and must answer it; with `routes`, or for a static site, put an index.html in publicDir (docs/manifest.md, under start); a redirect does not count either; then deploy again"],
   [/unreachable: /, "the deployment is installed but the address did not answer: read `sitesolide logs --json`, then `sitesolide status --json`, and fix the service before deploying again"],
   [/^unexpected response: /, "the service answers with an error after the deployment: read `sitesolide logs --json` to find why, fix the code, then deploy again"],
@@ -186,7 +186,7 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "too-many-changes": "too many changes of access this hour: wait, then run the same command again; never retry in a loop",
   "log-full": "the access log is full of recent changes, which are kept 180 days: tell the owner of the machine; nothing more can be changed until older ones age out",
   conflict: "the access registry is already made: there is nothing left to carry over",
-  "no-portal": "the project is not behind the portal: its general access is the dashboard's Access section",
+  "no-portal": "the project is not restricted: its general access is the dashboard's Access section",
   // --- a deployment that failed on the machine
   "install-failed": "run the install command from the message in the project folder, fix what it reports, then deploy again",
   "secret-missing": "ask the owner of the machine to create that file in the dashboard's Secrets section, then deploy again; never put secret values in the repository or in sitesolide.json",
@@ -202,7 +202,7 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "public-empty": "make the build produce the site in publicDir: an empty folder would wipe the live one",
   "portal-not-ready": "the portal has to be deployed first: tell the owner of the machine",
   "service-failed": "read `sitesolide logs --json` to see why the service did not start, fix the code, then deploy again",
-  "verify-failed": "a 404 means nothing answers at /: make it answer 200, from the app, which receives / unless the manifest has routes, or from an index.html in publicDir (docs/manifest.md, under start); otherwise read `sitesolide logs --json`; a site declared behind the portal that answers in the clear must be reported to the owner of the machine at once",
+  "verify-failed": "a 404 means nothing answers at /: make it answer 200, from the app, which receives / unless the manifest has routes, or from an index.html in publicDir (docs/manifest.md, under start); otherwise read `sitesolide logs --json`; a site declared Restricted that answers anyone must be reported to the owner of the machine at once",
   "machine-unreadable": "the machine could not be read, nothing was changed: deploy again in a minute, then tell the owner of the machine if it persists",
   // --- `machine`: a VM ordered from a cloud provider's API, see bin/cli/machine.ts
   "machine-usage": "run one of the commands `details` lists: sitesolide machine create, list or destroy, each with --provider",

@@ -243,7 +243,9 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
         const grant = options.access.passwordByHash(guestHash(submitted), host, now);
         if (grant !== null) {
           attempts.delete(host);
-          audit({ actor: grantActor(grant), action: "portal.signin", target: host, detail: { method: "password-access" } }, now);
+          // A name given before the registry is not an email: the activity shows it beside the access's identifier.
+          const actor = grantActor(grant);
+          audit({ actor, action: "portal.signin", target: host, detail: actor === grant.who ? { method: "password-access" } : { method: "password-access", name: grant.who } }, now);
           const expiration = grantExpiration(grant, nowS, options.cookieDurationS);
           return open(returnTo, issueToken(options.key, host, expiration, grant.id), expiration - nowS);
         }

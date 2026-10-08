@@ -185,7 +185,7 @@ describe("the door that deploy applies", () => {
       const decision = decidePortal("cms", local, { kind: "unreadable", reason: "not valid JSON" });
       expect(decision.kind).toBe("rejects");
       if (decision.kind !== "rejects") return;
-      expect(decision.message).toContain("cannot tell whether the portal of cms");
+      expect(decision.message).toContain("cannot tell whether the general access of cms");
       expect(decision.details.join("\n")).toContain("/srv/sites/cms/sitesolide.json: not valid JSON");
       expect(decision.details.join("\n")).toContain("nothing was sent");
     }
@@ -233,7 +233,7 @@ describe("the guard of the lock and the domain", () => {
       expect(agreement.kind).toBe("rejects");
       if (agreement.kind !== "rejects") return;
       expect(agreement.message).toBe(
-        "portal of vineyard changed from the dashboard: run `sitesolide deploy` in its folder first",
+        "general access of vineyard changed from the dashboard: run `sitesolide deploy` in its folder first",
       );
       expect(agreement.details.join("\n")).toContain("nothing was written");
     }
@@ -244,7 +244,7 @@ describe("the guard of the lock and the domain", () => {
     expect(agreement.kind).toBe("rejects");
     if (agreement.kind !== "rejects") return;
     expect(agreement.message).toBe(
-      "portal of vineyard changed from the dashboard: run `sitesolide deploy` in its folder first",
+      "general access of vineyard changed from the dashboard: run `sitesolide deploy` in its folder first",
     );
   });
 
@@ -254,8 +254,8 @@ describe("the guard of the lock and the domain", () => {
       const agreement = guardDepositedManifest("vineyard", local, present(true), "lock");
       expect(agreement.kind).toBe("rejects");
       if (agreement.kind !== "rejects") return;
-      expect(agreement.message).toBe("vineyard is behind the portal: turn it off from the dashboard first");
-      expect(agreement.details).toContain("a site behind the portal takes no preview lock");
+      expect(agreement.message).toBe("vineyard is restricted: make it public from the dashboard's Access section first");
+      expect(agreement.details).toContain("a restricted site takes no preview code");
       // The local manifest that still asks for the door will have to catch up.
       expect(agreement.details.some((line) => line.includes("sitesolide deploy"))).toBe(local);
     }
@@ -265,8 +265,8 @@ describe("the guard of the lock and the domain", () => {
     const agreement = guardDepositedManifest("vineyard", false, present(true), "domain");
     expect(agreement.kind).toBe("rejects");
     if (agreement.kind !== "rejects") return;
-    expect(agreement.message).toBe("vineyard is behind the portal: turn it off from the dashboard first");
-    expect(agreement.details).toContain("a site behind the portal cannot switch to its own domain yet");
+    expect(agreement.message).toBe("vineyard is restricted: make it public from the dashboard's Access section first");
+    expect(agreement.details).toContain("a restricted site cannot switch to its own domain yet");
   });
 
   test("an unreadable reading authorises no gesture", () => {
@@ -274,7 +274,7 @@ describe("the guard of the lock and the domain", () => {
       const agreement = guardDepositedManifest("vineyard", false, { kind: "unreadable", reason: "not valid JSON" }, action);
       expect(agreement.kind).toBe("rejects");
       if (agreement.kind !== "rejects") return;
-      expect(agreement.message).toContain("cannot tell whether the portal of vineyard");
+      expect(agreement.message).toContain("cannot tell whether the general access of vineyard");
     }
   });
 });
@@ -318,9 +318,9 @@ describe("the guard of deploy-caddy.sh", () => {
     expect(guard.kind).toBe("rejects");
     if (guard.kind !== "rejects") return;
     expect(guard.lines[0]).toBe(
-      "portal of cms changed from the dashboard: run `sitesolide deploy` in its folder first",
+      "general access of cms changed from the dashboard: run `sitesolide deploy` in its folder first",
     );
-    expect(guard.lines[1]).toContain("the repository block is behind the portal");
+    expect(guard.lines[1]).toContain("the repository block is restricted");
   });
 
   test("a block open in the repository, a site closed from the dashboard: refusal", () => {
@@ -330,9 +330,9 @@ describe("the guard of deploy-caddy.sh", () => {
     expect(guard.kind).toBe("rejects");
     if (guard.kind !== "rejects") return;
     expect(guard.lines[0]).toBe(
-      "portal of tool changed from the dashboard: run `sitesolide deploy` in its folder first",
+      "general access of tool changed from the dashboard: run `sitesolide deploy` in its folder first",
     );
-    expect(guard.lines[1]).toContain("the server's manifest is behind the portal");
+    expect(guard.lines[1]).toContain("the server's manifest is restricted");
   });
 
   test("every site in disagreement is named, not only the first one", () => {
@@ -344,8 +344,8 @@ describe("the guard of deploy-caddy.sh", () => {
     if (guard.kind !== "rejects") return;
     const refusals = guard.lines.filter((line) => !line.startsWith(" "));
     expect(refusals).toEqual([
-      "portal of cms changed from the dashboard: run `sitesolide deploy` in its folder first",
-      "portal of tool changed from the dashboard: run `sitesolide deploy` in its folder first",
+      "general access of cms changed from the dashboard: run `sitesolide deploy` in its folder first",
+      "general access of tool changed from the dashboard: run `sitesolide deploy` in its folder first",
     ]);
   });
 
@@ -410,7 +410,7 @@ describe("the door read again under the lock", () => {
     // site.
     expect(confirmDoorUnderLock("cms", false, { kind: "present", portal: true })).toMatchObject({
       kind: "rejects",
-      message: "portal of cms changed from the dashboard during this deploy: run `sitesolide deploy` again",
+      message: "general access of cms changed from the dashboard during this deploy: run `sitesolide deploy` again",
       details: ["this deploy was turning the portal off, the server now has it on", "neither the manifest nor the Caddy block was deposited"],
     });
     expect(confirmDoorUnderLock("cms", true, { kind: "present", portal: false }).kind).toBe("rejects");
@@ -419,7 +419,7 @@ describe("the door read again under the lock", () => {
   test("an unreadable reading authorises nothing", () => {
     expect(confirmDoorUnderLock("cms", true, { kind: "unreadable", reason: "cut" })).toMatchObject({
       kind: "rejects",
-      message: "cannot tell whether the portal of cms was changed from the dashboard",
+      message: "cannot tell whether the general access of cms was changed from the dashboard",
     });
   });
 });

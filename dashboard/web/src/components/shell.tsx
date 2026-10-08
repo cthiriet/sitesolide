@@ -52,6 +52,10 @@ function NotYours({ page }: { page: Page }) {
             <EmptyState icon={ShieldOff} title="Not part of your role">
               Your role on {page.slug} doesn't open this section. Ask an Admin of {page.slug}, or the owner, for another role.
             </EmptyState>
+          ) : page.name === "tokens" ? (
+            <EmptyState icon={ShieldOff} title="Tokens are for Developers and Admins">
+              You're a Viewer on every project.
+            </EmptyState>
           ) : (
             <EmptyState icon={ShieldOff} title="Only the owner's">
               This part of the dashboard is the owner's. You see the projects you have a role on, from Sites.

@@ -629,11 +629,11 @@ tries again. Guessing at who may do what is the one thing not to do.
 Everyone with a role above Can open on a project, Viewer, Developer or Admin,
 now opens its site when its general access is restricted: the role includes
 it. Before, the dashboard's roles and the portal's lists were separate, and
-a Developer of a site behind the portal needed to be on its list besides. Read the list
-of people with access of each restricted site after the upgrade
+a Developer of a restricted site needed to be on its list besides. Read the
+list of people with access of each restricted site after the upgrade
 (`sitesolide share` in its folder) if that matters for one of them.
 
-`X-Sitesolide-Role`, the header a site behind the portal reads, now carries
+`X-Sitesolide-Role`, the header a restricted site reads, now carries
 the role: `admin` for the owner's password and the admin emails, `visitor`,
 `viewer`, `developer` or `admin` for a company account, `visitor` for password
 access, which carries no `X-Sitesolide-User`. An app that compared it with
@@ -662,7 +662,7 @@ Refusals stay in the journal.
 
 ```bash
 sitesolide people                                   # everyone, their roles, who may create projects
-cd <a project behind the portal> && sitesolide share  # its people with access, no warning about the portal
+cd <a restricted project> && sitesolide share       # its people with access, no warning about the portal
 ssh you@your-machine 'sudo journalctl -u sitesolide-steward -n 50 | grep access:'
 ssh you@your-machine 'sudo curl -s http://127.0.0.1:3026/admin/access'   # {"reading":"steward",...} once the portal is deployed
 ```

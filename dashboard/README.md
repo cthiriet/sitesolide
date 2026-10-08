@@ -14,10 +14,6 @@ Someone with a role on a project signs in with their company account, and
 sees Sites and Activity reduced to their projects, and in a project the
 sections their role there opens: see [Access](#access).
 
-Bookmarks of the pages from before keep working: `/team/` opens *Tokens*,
-`/members/` *People*, and a site's `/site/sharing/`, `/site/guests/` and
-`/site/members/` its *Access*, the site kept (`web/src/lib/pages.ts`).
-
 **Few writes, and each one is a decision.** No button sets a preview lock. One
 machine serves every site, with no staging and no automatic recovery: what
 touches their shared configuration stays in the workstation's scripts, under the
@@ -226,8 +222,8 @@ In a site's *Secrets*: the state of its service and *Restart service*, what is
 wrong, then each of its files, with the expected owner and mode, and the states
 *Restart pending*, *Unmanaged*, *Missing* and *Write-only*. Then that site's
 activity. Changing site or section unmounts the rows, and with them any revealed
-value. **Without unlocking, no values.** After *Unlock* and retyping the
-password, for ten minutes:
+value. **Without unlocking, no values.** After *Unlock changes* and retyping
+the password, for ten minutes:
 
 - from a variables file, show a value for thirty seconds, copy it, set or remove
   a variable; *Generate* draws 32 bytes in base64url for a token the site issues
@@ -372,8 +368,8 @@ A compromised dashboard yields what the page already showed, plus what an
 unlocked session grants: reading and writing the secrets of every project, for
 ten minutes, among them the portal's sign-in settings, and giving people
 roles or password access. Without an unlock, it can give Can open to the
-company's people and domains, and take anyone's access away, through the
-steward, which records each under the owner's name (see the [threat model of access](#threat-model)). It never touches Caddy itself, the
+company's people and domains, restrict a site, and take anyone's access away,
+through the steward, which records each under the owner's name (see the [threat model of access](#threat-model)). It never touches Caddy itself, the
 gatekeeper refuses everything its own rules refuse, and restores. It cannot
 rewrite the hash that unlocks the secrets, which belongs to root.
 
@@ -445,20 +441,20 @@ registry keeps:
 | **Restricted** | the people with access, signed in by the portal in front of the site | the manifest's `portal` flag on, and its block's `forward_auth` |
 | **Anyone with the code** | whoever has the preview code | the preview lock, `sitesolide lock` |
 
-Public and restricted switch from a site's *Access*, under the unlock,
-through the steward and the gatekeeper: see [The portal, from the
-dashboard](#the-portal-from-the-dashboard). The code is set and removed with
+Public and restricted switch from a site's *Access*, through the steward and
+the gatekeeper, making a site public under the unlock, restricting it without
+one: see [The portal, from the dashboard](#the-portal-from-the-dashboard). The code is set and removed with
 `sitesolide lock` alone, from the project's folder, never from the page.
 
 **People with access** hold one rung of a ladder, each including the ones
-below:
+below it:
 
 | Role | On that project | Unlock |
 |---|---|---|
 | **Can open** (`visitor`) | opens the site when its general access is restricted, and sees nothing in the dashboard | none |
 | **Viewer** | also sees the project in the dashboard: its state, audience and activity | none |
 | **Developer** | also restarts its service; lists its secret files, names and metadata; sets, replaces and removes a variable, replaces a file read whole, creates a declared file, and never reads a value back; deploys it with a token of their own | to write, to mint a token |
-| **Admin** | everything of the project: what a Developer does, reads a value or a file back, restores a file's previous version, switches its general access between public and restricted, gives and takes away access to it, a role at most their own, lists and restores its backups; a token of theirs may also deploy it in the open, declare a domain and reach outside hosts | to read, write, restore, switch general access, give a role above Can open or password access, mint a token |
+| **Admin** | everything of the project: what a Developer does, reads a value or a file back, restores a file's previous version, switches its general access between public and restricted, gives and takes away access to it, a role at most their own, lists and restores its backups; a token of theirs may also deploy it in the open, declare a domain and reach outside hosts | to read, write, restore, make a site public, give a role above Can open or password access, mint a token |
 
 Who may hold which role is the steward's to decide, alone
 ([src/access/rules.ts](src/access/rules.ts)), on rules few and strict:
@@ -489,11 +485,15 @@ meaning: those addresses open every restricted site, as `admin`, and
 *People* shows them as such.
 
 **Who signs in to the dashboard**: someone with a role above Can open on a
-project, or the create right. Someone with Can open alone, or password access
-alone, opens sites and nothing more: the dashboard refuses their sign-in,
-saying they have no role on it. When someone's last role above Can open
-goes, removed or lowered, and they do not hold the create right, their
-dashboard sessions close and their tokens are revoked.
+project, or the create right. Someone with Can open alone, by name or through
+a domain, opens sites and nothing more: the steward refuses their sign-in with
+`can-open-only`, and the page says "You can open the sites shared with you.
+The dashboard is for Viewers and above: ask an Admin of the project if you
+need more." Someone on no list is refused with `no-role`: "This account has
+no access to any project here. Ask the owner, or an Admin of the project, to
+add you." When someone's last role above Can open goes, removed or lowered,
+and they do not hold the create right, their dashboard sessions close and
+their tokens are revoked.
 
 The table of powers is the steward's, [src/people/powers.ts](src/people/powers.ts),
 and the page reads it to offer what the steward will accept. Nothing in it
@@ -586,7 +586,7 @@ portal  -->  identity provider  -->  portal /oidc/callback   the portal's usual 
    |  303 to dashboard.<zone>/api/sso/complete?code=...
    v
 server.ts  --  POST /admin/dashboard/redeem  -->  portal: the code, for an assertion it signed
-   |  POST /members/signin { assertion }   on the steward's socket
+   |  POST /people/signin { assertion }    on the steward's socket
    v
 steward.js         root: the signature with its own public key, the audience, the expiry, the nonce
                    never seen, a role above Can open or the create right in access.json; the session drawn
@@ -637,7 +637,7 @@ them mint one, and in a project the sections their role there opens:
 
 | Role | Sections |
 |---|---|
-| Viewer | Overview, Audience, Access, read only: its general access, a note that only the project's Admins see the list, and what each role can do |
+| Viewer | Overview, Audience, Access, read only: its general access, its people with access, whom to ask to add someone, and what each role can do |
 | Developer | the same and Secrets, values write-only; *Restart* in the Overview's Service panel |
 | Admin | Overview, Audience, Secrets, Access, where they give people access, and Backups |
 
@@ -692,13 +692,13 @@ nobody out.
 
 ### A person's unlock
 
-Whatever reads or writes a secret, switches general access, restores data,
-gives a role above Can open or gives password access asks for the person's
-own unlock, the way the owner's asks for the password. A person has no password: they sign in
-again, made to by the provider.
+Whatever reads or writes a secret, makes a site public, restores data, gives
+a role above Can open or gives password access asks for the person's own
+unlock, the way the owner's asks for the password. A person has no password:
+they sign in again, made to by the provider.
 
 ```
-page, Unlock                                  the person's session open
+page, Unlock changes                          the person's session open
    |  GET /api/sso/begin?reauth=1&return=...   their session kept against the binding
    v
 server.ts  --  POST /admin/dashboard/flow { reauth: true }  -->  portal: a flow sealed with reauth
@@ -708,7 +708,7 @@ portal  -->  provider with prompt=login and max_age=0         never the portal's
    |  /oidc/callback: the ID token's auth_time read back, within this flow and five minutes
    v
 server.ts  --  POST /admin/dashboard/redeem  -->  portal: an assertion saying reauth
-   |  POST /members/unlock { session, assertion }   on the steward's socket
+   |  POST /people/unlock { session, assertion }    on the steward's socket
    v
 steward.js         root: the signature, reauth, auth_time five minutes old at most,
                    the email the session's, the nonce never seen; a token for that session
@@ -750,7 +750,7 @@ steward.js         root: the signature, reauth, auth_time five minutes old at mo
 
 The page asks the owner's routes, `/api/secrets/*`, `/api/backups`, whoever
 is signed in; for a person, src/people/relay.ts relays to the steward's
-`/members/*` routes with the session and the person's unlock token, and
+`/people/*` routes with the session and the person's unlock token, and
 src/people/actions.ts judges, in the order of the risk: the session, the
 person's unlock where the power needs one, the role on that project, the
 machine's own projects and files refused, then the operation, under the
@@ -765,9 +765,10 @@ carries.
   only, and a read is refused by role before any file is opened, the refusal
   journaled with their role.
 - **General access goes the owner's road.** An Admin switching their site
-  between public and restricted takes `/members/portal`, under their unlock,
-  the steward checking the role before it asks the gatekeeper, as it would
-  for the owner. The preview code stays `sitesolide lock`'s.
+  between public and restricted takes `/people/portal`, under their unlock to
+  make it public, without one to restrict it, the steward checking the role
+  before it asks the gatekeeper, as it would for the owner. The preview code
+  stays `sitesolide lock`'s.
 - **People with access are the access routes'**, `/access/person/*`, judged
   by src/access/rules.ts with the Admin as the one who gives: see
   [Granting, changing, removing](#granting-changing-removing).
@@ -792,7 +793,7 @@ page, Tokens, New token                      the person's session, unlocked
    |  POST /api/tokens { label, expiresAt, scope }
    v
 server.ts          src/people/relay.ts: origin, session, the person's unlock kept in memory
-   |  POST /team/member/tokens { session, token, label, expiresAt, scope }   on the steward's socket
+   |  POST /tokens/person/create { session, token, label, expiresAt, scope }   on the steward's socket
    v
 steward.js         src/control/steward.ts: the session and the unlock asked of the sign-in routes,
                    again in the registry's queue; the scope against the person's rights now;
@@ -826,7 +827,7 @@ steward.js         src/control/steward.ts: the session and the unlock asked of t
   included, so that a stolen one publishes nothing; a person's token answers
   to the person's role instead, and a Developer deploys a public project as
   it stands (src/control/policy.ts, `decideDoor`). What opens a site, a new
-  project in the open, paths exempted from the portal, takes `public`.
+  public project, paths open to anyone, takes `public`.
 - **What a person's token creates is theirs to administer.** At the start of
   a project's first deployment, before anything is written on the machine,
   the steward makes the person its Admin in `access.json`, in the registry's
@@ -840,17 +841,16 @@ steward.js         src/control/steward.ts: the session and the unlock asked of t
   journaled as `token.revoke` under the owner or the Admin who took their
   last role above Can open; and a token whose person the registry no longer
   lets sign in is refused anyway. Revoking one of their own needs no unlock;
-  the owner's *Tokens* page lists every token, a person's own marked, and
-  revokes any.
+  the owner's *Tokens* page lists every token and who made it, and revokes
+  any.
 
-The steward's routes for it, on the dashboard's socket, under `/team/`, a
-protocol name the *Tokens* page kept:
+The steward's routes for it, on the dashboard's socket:
 
 | Route | What it does |
 |---|---|
-| `POST /team/member/list` `{ session }` | the person's tokens, their roles and create right, the end of their unlock |
-| `POST /team/member/tokens` `{ session, token, label, expiresAt, scope }` | mints one, the person's unlock asked |
-| `POST /team/member/revoke` `{ session, id }` | revokes one of theirs; anyone else's reads as unknown |
+| `POST /tokens/person/list` `{ session }` | the person's tokens, their roles and create right, the end of their unlock |
+| `POST /tokens/person/create` `{ session, token, label, expiresAt, scope }` | mints one, the person's unlock asked |
+| `POST /tokens/person/revoke` `{ session, id }` | revokes one of theirs; anyone else's reads as unknown |
 
 ### Granting, changing, removing
 
@@ -871,8 +871,8 @@ from `portal.env` at each change:
   lowering never wait for an unlock.** Closing someone out never waits for
   a password, and the worst a compromised dashboard does with it is remove
   everyone, or open a site to people the company's own sign-in vouches for,
-  as the owner's session shared sites without an unlock before the
-  registry. Raising someone above Can open asks for the unlock, the same
+  as the owner's session opened sites to people without an unlock before
+  the registry. Raising someone above Can open asks for the unlock, the same
   ten minutes as creating a token: a Developer restarts services and writes
   secrets. So does **password access**, Can open as it is: it lets in
   someone from outside the company, whom no company account vouches for,
@@ -894,9 +894,10 @@ from `portal.env` at each change:
 - **The create right** goes only to someone who can sign in with their
   company account; giving it in the dashboard asks for the unlock, taking it
   back does not, and journals `people.create` either way.
-- **No email is sent**: the page and the command give the line to send,
-  `Open https://<slug>.<zone>/ and sign in with your <provider> account.`,
-  and a password once, to send yourself.
+- **No email is sent**: after giving someone access with an account, the page
+  and the command give the line to send, `Open https://<slug>.<zone>/ and
+  sign in with your <provider> account.`, and a password once, to send
+  yourself.
 - **Every change is journaled** by the steward, `access.add`,
   `access.change` or `access.remove`, under the owner, the Admin's email or
   `token:<id>`, with the project and "who: Role", the expiry for password
@@ -971,12 +972,12 @@ the owner's.
 
 | Threat | What stops it |
 |---|---|
-| A compromised dashboard | It cannot raise anyone above Can open, nor give the create right: the registry is root's, and that takes the owner's unlock or an Admin's, which takes a forced sign-in the portal signs. It cannot forge an assertion: the private key is the portal's alone. Every write and every secret read is judged by the steward on its own registry, by role, and it never reads a value a person's role does not reach. It acts for the people whose sessions pass through it while it is compromised, within their roles, and during a person's unlock within what that unlock opens, their projects' secrets for an Admin. Without any unlock it can give Can open to the company's people and domains, and remove anyone, as it could share sites and remove people before: only through the steward, under the owner's name or a session's, every change in the steward's journal. Password access, which lets someone from outside the company in, takes an unlock, as a role above Can open does. It sees a password access's password once, as it carries it to the page; never a hash nor an identifier, since the steward hands out views. It can no longer name a person or a token as the author of a change it made: the steward writes the actor it verified, and the portal records no change of access at all. It mints a person's token only during that person's unlock, within their roles, and every use of it is narrowed to their roles by the steward. During an owner's unlock it can do what an unlock allows, roles included, as it can already create a token. |
+| A compromised dashboard | It cannot raise anyone above Can open, nor give the create right: the registry is root's, and that takes the owner's unlock or an Admin's, which takes a forced sign-in the portal signs. It cannot forge an assertion: the private key is the portal's alone. Every write and every secret read is judged by the steward on its own registry, by role, and it never reads a value a person's role does not reach. It acts for the people whose sessions pass through it while it is compromised, within their roles, and during a person's unlock within what that unlock opens, their projects' secrets for an Admin. Without any unlock it can give Can open to the company's people and domains, restrict a site, and remove anyone, as it could open sites to them and remove people before: only through the steward, under the owner's name or a session's, every change in the steward's journal. Password access, which lets someone from outside the company in, takes an unlock, as a role above Can open does. It sees a password access's password once, as it carries it to the page; never a hash nor an identifier, since the steward hands out views. It can no longer name a person or a token as the author of a change it made: the steward writes the actor it verified, and the portal records no change of access at all. It mints a person's token only during that person's unlock, within their roles, and every use of it is narrowed to their roles by the steward. During an owner's unlock it can do what an unlock allows, roles included, as it can already create a token. |
 | A compromised portal | As before, it opens every restricted site, can sign an assertion for anyone, a forced sign-in's included, and act as anyone who signs in to the dashboard, within their roles, their unlock included. It cannot change the registry, root's, nor the projection, which root writes and it only reads: it gives nobody a role. It records no change of access any more, so it can no longer write one under anyone's name. |
 | A stolen token | Can open alone, on the projects it reaches, a person's own only where the person is Admin now, to the company's people and domains; never password access for someone outside them, never a role above Can open; it removes Can open entries alone. Every change is in the steward's journal under `token:<id>`. See [Access by token](#access-by-token). |
 | A stolen person's token | Within the person's roles at each request, not as minted: lowered, they narrow it; no longer signing in, it is revoked and refused. Revoked from the person's *Tokens* page or the owner's, no unlock. Every deployment under `token:<id>`, the person named. |
 | A person above their roles | The steward refuses the scope before the token exists, every reason journaled; and should the registry move after, it narrows the token at every use and the installer at its start. |
-| A stolen session cookie | Half a day at most, within that person's roles, and without their unlock, which needs a forced sign-in at the provider: what reads or writes a secret, switches general access, restores or raises someone above Can open stays closed. Removing them closes it at the next request. |
+| A stolen session cookie | Half a day at most, within that person's roles, and without their unlock, which needs a forced sign-in at the provider: what reads or writes a secret, makes a site public, restores or raises someone above Can open stays closed. Removing them closes it at the next request. |
 | A stolen unlock token | Useless alone: it is valid only with the session it was granted to, for its person, ten minutes, and the dashboard never sends it to a browser. |
 | A Developer reading a secret | Refused by the steward before any file is opened: the listing and every answer show names and metadata only, never a value, a size or a previous version. What they write still reaches the service, which may expose it: the role trusts them with the project's behaviour, not with reading its keys back. |
 | An Admin reaching further | One project, their own: the steward refuses another project, the platform's projects, the files it keeps for root, a password hash, a domain outside the company's, and a role above their own; a role they give lands on their project alone. |
@@ -1136,7 +1137,14 @@ server.ts          reads, merges, bounds; writes nothing
   and a range of days. Filters that rarely match can bring back a short page,
   or an empty one: a source read to the end of its budget before the page is
   full holds back the older rows of the others, so the order holds, and the
-  next page goes further.
+  next page goes further. *Access changes* is the action filter `access`;
+  the page's address may carry `actor`, `action`, `target` and `source`, as a
+  site's *See changes in Activity* link does.
+- **In words.** Each row reads as a sentence, "Gave dana@example.com
+  Developer on cms", "Restricted cms", "Signed in with the owner's password",
+  and names its actor: *Owner*, *The server*, *Someone*, `alice@example.com
+  (token)`, a password access by its name, `Example Accounting (password
+  access)` (web/src/lib/audit.ts).
 - **The exports**, CSV and JSON lines, are made in the browser from the rows
   already read, under the filters in force. A CSV field a spreadsheet would
   read as a formula starts with an apostrophe: an actor can be a stranger's
@@ -1215,20 +1223,25 @@ bin/deploy-steward.sh               # 2. optional: the backups' audit and the jo
 
 A site's *Access* section opens on its general access as the machine carries
 it, the three ways a site may open, the current one marked, a disagreement
-between the deployed manifest and the running block said first, in red; the
-site's Overview puts the two side by side in its *General access* panel. The
-owner and the project's Admins switch it between public and restricted when
-the steward accepts, *Make public* or *Restrict*: restricted is the portal
-turned on in front of the site, public the portal turned off, which retypes
-the slug to confirm. Anyone with the code, the preview lock, appears there
-too, read-only: it remains `sitesolide lock`'s business, and the page gives
-the commands, `sitesolide lock --new-code` and `sitesolide unlock` while a
-code is set. Who may open a restricted site is the steward's registry, not
-this switch: see [Access](#access).
+between the deployed manifest and the running block said first, in red, each
+side then marked *On the server* or *In sitesolide.json*, with *Keep* or
+*Apply*; the site's Overview puts the two side by side in its *General
+access* panel. The owner and the project's Admins switch it between public
+and restricted when the steward accepts, *Make public* or *Restrict*:
+restricted is the portal turned on in front of the site, without an unlock;
+public the portal turned off, under the unlock, which retypes the slug to
+confirm. The confirmation says it "Takes up to a minute. If anything fails,
+nothing changes.", and the result what the site now does, "wheels.example.com
+now asks visitors to sign in. The 13 other sites still answer.", then that the
+next `sitesolide deploy` writes it into `sitesolide.json`. Anyone with the
+code, the preview lock, appears there too, read-only: it remains `sitesolide
+lock`'s business, and the owner reads `sitesolide lock --new-code` and
+`sitesolide unlock` while a code is set. Who may open a restricted site is
+the steward's registry, not this switch: see [Access](#access).
 
 ```
 page, Access
-   |  /api/access/general, /api/secrets/portal : session, Origin, unlocked
+   |  /api/access/general, /api/secrets/portal : session, Origin, unlocked to make public
    v
 server.ts                  relays, with no rule; a person's request through src/people/relay.ts
    v
@@ -1387,8 +1400,8 @@ differ, both on purpose:
   [portal/README.md](../portal/README.md) gives for password access: 256 random
   bits leave nothing to guess, and a fast hash finds the token by lookup. The
   value is `sst_` and 43 characters of base64url.
-- **One per person**: a label, an email, an optional expiry, and a scope, all
-  off by default: existing slugs it may deploy; whether it may create projects,
+- **One per person**: whose it is, the owner's or a person's from *People*, a
+  label, an optional expiry, and a scope, all off by default: existing slugs it may deploy; whether it may create projects,
   deploy public sites, use outbound network (`network: outbound` or `egress`),
   declare a domain. The owner's belong to the owner; a person who signs in to
   the dashboard mints their own, narrowed to their roles at every use: see
@@ -1398,7 +1411,7 @@ differ, both on purpose:
   deployment that fails half way stays its creator's, and nobody else's.
   **Removed with `sitesolide remove`, its name is free again**: once the
   folder is gone, the command asks the steward's owner socket,
-  `DELETE /team/project { slug }`, which forgets the token's ownership only if
+  `DELETE /tokens/project { slug }`, which forgets the token's ownership only if
   the machine no longer carries the project, and journals `project.remove`
   under `owner`, the token in the detail. A removal stopped half way keeps
   the ownership, and running it again, which tolerates every absence,
@@ -1418,11 +1431,11 @@ earlier by the steward and the dashboard: see
 - **Reserved slugs**: `dashboard`, `portal`, `api`, `analytics`, `landing`,
   `www` and the landing's directory, whatever the scope; a slug another token
   created; an existing slug the token was not granted.
-- **Private by default**: a new project goes behind the portal unless the token
-  may deploy public sites and the manifest asks for it; an existing project
-  keeps the general access the machine carries. `portalExempt`, which opens paths, needs
-  the public permission; a static site cannot sit behind the portal yet, so a
-  private token cannot deploy one.
+- **Private by default**: a new project is restricted unless the token may
+  deploy public sites and the manifest asks for it; an existing project keeps
+  the general access the machine carries. `portalExempt`, which opens paths,
+  needs the public permission; a static site cannot be restricted yet, so a
+  token without it cannot deploy one.
 - **Secrets**: `<slug>.env` and no other name. The unit hands a declared file to
   the service through `EnvironmentFile=`, read as root: a manifest naming
   `dashboard.env` or another project's file would read it.
@@ -1542,7 +1555,7 @@ bin/deploy-installer.sh             # 3. the installer's code, its template, its
    `curl` now answers 401 `unauthenticated`, and a deployment answers
    `not-available` until the installer is there. The steward's script checks
    itself as before. Check, on the machine:
-   `sudo -u site-dashboard curl -s --unix-socket /run/sitesolide-steward/secretaire.sock http://steward/team/tokens`
+   `sudo -u site-dashboard curl -s --unix-socket /run/sitesolide-steward/secretaire.sock http://steward/tokens/list`
    answers `{"tokens":[]}`. Roll back: `bin/deploy-steward.sh` from the previous
    commit; `team.json` stays, unread, and the tokens come back with the steward.
 3. **The installer.** `bin/deploy-installer.sh` writes
@@ -1755,16 +1768,19 @@ before, and its portal signs people in: *Sign in with Google* on the sign-in
 page leads to a page of the bench's that signs in one of its people:
 alice@example.com, a Developer on `cms`, an Admin on `calendar` and a Viewer
 on `photos`; bruno@example.com, an Admin on `cms` and a Developer on
-`calendar`; chloe@example.com, a Viewer on `calendar`; maya@example.com, who
-may create projects; or stranger@example.com, whom the registry does not
-name. People and a domain can open `cms` and `calendar`, and five password
-accesses are carried over. `BENCH_NO_SSO=1` runs a portal with no provider,
-where everyone added gets password access.
+`calendar`; chloe@example.com, a Viewer on `calendar`; editor@example.com,
+Can open on `cms`, whose sign-in is refused `can-open-only`; or
+stranger@example.com, whom the registry does not name, refused `no-role`.
+maya@example.com may create projects. People and a domain can open `cms` and
+`calendar`, and five password accesses are carried over, the one on
+`library` expired. `BENCH_NO_SSO=1` runs a portal with no provider, where
+everyone added gets password access.
 The same page stands for the provider's forced sign-in when a person
 unlocks, and the bench's steward judges a person's secrets and general access
 by role before its own fake operations, and her own tokens on the *Tokens*
 page with the real rules of src/people/tokens.ts; the owner's *Tokens* page
-lists one of hers, marked.
+lists two of hers, made by her, `alice-ci` paused on `photos`, where she is a
+Viewer now.
 
 ## Tests
 

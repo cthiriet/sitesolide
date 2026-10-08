@@ -96,7 +96,7 @@ export function planPortal(
   // would refuse in the other direction. Taking away the door of a static site
   // that has none is not an error.
   if (isProtected(manifest) === active) {
-    return { kind: "nothing", message: active ? "already behind the portal" : "already open, no portal" };
+    return { kind: "nothing", message: active ? "already restricted" : "already public" };
   }
 
   const refusal = actionRefusal(manifest, active);

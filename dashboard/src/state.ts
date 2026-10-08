@@ -559,9 +559,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       discrepancies.push({
         slug,
         severity: "error",
-        message:
-          "Restricted in sitesolide.json but not in the live Caddy block: anyone can " +
-          "open the site. Redeploy with \"sitesolide deploy --force\" from its folder",
+        message: "Restricted in sitesolide.json, public on the server: anyone can open the site. Choose one in its Access section",
       });
     }
 
@@ -569,9 +567,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       discrepancies.push({
         slug,
         severity: "error",
-        message:
-          "Restricted in the live Caddy block although sitesolide.json no longer asks for it: " +
-          "the site stays restricted, and nobody knows which of the two is authoritative",
+        message: "Restricted on the server, public in sitesolide.json. Choose one in its Access section",
       });
     }
 

@@ -149,13 +149,16 @@ all it takes; read this first, for what changes for the sites and for you.
   Public, Restricted or Anyone with the code, then its people with access,
   each with a role, and *Add people*. At the machine level, *People*, the
   owner's, replaces *Members*: everyone across projects, their roles, who may
-  create projects, the domains; *Tokens* replaces *Team*, unchanged
-  otherwise. The old addresses, bookmarks included, lead to the new pages.
+  create projects, the domains; *Tokens* replaces *Team*, each token saying
+  who made it. The old addresses, bookmarks included, lead to the new pages.
 - **Password access waits for the unlock** when it is given from the
   dashboard, as a role above Can open does: the owner's password, or an
   Admin's forced sign-in, since it lets in someone from outside the company.
   Can open for a company account or a domain, lowering and removing still
-  never wait, and the owner's `sitesolide share` over SSH asks for nothing.
+  never wait, nor does restricting a site, and the owner's `sitesolide share`
+  over SSH asks for nothing.
+- **Someone who can only open sites is told so** when they try the dashboard,
+  `can-open-only`, apart from someone on no list, `no-role`.
 - **Activity** lists a change of general access as `access.general`, where it
   said `door.update`: a filter or an export that looked for the old name looks
   for the new one, or for `access.` to find every change of access. The rows
@@ -189,7 +192,7 @@ the portal's old tables, which nothing reads any more.
 
 ```bash
 sitesolide people
-cd <a project behind the portal> && sitesolide share
+cd <a restricted project> && sitesolide share
 ssh deploy@203.0.113.10 'sudo curl -s http://127.0.0.1:3026/admin/access'
 ```
 
@@ -253,7 +256,7 @@ person who owns the machine, in this order. Each step works without the next, so
 resume another day; each one says what to check and how to go back.
 
 This order was rehearsed on a test machine installed from 0.1 and serving the
-landing, a static site, an app, a site behind the portal and analytics, with a
+landing, a static site, an app, a restricted site and analytics, with a
 probe opening a fresh connection to every site every second throughout. No
 request failed because of the upgrade itself. Every Caddy reload, though,
 resets the connections that are being opened at that instant, for about a

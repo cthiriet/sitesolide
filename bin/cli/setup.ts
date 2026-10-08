@@ -1346,7 +1346,7 @@ export function showSecrets(deps: Pick<SetupDependencies, "secrets" | "output">)
   deps.output.secret([
     "",
     `  portal password   ${password}`,
-    "                    the shared password of the sites behind the portal",
+    "                    the owner's password at the sign-in of restricted sites",
     "                    store it now: it is shown this once, and changed from the dashboard",
     "",
   ]);

@@ -54,7 +54,7 @@ describe("unlocking", () => {
   test("the time left is counted in whole minutes", () => {
     expect(unlockStatus(NOW + 10 * MINUTE, NOW)).toMatchObject({
       open: true,
-      label: "Unlocked, 10 min left",
+      label: "Changes unlocked, 10 min left",
     })
     expect(unlockStatus(NOW + 10 * MINUTE - 1, NOW)).toMatchObject({ remainingText: "9 min left" })
     expect(unlockStatus(NOW + MINUTE, NOW)).toMatchObject({ remainingText: "1 min left" })
@@ -564,8 +564,8 @@ describe("log", () => {
   test("an unlock has no object", () => {
     const entry = logEntry({ operation: "unlock", slug: null, file: null, variable: null })
     expect(operationPlace(entry)).toEqual({ project: null, file: null })
-    expect(operationParts(entry)).toEqual({ verb: "Unlock", object: null, kind: null })
-    expect(operationParts({ ...entry, operation: "lock" })).toEqual({ verb: "Lock", object: null, kind: null })
+    expect(operationParts(entry)).toEqual({ verb: "Unlock changes", object: null, kind: null })
+    expect(operationParts({ ...entry, operation: "lock" })).toEqual({ verb: "Lock changes", object: null, kind: null })
   })
 
   test("an object the steward does not know is not invented", () => {

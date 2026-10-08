@@ -564,7 +564,7 @@ describe("the audit of sign-ins", () => {
     expect(JSON.stringify(audit.events)).not.toInclude(guestHash(ACCESS_PASSWORD));
   });
 
-  test("an access given under a name is named by its identifier, and so is one removed before its sign-out", async () => {
+  test("an access given under a name is named by its identifier, its name beside it, and so is one removed before its sign-out", async () => {
     const audit = memoryAudit();
     const access = accessFolder("routes-audit-name");
     access.write(projection({ [HOST]: site("kanban", { passwords: [grant({ id: "PaSsWoRdAcCeSs07", who: "Bob from the agency", hash: guestHash(ACCESS_PASSWORD) })] }) }));
@@ -579,9 +579,9 @@ describe("the audit of sign-ins", () => {
         headers: { "X-Portal-Hote": HOST, Origin: ORIGIN, Cookie: cookie },
       }),
     );
-    expect(audit.events.map(({ actor, action }) => ({ actor, action }))).toEqual([
-      { actor: "password:PaSsWoRdAcCeSs07", action: "portal.signin" },
-      { actor: "password:PaSsWoRdAcCeSs07", action: "portal.signout" },
+    expect(audit.events.map(({ actor, action, detail }) => ({ actor, action, detail }))).toEqual([
+      { actor: "password:PaSsWoRdAcCeSs07", action: "portal.signin", detail: { method: "password-access", name: "Bob from the agency" } },
+      { actor: "password:PaSsWoRdAcCeSs07", action: "portal.signout", detail: null },
     ]);
   });
 

@@ -5,9 +5,11 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem,
 import { AuditFilterBar, AuditLog, SourceStates } from "@/components/audit-log"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
+import { useNavigation } from "@/components/navigation"
 import { EmptyState, ErrorState, PageBody, PageHeader, Panel, RowsSkeleton } from "@/components/page"
 import {
   NO_FILTERS,
+  filtersFrom,
   auditQuery,
   countWords,
   exportName,
@@ -96,8 +98,10 @@ export function ActivityPage() {
   const { generation, snapshot, now, offset, sessionExpired } = useData()
   const announce = useAnnounce()
   const serverNow = now + offset
-  const [filters, setFilters] = useState<AuditFilters>(NO_FILTERS)
-  const [applied, setApplied] = useState<AuditFilters>(NO_FILTERS)
+  const { params } = useNavigation()
+  // A link from elsewhere, a site's Access section, opens the log narrowed.
+  const [filters, setFilters] = useState<AuditFilters>(() => filtersFrom(params))
+  const [applied, setApplied] = useState<AuditFilters>(() => filtersFrom(params))
   const [log, setLog] = useState<LogState>({ state: "loading" })
   // The strip at the top: every source as last read, kept while other filters
   // load, and for the sources a filter leaves out.

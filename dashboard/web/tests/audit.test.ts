@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import {
+  ACCESS_ACTION,
   NO_FILTERS,
   SOURCES,
+  accessOnly,
+  activityUrl,
   actorLabel,
   auditQuery,
   auditWords,
@@ -9,6 +12,7 @@ import {
   csvField,
   detailLines,
   exportName,
+  filtersFrom,
   hasFilters,
   isAuditResponse,
   keyWords,
@@ -126,16 +130,18 @@ describe("a row in words", () => {
   })
 
   test("the portal: sign-ins, refusals, sign-outs, and the changes of rows written before the access registry, in today's words", () => {
-    expect(auditWords(row({ detail: { method: "oidc", role: "developer" } })).summary).toBe("Signed in with a company account, as developer")
-    expect(auditWords(row({ detail: { method: "password", count: 4 } }))).toEqual({ summary: "Signed in with the shared password", note: "4 times", tone: "neutral" })
-    expect(auditWords(row({ actor: "eve@elsewhere.test", detail: { method: "password-access" } })).summary).toBe("Signed in with password access")
+    expect(auditWords(row({ detail: { method: "oidc", role: "developer" } })).summary).toBe("Opened cms as Developer")
+    // The portal's role before the registry, "member", says nothing of the ladder: dropped.
+    expect(auditWords(row({ detail: { method: "oidc", role: "member" } })).summary).toBe("Opened cms")
+    expect(auditWords(row({ detail: { method: "password", count: 4 } }))).toEqual({ summary: "Signed in with the owner's password", note: "4 times", tone: "neutral" })
+    expect(auditWords(row({ actor: "eve@elsewhere.test", detail: { method: "password-access" } })).summary).toBe("Opened cms")
     // A guest's sign-in, written before the access registry, reads the same.
-    expect(auditWords(row({ detail: { method: "guest" } })).summary).toBe("Signed in with password access")
-    expect(auditWords(row({ detail: { method: "something-new" } })).summary).toBe("Signed in")
+    expect(auditWords(row({ detail: { method: "guest" } })).summary).toBe("Opened cms")
+    expect(auditWords(row({ detail: { method: "something-new" } })).summary).toBe("Opened cms")
     expect(auditWords(row({ action: "portal.signin_failed", detail: { method: "oidc", reason: "not-shared" } }))).toEqual({ summary: "Sign-in refused", note: "no access to the site", tone: "attention" })
     expect(auditWords(row({ action: "portal.signin_failed", detail: { method: "password" } })).note).toBe("wrong password")
     expect(auditWords(row({ action: "portal.signin_failed", detail: { method: "oidc", reason: "constructor" } })).note).toBe("constructor")
-    expect(auditWords(row({ action: "portal.signout" })).summary).toBe("Signed out")
+    expect(auditWords(row({ action: "portal.signout" })).summary).toBe("Signed out of cms")
     expect(
       auditWords(row({ actor: "owner", action: "sharing.update", detail: { mode: "people", previousMode: "admins", peopleAdded: ["bob@test-zone.invalid"], peopleRemoved: [], domainsAdded: [], domainsRemoved: [] } })),
     ).toEqual({ summary: "Changed who can open it to specific people", note: "1 person added", tone: "neutral" })
@@ -166,39 +172,49 @@ describe("a row in words", () => {
   test("the steward: what was done, or tried, and how it ended", () => {
     const steward = (action: string, detail: Record<string, unknown>, target: string | null = "cms") => auditWords(row({ source: "steward", actor: "owner", action, target, detail }))
     expect(steward("secrets.set", { result: "ok", file: "cms.env", variable: "SMTP_PASSWORD" })).toEqual({ summary: "Set SMTP_PASSWORD", note: null, tone: "neutral" })
-    expect(steward("secrets.unlock", { result: "rejects", note: "wrong password" }, null)).toEqual({ summary: "Tried to unlock the secrets", note: "Refused: wrong password", tone: "attention" })
+    expect(steward("secrets.unlock", { result: "ok" }, null)).toEqual({ summary: "Unlocked changes", note: null, tone: "neutral" })
+    expect(steward("secrets.unlock", { result: "rejects", note: "wrong password" }, null)).toEqual({ summary: "Tried to unlock changes", note: "Refused: wrong password", tone: "attention" })
     expect(steward("secrets.replace", { result: "ok", file: "builder-secrets/registry" }).summary).toBe("Replaced builder-secrets/registry")
     expect(steward("service.restart", { result: "failure", note: "looping" })).toEqual({ summary: "Tried to restart", note: "Failed: crash loop", tone: "error" })
-    expect(steward("access.general", { result: "ok", note: "on, ok" })).toEqual({ summary: "Restricted it", note: null, tone: "neutral" })
-    expect(steward("access.general", { result: "failure", note: "off, failure" })).toEqual({ summary: "Tried to make it public", note: "Failed", tone: "error" })
+    expect(steward("access.general", { result: "ok", note: "on, ok" })).toEqual({ summary: "Restricted cms", note: null, tone: "neutral" })
+    expect(steward("access.general", { result: "failure", note: "off, failure" })).toEqual({ summary: "Tried to make cms public", note: "Failed", tone: "error" })
   })
 
   test("the steward's access registry: given, changed, taken away, carried over, and who may create projects", () => {
     const steward = (action: string, detail: Record<string, unknown>, actor = "owner") => auditWords(row({ source: "steward", actor, action, target: "kanban", site: "kanban", detail }))
-    expect(steward("access.add", { result: "ok", note: "alice@acme.test: Developer", member: "alice@acme.test" })).toEqual({ summary: "Gave access", note: "alice@acme.test: Developer", tone: "neutral" })
-    expect(steward("access.add", { result: "ok", note: "eve@elsewhere.test: Can open, password access until 2026-10-14" })).toMatchObject({ summary: "Gave access", note: expect.stringContaining("password access") })
-    expect(steward("access.add", { result: "rejects", note: "bob@acme.test may give at most Developer on kanban" }, "bob@acme.test")).toEqual({
-      summary: "Tried to give someone access",
+    expect(steward("access.add", { result: "ok", note: "alice@acme.test: Developer", member: "alice@acme.test" })).toEqual({ summary: "Gave alice@acme.test Developer on kanban", note: null, tone: "neutral" })
+    expect(steward("access.add", { result: "ok", note: "dana@acme.test: Can open", member: "dana@acme.test" }).summary).toBe("Let dana@acme.test open kanban")
+    expect(steward("access.add", { result: "ok", note: "@acme.test: Can open" }).summary).toBe("Let everyone at acme.test open kanban")
+    expect(steward("access.add", { result: "ok", note: "eve@elsewhere.test: Can open, password access until 2026-10-14 10:00 UTC" })).toEqual({
+      summary: "Gave eve@elsewhere.test password access to kanban",
+      note: "Until 2026-10-14 10:00 UTC",
+      tone: "neutral",
+    })
+    expect(steward("access.add", { result: "rejects", note: "bob@acme.test may give at most Developer on kanban", member: "eve@acme.test" }, "bob@acme.test")).toEqual({
+      summary: "Tried to give eve@acme.test access to kanban",
       note: "bob@acme.test may give at most Developer on kanban",
       tone: "attention",
     })
-    expect(steward("access.change", { result: "ok", note: "alice@acme.test: Developer -> Viewer" })).toEqual({ summary: "Changed someone's role", note: "alice@acme.test: Developer -> Viewer", tone: "neutral" })
-    expect(steward("access.remove", { result: "ok", note: "@acme.test: was Can open" }, "token:aaaaaaaaaaaa")).toEqual({ summary: "Took access away", note: "@acme.test: was Can open", tone: "neutral" })
-    expect(steward("access.remove", { result: "rejects", note: "a token removes Can open entries alone" }, "token:aaaaaaaaaaaa")).toMatchObject({ summary: "Tried to take someone's access away", tone: "attention" })
+    expect(steward("access.change", { result: "ok", note: "dana@acme.test: Developer -> Can open" })).toEqual({ summary: "Changed dana@acme.test from Developer to Can open on kanban", note: null, tone: "neutral" })
+    expect(steward("access.remove", { result: "ok", note: "@acme.test: was Can open" }, "token:aaaaaaaaaaaa")).toEqual({ summary: "Removed @acme.test from kanban", note: "Was Can open", tone: "neutral" })
+    expect(steward("access.remove", { result: "ok", note: "bob@acme.test: taken off everywhere, kanban: developer" })).toMatchObject({ summary: "Removed bob@acme.test from every project", note: "Was kanban: developer" })
+    expect(steward("access.remove", { result: "rejects", note: "a token removes Can open entries alone" }, "token:aaaaaaaaaaaa")).toMatchObject({ summary: "Tried to remove someone from kanban", tone: "attention" })
     expect(steward("access.migrate", { result: "ok", note: "4 entries, 1 password access" }, "system")).toEqual({
-      summary: "Carried the people with access over to the steward's registry",
+      summary: "Carried who has access over to one registry",
       note: "4 entries, 1 password access",
       tone: "neutral",
     })
-    expect(steward("people.create", { result: "ok", note: "carol@acme.test may create projects" })).toEqual({ summary: "Changed who may create projects", note: "carol@acme.test may create projects", tone: "neutral" })
+    expect(steward("people.create", { result: "ok", note: "carol@acme.test: may create projects" })).toEqual({ summary: "Let carol@acme.test create projects", note: null, tone: "neutral" })
+    expect(steward("people.create", { result: "ok", note: "carol@acme.test: may no longer create projects" }).summary).toBe("Took back carol@acme.test's right to create projects")
   })
 
   test("the dashboard's sign-ins with a company account, and the reason of a refusal", () => {
     const signin = (action: string, detail: Record<string, unknown> = { result: "ok" }) => auditWords(row({ source: "steward", actor: "alice@acme.test", action, target: null, site: null, detail }))
-    expect(signin("dashboard.signin", { result: "ok", note: "kanban: Developer" })).toEqual({ summary: "Signed in to the dashboard with a company account", note: null, tone: "neutral" })
+    expect(signin("dashboard.signin", { result: "ok", note: "kanban: Developer" })).toEqual({ summary: "Signed in to the dashboard", note: null, tone: "neutral" })
     expect(signin("dashboard.signout")).toEqual({ summary: "Signed out of the dashboard", note: null, tone: "neutral" })
-    expect(signin("dashboard.signin_failed", { result: "rejects", note: "not-a-member" })).toEqual({ summary: "Dashboard sign-in refused", note: "no role on the dashboard", tone: "attention" })
-    expect(signin("dashboard.signin_failed", { result: "rejects", note: "no-role" }).note).toBe("no role on the dashboard")
+    expect(signin("dashboard.signin_failed", { result: "rejects", note: "not-a-member" })).toEqual({ summary: "Dashboard sign-in refused", note: "no access to any project", tone: "attention" })
+    expect(signin("dashboard.signin_failed", { result: "rejects", note: "no-role" }).note).toBe("no access to any project")
+    expect(signin("dashboard.signin_failed", { result: "rejects", note: "can-open-only" }).note).toBe("Can open only: the dashboard starts at Viewer")
     expect(signin("dashboard.signin_failed", { result: "rejects", note: "replayed-assertion" }).note).toBe("sign-in already used")
     // A reason this page does not know is shown as it is, never a prototype's.
     expect(signin("dashboard.signin_failed", { result: "rejects", note: "constructor" }).note).toBe("constructor")
@@ -208,9 +224,26 @@ describe("a row in words", () => {
     expect(auditWords(row({ action: "monitor.alert" }))).toEqual({ summary: "monitor.alert", note: null, tone: "neutral" })
   })
 
-  test("a token says whose it is", () => {
-    expect(actorLabel(row({ actor: "token:abc", detail: { email: "ada@test-zone.invalid" } }))).toBe("ada@test-zone.invalid (token:abc)")
-    expect(actorLabel(row({ actor: "owner", detail: { email: "x@test-zone.invalid" } }))).toBe("owner")
+  test("who acted, by name: the owner, a token's person, a password access's name, the server", () => {
+    expect(actorLabel(row({ actor: "token:abc", detail: { email: "ada@test-zone.invalid" } }))).toBe("ada@test-zone.invalid (token)")
+    expect(actorLabel(row({ actor: "token:abc", detail: null }))).toBe("A token")
+    expect(actorLabel(row({ actor: "owner", detail: { email: "x@test-zone.invalid" } }))).toBe("Owner")
+    expect(actorLabel(row({ actor: "system" }))).toBe("The server")
+    expect(actorLabel(row({ actor: "anonymous" }))).toBe("Someone")
+    expect(actorLabel(row({ actor: "password:PaSsWoRdAcCeSs07", detail: { method: "password-access", name: "Example Accounting" } }))).toBe("Example Accounting (password access)")
+    expect(actorLabel(row({ actor: "guest:benchGuest000001", detail: { method: "guest" } }))).toBe("Someone with password access")
+    expect(actorLabel(row({ actor: "eve@elsewhere.test", detail: { method: "password-access" } }))).toBe("eve@elsewhere.test (password access)")
+    expect(actorLabel(row({ actor: "alice@acme.test", detail: { method: "oidc" } }))).toBe("alice@acme.test")
+  })
+
+  test("an address narrows the log: a site's Access links to its access changes", () => {
+    const params = new URLSearchParams("action=access&target=cms&source=steward&ignored=1")
+    expect(filtersFrom(params)).toEqual({ ...NO_FILTERS, source: "steward", action: "access", target: "cms" })
+    expect(filtersFrom(new URLSearchParams("source=nowhere"))).toEqual(NO_FILTERS)
+    expect(activityUrl({ action: "access", target: "cms" })).toBe("/activity/?action=access&target=cms")
+    expect(activityUrl({})).toBe("/activity/")
+    expect(accessOnly({ ...NO_FILTERS, action: ACCESS_ACTION })).toBe(true)
+    expect(accessOnly({ ...NO_FILTERS, action: "access.add" })).toBe(false)
   })
 })
 
@@ -225,7 +258,7 @@ describe("a person's own tokens, in words", () => {
   })
 
   test("a deployment by a person's token names the person as whose it is", () => {
-    expect(actorLabel(row({ actor: "token:abc", action: "deploy.start", detail: { email: "ada@acme.test", member: "ada@acme.test" } }))).toBe("ada@acme.test (token:abc)")
+    expect(actorLabel(row({ actor: "token:abc", action: "deploy.start", detail: { email: "ada@acme.test", member: "ada@acme.test" } }))).toBe("ada@acme.test (token)")
   })
 })
 

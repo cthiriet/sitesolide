@@ -94,6 +94,35 @@ export type AuditFilters = {
 
 export const NO_FILTERS: AuditFilters = { source: null, actor: "", action: "", target: "", from: "", to: "" }
 
+/** The action every access change starts with: someone given access, changed or taken off, a site restricted or made public. */
+export const ACCESS_ACTION = "access"
+
+/** Is the log narrowed to access changes, the filter the toolbar offers as a chip? */
+export function accessOnly(filters: AuditFilters): boolean {
+  return filters.action.trim().toLowerCase() === ACCESS_ACTION
+}
+
+/**
+ * The filters an address asks for, `/activity/?action=access&target=cms`
+ * from a site's Access section; anything else starts empty.
+ */
+export function filtersFrom(params: { get: (name: string) => string | null }): AuditFilters {
+  const value = (name: string) => (params.get(name) ?? "").slice(0, 200)
+  const source = SOURCES.find((entry) => entry.key === params.get("source"))?.key ?? null
+  return { ...NO_FILTERS, source, actor: value("actor"), action: value("action"), target: value("target") }
+}
+
+/** The Activity page's address, narrowed: what a link from elsewhere opens. */
+export function activityUrl(filters: Partial<Pick<AuditFilters, "action" | "target" | "actor">>): string {
+  const query = new URLSearchParams()
+  for (const key of ["actor", "action", "target"] as const) {
+    const value = filters[key]?.trim() ?? ""
+    if (value !== "") query.set(key, value)
+  }
+  const text = query.toString()
+  return `/activity/${text === "" ? "" : `?${text}`}`
+}
+
 export function hasFilters(filters: AuditFilters): boolean {
   return (
     filters.source !== null ||
@@ -236,8 +265,7 @@ function roleNote(note: string | null): string | null {
   if (note === null) return null
   if (note === "no role") return "Refused: no role on this project"
   const role = note.startsWith("role ") ? note.slice("role ".length) : null
-  const words: Readonly<Record<string, string>> = { visitor: "Can open", viewer: "Viewer", developer: "Developer", admin: "Admin" }
-  return role === null ? `Refused: ${note}` : `Refused: ${Object.hasOwn(words, role) ? words[role] : role} here`
+  return role === null ? `Refused: ${note}` : `Refused: ${Object.hasOwn(ROLE_WORDS, role) ? ROLE_WORDS[role] : role} here`
 }
 
 /** The steward's operation behind an action, for the words its own Activity always used. */
@@ -256,8 +284,8 @@ const STEWARD_OPERATIONS: Readonly<Record<string, StewardOperation>> = {
 }
 
 const DONE: Readonly<Record<StewardOperation, string>> = {
-  unlock: "Unlocked the secrets",
-  lock: "Locked the secrets",
+  unlock: "Unlocked changes",
+  lock: "Locked changes",
   read: "Read",
   set: "Set",
   remove: "Removed",
@@ -270,8 +298,8 @@ const DONE: Readonly<Record<StewardOperation, string>> = {
 }
 
 const TRIED: Readonly<Record<StewardOperation, string>> = {
-  unlock: "Tried to unlock the secrets",
-  lock: "Tried to lock the secrets",
+  unlock: "Tried to unlock changes",
+  lock: "Tried to lock changes",
   read: "Tried to read",
   set: "Tried to set",
   remove: "Tried to remove",
@@ -285,8 +313,9 @@ const TRIED: Readonly<Record<StewardOperation, string>> = {
 
 /** Why the steward refused a person's sign-in, in words. An unknown reason is shown as it is. */
 const MEMBER_REFUSALS: Readonly<Record<string, string>> = {
-  "not-a-member": "no role on the dashboard",
-  "no-role": "no role on the dashboard",
+  "not-a-member": "no access to any project",
+  "no-role": "no access to any project",
+  "can-open-only": "Can open only: the dashboard starts at Viewer",
   "replayed-assertion": "sign-in already used",
   "stale-authentication": "sign-in at the provider too old",
   "too-many-sign-ins": "too many sign-ins",
@@ -315,14 +344,77 @@ function stewardWords(row: AuditRow, operation: StewardOperation): AuditWords {
   if (operation === "portal") {
     // The journal writes the direction first: "on, ok" restricted the site, "off, failure" tried to make it public.
     const direction = entry.detail?.split(",")[0]?.trim()
+    const site = row.target ?? "it"
     const summary =
-      direction === "on" ? (ok ? "Restricted it" : "Tried to restrict it") : direction === "off" ? (ok ? "Made it public" : "Tried to make it public") : ok ? DONE.portal : TRIED.portal
+      direction === "on"
+        ? ok
+          ? `Restricted ${site}`
+          : `Tried to restrict ${site}`
+        : direction === "off"
+          ? ok
+            ? `Made ${site} public`
+            : `Tried to make ${site} public`
+          : ok
+            ? DONE.portal
+            : TRIED.portal
     return { summary, note: ok ? null : entry.result === "rejects" ? "Refused" : "Failed", tone }
   }
   const { object, kind } = operationParts(entry)
   // A site already shows in its own column.
   const named = object !== null && kind !== "project" ? ` ${object}` : ""
   return { summary: `${ok ? DONE[operation] : TRIED[operation]}${named}`, note: outcome.text, tone }
+}
+
+/** The ladder's roles as the page says them, `admin` included for an admin email's sign-in. */
+const ROLE_WORDS: Readonly<Record<string, string>> = { visitor: "Can open", viewer: "Viewer", developer: "Developer", admin: "Admin" }
+
+/**
+ * The steward's note on an access change, `dana@example.com: Developer ->
+ * Can open`: who it is about, and the rest. A note that does not read that
+ * way keeps the person the row names, and the note whole.
+ */
+function splitNote(note: string | null, member: string | null): { who: string; rest: string | null } {
+  if (note === null) return { who: member ?? "someone", rest: null }
+  const cut = note.indexOf(": ")
+  if (cut <= 0) return { who: member ?? "someone", rest: note }
+  return { who: note.slice(0, cut), rest: note.slice(cut + 2) }
+}
+
+/**
+ * Someone given access, changed or taken off, in a sentence that names them,
+ * their role and the site: "Gave dana@example.com Developer on cms",
+ * "Changed dana@example.com from Developer to Can open on cms".
+ */
+function accessWords(row: AuditRow): AuditWords {
+  const detail = row.detail ?? {}
+  const site = row.site ?? row.target ?? "a project"
+  const member = text(detail.member)
+  if (text(detail.result) === "rejects") {
+    const who = member ?? "someone"
+    const summary = row.action === "access.remove" ? `Tried to remove ${who} from ${site}` : `Tried to give ${who} access to ${site}`
+    return { summary, note: text(detail.note), tone: "attention" }
+  }
+  const { who, rest } = splitNote(text(detail.note), member)
+  if (row.action === "access.change") {
+    const roles = rest?.split(" -> ") ?? []
+    if (roles.length === 2) return { summary: `Changed ${who} from ${roles[0]} to ${roles[1]} on ${site}`, note: null, tone: "neutral" }
+    return { summary: `Changed the role of ${who} on ${site}`, note: rest, tone: "neutral" }
+  }
+  if (row.action === "access.remove") {
+    if (rest?.startsWith("taken off everywhere") === true) {
+      const was = rest.slice("taken off everywhere".length).replace(/^, /, "")
+      return { summary: `Removed ${who} from every project`, note: was === "" ? null : `Was ${was}`, tone: "neutral" }
+    }
+    const was = rest?.startsWith("was ") === true ? `Was ${rest.slice(4)}` : rest
+    return { summary: `Removed ${who} from ${site}`, note: was, tone: "neutral" }
+  }
+  if (rest?.startsWith("Can open, password access") === true) {
+    const until = rest.slice("Can open, password access".length).trim()
+    return { summary: `Gave ${who} password access to ${site}`, note: until === "" ? null : until.charAt(0).toUpperCase() + until.slice(1), tone: "neutral" }
+  }
+  if (who.startsWith("@")) return { summary: `Let everyone at ${who.slice(1)} open ${site}`, note: null, tone: "neutral" }
+  if (rest === "Can open") return { summary: `Let ${who} open ${site}`, note: null, tone: "neutral" }
+  return { summary: rest === null ? `Gave ${who} access to ${site}` : `Gave ${who} ${rest} on ${site}`, note: null, tone: "neutral" }
 }
 
 /**
@@ -340,19 +432,19 @@ export function auditWords(row: AuditRow): AuditWords {
 
   switch (row.action) {
     case "access.add":
-      if (text(detail.result) === "rejects") return { summary: "Tried to give someone access", note: text(detail.note), tone: "attention" }
-      return { summary: "Gave access", note: text(detail.note), tone: "neutral" }
     case "access.change":
-      return { summary: "Changed someone's role", note: text(detail.note), tone: "neutral" }
     case "access.remove":
-      if (text(detail.result) === "rejects") return { summary: "Tried to take someone's access away", note: text(detail.note), tone: "attention" }
-      return { summary: "Took access away", note: text(detail.note), tone: "neutral" }
+      return accessWords(row)
     case "access.migrate":
-      return { summary: "Carried the people with access over to the steward's registry", note: text(detail.note), tone: "neutral" }
-    case "people.create":
+      return { summary: "Carried who has access over to one registry", note: text(detail.note), tone: "neutral" }
+    case "people.create": {
+      const { who, rest } = splitNote(text(detail.note), member)
+      if (rest === "may create projects") return { summary: `Let ${who} create projects`, note: null, tone: "neutral" }
+      if (rest === "may no longer create projects") return { summary: `Took back ${who}'s right to create projects`, note: null, tone: "neutral" }
       return { summary: "Changed who may create projects", note: text(detail.note), tone: "neutral" }
+    }
     case "dashboard.signin":
-      return { summary: "Signed in to the dashboard with a company account", note: null, tone: "neutral" }
+      return { summary: "Signed in to the dashboard", note: null, tone: "neutral" }
     case "dashboard.signin_failed":
       return { summary: "Dashboard sign-in refused", note: word(MEMBER_REFUSALS, text(detail.note)), tone: "attention" }
     case "dashboard.signout":
@@ -402,24 +494,19 @@ export function auditWords(row: AuditRow): AuditWords {
 
     case "portal.signin": {
       const method = text(detail.method)
-      const how =
-        method === "password"
-          ? "with the shared password"
-          : method === "guest" || method === "password-access"
-            ? "with password access"
-            : method === "oidc"
-              ? "with a company account"
-              : null
+      const site = row.site ?? row.target ?? "a site"
+      if (method === "password") return { summary: "Signed in with the owner's password", note: times(count(detail.count)), tone: "neutral" }
+      // Who it was is the actor's column: a password access's name, or an email.
       const role = text(detail.role)
-      const summary = `Signed in${how === null ? "" : ` ${how}`}${role === null ? "" : `, as ${role}`}`
-      return { summary, note: times(count(detail.count)), tone: "neutral" }
+      const as = role !== null && Object.hasOwn(ROLE_WORDS, role) ? ` as ${ROLE_WORDS[role]}` : ""
+      return { summary: `Opened ${site}${as}`, note: times(count(detail.count)), tone: "neutral" }
     }
     case "portal.signin_failed": {
       const reason = word(SIGNIN_REFUSALS, text(detail.reason)) ?? (text(detail.method) === "password" ? "wrong password" : null)
       return { summary: "Sign-in refused", note: reason, tone: "attention" }
     }
     case "portal.signout":
-      return { summary: "Signed out", note: times(count(detail.count)), tone: "neutral" }
+      return { summary: `Signed out of ${row.site ?? row.target ?? "a site"}`, note: times(count(detail.count)), tone: "neutral" }
     case "sharing.update": {
       const mode = text(detail.mode)
       const previous = text(detail.previousMode)
@@ -471,10 +558,22 @@ export function auditWords(row: AuditRow): AuditWords {
   }
 }
 
-/** Who acted. A token says whose it is when the row knows: the person whose own token it is, or the holder's email. */
+/**
+ * Who acted, by name: the owner; a token's person when the row knows them;
+ * a password access by the name it was given under, which the portal writes
+ * beside its sign-ins; the server itself; someone not known yet.
+ */
 export function actorLabel(row: AuditRow): string {
   const email = text(row.detail?.member) ?? text(row.detail?.email)
-  if (row.actor.startsWith("token:") && email !== null) return `${email} (${row.actor})`
+  if (row.actor === "owner") return "Owner"
+  if (row.actor === "system") return "The server"
+  if (row.actor === "anonymous") return "Someone"
+  if (row.actor.startsWith("token:")) return email === null ? "A token" : `${email} (token)`
+  if (row.actor.startsWith("password:") || row.actor.startsWith("guest:")) {
+    const name = text(row.detail?.name)
+    return name === null ? "Someone with password access" : `${name} (password access)`
+  }
+  if (text(row.detail?.method) === "password-access") return `${row.actor} (password access)`
   return row.actor
 }
 

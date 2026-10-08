@@ -55,10 +55,10 @@ export function SecretsLockControl({ quiet = false }: { quiet?: boolean }) {
         variant={state.open || quiet ? "outline" : "default"}
         disabled={locking}
         onClick={state.open ? lock : unlock}
-        className="max-md:h-10 max-md:px-3.5"
+        className="max-md:h-10 max-md:px-3"
       >
         {state.open ? <Lock /> : <KeyRound />}
-        {state.open ? (locking ? "Locking…" : "Lock") : "Unlock"}
+        {state.open ? (locking ? "Locking…" : "Lock") : "Unlock changes"}
       </Button>
     </>
   )

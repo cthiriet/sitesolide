@@ -41,8 +41,8 @@
  *   `calendar` and a Viewer on `photos`, bruno@example.com an Admin on `cms`
  *   and a Developer on `calendar`, chloe@example.com a Viewer on
  *   `calendar`, maya@example.com may create projects; people and a domain
- *   can open `cms` and `calendar`, and five password accesses are carried
- *   over. *Sign in with Google* on the sign-in page goes through the fake
+ *   can open `cms` and `calendar`, editor@example.com can only open `cms`,
+ *   and five password accesses are carried over, one of them expired. *Sign in with Google* on the sign-in page goes through the fake
  *   portal's `/admin/dashboard/flow` to a page of its own that signs in one
  *   of them, or stranger@example.com, whom the registry does not name, then back with a
  *   code the fake portal redeems for an assertion signed with the steward's
@@ -1028,6 +1028,8 @@ const teamTokens: BenchToken[] = [
   { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com", createdAt: start - 90 * DAY, expiresAt: null, revokedAt: start - 20 * DAY, lastUsedAt: start - 21 * DAY, scope: { slugs: [], create: true, outbound: false, domain: false, public: false }, owned: ["mockups"], member: null, by: "owner" },
   // A person's own, minted from her Tokens page: a Developer on cms, an Admin on calendar.
   { id: "c0ffee123456", label: "Alice's agent", email: "alice@example.com", createdAt: start - 2 * DAY, expiresAt: start + 88 * DAY, revokedAt: null, lastUsedAt: start - 5 * HOUR, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: false }, owned: [], member: "alice@example.com", by: "alice@example.com" },
+  // Hers too, minted while she was a Developer on photos: a Viewer there now, it is paused on photos.
+  { id: "a11ce0c1ab12", label: "alice-ci", email: "alice@example.com", createdAt: start - 9 * DAY, expiresAt: null, revokedAt: null, lastUsedAt: start - 2 * DAY, scope: { slugs: ["cms", "photos"], create: false, outbound: false, domain: false, public: false }, owned: [], member: "alice@example.com", by: "alice@example.com" },
 ];
 
 // The control API's history, written by the service's own store in its data
@@ -1673,6 +1675,7 @@ const portalEvents = [
   }),
   portalEvent("owner", "sharing.update", "cms.example.com", { mode: "people", previousMode: "people", peopleAdded: ["editor@example.org"], peopleRemoved: [], domainsAdded: [], domainsRemoved: [] }, start - 2 * DAY),
   portalEvent("guest:benchGuest000001", "portal.signin", "cms.example.com", { method: "guest" }, start - 2 * HOUR),
+  portalEvent("password:benchGuest000002", "portal.signin", "calendar.example.com", { method: "password-access", name: "Example Accounting" }, start - 70 * MINUTE),
   portalEvent("owner", "portal.signin", "photos.example.com", { method: "password", count: 3 }, start - 90 * MINUTE),
   portalEvent("eve@elsewhere.example.net", "portal.signin_failed", "cms.example.com", { method: "oidc", reason: "not-shared" }, start - 50 * MINUTE),
   portalEvent("anonymous", "portal.signin_failed", "library.example.com", { method: "password" }, start - 30 * MINUTE),
@@ -1798,7 +1801,7 @@ const portal =
             if (!benchFlows.has(flow)) return new Response("unknown flow", { status: 400 });
             const choice = (email: string, label: string) => `<p><a href="/oidc/pick?flow=${flow}&email=${encodeURIComponent(email)}">Sign in as ${label}</a></p>`;
             return new Response(
-              `<!doctype html><meta charset="utf-8"><title>Bench provider</title><h1>Bench identity provider</h1>${choice("alice@example.com", "alice@example.com: Admin of calendar, Developer of cms, Viewer of photos")}${choice("bruno@example.com", "bruno@example.com: Admin of cms, Developer of calendar")}${choice("chloe@example.com", "chloe@example.com: Viewer of calendar")}${choice("stranger@example.com", "stranger@example.com, no role anywhere")}`,
+              `<!doctype html><meta charset="utf-8"><title>Bench provider</title><h1>Bench identity provider</h1>${choice("alice@example.com", "alice@example.com: Admin of calendar, Developer of cms, Viewer of photos")}${choice("bruno@example.com", "bruno@example.com: Admin of cms, Developer of calendar")}${choice("chloe@example.com", "chloe@example.com: Viewer of calendar")}${choice("editor@example.com", "editor@example.com: Can open on cms")}${choice("stranger@example.com", "stranger@example.com, no role anywhere")}`,
               { headers: { "Content-Type": "text/html; charset=utf-8" } },
             );
           },

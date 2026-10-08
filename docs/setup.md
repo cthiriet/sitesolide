@@ -154,9 +154,10 @@ not inherit it. Given on a later run and different from the one on the
 machine, it replaces it, and Caddy reads it at its next start.
 
 The dashboard's password is drawn by `bin/dashboard-password.sh` and shown once
-on standard error. The portal's is drawn on your workstation, its argon2id hash
-written to the machine, and the password shown once at the end of the run, on
-standard error, even when the run fails afterwards. Neither is ever drawn again
+on standard error. The portal's, the owner's password at the sign-in of
+restricted sites, is drawn on your workstation, its argon2id hash written to
+the machine, and the password shown once at the end of the run, on standard
+error, even when the run fails afterwards. Neither is ever drawn again
 by a later run, and neither appears in a `--json` event: both are changed from
 the dashboard.
 

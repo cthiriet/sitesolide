@@ -52,7 +52,7 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
   Entra, Okta or any OpenID Connect provider in front of private apps, opened
   to people or a whole domain, each with a role, from opening the site to
   looking after the project: `sitesolide share alice@example.com`. Someone
-  outside the company gets a password of their own. See
+  outside the company gets password access. See
   [portal/README.md](portal/README.md).
 - **Personal tokens instead of root SSH.** Colleagues and agents deploy with a
   personal, scoped, revocable token, never stronger than its holder's roles;

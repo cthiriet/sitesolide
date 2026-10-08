@@ -417,10 +417,10 @@ machine and never enters the repository.
 "portalExempt": ["/webhook/*"]
 ```
 
-`portal` puts the project behind the shared portal, which Caddy consults before
-every request: its general access is then Restricted. `portalExempt` lists the
-paths that go straight through, signed webhooks, mostly, which carry their own
-proof and have no cookie.
+`portal` makes the project's general access Restricted: Caddy asks the portal
+before every request. `portalExempt` lists the paths that stay open to anyone,
+guarded by the app alone: signed webhooks, mostly, which carry their own proof
+and have no cookie.
 
 **Who gets in** is not in the manifest: the owner's password, the admin emails,
 and the project's people with access, given from the dashboard's *Access*
@@ -437,7 +437,7 @@ sets on every request that went through the portal:
 
 The block takes any `X-Sitesolide-*` header the visitor sends off every request
 first, exempted paths included, and their underscore spellings, so a protected
-service can trust them. A service that is not behind the portal gets none: its
+service can trust them. A public service gets none: its
 block, and its customer domain's, take them off too, so it is never handed a
 stranger's `X-Sitesolide-Role: admin`. A site deployed before these headers
 existed, protected or not, keeps working, takes nothing off, and gains them at

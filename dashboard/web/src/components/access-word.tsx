@@ -7,6 +7,22 @@ import type { Site } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /**
+ * An email, or a `@domain`, that breaks right after its @ when the line is
+ * too narrow, rather than at any letter: `alice@` then `example.com`.
+ */
+export function Who({ value }: { value: string }) {
+  const at = value.indexOf("@")
+  if (at <= 0 || at === value.length - 1) return <>{value}</>
+  return (
+    <>
+      {value.slice(0, at + 1)}
+      <wbr />
+      {value.slice(at + 1)}
+    </>
+  )
+}
+
+/**
  * The preview code and its two actions: copy the link to send to the client, or
  * open it. The link carries the key as a parameter, which sets the cookie and
  * unlocks. `large` for the site card and for fingers: 36 px buttons.

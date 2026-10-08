@@ -588,7 +588,7 @@ describe("reading again just before writing", () => {
       },
     });
     const result = await s.spawn(true);
-    expect(result).toMatchObject({ result: "ok", message: "already behind the portal", requested: true, installed: true });
+    expect(result).toMatchObject({ result: "ok", message: "already restricted", requested: true, installed: true });
     for (const name of NOTHING) expect({ name, n: s.count(name) }).toEqual({ name, n: 0 });
   });
 

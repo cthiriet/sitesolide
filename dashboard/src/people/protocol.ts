@@ -111,11 +111,13 @@ export type MemberUnlockResponse = { token: string; expiresAt: number };
 /**
  * The steward's refusals for people, beside those of src/secrets/protocol.ts:
  * `signed-out` (401), the session is unknown, expired, or its person was
- * removed; `no-role` (403), the verified email holds no role above Can open
- * and may not create projects; `invalid-assertion` (401), the assertion fails
- * its checks; `not-ready` (503), the key pair is not in place yet.
+ * removed; `no-role` (403), no list names the verified email and it may not
+ * create projects; `can-open-only` (403), it may open sites, Can open on a
+ * list or through a domain, and nothing more; `invalid-assertion` (401), the
+ * assertion fails its checks; `not-ready` (503), the key pair is not in
+ * place yet.
  */
-export type MemberErrorCode = "signed-out" | "no-role" | "invalid-assertion" | "not-ready";
+export type MemberErrorCode = "signed-out" | "no-role" | "can-open-only" | "invalid-assertion" | "not-ready";
 
 export type MemberFailure = { error: string; message: string };
 

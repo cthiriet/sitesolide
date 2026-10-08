@@ -8,7 +8,7 @@
 | `infra/` | The Caddy configuration and the systemd units of the services that serve the others. |
 | `api/` | The shared service, deliberately tiny: the `ask` endpoint for on-demand TLS, and preview locks. |
 | `dashboard/` | The dashboard, the steward that writes secrets as root, and the gatekeeper that touches Caddy. |
-| `portal/` | The sign-in in front of restricted sites: the shared password, password access, company accounts. Who may open which site is the steward's, in `dashboard/`. |
+| `portal/` | The sign-in in front of restricted sites: the owner's password, password access, company accounts. Who may open which site is the steward's, in `dashboard/`. |
 | `analytics/` | Audience measurement: ingestion only, the numbers are read in the dashboard. |
 | `monitor/` | Every minute, Caddy, the sites over HTTPS, units, disk, certificates and backups, and the alerts when one goes down. |
 | `egress/` | The egress proxy: the hosts each project may reach, and the credentials it is lent. |

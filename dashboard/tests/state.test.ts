@@ -470,7 +470,7 @@ describe("the portal's door", () => {
     const snapshot = buildSnapshot(
       raw([folder("kanban", { ...RESTRICTED, portal: undefined })], { blocks: { kanban: WITH_DOOR } }),
     );
-    expect(messages(snapshot, "kanban")).toContainEqual(expect.stringContaining("no longer asks for it"));
+    expect(messages(snapshot, "kanban")).toContainEqual("Restricted on the server, public in sitesolide.json. Choose one in its Access section");
   });
 
   test("the exemptions are taken from the manifest, never guessed", () => {

@@ -54,7 +54,7 @@ const HOST = `kanban.${TEST_ZONE}`;
 const URL_ = `https://${HOST}/`;
 const DASHBOARD = `https://dashboard.${TEST_ZONE}`;
 const SEND = `Open ${URL_} and sign in with your Google account.`;
-const ALSO = "   also open it when restricted: the owner's password, and the admin emails (OIDC_ADMIN_EMAILS)";
+const ALSO = "   The owner also opens it.";
 const toClean: string[] = [];
 
 function folder(prefix: string): string {
@@ -190,7 +190,7 @@ describe("share with a token, through the API", () => {
     const result = await remote(project(), ["share"]);
     expect(result.code).toBe(0);
     expect(result.output).toContain(`-> access to kanban, ${URL_}, through ${base}`);
-    expect(result.output).toContain("   general access: Restricted: only the people with access open it");
+    expect(result.output).toContain("   general access: Restricted: visitors are asked to sign in.");
     expect(result.output).toContain("   people with access: nobody yet");
     // Nobody with an account yet: nothing to send.
     expect(result.output).not.toContain("send:");
@@ -349,12 +349,11 @@ describe("share and people as the owner, over SSH to the steward's owner socket"
     expect(read.code).toBe(0);
     expect(read.output.split("\n").filter((line) => line !== "")).toEqual([
       `-> access to kanban, ${URL_}, over SSH, as the owner`,
-      "   general access: Restricted: only the people with access open it",
+      "   general access: Restricted: visitors are asked to sign in.",
       "   people with access:",
       "     alice@acme.test  Developer",
       "     @acme.test       Can open",
       ALSO,
-      `   send: ${SEND}`,
     ]);
     expect(machine.logs()).toEqual(["ACCESS GET kanban"]);
   });
@@ -484,7 +483,7 @@ describe("share and people as the owner, over SSH to the steward's owner socket"
       "   alice@acme.test     blog: Viewer, kanban: Developer",
       "   carol@acme.test     no project; may create projects",
       "   eve@elsewhere.test  kanban: Can open, password access until 2026-10-04 04:00 UTC",
-      "   domains, Can open: kanban: @acme.test",
+      "   @acme.test          Can open: kanban",
       "   the company's domains: acme.test; anyone else gets password access",
     ]);
     expect(machine.logs()).toEqual(["PEOPLE GET"]);
@@ -677,18 +676,17 @@ describe("share, over a fake transport", () => {
     expect(out.said).toEqual([]);
   });
 
-  test("the list: the first line names the way it went, then the access, the line to send, and the result", async () => {
+  test("the list: the first line names the way it went, then the access, and the result; nothing to send when nothing changed", async () => {
     const { calls, transport } = fakeTransport(state({ entries: [entry("alice@acme.test", "admin")] }));
     const out = recorder();
     expect(await share(["share", "--json"], "kanban", transport, out.output)).toBe(0);
     expect(calls).toEqual(["list kanban"]);
     expect(out.said).toEqual([
       `-> access to kanban, ${URL_}, over a fake`,
-      "   general access: Restricted: only the people with access open it",
+      "   general access: Restricted: visitors are asked to sign in.",
       "   people with access:",
       "     alice@acme.test  Admin",
       ALSO,
-      `   send: ${SEND}`,
     ]);
     expect(out.results).toEqual([
       {
@@ -835,7 +833,7 @@ describe("people, over a fake transport", () => {
     expect(out.said).toEqual([
       `-> people of ${DASHBOARD}, over SSH, as the owner`,
       "   alice@acme.test  blog: Admin, shop: Developer",
-      "   root@acme.test   no project; admin email, opens every restricted site",
+      "   root@acme.test   no project; every site, as admin: set on the server in OIDC_ADMIN_EMAILS",
     ]);
     expect(out.results).toEqual([{ command: "people", fields: { people: listed.people, domains: [], signIn: listed.signIn, changed: false } }]);
   });
@@ -1085,19 +1083,23 @@ describe("the pure parts", () => {
   });
 
   test("the access in lines: each general access, a project not deployed, and Can open on a public site", () => {
-    expect(describeAccess(state())).toEqual(["   general access: Restricted: only the people with access open it", "   people with access: nobody yet", ALSO]);
+    expect(describeAccess(state())).toEqual(["   general access: Restricted: visitors are asked to sign in.", "   people with access: nobody yet", ALSO]);
     expect(describeAccess(state({ general: { access: "code", modifiable: false, reason: null } }))[0]).toBe(
-      "   general access: Anyone with the code: the preview code opens it, `sitesolide lock` sets it",
+      "   general access: Anyone with the code: the preview code opens it, set with sitesolide lock.",
+    );
+    // The admin emails set on the server, named once under the list, as the dashboard says it.
+    expect(describeAccess(state({ signIn: { configured: true, allowedDomains: ["acme.test"], admins: ["root@acme.test"] } })).at(-1)).toBe(
+      "   Also open it: the owner, and root@acme.test (an admin email set on the server; sites see them as admin).",
     );
     expect(describeAccess(state({ general: null }))[0]).toBe("   general access: not deployed: its people with access are kept, its site serves nothing");
     const open = describeAccess(state({ general: { access: "public", modifiable: true, reason: null }, entries: [entry("@acme.test"), entry("a-very-long-address@acme.test", "admin")] }));
     expect(open).toEqual([
-      "   general access: Public: anyone opens it",
+      "   general access: Public: anyone can open it.",
       "   people with access:",
       "     @acme.test                     Can open",
       "     a-very-long-address@acme.test  Admin",
       ALSO,
-      "   its general access is Public: Can open matters once it is Restricted, from the dashboard's Access section",
+      "   kanban is public, so anyone can open it. Viewer, Developer and Admin still apply; Can open matters once you restrict it.",
     ]);
     // Public with only roles above Can open: nothing to point out.
     expect(describeAccess(state({ general: { access: "public", modifiable: true, reason: null }, entries: [entry("a@acme.test", "viewer")] }))).toHaveLength(4);
@@ -1128,7 +1130,7 @@ describe("the pure parts", () => {
         }),
       ),
     ).toBe("blog: Can open, shop: Can open, password access with no expiry; may create projects");
-    expect(personText(person("root@acme.test", { admin: true, roles: { blog: "admin" } }))).toBe("blog: Admin; admin email, opens every restricted site");
+    expect(personText(person("root@acme.test", { admin: true, roles: { blog: "admin" } }))).toBe("blog: Admin; every site, as admin: set on the server in OIDC_ADMIN_EMAILS");
 
     const nobody: PeopleState = { people: [], domains: [], signIn: { configured: false, allowedDomains: [], admins: [] } };
     expect(describePeople(nobody)).toEqual([
@@ -1136,7 +1138,9 @@ describe("the pure parts", () => {
       "!! signing in with a company account is not set up on this machine: only password access opens a site, and nobody signs in to the dashboard but the owner (portal/README.md)",
     ]);
     const some: PeopleState = { people: [person("a@acme.test", { roles: { blog: "viewer" } })], domains: [{ slug: "blog", domain: "@acme.test" }], signIn: { configured: true, allowedDomains: [], admins: [] } };
-    expect(describePeople(some)).toEqual(["   a@acme.test  blog: Viewer", "   domains, Can open: blog: @acme.test"]);
+    expect(describePeople(some)).toEqual(["   a@acme.test  blog: Viewer", "   @acme.test   Can open: blog"]);
+    const domains: PeopleState = { ...some, domains: [{ slug: "shop", domain: "@acme.test" }, { slug: "blog", domain: "@acme.test" }, { slug: "blog", domain: "@beta.test" }] };
+    expect(describePeople(domains).slice(1)).toEqual(["   @acme.test   Can open: blog, shop", "   @beta.test   Can open: blog"]);
   });
 
   test("curl's answer: the body, then the status on its own line", () => {

@@ -1,5 +1,10 @@
 # People and tokens
 
+Each project has a general access, Public, Restricted or Anyone with the code,
+and a list of people with access, each with a role: Can open, Viewer,
+Developer or Admin. The owner can do everything; tokens let people and agents
+deploy, never beyond their person's roles.
+
 The owner of the machine deploys over SSH, as root. Nobody else needs that, and
 nobody else should have it. Two things let others work on the machine, and
 neither is root:
@@ -16,8 +21,7 @@ neither is root:
 In the dashboard, each of them has one place: a site's *Access* section for
 who may open that site and who may do what on it, the *People* page for
 everyone across projects, the owner's alone, and the *Tokens* page for the
-tokens. Their addresses of before, `/members/`, `/team/` and a site's
-`/site/sharing/`, `/site/guests/` and `/site/members/`, lead there.
+tokens.
 
 ## People with access, beside tokens
 
@@ -34,8 +38,8 @@ The two meet in one place: **a person mints tokens of their own**, from the
 *Tokens* page, never stronger than their roles. See [Your own
 tokens](#your-own-tokens).
 
-A person holds one role on each of their projects, each role including the
-ones above it in this table:
+A person holds one role on each of their projects. Can open is the lowest,
+Admin the highest, and each role includes the ones below it:
 
 | Role | On that project |
 |---|---|
@@ -55,9 +59,12 @@ expiry chosen then, 24 hours, 7 days (the default), 30 days or none
 
 **Who signs in to the dashboard**: someone with a role above Can open on at
 least one project, or the right to create projects, with their company
-account. Someone with Can open alone, or password access alone, opens sites
-and nothing more: the steward refuses their sign-in, "has no role on this
-dashboard".
+account. Someone with Can open alone, by name or through a domain, opens sites
+and nothing more: their sign-in is refused with `can-open-only`, "You can open
+the sites shared with you. The dashboard is for Viewers and above: ask an
+Admin of the project if you need more." Someone on no list is refused with
+`no-role`, "This account has no access to any project here. Ask the owner, or
+an Admin of the project, to add you."
 When their last role above Can open goes, removed or lowered, and they do not
 hold the right to create projects, their dashboard sessions close and their
 tokens are revoked at once.
@@ -70,10 +77,12 @@ are not Admin of.
 **The owner** is whoever holds the dashboard's password, the first account,
 made by `setup`, and may do everything, on every project and on the machine.
 Their *People* page lists everyone across projects, their roles, their
-password access, who may create projects, the admin emails and the domains;
+password access, who may create projects, the domains, and the admin emails,
+"Every site, as admin: set on the server in OIDC_ADMIN_EMAILS";
 `sitesolide people` prints the same from any folder
 ([commands.md](commands.md#people)). Taking someone off there takes them off
-every project.
+every project and revokes their tokens, which the confirmation lists;
+*Remove expired* clears every password access that has ended.
 
 **Creating projects is a right the owner grants per person**, beside their
 roles: from *People*, or `sitesolide people <email> --may-create`, taken back
@@ -100,35 +109,37 @@ in a project the sections their role opens:
 
 | Role | A project's sections |
 |---|---|
-| Viewer | Overview, Audience, and Access read only: its general access, and what their own role lets them do |
+| Viewer | Overview, Audience, and Access read only: its general access, its people with access, and whom to ask to add someone |
 | Developer | the same, and Secrets, whose values they write and never read back |
 | Admin | everything: Overview, Audience, Secrets, Access, where they give people access, and Backups |
 
 The rest of the dashboard is the owner's, hidden and refused: People,
 Connectors, and every project they hold no role on.
 
-**A site's Access section** reads like a "Share" dialog. First its general
-access, the three ways it may open, Public, Restricted or Anyone with the
-code, the current one marked; the owner and its Admins switch between Public
-and Restricted there, while a preview code stays `sitesolide lock`'s. Then
-its people with access: an *Add people* field taking an email or a
+**A site's Access section** reads like a "Share" dialog, in one column, with
+a link to its changes in Activity. First its general access, the three ways
+it may open, Public, Restricted or Anyone with the code, the current one
+marked; the owner and its Admins switch between Public and Restricted there,
+while a preview code stays `sitesolide lock`'s, from the project's folder.
+Then its people with access: an *Add people* field taking an email or a
 `@domain` and a role, which says before anything is sent whether the person
-signs in with their company account or gets password access; the owner's
-row, then every entry with its role, password access with its expiry, and
-the admin emails, which open every restricted site. Last, what each role can
-do, the reader's own marked. Only the owner and the project's Admins see the
-list; a Viewer or a Developer reads the general access and a note saying so.
+signs in with their company account or gets password access, and every entry
+with its role, password access with its expiry. One line under the list names
+who also opens the site without being on it: the owner, and the admin emails
+set on the server. *What each role can do* opens under the field, the
+reader's own marked. A Viewer or a Developer reads all of it without a
+control, and whom to ask to add someone.
 
 **Unlocking, for a person, is signing in again.** Whatever reads or writes a
-secret, switches general access, restores data, mints a token, gives someone
-a role above Can open, or gives password access asks for the person's own
-unlock: *Unlock* sends them to the identity provider, which asks them to
-prove themselves once more even if they are signed in there, and brings them
-back unlocked for ten minutes, for their session alone. The owner unlocks
-with the dashboard's password, as before; neither unlock replaces the other,
-nor another person's. Giving Can open to a company account or a domain,
-removing someone, lowering them and restarting a service never wait for an
-unlock.
+secret, makes a site public, restores data, mints a token, gives someone a
+role above Can open, or gives password access asks for the person's own
+unlock: *Unlock changes* sends them to the identity provider, which asks them
+to prove themselves once more even if they are signed in there, and brings
+them back unlocked for ten minutes, for their session alone. The owner
+unlocks with the dashboard's password; neither unlock replaces the other, nor
+another person's. Restricting a site, giving Can open to a company account or
+a domain, removing someone, lowering them and restarting a service never wait
+for an unlock.
 
 ## Your own tokens
 
@@ -152,7 +163,9 @@ A Viewer everywhere, without the create right, mints nothing, and sees no
   dialog offers the projects where they are Developer or Admin, creating
   projects only with the right, and the options only for projects they
   administer. The token carries their email, whatever is sent, and is shown
-  once, as the owner's are.
+  once, as the owner's are. Its row on *Tokens* names each project with
+  their role there today, "calendar (Admin)", or "cms (paused: Viewer now)"
+  where it no longer deploys.
 - **Narrowed live.** The steward reads the access registry at every use of the
   token, not only when it was minted: a role lowered to Viewer or Can open
   stops that project's deployments at the next request, the create right taken
@@ -163,15 +176,17 @@ A Viewer everywhere, without the create right, mints nothing, and sees no
 - **An existing project keeps its general access.** A deployed site is switched
   between Public and Restricted by its Admin or the owner, never by a
   deployment: a Developer's token deploys a public project as it stands, and
-  opens nothing. A new project goes behind the portal unless the token may
-  deploy public sites; exempting paths from the portal takes that option too.
+  opens nothing. A new project is restricted unless the token may deploy
+  public sites; leaving paths open to anyone (`portalExempt`) takes that
+  option too.
 - **Giving access**, `sitesolide share`, takes the person's own power: Can open
   alone, on a project where they are Admin now.
 - **When they no longer sign in to the dashboard, their tokens go with them**:
   revoked by the steward at once, under whoever removed or lowered them, and
   refused anyway, since the registry no longer gives them a role. Revoking one
   needs no unlock, from their *Tokens* page, or the owner's, which lists every
-  token, a person's own marked as such.
+  token and who made it, "Made by alice@example.com" or "Made by you for
+  alice@example.com".
 - **Ten live tokens per person**, so that one person cannot fill the
   machine's registry.
 
@@ -191,8 +206,7 @@ person in their detail.
 A token the owner creates deploys only what they allowed when creating it: the
 existing projects they granted, and, if they allowed it, new projects, which
 are then yours. Everything is **private by default**: a project you create
-sits behind the portal, its general access Restricted, unless your token may
-deploy public sites.
+is Restricted, unless your token may deploy public sites.
 
 ## Sign in
 
@@ -236,11 +250,11 @@ $ sitesolide deploy
 -> upload
 -> manifest, validated on the machine
    port 3002 chosen for the service
-   project notes, service, behind the portal
+   project notes, service, restricted
 -> the machine
 ...
 -> verify
-   https://notes.example.com/ 401, behind the portal: unknown visitors get the sign-in page
+   https://notes.example.com/ 401, restricted: visitors are asked to sign in
 -> deployed: https://notes.example.com/
 ```
 
@@ -270,7 +284,7 @@ it in `sitesolide.json` to make it explicit.
 | In the manifest | Refused unless | Why |
 |---|---|---|
 | no `portal`, or `portalExempt` | the token may deploy public sites | private by default |
-| a static site (no `start`) | the token may deploy public sites | a static site cannot sit behind the portal yet |
+| a static site (no `start`) | the token may deploy public sites | a static site cannot be restricted yet |
 | `"network": "outbound"` | the token may use outbound network | services reach only the loopback otherwise |
 | `egress` | the token may use outbound network | the hosts it lists are reached through the egress proxy, a way out all the same |
 | `domain` | the token may declare a domain | switching to it stays the owner's job |
@@ -309,7 +323,7 @@ instead, since `HOME` is gone afterwards.
 ## Status and logs
 
 ```bash
-sitesolide status          # the projects your token reaches, their service, and whether the portal guards them
+sitesolide status          # the projects your token reaches, their service, and their general access
 sitesolide logs            # the journal of this folder's project
 sitesolide logs --follow
 ```
@@ -323,14 +337,14 @@ command does not take with a token is refused the same way.
 
 ## Giving access to what you deployed
 
-A project you deploy with a token sits behind the portal, its general access
-Restricted, and opens to its people with access, the owner's password and the
-admin emails alone. Once the owner has set up signing in with a company
-account ([portal/README.md](../portal/README.md#signing-in-with-a-company-account)),
+A project you deploy with a token is Restricted, and opens to its people with
+access, the owner and the admin emails alone. Once the owner has set up
+signing in with a company account
+([portal/README.md](../portal/README.md#signing-in-with-a-company-account)),
 you give people Can open from its folder:
 
 ```bash
-sitesolide share                              # its general access, its people with access, the line to send
+sitesolide share                              # its general access and its people with access
 sitesolide share alice@acme.com bob@acme.com  # Can open for them
 sitesolide share @acme.com                    # everyone at acme.com, one of the company's domains
 sitesolide share --remove bob@acme.com        # refused from their next request
@@ -340,18 +354,19 @@ sitesolide share --remove bob@acme.com        # refused from their next request
 $ sitesolide share alice@acme.com
 -> access to notes, https://notes.example.com/, through https://dashboard.example.com
 -> alice@acme.com: Can open on notes
-   general access: Restricted: only the people with access open it
+   general access: Restricted: visitors are asked to sign in.
    people with access:
      alice@acme.com  Can open
      @acme.com       Can open
-   also open it when restricted: the owner's password, and the admin emails (OIDC_ADMIN_EMAILS)
+   Also open it: the owner, and owner@acme.com (an admin email set on the server; sites see them as admin).
    send: Open https://notes.example.com/ and sign in with your company account.
 ```
 
-The steward judges each change by the access rules, writes it, and records it
-in its journal under your token, `token:<id>`, never as the owner; the portal
-reads it from the next request. What a token may do is narrower than what an
-Admin or the owner may:
+The `send:` line comes only after a change that gives someone access with an
+account, never on a plain listing. The steward judges each change by the
+access rules, writes it, and records it in its journal under your token,
+`token:<id>`, never as the owner; the portal reads it from the next request.
+What a token may do is narrower than what an Admin or the owner may:
 
 | You may | You may not |
 |---|---|
@@ -363,7 +378,9 @@ Admin or the owner may:
 
 Giving access never touches Caddy, and a project not deployed yet is refused
 with `not-found`. A project whose general access is Public keeps its list, and
-the list matters once it is Restricted: the command says so.
+Can open matters once it is Restricted: the command says so, "notes is public,
+so anyone can open it. Viewer, Developer and Admin still apply; Can open
+matters once you restrict it."
 
 ## The API, for an agent without the CLI
 

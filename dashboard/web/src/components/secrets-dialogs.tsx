@@ -44,6 +44,10 @@ export type FocusReturn = () => HTMLElement | boolean
 
 // --- Unlocking -----------------------------------------------------------------
 
+/** What an unlock opens, and for how long: the same sentence for the owner's password and a person's provider. */
+const UNLOCK_SCOPE = (how: string) =>
+  `${how} to change secrets, general access, roles, password access, tokens and restores for 10 minutes.`
+
 /**
  * The dashboard password, typed a second time and checked by the steward, not
  * by the service. The field lives inside the dialog, which unmounts on closing:
@@ -76,11 +80,8 @@ export function UnlockDialog({
     >
       <DialogContent initialFocus={field} finalFocus={focusReturn} className={cn("sm:max-w-md", INPUT_DIALOG)}>
         <DialogHeader>
-          <DialogTitle>Unlock</DialogTitle>
-          <DialogDescription>
-            Enter the dashboard password again. For a few minutes you can then show and change secrets, give roles and
-            password access, and create tokens. It locks again on its own.
-          </DialogDescription>
+          <DialogTitle>Unlock changes</DialogTitle>
+          <DialogDescription>{UNLOCK_SCOPE("Enter the dashboard password again")}</DialogDescription>
         </DialogHeader>
         <UnlockForm
           field={field}
@@ -120,12 +121,8 @@ export function PersonUnlockDialog({
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent initialFocus={action} finalFocus={focusReturn} className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Unlock your projects</DialogTitle>
-          <DialogDescription>
-            Sign in again with {provider}: it asks you to prove it's you once more, even if you're signed in there, then
-            brings you back here, unlocked for ten minutes. Only your session is unlocked, and only for what your role
-            allows.
-          </DialogDescription>
+          <DialogTitle>Unlock changes</DialogTitle>
+          <DialogDescription>{UNLOCK_SCOPE(`Sign in again with ${provider}`)} Only what your roles allow.</DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>

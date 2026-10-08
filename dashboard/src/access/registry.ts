@@ -15,7 +15,7 @@
  * writing the file are system.ts's.
  */
 import { atLeast, encodeProjection, isAccessId, isRole, PROJECTION_VERSION, rank, readProjection, WHO_MAX, type PasswordGrant, type Projection, type Role, type SiteAccess } from "../../borrowed/access";
-import { cleanDomain, cleanEmail } from "../../borrowed/sharing";
+import { cleanDomain, cleanEmail, domainOf } from "../../borrowed/sharing";
 import { isValidSlug } from "../../borrowed/manifest";
 import { MAX_DASHBOARD_PEOPLE, MAX_ENTRIES, type EntryKind, type EntryView, type PersonView } from "./protocol";
 
@@ -252,6 +252,16 @@ export function dashboardRolesOf(registry: Registry, email: string): Record<stri
  */
 export function isDashboardPerson(registry: Registry, email: string): boolean {
   return mayCreate(registry, email) || Object.keys(dashboardRolesOf(registry, email)).length > 0;
+}
+
+/**
+ * Does this email open a restricted site without signing in to the
+ * dashboard: Can open on a project's list, or through a domain on one. The
+ * dashboard tells them apart from someone no list names at all.
+ */
+export function opensASite(registry: Registry, email: string): boolean {
+  const domain = `@${domainOf(email)}`;
+  return Object.values(registry.projects).some((entries) => entries.some((entry) => entry.who === email || entry.who === domain));
 }
 
 /**

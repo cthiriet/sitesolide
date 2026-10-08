@@ -84,7 +84,7 @@ export const INSTRUCTIONS = [
   "Workflow: call detect on a folder without sitesolide.json and show the user the manifest and its notes;",
   "call deploy with dry_run true and show what would happen; deploy for real only once the user agrees,",
   "then give them the url from the result. When a call fails, its error carries a hint: follow it.",
-  "Once a project behind the portal is deployed, share it with the people who need it: call share with",
+  "Once a restricted project is deployed, share it with the people who need it: call share with",
   "the addresses or the domain the user gave, never others, and give them the message from the result.",
   "Secrets never go in the repository nor in sitesolide.json: the user sets them in the dashboard's",
   "Secrets section, whose address a deploy stopped by a missing secret gives. Read logs when a service fails.",

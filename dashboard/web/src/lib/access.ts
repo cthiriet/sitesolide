@@ -36,9 +36,6 @@ export const ROLE_TEXTS: Readonly<Record<AccessRole, RoleText>> = {
   admin: { label: "Admin", can: "Also reads its secrets, changes its access and people, restores its backups.", yours: "you can do everything with the project" },
 }
 
-/** The one above every project, who is not on any list. */
-export const OWNER_TEXT: RoleText = { label: "Owner", can: "Everything, on every project and on the server.", yours: "you can do everything" }
-
 /** The ladder, from the lowest. */
 export const LADDER: readonly AccessRole[] = ROLES
 
@@ -103,7 +100,7 @@ export function generalState(site: Pick<Site, "portal" | "lock">): GeneralState 
             current: "public",
             problem: {
               title: "Restricted in sitesolide.json, public on the server",
-              detail: "The live Caddy block doesn't restrict the site: anyone can open it. Choose Restricted to apply it, or Public to agree with the server.",
+              detail: "Anyone can open it right now. Choose one below.",
               portal: true,
             },
             exemptions,
@@ -113,8 +110,8 @@ export function generalState(site: Pick<Site, "portal" | "lock">): GeneralState 
           return {
             current: "restricted",
             problem: {
-              title: "Restricted on the server, not in sitesolide.json",
-              detail: "The live Caddy block still restricts the site, but sitesolide.json no longer asks for it. Choose one to bring them together.",
+              title: "Restricted on the server, public in sitesolide.json",
+              detail: "Choose one below.",
               portal: true,
             },
             exemptions,
@@ -151,39 +148,67 @@ export type ChoiceOption = GeneralChoice & {
   current: boolean
   /** It may be chosen here, now. */
   available: boolean
-  /** Why it may not, when there is something to say: a command, or the steward's reason. */
-  reason: string | null
-  /** The command that does it instead, from the project's folder. */
-  command: string | null
+  /** What its button says when it may: Make public, Restrict; in a disagreement, Keep or Apply. */
+  action: string | null
+  /** In a disagreement between the server and sitesolide.json, which side this choice is. */
+  side: "On the server" | "In sitesolide.json" | null
 }
+
+/** What a choice's button says it will do, outside a disagreement. */
+const ACTIONS: Record<"public" | "restricted", string> = { public: "Make public", restricted: "Restrict" }
 
 /**
  * What each choice offers. Public and restricted change here, through the
  * steward, for those who may change general access; a preview code is
- * `sitesolide lock`'s, from the project's folder, and while it is set the
- * other two wait for `sitesolide unlock`. `steward` is null until the
- * steward has said whether the site may change.
+ * `sitesolide lock`'s, from the project's folder, said once under the
+ * choices (`generalNote`), and while it is set the other two wait for it to
+ * be removed. `steward` is null until the steward has said whether the site
+ * may change; its reason, when it refuses, is said once too.
  */
 export function generalOptions(
   state: GeneralState,
   steward: { modifiable: boolean; reason: string | null } | null,
   mayChange: boolean,
 ): ChoiceOption[] {
+  const disagreement = state.problem?.portal === true
   return GENERAL_CHOICES.map((choice) => {
     const current = choice.access === state.current
-    const base = { ...choice, current, available: false, reason: null, command: null }
-    if (!mayChange) return base
-    if (choice.access === "code") {
-      return current ? base : { ...base, reason: "Given from the project's folder:", command: "sitesolide lock" }
-    }
-    // The commands that replace or remove the code are listed once, under the choices.
-    if (state.current === "code") return { ...base, reason: "Remove the preview code first, from the project's folder." }
+    const side = !disagreement || choice.access === "code" ? null : current ? "On the server" : "In sitesolide.json"
+    const base: ChoiceOption = { ...choice, current, available: false, action: null, side }
+    if (!mayChange || choice.access === "code" || state.current === "code") return base
     // In disagreement, both sides may be chosen: either brings them together.
-    if (current && state.problem?.portal !== true) return base
-    if (steward === null) return base
-    if (!steward.modifiable) return { ...base, reason: steward.reason }
-    return { ...base, available: true }
+    if (current && !disagreement) return base
+    if (steward === null || !steward.modifiable) return base
+    const action = disagreement ? `${current ? "Keep" : "Apply"} ${choice.title}` : ACTIONS[choice.access as "public" | "restricted"]
+    return { ...base, available: true, action }
   })
+}
+
+/** Who reads General access: the owner, an Admin of the project, or someone who only reads it. */
+export type GeneralReader = "owner" | "admin" | "reader"
+
+/**
+ * The one line under the three choices about the preview code, said once
+ * rather than on a row: the owner sets it with the CLI; an Admin cannot.
+ * Null when there is nothing to say, for whoever only reads.
+ */
+export function generalNote(state: GeneralState, reader: GeneralReader): string | null {
+  if (reader === "reader") return null
+  if (state.current === "code") {
+    return reader === "owner" ? "Set and replaced with the sitesolide CLI, in the project's folder. Shown here to copy." : "Only the owner replaces or removes the preview code."
+  }
+  return reader === "owner" ? "A preview code is set with sitesolide lock, in the project's folder." : "Only the owner sets a preview code."
+}
+
+/**
+ * General access for someone who may not change it, in one line: how the
+ * site opens, and who changes it. A platform project says how it opens
+ * alone: nobody but the owner has any say on it.
+ */
+export function generalLine(state: GeneralState, slug: string, platform = false): string {
+  const choice = GENERAL_CHOICES.find((one) => one.access === state.current)!
+  const how = choice.access === "code" ? "the preview code opens it." : `${choice.sentence.charAt(0).toLowerCase()}${choice.sentence.slice(1)}`
+  return platform ? `${choice.title}: ${how}` : `${choice.title}: ${how} Only an Admin of ${slug}, or the owner, changes it.`
 }
 
 export type ChangeTexts = {
@@ -211,7 +236,7 @@ export function changeTexts(slug: string, target: "public" | "restricted"): Chan
   }
   return {
     title: `Make ${slug} public?`,
-    consequence: `Anyone with its address will open ${slug}, without signing in. The people with access keep their roles in the dashboard.`,
+    consequence: "People with access keep their dashboard roles; Can open and password access stop mattering.",
     action: "Make public",
     actionInProgress: "Making public…",
     runningTitle: `Making ${slug} public…`,
@@ -219,6 +244,39 @@ export function changeTexts(slug: string, target: "public" | "restricted"): Chan
     failure: `Couldn't make ${slug} public`,
   }
 }
+
+/** What the wait takes, said before it starts. */
+export const CHANGE_DURATION = "Takes up to a minute. If anything fails, nothing changes."
+
+/**
+ * Restricting a site nobody is on the list of: who will still open it. The
+ * owner always does, and the admin emails, set on the server.
+ */
+export function emptyListWarning(slug: string, entries: number, admins: readonly string[]): string | null {
+  if (entries > 0) return null
+  return `Nobody is on the list yet: after this, only the owner${admins.length > 0 ? " and the admin emails" : ""} can open ${slug}.`
+}
+
+/**
+ * The gatekeeper's verdict in plain words: what the site now does, and that
+ * the others still answer. Its own wording, `portal set: validated, reloaded,
+ * <host> answers the portal's 401, 13 other site(s) still answer`, is shown
+ * as it stands when it does not read that way.
+ */
+export function changeResult(target: "public" | "restricted", detail: string): string {
+  const host = /: validated, reloaded, (\S+) answers /.exec(detail)?.[1]
+  if (host === undefined) return detail
+  const lines = [target === "restricted" ? `${host} now asks visitors to sign in.` : `${host} now opens without signing in.`]
+  const others = Number(/(\d+) other site\(s\) still answer/.exec(detail)?.[1] ?? 0)
+  if (others === 1) lines.push("The other site still answers.")
+  if (others > 1) lines.push(`The ${others} other sites still answer.`)
+  const silent = /already not answering before: (.+)$/.exec(detail)?.[1]
+  if (silent !== undefined) lines.push(`Already not answering before: ${silent}.`)
+  return lines.join(" ")
+}
+
+/** After a change: the repository follows the machine at the next deploy. */
+export const DEPLOY_NOTE = "Your next sitesolide deploy writes this into sitesolide.json."
 
 /**
  * The slug retyped to make a site public, without the blanks of a
@@ -232,18 +290,6 @@ export function removalConfirmation(entry: string): string {
 export function confirmationValid(entry: string, slug: string): boolean {
   return removalConfirmation(entry) === slug
 }
-
-/**
- * What the gatekeeper does during the wait, in order. The page does not know
- * how far it has got, so it ticks nothing off: it states the steps and the
- * time elapsed.
- */
-export function gatekeeperSteps(slug: string): string[] {
-  return ["Validate the whole Caddy configuration", "Reload Caddy", `Check that ${slug} answers as it should`]
-}
-
-/** What is written by hand after a change: the repository has to follow the machine. */
-export const DEPLOY_COMMAND = "sitesolide deploy"
 
 /**
  * The track's scale: the longest answer the relay waits for from the steward,
@@ -334,12 +380,17 @@ export type Addition = {
   roles: AccessRole[]
   /** The line under the field. */
   hint: string
-  /** Why the roles beyond `roles` are not offered, when the viewer could give them otherwise. */
-  limit: string | null
+  /**
+   * Someone who opens the site already, without an entry of their own: a
+   * domain on the list covers them, or they are an admin email. Adding them
+   * as Can open changes nothing, which is said in place of the hint.
+   */
+  covered: string | null
 }
 
 function domainsText(signIn: SignIn): string {
-  return signIn.allowedDomains.join(", ")
+  const domains = signIn.allowedDomains
+  return domains.length <= 1 ? (domains[0] ?? "") : `${domains.slice(0, -1).join(", ")} or ${domains.at(-1)}`
 }
 
 /** The line under an empty field. */
@@ -354,14 +405,13 @@ export function emptyHint(signIn: SignIn): string {
  * `judgeGrant` from the page's side. Someone inside the company's domains
  * signs in with their company account and may hold any role the viewer may
  * give; someone outside gets password access and can only open the site; a
- * domain can only open it, and only the owner gives one outside the
- * company's domains.
+ * domain can only open the site, and only one of the company's.
  */
 export function planAddition(
   text: string,
   page: { entries: readonly EntryView[]; signIn: SignIn; grantable: readonly AccessRole[]; you: Viewer },
 ): Addition {
-  const none = { who: null, kind: null, password: false, roles: [], limit: null }
+  const none = { who: null, kind: null, password: false, roles: [], covered: null }
   const who = readWho(text)
   if (who.kind === "empty") return { ...none, state: "empty", hint: emptyHint(page.signIn) }
   if (who.kind === "invalid") return { ...none, state: "invalid", hint: who.message }
@@ -370,7 +420,6 @@ export function planAddition(
   if (existing !== null) {
     return { ...none, state: "existing", who: who.who, kind: who.kind, hint: `${who.who} is already on the list, as ${roleLabel(existing.role)}. Change it below.` }
   }
-  const higher = page.grantable.length > 1
 
   if (who.kind === "domain") {
     const base = { ...none, who: who.who, kind: "domain" as const }
@@ -383,41 +432,24 @@ export function planAddition(
       return {
         ...base,
         state: "blocked",
-        hint: `${who.domain} isn't one of the company's domains (${domainsText(page.signIn)}): nobody there could sign in. Add people by email.`,
+        hint: `Nobody at ${who.domain} can sign in here: only ${domainsText(page.signIn)} accounts can. Add people from ${who.domain} by email: they get password access.`,
       }
     }
-    return {
-      ...base,
-      state: "ready",
-      roles: ["visitor"],
-      hint: `Everyone with a company account at ${who.domain} can open the site.`,
-      limit: higher ? "A domain can only open the site: give people roles one by one." : null,
-    }
+    return { ...base, state: "ready", roles: ["visitor"], hint: `Everyone with a company account at ${who.domain} can open the site.` }
   }
 
   const base = { ...none, who: who.who, kind: "person" as const }
   if (signsInWithAccount(who.email, page.signIn)) {
-    const top = page.grantable[page.grantable.length - 1]
-    const capped = top !== undefined && top !== "admin" && page.you.kind !== "owner"
-    return {
-      ...base,
-      state: "ready",
-      roles: [...page.grantable],
-      hint: `${who.email} signs in with their company account.`,
-      limit: capped ? `You can give at most ${roleLabel(top)}, your own role.` : null,
-    }
+    const domain = `@${domainOf(who.email)}`
+    const covered = page.signIn.admins.includes(who.email)
+      ? `${who.email} already opens every site, as admin: it's set on the server.`
+      : page.entries.some((entry) => entry.who === domain)
+        ? `Already covered by ${domain}.`
+        : null
+    return { ...base, state: "ready", roles: [...page.grantable], hint: `${who.email} signs in with their company account.`, covered }
   }
-  const why = page.signIn.configured
-    ? `${domainOf(who.email)} isn't one of the company's domains (${domainsText(page.signIn)})`
-    : "Company sign-in isn't set up here"
-  return {
-    ...base,
-    state: "ready",
-    password: true,
-    roles: ["visitor"],
-    hint: `${why}: ${who.email} gets password access, to open the site only. The password is shown once, after adding.`,
-    limit: higher ? "Password access can only open the site." : null,
-  }
+  const why = page.signIn.configured ? `${domainOf(who.email)} isn't one of the company's domains` : "Company sign-in isn't set up here"
+  return { ...base, state: "ready", password: true, roles: ["visitor"], hint: `${why}: they get password access, to open the site only.` }
 }
 
 /** Does this change wait for the unlock? A role above Can open, or a password drawn: the steward's rule. */
@@ -428,6 +460,11 @@ export function needsUnlock(role: AccessRole, password: boolean): boolean {
 /** Does changing someone from one role to another wait for the unlock? Raising above Can open does; lowering never. */
 export function raiseNeedsUnlock(from: AccessRole, to: AccessRole): boolean {
   return rank(to) > rank(from) && needsUnlock(to, false)
+}
+
+/** Is going from one role to the other a step down the ladder? */
+export function lowers(from: AccessRole, to: AccessRole): boolean {
+  return rank(to) < rank(from)
 }
 
 /** Who gave an entry, in the quiet words of its row. */
@@ -453,46 +490,121 @@ export function passwordExpiry(password: NonNullable<EntryView["password"]>, now
 
 export type EntryRow = {
   entry: EntryView
-  /** What this entry is, under its name: a domain's people, a password and its expiry. */
+  /** What this entry is, under its name: a domain's people, a password and its expiry, why someone can't sign in. */
   what: string | null
   whatTone: Tone | null
-  /** Who gave it, and when: quiet. */
-  added: string
+  /** Who gave it, and when: quiet. Null for what was carried over, whose giver was not kept. */
+  added: string | null
   /** The roles its menu offers, or null when it is shown as a word only. */
   roles: AccessRole[] | null
+  /** The word in the role column when there is no menu: the role, or Expired. */
+  word: string
+  /** The word is greyed: a password access that ended, someone who can't sign in. */
+  muted: boolean
   removable: boolean
   /** The person signed in, on their own row. */
   self: boolean
 }
 
+/** Why someone named on the list can't sign in, or null when they can. */
+function signInProblem(email: string, signIn: SignIn): string | null {
+  if (!signIn.configured) return "Can't sign in until company sign-in is set up."
+  if (signsInWithAccount(email, signIn)) return null
+  return `Can't sign in: ${domainOf(email)} isn't one of the company's domains.`
+}
+
 /**
  * How an entry reads, and what the viewer may do with it: change its role
  * among those they may give and it may hold, remove it if they could have
- * given its role. Lowering and removing never wait for an unlock.
+ * given its role. Lowering and removing never wait for an unlock. Someone
+ * who may manage nothing reads every row as words.
  */
 export function entryRow(entry: EntryView, page: { signIn: SignIn; grantable: readonly AccessRole[]; you: Viewer }, now: number): EntryRow {
   const top = page.grantable[page.grantable.length - 1]
   const reach = top === undefined ? -1 : rank(top)
   const manageable = rank(entry.role) <= reach
-  // Carried over from before the registry: who gave it was not kept.
-  const added = entry.by === "migration" ? `Added ${ago(now - entry.createdAt)}` : `Added by ${byText(entry.by, page.you)}, ${ago(now - entry.createdAt)}`
+  const added = entry.by === "migration" ? null : `Added by ${byText(entry.by, page.you)}, ${ago(now - entry.createdAt)}`
   const self = page.you.kind === "person" && entry.who === page.you.email
+  const base = { entry, whatTone: null, added, roles: null, word: roleLabel(entry.role), muted: false, removable: manageable, self }
   if (entry.kind === "domain") {
-    return { entry, what: `Everyone with a company account at ${entry.who.slice(1)}`, whatTone: null, added, roles: null, removable: manageable, self }
+    // Nobody at a domain signs in without company sign-in: the entry waits, greyed.
+    if (!page.signIn.configured) return { ...base, what: "Can't sign in until company sign-in is set up.", muted: true }
+    return { ...base, what: `Everyone with a company account at ${entry.who.slice(1)}` }
   }
   if (entry.kind === "password" || entry.password !== null) {
-    const expiry = entry.password === null ? null : passwordExpiry(entry.password, now)
-    return { entry, what: expiry === null ? "Password access" : `Password access, ${expiry.text}`, whatTone: expiry?.tone ?? null, added, roles: null, removable: manageable, self }
+    if (entry.password === null) return { ...base, what: "Password access" }
+    const expiry = passwordExpiry(entry.password, now)
+    const expired = isExpired(entry, now)
+    return { ...base, what: `Password access, ${expiry.text}`, whatTone: expiry.tone, word: expired ? "Expired" : base.word, muted: expired }
   }
-  const account = signsInWithAccount(entry.who, page.signIn)
-  const roles = manageable && account && page.grantable.length > 1 ? [...page.grantable] : null
-  return { entry, what: account ? null : "Can only open the site: not a company account", whatTone: null, added, roles, removable: manageable, self }
+  const problem = signInProblem(entry.who, page.signIn)
+  if (problem !== null) return { ...base, what: problem, muted: true }
+  return { ...base, what: null, roles: manageable && page.grantable.length > 1 ? [...page.grantable] : null }
 }
 
-/** The list in reading order: the higher roles first, then people, domains, password access, then by name. */
-export function sortEntries(entries: readonly EntryView[]): EntryView[] {
+/** A password access whose end has passed: it opens nothing, and its row says so. */
+export function isExpired(entry: Pick<EntryView, "password">, now: number): boolean {
+  return entry.password !== null && (entry.password.expired || (entry.password.expiresAt !== null && entry.password.expiresAt <= now))
+}
+
+/** The list in reading order: the higher roles first, then people, domains, password access, then by name; what expired last. */
+export function sortEntries(entries: readonly EntryView[], now: number): EntryView[] {
   const kinds = { person: 0, domain: 1, password: 2 }
-  return [...entries].sort((a, b) => rank(b.role) - rank(a.role) || kinds[a.kind] - kinds[b.kind] || a.who.localeCompare(b.who, "en"))
+  const ended = (entry: EntryView) => (isExpired(entry, now) ? 1 : 0)
+  return [...entries].sort((a, b) => ended(a) - ended(b) || rank(b.role) - rank(a.role) || kinds[a.kind] - kinds[b.kind] || a.who.localeCompare(b.who, "en"))
+}
+
+/**
+ * Who opens the site without being on its list, said once under it: the
+ * owner, and the admin emails set on the server.
+ */
+export function alsoOpens(admins: readonly string[]): string {
+  if (admins.length === 0) return "The owner also opens it."
+  return `Also open it: the owner, and ${admins.join(", ")} (${admins.length > 1 ? "admin emails" : "an admin email"} set on the server; sites see them as admin).`
+}
+
+/** For someone who may not add people: whom to ask, by name. */
+export function askAnAdmin(entries: readonly EntryView[]): string {
+  const admins = entries.filter((entry) => entry.kind === "person" && entry.role === "admin").map((entry) => entry.who)
+  return admins.length === 0 ? "To add someone, ask the owner." : `To add someone, ask an Admin: ${admins.join(", ")}.`
+}
+
+/** What someone has now, in one sentence: "dana@example.com can now open cms.", "dana@example.com is now Viewer on cms." */
+export function grantSentence(who: string, role: AccessRole, slug: string): string {
+  return role === "visitor" ? `${who} can now open ${slug}.` : `${who} is now ${roleLabel(role)} on ${slug}.`
+}
+
+/** An Admin lowering or removing themselves: what they give up, said before it is done. */
+export function selfChangeWarning(slug: string): string {
+  return `You'll no longer manage ${slug}. Only another Admin or the owner can give it back.`
+}
+
+/** The people with access in a few words, for the Overview: "6 people and 1 domain have access". */
+export function accessSummary(entries: readonly EntryView[]): string {
+  const domains = entries.filter((entry) => entry.kind === "domain").length
+  const people = entries.length - domains
+  if (people + domains === 0) return "Nobody is on the list yet"
+  const parts = [people > 0 ? `${people} ${people === 1 ? "person" : "people"}` : null, domains > 0 ? `${domains} ${domains === 1 ? "domain" : "domains"}` : null].filter(
+    (part): part is string => part !== null,
+  )
+  return `${parts.join(" and ")} ${people + domains === 1 ? "has" : "have"} access`
+}
+
+/**
+ * The platform's own projects, the steward's `reservedReason`
+ * (src/control/policy.ts): nobody is given a role on them. The page cannot
+ * import that list; tests/access.test.ts reads it back from the policy.
+ */
+export const PLATFORM_SLUGS: readonly string[] = ["dashboard", "portal", "api", "analytics", "landing", "www"]
+
+/** Is this project part of the platform: one of its own, or the landing, named after the zone. */
+export function isPlatform(slug: string, zone: string | null): boolean {
+  return PLATFORM_SLUGS.includes(slug) || (zone !== null && zone !== "" && slug === zone)
+}
+
+/** What a platform project's Access says, in place of its people. */
+export function platformText(slug: string): string {
+  return `${slug} is part of the platform. Only the owner opens it when restricted; no one can be given a role on it.`
 }
 
 /**
@@ -541,11 +653,14 @@ export function closeOutcome(copied: boolean, warned: boolean): "close" | "warn"
  * What Can open changes while the site is not restricted: nothing, the other
  * roles still counting in the dashboard. Null when it is restricted.
  */
-export function inertNote(slug: string, current: GeneralAccess): string | null {
+export function inertNote(slug: string, current: GeneralAccess, manages: boolean): string | null {
   if (current === "restricted") return null
-  const how = current === "public" ? "is public" : "opens with its preview code"
-  return `${slug} ${how}: Can open changes nothing until its access is restricted. The other roles still count here.`
+  const how = current === "public" ? "is public, so anyone can open it" : "opens with its preview code"
+  return `${slug} ${how}. Viewer, Developer and Admin still apply; Can open matters once ${manages ? "you restrict it" : "it's restricted"}.`
 }
+
+/** The access service on the server did not answer: what the page says, and what to do. */
+export const ACCESS_UNREACHABLE = "Can't reach the access service on the server. Retry in a moment; if it persists, run sitesolide status."
 
 /** A refusal of the steward's or the service's, in words. */
 export function refusalText(status: number, body: { error?: string; message?: string } | null): string {
@@ -564,7 +679,7 @@ export function readingProblem(portal: AccessPageResponse["portal"]): { tone: "a
     case "portal":
       return { tone: "attention", text: "The portal on this server still reads its own lists, so changes here don't reach the site yet. Run sitesolide upgrade." }
     case "unreadable":
-      return { tone: "error", text: "The portal can't read who has access: nobody on this list opens a restricted site until it can. Run sitesolide upgrade, then check the steward's journal." }
+      return { tone: "error", text: "The portal can't read who has access: nobody on this list opens a restricted site until it can. Run sitesolide upgrade, then sitesolide status." }
     default:
       return null
   }

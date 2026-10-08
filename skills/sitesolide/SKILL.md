@@ -1,7 +1,7 @@
 ---
 name: sitesolide
 description: Deploy a project folder to the user's own sitesolide server, and check on it afterwards. Use when the user asks to deploy, publish, ship or put online a site, an app or a tool, to give colleagues access to it, to see whether it is up, or to read its logs, in a setup that has the sitesolide CLI or its MCP server.
-when_to_use: Requests such as "deploy this", "put it online", "publish the site", "share this tool with my team", "give alice access", "is it up?", "why does the site return 500?" or "show me the logs", and any folder holding a sitesolide.json.
+when_to_use: Requests such as "deploy this", "put it online", "publish the site", "share this tool with my colleagues", "give alice access", "is it up?", "why does the site return 500?" or "show me the logs", and any folder holding a sitesolide.json.
 ---
 
 # Deploying with sitesolide
@@ -46,7 +46,7 @@ Use the MCP tools when they are available (`detect`, `deploy`, `status`,
    ask the user who should get in and with which role, then `share` with
    exactly those addresses or that domain (`who`), and nobody else
    (`sitesolide share alice@acme.com --json`, `@acme.com` for everyone at a
-   domain). The role is Can open (`visitor`) unless the user names `viewer`,
+   domain). The role is Can open (`can-open`) unless the user names `viewer`,
    `developer` or `admin`, which also let the person into the project in the
    dashboard. Access lets real people into the app and its data: tell the user
    who will get in, and wait for their yes. Give them the `message` of the
@@ -109,8 +109,9 @@ Every error carries a `hint`: follow it. The usual ones:
 
 `status` lists every project on the machine with its service state and
 memory. `access` (`sitesolide share --json`) says a project's general access
-and its people with access, with their roles, and the message to send them. `lock_status` (`sitesolide lock --status --json`) says whether a
-preview is closed behind an access code, without revealing the code.
+and its people with access, with their roles. `lock_status`
+(`sitesolide lock --status --json`) says whether a preview is closed behind an
+access code, without revealing the code.
 
 The full reference: `docs/agents.md` in the sitesolide repository, and
 `docs/manifest.md` for every key of `sitesolide.json`.

@@ -329,21 +329,25 @@ describe("signing in", () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({
       error: "no-role",
-      message: `${BOB} has no role on this dashboard: ask its owner, or the Admin of a project, for access`,
+      message: `${BOB} has no access to any project here: ask the owner, or an Admin of the project, to add them`,
     });
     expect(bench.journal().at(-1)).toMatchObject({ operation: "dashboard.signin_failed", actor: BOB, detail: "no-role" });
   });
 
-  test("someone who can only open sites, by name or by their domain, is refused: the dashboard has nothing for them", async () => {
+  test("someone who can only open sites, by name or by their domain, is refused and told so: the dashboard starts at Viewer", async () => {
     const bench = await mount();
     const carol = "carol@acme.test";
+    const dora = "dora@other.test";
     bench.seed({ [ALICE]: { blog: "developer" }, [carol]: { blog: "visitor", shop: "visitor" }, "@acme.test": { notes: "visitor" } });
+    // Carol by name, Bob through @acme.test: both may open a site, and nothing more.
     for (const email of [carol, BOB]) {
       const response = await signIn(bench, await assertion(bench, email));
       expect([email, response.status]).toEqual([email, 403]);
-      expect(await response.json()).toMatchObject({ error: "no-role", message: expect.stringContaining("has no role on this dashboard") });
+      expect(await response.json()).toMatchObject({ error: "can-open-only", message: expect.stringContaining("can open the sites shared with them") });
     }
-    expect(bench.journal().at(-1)).toMatchObject({ operation: "dashboard.signin_failed", actor: BOB, detail: "no-role" });
+    expect(bench.journal().at(-1)).toMatchObject({ operation: "dashboard.signin_failed", actor: BOB, detail: "can-open-only" });
+    const nobody = await signIn(bench, await assertion(bench, dora));
+    expect(await nobody.json()).toMatchObject({ error: "no-role", message: expect.stringContaining("has no access to any project here") });
   });
 
   test("a role above Can open somewhere, or the create right alone, opens a session that names no visitor role", async () => {
