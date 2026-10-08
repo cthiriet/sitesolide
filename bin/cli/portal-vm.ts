@@ -1,22 +1,26 @@
 /**
- * The portal of an already deployed site, as the VM carries it.
+ * The general access of an already deployed site, as the VM carries it:
+ * Restricted, the manifest's `portal`; Anyone with the code, its `lock`;
+ * Public, neither. The manifest refuses the two together.
  *
- * The dashboard puts up and takes down a site's portal on the machine: its
- * gatekeeper rewrites `/srv/sites/<slug>/sitesolide.json` and
- * `/etc/caddy/sites/<slug>.caddy`, validates and reloads Caddy. The repository
- * knows nothing of it. Yet `sitesolide deploy` re-deposits the repository's
- * manifest and generates the block from it, and bin/deploy-caddy.sh
- * re-deposits every block in the repository: without a guard, the next
- * deployment of any project would silently remove a door put up from the
- * dashboard, and the site would be served in the clear.
+ * The dashboard changes a site's general access on the machine, and so does
+ * `sitesolide lock`: the gatekeeper rewrites
+ * `/srv/sites/<slug>/sitesolide.json`, the block or the preview locks,
+ * validates and reloads Caddy. The repository knows nothing of it. Yet
+ * `sitesolide deploy` re-deposits the repository's manifest and generates the
+ * block from it, and bin/deploy-caddy.sh re-deposits every block in the
+ * repository: without a guard, the next deployment of any project would
+ * silently remove a door put up from the dashboard, and the site would be
+ * served in the clear; or drop a code the dashboard set, the code left in
+ * force for a manifest that no longer asks for it.
  *
  * The rule is the one for secrets: **the VM is the source of truth** for the
- * portal of an already deployed site. `deploy` reads the deposited manifest,
- * takes `portal` back from it and rewrites the local manifest so that the
- * repository catches up with the machine; bin/deploy-caddy.sh refuses to
- * deposit a block whose door contradicts its site's deposited manifest. A site
- * never deployed takes the value from its repository, since there is nothing on
- * the machine to contradict.
+ * general access of an already deployed site. `deploy` reads the deposited
+ * manifest, takes `portal` and `lock` back from it and rewrites the local
+ * manifest so that the repository catches up with the machine;
+ * bin/deploy-caddy.sh refuses to deposit a block whose door contradicts its
+ * site's deposited manifest. A site never deployed takes the value from its
+ * repository, since there is nothing on the machine to contradict.
  *
  * Pure: returns commands, readings and decisions, touches nothing.
  */
@@ -126,15 +130,33 @@ export function readDepositedManifests(output: string): ManifestsRead {
   return unreadable("the server did not finish its answer");
 }
 
-export type PortalRead = { kind: "read"; portal: boolean } | { kind: "unreadable"; reason: string };
+/** A site's general access, as its manifest says it: `portal`, `lock`, or neither. */
+export type General = { portal: boolean; lock: boolean };
+
+export type GeneralAccess = "public" | "restricted" | "code";
+
+/** The general access these two fields say, the portal first: the manifest refuses them together. */
+export function accessOf(general: General): GeneralAccess {
+  return general.portal ? "restricted" : general.lock ? "code" : "public";
+}
+
+/** The two fields of a general access. */
+export function generalOf(access: GeneralAccess): General {
+  return { portal: access === "restricted", lock: access === "code" };
+}
+
+const WORDS: Readonly<Record<GeneralAccess, string>> = { public: "Public", restricted: "Restricted", code: "Anyone with the code" };
+
+export type PortalRead = { kind: "read"; portal: boolean; lock: boolean } | { kind: "unreadable"; reason: string };
 
 /**
- * What a deposited manifest says about the portal, and nothing more.
+ * What a deposited manifest says about its general access, and nothing more.
  *
- * `portal` is `true` or missing, as `validate()` requires and as the gatekeeper
- * writes it: any other value is unreadable rather than guessed, a `false` or a
- * `"yes"` being readable either way. The rest of the manifest is not validated
- * here: a key the CLI no longer knows says nothing about the door.
+ * `portal` and `lock` are each `true` or missing, as `validate()` requires and
+ * as the gatekeeper writes them: any other value is unreadable rather than
+ * guessed, a `false` or a `"yes"` being readable either way. The rest of the
+ * manifest is not validated here: a key the CLI no longer knows says nothing
+ * about the door.
  *
  * `slug`, when given, must be the one the manifest declares: a directory
  * carrying another site's manifest says nothing about this one.
@@ -153,14 +175,14 @@ export function portalFromManifest(raw: string, slug?: string): PortalRead {
   if (slug !== undefined && fields.slug !== slug) {
     return unreadable(`it names another slug: ${String(fields.slug)}`);
   }
-  if (fields.portal === undefined) return { kind: "read", portal: false };
-  if (fields.portal === true) return { kind: "read", portal: true };
-  return unreadable("portal is neither true nor absent");
+  if (fields.portal !== undefined && fields.portal !== true) return unreadable("portal is neither true nor absent");
+  if (fields.lock !== undefined && fields.lock !== true) return unreadable("lock is neither true nor absent");
+  return { kind: "read", portal: fields.portal === true, lock: fields.lock === true };
 }
 
 export type DepositedRead =
   | { kind: "absent" }
-  | { kind: "present"; portal: boolean }
+  | { kind: "present"; portal: boolean; lock: boolean }
   | { kind: "unreadable"; reason: string };
 
 /** The reading of a single site's manifest, for `deploy`. */
@@ -172,8 +194,8 @@ export function readDepositedManifest(output: string, slug: string): DepositedRe
   }
   const raw = reading.manifests.get(slug);
   if (raw === undefined) return { kind: "absent" };
-  const portal = portalFromManifest(raw, slug);
-  return portal.kind === "read" ? { kind: "present", portal: portal.portal } : portal;
+  const general = portalFromManifest(raw, slug);
+  return general.kind === "read" ? { kind: "present", portal: general.portal, lock: general.lock } : general;
 }
 
 /**
@@ -187,40 +209,45 @@ export function readManifestAmongAll(output: string, slug: string): DepositedRea
   if (reading.kind === "unreadable") return reading;
   const raw = reading.manifests.get(slug);
   if (raw === undefined) return { kind: "absent" };
-  const portal = portalFromManifest(raw, slug);
-  return portal.kind === "read" ? { kind: "present", portal: portal.portal } : portal;
+  const general = portalFromManifest(raw, slug);
+  return general.kind === "read" ? { kind: "present", portal: general.portal, lock: general.lock } : general;
+}
+
+/** Does the machine carry the same general access as these fields? */
+function agrees(reading: { portal: boolean; lock: boolean }, local: General): boolean {
+  return reading.portal === local.portal && reading.lock === local.lock;
 }
 
 export type PortalDecision =
   /** The repository's value: first deployment, or same value on both sides. */
-  | { kind: "repository"; portal: boolean }
-  /** The dashboard changed the door: its value wins, the repository catches up. */
-  | { kind: "dashboard"; portal: boolean }
+  | ({ kind: "repository" } & General)
+  /** The dashboard, or `sitesolide lock`, changed it: its value wins, the repository catches up. */
+  | ({ kind: "dashboard" } & General)
   | { kind: "rejects"; message: string; details: string[] };
 
 /**
- * The portal `deploy` applies, decided before anything leaves.
+ * The general access `deploy` applies, decided before anything leaves.
  *
  * The order of the cases is the order of truth, as for the secrets: a reading
  * that failed authorises nothing, a site absent from the machine takes the
  * value from its repository, and a site present keeps the machine's.
  */
-export function decidePortal(slug: string, local: boolean, reading: DepositedRead): PortalDecision {
+export function decidePortal(slug: string, local: General, reading: DepositedRead): PortalDecision {
   if (reading.kind === "unreadable") {
     return {
       kind: "rejects",
       message: `cannot tell whether the general access of ${slug} was changed from the dashboard`,
       details: [
         `${depositedManifestPath(slug)}: ${reading.reason}`,
-        "nothing was sent: the portal is never decided on a reading that failed,",
+        "nothing was sent: general access is never decided on a reading that failed,",
         "the repository could otherwise open a site the dashboard closed",
       ],
     };
   }
-  if (reading.kind === "absent" || reading.portal === local) {
-    return { kind: "repository", portal: local };
+  if (reading.kind === "absent" || agrees(reading, local)) {
+    return { kind: "repository", ...local };
   }
-  return { kind: "dashboard", portal: reading.portal };
+  return { kind: "dashboard", portal: reading.portal, lock: reading.lock };
 }
 
 /**
@@ -241,7 +268,7 @@ export function decidePortal(slug: string, local: boolean, reading: DepositedRea
  * in the meantime, which the repository is once more the source of truth to put
  * in place. An unreadable reading authorises nothing.
  */
-export function confirmDoorUnderLock(slug: string, applied: boolean, reading: DepositedRead): Agreement {
+export function confirmDoorUnderLock(slug: string, applied: General, reading: DepositedRead): Agreement {
   if (reading.kind === "unreadable") {
     return {
       kind: "rejects",
@@ -252,12 +279,12 @@ export function confirmDoorUnderLock(slug: string, applied: boolean, reading: De
       ],
     };
   }
-  if (reading.kind === "absent" || reading.portal === applied) return { kind: "agreed" };
+  if (reading.kind === "absent" || agrees(reading, applied)) return { kind: "agreed" };
   return {
     kind: "rejects",
     message: `general access of ${slug} changed from the dashboard during this deploy: run \`sitesolide deploy\` again`,
     details: [
-      `this deploy was turning the portal ${applied ? "on" : "off"}, the server now has it ${reading.portal ? "on" : "off"}`,
+      `this deploy was applying ${WORDS[accessOf(applied)]}, the server now has ${WORDS[accessOf(reading)]}`,
       "neither the manifest nor the Caddy block was deposited",
     ],
   };
@@ -266,11 +293,10 @@ export function confirmDoorUnderLock(slug: string, applied: boolean, reading: De
 /**
  * What `deploy` says about a door changed from the dashboard. The local
  * manifest is rewritten, and it must be committed: without that commit, the
- * repository goes on saying the opposite of the machine, as bin/lock.sh recalls
- * for the lock.
+ * repository goes on saying the opposite of the machine.
  */
-export function switchAnnouncement(portal: boolean, dryRun: boolean): { title: string; details: string[] } {
-  const access = portal ? "Restricted" : "Public";
+export function switchAnnouncement(general: General, dryRun: boolean): { title: string; details: string[] } {
+  const access = WORDS[accessOf(general)];
   return {
     title: dryRun
       ? `general access was set to ${access} from the dashboard; a real deploy updates sitesolide.json, then commit it`
@@ -283,28 +309,29 @@ export function switchAnnouncement(portal: boolean, dryRun: boolean): { title: s
 }
 
 /**
- * The actions that deposit the local manifest on the VM without going through
- * `deploy`: `lock` and `unlock` (bin/lock.sh), `domain` (`sitesolide domain`).
+ * The action that deposits the local manifest on the VM without going through
+ * `deploy`: `domain` (`sitesolide domain`). `lock` and `unlock` no longer
+ * deposit it: the gatekeeper writes the machine's, and the repository follows.
  */
-export type ManifestAction = "lock" | "unlock" | "domain";
+export type ManifestAction = "domain";
 
 export type Agreement = { kind: "agreed" } | { kind: "rejects"; message: string; details: string[] };
 
 /**
- * The guard of the actions that deposit the local manifest as is, before any
+ * The guard of the action that deposits the local manifest as is, before any
  * write.
  *
- * None of them takes the VM's door back the way `deploy` does: depositing the
- * local manifest would therefore erase a portal put up from the dashboard, or
- * put one back that it removed, and bin/deploy-caddy.sh would then see no
- * divergence left to refuse. They refuse instead, and point to `deploy`, which
- * makes the repository catch up.
+ * It does not take the VM's general access back the way `deploy` does:
+ * depositing the local manifest would therefore erase a portal put up from
+ * the dashboard, put one back that it removed, or drop a code it set, and
+ * bin/deploy-caddy.sh would then see no divergence left to refuse. It refuses
+ * instead, and points to `deploy`, which makes the repository catch up.
  *
- * Two refusals say something else, because `deploy` would not be enough there:
- * `validate()` forbids the lock and the customer domain on a site behind the
- * portal. When the VM carries the door, putting a lock in place or switching
- * the domain therefore requires removing it from the dashboard first, and the
- * message says so.
+ * One refusal says something else, because `deploy` would not be enough
+ * there: `validate()` forbids the customer domain on a site behind the
+ * portal. When the VM carries the door, switching the domain therefore
+ * requires making the site public from the dashboard first, and the message
+ * says so.
  *
  * A site absent from the machine has nothing to lose: the action goes through,
  * and it is up to it to refuse a site never deployed if need be. An unreadable
@@ -312,9 +339,9 @@ export type Agreement = { kind: "agreed" } | { kind: "rejects"; message: string;
  */
 export function guardDepositedManifest(
   slug: string,
-  local: boolean,
+  local: General,
   reading: DepositedRead,
-  action: ManifestAction,
+  _action: ManifestAction,
 ): Agreement {
   if (reading.kind === "unreadable") {
     return {
@@ -328,27 +355,25 @@ export function guardDepositedManifest(
   }
   if (reading.kind === "absent") return { kind: "agreed" };
 
-  if (reading.portal && action !== "unlock") {
+  if (reading.portal) {
     return {
       kind: "rejects",
       message: `${slug} is restricted: make it public from the dashboard's Access section first`,
       details: [
-        action === "lock"
-          ? "a restricted site takes no preview code"
-          : "a restricted site cannot switch to its own domain yet",
+        "a restricted site cannot switch to its own domain yet",
         // The local manifest still asking for the door would contradict it once
         // removed: `deploy` makes it catch up.
-        ...(local ? ["then run `sitesolide deploy` in its folder, so that the repository follows"] : []),
+        ...(local.portal ? ["then run `sitesolide deploy` in its folder, so that the repository follows"] : []),
         "nothing was written",
       ],
     };
   }
-  if (reading.portal !== local) {
+  if (!agrees(reading, local)) {
     return {
       kind: "rejects",
       message: `general access of ${slug} changed from the dashboard: run \`sitesolide deploy\` in its folder first`,
       details: [
-        `depositing this sitesolide.json would turn the portal ${local ? "back on" : "back off"}`,
+        `depositing this sitesolide.json would apply ${WORDS[accessOf(local)]}, the server has ${WORDS[accessOf(reading)]}`,
         "nothing was written",
       ],
     };

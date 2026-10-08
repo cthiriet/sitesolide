@@ -69,6 +69,8 @@ export type FakeVm = {
   access(): AccessRegistry;
   /** The steward's token ownership, `{ slug: tokenId }`, as a removal finds and leaves it. */
   setOwners(owners: Record<string, string>): void;
+  /** What the steward answers a change of general access, in place of the simulated gatekeeper. */
+  setGeneral(status: number, body: object): void;
   owners(): Record<string, string>;
   /** Lays a static account the machine already carries, with a system uid unless one is given. */
   addAccount(name: string, uid?: number): void;
@@ -174,6 +176,9 @@ export function createFakeVm(): FakeVm {
     },
     setOwners(owners) {
       writeFileSync(join(root, SWITCHES.owners), JSON.stringify(owners));
+    },
+    setGeneral(status, body) {
+      writeFileSync(join(root, SWITCHES.general), JSON.stringify({ status, body }));
     },
     owners() {
       const file = join(root, SWITCHES.owners);

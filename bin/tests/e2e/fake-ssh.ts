@@ -60,7 +60,7 @@ import {
 import { MARKER_ABSENT, MARKER_PRESENT } from "../../cli/unit";
 import { GENERATOR_MARK, loopbackStateCommand, MARKER_DONE, unitOriginsCommand } from "../../cli/services";
 import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
-import { ownerReadCommand, ownerWriteCommand, type EntryView, type PersonView, type Role } from "../../cli/access";
+import { ownerGeneralCommand, ownerReadCommand, ownerWriteCommand, type EntryView, type PersonView, type Role } from "../../cli/access";
 import { ownershipReleaseCommand } from "../../cli/removal";
 
 export const TEST_HOST = "sample@invalid.local";
@@ -81,6 +81,8 @@ export const SWITCHES = {
   access: "access.json",
   /** The steward's token ownership, `{ slug: tokenId }`, which a removal releases. */
   owners: "owners.json",
+  /** What the steward answers a change of general access, in place of the gatekeeper's work: `{ status, body }`. */
+  general: "general.json",
   accounts: "accounts",
 } as const;
 
@@ -125,6 +127,9 @@ export type AccessRegistry = {
 /** What every change is dated, and the password a password access is given: the tests read both back. */
 export const FAKE_NOW = 1_791_000_000_000;
 export const FAKE_PASSWORD = "fake-password-for-tests-only";
+/** The codes the simulated gatekeeper draws: the first, then a new one. */
+export const FAKE_CODE = "K7M2PQ";
+export const FAKE_NEW_CODE = "W4XN8R";
 
 /** kanban deployed and restricted, nobody on it, acme.test the company's domain, Google set up. */
 export const DEFAULT_ACCESS: AccessRegistry = {
@@ -496,6 +501,33 @@ if (import.meta.main) {
     writeFileSync(accessFile, JSON.stringify(current));
     const person = peopleAnswer(current).people.find((one) => one.who === asked.email) ?? { who: asked.email, roles: {}, create: false, passwords: [], admin: false };
     answer(200, { person, change: had === asked.create ? "none" : asked.create ? "create" : "remove" });
+  }
+  // The steward's owner socket again: a site's general access, the
+  // gatekeeper's work simulated on the VM's own manifest, the body recorded as
+  // it came on standard input. A test lays the answer instead to see a
+  // refusal through.
+  if (command === ownerGeneralCommand()) {
+    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
+    const body = await Bun.stdin.text();
+    record(`GENERAL ${body}`);
+    const forced = join(vm, SWITCHES.general);
+    if (existsSync(forced)) {
+      const { status, body: laid } = JSON.parse(readFileSync(forced, "utf8")) as { status: number; body: object };
+      answer(status, laid);
+    }
+    const asked = JSON.parse(body) as { slug: string; access: "public" | "restricted" | "code"; renew?: boolean };
+    const path = join(vm, "srv", "sites", asked.slug, "sitesolide.json");
+    if (!existsSync(path)) refusal(403, "out-of-scope", `${asked.slug} is not a site of this server`);
+    const { portal: _portal, lock: _lock, ...rest } = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const general = { ...rest, ...(asked.access === "restricted" ? { portal: true } : {}), ...(asked.access === "code" ? { lock: true } : {}) };
+    writeFileSync(path, `${JSON.stringify(general, null, 2)}\n`);
+    const code = asked.access === "code" ? (asked.renew === true ? FAKE_NEW_CODE : FAKE_CODE) : null;
+    answer(200, {
+      portal: { requested: asked.access === "restricted", installed: asked.access === "restricted", modifiable: true, reason: null },
+      general: { access: asked.access, modifiable: true, reason: null },
+      detail: `${asked.access}: validated, reloaded`,
+      code: code === null ? null : { code, url: null },
+    });
   }
   // The steward's owner socket again: a removed project's token ownership
   // released and its people with access dropped, the slug on standard input,

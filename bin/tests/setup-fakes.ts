@@ -157,7 +157,7 @@ export class FakeMachine implements Machine {
 /** What each script of the kit sets on the model machine, and what it needs there. */
 const EFFECTS: Record<string, string[]> = {
   "deploy-api.sh": ["api-active", "api-enabled"],
-  "deploy-gatekeeper.sh": ["gatekeeper-code", "gatekeeper-on", "gatekeeper-off"],
+  "deploy-gatekeeper.sh": ["gatekeeper-code", "gatekeeper-on", "gatekeeper-off", "gatekeeper-code-unit", "gatekeeper-renew", "locks-codes"],
   "dashboard-password.sh": ["dashboard-password"],
   "deploy dashboard": ["dashboard-active"],
   "deploy-steward.sh": ["steward-active", "steward-code"],

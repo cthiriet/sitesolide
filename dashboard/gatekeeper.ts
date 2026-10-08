@@ -1,18 +1,23 @@
 #!/usr/bin/env bun
 /**
- * The gatekeeper: puts up or takes away a site's portal, launched by systemd
- * under root's identity, one transaction per startup.
+ * The gatekeeper: changes a site's general access, Public, Restricted or
+ * Anyone with the code, or gives it a new code, launched by systemd under
+ * root's identity, one transaction per startup.
  *
- *   systemctl start sitesolide-gatekeeper-on@cms.service
- *   systemctl start sitesolide-gatekeeper-off@cms.service
+ *   systemctl start sitesolide-gatekeeper-on@cms.service      Restricted
+ *   systemctl start sitesolide-gatekeeper-off@cms.service     Public
+ *   systemctl start sitesolide-gatekeeper-code@cms.service    Anyone with the code
+ *   systemctl start sitesolide-gatekeeper-renew@cms.service   a new code
  *   cat /run/sitesolide-gatekeeper/cms.json
  *
  * It is the steward that launches it, never the dashboard: the dashboard has no
- * rights at all, and the steward does not reload Caddy itself. All the
- * judgement is in src/gatekeeper/, tested without a VM; the two units of
- * infra/gatekeeper/, one per action, bound what a compromised gatekeeper would
- * obtain all the same: each of them writes only in the directory of the site it
- * is named for.
+ * rights at all, and the steward does not reload Caddy itself. `sitesolide
+ * lock` reaches it the same way, through the steward's owner socket: there is
+ * one path that touches Caddy from the machine. All the judgement is in
+ * src/gatekeeper/, tested without a VM; the four units of infra/gatekeeper/,
+ * one per action, bound what a compromised gatekeeper would obtain all the
+ * same: each of them writes only in the directory of the site it is named for,
+ * the blocks and the preview locks.
  *
  * Like the steward, it does not travel with the dashboard's code:
  * bin/deploy-gatekeeper.sh builds it into a single file and installs it under

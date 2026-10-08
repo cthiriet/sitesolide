@@ -1,8 +1,8 @@
-# The gatekeeper, `on` action: makes a site Restricted, one
+# The gatekeeper, `renew` action: gives a site a new code, one
 # transaction per start. See dashboard/gatekeeper.ts and
 # dashboard/src/gatekeeper/.
 #
-#   systemctl start sitesolide-gatekeeper-on@cms.service
+#   systemctl start sitesolide-gatekeeper-renew@cms.service
 #   cat /run/sitesolide-gatekeeper/cms.json
 #
 # Four templates, one per action, and the slug alone as the instance: each
@@ -35,7 +35,7 @@
 # Placed by bin/deploy-gatekeeper.sh, never by `sitesolide deploy`.
 
 [Unit]
-Description=Gatekeeper, Restricted %i
+Description=Gatekeeper, new code %i
 # It reads and writes under /srv/sites and /etc/caddy: nothing to do before
 # they are mounted.
 RequiresMountsFor=/srv/sites /etc/caddy
@@ -45,7 +45,7 @@ Type=oneshot
 # The action of this file. The gatekeeper also receives `%n`, the name systemd
 # resolved, and refuses to start if the two do not say the same action: a file
 # copied without changing this line does nothing rather than the opposite.
-Environment=GATEKEEPER_ACTION=on
+Environment=GATEKEEPER_ACTION=renew
 # The served zone, which the gatekeeper probes as `<slug>.<zone>` once Caddy is
 # reloaded. It has no default, an invented zone would fail the probe on every
 # site and roll back a sound transaction. The same file Caddy is given, so the

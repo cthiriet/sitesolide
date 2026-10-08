@@ -20,6 +20,7 @@
  *   E=$(mktemp -d) && mkdir -p $E/sites $E/secrets $E/units $E/state $E/run $E/owner $E/caddy $E/gatekeeper $E/portal-key
  *   SITES_DIR=$E/sites SECRETS_FOLDER=$E/secrets UNITS_FOLDER=$E/units \
  *     STATE_FOLDER=$E/state CADDY_FOLDER=$E/caddy GATEKEEPER_FOLDER=$E/gatekeeper \
+ *     CODES_FILE=$E/locks-codes.json LOCKS_FRAGMENT=$E/verrous.caddy \
  *     BACKUP_FOLDER=$E/backups BACKUP_STATE_FOLDER=$E/backup-state BACKUP_RUN_FOLDER=$E/backup-run \
  *     SOCKET=$E/run/steward.sock OWNER_SOCKET=$E/owner/owner.sock PORTAL_KEY_FOLDER=$E/portal-key \
  *     PORTAL_RELAY_SOCKET= SOCKET_GROUP= OWNERS= SYSTEMCTL=false \
@@ -42,6 +43,7 @@ import { createControlSteward, isControlPath } from "./src/control/steward";
 import { createControlSystem } from "./src/control/system";
 import { INSTALLER_RUN_FOLDER } from "./src/control/protocol";
 import { BACKUP_FOLDER } from "./borrowed/backups";
+import { CODES_FILE as LOCK_CODES_FILE, FRAGMENT_NAME, LOCKS_DIR } from "./borrowed/locks";
 import { createBackupReader } from "./src/backup/reader";
 import { createMembersSystem } from "./src/people/system";
 import { createAccessSystem } from "./src/access/system";
@@ -62,6 +64,9 @@ const GROUPS_FILE = process.env.GROUPS_FILE ?? "/etc/group";
 /** Read to say whether a site's portal is up, never written. */
 const CADDY_FOLDER = process.env.CADDY_FOLDER ?? "/etc/caddy/sites";
 const GATEKEEPER_RESULTS = process.env.GATEKEEPER_FOLDER ?? GATEKEEPER_FOLDER;
+/** The preview codes and their fragment, read to show a site's code, never written: the gatekeeper's. */
+const CODES_FILE = process.env.CODES_FILE ?? LOCK_CODES_FILE;
+const LOCKS_FRAGMENT = process.env.LOCKS_FRAGMENT ?? `${LOCKS_DIR}/${FRAGMENT_NAME}`;
 /** Where the installer leaves its results, read to relay a deployment's progress. */
 const INSTALLER_FOLDER = process.env.INSTALLER_FOLDER ?? INSTALLER_RUN_FOLDER;
 const JOURNALCTL = process.env.JOURNALCTL ?? "/usr/bin/journalctl";
@@ -141,6 +146,8 @@ const system = createSystem({
   accountsFile: ACCOUNTS_FILE,
   caddyFolder: CADDY_FOLDER,
   gatekeeperFolder: GATEKEEPER_RESULTS,
+  codesFile: CODES_FILE,
+  locksFragment: LOCKS_FRAGMENT,
   systemctl: SYSTEMCTL,
 });
 

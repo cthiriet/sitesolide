@@ -1,22 +1,28 @@
 /**
  * What the gatekeeper agrees to change, said only once.
  *
- * The steward reads it to fill `PortalView.modifiable` before calling the
- * gatekeeper, and the gatekeeper re-reads it at the moment of the transaction:
- * the page shows the answer, it does not copy the rule.
+ * The steward reads it to say, before calling the gatekeeper, which of the
+ * three general accesses a site may take, and the gatekeeper re-reads it at
+ * the moment of the transaction: the page shows the answer, it does not copy
+ * the rule.
  *
  * Pure: a slug and an already-read manifest, no disk reading at all.
  */
 import { PORTAL_SLUG, isProtected, validate, type Manifest } from "../../borrowed/manifest";
+import type { GeneralAccess } from "./instance";
 
 /**
- * The dashboard does not close itself behind the portal: if the portal falls,
- * it keeps a closed door that nobody can reopen from the dashboard any more,
- * and it is precisely the dashboard that serves to notice it.
+ * The dashboard does not close itself behind the portal, nor behind a code:
+ * if the portal falls, it keeps a closed door that nobody can reopen from the
+ * dashboard any more, and it is precisely the dashboard that serves to notice
+ * it.
  */
 export const DASHBOARD_SLUG = "dashboard";
 
 export type Modifiable = { modifiable: boolean; reason: string | null };
+
+/** For each general access, null when the site may take it, otherwise why not. */
+export type Choices = Record<GeneralAccess, string | null>;
 
 /**
  * The refusals that do not depend on the action: the portal itself, the
@@ -36,36 +42,66 @@ export function fixedRefusal(slug: string, manifest: Manifest | null): string | 
 }
 
 /**
- * The refusals from `validate()` that putting the door up can trigger, said as
+ * The refusals from `validate()` that a general access can trigger, said as
  * the page must say them: what would have to be changed, not the rule broken.
  */
 const REASONS: [prefix: string, reason: string][] = [
   ["portal: only a project with `start`", "a static site cannot be restricted yet"],
-  ["portal: a site behind the portal needs no preview lock", "remove the preview code first: sitesolide unlock"],
   ["portal: not yet on a customer domain", "not on a customer domain, only under the served zone"],
 ];
 
+/** How the manifest says the site opens: the portal, the code, or neither. */
+export function manifestAccess(manifest: Manifest): GeneralAccess {
+  if (isProtected(manifest)) return "restricted";
+  return manifest.lock === true ? "code" : "public";
+}
+
 /**
- * Does the manifest the action would produce pass `validate()`? null if it
- * passes. Judged on the object, with the same key that `setPortal` writes or
- * removes: the transaction then re-reads the rewritten text, and the two must
- * say the same thing.
+ * The manifest a general access leaves, judged on the object: `portal` and
+ * `lock` as the target wants them, the same keys `setPortal` and `setLock`
+ * write or remove. The manifest refuses the two together, so a switch between
+ * Restricted and the code changes both at once.
  */
-export function actionRefusal(manifest: Manifest, active: boolean): string | null {
-  const { portal: _previous, ...remaining } = manifest;
-  const next: Manifest = active ? { ...remaining, portal: true } : remaining;
-  const errors = validate(next);
+export function targetManifest(manifest: Manifest, target: GeneralAccess): Manifest {
+  const { portal: _portal, lock: _lock, ...remaining } = manifest;
+  if (target === "restricted") return { ...remaining, portal: true };
+  if (target === "code") return { ...remaining, lock: true };
+  return remaining;
+}
+
+/**
+ * Does the manifest the target would produce pass `validate()`, and the rules
+ * `validate()` does not hold? null if it passes.
+ *
+ * A code closes only the site's address under the zone: a site that serves its
+ * own domain would go on serving the same content there, without a code and
+ * indexable, and "Anyone with the code" would be a lie by omission.
+ */
+export function targetRefusal(manifest: Manifest, target: GeneralAccess): string | null {
+  if (target === "code" && manifest.domain?.active === true) {
+    return `it serves its own domain, ${manifest.domain.name}, which a code would not close: switch it back to its preview first, sitesolide domain --deactivate`;
+  }
+  const errors = validate(targetManifest(manifest, target));
   if (errors.length === 0) return null;
   const first = errors[0]!;
   const known = REASONS.find(([prefix]) => first.startsWith(prefix));
   return known?.[1] ?? `sitesolide.json would be invalid: ${first}`;
 }
 
+/** The three general accesses, each with why the site may not take it, null when it may. */
+export function generalChoices(slug: string, manifest: Manifest | null): Choices {
+  const fixed = fixedRefusal(slug, manifest);
+  const judge = (target: GeneralAccess) => fixed ?? targetRefusal(manifest!, target);
+  return { public: judge("public"), restricted: judge("restricted"), code: judge("code") };
+}
+
 /**
- * Is the possible action permitted? Putting the door up if it is missing,
- * taking it away if it is there: that is the only one the page offers.
+ * Between Public and Restricted, the change the secrets page offers: putting
+ * the portal up where it is missing, taking it away where it is there. A site
+ * that opens with a code is restricted from here, its code taken away in the
+ * same transaction.
  */
 export function portalModifiable(slug: string, manifest: Manifest | null): Modifiable {
-  const reason = fixedRefusal(slug, manifest) ?? actionRefusal(manifest!, !isProtected(manifest!));
+  const reason = fixedRefusal(slug, manifest) ?? targetRefusal(manifest!, isProtected(manifest!) ? "public" : "restricted");
   return reason === null ? { modifiable: true, reason: null } : { modifiable: false, reason };
 }

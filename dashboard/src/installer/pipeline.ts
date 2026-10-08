@@ -136,7 +136,7 @@ export function finalManifest(
   let onMachine: DepositedRead = { kind: "absent" };
   if (raw !== undefined) {
     const door = portalFromManifest(raw, slug);
-    onMachine = door.kind === "read" ? { kind: "present", portal: door.portal } : door;
+    onMachine = door.kind === "read" ? { kind: "present", portal: door.portal, lock: door.lock } : door;
   }
   if (onMachine.kind === "unreadable") {
     throw new Stop("machine-unreadable", `the manifest on the machine does not read (${onMachine.reason}): nothing was changed, the owner must look at /srv/sites/${slug}/sitesolide.json`);
@@ -156,7 +156,8 @@ export function finalManifest(
   if (refusals.length > 0 || "refusal" in door) throw new Stop("out-of-scope", refusals.join("; "));
 
   // The door and the preview lock are the machine's, as for `deploy`: the
-  // dashboard and bin/lock.sh change them on the machine, a deployment follows.
+  // dashboard and `sitesolide lock` change them on the machine, through the
+  // gatekeeper, and a deployment follows.
   let text = `${JSON.stringify(allocation.object, null, 2)}\n`;
   text = setPortal(text, door.portal);
   text = setLock(text, previous?.lock === true);
@@ -351,12 +352,15 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
       const raw = current.get(slug);
       if (raw !== undefined) {
         const door = portalFromManifest(raw, slug);
-        underLock = door.kind === "read" ? { kind: "present", portal: door.portal } : door;
+        underLock = door.kind === "read" ? { kind: "present", portal: door.portal, lock: door.lock } : door;
       }
     } catch (error) {
       underLock = { kind: "unreadable", reason: (error as Error).message };
     }
-    const agreement = confirmDoorUnderLock(slug, behindPortal, underLock);
+    // The portal and the code both: a code set from the dashboard while this
+    // deployment was being prepared would be dropped by its manifest, the code
+    // left in force for a manifest that no longer asks for it.
+    const agreement = confirmDoorUnderLock(slug, { portal: behindPortal, lock: manifest.lock === true }, underLock);
     if (agreement.kind === "rejects") throw new Stop("access-changed", `${agreement.message}; nothing served was changed`);
     // The ports again, under the lock every deposit takes: two deployments
     // running side by side chose theirs from the same reading, and the first

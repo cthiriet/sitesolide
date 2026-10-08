@@ -108,7 +108,7 @@ describe("the lock", () => {
     );
     expect(messages(snapshot, "client")).toHaveLength(1);
     expect(snapshot.discrepancies[0]?.severity).toBe("error");
-    expect(snapshot.discrepancies[0]?.message).toContain('"sitesolide lock" from the client folder');
+    expect(snapshot.discrepancies[0]?.message).toContain("Choose one in its Access section");
   });
 
   test("a lower-case or too short code does not count as a code", () => {
@@ -128,7 +128,7 @@ describe("the lock", () => {
       }),
     );
     expect(snapshot.discrepancies[0]?.severity).toBe("error");
-    expect(snapshot.discrepancies[0]?.message).toContain('"sitesolide unlock" from the client folder');
+    expect(snapshot.discrepancies[0]?.message).toContain("no longer asks for one. Choose one in its Access section");
   });
 
   test("an unreadable code table says so instead of keeping quiet", () => {

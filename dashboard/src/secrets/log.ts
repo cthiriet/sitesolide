@@ -25,6 +25,7 @@ export const OPERATIONS: Operation[] = [
   "replace",
   "password",
   "portal",
+  "code",
   "restart",
   "access.add",
   "access.change",
@@ -335,9 +336,9 @@ export function truncate(text: string, max: number = MAX_LINES, kept: number = K
  *
  * **What goes there**: a line whose operation is a change of access and
  * whose result is `ok` (`isAccessChange`): people with access, the create
- * right, general access (`portal`), a project created or removed. A refusal
- * is not a change: it stays in the journal, bounded per minute, rotated with
- * the rest.
+ * right, general access (`portal`), a new code (`code`), a project created or
+ * removed. A refusal is not a change: it stays in the journal, bounded per
+ * minute, rotated with the rest.
  *
  * **Never pushed out young.** A row younger than the retention is kept,
  * whatever the count: the steward refuses a change that lets more people in
@@ -361,6 +362,7 @@ export const ACCESS_OPERATIONS: ReadonlySet<Operation> = new Set<Operation>([
   "access.migrate",
   "people.create",
   "portal",
+  "code",
   "project.create",
   "project.remove",
   "member.invite",

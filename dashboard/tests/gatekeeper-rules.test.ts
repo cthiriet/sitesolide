@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readManifest, type Manifest } from "../borrowed/manifest";
-import { portalModifiable, actionRefusal } from "../src/gatekeeper/rules";
+import { portalModifiable, targetRefusal, generalChoices, manifestAccess, targetManifest } from "../src/gatekeeper/rules";
 
 /**
  * What the gatekeeper agrees to change. The refusals count as much as the
@@ -78,11 +78,8 @@ describe("portalModifiable", () => {
     });
   });
 
-  test("a site under a preview lock, or on its own domain: what would have to change", () => {
-    expect(portalModifiable("tool", { ...appSite, lock: true })).toEqual({
-      modifiable: false,
-      reason: "remove the preview code first: sitesolide unlock",
-    });
+  test("a site that opens with a code can be restricted, its code taken away in the same change; on its own domain, what would have to change", () => {
+    expect(portalModifiable("tool", { ...appSite, lock: true })).toEqual({ modifiable: true, reason: null });
     expect(portalModifiable("tool", { ...appSite, domain: { name: "example.test", active: true } })).toEqual({
       modifiable: false,
       reason: "not on a customer domain, only under the served zone",
@@ -92,9 +89,9 @@ describe("portalModifiable", () => {
   test("the action judged is the one the page offers: removing a door in place is allowed", () => {
     const guarded: Manifest = { ...appSite, portal: true, portalExempt: ["/webhooks/*"] };
     expect(portalModifiable("tool", guarded)).toEqual({ modifiable: true, reason: null });
-    expect(actionRefusal(guarded, false)).toBeNull();
-    expect(actionRefusal(staticSite, false)).toBeNull();
-    expect(actionRefusal(staticSite, true)).toBe("a static site cannot be restricted yet");
+    expect(targetRefusal(guarded, "public")).toBeNull();
+    expect(targetRefusal(staticSite, "public")).toBeNull();
+    expect(targetRefusal(staticSite, "restricted")).toBe("a static site cannot be restricted yet");
   });
 
   test.skipIf(!existsSync(SITES))("the manifests from the sites repository", () => {
@@ -127,5 +124,43 @@ describe("portalModifiable", () => {
   test("a malformed exemption stays refused, door in place or not", () => {
     expect(portalModifiable("tool", { ...appSite, portal: true, portalExempt: ["/"] }).modifiable).toBe(false);
     expect(portalModifiable("tool", { ...appSite, portalExempt: ["/"] }).modifiable).toBe(false);
+  });
+});
+
+describe("the three general accesses", () => {
+  test("how the manifest says the site opens", () => {
+    expect(manifestAccess(appSite)).toBe("public");
+    expect(manifestAccess({ ...appSite, portal: true })).toBe("restricted");
+    expect(manifestAccess({ ...appSite, lock: true })).toBe("code");
+  });
+
+  test("the manifest a general access leaves never carries the portal and the lock together", () => {
+    for (const from of [appSite, { ...appSite, portal: true }, { ...appSite, lock: true }] as Manifest[]) {
+      expect(targetManifest(from, "restricted")).toMatchObject({ portal: true });
+      expect(targetManifest(from, "restricted").lock).toBeUndefined();
+      expect(targetManifest(from, "code")).toMatchObject({ lock: true });
+      expect(targetManifest(from, "code").portal).toBeUndefined();
+      expect(targetManifest(from, "public").portal).toBeUndefined();
+      expect(targetManifest(from, "public").lock).toBeUndefined();
+    }
+  });
+
+  test("each choice with its reason: a static site takes a code, not the portal", () => {
+    expect(generalChoices("tool", appSite)).toEqual({ public: null, restricted: null, code: null });
+    expect(generalChoices("vineyard", staticSite)).toEqual({ public: null, restricted: "a static site cannot be restricted yet", code: null });
+  });
+
+  test("a site on its own domain takes no code: it would go on serving there without one", () => {
+    const own: Manifest = { ...appSite, domain: { name: "example.test", active: true } };
+    expect(generalChoices("tool", own).code).toContain("serves its own domain, example.test, which a code would not close");
+    // A domain declared but not yet switched to closes nothing: the preview is all there is.
+    expect(generalChoices("tool", { ...appSite, domain: { name: "example.test", active: false } }).code).toBeNull();
+  });
+
+  test("the dashboard, the portal and the landing take none of the three", () => {
+    for (const [slug, manifest] of [["dashboard", appSite], ["portal", appSite], ["test-zone.invalid", null]] as const) {
+      const choices = generalChoices(slug, manifest === null ? null : { ...manifest, slug });
+      expect(Object.values(choices).every((reason) => reason !== null)).toBe(true);
+    }
   });
 });

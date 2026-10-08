@@ -68,12 +68,12 @@ more.
 |---|---|---|
 | Caddy | `caddy` | serve, and ask the shared service whether a domain is allowed |
 | A project's service | `site-<slug>` | read its own directory, write its own data directory |
-| The shared service (`api/`) | its own account | answer `ask` for on-demand TLS, generate preview locks |
+| The shared service (`api/`) | its own account | answer `ask` for on-demand TLS; its `src/locks.ts` decides the preview locks the gatekeeper writes |
 | The dashboard | `site-dashboard` | read a snapshot file, relay to the steward, ask the portal for sign-ins and its audit |
 | The portal | `site-portal` | answer Caddy's `forward_auth` from the projection the steward writes, sign people in with the identity provider or password access, sign the dashboard's identity assertions; keep no list of who may open a site |
 | The steward | root | write `/etc/sitesolide`, restart services, command the gatekeeper, keep the access registry and write its projection for the portal, judge what each person and each token does, ask the portal through its relay what it decides from |
 | The portal relay | root, no capability, on demand | forward the steward's connections to the portal's admin API, and to nothing else; the steward asks it `GET /admin/access` alone |
-| The gatekeeper | root, one-shot | rewrite one project's block, reload Caddy, probe, roll back |
+| The gatekeeper | root, one-shot | change one project's general access: its manifest, its block, the preview locks; reload Caddy, probe, roll back |
 | The installer | root, one-shot | deploy one project for a token, the archive read by the project's own account |
 | The collector | root, on a timer | read the machine, drop a snapshot where the dashboard can read it |
 | The monitor | `sitesolide-monitor`, on a timer | read what any account reads, ask Caddy for every site over HTTPS, alert |
@@ -89,16 +89,20 @@ timer wrote for it. A compromised dashboard therefore leaks exactly what the
 page already showed.
 
 **Only the gatekeeper touches Caddy from the machine**, and only for the one
-project named in its unit. Two unit templates rather than one instance, so that
-each can only write into `/srv/sites/%i`: a compromised gatekeeper holds the one
-site you named it for.
+project named in its unit. Four unit templates, one per action, `on`
+(Restricted), `off` (Public), `code` (Anyone with the code) and `renew` (a new
+code), rather than one instance, so that each can only write into
+`/srv/sites/%i`, the blocks and the preview locks: a compromised gatekeeper
+holds the one site you named it for. The dashboard reaches it through the
+steward, and so does `sitesolide lock`, over the owner's SSH: one path changes
+a site's general access, whoever asks.
 
 **People with access are judged as root.** Per project, each person or
 domain with access holds a role, each including the ones below it: *Can open*
 opens the site when its general access is restricted; *Viewer* also sees the
 project in the dashboard; *Developer* also deploys it, restarts it and writes
 its secrets without ever reading one back; *Admin* also reads its secrets,
-switches its general access, gives and takes away access to it, a role at
+chooses its general access, gives and takes away access to it, a role at
 most their own, and restores its backups. The steward keeps them in one
 registry, `/var/lib/sitesolide-steward/access.json`, root's alone, judges
 every change by its rules, and writes after each one the projection the portal
@@ -122,9 +126,9 @@ dashboard acts only for the people whose sessions pass through it, within
 their roles, and raises nobody above Can open without an unlock. What a person
 sees, the dashboard filters from data it already holds.
 
-**A secret read, a site made public, a restore, a role above Can open given,
-password access given, a token minted, each waits for the person's own
-unlock**: a forced sign-in at the provider, which the portal asks for
+**A secret read, a site made public, opened with a code or given a new code, a
+restore, a role above Can open given, password access given, a token minted,
+each waits for the person's own unlock**: a forced sign-in at the provider, which the portal asks for
 (`prompt=login`, `max_age=0`) and reads back in the provider's own ID token,
 and the steward checks again, for ten minutes and that person's session
 alone. The owner's unlock is the dashboard's password, retyped. Password
@@ -280,10 +284,13 @@ what they hand it, as archives no project can read. A manifest opts out with
 Two different things, often confused.
 
 **A preview lock** closes one site behind a six-character code, for showing work
-to a client before launch. The code lives on the machine, never in the
-repository. Every URL of the locked host is rewritten to a code page that stands
-on its own, inline CSS, inline icon, no external request, because anything it
-asked for would come back as HTML.
+to a client before launch: its general access is then *Anyone with the code*.
+The code is drawn on the machine by the gatekeeper and lives there, never in
+the repository; the owner and the site's Admins read it in its *Access*
+section, with the link that carries it, and draw a new one there. Every URL of
+the locked host is rewritten to a code page that stands on its own, inline
+CSS, inline icon, no external request, because anything it asked for would
+come back as HTML.
 
 **The portal** stands in front of every restricted site, and Caddy consults it
 with `forward_auth` before every request. A project's **general access** is
@@ -300,7 +307,8 @@ admin emails. They are given from a site's *Access* in the dashboard, or with
 token through the dashboard and the steward, which lets a token give Can open
 alone, to the company's people and domains. Every change goes to the steward's
 registry and its projection, never to Caddy, and holds from the next request;
-switching between public and restricted is what goes through the gatekeeper.
+changing the general access, among the three, is what goes through the
+gatekeeper, a switch between Restricted and the code in one transaction.
 
 A restricted project writes no sign-in of its own. It trusts Caddy,
 which is sound only because of the loopback rule. It also learns who came in,
@@ -374,7 +382,8 @@ rotates by line count: a refusal stays in the journal.
 | `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner`, or a person's email | slug | a variable read, set or removed, by its name; a person's refused by role, with that role |
 | `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner`, or a person's email | slug | a secret file created, put back to its previous version, or replaced |
 | `secrets.password` | steward | `owner` | slug | a password hash changed |
-| `access.general` | steward | `owner`, or an Admin's email | slug | a site's general access switched between public and restricted, the portal turned on or off; listed as `door.update` before, the rows themselves unchanged |
+| `access.general` | steward | `owner`, or an Admin's email | slug | a site's general access chosen, Public, Restricted or Anyone with the code, `off`, `on` or `code` in the detail; listed as `door.update` before, the rows themselves unchanged |
+| `access.code` | steward | `owner`, or an Admin's email | slug | a site that opens with a code given a new one; never the code, which no row holds |
 | `service.restart` | steward | `owner`, or a person's email | slug | a service restarted from *Secrets*, or by a Developer or an Admin, with its verdict; a person's refused restart, with their role |
 
 The steward's rows say how each operation ended, `ok`, `rejects` or `failure`,

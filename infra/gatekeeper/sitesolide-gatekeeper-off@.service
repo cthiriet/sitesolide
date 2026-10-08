@@ -1,22 +1,27 @@
-# The gatekeeper, `off` action: removes the portal from a site, one
+# The gatekeeper, `off` action: makes a site Public, one
 # transaction per start. See dashboard/gatekeeper.ts and
 # dashboard/src/gatekeeper/.
 #
 #   systemctl start sitesolide-gatekeeper-off@cms.service
 #   cat /run/sitesolide-gatekeeper/cms.json
 #
-# Two templates, one per action, and the slug alone as the instance: each unit
-# writes only into the directory of the site it is named. This file and
-# sitesolide-gatekeeper-on@.service differ only by the action, and
-# dashboard/tests/gatekeeper-units.test.ts checks it line by line.
+# Four templates, one per action, and the slug alone as the instance: each
+# unit writes only into the directory of the site it is named. `on` makes a
+# site Restricted, `off` Public, `code` opens it to anyone with its code, and
+# `renew` gives it a new one, each from whichever general access it had: a
+# switch between Restricted and the code is one transaction. The four files
+# differ only by the action, and dashboard/tests/gatekeeper-units.test.ts
+# checks it line by line.
 #
 # The riskiest action of the platform: it rewrites /etc/caddy/sites/<slug>.caddy
-# and reloads Caddy, which serves every site of the machine. All the judgement
-# (plan, Caddy lock, refusal, restoration) lives in dashboard/src/gatekeeper/,
-# tried out without a VM, right up to facing a real test Caddy; what follows
-# bounds what a compromised gatekeeper would obtain all the same.
+# or the preview locks, and reloads Caddy, which serves every site of the
+# machine. All the judgement (plan, Caddy lock, refusal, restoration) lives in
+# dashboard/src/gatekeeper/, tried out without a VM, right up to facing a real
+# test Caddy; what follows bounds what a compromised gatekeeper would obtain
+# all the same.
 #
-# Only the steward launches it. It never activates by itself: no [Install], no
+# Only the steward launches it, for the dashboard and for `sitesolide lock`
+# over the owner's socket. It never activates by itself: no [Install], no
 # timer.
 #
 # NEVER `caddy stop` nor `caddy start` in what it launches: only
@@ -30,7 +35,7 @@
 # Placed by bin/deploy-gatekeeper.sh, never by `sitesolide deploy`.
 
 [Unit]
-Description=Gatekeeper, portal off %i
+Description=Gatekeeper, Public %i
 # It reads and writes under /srv/sites and /etc/caddy: nothing to do before
 # they are mounted.
 RequiresMountsFor=/srv/sites /etc/caddy
@@ -44,7 +49,8 @@ Environment=GATEKEEPER_ACTION=off
 # The served zone, which the gatekeeper probes as `<slug>.<zone>` once Caddy is
 # reloaded. It has no default, an invented zone would fail the probe on every
 # site and roll back a sound transaction. The same file Caddy is given, so the
-# two can never disagree on what zone is served.
+# two can never disagree on what zone is served. The contact address the door
+# page of a site with a code offers comes from it too.
 EnvironmentFile=/etc/caddy/sitesolide.env
 # `%n`: the full name, from which the gatekeeper draws the slug and the action.
 # `%i` and not `%I` in the paths: the unescaped form would change the dashes of
@@ -68,12 +74,14 @@ TimeoutStopSec=5s
 # steward. Kept at the end of the unit, without which the result would disappear
 # before being read; tmpfs, it goes away when the machine reboots. The Caddy lock
 # (caddy.lock/, shared with the tools of the workstation) and the backups (0700)
-# live there too. Common to both templates and to all their instances.
+# live there too. Common to the four templates and to all their instances. The
+# result never carries a preview code: other accounts read it.
 RuntimeDirectory=sitesolide-gatekeeper
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
 # Everything it creates receives its mode explicitly: the manifest keeps its
-# own, the block is 0644, the result 0644, the backups 0600.
+# own, the block is 0644, the locks' fragment 0644, the door page 0644 in a 0755
+# folder, the codes file keeps its own, the result 0644, the backups 0600.
 UMask=0077
 
 # Two capabilities, for its sole job:
@@ -81,11 +89,12 @@ UMask=0077
 # CAP_DAC_OVERRIDE: /srv/sites/<slug> belongs to the deployment account in 0755.
 # Root is only another account there, and rewriting sitesolide.json by renaming
 # requires writing in it. The steward does without it because it owns its
-# directories; here that is not the case.
+# directories; here that is not the case. The same for
+# /etc/caddy/locks-codes.json, the deployment account's in 0600.
 #
 # CAP_CHOWN: the rewritten manifest is given back to its owner, the deployment
-# account. The mode is set before, while the temporary still belongs to root: no
-# CAP_FOWNER.
+# account, and so is a door page's folder. The mode is set before, while the
+# temporary still belongs to root: no CAP_FOWNER.
 #
 # No CAP_NET_BIND_SERVICE: /usr/bin/caddy carries no file capability on the VM
 # (`security.capability` absent, reading of 17 September 2026), and
@@ -110,12 +119,19 @@ CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_CHOWN
 # the gatekeeper, with no result: the steward launches only sites it has read
 # under /srv/sites.
 #
-# /etc/caddy stays readable: the Caddyfile, domaines.map, verrous/ and
-# cloudflare.env, which `caddy validate` reads without writing anything there.
-# /etc/caddy/sites stays fully writable, the price of this action: a compromised
-# gatekeeper can rewrite the block of any site, but no longer its files.
+# /etc/caddy stays readable: the Caddyfile, domaines.map and cloudflare.env,
+# which `caddy validate` reads without writing anything there. /etc/caddy/sites
+# stays fully writable, the price of this action: a compromised gatekeeper can
+# rewrite the block of any site, but no longer its files.
 ProtectSystem=strict
 ReadWritePaths=/srv/sites/%i /etc/caddy/sites /run/sitesolide-gatekeeper
+# The preview locks, which a change of general access rewrites with the rest:
+# the fragment's folder Caddy imports by glob, the codes file alone, rewritten
+# in place since nothing else of /etc/caddy may be written, and the door pages,
+# /srv/garde/<slug>/index.html. bin/deploy-gatekeeper.sh creates the three when
+# they are missing; the dash keeps a machine without them restricting and
+# opening its sites, the code alone refused.
+ReadWritePaths=-/etc/caddy/locks -/etc/caddy/locks-codes.json -/srv/garde
 ReadOnlyPaths=-/srv/sites/%i/app -/srv/sites/%i/public
 InaccessiblePaths=-/srv/sites/%i/data
 # The secrets of the sites and the state of the steward: nothing here needs

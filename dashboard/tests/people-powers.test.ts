@@ -54,8 +54,9 @@ describe("what each role may do", () => {
 
   test("whatever reads or writes a secret, or restores, asks for the person's own unlock; general access only to make a site public", () => {
     expect(all.filter(needsUnlock)).toEqual(["secrets.write", "secrets.read", "secrets.restore", "backups"]);
-    expect(generalNeedsUnlock(false)).toBe(true);
-    expect(generalNeedsUnlock(true)).toBe(false);
+    expect(generalNeedsUnlock("public")).toBe(true);
+    expect(generalNeedsUnlock("code")).toBe(true);
+    expect(generalNeedsUnlock("restricted")).toBe(false);
     // People with access ask for it only to give a role above Can open, which the access rules judge.
     expect(needsUnlock("access")).toBe(false);
   });

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Installs or updates the gatekeeper, the root component that sets or removes a
-# site's portal for the dashboard. See dashboard/gatekeeper.ts.
+# Installs or updates the gatekeeper, the root component that changes a site's
+# general access, Public, Restricted or Anyone with the code, for the
+# dashboard and for `sitesolide lock`. See dashboard/gatekeeper.ts.
 #
 #   bin/deploy-gatekeeper.sh
 #   bin/deploy-gatekeeper.sh --fingerprint   what it would install, nothing sent
@@ -9,9 +10,15 @@
 # Like the steward, its code does not travel with the dashboard: a root
 # component that rewrites a Caddy block and reloads Caddy only changes by this
 # deliberate gesture. The script builds a single file on the workstation,
-# installs it as root:root under /usr/local/lib/sitesolide/, sets the two unit
-# templates (sitesolide-gatekeeper-on@ and -off@, one per gesture), removes the
-# single template from before and reloads systemd.
+# installs it as root:root under /usr/local/lib/sitesolide/, sets the four unit
+# templates (sitesolide-gatekeeper-on@, -off@, -code@ and -renew@, one per
+# gesture), removes the single template from before and reloads systemd.
+#
+# It lays what the units open for writing and cannot create themselves, when
+# missing: /etc/caddy/locks, which the Caddyfile imports by glob,
+# /etc/caddy/locks-codes.json, an empty table of codes for the deployment
+# account in 0600, and /srv/garde, the door pages' folder. It never changes one
+# that is there.
 #
 # IT LAUNCHES NO TRANSACTION. No `systemctl start` of the gatekeeper, no reload
 # of Caddy: the first transaction will come from the steward, on demand. The
@@ -34,7 +41,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$REPO_ROOT/bin/config.sh"
 sitesolide_require_config
-UNITS=("sitesolide-gatekeeper-on@.service" "sitesolide-gatekeeper-off@.service")
+UNITS=("sitesolide-gatekeeper-on@.service" "sitesolide-gatekeeper-off@.service" "sitesolide-gatekeeper-code@.service" "sitesolide-gatekeeper-renew@.service")
+# What the units open for writing, and the gatekeeper cannot create, /etc/caddy
+# and /srv being read-only to it. The fragment's folder and the door pages'
+# keep the names the machine carries: see CLAUDE.md.
+LOCKS_FOLDER="/etc/caddy/locks"
+CODES_FILE="/etc/caddy/locks-codes.json"
+DOOR_PAGES_FOLDER="/srv/garde"
 # The single template from before wrote into the whole of /srv/sites: it must
 # not stay launchable next to the two new ones.
 PREVIOUS_TEMPLATE="sitesolide-gatekeeper@.service"
@@ -135,6 +148,11 @@ ssh -n "$SITESOLIDE_SERVER" "
   done
   sudo rm -f '$UNITS_FOLDER/$PREVIOUS_TEMPLATE'
   rm -rf $REMOTE
+  # Laid when missing, never changed when there: a machine that has locked a
+  # preview before carries them already.
+  sudo test -d $LOCKS_FOLDER || sudo install -d -m 0755 -o root -g root $LOCKS_FOLDER
+  sudo test -e $CODES_FILE || printf '{}\\n' | sudo install -m 0600 -o $DEPLOY_USER -g $DEPLOY_USER /dev/stdin $CODES_FILE
+  sudo test -d $DOOR_PAGES_FOLDER || sudo install -d -m 0755 -o root -g root $DOOR_PAGES_FOLDER
   sudo systemctl daemon-reload
 "
 # Installed: the checks that follow do nothing but read.
@@ -164,5 +182,9 @@ for unit in "${UNITS[@]}"; do
   fi
 done
 
-echo "   installed, two units verified, template from before removed, no transaction launched"
-echo "   first transaction: from the dashboard, by the steward"
+if ! ssh -n "$SITESOLIDE_SERVER" "sudo test -d $LOCKS_FOLDER && sudo test -f $CODES_FILE && sudo test -d $DOOR_PAGES_FOLDER"; then
+  fail "the preview locks' files are missing on the machine" "expected: $LOCKS_FOLDER, $CODES_FILE, $DOOR_PAGES_FOLDER"
+fi
+
+echo "   installed, four units verified, template from before removed, no transaction launched"
+echo "   first transaction: from the dashboard, or sitesolide lock, by the steward"

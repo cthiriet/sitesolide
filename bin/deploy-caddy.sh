@@ -14,10 +14,10 @@
 # blocks of the other projects are the machine's, and a deployment of one site
 # never rewrites another's.
 #
-# WHAT IS NOT DEPOSITED HERE: /etc/caddy/locks/*.caddy, produced by bin/lock.sh
-# from the codes that live on the VM, and /etc/caddy/domaines.map, produced by
-# bin/generate-domains.sh. Overwriting them from the workstation would reopen
-# locked previews.
+# WHAT IS NOT DEPOSITED HERE: /etc/caddy/locks/*.caddy, written by the
+# dashboard's gatekeeper from the codes that live on the VM, and
+# /etc/caddy/domaines.map, produced by bin/generate-domains.sh. Overwriting
+# them from the workstation would reopen locked previews.
 #
 # WHAT STOPS THE SCRIPT BEFORE ANY WRITE: a block given whose door contradicts
 # the manifest the VM carries for its site. The portal of a deployed site is set
@@ -31,7 +31,7 @@
 # or during the verification, was overwritten by the deposit or by the rsync
 # --delete of the restore, and the site served in the clear without anything
 # saying so. Launched by a gesture that already holds the lock, `sitesolide
-# deploy`, `remove` or bin/lock.sh, the script receives its line in
+# deploy` or `remove`, the script receives its line in
 # CADDY_LOCK_HELD: it checks on the VM that the holder really is that one, and
 # neither takes nor releases anything. In a dry run, it takes nothing, writing
 # nothing. See bin/cli/caddy-lock.ts.
@@ -458,8 +458,8 @@ for address in ${ADDRESSES[@]+"${ADDRESSES[@]}"}; do
     done
   fi
   case "$code" in
-    # 401 is the intended behaviour of a locked preview, see bin/lock.sh, and of
-    # a site behind the portal, see portal/README.md.
+    # 401 is the intended behaviour of a site that opens with a code, see
+    # api/src/locks.ts, and of a site behind the portal, see portal/README.md.
     200) printf "   %-44s %s\n" "$address" "$code" ;;
     401) printf "   %-44s %s (closed: lock or portal)\n" "$address" "$code" ;;
     # A 404 at the root most often means nothing is served there: an app

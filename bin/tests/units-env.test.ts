@@ -24,6 +24,8 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UNITS: ReadonlyArray<readonly [unit: string, entryPoint: string]> = [
   ["infra/gatekeeper/sitesolide-gatekeeper-on@.service", "dashboard/src/gatekeeper/main.ts"],
   ["infra/gatekeeper/sitesolide-gatekeeper-off@.service", "dashboard/src/gatekeeper/main.ts"],
+  ["infra/gatekeeper/sitesolide-gatekeeper-code@.service", "dashboard/src/gatekeeper/main.ts"],
+  ["infra/gatekeeper/sitesolide-gatekeeper-renew@.service", "dashboard/src/gatekeeper/main.ts"],
   ["infra/collector/sitesolide-collector.service", "dashboard/collector.ts"],
   ["infra/steward/sitesolide-steward.service", "dashboard/steward.ts"],
   ["infra/installer/sitesolide-installer@.service", "dashboard/src/installer/main.ts"],

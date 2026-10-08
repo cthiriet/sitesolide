@@ -170,38 +170,38 @@ describe("the manifest on the VM", () => {
   });
 });
 
-describe("the lock from the project's folder", () => {
+describe("the preview code from the project's folder", () => {
   /**
-   * `lock` and `unlock` do not rewrite the gesture: they run bin/lock.sh,
-   * which lays the code, writes the manifest, generates the fragment,
-   * validates it, reloads Caddy and measures the result, with a restore on
-   * every failure. Two paths towards the same configuration in service is what
-   * the disappearance of site.json has just corrected.
+   * `lock` and `unlock` do not rewrite the gesture: they ask the steward on
+   * its owner socket, which launches the gatekeeper, the one path that
+   * changes a site's general access on the machine, the dashboard's as well.
+   * In a dry run, nothing leaves: the request is shown, with the slug the
+   * manifest names, never the folder's.
    */
 
-  test("lock closes the preview of the slug, not of the folder name", async () => {
-    // The folder is called showcase-simple and the slug sample-static: it is
-    // the case of a project deployed from somewhere other than the sites
-    // repository, and the script therefore receives the folder rather than
-    // deducing it from the slug.
+  test("lock asks for Anyone with the code, for the slug, not the folder name", async () => {
+    // The folder is called simple-site and the slug sample-static: it is the
+    // case of a project deployed from somewhere other than the sites
+    // repository.
     const r = await run("projects/simple-site", ["lock", "--dry-run"]);
     expect(r.code).toBe(0);
-    expect(r.output).toContain("lock.sh enable sample-static");
+    expect(r.output).toContain("/run/sitesolide-steward-owner/owner.sock http://steward/general");
+    expect(r.output).toContain('{"slug":"sample-static","access":"code"}');
+    expect(r.output).not.toContain("lock.sh");
   });
 
-  test("unlock reopens", async () => {
+  test("unlock asks for Public", async () => {
     const r = await run("projects/simple-site", ["unlock", "--dry-run"]);
     expect(r.code).toBe(0);
-    expect(r.output).toContain("lock.sh disable sample-static");
+    expect(r.output).toContain('{"slug":"sample-static","access":"public"}');
   });
 
-  test("--new-code renews instead of recalling", async () => {
-    // Without this flag, `lock` on an already closed site gives back the code
-    // in force: generating a fresh one would break the link already sent to
-    // the client.
+  test("--new-code asks for a new code instead of the one in force", async () => {
+    // Without this flag, `lock` on a site that opens with a code gives back the
+    // code in force: a fresh one would break the link already sent.
     const r = await run("projects/simple-site", ["lock", "--new-code", "--dry-run"]);
     expect(r.code).toBe(0);
-    expect(r.output).toContain("lock.sh code sample-static");
+    expect(r.output).toContain('{"slug":"sample-static","access":"code","renew":true}');
   });
 });
 

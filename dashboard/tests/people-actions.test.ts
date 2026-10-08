@@ -115,6 +115,8 @@ async function mount(): Promise<Bench> {
     accountsFile: join(root, "passwd"),
     caddyFolder: caddy,
     gatekeeperFolder: gatekeeper,
+    codesFile: join(gatekeeper, "..", "locks-codes.json"),
+    locksFragment: join(gatekeeper, "..", "verrous.caddy"),
     systemctl: "/path/that/does/not/exist",
   });
   const system: System = {
@@ -126,13 +128,24 @@ async function mount(): Promise<Bench> {
     systemctl: async (arguments_): Promise<Command> => {
       calls.push(arguments_);
       if (arguments_[0] === "restart" && barrier.promise !== null) await barrier.promise;
-      // The gatekeeper writes its result, as the real one does once Caddy answered.
+      // The gatekeeper writes its result, as the real one does once Caddy
+      // answered; for the code, the manifest, the codes and the fragment too.
       const unit = arguments_[0] === "start" ? arguments_[1] ?? "" : "";
-      const door = unit.match(/^sitesolide-gatekeeper-(on|off)@(.+)\.service$/);
+      const door = unit.match(/^sitesolide-gatekeeper-(on|off|code|renew)@(.+)\.service$/);
       if (door !== null) {
+        const [, action, slug] = door as unknown as [string, string, string];
+        if (action === "code" || action === "renew") {
+          const path = join(sites, slug, "sitesolide.json");
+          const { portal: _portal, ...manifest } = JSON.parse(readFileSync(path, "utf8"));
+          writeFileSync(path, JSON.stringify({ ...manifest, lock: true }));
+          writeFileSync(join(caddy, `${slug}.caddy`), `${slug}.{$SITESOLIDE_ZONE} {\n\treverse_proxy 127.0.0.1:3062\n}\n`);
+          const code = action === "code" ? DRAWN : RENEWED;
+          writeFileSync(join(root, "locks-codes.json"), JSON.stringify({ [slug]: code }), { mode: 0o600 });
+          writeFileSync(join(root, "verrous.caddy"), `# Preview lock: ${slug}\n@lock_key_${slug} query key=${code}\n`);
+        }
         writeFileSync(
-          join(gatekeeper, `${door[2]}.json`),
-          JSON.stringify({ a: clock.t + 1, result: "ok", message: `portal ${door[1]} for ${door[2]}`, requested: door[1] === "on", installed: door[1] === "on" }),
+          join(gatekeeper, `${slug}.json`),
+          JSON.stringify({ a: clock.t + 1, result: "ok", message: `portal ${action} for ${slug}`, requested: action === "on", installed: action === "on" }),
           { mode: 0o600 },
         );
       }
@@ -198,6 +211,10 @@ async function ownerUnlock(bench: Bench): Promise<string> {
   const response = await bench.call("POST", "/unlock", { password: PASSWORD });
   return ((await response.json()) as { token: string }).token;
 }
+
+/** The codes the simulated gatekeeper draws. */
+const DRAWN = "K7M2PQ";
+const RENEWED = "W4XN8R";
 
 /** Alice: Developer on alpha, Admin on beta, Viewer on shop. Bob: Developer on alpha. */
 const TEAM: People = { [ALICE]: { alpha: "developer", beta: "admin", shop: "viewer" }, [BOB]: { alpha: "developer" } };
@@ -492,6 +509,50 @@ describe("an Admin's project", () => {
     expect(restricted.status).not.toBe(401);
     expect(bench.calls).toContainEqual(["start", "sitesolide-gatekeeper-on@beta.service"]);
     expect(bench.journal().concat(bench.accessLog()).findLast((one) => one.operation === "portal")).toMatchObject({ actor: ALICE, slug: "beta" });
+  });
+
+  test("opens it with a code under her own unlock, the slug retyped; the code in her answer, her email in the journal, never the code", async () => {
+    const bench = await mount();
+    const { alice } = await team(bench);
+    const locked = await bench.call("POST", "/people/general", { session: alice, slug: "beta", access: "code", confirmation: "beta" });
+    expect(locked.status).toBe(401);
+    expect(await body(locked)).toMatchObject({ error: "locked" });
+    const token = await unlockAs(bench, alice, ALICE);
+    const unconfirmed = await bench.call("POST", "/people/general", { session: alice, token, slug: "beta", access: "code", confirmation: "" });
+    expect(await body(unconfirmed)).toMatchObject({ error: "invalid", message: "type beta to confirm opening it with a code" });
+    expect(bench.calls).not.toContainEqual(["start", "sitesolide-gatekeeper-code@beta.service"]);
+
+    const coded = await bench.call("POST", "/people/general", { session: alice, token, slug: "beta", access: "code", confirmation: "beta" });
+    expect(coded.status).toBe(200);
+    expect(await body(coded)).toMatchObject({ general: { access: "code" }, code: { code: DRAWN, url: `https://beta.${ZONE}/?key=${DRAWN}` } });
+    expect(bench.calls).toContainEqual(["start", "sitesolide-gatekeeper-code@beta.service"]);
+    expect(bench.accessLog().at(-1)).toMatchObject({ operation: "portal", result: "ok", actor: ALICE, slug: "beta", detail: "code, ok" });
+
+    const renewed = await bench.call("POST", "/people/general", { session: alice, token, slug: "beta", access: "code", renew: true, confirmation: "" });
+    expect(await body(renewed)).toMatchObject({ code: { code: RENEWED } });
+    expect(bench.accessLog().at(-1)).toMatchObject({ operation: "code", result: "ok", actor: ALICE, slug: "beta", detail: "renew, ok" });
+    const lines = JSON.stringify([bench.journal(), bench.accessLog()]);
+    expect(lines).not.toContain(DRAWN);
+    expect(lines).not.toContain(RENEWED);
+
+    // Back to Restricted: no unlock asked.
+    const fresh = await sessionOf(bench, ALICE);
+    const restricted = await bench.call("POST", "/people/general", { session: fresh, slug: "beta", access: "restricted", confirmation: "" });
+    expect(restricted.status).toBe(200);
+    expect(bench.calls).toContainEqual(["start", "sitesolide-gatekeeper-on@beta.service"]);
+  });
+
+  test("a Developer or a Viewer does not choose a code, unlocked or not", async () => {
+    const bench = await mount();
+    const { alice, bob } = await team(bench);
+    const bobToken = await unlockAs(bench, bob, BOB);
+    expect(await body(await bench.call("POST", "/people/general", { session: bob, token: bobToken, slug: "alpha", access: "code", confirmation: "alpha" }))).toMatchObject({
+      error: "out-of-scope",
+      message: `${BOB} is a Developer on alpha: changing its general access takes an Admin`,
+    });
+    const aliceToken = await unlockAs(bench, alice, ALICE);
+    expect(await body(await bench.call("POST", "/people/general", { session: alice, token: aliceToken, slug: "shop", access: "code", confirmation: "shop" }))).toMatchObject({ error: "out-of-scope" });
+    expect(bench.calls.filter((call) => call[0] === "start")).toEqual([]);
   });
 
   test("restores a snapshot of it, the requester the email the steward verified; a Developer cannot", async () => {

@@ -10,6 +10,10 @@
  *     recognisable by `X-Portal: connexion` (portal/src/gate.ts). A 200 there
  *     would be the worst possible state: a site its owner believes closed.
  *
+ * A site that opens with a code answers the door page's 401 to whoever has no
+ * code, a 401 that is not the portal's, and the site itself to whoever sends
+ * the right cookie; the cookie of a code replaced must no longer open it.
+ *
  * Beyond the targeted site, **every served site** must still answer: a block
  * that claimed another's host by mistake would be enough to cut it off. The
  * comparison is made against a reading taken before the action. A site that
@@ -46,6 +50,46 @@ export function judgeTarget(active: boolean, host: string, response: ProbeRespon
   }
   if (fromPortal(response)) return `${host} still answers the portal's 401`;
   return answers(response) ? null : `${host} does not answer, got ${describe(response)}`;
+}
+
+/**
+ * What a site answers once it opens: not a 401, not a server error. A
+ * redirect counts, an app may send its home elsewhere; the door page and the
+ * portal never redirect, they answer 401.
+ */
+export function opens(response: ProbeResponse): boolean {
+  return "code" in response && response.code >= 200 && response.code < 400;
+}
+
+/** The door page's 401: a 401 the portal did not write. */
+export function fromDoor(response: ProbeResponse): boolean {
+  return "code" in response && response.code === 401 && !response.door;
+}
+
+/** What a site that opens with a code was asked, and answered. */
+export type CodedResponses = { without: ProbeResponse; withCode: ProbeResponse; withPrevious: ProbeResponse | null };
+
+/**
+ * A site that opens with a code, after the action: null if it is in the
+ * wanted state, otherwise what is wrong, in English. Never the code itself:
+ * the message reaches the page and the journal.
+ */
+export function judgeCoded(host: string, responses: CodedResponses): string | null {
+  if (!fromDoor(responses.without)) return `${host} should answer the door page's 401 without a code, got ${describe(responses.without)}`;
+  if (!opens(responses.withCode)) return `${host} should open with its code, got ${describe(responses.withCode)}`;
+  if (responses.withPrevious !== null && !fromDoor(responses.withPrevious)) {
+    return `${host} still opens with the code it replaced, got ${describe(responses.withPrevious)}`;
+  }
+  return null;
+}
+
+/**
+ * A site made public after it opened with a code: the stanza must be gone,
+ * so it opens without one. The door page's 401 would say it is still closed.
+ */
+export function judgeOpened(host: string, response: ProbeResponse): string | null {
+  if (fromPortal(response)) return `${host} still answers the portal's 401`;
+  return opens(response) ? null : `${host} should open without a code, got ${describe(response)}`;
 }
 
 /**

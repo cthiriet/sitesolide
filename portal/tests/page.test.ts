@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { signInPage, signedOutPage, doorPage, portalPage } from "../src/page";
+import { signInPage, signedOutPage, doorPage, portalPage, DOOR_PAGE_MARKER } from "../src/page";
 
 /** The chunk of page between two markers, bounds included. */
 function between(page: string, start: string, end: string): string {
@@ -15,14 +15,25 @@ describe("the door page of the previews", () => {
     // of a stylesheet or an image: what it would ask of the server would come
     // back to it as HTML, and the page would be displayed bare. The icon in
     // `data:` and the inline CSS are precisely what spares it that.
-    const page = doorPage();
+    const page = doorPage("");
     for (const external of ['href="http', 'src="http', "url(http", "<script src", "<link rel=\"stylesheet"]) {
       expect(page).not.toInclude(external);
     }
   });
 
+  test("names the contact address it is given, escaped, and none without one", () => {
+    const page = doorPage('owner+"x"@test-zone.invalid');
+    expect(page).toInclude("No code?");
+    expect(page).toInclude("mailto:owner+&quot;x&quot;@test-zone.invalid?subject=Access%20code");
+    expect(doorPage("")).not.toInclude("No code?");
+  });
+
+  test("carries the marker the gatekeeper recognises a generated page by", () => {
+    expect(doorPage("")).toInclude(DOOR_PAGE_MARKER);
+  });
+
   test("sends the code with a GET to the root, which the Caddy stanza compares", () => {
-    const page = doorPage();
+    const page = doorPage("");
     expect(page).toInclude('<form method="get" action="/">');
     expect(page).toInclude('name="key"');
     expect(page).toInclude('pattern="[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}"');
@@ -97,13 +108,13 @@ describe("the page a site's sign-out answers", () => {
     expect(page).toInclude('href="https://portal.test-zone.invalid/oidc/signout?ticket=a.b&amp;x=&quot;y"');
     expect(page).not.toInclude('"y"');
     // The door page shares the template and gains nothing from it.
-    expect(doorPage()).not.toInclude("http-equiv");
+    expect(doorPage("")).not.toInclude("http-equiv");
   });
 });
 
 describe("a single template for both", () => {
   test("same stylesheet, same icon, same brand", () => {
-    const lockPage = doorPage();
+    const lockPage = doorPage("");
     const signIn = signInPage("/");
     for (const [start, end] of [
       ["<style>", "</style>"],
@@ -115,7 +126,7 @@ describe("a single template for both", () => {
   });
 
   test("the brand is the one of test-zone.invalid: the slotted block, then the name", () => {
-    for (const page of [doorPage(), signInPage("/")]) {
+    for (const page of [doorPage(""), signInPage("/")]) {
       const brand = between(page, '<p class="brand">', "</p>");
       expect(brand).toInclude('fill="url(#mark-fill)"');
       expect(brand).toInclude('<svg viewBox="0 0 32 32" aria-hidden="true">');
@@ -124,7 +135,7 @@ describe("a single template for both", () => {
   });
 
   test("no external resource: the door page would serve itself in a loop", () => {
-    for (const page of [doorPage(), signInPage("/")]) {
+    for (const page of [doorPage(""), signInPage("/")]) {
       expect(page).not.toMatch(/\ssrc=/);
       expect(page).not.toMatch(/href="https?:/);
       expect(page).not.toInclude("@import");

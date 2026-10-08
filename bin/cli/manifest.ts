@@ -7,7 +7,7 @@
  *
  * It is a site's only configuration file, on both sides: it is versioned in the
  * repository and deposited as is at the root of the project on the VM, where
- * api/src/table.ts and api/scripts/generate-locks.ts read it again. The
+ * api/src/table.ts and the dashboard's gatekeeper read it again. The
  * `site.json` with French keys that held this role is gone: two files for a
  * single state ended up diverging, and the lock showed it.
  *
@@ -950,11 +950,12 @@ function readObject(raw: string): Record<string, unknown> {
 }
 
 /**
- * The manifest rewritten with its `lock` field, as bin/lock.sh records it.
+ * The manifest rewritten with its `lock` field, as the gatekeeper writes it on
+ * the machine and `deploy` makes the repository follow.
  *
  * The lock lives here and nowhere else: this is the file the deployment
- * deposits on the VM and that the lock generator reads there, and a lock
- * written elsewhere would be erased at the next deployment.
+ * deposits on the VM and that the gatekeeper generates the locks from, and a
+ * lock written elsewhere would be erased at the next deployment.
  *
  * The field disappears when the lock is lifted, rather than being `false`: its
  * absence is already the shape open sites have, and two ways of writing the

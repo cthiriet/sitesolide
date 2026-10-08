@@ -158,6 +158,9 @@ export type Operation =
   | "replace"
   | "password"
   | "portal"
+  // A new code for a site that opens with one: `portal` says the general
+  // access chosen, this the code replaced, never the code itself.
+  | "code"
   | "restart"
   // Someone given access to a project, their role changed, or taken off; the
   // registry made from the stores before it; the right to create projects.

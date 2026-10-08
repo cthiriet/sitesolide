@@ -186,6 +186,11 @@ export type Lock = {
   code: string | null;
   /** The address to send to the client, code included, or null without a code. */
   url: string | null;
+  /**
+   * A code is in force, but not shown to whoever reads: a Viewer or a
+   * Developer of the site, see src/people/view.ts. Absent for the owner.
+   */
+  withheld?: boolean;
 };
 
 /**
@@ -531,9 +536,10 @@ export function buildSnapshot(raw: Raw): Snapshot {
  * does.
  *
  * It is the only part of the dashboard that teaches you something: the rest is
- * already read in git. The first two rules take up those that stop
- * `api/scripts/generate-locks.ts`, so that a disagreement shows here before
- * stopping the regeneration triggered by a completely different site.
+ * already read in git. The first two rules take up those that stop the
+ * gatekeeper's generation of the preview locks (`buildFragment` in
+ * api/src/locks.ts), so that a disagreement shows here before stopping a
+ * change of general access on a completely different site.
  */
 export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
   const discrepancies: Discrepancy[] = [];
@@ -547,8 +553,8 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         slug,
         severity: "error",
         message:
-          "Preview code requested but none is valid: the next regeneration will fail, " +
-          `give it one again with "sitesolide lock" from the ${slug} folder`,
+          "Preview code requested but none is valid: every change of a preview code will be refused until it is mended. " +
+          "Choose one in its Access section"
       });
     }
 
@@ -576,8 +582,8 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         slug,
         severity: "error",
         message:
-          "Preview code in effect although sitesolide.json no longer asks for one: " +
-          `remove it with "sitesolide unlock" from the ${slug} folder`,
+          "Preview code in effect although sitesolide.json no longer asks for one. " +
+          "Choose one in its Access section"
       });
     }
 

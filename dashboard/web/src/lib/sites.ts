@@ -51,7 +51,8 @@ export function siteAddress(site: Pick<Site, "address" | "domain">): Address {
 export type Mismatch = "portal-absent" | "portal-extra" | "code-without-lock" | "lock-without-code"
 
 export type Access =
-  | { kind: "code"; code: string; url: string | null }
+  /** `code` null: one is in force, withheld from whoever reads, a Viewer or a Developer. */
+  | { kind: "code"; code: string | null; url: string | null }
   | { kind: "portal"; exemptions: string[] }
   | { kind: "open" }
   | { kind: "mismatch"; key: Mismatch; label: string }
@@ -73,6 +74,9 @@ export function siteAccess(site: Pick<Site, "portal" | "lock">): Access {
   if (wanted) return { kind: "portal", exemptions }
 
   const { closed, code, url } = site.lock
+  // A code in force the snapshot does not show this reader: the site opens
+  // with one, and an Admin of it holds it.
+  if (closed && code === null && site.lock.withheld === true) return { kind: "code", code: null, url: null }
   if (!closed && code !== null) return { kind: "mismatch", key: "code-without-lock", label: "A code on the server, none in sitesolide.json" }
   if (closed && code === null) return { kind: "mismatch", key: "lock-without-code", label: "A code in sitesolide.json, none on the server" }
   if (closed && code !== null) return { kind: "code", code, url }

@@ -31,9 +31,10 @@
  *   of those domains, and removes Can open entries, when its person is an
  *   Admin of the project. `people` is the owner's alone.
  *
- * **What is never done here.** General access, public or restricted, is the
- * dashboard's Access section; the preview code is `sitesolide lock`. No
- * email is sent: the command prints the line to send, and a password once.
+ * **What is never done here.** General access is the dashboard's Access
+ * section, or `sitesolide lock` and `unlock` for the code, which reach the
+ * steward's owner socket through `sshGeneral` below. No email is sent: the
+ * command prints the line to send, and a password once.
  *
  * The decisions are pure; the transports and the output are handed in.
  */
@@ -250,7 +251,7 @@ export function entryText(entry: EntryView): string {
 const GENERAL: Readonly<Record<"public" | "restricted" | "code", string>> = {
   public: "Public: anyone can open it.",
   restricted: "Restricted: visitors are asked to sign in.",
-  code: "Anyone with the code: the preview code opens it, set with sitesolide lock.",
+  code: "Anyone with the code: the preview code opens it.",
 };
 
 /**
@@ -533,8 +534,22 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * A change of general access, the JSON body on standard input. It waits for
+ * the steward's lock and then for the gatekeeper, up to ninety seconds: curl
+ * waits longer than for the other routes.
+ */
+export function ownerGeneralCommand(): string {
+  return `sudo curl -sS --max-time 240 -X POST -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' ${SOCKET} http://steward/general`;
+}
+
 /** The steward's answer over SSH, or the failure in the command's words. */
-async function askSteward(run: RunOnMachine, command: string, input?: string): Promise<Reading<Record<string, unknown>>> {
+async function askSteward(
+  run: RunOnMachine,
+  command: string,
+  input?: string,
+  words: { outdated: string; unchanged: boolean } = { outdated: "the steward on the server does not keep people with access yet: run sitesolide upgrade first", unchanged: true },
+): Promise<Reading<Record<string, unknown>>> {
   const done = await run(command, input);
   if (done.code === 255) {
     return { ok: false, failure: { error: "ssh-failed", message: "cannot reach the server over SSH: nothing was changed", details: [done.error.trim() || "no message"] } };
@@ -560,11 +575,12 @@ async function askSteward(run: RunOnMachine, command: string, input?: string): P
   }
   if (!isObject(body)) return { ok: false, failure: { error: "failure", message: `the steward answered ${answer.status} with something this CLI cannot read` } };
   if (answer.status === 404 && body.message === "no such route") {
-    return { ok: false, failure: { error: "steward-outdated", message: "the steward on the server does not keep people with access yet: run sitesolide upgrade first" } };
+    return { ok: false, failure: { error: "steward-outdated", message: words.outdated } };
   }
   if (answer.status >= 400) {
     const code = typeof body.error === "string" ? body.error : "failure";
-    return { ok: false, failure: { error: code, message: `${typeof body.message === "string" ? body.message : `refused (${answer.status})`}: nothing was changed` } };
+    const said = typeof body.message === "string" ? body.message : `refused (${answer.status})`;
+    return { ok: false, failure: { error: code, message: words.unchanged ? `${said}: nothing was changed` : said } };
   }
   return { ok: true, value: body };
 }
@@ -633,4 +649,35 @@ export function sshPeople(run: RunOnMachine): PeopleTransport {
       return { ok: true, value: { people: counted, projects } };
     },
   };
+}
+
+// --- general access, for `sitesolide lock` and `unlock` -------------------------------
+
+/** What the steward answers once the gatekeeper is done, as far as the command reads it. */
+export type GeneralAnswer = {
+  general: { access: "public" | "restricted" | "code" };
+  /** The gatekeeper's verdict, in its words. */
+  detail: string;
+  /** The code in force when the site opens with one: the steward read it back from the machine. */
+  code: { code: string; url: string | null } | null;
+};
+
+/**
+ * The owner's way to a site's general access: root on the machine asks the
+ * steward on its owner socket, which launches the gatekeeper, the one path
+ * that changes Caddy from the machine, the dashboard's too. `renew` asks for a
+ * new code. The gatekeeper's message comes back as it stands: a failure says
+ * itself whether the previous configuration was restored.
+ */
+export async function sshGeneral(run: RunOnMachine, slug: string, access: "public" | "code", renew: boolean): Promise<Reading<GeneralAnswer>> {
+  if (!SLUG.test(slug)) return { ok: false, failure: { error: "invalid", message: `${slug} is not a project's slug` } };
+  const read = await askSteward(run, ownerGeneralCommand(), JSON.stringify({ slug, access, ...(renew ? { renew } : {}) }), {
+    outdated: "the steward on the server cannot change a site's general access yet: run sitesolide upgrade first, which brings the steward and the gatekeeper up to date",
+    unchanged: false,
+  });
+  if (!read.ok) return read;
+  const { general, detail, code } = read.value;
+  if (!isObject(general) || typeof general.access !== "string" || typeof detail !== "string") return unreadable("answer");
+  if (code !== null && (!isObject(code) || typeof code.code !== "string")) return unreadable("answer");
+  return { ok: true, value: read.value as unknown as GeneralAnswer };
 }

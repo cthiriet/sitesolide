@@ -9,7 +9,7 @@
  *   1. `import tls-zone` in the preview block, failing which that block gets
  *      its own certificate instead of sharing the wildcard, silently;
  *   2. `import /etc/caddy/locks/*.caddy` in that same block, and in it alone:
- *      without it `bin/lock.sh enable` fails and the preview stays open; put
+ *      without it the gatekeeper's check of a code fails and nothing changes; put
  *      on a final domain, it would close the customer's site;
  *   3. **no `handle`**: all the `handle` of one block form an exclusive group,
  *      the lock's would win, and the visitor holding the right code would get a
@@ -281,7 +281,7 @@ export function generateFragment(manifest: Manifest, generation: PortalGeneratio
       : ['\theader X-Robots-Tag "noindex, nofollow"']),
     "",
     "\t# Without this import, this project would be the only one unable to",
-    "\t# lock itself, and bin/lock.sh enable would fail on its check.",
+    "\t# open with a code: the gatekeeper would find it still open, and undo.",
     `\t${IMPORT_LOCKS}`,
     "",
     ...portalStanza(manifest, generation),

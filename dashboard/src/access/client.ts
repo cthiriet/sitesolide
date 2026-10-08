@@ -14,6 +14,11 @@ export type AccessSteward = {
   removePerson: (email: unknown) => Promise<Response>;
   /** The site's portal put up or taken away, the steward's `/portal`: the unlock to take it away, none to put it up. */
   portal: (requested: { token?: string; slug: unknown; active: boolean; confirmation: string }) => Promise<Response>;
+  /**
+   * The site's general access, any of the three, or a new code, the
+   * steward's `/general`: the unlock for all but Restricted.
+   */
+  general: (requested: { token?: string; slug: unknown; access: "public" | "restricted" | "code"; renew?: boolean; confirmation: string }) => Promise<Response>;
 };
 
 /** Every access route answers within seconds. */
@@ -41,5 +46,6 @@ export function localAccessSteward(socket: string): AccessSteward {
     putPerson: (requested) => call("PUT", "/people/person", requested),
     removePerson: (email) => call("DELETE", "/people/person", { email }),
     portal: (requested) => call("POST", "/portal", requested, PORTAL_TIMEOUT_MS),
+    general: (requested) => call("POST", "/general", requested, PORTAL_TIMEOUT_MS),
   };
 }

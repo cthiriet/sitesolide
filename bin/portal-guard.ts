@@ -3,7 +3,6 @@
  * The portal guard, run by the scripts before any write.
  *
  *   SITESOLIDE_SERVER=<account@host> bun bin/portal-guard.ts <block.caddy>...
- *   SITESOLIDE_SERVER=<account@host> bun bin/portal-guard.ts --manifest <slug> <sitesolide.json> lock|unlock
  *   SITESOLIDE_SERVER=<account@host> bun bin/portal-guard.ts --lock take <who> <pid>
  *   SITESOLIDE_SERVER=<account@host> bun bin/portal-guard.ts --lock release|verify <holder line>
  *
@@ -18,14 +17,10 @@
  * and standard output names, one per line, the sites that their deposited
  * manifest puts behind the portal.
  *
- * The second is the one of bin/lock.sh, which deposits the local manifest as
- * is: it would erase the door of the deposited manifest in the same way. Only
- * the site's manifest is read. Exit 0: the gesture may deposit that manifest.
+ * Exit 1: a contradiction or an unreadable read, told on the error output.
+ * Exit 2: a malformed call.
  *
- * Exit 1 in both cases: a contradiction or an unreadable read, told on the
- * error output. Exit 2: a malformed call.
- *
- * The third is the lock that the scripts share with the dashboard's gatekeeper
+ * The second is the lock that the scripts share with the dashboard's gatekeeper
  * before touching Caddy, see bin/cli/caddy-lock.ts. `take` prints the holder
  * line, which the script keeps in order to release it or to pass it on through
  * CADDY_LOCK_HELD; held by another, it refuses with exit 1. `release` only
@@ -40,7 +35,6 @@
  * and writes nothing other than the lock.
  */
 import { basename } from "node:path";
-import { isValidSlug } from "./cli/manifest";
 import { fragmentIsProtected } from "./cli/portal";
 import {
   takeLock,
@@ -52,10 +46,7 @@ import {
 } from "./cli/caddy-lock";
 import {
   readManifestsCommand,
-  guardDepositedManifest,
   guardPortals,
-  readDepositedManifest,
-  portalFromManifest,
 } from "./cli/portal-vm";
 
 /** An indented line details the previous one; the others are each a refusal. */
@@ -141,19 +132,6 @@ if (arguments_[0] === "--lock") {
   } else {
     die(["usage: portal-guard.ts --lock take|release|verify ..."], 2);
   }
-} else if (arguments_[0] === "--manifest") {
-  const [, slug = "", path = "", action = ""] = arguments_;
-  if (action !== "lock" && action !== "unlock") {
-    die(["usage: portal-guard.ts --manifest <slug> <sitesolide.json> lock|unlock"], 2);
-  }
-  if (!isValidSlug(slug)) die([`invalid slug: ${slug}`], 2);
-  const file = Bun.file(path);
-  if (!(await file.exists())) die([`not found: ${path}`], 2);
-  const local = portalFromManifest(await file.text(), slug);
-  if (local.kind === "unreadable") die([`cannot read ${path}: ${local.reason}`]);
-
-  const agreement = guardDepositedManifest(slug, local.portal, readDepositedManifest(await read(slug), slug), action);
-  if (agreement.kind === "rejects") die([agreement.message, ...agreement.details.map((line) => `  ${line}`)]);
 } else {
   const blocks = await Promise.all(
     arguments_.map(async (path) => ({

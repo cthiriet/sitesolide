@@ -258,6 +258,8 @@ beforeAll(async () => {
     accountsFile: join(root, "passwd"),
     caddyFolder: join(root, "caddy"),
     gatekeeperFolder: folder("gatekeeper"),
+    codesFile: join(folder("gatekeeper"), "..", "locks-codes.json"),
+    locksFragment: join(folder("gatekeeper"), "..", "verrous.caddy"),
     systemctl: "/path/that/does/not/exist",
   });
   let clock = Date.now();

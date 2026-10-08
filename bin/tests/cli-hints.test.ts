@@ -58,10 +58,10 @@ describe("the hints", () => {
     if (secret.kind === "rejects") messages.push(secret.message);
     const unreadable = { kind: "unreadable", reason: "no answer" } as const;
     for (const decision of [
-      decidePortal("shop", false, unreadable),
-      confirmDoorUnderLock("shop", true, { kind: "present", portal: false }),
-      guardDepositedManifest("shop", false, { kind: "present", portal: true }, "lock"),
-      guardDepositedManifest("shop", true, { kind: "present", portal: false }, "domain"),
+      decidePortal("shop", { portal: false, lock: false }, unreadable),
+      confirmDoorUnderLock("shop", { portal: true, lock: false }, { kind: "present", portal: false, lock: false }),
+      guardDepositedManifest("shop", { portal: false, lock: false }, { kind: "present", portal: true, lock: false }, "domain"),
+      guardDepositedManifest("shop", { portal: true, lock: false }, { kind: "present", portal: false, lock: false }, "domain"),
     ]) {
       if (decision.kind === "rejects") messages.push(decision.message);
     }

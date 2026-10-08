@@ -107,6 +107,7 @@ export type {
   EntryResponse,
   EntryView,
   GeneralAccess,
+  GeneralResponse,
   GeneralView,
   PeoplePageResponse,
   PersonResponse,

@@ -2,9 +2,10 @@
  * The lock that the CLI, the scripts in bin/ and the dashboard's gatekeeper
  * share before touching Caddy's configuration.
  *
- * The gatekeeper puts up and takes down a site's portal on the VM: it rewrites
- * the deposited manifest and the block, validates and reloads. `sitesolide
- * deploy`, bin/deploy-caddy.sh and bin/lock.sh read the VM's door, then deposit
+ * The gatekeeper changes a site's general access on the VM: it rewrites the
+ * deposited manifest, the block or the preview locks, validates and reloads.
+ * `sitesolide deploy`, bin/deploy-caddy.sh and bin/generate-domains.sh read
+ * the VM's door, then deposit
  * minutes later, and may restore a backup with `rsync --delete`. A gatekeeper
  * action falling inside that window was overwritten with nothing to say so: a
  * site closed from the dashboard went back to being served in the clear. The

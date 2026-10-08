@@ -141,6 +141,7 @@ describe("each source's rows, in one shape", () => {
       "access.migrate",
       "access.remove",
       "backup.restore",
+      "code",
       "create",
       "dashboard.signin",
       "dashboard.signin_failed",

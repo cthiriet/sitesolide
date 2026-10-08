@@ -406,9 +406,12 @@ already covers it.
 
 ### `lock`
 
-Written by `sitesolide lock`, not by hand. It says the preview is closed behind
-a code, its general access *Anyone with the code*; the code itself lives on the
-machine and never enters the repository.
+Not written by hand. It says the preview is closed behind a code, its general
+access *Anyone with the code*, and the machine is its source of truth, as for
+`portal`: the site's *Access* section in the dashboard, or `sitesolide lock`
+in its folder, sets it on the machine with the code, and the next `sitesolide
+deploy` writes it here, to commit. The code itself lives on the machine and
+never enters the repository. `lock` and `portal` never go together.
 
 ### `portal` and `portalExempt`
 

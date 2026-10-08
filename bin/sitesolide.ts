@@ -46,16 +46,17 @@
  * `deploy` puts in place is idempotent: the second run changes nothing on the
  * machine.
  *
- * THE PORTAL OF A DEPLOYED SITE IS SET FROM THE DASHBOARD, AND THE VM IS THE
- * SOURCE OF TRUTH THERE TOO. The dashboard's gatekeeper rewrites on the machine
- * the deposited manifest and the site's Caddy block, without changing anything
- * in the repository. Now `deploy` deposits the repository's manifest again and
+ * THE GENERAL ACCESS OF A DEPLOYED SITE IS SET FROM THE DASHBOARD, AND THE VM
+ * IS THE SOURCE OF TRUTH THERE TOO. The dashboard's gatekeeper rewrites on the
+ * machine the deposited manifest, the site's Caddy block and the preview locks,
+ * without changing anything in the repository; `sitesolide lock` reaches the
+ * same gatekeeper. Now `deploy` deposits the repository's manifest again and
  * generates the block from it: without precaution, it would silently reopen a
- * site the dashboard has just closed. `deploy` therefore reads the deposited
- * manifest first. If it asks for a door other than the local manifest's, it is
- * its own that holds for everything `deploy` generates and deposits, and the
- * local sitesolide.json is rewritten so that the repository catches up with the
- * machine, as bin/lock.sh does with the lock: to be committed. A first
+ * site the dashboard has just closed, or drop the code it set. `deploy`
+ * therefore reads the deposited manifest first. If its `portal` or its `lock`
+ * differs from the local manifest's, it is its own that holds for everything
+ * `deploy` generates and deposits, and the local sitesolide.json is rewritten
+ * so that the repository catches up with the machine: to be committed. A first
  * deployment, which the machine does not know, takes the repository's value; an
  * unreadable read stops everything. bin/deploy-caddy.sh holds the same rule for
  * the block it is given, and refuses to deposit one that would contradict the
@@ -129,6 +130,7 @@ import {
   readManifest,
   servicesOf,
   setDomainActive,
+  setLock,
   setPortal,
   validate,
   PORTAL_SLUG,
@@ -198,7 +200,7 @@ import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState
 import { machine } from "./cli/machine";
 import { eventOutput, humanOutput, login, remoteMode, REMOTE_USAGE, runRemote } from "./cli/remote";
 import { KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
-import { PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshPeople } from "./cli/access";
+import { ownerGeneralCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshGeneral, sshPeople } from "./cli/access";
 import {
   foreignUnit,
   listUnitsCommand,
@@ -1091,7 +1093,7 @@ async function deploy(
   if (switched) {
     say("");
     say(`   commit ${MANIFEST_NAME}:`);
-    say("   the dashboard changed the portal, and git should say what the server does.");
+    say("   the dashboard changed its general access, and git should say what the server does.");
   }
 }
 
@@ -1247,7 +1249,7 @@ async function rereadUnderLock(
   const slug = manifest.slug;
   const output = await executor.read(config, readManifestsCommand(isApplication ? "*" : slug));
   const door = isApplication ? readManifestAmongAll(output, slug) : readDepositedManifest(output, slug);
-  const agreement = confirmDoorUnderLock(slug, isProtected(manifest), door);
+  const agreement = confirmDoorUnderLock(slug, { portal: isProtected(manifest), lock: manifest.lock === true }, door);
   if (agreement.kind === "rejects") die(agreement.message, agreement.details);
   if (!isApplication) return;
   const reading = readDepositedManifests(output);
@@ -1280,7 +1282,7 @@ async function requireAgreedDoor(
   const { manifest } = project;
   const agreement = guardDepositedManifest(
     manifest.slug,
-    isProtected(manifest),
+    { portal: isProtected(manifest), lock: manifest.lock === true },
     await readDepositedDoor(manifest.slug, config, executor),
     action,
   );
@@ -1319,19 +1321,21 @@ async function reconcilePortal(
 ): Promise<{ project: Project; switched: boolean; doorConfirmed: boolean }> {
   const { manifest } = project;
   const reading = await readDepositedDoor(manifest.slug, config, executor);
-  const decision = decidePortal(manifest.slug, isProtected(manifest), reading);
+  const decision = decidePortal(manifest.slug, { portal: isProtected(manifest), lock: manifest.lock === true }, reading);
   if (decision.kind === "rejects") die(decision.message, decision.details);
   const doorConfirmed = reading.kind === "present";
   if (decision.kind === "repository") return { project, switched: false, doorConfirmed };
 
-  const announcement = switchAnnouncement(decision.portal, executor.simulated);
+  const announcement = switchAnnouncement(decision, executor.simulated);
   step(announcement.title);
   for (const line of announcement.details) say(`   ${line}`);
 
-  const raw = setPortal(project.raw, decision.portal);
+  // Both fields at once: the manifest refuses them together, and a switch
+  // between Restricted and the code changed both on the machine.
+  const raw = setLock(setPortal(project.raw, decision.portal), decision.lock);
   const { manifest: followed, errors } = readManifest(raw);
   if (followed === undefined || errors.length > 0) {
-    die(`${MANIFEST_NAME} rejected once the portal set from the dashboard is applied`, errors);
+    die(`${MANIFEST_NAME} rejected once the general access set from the dashboard is applied`, errors);
   }
 
   const path = join(project.folder, MANIFEST_NAME);
@@ -1572,7 +1576,7 @@ async function verify(manifest: Manifest, config: Config, executor: Executor): P
   }
 
   if (code === 401) {
-    say(`   preview locked, see bin/lock.sh state ${manifest.slug}`);
+    say(`   it opens with a code, see sitesolide lock --status`);
     return;
   }
   if (code === 404) {
@@ -2200,19 +2204,26 @@ async function depositManifest(
 // --- lock --------------------------------------------------------------------
 
 /**
- * The preview lock, from the project's folder.
+ * The preview code, from the project's folder: general access set to Anyone
+ * with the code, a new code, or back to Public.
  *
- * The gesture belongs to bin/lock.sh and stays there: it sets a code, writes
- * the manifest, generates the fragment, validates it, reloads Caddy and
- * measures the result over HTTP, with a restore on every failure. Rewriting it
- * here would make two paths to the same configuration in service, and that is
- * exactly what the disappearance of site.json has just corrected. The CLI
- * therefore only launches it, as it already launches deploy-caddy.sh.
+ * One path changes a site's general access on the machine, and this is not a
+ * second one: root asks the steward on its owner socket (bin/cli/access.ts,
+ * `sshGeneral`), which launches the gatekeeper, exactly as the dashboard's
+ * Access section does. The gatekeeper draws the code on the machine, writes
+ * the manifest, the codes file and the locks' fragment in one transaction,
+ * validates, reloads Caddy with systemctl, checks over HTTPS that the door
+ * page answers without the code and the site with it, and restores at the
+ * slightest failure, under the Caddy lock the deploy scripts share. A
+ * restricted site switches to the code in the same transaction.
  *
- * `SITESOLIDE_PROJECT_DIR` tells it where the project lives. Without it, the
- * script infers the folder from the slug, which assumes that the folder carries
- * its name: true in the sites repository, false for a project deployed from
- * somewhere else, and that is precisely what the CLI exists to allow.
+ * The code comes back in the steward's answer and is said here, once: it is
+ * written into no file of the workstation. The repository follows the
+ * machine: the local sitesolide.json gets the general access the machine now
+ * carries, to commit, as `deploy` would write it.
+ *
+ * `--status` reads without changing anything: bin/lock.sh state measures what
+ * the machine wants, installs and serves.
  */
 async function lockPreview(
   project: Project,
@@ -2221,15 +2232,97 @@ async function lockPreview(
   subcommand: "enable" | "code" | "disable" | "state",
 ): Promise<void> {
   const slug = project.manifest.slug;
-  const command = [script("lock.sh"), subcommand, slug];
-  const env = { SITESOLIDE_SERVER: config.server, SITESOLIDE_PROJECT_DIR: project.folder };
   note({ slug });
-  // `--status --json` hands the table over as data, this project's row of it.
-  if (subcommand === "state" && jsonOutput) {
-    note({ lock: readLockState(await executor.run(command, { env, quiet: true }), slug) });
+  if (subcommand === "state") {
+    const command = [script("lock.sh"), "state", slug];
+    const env = { SITESOLIDE_SERVER: config.server, SITESOLIDE_PROJECT_DIR: project.folder };
+    // `--status --json` hands the table over as data, this project's row of it.
+    if (jsonOutput) {
+      note({ lock: readLockState(await executor.run(command, { env, quiet: true }), slug) });
+      return;
+    }
+    await executor.run(command, { env });
     return;
   }
-  await executor.run(command, { env });
+
+  const access = subcommand === "disable" ? "public" : "code";
+  const renew = subcommand === "code";
+  step(`general access of ${slug}: ${renew ? "a new code" : access === "code" ? "Anyone with the code" : "Public"}, through the steward and the gatekeeper`);
+  if (executor.simulated) {
+    say(`   [dry-run] ssh ${config.server} ${ownerGeneralCommand()}`);
+    say(`   [dry-run]   with ${JSON.stringify({ slug, access, ...(renew ? { renew } : {}) })}`);
+    say("   [dry-run] the gatekeeper draws the code on the machine, writes sitesolide.json, the codes and the locks,");
+    say("   [dry-run] validates, reloads Caddy, checks the site over HTTPS, and restores everything on a failure");
+    say(`   [dry-run] write ${join(project.folder, MANIFEST_NAME)}, so that the repository follows`);
+    note({ dryRun: true });
+    return;
+  }
+
+  // A project that brings its own door page lays it first: the gatekeeper
+  // writes the template's only where no page of the site's own stands.
+  if (access === "code") await depositOwnDoorPage(project, config, executor);
+
+  const answer = await sshGeneral((remote, input) => executor.execute(config, remote, input), slug, access, renew);
+  if (!answer.ok) die(answer.failure.message, answer.failure.details ?? []);
+  const { general, detail, code } = answer.value;
+  say(`   ${detail}`);
+
+  const written = followGeneral(project, executor, general.access);
+  const url = code === null ? null : (code.url ?? `https://${slug}.${config.zone}/?key=${code.code}`);
+  note({ access: general.access, code: code?.code ?? null, url, manifestWritten: written });
+  if (code !== null) {
+    say("");
+    say(`   ${slug} opens with its code.`);
+    say("");
+    say(`   Code   : ${code.code}`);
+    say(`   Link   : ${url}`);
+    say("");
+    say("   This link sets a cookie valid for thirty days, then sends back to the home");
+    say("   page. The code is not a secret: it travels in the clear in the URL and lives");
+    say("   in the clear in Caddy's configuration. It keeps out a passing visitor, not");
+    say("   an adversary. It is also shown in the site's Access section, to the owner and its Admins.");
+  } else {
+    say("");
+    say(`   ${slug} is public again: its code no longer opens anything.`);
+  }
+  if (written) {
+    say("");
+    say(`   commit ${MANIFEST_NAME}: it now says what the server does.`);
+  }
+}
+
+/**
+ * The repository catches up with the machine, as `deploy` makes it: the local
+ * manifest's `portal` and `lock` set as the general access now in force, the
+ * rest of the file untouched. True when the file was rewritten.
+ */
+function followGeneral(project: Project, executor: Executor, access: "public" | "restricted" | "code"): boolean {
+  const path = join(project.folder, MANIFEST_NAME);
+  if (executor.simulated || !existsSync(path)) return false;
+  const raw = readFileSync(path, "utf8");
+  const followed = setLock(setPortal(raw, access === "restricted"), access === "code");
+  const before = readManifest(raw).manifest;
+  if (before !== undefined && isProtected(before) === (access === "restricted") && (before.lock === true) === (access === "code")) return false;
+  writeFileSync(path, followed);
+  return true;
+}
+
+/**
+ * A site's own door page, `verrou.html` beside its manifest, laid where Caddy
+ * serves it, `/srv/garde/<slug>/index.html`, a name the machine carries. It
+ * is a page and nothing Caddy reads as configuration: it changes no general
+ * access, and the gatekeeper, which writes the template's page, leaves a page
+ * it did not write as it is. A project without one gets the template's.
+ */
+async function depositOwnDoorPage(project: Project, config: Config, executor: Executor): Promise<void> {
+  const source = join(project.folder, "verrou.html");
+  if (!existsSync(source)) return;
+  const slug = project.manifest.slug;
+  const folder = `/srv/garde/${slug}`;
+  const account = deploymentAccount(config.server);
+  step("door page, the project's own verrou.html");
+  await executor.ssh(config, `sudo mkdir -p ${folder} && sudo chown ${account}:${account} ${folder} && sudo chmod 755 ${folder}`);
+  await executor.run(["rsync", "--chmod=F644", source, `${config.server}:${folder}/index.html`]);
 }
 
 // --- domain ------------------------------------------------------------------
@@ -2435,8 +2528,10 @@ async function switchDomain(
  *
  * **The lock shared with the gatekeeper is held from start to finish**, the
  * read of the door included: it is that read which decides the order, and the
- * gatekeeper must not change it in the meantime. bin/lock.sh and
- * bin/deploy-caddy.sh receive it through CADDY_LOCK_HELD.
+ * gatekeeper must not change it in the meantime. bin/deploy-caddy.sh receives
+ * it through CADDY_LOCK_HELD. A site that opens with a code is first made
+ * Public through the steward, before the lock is taken: the gatekeeper takes
+ * it for its own transaction.
  *
  * **The site's code is never deleted here.** It lives in the neighbouring
  * repository, under git: `git rm -r` does it better, and the history keeps the
@@ -2465,6 +2560,24 @@ async function remove(
   say(`-> removing ${slug}, ${isApplication ? "service" : "static"}`);
   say("   this deletes the served directory and its data. The VM has no backup.");
 
+  // A site that opens with a code goes back to Public first, through the
+  // steward and the gatekeeper, the one path that changes a general access:
+  // once the folder is deleted, its code would stay in force on the machine
+  // with nothing left to remove it. Before the Caddy lock this command then
+  // holds to the end, which the gatekeeper would wait on.
+  const first = await readDepositedDoor(slug, config, executor);
+  if (first.kind === "present" && first.lock) {
+    step("preview code, back to Public through the steward and the gatekeeper");
+    if (executor.simulated) {
+      say(`   [dry-run] ssh ${config.server} ${ownerGeneralCommand()}`);
+      say(`   [dry-run]   with ${JSON.stringify({ slug, access: "public" })}`);
+    } else {
+      const reopened = await sshGeneral((remote, input) => executor.execute(config, remote, input), slug, "public", false);
+      if (!reopened.ok) die(reopened.failure.message, [...(reopened.failure.details ?? []), "nothing was removed"]);
+      say(`   ${reopened.value.detail}`);
+    }
+  }
+
   // Before the read of the door, which decides the order of the gestures.
   await takeCaddyLock(config, executor, "nothing was removed");
 
@@ -2481,14 +2594,11 @@ async function remove(
     ]);
   }
 
-  // The lock before anything else: bin/lock.sh rewrites the manifest and the
-  // fragment, and it needs both. Once the folder is deleted, its code would
-  // stay set on the VM with nothing to remove it.
-  if (manifest.lock === true) {
-    step("preview lock");
-    await executor.run([script("lock.sh"), "disable", slug], {
-      env: { ...envUnderLock(config), SITESOLIDE_PROJECT_DIR: project.folder },
-    });
+  // Given a code again between the two readings, from the dashboard: the
+  // code would outlive the folder. Nothing is removed; running this again
+  // takes it back to Public first.
+  if (deposited.kind === "present" && deposited.lock && !executor.simulated) {
+    die(`${slug} was given a code again while it was being removed`, ["nothing was removed: run this command again"]);
   }
 
   // The door the VM carries, or the manifest's when the VM no longer has one: a
@@ -2843,10 +2953,10 @@ function usage(zone: string | null): string {
     "     <email> --may-create         let them create projects, Admin of what they create",
     "     <email> --no-create          take that right back",
     "     --migrate-without-portal     carry access over without the portal's database, when it does not read",
-    "  sitesolide lock   [--dry-run]   close the preview behind a code, or show it",
+    "  sitesolide lock   [--dry-run]   Anyone with the code: the site opens with a code, said once; or the one in force",
     "     --status                     wanted / installed / measured, without touching",
-    "     --new-code                   replace the code in force by a fresh one",
-    "  sitesolide unlock [--dry-run]   reopen the preview and drop its code",
+    "     --new-code                   a new code, the old one no longer opens it",
+    "  sitesolide unlock [--dry-run]   back to Public, its code dropped",
     "  sitesolide domain               where this project's own domain stands",
     "     --activate [--force]         switch the site onto it, then rebuild the table",
     "     --deactivate                 back to the preview subdomain",

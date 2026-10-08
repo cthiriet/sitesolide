@@ -19,7 +19,10 @@
  *   - CAP_CHOWN: giving the rewritten manifest back to its owner, the
  *     deployment account. The mode is set before the owner, while the file
  *     still belongs to root: afterwards, `fchmod` would demand CAP_FOWNER;
- *   - nothing for /etc/caddy/sites nor /run/sitesolide-gatekeeper, root's;
+ *   - nothing for /etc/caddy/sites, /etc/caddy/locks nor
+ *     /run/sitesolide-gatekeeper, root's; CAP_DAC_OVERRIDE again for
+ *     /etc/caddy/locks-codes.json, the deployment account's in 0600, which
+ *     the unit opens for writing alone and which is rewritten in place;
  *   - nothing for `systemctl`: PID 1 judges the caller's uid 0 by the socket,
  *     not its capabilities (measurement for the steward, RESULTS.md,
  *     measurement 3);
@@ -37,6 +40,7 @@ import {
   fchownSync,
   fstatSync,
   fsyncSync,
+  ftruncateSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -49,8 +53,10 @@ import {
   writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { FRAGMENT_NAME, lockField } from "../../borrowed/locks";
 import { isValidSlug } from "../../borrowed/manifest";
+import { isValidSlug as isSitesFolder } from "../../borrowed/table";
 import { parseEnvBytes } from "../secrets/envfile";
 import { BACKUPS_NAME, HOLDER_NAME, LOCK_NAME } from "./instance";
 import {
@@ -59,7 +65,7 @@ import {
   type Command,
   type Permissions,
   type Release,
-  type Machine,
+  type GeneralMachine,
   type ManifestRead,
   type LockResult,
   type Backup,
@@ -97,6 +103,12 @@ export type MachineConfig = {
   caddy: string;
   /** /run/sitesolide-gatekeeper: lock, backups, results. */
   runFolder: string;
+  /** /etc/caddy/locks, which Caddy imports by glob: the preview locks' fragment. */
+  locksFolder: string;
+  /** /etc/caddy/locks-codes.json, the codes in force, outside the folder Caddy imports. */
+  codesFile: string;
+  /** /srv/garde, one folder per site that opens with a code, its door page inside. */
+  doorPagesDir: string;
   /** root:root for a block, like bin/deploy-caddy.sh. null: unchanged, for the workstation. */
   blockOwner: { uid: number; gid: number } | null;
   /** Where to reach Caddy: the loopback and port 443 in production. */
@@ -358,7 +370,37 @@ async function readStart(response: Response, max: number, timeout: AbortSignal, 
   return bytes;
 }
 
-export function createMachine(config: MachineConfig): Machine {
+/**
+ * Rewrites a file in place: the new bytes from its start, the rest cut off,
+ * `fsync`. For the one file the unit may write outside a folder of its own,
+ * the codes file: a rename onto it would need its folder, /etc/caddy, which
+ * stays read-only. A file missing is created atomically, where the folder
+ * allows it. Owner and mode stay the file's own.
+ */
+function writeInPlace(path: string, text: string, owner: { uid: number; gid: number } | null): void {
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    if (code(error) !== "ENOENT") throw error;
+    writeAtomically(dirname(path), basename(path), text, 0o600, owner);
+    return;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new Error(`${path} is not a regular file`);
+    if (stat.nlink > 1) throw new Error(`${path} has more than one link`);
+    const bytes = encoder.encode(text);
+    let written = 0;
+    while (written < bytes.length) written += writeSync(fd, bytes, written, bytes.length - written, written);
+    ftruncateSync(fd, bytes.length);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function createMachine(config: MachineConfig): GeneralMachine {
   const backupsFolder = join(config.runFolder, BACKUPS_NAME);
   const lockPath = join(config.runFolder, LOCK_NAME);
 
@@ -526,6 +568,15 @@ export function createMachine(config: MachineConfig): Machine {
       writeAtomically(folder, "permissions.json", `${JSON.stringify(backup.manifest.permissions)}\n`, 0o600, null);
       if (backup.block === null) writeAtomically(folder, `${slug}.caddy.absent`, "", 0o600, null);
       else writeAtomically(folder, `${slug}.caddy`, backup.block, 0o600, null);
+      // The preview locks, when the action touches them: the codes file and
+      // the fragment, each back where `interruptedMessage` says.
+      if (backup.locks !== undefined) {
+        const { codes, fragment } = backup.locks;
+        if (codes === null) writeAtomically(folder, "locks-codes.json.absent", "", 0o600, null);
+        else writeAtomically(folder, "locks-codes.json", codes, 0o600, null);
+        if (fragment === null) writeAtomically(folder, `${FRAGMENT_NAME}.absent`, "", 0o600, null);
+        else writeAtomically(folder, FRAGMENT_NAME, fragment, 0o600, null);
+      }
     },
 
     async clearBackup(slug: string) {
@@ -621,7 +672,7 @@ export function createMachine(config: MachineConfig): Machine {
       return [...served].sort();
     },
 
-    async probe(host: string, path: string, timeoutMs: number): Promise<ProbeResponse> {
+    async probe(host: string, path: string, timeoutMs: number, cookie?: string): Promise<ProbeResponse> {
       // The Host header and `tls.serverName` both name the site. Measured on
       // 17 September 2026 on Bun 1.3.11, the Host header alone set the SNI
       // AND the name the certificate must carry. Bun 1.4.2 takes neither from
@@ -646,7 +697,7 @@ export function createMachine(config: MachineConfig): Machine {
       const timeout = AbortSignal.timeout(timeoutMs);
       const closing = new AbortController();
       const options: BunFetchRequestInit & { decompress: boolean } = {
-        headers: { Host: host, "Accept-Encoding": "identity" },
+        headers: { Host: host, "Accept-Encoding": "identity", ...(cookie === undefined ? {} : { Cookie: cookie }) },
         redirect: "manual",
         keepalive: false,
         decompress: false,
@@ -677,7 +728,97 @@ export function createMachine(config: MachineConfig): Machine {
     async restartCollector(timeoutMs: number) {
       return toCommand(await config.systemctl(["start", "--no-block", config.collectorUnit], timeoutMs));
     },
+
+    async readCodes() {
+      const parsed = readFileSafely(config.codesFile);
+      return parsed === null ? null : decoder.decode(parsed.bytes);
+    },
+
+    async writeCodes(text, owner) {
+      writeInPlace(config.codesFile, text, owner);
+    },
+
+    async readLocksFragment() {
+      const parsed = readFileSafely(join(config.locksFolder, FRAGMENT_NAME));
+      return parsed === null ? null : decoder.decode(parsed.bytes);
+    },
+
+    async writeLocksFragment(text) {
+      requireFolder(config.locksFolder);
+      writeAtomically(config.locksFolder, FRAGMENT_NAME, text, 0o644, config.blockOwner);
+    },
+
+    async removeLocksFragment() {
+      try {
+        unlinkSync(join(config.locksFolder, FRAGMENT_NAME));
+      } catch (error) {
+        if (code(error) !== "ENOENT") throw error;
+      }
+      syncFolder(config.locksFolder);
+    },
+
+    /**
+     * What the generator always read: every directory, and its manifest's
+     * `lock` as it stands. A site that still carries the descriptor from
+     * before the manifest could ask for a lock nobody reads any more: the
+     * reading stops, as it did, rather than reopening it silently.
+     */
+    async readLockSites() {
+      const sites: { slug: string; lock: unknown }[] = [];
+      for (const entry of readdirSync(config.sitesDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        if (!isSitesFolder(entry.name)) throw new Error(`unexpected folder in ${config.sitesDir}`);
+        const parsed = readFileSafely(join(config.sitesDir, entry.name, "sitesolide.json"));
+        if (parsed === null) {
+          if (readFileSafely(join(config.sitesDir, entry.name, "site.json")) !== null) {
+            throw new Error(`${entry.name}: site.json is still there and sitesolide.json is missing, redeploy it with sitesolide deploy`);
+          }
+          sites.push({ slug: entry.name, lock: undefined });
+          continue;
+        }
+        sites.push({ slug: entry.name, lock: lockField(decoder.decode(parsed.bytes), entry.name) });
+      }
+      return sites.sort((a, b) => a.slug.localeCompare(b.slug));
+    },
+
+    async readDoorPage(slug) {
+      const folder = join(config.doorPagesDir, siteFolderName(slug));
+      const parsed = readFileSafely(join(folder, "index.html"));
+      return parsed === null ? null : decoder.decode(parsed.bytes);
+    },
+
+    async writeDoorPage(slug, text, owner) {
+      requireFolder(config.doorPagesDir);
+      const folder = join(config.doorPagesDir, siteFolderName(slug));
+      try {
+        mkdirSync(folder, { mode: 0o755 });
+        // Caddy runs under its own account: without 0755, which the unit's
+        // UMask takes away, the page exists and the lock answers 403.
+        settleFolder(folder, owner);
+      } catch (error) {
+        if (code(error) !== "EEXIST") throw error;
+      }
+      requireFolder(folder);
+      writeAtomically(folder, "index.html", text, 0o644, owner);
+    },
   };
+}
+
+/** A door page's folder: the slug alone, never a path. */
+function siteFolderName(slug: string): string {
+  if (!isValidSlug(slug)) throw new Error("invalid slug");
+  return slug;
+}
+
+/** A folder just made, 0755 and given to its owner, by its descriptor, never by following a link. */
+function settleFolder(folder: string, owner: { uid: number; gid: number } | null): void {
+  const fd = openSync(folder, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    fchmodSync(fd, 0o755);
+    if (owner !== null) fchownSync(fd, owner.uid, owner.gid);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**

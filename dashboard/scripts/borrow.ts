@@ -73,6 +73,9 @@ const BORROWINGS = [
   // The role ladder and the projection of the access registry: the steward
   // writes it, the portal reads it, both with this one copy of the format.
   "portal/src/access.ts",
+  // The door page of a site that opens with a code: the gatekeeper writes it
+  // from the template the portal's sign-in page shares.
+  "portal/src/page.ts",
 ];
 
 /** The header of every copied module. */

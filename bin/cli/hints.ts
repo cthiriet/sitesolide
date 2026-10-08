@@ -108,6 +108,8 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/try again in a moment/, LOCK_BUSY],
   [/is not a workstation lock holder line/, "unset CADDY_LOCK_HELD in this environment, then run the command again"],
   [/changed from the dashboard during this deploy/, "the server changed while deploy ran: run `sitesolide deploy` again"],
+  [/was given a code again while it was being removed/, "its general access changed from the dashboard meanwhile, and nothing was removed: run the same `sitesolide remove --confirm <slug>` again, which takes it back to Public first"],
+  [/cannot change a site's general access yet/, "the machine predates the code being set through the gatekeeper: the owner runs `sitesolide upgrade`, then this command again; never edit the codes file or the locks on the machine by hand"],
   [/^general access of .* changed from the dashboard/, "run `sitesolide deploy` in the project's folder first, so that sitesolide.json follows the server, then run this command again"],
   [/is restricted: make it public from the dashboard's Access section first/, "ask the owner, or an Admin of the project, to make it public in the dashboard's Access section, then run `sitesolide deploy` in this folder, then this command"],
   [/^the portal is not ready/, "the portal has to be deployed before a site can sit behind it: ask the owner, or remove `portal` from sitesolide.json"],

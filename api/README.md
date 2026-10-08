@@ -60,39 +60,37 @@ was.
 
 ## The preview-lock fragment
 
-`scripts/generate-locks.ts` is the service's second generator. It serves no
-request: it writes to standard output the Caddy fragment that closes previews
-behind a code, and `bin/lock.sh` installs it into `/etc/caddy/locks/`, imported
-by glob from the wildcard block **and from the preview block of every app**
-(`<projects>/<slug>/<slug>.caddy`). That second import is not optional: an app's
-block is more specific than the wildcard and takes precedence over it, so
-without it that app would be the only one unable to lock itself.
+`src/locks.ts` decides the Caddy fragment that closes previews behind a code.
+It serves no request, and nothing in this service writes it: the dashboard's
+gatekeeper does, the one path that changes a site's general access on the
+machine, for the site's *Access* section and for `sitesolide lock` alike
+(dashboard/src/gatekeeper/). It installs the fragment into
+`/etc/caddy/locks/verrous.caddy`, imported by glob from the wildcard block
+**and from the preview block of every app** (`/etc/caddy/sites/<slug>.caddy`).
+That second import is not optional: an app's block is more specific than the
+wildcard and takes precedence over it, so without it that app would be the only
+one unable to open with a code.
 
 It reads two sources, and the separation is the point:
 
 | Source | Content | Where it lives |
 |---|---|---|
-| `/srv/sites/<slug>/sitesolide.json` | `"lock": true`, the intent | committed in the project's repository, deployed with it |
-| `/etc/caddy/lock-codes.json` | `{ "<slug>": "A7B2K9" }`, the code | on the machine, outside any repository |
+| `/srv/sites/<slug>/sitesolide.json` | `"lock": true`, the intent | on the machine, which the next `sitesolide deploy` writes back into the project's repository |
+| `/etc/caddy/locks-codes.json` | `{ "<slug>": "A7B2K9" }`, the code | on the machine alone, the deployment account's in 0600 |
 
-The wanted state is therefore readable in git, while a code is replaced without
-a commit. The action goes through `bin/lock.sh`, which `sitesolide lock` and
-`sitesolide unlock` run from the project's directory.
-
-That manifest is the only configuration file a project has, here as in its
-repository. A project that keeps a lock without a manifest stops the generation
-rather than silently dropping out of the table. Every path comes from an
-environment variable (`SITES_DIR`, `CODES_FILE`, `DOOR_PAGES_DIR`, `SITESOLIDE_ZONE`),
-none is hard-coded: the generator therefore runs on a workstation, against a
-test tree.
+The gatekeeper draws the code there with `generateCode`, writes both files and
+the fragment in one transaction, validates, reloads Caddy and checks the site,
+and puts everything back on a failure. A code is replaced without a commit.
 
 **A lock requested without a valid code is an error that stops everything**, not
-a site left silently open. The generator exits non-zero and the install script
-stops before touching the running configuration.
+a site left silently open, and so is a code in force for a manifest that no
+longer asks for one: the fragment is not generated, and nothing in service
+changes.
 
 The decisions live in `src/locks.ts`, with no disk access: drawing the code and
-its alphabet, validation, the cookie name, the Caddy stanza and the complete
-fragment. The script only adds reading the files.
+its alphabet, validation, the cookie name, the Caddy stanza, the complete
+fragment, the codes file read and written, the code a stanza in service
+carries. The gatekeeper only adds reading and writing the files.
 
 The code is not a cryptographic secret: Caddy compares it in clear text, so it
 is written in clear text in the fragment. `src/locks.ts` says at the top what

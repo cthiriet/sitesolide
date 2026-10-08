@@ -6,6 +6,8 @@ import { generateFragment } from "../cli/fragment";
 import type { Manifest } from "../cli/manifest";
 import { fragmentIsProtected } from "../cli/portal";
 import {
+  accessOf,
+  generalOf,
   switchAnnouncement,
   readManifestsCommand,
   confirmDoorUnderLock,
@@ -76,14 +78,14 @@ describe("the remote reading", () => {
     expect(reading.kind).toBe("read");
     if (reading.kind !== "read") return;
     expect([...reading.manifests.keys()]).toEqual(["cms", "vineyard"]);
-    expect(portalFromManifest(reading.manifests.get("cms")!)).toEqual({ kind: "read", portal: true });
-    expect(portalFromManifest(reading.manifests.get("vineyard")!)).toEqual({ kind: "read", portal: false });
+    expect(portalFromManifest(reading.manifests.get("cms")!)).toEqual({ kind: "read", portal: true, lock: false });
+    expect(portalFromManifest(reading.manifests.get("vineyard")!)).toEqual({ kind: "read", portal: false, lock: false });
   });
 
   test("a single site: present, or absent when the machine does not know it", () => {
     const root = join(TMP_ROOT, "one");
     deposit(root, "cms", JSON_CMS);
-    expect(readDepositedManifest(readIn(root, "cms"), "cms")).toEqual({ kind: "present", portal: true });
+    expect(readDepositedManifest(readIn(root, "cms"), "cms")).toEqual({ kind: "present", portal: true, lock: false });
     expect(readDepositedManifest(readIn(root, "fresh"), "fresh")).toEqual({ kind: "absent" });
   });
 
@@ -116,10 +118,11 @@ describe("an answer we do not recognise authorises nothing", () => {
   });
 });
 
-describe("what a deposited manifest says about the door", () => {
-  test("true closes, the absence opens", () => {
-    expect(portalFromManifest('{"slug":"cms","portal":true}')).toEqual({ kind: "read", portal: true });
-    expect(portalFromManifest('{"slug":"cms"}')).toEqual({ kind: "read", portal: false });
+describe("what a deposited manifest says about its general access", () => {
+  test("the portal restricts, the lock asks for a code, the absence of both opens", () => {
+    expect(portalFromManifest('{"slug":"cms","portal":true}')).toEqual({ kind: "read", portal: true, lock: false });
+    expect(portalFromManifest('{"slug":"cms","lock":true}')).toEqual({ kind: "read", portal: false, lock: true });
+    expect(portalFromManifest('{"slug":"cms"}')).toEqual({ kind: "read", portal: false, lock: false });
   });
 
   test("another value is unreadable rather than guessed", () => {
@@ -127,7 +130,13 @@ describe("what a deposited manifest says about the door", () => {
     // ways: neither of the two decides to open a site.
     for (const value of [false, "yes", 1, null, "true"]) {
       expect(portalFromManifest(JSON.stringify({ slug: "cms", portal: value })).kind).toBe("unreadable");
+      expect(portalFromManifest(JSON.stringify({ slug: "cms", lock: value })).kind).toBe("unreadable");
     }
+  });
+
+  test("the three general accesses and their two fields, one way and back", () => {
+    for (const access of ["public", "restricted", "code"] as const) expect(accessOf(generalOf(access))).toBe(access);
+    expect(generalOf("code")).toEqual({ portal: false, lock: true });
   });
 
   test("what is not a JSON object is unreadable", () => {
@@ -139,50 +148,51 @@ describe("what a deposited manifest says about the door", () => {
   test("another site's manifest, deposited in this folder, is unreadable for deploy", () => {
     expect(portalFromManifest('{"slug":"other","portal":true}', "cms").kind).toBe("unreadable");
     // The guard only knows the folder, and reads the door as it is.
-    expect(portalFromManifest('{"slug":"other","portal":true}')).toEqual({ kind: "read", portal: true });
+    expect(portalFromManifest('{"slug":"other","portal":true}')).toEqual({ kind: "read", portal: true, lock: false });
   });
 
   test("the rest of the manifest is not judged: an unknown key says nothing about the door", () => {
     expect(portalFromManifest('{"slug":"cms","portal":true,"newKey":1}', "cms")).toEqual({
       kind: "read",
       portal: true,
+      lock: false,
     });
   });
 });
 
-describe("the door that deploy applies", () => {
-  test("a first deployment takes the repository's value, open or closed", () => {
-    for (const local of [true, false]) {
-      expect(decidePortal("fresh", local, { kind: "absent" })).toEqual({ kind: "repository", portal: local });
+/** The two fields of each general access. */
+const G = {
+  public: { portal: false, lock: false },
+  restricted: { portal: true, lock: false },
+  code: { portal: false, lock: true },
+} as const;
+const ACCESSES = ["public", "restricted", "code"] as const;
+const present = (access: (typeof ACCESSES)[number]) => ({ kind: "present" as const, ...G[access] });
+
+describe("the general access that deploy applies", () => {
+  test("a first deployment takes the repository's value, whichever it is", () => {
+    for (const local of ACCESSES) {
+      expect(decidePortal("fresh", G[local], { kind: "absent" })).toEqual({ kind: "repository", ...G[local] });
     }
   });
 
   test("the same value on both sides changes nothing", () => {
-    for (const value of [true, false]) {
-      expect(decidePortal("cms", value, { kind: "present", portal: value })).toEqual({
-        kind: "repository",
-        portal: value,
-      });
+    for (const value of ACCESSES) {
+      expect(decidePortal("cms", G[value], present(value))).toEqual({ kind: "repository", ...G[value] });
     }
   });
 
-  test("the dashboard closed the site: the VM wins", () => {
-    expect(decidePortal("cms", false, { kind: "present", portal: true })).toEqual({
-      kind: "dashboard",
-      portal: true,
-    });
+  test("changed on the machine, from the dashboard or with sitesolide lock: the VM wins, whichever way", () => {
+    for (const local of ACCESSES) {
+      for (const machine of ACCESSES.filter((one) => one !== local)) {
+        expect(decidePortal("cms", G[local], present(machine))).toEqual({ kind: "dashboard", ...G[machine] });
+      }
+    }
   });
 
-  test("the dashboard reopened the site: the VM wins too", () => {
-    expect(decidePortal("cms", true, { kind: "present", portal: false })).toEqual({
-      kind: "dashboard",
-      portal: false,
-    });
-  });
-
-  test("an unreadable reading stops the deployment, in both directions", () => {
-    for (const local of [true, false]) {
-      const decision = decidePortal("cms", local, { kind: "unreadable", reason: "not valid JSON" });
+  test("an unreadable reading stops the deployment, whichever the repository says", () => {
+    for (const local of ACCESSES) {
+      const decision = decidePortal("cms", G[local], { kind: "unreadable", reason: "not valid JSON" });
       expect(decision.kind).toBe("rejects");
       if (decision.kind !== "rejects") return;
       expect(decision.message).toContain("cannot tell whether the general access of cms");
@@ -191,17 +201,20 @@ describe("the door that deploy applies", () => {
     }
   });
 
-  test("the announcement says the direction, that the manifest is rewritten, and that it must be committed", () => {
-    expect(switchAnnouncement(true, false).title).toBe(
+  test("the announcement says the general access, that the manifest is rewritten, and that it must be committed", () => {
+    expect(switchAnnouncement(G.restricted, false).title).toBe(
       "general access was set to Restricted from the dashboard; sitesolide.json updated, commit it",
     );
-    expect(switchAnnouncement(false, false).title).toBe(
+    expect(switchAnnouncement(G.public, false).title).toBe(
       "general access was set to Public from the dashboard; sitesolide.json updated, commit it",
+    );
+    expect(switchAnnouncement(G.code, false).title).toBe(
+      "general access was set to Anyone with the code from the dashboard; sitesolide.json updated, commit it",
     );
   });
 
   test("in a dry run, the announcement does not claim to have rewritten anything", () => {
-    const { title } = switchAnnouncement(true, true);
+    const { title } = switchAnnouncement(G.restricted, true);
     expect(title).toContain("general access was set to Restricted from the dashboard");
     expect(title).not.toContain("updated,");
     expect(title).toContain("commit it");
@@ -209,27 +222,23 @@ describe("the door that deploy applies", () => {
 });
 
 /**
- * The gestures that deposit the local manifest as it is: the lock and the
- * domain. They do not take back the VM's door, so they would erase it.
+ * The gesture that deposits the local manifest as it is: the domain. It does
+ * not take back the VM's general access, so it would erase it.
  */
-describe("the guard of the lock and the domain", () => {
-  const present = (portal: boolean) => ({ kind: "present" as const, portal });
-
-  test("same door on both sides, site open: the three gestures go through", () => {
-    for (const action of ["lock", "unlock", "domain"] as const) {
-      expect(guardDepositedManifest("vineyard", false, present(false), action)).toEqual({ kind: "agreed" });
+describe("the guard of the domain", () => {
+  test("same general access on both sides, site open or with a code: the gesture goes through", () => {
+    for (const access of ["public", "code"] as const) {
+      expect(guardDepositedManifest("vineyard", G[access], present(access), "domain")).toEqual({ kind: "agreed" });
     }
   });
 
   test("a site absent from the machine has nothing to lose", () => {
-    for (const action of ["lock", "unlock", "domain"] as const) {
-      expect(guardDepositedManifest("fresh", false, { kind: "absent" }, action)).toEqual({ kind: "agreed" });
-    }
+    expect(guardDepositedManifest("fresh", G.public, { kind: "absent" }, "domain")).toEqual({ kind: "agreed" });
   });
 
-  test("reopened from the dashboard, the deposit would close it: refusal that points to deploy", () => {
-    for (const action of ["lock", "unlock", "domain"] as const) {
-      const agreement = guardDepositedManifest("vineyard", true, present(false), action);
+  test("changed from the dashboard, the deposit would undo it: refusal that points to deploy", () => {
+    for (const [local, machine] of [["restricted", "public"], ["public", "code"], ["code", "public"]] as const) {
+      const agreement = guardDepositedManifest("vineyard", G[local], present(machine), "domain");
       expect(agreement.kind).toBe("rejects");
       if (agreement.kind !== "rejects") return;
       expect(agreement.message).toBe(
@@ -239,43 +248,23 @@ describe("the guard of the lock and the domain", () => {
     }
   });
 
-  test("closed from the dashboard, removing the lock would erase the door: refusal that points to deploy", () => {
-    const agreement = guardDepositedManifest("vineyard", false, present(true), "unlock");
-    expect(agreement.kind).toBe("rejects");
-    if (agreement.kind !== "rejects") return;
-    expect(agreement.message).toBe(
-      "general access of vineyard changed from the dashboard: run `sitesolide deploy` in its folder first",
-    );
-  });
-
-  test("a lock on a site behind the portal: the door comes off from the dashboard first", () => {
-    // validate() forbids the two together: `deploy` would not be enough.
-    for (const local of [false, true]) {
-      const agreement = guardDepositedManifest("vineyard", local, present(true), "lock");
+  test("an own domain on a site behind the portal: it comes off from the dashboard first", () => {
+    for (const local of ["public", "restricted"] as const) {
+      const agreement = guardDepositedManifest("vineyard", G[local], present("restricted"), "domain");
       expect(agreement.kind).toBe("rejects");
       if (agreement.kind !== "rejects") return;
       expect(agreement.message).toBe("vineyard is restricted: make it public from the dashboard's Access section first");
-      expect(agreement.details).toContain("a restricted site takes no preview code");
+      expect(agreement.details).toContain("a restricted site cannot switch to its own domain yet");
       // The local manifest that still asks for the door will have to catch up.
-      expect(agreement.details.some((line) => line.includes("sitesolide deploy"))).toBe(local);
+      expect(agreement.details.some((line) => line.includes("sitesolide deploy"))).toBe(local === "restricted");
     }
   });
 
-  test("an own domain on a site behind the portal: same refusal", () => {
-    const agreement = guardDepositedManifest("vineyard", false, present(true), "domain");
+  test("an unreadable reading authorises nothing", () => {
+    const agreement = guardDepositedManifest("vineyard", G.public, { kind: "unreadable", reason: "not valid JSON" }, "domain");
     expect(agreement.kind).toBe("rejects");
     if (agreement.kind !== "rejects") return;
-    expect(agreement.message).toBe("vineyard is restricted: make it public from the dashboard's Access section first");
-    expect(agreement.details).toContain("a restricted site cannot switch to its own domain yet");
-  });
-
-  test("an unreadable reading authorises no gesture", () => {
-    for (const action of ["lock", "unlock", "domain"] as const) {
-      const agreement = guardDepositedManifest("vineyard", false, { kind: "unreadable", reason: "not valid JSON" }, action);
-      expect(agreement.kind).toBe("rejects");
-      if (agreement.kind !== "rejects") return;
-      expect(agreement.message).toContain("cannot tell whether the general access of vineyard");
-    }
+    expect(agreement.message).toContain("cannot tell whether the general access of vineyard");
   });
 });
 
@@ -392,32 +381,37 @@ describe("the door read again under the lock", () => {
   test("a site's manifest is read within the reading of them all, even if another one is unreadable", () => {
     // The other one will be refused by the guard of the blocks, not by this
     // one's door.
-    expect(readManifestAmongAll(ALL, "cms")).toEqual({ kind: "present", portal: true });
+    expect(readManifestAmongAll(ALL, "cms")).toEqual({ kind: "present", portal: true, lock: false });
     expect(readManifestAmongAll(ALL, "tool")).toEqual({ kind: "absent" });
     expect(readManifestAmongAll(ALL, "stale").kind).toBe("unreadable");
     expect(readManifestAmongAll("MANIFEST cms\n", "cms").kind).toBe("unreadable");
   });
 
-  test("the same door, or no manifest at all, lets the deposit happen", () => {
-    expect(confirmDoorUnderLock("cms", true, { kind: "present", portal: true })).toEqual({ kind: "agreed" });
-    expect(confirmDoorUnderLock("cms", false, { kind: "present", portal: false })).toEqual({ kind: "agreed" });
-    expect(confirmDoorUnderLock("cms", true, { kind: "absent" })).toEqual({ kind: "agreed" });
+  test("the same general access, or no manifest at all, lets the deposit happen", () => {
+    for (const access of ACCESSES) expect(confirmDoorUnderLock("cms", G[access], present(access))).toEqual({ kind: "agreed" });
+    expect(confirmDoorUnderLock("cms", G.restricted, { kind: "absent" })).toEqual({ kind: "agreed" });
   });
 
-  test("a door changed since the first reading stops everything, in both directions", () => {
+  test("a general access changed since the first reading stops everything, whichever way", () => {
     // Open at the start, closed from the dashboard during the build:
     // depositing the manifest and the block from the start would reopen the
     // site.
-    expect(confirmDoorUnderLock("cms", false, { kind: "present", portal: true })).toMatchObject({
+    expect(confirmDoorUnderLock("cms", G.public, present("restricted"))).toMatchObject({
       kind: "rejects",
       message: "general access of cms changed from the dashboard during this deploy: run `sitesolide deploy` again",
-      details: ["this deploy was turning the portal off, the server now has it on", "neither the manifest nor the Caddy block was deposited"],
+      details: ["this deploy was applying Public, the server now has Restricted", "neither the manifest nor the Caddy block was deposited"],
     });
-    expect(confirmDoorUnderLock("cms", true, { kind: "present", portal: false }).kind).toBe("rejects");
+    // A code set meanwhile: the manifest leaving would drop it, the code left in force.
+    expect(confirmDoorUnderLock("cms", G.public, present("code"))).toMatchObject({
+      kind: "rejects",
+      details: ["this deploy was applying Public, the server now has Anyone with the code", "neither the manifest nor the Caddy block was deposited"],
+    });
+    expect(confirmDoorUnderLock("cms", G.restricted, present("public")).kind).toBe("rejects");
+    expect(confirmDoorUnderLock("cms", G.code, present("restricted")).kind).toBe("rejects");
   });
 
   test("an unreadable reading authorises nothing", () => {
-    expect(confirmDoorUnderLock("cms", true, { kind: "unreadable", reason: "cut" })).toMatchObject({
+    expect(confirmDoorUnderLock("cms", G.restricted, { kind: "unreadable", reason: "cut" })).toMatchObject({
       kind: "rejects",
       message: "cannot tell whether the general access of cms was changed from the dashboard",
     });

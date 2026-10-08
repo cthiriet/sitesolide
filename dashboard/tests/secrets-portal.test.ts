@@ -28,12 +28,14 @@ const result = (others: Record<string, unknown> = {}) => ({
 
 describe("the gatekeeper's unit", () => {
   test("the action in the template's name, the slug alone as the instance", () => {
-    expect(gatekeeperUnitOf(true, "cms")).toBe("sitesolide-gatekeeper-on@cms.service");
-    expect(gatekeeperUnitOf(false, "cms-tool")).toBe("sitesolide-gatekeeper-off@cms-tool.service");
+    expect(gatekeeperUnitOf("on", "cms")).toBe("sitesolide-gatekeeper-on@cms.service");
+    expect(gatekeeperUnitOf("off", "cms-tool")).toBe("sitesolide-gatekeeper-off@cms-tool.service");
+    expect(gatekeeperUnitOf("code", "cms")).toBe("sitesolide-gatekeeper-code@cms.service");
+    expect(gatekeeperUnitOf("renew", "cms")).toBe("sitesolide-gatekeeper-renew@cms.service");
   });
 
   test("a name that is not a slug never enters a unit name", () => {
-    for (const slug of ["test-zone.invalid", "../cms", "cms;reboot", "Cms", "", "cms.service"]) expect(gatekeeperUnitOf(true, slug)).toBeNull();
+    for (const slug of ["test-zone.invalid", "../cms", "cms;reboot", "Cms", "", "cms.service"]) expect(gatekeeperUnitOf("on", slug)).toBeNull();
   });
 });
 

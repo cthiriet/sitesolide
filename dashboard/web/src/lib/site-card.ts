@@ -312,7 +312,7 @@ const ANOMALY_DETAILS: Record<Mismatch, string> = {
     "The live Caddy block restricts the site, but sitesolide.json no longer asks for it. The site stays restricted.",
   "code-without-lock": "A preview code is in effect, but sitesolide.json no longer asks for one.",
   "lock-without-code":
-    "sitesolide.json asks for a preview code, but the server has no valid one: the next regeneration will fail.",
+    "sitesolide.json asks for a preview code, but the server has no valid one: choose one in Access to mend it.",
 }
 
 /**
@@ -335,11 +335,12 @@ export function readAccess(site: Pick<Site, "type" | "portal" | "lock">, plain =
     })
   }
   if (lock.closed || lock.code !== null) {
+    const inForce = lock.code !== null || lock.withheld === true
     checks.push({
       setting: "Preview code",
       requested: lock.closed ? "Requested" : "Not requested",
-      applied: lock.code === null ? "No code on the server" : "Code in effect",
-      tone: lock.closed === (lock.code !== null) ? "ok" : "error",
+      applied: inForce ? "Code in effect" : "No code on the server",
+      tone: lock.closed === inForce ? "ok" : "error",
     })
   }
 

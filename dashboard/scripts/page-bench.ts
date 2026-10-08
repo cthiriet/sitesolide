@@ -83,6 +83,8 @@ import { join, normalize, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import { writeFileSync } from "node:fs";
 import { fixedRefusal } from "../src/gatekeeper/rules";
+import type { GeneralAccess, GeneralView } from "../src/access/protocol";
+import { generateCode } from "../borrowed/locks";
 import { lockHeldMessage } from "../src/gatekeeper/transaction";
 import { HASH_ONLY, PASSWORD_VARIABLE, MIN_PASSWORD } from "../src/secrets/scope";
 import { INTERRUPTED_TRANSACTION_REASON } from "../src/secrets/portal";
@@ -581,7 +583,7 @@ function reading(now: number) {
     generated: generatedAt,
     zone: "example.com",
     folders,
-    codes: JSON.stringify({ "bakery-martin": "K7PX3M" }),
+    codes: JSON.stringify(CODES),
     domains:
       "\triverside-cycles.example wheels\n\twww.riverside-cycles.example wheels\n\tyoga-studio.example yoga-studio\n" +
       (SHOWCASE ? "\tcorner-bookshop.example bookshop\n" : ""),
@@ -605,6 +607,9 @@ function reading(now: number) {
     previous: { generated: generatedAt - MINUTE, cpu },
   };
 }
+
+/** The preview codes in force, which the bench's gatekeeper draws and takes away. */
+const CODES: Record<string, string> = { "bakery-martin": "K7PX3M" };
 
 async function writeState() {
   if (process.env.BENCH_EMPTY === "1") return;
@@ -800,7 +805,7 @@ if (SHOWCASE) {
  * (src/gatekeeper/rules.ts): the portal, the dashboard, the landing with no
  * manifest. The bench does not copy the rest of the rules: a static site
  * changes its door there, so that the wait and the success can be watched on
- * `wheels`.
+ * `wheels`; a site on its own domain takes no code, in the real words.
  */
 const UNTOUCHABLE: Record<string, string> = Object.fromEntries(
   ["portal", "dashboard", "example.com"].map((slug) => [slug, fixedRefusal(slug, null) ?? "the portal of this site cannot be changed"]),
@@ -915,6 +920,19 @@ function portalOf(slug: string) {
   const d = FOLDERS.find((candidate) => candidate.slug === slug);
   const requested = d?.manifest?.portal === true;
   return { requested, installed: d?.portal === true };
+}
+
+/** A site's general access and its three choices, as the real steward says them (`generalState`). */
+function generalView(folder: FakeFolder): GeneralView {
+  const view = PROJECTS.find((project) => project.slug === folder.slug);
+  const portal = view === undefined ? { requested: false, installed: false } : portalOf(folder.slug);
+  const access: GeneralAccess = portal.requested && portal.installed ? "restricted" : folder.manifest?.lock === true ? "code" : "public";
+  const stop = UNTOUCHABLE[folder.slug] ?? null;
+  const domain = folder.manifest?.domain as { name?: string; active?: boolean } | undefined;
+  const ownDomain = domain?.active === true ? `it serves its own domain, ${domain.name}, which a code would not close: switch it back to its preview first, sitesolide domain --deactivate` : null;
+  const choices = { public: stop, restricted: stop, code: stop ?? ownDomain };
+  const open = (["public", "restricted", "code"] as const).some((one) => one !== access && choices[one] === null);
+  return { access, modifiable: open, reason: open ? null : stop, choices };
 }
 
 function projectView(p: FakeProject) {
@@ -1183,9 +1201,7 @@ const accessRoutes = createAccessRoutes({
   general: async (slug) => {
     const found = FOLDERS.find((one) => one.slug === slug);
     if (found === undefined) return null;
-    const view = PROJECTS.find((project) => project.slug === slug);
-    const restricted = view !== undefined && projectView(view).portal.requested === true && projectView(view).portal.installed === true;
-    return { access: restricted ? "restricted" : "public", modifiable: true, reason: null };
+    return generalView(found);
   },
   portalReading: async () => ({ reading: process.env.BENCH_OLD_PORTAL === "1" ? "portal" : "steward", writtenAt: Date.now() }),
   isUnlocked: async (value) => isValidToken({ token: value }),
@@ -1209,14 +1225,16 @@ const accessRoutes = createAccessRoutes({
 function memberAction(power: Power, operation: (req: Request) => Response | Promise<Response>) {
   return async (req: Request): Promise<Response> => {
     const body = await readBody(req);
-    const asks = power === "general" ? generalNeedsUnlock(body.active === true) : needsUnlock(power);
+    const target = body.access === "public" || body.access === "restricted" || body.access === "code" ? body.access : body.active === true ? "restricted" : "public";
+    const asks = power === "general" ? generalNeedsUnlock(target) : needsUnlock(power);
     const principal = await memberRoutes.authorize(body.session, asks ? body.token : null);
     if (principal instanceof Response) return principal;
     const slug = text(body.slug);
     const role = Object.hasOwn(principal.roles, slug) ? principal.roles[slug]! : null;
     if (!may(role, power)) return refusal(403, "out-of-scope", powerRefusal(principal.email, role, slug, power));
     const { session: _session, token: _token, ...rest } = body;
-    return operation(new Request(req.url, { method: req.method, body: JSON.stringify({ ...rest, token: MEMBER_PASS }) }));
+    // The actor, the email this steward verified, as the real one hands its operations.
+    return operation(new Request(req.url, { method: req.method, body: JSON.stringify({ ...rest, token: MEMBER_PASS, actor: principal.email }) }));
   };
 }
 
@@ -1255,6 +1273,7 @@ const steward =
               "/people/secrets/restore": { POST: memberAction("secrets.restore", owner("/restore", "POST")) },
               "/people/secrets/content": { POST: memberAction("secrets.read", owner("/content", "POST")), PUT: memberAction("secrets.write", owner("/content", "PUT")) },
               "/people/portal": { POST: memberAction("general", owner("/portal", "POST")) },
+              "/people/general": { POST: memberAction("general", owner("/general", "POST")) },
             };
           })(),
           // The backups, their troubles and a simulated restore: scripts/bench-backups.ts.
@@ -1580,6 +1599,79 @@ const steward =
               const checked = active ? `${address} answers the portal's 401` : `${address} answers without the portal`;
               const detail = `${active ? "portal set" : "portal removed"}: validated, reloaded, ${checked}, ${others} other site(s) still answer`;
               return Response.json({ portal: { ...portalOf(project.slug), modifiable: true, reason: null }, detail });
+            },
+          },
+          // General access, the three of it and a new code, as the real
+          // steward and gatekeeper answer: the code drawn here, said back in
+          // the answer and in the snapshot, never in the journal.
+          "/general": {
+            POST: async (req) => {
+              const requested = await readBody(req);
+              const target = requested.access;
+              if (target !== "public" && target !== "restricted" && target !== "code") return refusal(400, "invalid", "access: public, restricted or code");
+              const renew = requested.renew === true;
+              if (target !== "restricted" && !isValidToken(requested)) return refusal(401, "locked", "Locked.");
+              const project = projectOf(requested);
+              if (project instanceof Response) return project;
+              const folder = FOLDERS.find((candidate) => candidate.slug === project.slug)!;
+              const operation = renew ? "code" : "portal";
+              const action = renew ? "renew" : target === "restricted" ? "on" : target === "public" ? "off" : "code";
+              const actor = typeof requested.actor === "string" ? requested.actor : undefined;
+              const trace = (result: "ok" | "rejects" | "failure", detail: string) =>
+                record({ operation, result, ...(actor === undefined ? {} : { actor, member: actor }), slug: project.slug, file: null, variable: null, detail });
+              const before = generalView(folder);
+              const refused = before.choices![target];
+              if (refused !== null) {
+                trace("rejects", "out-of-scope");
+                return refusal(403, "out-of-scope", refused);
+              }
+              if (!renew && target !== "restricted" && requested.confirmation !== project.slug) {
+                trace("rejects", "invalid");
+                return refusal(400, "invalid", `type ${project.slug} to confirm ${target === "public" ? "making it public" : "opening it with a code"}`);
+              }
+              if (renew && before.access !== "code") return refusal(400, "invalid", `${project.slug} does not open with a code: choose Anyone with the code first`);
+              const codeOf = () => (CODES[project.slug] === undefined ? null : { code: CODES[project.slug]!, url: `https://${project.slug}.example.com/?key=${CODES[project.slug]}` });
+              const answer = (detail: string) => Response.json({ portal: { ...portalOf(project.slug), modifiable: true, reason: null }, general: generalView(folder), detail, code: target === "code" ? codeOf() : null });
+              if (!renew && before.access === target) return answer(`${project.slug} already ${target === "code" ? "opens with a code" : `is ${target}`}: nothing to change`);
+
+              const address = `${project.slug}.example.com`;
+              if (project.slug === LOCK_HELD_SITE) {
+                await Bun.sleep(400);
+                trace("rejects", `${action}, rejects`);
+                return refusal(409, "unmanaged", lockHeldMessage("deploy-caddy", Date.now() - 40_000));
+              }
+              await Bun.sleep(6000);
+              if (project.slug === FAILING_SITE) {
+                trace("failure", `${action}, failure`);
+                return refusal(500, "failure", `probe: ${address} does not answer, got 502; previous configuration restored`);
+              }
+              const leaving = before.access === "code" && target !== "code";
+              folder.portal = target === "restricted";
+              if (folder.manifest !== null) {
+                delete folder.manifest.portal;
+                delete folder.manifest.lock;
+                if (target === "restricted") folder.manifest.portal = true;
+                if (target === "code") folder.manifest.lock = true;
+              }
+              const previous = CODES[project.slug];
+              if (target === "code") {
+                let drawn = previous ?? generateCode();
+                while (renew && drawn === previous) drawn = generateCode();
+                CODES[project.slug] = drawn;
+              } else delete CODES[project.slug];
+              await writeState();
+              trace("ok", `${action}, ok`);
+              const others = FOLDERS.length - 1;
+              const checked =
+                target === "restricted"
+                  ? `${address} answers the portal's 401`
+                  : target === "public"
+                    ? leaving ? `${address} answers without a code` : `${address} answers without the portal`
+                    : renew
+                      ? `${address} answers the door page's 401 and opens with the new code, not the old one`
+                      : `${address} answers the door page's 401 and opens with its code`;
+              const words = renew ? "new code set" : target === "restricted" ? (leaving ? "code removed, portal set" : "portal set") : target === "public" ? (leaving ? "code removed" : "portal removed") : before.access === "restricted" ? "portal removed, code set" : "code set";
+              return answer(`${words}: validated, reloaded, ${checked}, ${others} other site(s) still answer`);
             },
           },
           // The egress proxy's connectors, through the real rules of

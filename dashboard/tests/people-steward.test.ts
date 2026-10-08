@@ -114,6 +114,8 @@ async function mount(): Promise<Bench> {
     accountsFile: join(root, "passwd"),
     caddyFolder: join(root, "caddy"),
     gatekeeperFolder: join(root, "gatekeeper"),
+    codesFile: join(root, "locks-codes.json"),
+    locksFragment: join(root, "verrous.caddy"),
     systemctl: "/path/that/does/not/exist",
   });
   const system: System = {
@@ -630,6 +632,24 @@ describe("general access and the access log's bounds", () => {
     expect(bench.calls.filter((call) => call[0] === "start")).toEqual([]);
     expect(lines(bench)).toBe(before);
     void token;
+  });
+
+  test("Anyone with the code and a new code count as making a site public: refused while the log is full, nothing started", async () => {
+    const bench = await mount();
+    withAlice(bench);
+    writeFileSync(join(bench.root, "state", "access-log.jsonl"), Array.from({ length: 20_000 }, (_, i) => `{"a":${bench.clock.t - 1000 + i}}\n`).join(""), { mode: 0o600 });
+    bench.clock.t += 3_600_001;
+    const opened = await bench.call("POST", "/general", { token: await unlock(bench), slug: "blog", access: "code", confirmation: "blog" });
+    expect(opened.status).toBe(507);
+    expect(await opened.json()).toMatchObject({ error: "log-full" });
+    // blog opening with a code already: a new one is bounded the same way.
+    const path = join(bench.root, "sites", "blog", "sitesolide.json");
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), lock: true }));
+    writeFileSync(join(bench.root, "locks-codes.json"), '{"blog":"K7M2PQ"}', { mode: 0o600 });
+    writeFileSync(join(bench.root, "verrous.caddy"), "@lock_key_blog query key=K7M2PQ\n");
+    const renewed = await bench.call("POST", "/general", { token: await unlock(bench), slug: "blog", access: "code", renew: true, confirmation: "" });
+    expect(renewed.status).toBe(507);
+    expect(bench.calls.filter((call) => call[0] === "start")).toEqual([]);
   });
 });
 

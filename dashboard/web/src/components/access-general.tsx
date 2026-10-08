@@ -1,10 +1,10 @@
 import { useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
-import { Check, CircleCheck, CircleX, Globe, Info, KeyRound, ShieldCheck, type LucideIcon } from "lucide-react"
+import { Check, CircleCheck, CircleX, Globe, Info, KeyRound, RefreshCw, ShieldCheck, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Command, useAnnounce } from "@/components/copy"
+import { useAnnounce } from "@/components/copy"
 import { Banner, INPUT_DIALOG, Panel } from "@/components/page"
 import { CodeChip } from "@/components/access-word"
 import { Track, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
@@ -15,11 +15,11 @@ import {
   changeProgress,
   changeResult,
   changeTexts,
-  codeCommands,
+  codeWithheld,
   confirmationValid,
   generalLine,
-  generalNote,
   removalConfirmation,
+  type ChangeTarget,
   type ChoiceOption,
   type GeneralReader,
   type GeneralState,
@@ -31,10 +31,9 @@ import { cn } from "@/lib/utils"
 
 /**
  * General access, the first thing a site's Access section says: how the site
- * opens, the three ways it may, and the change from one to another. Public
- * and restricted change here through the steward and the gatekeeper; a
- * preview code is `sitesolide lock`'s, from the project's folder, and the
- * dashboard only shows it.
+ * opens, the three ways it may, and the change from one to another. All three
+ * change here, through the steward and the gatekeeper; a site that opens with
+ * a code shows it, its link to copy, and a new one to draw.
  */
 
 // --- The panel ---------------------------------------------------------------------
@@ -56,18 +55,26 @@ function Exemptions({ paths }: { paths: readonly string[] }) {
   )
 }
 
+/** The code in force, to copy or open; or, for whoever may not see it, whom to ask. */
+function Code({ slug, state }: { slug: string; state: GeneralState }) {
+  if (state.code === null) return <p className="text-xs text-pretty text-muted-foreground">{codeWithheld(slug)}</p>
+  return <CodeChip slug={slug} code={state.code.code} url={state.code.url} large />
+}
+
 /**
  * The three ways a site opens, the current one marked as the sidebar marks
  * the current page. For the owner and the project's Admins, each other way
- * says what choosing it does, with a button that names the change; what
- * cannot change here is said once, under the choices. Whoever only reads it
- * gets one line. Nothing changes until the confirmation.
+ * says what choosing it does, with a button that names the change; the code
+ * in force has *New code* beside it. What the steward refuses for one choice
+ * is said under it, for all of them once under the choices. Whoever only
+ * reads it gets one line. Nothing changes until the confirmation.
  */
 export function GeneralAccessPanel({
   slug,
   state,
   options,
   reader,
+  renewable,
   stewardReason,
   failedNote,
   onChoose,
@@ -76,11 +83,13 @@ export function GeneralAccessPanel({
   state: GeneralState
   options: ChoiceOption[]
   reader: GeneralReader
-  /** The steward's reason when the site may not change from here, said once under the choices. */
+  /** *New code* is offered beside the code in force. */
+  renewable: boolean
+  /** The steward's reason when no other choice may be taken from here, said once under the choices. */
   stewardReason: string | null
   /** When who has access could not be read: the choices wait for the server. */
   failedNote: string | null
-  onChoose: (target: "public" | "restricted") => void
+  onChoose: (target: ChangeTarget) => void
 }) {
   const problem =
     state.problem === null ? null : (
@@ -97,15 +106,13 @@ export function GeneralAccessPanel({
         {problem}
         <div className="grid gap-2 px-4 py-3">
           <p className="text-pretty">{generalLine(state, slug)}</p>
-          {state.current === "code" && state.code !== null && <CodeChip slug={slug} code={state.code.code} url={state.code.url} large />}
+          {state.current === "code" && <Code slug={slug} state={state} />}
           {state.current === "restricted" && state.exemptions.length > 0 && <Exemptions paths={state.exemptions} />}
         </div>
       </Panel>
     )
   }
 
-  const commands = state.current === "code" && reader === "owner" ? codeCommands(true) : []
-  const note = generalNote(state, reader)
   return (
     <Panel title="General access" full>
       {problem}
@@ -134,9 +141,15 @@ export function GeneralAccessPanel({
                   )}
                 </p>
                 <p className="text-pretty text-muted-foreground">{option.sentence}</p>
-                {option.current && option.access === "code" && state.code !== null && (
-                  <div className="mt-1.5">
-                    <CodeChip slug={slug} code={state.code.code} url={state.code.url} large />
+                {option.current && option.access === "code" && (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                    <Code slug={slug} state={state} />
+                    {renewable && (
+                      <Button variant="outline" size="sm" data-general="renew" onClick={() => onChoose("renew")} className="max-md:h-10">
+                        <RefreshCw aria-hidden="true" />
+                        New code
+                      </Button>
+                    )}
                   </div>
                 )}
                 {option.current && option.access === "restricted" && state.exemptions.length > 0 && (
@@ -144,13 +157,14 @@ export function GeneralAccessPanel({
                     <Exemptions paths={state.exemptions} />
                   </div>
                 )}
+                {option.reason !== null && <p className="mt-0.5 text-xs text-pretty text-muted-foreground">{option.reason}</p>}
               </div>
               {option.available && option.action !== null && (
                 <Button
                   variant="outline"
                   size="sm"
                   data-general={option.access}
-                  onClick={() => onChoose(option.access as "public" | "restricted")}
+                  onClick={() => onChoose(option.access)}
                   className="max-md:h-10"
                 >
                   {option.action}
@@ -160,22 +174,6 @@ export function GeneralAccessPanel({
           )
         })}
       </ul>
-
-      {(note !== null || commands.length > 0) && (
-        <div className="grid gap-2 border-t px-4 py-3">
-          {note !== null && <p className="text-xs text-pretty text-muted-foreground">{note}</p>}
-          {commands.length > 0 && (
-            <ul className="grid gap-2 sm:grid-cols-2">
-              {commands.map((command) => (
-                <li key={command.command} className="grid gap-1">
-                  <span className="text-xs text-muted-foreground">{command.label}</span>
-                  <Command text={command.command} />
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
 
       {stewardReason !== null && (
         <p className="flex gap-2 border-t px-4 py-3 text-xs text-pretty text-muted-foreground">
@@ -196,7 +194,9 @@ export function GeneralAccessPanel({
 
 export type ChangeState = {
   slug: string
-  target: "public" | "restricted"
+  target: ChangeTarget
+  /** How the site opens before the change: leaving a code says the code stops working. */
+  from: GeneralAccess
   /** Said before restricting a site nobody is on the list of: who will still open it. */
   warning: string | null
   open: boolean
@@ -206,14 +206,15 @@ export type ChangeState = {
 type Phase =
   | { phase: "confirmation" }
   | { phase: "in-progress"; start: number }
-  | { phase: "succeeded"; detail: string }
+  | { phase: "succeeded"; detail: string; code: { code: string; url: string | null } | null }
   | { phase: "failure"; message: string }
 
 /**
  * A change of general access: a confirmation stating what is about to
- * happen, the slug retyped to make a site public, then the wait, which
- * neither closes nor cancels, and finally the gatekeeper's result in plain
- * words and the repository reminder. The form remounts on every opening.
+ * happen, the slug retyped to make a site public or open it with a code,
+ * then the wait, which neither closes nor cancels, and finally the
+ * gatekeeper's result in plain words, the code when there is one, and the
+ * repository reminder. The form remounts on every opening.
  */
 export function GeneralAccessDialog({
   state,
@@ -224,11 +225,12 @@ export function GeneralAccessDialog({
 }: {
   state: ChangeState | null
   onClose: () => void
-  onChanged: (target: "public" | "restricted") => void
+  onChanged: (target: ChangeTarget) => void
   onRefusal: OnRefusal
   focusReturn: FocusReturn
 }) {
   const busy = useRef(false)
+  const typed = state !== null && changeTexts(state.slug, state.target, state.from).typed
   return (
     <Dialog
       open={state?.open ?? false}
@@ -236,7 +238,7 @@ export function GeneralAccessDialog({
         if (!next && !busy.current) onClose()
       }}
     >
-      <DialogContent finalFocus={focusReturn} showCloseButton={false} className={cn("gap-5 sm:max-w-lg", state?.target === "public" && INPUT_DIALOG)}>
+      <DialogContent finalFocus={focusReturn} showCloseButton={false} className={cn("gap-5 sm:max-w-lg", typed && INPUT_DIALOG)}>
         {state !== null && <ChangeFlow key={state.opening} state={state} busy={busy} onChanged={onChanged} onRefusal={onRefusal} />}
       </DialogContent>
     </Dialog>
@@ -251,13 +253,13 @@ function ChangeFlow({
 }: {
   state: ChangeState
   busy: { current: boolean }
-  onChanged: (target: "public" | "restricted") => void
+  onChanged: (target: ChangeTarget) => void
   onRefusal: OnRefusal
 }) {
   const announce = useAnnounce()
   const { slug, target } = state
-  const opening = target === "public"
-  const texts = changeTexts(slug, target)
+  const texts = changeTexts(slug, target, state.from)
+  const typed = texts.typed
   const [phase, setPhase] = useState<Phase>({ phase: "confirmation" })
   const [entry, setEntry] = useState("")
   const [error, setError] = useState("")
@@ -278,17 +280,20 @@ function ChangeFlow({
   async function confirm(event: SyntheticEvent) {
     event.preventDefault()
     if (phase.phase === "in-progress") return
-    if (opening && !confirmationValid(entry, slug)) {
+    if (typed && !confirmationValid(entry, slug)) {
       setError(`Type ${slug} to confirm.`)
       return
     }
     setError("")
     setPhase({ phase: "in-progress", start: Date.now() })
     announce(texts.runningTitle)
-    const { status, body } = await setGeneralAccess(slug, target, opening ? removalConfirmation(entry) : "")
+    const access = target === "renew" ? "code" : target
+    const { status, body } = await setGeneralAccess(slug, access, typed ? removalConfirmation(entry) : "", target === "renew")
     if (succeeded(status) && body !== null && typeof body.detail === "string") {
       const detail = changeResult(target, body.detail)
-      setPhase({ phase: "succeeded", detail })
+      const code = body.code !== undefined && body.code !== null ? body.code : null
+      setPhase({ phase: "succeeded", detail, code })
+      // Never through the live region: the code is on screen for whoever asked.
       announce(`${texts.succeeded}. ${detail}`)
       return onChanged(target)
     }
@@ -310,7 +315,16 @@ function ChangeFlow({
           </DialogTitle>
           <DialogDescription className="text-pretty">{success ? phase.detail : phase.message}</DialogDescription>
         </DialogHeader>
-        {success && <p className="text-sm text-pretty text-muted-foreground">{DEPLOY_NOTE}</p>}
+        {success && phase.code !== null && (
+          <div className="grid gap-1.5">
+            <p className="text-sm font-medium">The code</p>
+            <div>
+              <CodeChip slug={slug} code={phase.code.code} url={phase.code.url} large />
+            </div>
+            <p className="text-xs text-pretty text-muted-foreground">Send the link: it opens the site and remembers the code for thirty days. It stays shown in Access.</p>
+          </div>
+        )}
+        {success && target !== "renew" && <p className="text-sm text-pretty text-muted-foreground">{DEPLOY_NOTE}</p>}
         <DialogFooter>
           <DialogClose render={<Button ref={closeButton} className="max-sm:h-11" />}>Close</DialogClose>
         </DialogFooter>
@@ -319,6 +333,7 @@ function ChangeFlow({
   }
 
   const inProgress = phase.phase === "in-progress"
+  const lead = target === "public" ? `${slug} becomes public.` : `${slug} opens to anyone with its code.`
   return (
     <form noValidate onSubmit={confirm} className="grid gap-5" aria-busy={inProgress || undefined}>
       <DialogHeader>
@@ -326,19 +341,19 @@ function ChangeFlow({
         {/* What it opens, first and in red, before what it keeps. */}
         {texts.warning !== null && !inProgress && (
           <Banner tone="error">
-            <span className="font-medium">{slug} becomes public.</span> {texts.warning}
+            <span className="font-medium">{lead}</span> {texts.warning}
           </Banner>
         )}
         <DialogDescription className="text-pretty">{texts.consequence}</DialogDescription>
       </DialogHeader>
 
-      {!opening && !inProgress && state.warning !== null && <Banner tone="attention">{state.warning}</Banner>}
+      {target === "restricted" && !inProgress && state.warning !== null && <Banner tone="attention">{state.warning}</Banner>}
 
       <p className="text-xs text-pretty text-muted-foreground">{CHANGE_DURATION}</p>
 
       {inProgress && <ChangeWait start={phase.start} />}
 
-      {opening && !inProgress && (
+      {typed && !inProgress && (
         <div className="grid gap-2">
           <Label htmlFor={inputId}>
             Type <span className="font-mono">{slug}</span> to confirm
@@ -371,9 +386,9 @@ function ChangeFlow({
         {!inProgress && <DialogClose render={<Button type="button" variant="outline" className="max-sm:h-11" />}>Cancel</DialogClose>}
         <Button
           type="submit"
-          autoFocus={!opening}
-          variant={opening ? "destructive" : "default"}
-          disabled={inProgress || (opening && !confirmationValid(entry, slug))}
+          autoFocus={!typed}
+          variant={typed ? "destructive" : "default"}
+          disabled={inProgress || (typed && !confirmationValid(entry, slug))}
           className="max-sm:h-11"
         >
           {inProgress ? texts.actionInProgress : texts.action}

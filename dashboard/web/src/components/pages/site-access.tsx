@@ -9,7 +9,21 @@ import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { SitePage } from "@/components/site"
 import { readAccess } from "@/lib/api"
-import { ACCESS_UNREACHABLE, emptyListWarning, generalLine, generalOptions, generalState, isPlatform, platformText, readingProblem, refusalText, type GeneralReader } from "@/lib/access"
+import {
+  ACCESS_UNREACHABLE,
+  emptyListWarning,
+  generalLine,
+  generalOptions,
+  generalState,
+  isPlatform,
+  mayRenew,
+  platformText,
+  readingProblem,
+  refusalText,
+  sharedReason,
+  stewardChoices,
+  type GeneralReader,
+} from "@/lib/access"
 import { activityUrl } from "@/lib/audit"
 import { isPerson, roleOn } from "@/lib/identity"
 import { siteUrl } from "@/lib/pages"
@@ -85,9 +99,9 @@ function Content({ site }: { site: Site }) {
   if (platform) return <PlatformContent site={site} />
 
   const state = generalState(site)
-  const steward = page?.general ?? null
-  const options = generalOptions(state, steward === null ? null : { modifiable: steward.modifiable, reason: steward.reason }, admin)
-  const stewardReason = admin && steward !== null && !steward.modifiable && state.current !== "code" && steward.reason !== null ? steward.reason : null
+  const steward = stewardChoices(page?.general ?? null)
+  const options = generalOptions(state, steward, admin)
+  const stewardReason = admin ? sharedReason(state, steward) : null
   const problem = page === null ? null : readingProblem(page.portal)
 
   return (
@@ -121,9 +135,12 @@ function Content({ site }: { site: Site }) {
         state={state}
         options={options}
         reader={reader}
+        renewable={mayRenew(state, steward, admin)}
         stewardReason={stewardReason}
         failedNote={admin && loaded.state === "failed" ? "Shown as last read: it can't change until the server answers." : null}
-        onChoose={(target) => actions.changeAccess(slug, target, target === "restricted" && page !== null ? emptyListWarning(slug, page.entries.length, page.signIn.admins) : null)}
+        onChoose={(target) =>
+          actions.changeAccess(slug, target, state.current, target === "restricted" && page !== null ? emptyListWarning(slug, page.entries.length, page.signIn.admins) : null)
+        }
       />
 
       {loaded.state === "loading" ? (

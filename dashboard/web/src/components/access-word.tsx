@@ -98,7 +98,7 @@ export function AccessWord({ site, large = false }: { site: Pick<Site, "slug" | 
       return (
         <span className="grid justify-items-start gap-1">
           <span className="whitespace-nowrap">Anyone with the code</span>
-          <CodeChip slug={site.slug} code={access.code} url={access.url} large={large} />
+          {access.code !== null && <CodeChip slug={site.slug} code={access.code} url={access.url} large={large} />}
         </span>
       )
     case "portal":

@@ -32,7 +32,9 @@ import { isPasswordValid, isAcceptableSubmission } from "../auth";
 import { addressOf, unitOf } from "../state";
 import { reservedReason } from "../control/policy";
 import { generatePassword } from "../password";
-import { portalModifiable, DASHBOARD_SLUG } from "../gatekeeper/rules";
+import { portalModifiable, generalChoices, DASHBOARD_SLUG, type Choices } from "../gatekeeper/rules";
+import { actionFor, type GeneralAccess } from "../gatekeeper/instance";
+import { installedCode, isValidCode, readCodes as readLockCodes } from "../../borrowed/locks";
 import type { RandomSource } from "../sessions";
 import {
   INITIAL_STATE,
@@ -130,7 +132,7 @@ import { machineRefusal, may } from "../people/powers";
 import { portalReading, type PortalAdmin } from "../people/portal";
 import { createAccessRoutes, createAccessStore, type AccessRoutes, type AccessStore } from "../access/steward";
 import type { AccessSystem } from "../access/system";
-import type { GeneralView, LeavingToken } from "../access/protocol";
+import { GENERAL_ACCESSES, type GeneralResponse, type GeneralView, type LeavingToken } from "../access/protocol";
 
 export type StewardOptions = {
   secretsFolder: string;
@@ -861,12 +863,34 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return null;
   }
 
-  // --- A site's portal -------------------------------------------------------
+  // --- A site's general access ----------------------------------------------
 
   /** The sites whose gatekeeper the steward is waiting for at this moment. */
   const gatekeepersInFlight = new Set<string>();
 
-  async function portalView(site: Site): Promise<PortalView> {
+  /**
+   * What stops every change of general access on this site right now, null
+   * if nothing. A backup that remains says a gatekeeper stopped in the
+   * middle: the block in service is not necessarily the one being read any
+   * more, and a new action would start from a state nobody knows. While this
+   * steward is waiting for the gatekeeper, it is normal, and the page says so
+   * otherwise.
+   */
+  async function blockerOf(site: Site): Promise<string | null> {
+    try {
+      if (await system.gatekeeperBackup(site.folder)) {
+        return gatekeepersInFlight.has(site.folder) ? TRANSACTION_IN_PROGRESS_REASON : INTERRUPTED_TRANSACTION_REASON;
+      }
+      const other = (await system.gatekeeperBackups()).find((name) => name !== site.folder);
+      return other === undefined ? null : backupElsewhereReason(other, gatekeepersInFlight.has(other));
+    } catch (e) {
+      // When in doubt, no action: we do not know whether a gatekeeper stopped.
+      console.error(`portal: gatekeeper backup unreadable for ${site.folder} (${errorName(e)})`);
+      return "the gatekeeper's state could not be checked on the server";
+    }
+  }
+
+  async function portalView(site: Site, blocker?: string | null): Promise<PortalView> {
     let modifiable = false;
     let reason: string | null = "sitesolide.json could not be checked";
     try {
@@ -874,27 +898,10 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     } catch (e) {
       console.error(`portal: rule unreadable for ${site.folder} (${errorName(e)})`);
     }
-
-    // A backup that remains says a gatekeeper stopped in the middle: the block
-    // in service is not necessarily the one being read any more, and a new
-    // action would start from a state nobody knows. While this steward is
-    // waiting for the gatekeeper, it is normal, and the page says so otherwise.
-    try {
-      if (await system.gatekeeperBackup(site.folder)) {
-        modifiable = false;
-        reason = gatekeepersInFlight.has(site.folder) ? TRANSACTION_IN_PROGRESS_REASON : INTERRUPTED_TRANSACTION_REASON;
-      } else {
-        const other = (await system.gatekeeperBackups()).find((name) => name !== site.folder);
-        if (other !== undefined) {
-          modifiable = false;
-          reason = backupElsewhereReason(other, gatekeepersInFlight.has(other));
-        }
-      }
-    } catch (e) {
-      // When in doubt, no action: we do not know whether a gatekeeper stopped.
-      console.error(`portal: gatekeeper backup unreadable for ${site.folder} (${errorName(e)})`);
+    const stop = blocker === undefined ? await blockerOf(site) : blocker;
+    if (stop !== null) {
       modifiable = false;
-      reason = "the gatekeeper's state could not be checked on the server";
+      reason = stop;
     }
 
     let installed = false;
@@ -905,6 +912,56 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       console.error(`portal: Caddy block unreadable for ${site.folder} (${errorName(e)})`);
     }
     return { requested: site.manifest !== null && isProtected(site.manifest), installed, modifiable, reason };
+  }
+
+  /**
+   * The preview code in force for a site, and whether the fragment in service
+   * applies it: read from the files the gatekeeper writes, never kept here.
+   * Unreadable reads as no code, said in the journal.
+   */
+  async function codeOf(slug: string): Promise<{ code: string | null; applied: boolean }> {
+    try {
+      const raw = readLockCodes(await system.readCodes())[slug];
+      const code = isValidCode(raw) ? raw : null;
+      return { code, applied: code !== null && installedCode(await system.readLocksFragment(), slug) === code };
+    } catch (e) {
+      console.error(`general: preview code unreadable for ${slug} (${errorName(e)})`);
+      return { code: null, applied: false };
+    }
+  }
+
+  type GeneralState = { view: GeneralView; choices: Choices; portal: PortalView; code: string | null; applied: boolean };
+
+  /**
+   * A site's general access as the machine carries it, Public, Restricted or
+   * Anyone with the code, and for each of the three whether it may be chosen
+   * from here: the gatekeeper's rule (src/gatekeeper/rules.ts), and a
+   * gatekeeper in flight or interrupted, which stops all three.
+   */
+  async function generalState(site: Site): Promise<GeneralState> {
+    const blocker = await blockerOf(site);
+    const portal = await portalView(site, blocker);
+    let choices: Choices;
+    try {
+      choices = generalChoices(site.folder, site.manifest);
+    } catch (e) {
+      console.error(`general: rule unreadable for ${site.folder} (${errorName(e)})`);
+      const unknown = "sitesolide.json could not be checked";
+      choices = { public: unknown, restricted: unknown, code: unknown };
+    }
+    if (blocker !== null) choices = { public: blocker, restricted: blocker, code: blocker };
+    const access: GeneralAccess = portal.requested && portal.installed ? "restricted" : site.manifest?.lock === true ? "code" : "public";
+    const { code, applied } = await codeOf(site.folder);
+    const others = GENERAL_ACCESSES.filter((one) => one !== access);
+    const open = others.some((one) => choices[one] === null);
+    const reason = open ? null : (blocker ?? choices[others[0]!] ?? null);
+    return { view: { access, modifiable: open, reason, choices }, choices, portal, code, applied };
+  }
+
+  /** The code and the link that carries it, for whoever may see them. */
+  function codeView(slug: string, code: string | null): { code: string; url: string | null } | null {
+    if (code === null) return null;
+    return { code, url: memberZone === "" ? null : `https://${addressOf(slug, memberZone)}/?key=${code}` };
   }
 
   // --- The routes ------------------------------------------------------------
@@ -1410,14 +1467,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
-   * Puts up or takes away a site's portal through the gatekeeper, under the
-   * exclusion lock: two actions on Caddy never cross. Making a site public
-   * takes the unlock, and its name retyped, and is bounded as every change
-   * that lets more people in (src/access/steward.ts, `widen`); restricting it
-   * takes neither: less exposure is never refused for want of a password, nor
-   * for the access log's room. A site already restricted is left as it is:
-   * nothing started, nothing logged, so that restricting, which nothing
-   * refuses, never fills the access log either.
+   * Restricts a site or makes it public, through the gatekeeper: the route the
+   * dashboard called before the three general accesses, kept for a dashboard
+   * deployed before this steward. Its answer keeps its shape.
    */
   async function togglePortal(req: Request): Promise<Response> {
     const body = await readBody(req, ["token", "slug", "confirmation", "active"]);
@@ -1429,71 +1481,138 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return underLock(req, body, () => portalTask(req, body, OWNER));
   }
 
-  /** The gatekeeper started for one site's door, under the lock, for the owner or an Admin. */
+  /** `POST /portal`'s and `/people/portal`'s body read as a general access, answered in their shape. */
   async function portalTask(req: Request, body: Body, who: Who): Promise<Response> {
-    const active = body.active === true;
-    const direction = active ? "on" : "off";
-    {
-      const found = checkSite(await sites(), body.slug);
-      if ("refusal" in found) return refuse("portal", body, found.refusal, null, who);
-      const { site } = found;
-      if (who.member !== null) {
-        const machine = machineRefusal(site.folder, null, memberZone);
-        if (machine !== null) return refuse("portal", body, { error: "out-of-scope", message: machine }, null, who);
-      }
+    const { active, ...rest } = body;
+    const changed = await generalChange(req, { ...rest, access: active === true ? "restricted" : "public" }, who, "dashboard");
+    if (changed instanceof Response) return changed;
+    const response: PortalResponse = { portal: changed.portal, detail: changed.detail };
+    return Response.json(response);
+  }
 
-      const view = await portalView(site);
-      if (active && view.requested && view.installed) {
-        const response: PortalResponse = { portal: view, detail: `${site.folder} is already restricted: nothing to change` };
-        return Response.json(response);
-      }
-      const { modifiable, reason } = view;
-      const unit = gatekeeperUnitOf(active, site.folder);
-      if (!modifiable || unit === null) {
-        return refuse("portal", body, { error: "out-of-scope", message: reason ?? "the portal of this site cannot be changed" }, null, who);
-      }
-      // Taking away the portal makes the site public: the name is retyped.
-      if (!active && body.confirmation !== site.folder) {
-        return refuse("portal", body, { error: "invalid", message: `type ${site.folder} to confirm removing the portal` }, null, who);
-      }
-      if (!active && access !== null) {
-        const bounded = await access.widen("dashboard", who.actor);
-        if (bounded !== null) return bounded;
-      }
-      // Checked again just before the launch: re-reading the site and its block
-      // took time, and a gatekeeper launched for a requester who has gone would
-      // change Caddy without anyone seeing the result.
-      if (req.signal.aborted) return abandoned();
+  /**
+   * A site's general access, any of the three, or a new code, for the owner's
+   * session: the unlock for everything but Restricted, which lets nobody new
+   * in, and is never refused for want of a password.
+   */
+  async function setGeneral(req: Request): Promise<Response> {
+    const body = await readBody(req, ["token", "slug", "access", "renew", "confirmation"]);
+    if (body instanceof Response) return body;
+    if (body.access === "restricted") return underLockWith(req, async () => null, () => generalTask(req, body, OWNER));
+    if (!(await isValidToken(state, body.token, system.now()))) return error("locked", "locked, unlock again");
+    return underLock(req, body, () => generalTask(req, body, OWNER));
+  }
 
-      const launch = system.now();
-      gatekeepersInFlight.add(site.folder);
-      try {
-        // `start` waits for the end of the gatekeeper, which is a oneshot. Its
-        // code does not decide: the result written by the gatekeeper is
-        // authoritative.
-        await system.systemctl(["start", unit], gatekeeperTimeoutMs);
-      } catch (e) {
-        console.error(`portal: systemctl start failed (${errorName(e)})`);
-      } finally {
-        gatekeepersInFlight.delete(site.folder);
-      }
-      let examination: Examination = { kind: "absent" };
-      try {
-        examination = await system.readGatekeeperResult(site.folder);
-      } catch (e) {
-        console.error(`portal: result unreadable (${errorName(e)})`);
-      }
-      const { result, message } = judgeGatekeeperResult(examination, launch, checked ? uidRoot : null);
-      await writeLog("portal", result, body, `${direction}, ${result}`, null, who);
+  /**
+   * The same over the owner's socket, which only root opens: `sitesolide lock`
+   * and `sitesolide unlock`, over the owner's SSH. Root has asked for it:
+   * neither the dashboard's unlock nor the slug retyped, and the bound of the
+   * owner over SSH (src/access/steward.ts, `widen`).
+   */
+  async function ownerGeneral(req: Request): Promise<Response> {
+    const body = await readBody(req, ["slug", "access", "renew"]);
+    if (body instanceof Response) return body;
+    return underLockWith(req, async () => null, () => generalTask(req, body, OWNER, "ssh"));
+  }
 
-      // A refusal from the gatekeeper, Caddy being changed from the workstation
-      // included: nothing has moved, the message says what to do.
-      if (result === "rejects") return error("unmanaged", message);
-      if (result === "failure") return error("failure", message);
-      const reread = (await sites()).get(site.folder) ?? site;
-      const response: PortalResponse = { portal: await portalView(reread), detail: message };
-      return Response.json(response);
+  async function generalTask(req: Request, body: Body, who: Who, channel: "dashboard" | "ssh" = "dashboard"): Promise<Response> {
+    const changed = await generalChange(req, body, who, channel);
+    return changed instanceof Response ? changed : Response.json(changed);
+  }
+
+  /**
+   * A change of general access through the gatekeeper, under the exclusion
+   * lock: two actions on Caddy never cross. Making a site public, opening it
+   * with a code, and a new code each let someone in who was not: they take
+   * the unlock (the callers'), are bounded as every change that lets more
+   * people in (src/access/steward.ts, `widen`), and the first two take the
+   * slug retyped. Restricting takes none of it: less exposure is never refused
+   * for want of a password, nor for the access log's room. A site already as
+   * asked is left as it is: nothing started, nothing logged, so that what
+   * nothing refuses never fills the access log.
+   *
+   * The journal says `portal` and the general access chosen, `on`, `off` or
+   * `code`, or `code` and `renew` for a new code: never the code itself, which
+   * the gatekeeper draws on the machine. The answer carries it, for the owner and
+   * the project's Admins, read back from the codes file.
+   */
+  async function generalChange(req: Request, body: Body, who: Who, channel: "dashboard" | "ssh"): Promise<GeneralResponse | Response> {
+    if (body.access !== "public" && body.access !== "restricted" && body.access !== "code") return error("invalid", "access: public, restricted or code");
+    if (body.renew !== undefined && typeof body.renew !== "boolean") return error("invalid", "renew must be a boolean");
+    if (typeof body.slug !== "string") return error("invalid", "slug must be a string");
+    if (body.confirmation !== undefined && typeof body.confirmation !== "string") return error("invalid", "confirmation must be a string");
+    const target: GeneralAccess = body.access;
+    const renew = body.renew === true;
+    if (renew && target !== "code") return error("invalid", "a new code is asked with access: code");
+    const action = actionFor(target, renew);
+    const operation: Operation = renew ? "code" : "portal";
+
+    const found = checkSite(await sites(), body.slug);
+    if ("refusal" in found) return refuse(operation, body, found.refusal, null, who);
+    const { site } = found;
+    if (who.member !== null) {
+      const machine = machineRefusal(site.folder, null, memberZone);
+      if (machine !== null) return refuse(operation, body, { error: "out-of-scope", message: machine }, null, who);
     }
+
+    const current = await generalState(site);
+    if (!renew && target === "restricted" && current.portal.requested && current.portal.installed) {
+      return { portal: current.portal, general: current.view, detail: `${site.folder} is already restricted: nothing to change`, code: null };
+    }
+    if (!renew && target === "code" && current.view.access === "code" && current.applied) {
+      return { portal: current.portal, general: current.view, detail: `${site.folder} already opens with a code: nothing to change`, code: codeView(site.folder, current.code) };
+    }
+    if (renew && current.view.access !== "code") {
+      return refuse(operation, body, { error: "invalid", message: `${site.folder} does not open with a code: choose Anyone with the code first` }, null, who);
+    }
+    const reason = current.choices[target];
+    const unit = gatekeeperUnitOf(action, site.folder);
+    if (reason !== null || unit === null) {
+      return refuse(operation, body, { error: "out-of-scope", message: reason ?? "the general access of this site cannot be changed" }, null, who);
+    }
+    // Making a site public, or opening it to anyone who holds a code: the name
+    // is retyped. Root over its own socket has typed the command itself.
+    if (channel !== "ssh" && !renew && target !== "restricted" && body.confirmation !== site.folder) {
+      const what = target === "public" ? "making it public" : "opening it with a code";
+      return refuse(operation, body, { error: "invalid", message: `type ${site.folder} to confirm ${what}` }, null, who);
+    }
+    if (target !== "restricted" && access !== null) {
+      const bounded = await access.widen(channel, who.actor);
+      if (bounded !== null) return bounded;
+    }
+    // Checked again just before the launch: re-reading the site and its block
+    // took time, and a gatekeeper launched for a requester who has gone would
+    // change Caddy without anyone seeing the result.
+    if (req.signal.aborted) return abandoned();
+
+    const launch = system.now();
+    gatekeepersInFlight.add(site.folder);
+    try {
+      // `start` waits for the end of the gatekeeper, which is a oneshot. Its
+      // code does not decide: the result written by the gatekeeper is
+      // authoritative.
+      await system.systemctl(["start", unit], gatekeeperTimeoutMs);
+    } catch (e) {
+      console.error(`portal: systemctl start failed (${errorName(e)})`);
+    } finally {
+      gatekeepersInFlight.delete(site.folder);
+    }
+    let examination: Examination = { kind: "absent" };
+    try {
+      examination = await system.readGatekeeperResult(site.folder);
+    } catch (e) {
+      console.error(`portal: result unreadable (${errorName(e)})`);
+    }
+    const { result, message } = judgeGatekeeperResult(examination, launch, checked ? uidRoot : null);
+    await writeLog(operation, result, body, `${action}, ${result}`, null, who);
+
+    // A refusal from the gatekeeper, Caddy being changed from the workstation
+    // included: nothing has moved, the message says what to do.
+    if (result === "rejects") return error("unmanaged", message);
+    if (result === "failure") return error("failure", message);
+    const reread = (await sites()).get(site.folder) ?? site;
+    const after = await generalState(reread);
+    return { portal: after.portal, general: after.view, detail: message, code: target === "code" ? codeView(site.folder, after.code) : null };
   }
 
   /** Eight seconds of readings after a restart, and the verdict that comes out of them. */
@@ -1672,13 +1791,11 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           random: options.random,
         });
 
-  /** A project's general access as the machine carries it: the preview lock, the portal, or neither. */
+  /** A project's general access as the machine carries it: the preview lock, the portal, or neither, and what may change. */
   async function generalOf(slug: string): Promise<GeneralView | null> {
     const found = checkSite(await sites(), slug);
     if ("refusal" in found) return null;
-    const view = await portalView(found.site);
-    if (found.site.manifest?.lock === true) return { access: "code", modifiable: false, reason: "a preview code is set and removed with sitesolide lock, from the project's folder" };
-    return { access: view.requested && view.installed ? "restricted" : "public", modifiable: view.modifiable, reason: view.reason };
+    return (await generalState(found.site)).view;
   }
 
   const access: AccessRoutes | null =
@@ -1738,6 +1855,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
             readContent: readContentTask,
             replaceContent: replaceContentTask,
             portal: portalTask,
+            general: (req, body, who) => generalTask(req, body, who),
           },
           startRestore: backups.start,
           zone: memberZone,
@@ -1770,6 +1888,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     "/content": { POST: readFileContent, PUT: replaceContent },
     "/password": { POST: changePassword },
     "/portal": { POST: togglePortal },
+    "/general": { POST: setGeneral },
     "/restart": { POST: restart },
     "/backups": { GET: backups.list },
     "/backups/restore": { POST: backups.restore },
@@ -1813,7 +1932,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   const handle = serve(routes);
   return Object.assign(handle, {
     isUnlocked: (token: unknown) => isValidToken(state, token, system.now()),
-    owner: serve(access?.owner ?? {}),
+    owner: serve({ ...(access?.owner ?? {}), "/general": { POST: ownerGeneral } }),
     ensureMemberKeys: async () => (members === null ? null : members.ensureKeys()),
     startAccess: async () => accessStore?.start(),
     forgetProjectAccess: access?.forgetProject ?? null,

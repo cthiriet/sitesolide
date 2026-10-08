@@ -295,5 +295,6 @@ does.
 serves it: either `public/` is empty or the service is not running.
 `sitesolide status` says which.
 
-**A preview asks for a code you do not have.** `sitesolide lock --status` prints
-the code in force without changing it.
+**A preview asks for a code you do not have.** The site's *Access* section in
+the dashboard shows it, to the owner and the site's Admins; `sitesolide lock`
+in the project's folder prints the code in force without changing it.

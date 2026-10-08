@@ -78,6 +78,8 @@ const FINGERPRINTED: Record<string, string[]> = {
     "/usr/local/lib/sitesolide/gatekeeper.js",
     "/etc/systemd/system/sitesolide-gatekeeper-on@.service",
     "/etc/systemd/system/sitesolide-gatekeeper-off@.service",
+    "/etc/systemd/system/sitesolide-gatekeeper-code@.service",
+    "/etc/systemd/system/sitesolide-gatekeeper-renew@.service",
   ],
   "deploy-installer.sh": ["/usr/local/lib/sitesolide/installer.js", "/etc/systemd/system/sitesolide-installer@.service", "/etc/sitesolide-installer.env"],
   "deploy-monitor.sh": ["/usr/local/lib/sitesolide/monitor.js", "/etc/systemd/system/sitesolide-monitor.service", "/etc/systemd/system/sitesolide-monitor.timer"],

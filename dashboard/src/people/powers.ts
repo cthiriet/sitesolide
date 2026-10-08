@@ -78,15 +78,19 @@ export function mayRestart(role: Role | null): boolean {
  * asks for it too (`Grant.unlock` in src/access/rules.ts); a restart,
  * restricting a site, removing someone, and giving Can open to a company
  * account do not, as for the owner, whose session alone does them.
- * `general` is judged by its direction (`generalNeedsUnlock`).
+ * `general` is judged by the general access asked for (`generalNeedsUnlock`).
  */
 export function needsUnlock(power: Power): boolean {
   return power === "secrets.write" || power === "secrets.read" || power === "secrets.restore" || power === "backups";
 }
 
-/** General access asks for the unlock to make a site public, never to restrict it: less exposure is never refused for want of one. */
-export function generalNeedsUnlock(restricting: boolean): boolean {
-  return !restricting;
+/**
+ * General access asks for the unlock to make a site public, to open it with a
+ * code, or to give it a new code, never to restrict it: less exposure is never
+ * refused for want of one.
+ */
+export function generalNeedsUnlock(target: "public" | "restricted" | "code"): boolean {
+  return target !== "restricted";
 }
 
 const ROLE_NAMES: Readonly<Record<Role, string>> = { visitor: "Can open", viewer: "a Viewer", developer: "a Developer", admin: "an Admin" };

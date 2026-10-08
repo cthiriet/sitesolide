@@ -214,6 +214,27 @@ describe("refusals, before anything served changes", () => {
     expect(bench.events).toContain("release");
   });
 
+  test("a code set from the dashboard while the deployment ran: refused, the code never left behind a manifest without it", async () => {
+    const bench = createBench({
+      onLock: (b) => writeFileSync(join(b.sites, "shop", "sitesolide.json"), JSON.stringify({ ...APP, port: 3040, lock: true })),
+    });
+    deposit(bench, { ...APP, port: 3040 });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, port: 3040 }, PUBLIC));
+    expect(outcome).toMatchObject({ ok: false, code: "access-changed" });
+    expect(outcome.ok === false && outcome.message).toContain("changed from the dashboard during this deploy");
+    expect(JSON.parse(readFileSync(join(bench.sites, "shop", "sitesolide.json"), "utf8")).lock).toBe(true);
+  });
+
+  test("a site that opens with a code keeps it through a token's deployment", async () => {
+    const bench = createBench();
+    deposit(bench, { ...APP, port: 3040, lock: true });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, port: 3040 }, PUBLIC));
+    expect(outcome.ok).toBe(true);
+    expect(JSON.parse(readFileSync(join(bench.sites, "shop", "sitesolide.json"), "utf8")).lock).toBe(true);
+  });
+
   test("a manifest that would write Caddy or systemd syntax is refused on the machine, before any account or block", async () => {
     // The installer is root and the last judge: whatever the dashboard and the
     // steward let through, a token's placeholder never reaches a block, nor

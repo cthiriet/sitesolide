@@ -4,14 +4,15 @@ import { join } from "node:path";
 import { readLaunch, gatekeeperUnit } from "../src/gatekeeper/instance";
 
 /**
- * The gatekeeper's two unit templates, read the way systemd reads them. They
+ * The gatekeeper's four unit templates, read the way systemd reads them. They
  * are only measured on the bench (see the laboratory report), but what makes them
  * safe is checked here: each one writes only into the directory of the site it
- * names, with no capability too many, and the two differ only by their action.
+ * names, the blocks and the preview locks, with no capability too many, and the
+ * four differ only by their action.
  */
 const ROOT = join(import.meta.dir, "..", "..");
 const FOLDER = join(ROOT, "infra", "gatekeeper");
-const ACTIONS = ["on", "off"] as const;
+const ACTIONS = ["on", "off", "code", "renew"] as const;
 
 function read(action: string): string {
   return readFileSync(join(FOLDER, `sitesolide-gatekeeper-${action}@.service`), "utf8");
@@ -42,25 +43,30 @@ function values(text: string, key: string): string[] {
     .map(([, v]) => v);
 }
 
-describe("the gatekeeper's two units", () => {
+describe("the gatekeeper's four units", () => {
   test("the single template from before is gone", () => {
     expect(existsSync(join(FOLDER, "sitesolide-gatekeeper@.service"))).toBe(false);
   });
 
   test("they differ only by their action", () => {
-    const on = read("on");
-    const off = read("off");
-    const onLines = on.split("\n");
-    const offLines = off.split("\n");
-    expect(offLines).toHaveLength(onLines.length);
-    const differences = onLines.map((line, i) => [line, offLines[i]!] as const).filter(([a, b]) => a !== b);
-    expect(differences).toEqual([
-      ["# The gatekeeper, `on` action: sets the portal in front of a site, one", "# The gatekeeper, `off` action: removes the portal from a site, one"],
-      ["#   systemctl start sitesolide-gatekeeper-on@cms.service", "#   systemctl start sitesolide-gatekeeper-off@cms.service"],
-      ["# sitesolide-gatekeeper-off@.service differ only by the action, and", "# sitesolide-gatekeeper-on@.service differ only by the action, and"],
-      ["Description=Gatekeeper, portal on %i", "Description=Gatekeeper, portal off %i"],
-      ["Environment=GATEKEEPER_ACTION=on", "Environment=GATEKEEPER_ACTION=off"],
-    ]);
+    const WORDS: Record<(typeof ACTIONS)[number], [string, string]> = {
+      on: ["makes a site Restricted, one", "Restricted"],
+      off: ["makes a site Public, one", "Public"],
+      code: ["opens a site to anyone with its code, one", "Anyone with the code"],
+      renew: ["gives a site a new code, one", "new code"],
+    };
+    const onLines = read("on").split("\n");
+    for (const action of ACTIONS.slice(1)) {
+      const lines = read(action).split("\n");
+      expect(lines).toHaveLength(onLines.length);
+      const differences = onLines.map((line, i) => [line, lines[i]!] as const).filter(([a, b]) => a !== b);
+      expect(differences).toEqual([
+        [`# The gatekeeper, \`on\` action: ${WORDS.on[0]}`, `# The gatekeeper, \`${action}\` action: ${WORDS[action][0]}`],
+        ["#   systemctl start sitesolide-gatekeeper-on@cms.service", `#   systemctl start sitesolide-gatekeeper-${action}@cms.service`],
+        [`Description=Gatekeeper, ${WORDS.on[1]} %i`, `Description=Gatekeeper, ${WORDS[action][1]} %i`],
+        ["Environment=GATEKEEPER_ACTION=on", `Environment=GATEKEEPER_ACTION=${action}`],
+      ]);
+    }
   });
 
   for (const action of ACTIONS) {
@@ -72,15 +78,19 @@ describe("the gatekeeper's two units", () => {
         expect(values(text, "ExecStart")).toEqual(["/usr/local/bin/bun /usr/local/lib/sitesolide/gatekeeper.js %n"]);
         expect(values(text, "Type")).toEqual(["oneshot"]);
         // What systemd would pass for cms is accepted, and only with this action.
-        const name = gatekeeperUnit("cms", action === "on")!;
+        const name = gatekeeperUnit("cms", action)!;
         expect(name).toBe(`sitesolide-gatekeeper-${action}@cms.service`);
-        expect(readLaunch([name], action)).toEqual({ ok: true, instance: { slug: "cms", active: action === "on" } });
-        expect(readLaunch([name], action === "on" ? "off" : "on").ok).toBe(false);
+        expect(readLaunch([name], action)).toEqual({ ok: true, instance: { slug: "cms", action } });
+        for (const other of ACTIONS.filter((one) => one !== action)) expect(readLaunch([name], other).ok).toBe(false);
       });
 
-      test("it writes only into the named site's directory, the blocks and its own directory", () => {
+      test("it writes only into the named site's directory, the blocks, the preview locks and its own directory", () => {
         expect(values(text, "ProtectSystem")).toEqual(["strict"]);
-        expect(values(text, "ReadWritePaths")).toEqual(["/srv/sites/%i /etc/caddy/sites /run/sitesolide-gatekeeper"]);
+        expect(values(text, "ReadWritePaths")).toEqual([
+          "/srv/sites/%i /etc/caddy/sites /run/sitesolide-gatekeeper",
+          // The codes file alone, never /etc/caddy: nothing else of it is written.
+          "-/etc/caddy/locks -/etc/caddy/locks-codes.json -/srv/garde",
+        ]);
         expect(values(text, "ReadOnlyPaths")).toEqual(["-/srv/sites/%i/app -/srv/sites/%i/public"]);
         const inaccessibles = values(text, "InaccessiblePaths").join(" ").split(" ");
         expect(inaccessibles).toContain("-/srv/sites/%i/data");
@@ -142,13 +152,19 @@ describe("the gatekeeper's two units", () => {
 describe("bin/deploy-gatekeeper.sh", () => {
   const script = readFileSync(join(ROOT, "bin", "deploy-gatekeeper.sh"), "utf8");
 
-  test("it installs and checks both units, and removes the template from before", () => {
+  test("it installs and checks the four units, and removes the template from before", () => {
     for (const action of ACTIONS) {
       expect(script).toContain(`sitesolide-gatekeeper-${action}@.service`);
     }
     expect(script).toContain("systemd-analyze verify");
     expect(script).toContain("sitesolide-gatekeeper@.service");
     expect(script).toMatch(/rm -f .*PREVIOUS_TEMPLATE/);
+  });
+
+  test("it lays the preview locks' files the units open for writing, and never changes one that is there", () => {
+    for (const path of ['LOCKS_FOLDER="/etc/caddy/locks"', 'CODES_FILE="/etc/caddy/locks-codes.json"', 'DOOR_PAGES_FOLDER="/srv/garde"']) expect(script).toContain(path);
+    expect(script).toContain("sudo test -e $CODES_FILE || ");
+    expect(script).toContain("-m 0600 -o $DEPLOY_USER -g $DEPLOY_USER");
   });
 
   test("it starts no transaction", () => {

@@ -29,6 +29,7 @@
  *   POST   /people/secrets/content   { session, token, slug, file }                   -> ContentResponse   Admin
  *   PUT    /people/secrets/content   { session, token, slug, file, content }          -> FileResponse      Developer
  *   POST   /people/portal            { session, token?, slug, active, confirmation }  -> PortalResponse    Admin, the unlock to make it public
+ *   POST   /people/general           { session, token?, slug, access, renew?, confirmation } -> GeneralResponse  Admin, the unlock but to restrict
  *   POST   /people/backups/restore   { session, token, slug, snapshot, confirmation } -> 202 RestoreResponse  Admin
  */
 import type { ProjectView } from "../secrets/protocol";
@@ -59,6 +60,8 @@ export type MemberOps = {
   readContent: (req: Request, body: Body, who: Who) => Promise<Response>;
   replaceContent: (req: Request, body: Body, who: Who) => Promise<Response>;
   portal: (req: Request, body: Body, who: Who) => Promise<Response>;
+  /** General access, any of the three, or a new code: `access`, `renew`, `confirmation`. */
+  general: (req: Request, body: Body, who: Who) => Promise<Response>;
 };
 
 export type MemberActionsDependencies = {
@@ -195,8 +198,26 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
         others: ["active"],
         check: (body) => (typeof body.active === "boolean" ? null : fail("invalid", "active must be a boolean")),
         // Restricting a site needs no unlock; making it public does.
-        unlockFor: (body) => generalNeedsUnlock(body.active === true),
+        unlockFor: (body) => generalNeedsUnlock(body.active === true ? "restricted" : "public"),
         run: ops.portal,
+      }),
+    },
+    "/people/general": {
+      POST: action({
+        operation: "portal",
+        power: "general",
+        texts: ["slug", "confirmation"],
+        others: ["access", "renew"],
+        check: (body) =>
+          body.access !== "public" && body.access !== "restricted" && body.access !== "code"
+            ? fail("invalid", "access: public, restricted or code")
+            : body.renew !== undefined && typeof body.renew !== "boolean"
+              ? fail("invalid", "renew must be a boolean")
+              : null,
+        // Restricting a site needs no unlock; making it public, opening it
+        // with a code and a new code do.
+        unlockFor: (body) => generalNeedsUnlock(body.access as "public" | "restricted" | "code"),
+        run: ops.general,
       }),
     },
     "/people/backups/restore": {

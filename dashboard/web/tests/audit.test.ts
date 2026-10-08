@@ -178,6 +178,11 @@ describe("a row in words", () => {
     expect(steward("service.restart", { result: "failure", note: "looping" })).toEqual({ summary: "Tried to restart", note: "Failed: crash loop", tone: "error" })
     expect(steward("access.general", { result: "ok", note: "on, ok" })).toEqual({ summary: "Restricted cms", note: null, tone: "neutral" })
     expect(steward("access.general", { result: "failure", note: "off, failure" })).toEqual({ summary: "Tried to make cms public", note: "Failed", tone: "error" })
+    expect(steward("access.general", { result: "ok", note: "code, ok" })).toEqual({ summary: "Set cms to Anyone with the code", note: null, tone: "neutral" })
+    expect(steward("access.general", { result: "rejects", note: "code, rejects" })).toEqual({ summary: "Tried to set cms to Anyone with the code", note: "Refused", tone: "attention" })
+    // A new code, never the code itself: the row says it was given, and to which site.
+    expect(steward("access.code", { result: "ok", note: "renew, ok" })).toEqual({ summary: "Gave cms a new code", note: null, tone: "neutral" })
+    expect(steward("access.code", { result: "failure", note: "renew, failure" })).toEqual({ summary: "Tried to give cms a new code", note: "Failed", tone: "error" })
   })
 
   test("the steward's access registry: given, changed, taken away, carried over, and who may create projects", () => {

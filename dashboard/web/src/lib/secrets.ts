@@ -443,6 +443,7 @@ const OPERATION_NAMES: Record<Operation, string> = {
   replace: "Replace",
   password: "Change password",
   portal: "Change general access",
+  code: "New code",
   restart: "Restart",
   "access.add": "Give access",
   "access.change": "Change role",
@@ -475,10 +476,10 @@ const OPERATION_NAMES: Record<Operation, string> = {
  */
 export type OperationParts = { verb: string; object: string | null; kind: "variable" | "file" | "project" | null }
 
-/** A change of general access, by the direction the steward writes first in its detail: "on, ok", "off, failure". */
+/** A change of general access, by the direction the steward writes first in its detail: "on, ok", "off, failure", "code, ok". */
 function generalVerb(detail: string | null): string {
   const direction = detail?.split(",")[0]?.trim()
-  return direction === "on" ? "Restrict" : direction === "off" ? "Make public" : OPERATION_NAMES.portal
+  return direction === "on" ? "Restrict" : direction === "off" ? "Make public" : direction === "code" ? "Use a code" : OPERATION_NAMES.portal
 }
 
 export function operationParts(entry: LogEntry): OperationParts {
@@ -495,6 +496,7 @@ export function operationParts(entry: LogEntry): OperationParts {
       return { verb, object: entry.file, kind: entry.file === null ? null : "file" }
     case "restart":
     case "portal":
+    case "code":
       return { verb, object: entry.slug, kind: entry.slug === null ? null : "project" }
     default:
       return { verb, object: null, kind: null }
@@ -557,8 +559,8 @@ export type OperationOutcome = { tone: Tone; text: string | null }
  * rather than vanishing.
  */
 export function operationOutcome(entry: LogEntry): OperationOutcome {
-  // A change of general access: its verb already says which way; only how it ended is left to say.
-  if (entry.operation === "portal") {
+  // A change of general access, or a new code: its verb already says which way; only how it ended is left to say.
+  if (entry.operation === "portal" || entry.operation === "code") {
     if (entry.result === "ok") return { tone: "ok", text: null }
     return entry.result === "rejects" ? { tone: "attention", text: "Refused" } : { tone: "error", text: "Failed" }
   }

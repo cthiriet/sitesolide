@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { backupFolder, readLaunch, gatekeeperUnit } from "../src/gatekeeper/instance";
+import { ACTIONS, actionFor, backupFolder, readLaunch, gatekeeperUnit, targetOf } from "../src/gatekeeper/instance";
 import { HOLDERS, STALE_LOCK_MS, judgeLock, readHolder, holderText } from "../src/gatekeeper/machine";
 
 /**
@@ -9,14 +9,12 @@ import { HOLDERS, STALE_LOCK_MS, judgeLock, readHolder, holderText } from "../sr
  */
 describe("readLaunch", () => {
   test("the unit name (%n) and the file's action", () => {
-    expect(readLaunch(["sitesolide-gatekeeper-on@cms.service"], "on")).toEqual({
-      ok: true,
-      instance: { slug: "cms", active: true },
-    });
-    expect(readLaunch(["sitesolide-gatekeeper-off@cms.service"], "off")).toEqual({
-      ok: true,
-      instance: { slug: "cms", active: false },
-    });
+    for (const action of ["on", "off", "code", "renew"] as const) {
+      expect(readLaunch([`sitesolide-gatekeeper-${action}@cms.service`], action)).toEqual({
+        ok: true,
+        instance: { slug: "cms", action },
+      });
+    }
     expect(readLaunch(["sitesolide-gatekeeper-on@sample-api.service"], "on")).toMatchObject({
       instance: { slug: "sample-api" },
     });
@@ -29,10 +27,12 @@ describe("readLaunch", () => {
       reason: "GATEKEEPER_ACTION=on does not match the off unit",
     });
     expect(readLaunch(["sitesolide-gatekeeper-on@cms.service"], "off")).toMatchObject({ ok: false });
+    // A -renew@ copied from -code@: a new code where one wanted the code kept, refused.
+    expect(readLaunch(["sitesolide-gatekeeper-renew@cms.service"], "code")).toMatchObject({ ok: false });
   });
 
   test("a missing or malformed action is refused", () => {
-    for (const action of [undefined, "", "ON", "yes", "on\n", "on off"]) {
+    for (const action of [undefined, "", "ON", "yes", "on\n", "on off", "lock", "public"]) {
       expect({ action, ok: readLaunch(["sitesolide-gatekeeper-on@cms.service"], action).ok }).toEqual({ action, ok: false });
     }
   });
@@ -58,6 +58,8 @@ describe("readLaunch", () => {
       `sitesolide-gatekeeper-on@${"a".repeat(64)}.service`,
       "sitesolide-gatekeeper-on@cms.service\n",
       "xsitesolide-gatekeeper-on@cms.service",
+      "sitesolide-gatekeeper-lock@cms.service",
+      "sitesolide-gatekeeper-public@cms.service",
     ]) {
       expect({ name, ok: readLaunch([name], "on").ok }).toEqual({ name, ok: false });
     }
@@ -69,12 +71,21 @@ describe("readLaunch", () => {
   });
 
   test("gatekeeperUnit is the inverse of readLaunch", () => {
-    for (const [slug, active] of [["cms", true], ["sample-api", false]] as const) {
-      const unit = gatekeeperUnit(slug, active)!;
-      expect(readLaunch([unit], active ? "on" : "off")).toEqual({ ok: true, instance: { slug, active } });
+    for (const [slug, action] of [["cms", "on"], ["sample-api", "off"], ["cms", "code"], ["sample-api", "renew"]] as const) {
+      const unit = gatekeeperUnit(slug, action)!;
+      expect(readLaunch([unit], action)).toEqual({ ok: true, instance: { slug, action } });
     }
-    expect(gatekeeperUnit("cms", true)).toBe("sitesolide-gatekeeper-on@cms.service");
-    expect(gatekeeperUnit("../etc", true)).toBeNull();
+    expect(gatekeeperUnit("cms", "on")).toBe("sitesolide-gatekeeper-on@cms.service");
+    expect(gatekeeperUnit("cms", "code")).toBe("sitesolide-gatekeeper-code@cms.service");
+    expect(gatekeeperUnit("../etc", "on")).toBeNull();
+  });
+
+  test("each action leaves the general access it names, and each general access has its action", () => {
+    expect(ACTIONS.map(targetOf)).toEqual(["restricted", "public", "code", "code"]);
+    expect(actionFor("restricted")).toBe("on");
+    expect(actionFor("public")).toBe("off");
+    expect(actionFor("code")).toBe("code");
+    expect(actionFor("code", true)).toBe("renew");
   });
 
   test("the backup's path, stable for the steward", () => {

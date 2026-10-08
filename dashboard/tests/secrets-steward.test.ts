@@ -149,6 +149,8 @@ type Bench = {
   gatekeeper: string;
   config: SystemConfig;
   call: (method: string, path: string, body?: unknown, init?: RequestInit) => Promise<Response>;
+  /** The owner's socket, which only root opens: `sitesolide lock` and `unlock` over SSH. */
+  owner: (method: string, path: string, body?: unknown) => Promise<Response>;
   /** A new steward on the same machine: what Restart=always does. */
   restartSteward: () => void;
   clock: { t: number };
@@ -260,6 +262,8 @@ async function mount(options: Mount = {}): Promise<Bench> {
     accountsFile,
     caddyFolder: caddy,
     gatekeeperFolder: gatekeeper,
+    codesFile: join(root, "locks-codes.json"),
+    locksFragment: join(root, "verrous.caddy"),
     systemctl: "/path/that/does/not/exist",
   };
   const real = createSystem(config);
@@ -336,6 +340,9 @@ async function mount(options: Mount = {}): Promise<Bench> {
     renderedTexts,
     restartSteward() {
       handler = newPassword();
+    },
+    async owner(method, path, body) {
+      return handler.owner(new Request(`http://steward${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
     },
     async call(method, path, body, init = {}) {
       const requested: RequestInit = { method: method, ...init };
@@ -2052,6 +2059,164 @@ describe("POST /password", () => {
   });
 });
 
+/**
+ * General access, the three of it and a new code, through the gatekeeper:
+ * the owner's session on the dashboard's socket, and root on the owner's,
+ * which `sitesolide lock` and `unlock` reach over SSH. The gatekeeper is
+ * simulated as doing what it says: the manifest, the codes file and the
+ * locks' fragment written, then its result. The code it draws comes back in
+ * the answer, read from the codes file, and is written nowhere else.
+ */
+describe("POST /general", () => {
+  const CODE = "K7M2PQ";
+  const NEW_CODE = "W4XN8R";
+
+  function gatekeeperThatDoes(bench: Bench, draws: string[] = [CODE, NEW_CODE]): Gatekeeper {
+    return (unit) => {
+      const [, action, slug] = /^sitesolide-gatekeeper-(on|off|code|renew)@(.+)\.service$/.exec(unit)!;
+      const path = join(bench.sites, slug!, "sitesolide.json");
+      const { portal: _portal, lock: _lock, ...manifest } = JSON.parse(readFileSync(path, "utf8"));
+      const codesPath = bench.config.codesFile;
+      const codes = existsSync(codesPath) ? JSON.parse(readFileSync(codesPath, "utf8")) : {};
+      const code = action === "code" ? (codes[slug!] ?? draws.shift()!) : action === "renew" ? draws.shift()! : null;
+      writeFileSync(path, JSON.stringify({ ...manifest, ...(action === "on" ? { portal: true } : {}), ...(code !== null ? { lock: true } : {}) }));
+      writeFileSync(join(bench.caddy, `${slug}.caddy`), action === "on" ? "forward_auth @portal_guard 127.0.0.1:3026 {\n}\n" : "reverse_proxy 127.0.0.1:3048\n");
+      if (code === null) delete codes[slug!];
+      else codes[slug!] = code;
+      writeFileSync(codesPath, `${JSON.stringify(codes)}\n`, { mode: 0o600 });
+      writeFileSync(bench.config.locksFragment, code === null ? "# Preview locks\n" : `# Preview lock: ${slug}\n@lock_key_${slug} query key=${code}\n`);
+      writeFileSync(join(bench.gatekeeper, `${slug}.json`), `${JSON.stringify({ a: bench.clock.t, result: "ok", message: `${action}: validated, reloaded`, requested: action === "on", installed: action === "on" })}\n`, { mode: 0o644 });
+      return 0;
+    };
+  }
+  const starts = (bench: Bench) => bench.systemctlCalls.filter((call) => call[0] === "start").map((call) => call[1]);
+  /** Every line the steward wrote, journal and access log: never a code. */
+  const written = (bench: Bench) => [join(bench.state, "journal.jsonl"), join(bench.state, "access-log.jsonl")].filter(existsSync).map((file) => readFileSync(file, "utf8")).join("");
+
+  test("Anyone with the code: the unlock, the slug retyped, the gatekeeper, and the code in the answer alone", async () => {
+    const bench = await mount();
+    bench.simulatedGatekeeper.current = gatekeeperThatDoes(bench);
+    expect((await bench.call("POST", "/general", { slug: "cms", access: "code", confirmation: "cms" })).status).toBe(401);
+    const token = await unlock(bench);
+    const unconfirmed = await bench.call("POST", "/general", { token, slug: "cms", access: "code", confirmation: "" });
+    expect(unconfirmed.status).toBe(400);
+    expect((await errorOf(unconfirmed)).message).toBe("type cms to confirm opening it with a code");
+    expect(starts(bench)).toEqual([]);
+
+    const response = await bench.call("POST", "/general", { token, slug: "cms", access: "code", confirmation: "cms" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      general: { access: "code", modifiable: true, choices: { public: null, restricted: null, code: null } },
+      detail: "code: validated, reloaded",
+      code: { code: CODE, url: null },
+    });
+    expect(starts(bench)).toEqual(["sitesolide-gatekeeper-code@cms.service"]);
+    expect(accessLogOf(bench).at(-1)).toMatchObject({ operation: "portal", result: "ok", actor: "owner", slug: "cms", detail: "code, ok" });
+    expect(written(bench)).not.toContain(CODE);
+  });
+
+  test("a new code: the unlock and no retyping, journaled as a new code, never the code", async () => {
+    const bench = await mount();
+    bench.simulatedGatekeeper.current = gatekeeperThatDoes(bench);
+    const token = await unlock(bench);
+    await bench.call("POST", "/general", { token, slug: "cms", access: "code", confirmation: "cms" });
+    const renewed = await bench.call("POST", "/general", { token, slug: "cms", access: "code", renew: true, confirmation: "" });
+    expect(renewed.status).toBe(200);
+    expect(await renewed.json()).toMatchObject({ general: { access: "code" }, code: { code: NEW_CODE } });
+    expect(starts(bench)).toEqual(["sitesolide-gatekeeper-code@cms.service", "sitesolide-gatekeeper-renew@cms.service"]);
+    expect(accessLogOf(bench).at(-1)).toMatchObject({ operation: "code", result: "ok", slug: "cms", detail: "renew, ok" });
+    // Read back as a new code on the Activity page, under the owner.
+    expect(fromJournal([accessLogOf(bench).at(-1)])[0]!.row).toMatchObject({ action: "access.code", actor: "owner", target: "cms" });
+    expect(written(bench)).not.toContain(CODE);
+    expect(written(bench)).not.toContain(NEW_CODE);
+    // Without the unlock, no new code.
+    await bench.call("POST", "/lock", { token });
+    expect((await bench.call("POST", "/general", { token, slug: "cms", access: "code", renew: true, confirmation: "" })).status).toBe(401);
+  });
+
+  test("a new code for a site that does not open with one is refused before the gatekeeper", async () => {
+    const bench = await mount();
+    bench.simulatedGatekeeper.current = gatekeeperThatDoes(bench);
+    const response = await bench.call("POST", "/general", { token: await unlock(bench), slug: "cms", access: "code", renew: true, confirmation: "" });
+    expect(response.status).toBe(400);
+    expect((await errorOf(response)).message).toBe("cms does not open with a code: choose Anyone with the code first");
+    expect(starts(bench)).toEqual([]);
+  });
+
+  test("from the code to Restricted with no unlock, and to Public with it and the slug retyped", async () => {
+    const bench = await mount();
+    bench.simulatedGatekeeper.current = gatekeeperThatDoes(bench);
+    const token = await unlock(bench);
+    await bench.call("POST", "/general", { token, slug: "cms", access: "code", confirmation: "cms" });
+    const restricted = await bench.call("POST", "/general", { slug: "cms", access: "restricted", confirmation: "" });
+    expect(restricted.status).toBe(200);
+    expect(await restricted.json()).toMatchObject({ general: { access: "restricted" }, code: null });
+    expect(JSON.parse(readFileSync(bench.config.codesFile, "utf8"))).toEqual({});
+    const opened = await bench.call("POST", "/general", { token, slug: "cms", access: "public", confirmation: "cms" });
+    expect(await opened.json()).toMatchObject({ general: { access: "public" }, code: null });
+    expect(starts(bench)).toEqual(["sitesolide-gatekeeper-code@cms.service", "sitesolide-gatekeeper-on@cms.service", "sitesolide-gatekeeper-off@cms.service"]);
+    expect(accessLogOf(bench).map((entry) => entry.detail)).toEqual(["code, ok", "on, ok", "off, ok"]);
+  });
+
+  test("already open with its code, applied: nothing started, nothing logged, the code said back", async () => {
+    const bench = await mount();
+    bench.simulatedGatekeeper.current = gatekeeperThatDoes(bench);
+    const token = await unlock(bench);
+    await bench.call("POST", "/general", { token, slug: "cms", access: "code", confirmation: "cms" });
+    const again = await bench.call("POST", "/general", { token, slug: "cms", access: "code", confirmation: "cms" });
+    expect(await again.json()).toMatchObject({ detail: "cms already opens with a code: nothing to change", code: { code: CODE } });
+    expect(starts(bench)).toHaveLength(1);
+    expect(accessLogOf(bench)).toHaveLength(1);
+  });
+
+  test("each choice the rule refuses is said, and refused before the gatekeeper", async () => {
+    const bench = await mount();
+    bench.simulatedGatekeeper.current = gatekeeperThatDoes(bench);
+    const token = await unlock(bench);
+    // A static site takes a code, never the portal.
+    const general = (await (await bench.call("POST", "/general", { token, slug: "showcase", access: "restricted", confirmation: "" })).json()) as Failure;
+    expect(general).toEqual({ error: "out-of-scope", message: "a static site cannot be restricted yet" });
+    expect((await bench.call("POST", "/general", { token, slug: "showcase", access: "code", confirmation: "showcase" })).status).toBe(200);
+    // The dashboard and the portal take none of the three.
+    for (const slug of ["dashboard", "portal"]) {
+      expect((await bench.call("POST", "/general", { token, slug, access: "code", confirmation: slug })).status).toBe(403);
+    }
+    // Malformed.
+    for (const body of [{ token, slug: "cms", access: "open", confirmation: "" }, { token, slug: "cms", access: "public", renew: true, confirmation: "cms" }, { token, slug: "cms", access: "code", renew: "yes", confirmation: "" }]) {
+      expect((await bench.call("POST", "/general", body)).status).toBe(400);
+    }
+    expect(starts(bench)).toEqual(["sitesolide-gatekeeper-code@showcase.service"]);
+  });
+
+  test("the owner's socket: `sitesolide lock` and `unlock` as root, no unlock and no retyping, journaled under the owner", async () => {
+    const bench = await mount();
+    bench.simulatedGatekeeper.current = gatekeeperThatDoes(bench);
+    const locked = await bench.owner("POST", "/general", { slug: "cms", access: "code" });
+    expect(locked.status).toBe(200);
+    expect(await locked.json()).toMatchObject({ general: { access: "code" }, code: { code: CODE } });
+    const renewed = await bench.owner("POST", "/general", { slug: "cms", access: "code", renew: true });
+    expect(await renewed.json()).toMatchObject({ code: { code: NEW_CODE } });
+    const unlocked = await bench.owner("POST", "/general", { slug: "cms", access: "public" });
+    expect(await unlocked.json()).toMatchObject({ general: { access: "public" }, code: null });
+    expect(starts(bench)).toEqual(["sitesolide-gatekeeper-code@cms.service", "sitesolide-gatekeeper-renew@cms.service", "sitesolide-gatekeeper-off@cms.service"]);
+    expect(accessLogOf(bench).map((entry) => [entry.operation, entry.actor, entry.detail])).toEqual([
+      ["portal", "owner", "code, ok"],
+      ["code", "owner", "renew, ok"],
+      ["portal", "owner", "off, ok"],
+    ]);
+    expect(written(bench)).not.toContain(CODE);
+    // A token field is no part of it: the owner's socket takes the three fields alone.
+    expect((await bench.owner("POST", "/general", { slug: "cms", access: "code", token: "x" })).status).toBe(400);
+  });
+
+  test("the old route keeps its answer's shape for a dashboard deployed before", async () => {
+    const bench = await mount();
+    bench.simulatedGatekeeper.current = gatekeeperThatDoes(bench);
+    const response = await bench.call("POST", "/portal", { slug: "cms", active: true, confirmation: "" });
+    expect(Object.keys((await response.json()) as object).sort()).toEqual(["detail", "portal"]);
+  });
+});
+
 describe("POST /portal", () => {
   const writeResult = (bench: Bench, slug: string, object: Record<string, unknown>) =>
     writeFileSync(join(bench.gatekeeper, `${slug}.json`), `${JSON.stringify(object)}\n`, { mode: 0o644 });
@@ -2752,6 +2917,8 @@ describe("the real system", () => {
       accountsFile: join(root, "passwd"),
       caddyFolder: join(root, "caddy"),
       gatekeeperFolder: join(root, "gatekeeper"),
+      codesFile: join(root, "locks-codes.json"),
+      locksFragment: join(root, "verrous.caddy"),
       systemctl: "false",
     });
   }

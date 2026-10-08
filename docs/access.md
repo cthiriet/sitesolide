@@ -46,7 +46,7 @@ Admin the highest, and each role includes the ones below it:
 | Can open (`can-open` in the CLI, `visitor` in the API) | opens its site when its general access is Restricted, and nothing in the dashboard |
 | Viewer | also sees the project in the dashboard: its state, audience and activity |
 | Developer | also deploys it with a token of their own, restarts its service, and sets, replaces and removes its secrets without ever reading one back: the dashboard shows them names, the server never hands them a value |
-| Admin | everything of the project: reads its secrets, switches its general access between Public and Restricted, gives people access to it, a role at most their own, and restores its backups |
+| Admin | everything of the project: reads its secrets, chooses its general access, Public, Restricted or Anyone with the code, and a new code, gives people access to it, a role at most their own, and restores its backups |
 
 **Every role opens the site** when its general access is Restricted: a
 Developer needs no Can open besides. A whole domain, written `@acme.com`, is
@@ -70,9 +70,8 @@ hold the right to create projects, their dashboard sessions close and their
 tokens are revoked at once.
 
 The machine itself stays the owner's: the platform's own projects, the
-dashboard and the portal among them, their settings, the preview codes, the
-tokens of others, the connectors, and the roles people hold on projects they
-are not Admin of.
+dashboard and the portal among them, their settings, the tokens of others, the
+connectors, and the roles people hold on projects they are not Admin of.
 
 **The owner** is whoever holds the dashboard's password, the first account,
 made by `setup`, and may do everything, on every project and on the machine.
@@ -121,9 +120,13 @@ Connectors, and every project they hold no role on.
 **A site's Access section** reads like a "Share" dialog, in one column, with
 a link to its changes in Activity. First its general access, the three ways
 it may open, Public, Restricted or Anyone with the code, the current one
-marked; the owner and its Admins switch between Public and Restricted there,
-while a preview code stays `sitesolide lock`'s, from the project's folder.
-Then its people with access: an *Add people* field taking an email or a
+marked; the owner and its Admins choose among the three there, *Make public*,
+*Restrict* or *Use a code*. A site that opens with a code shows it to them,
+with its link to copy, and *New code*, which stops the old one at once; a
+Viewer or a Developer reads that the site opens with one, and whom to ask.
+The code is drawn on the machine, six characters without O, I, 0 or 1, and
+`sitesolide lock` from the project's folder reaches the same path. Then its
+people with access: an *Add people* field taking an email or a
 `@domain` and a role, which says before anything is sent whether the person
 signs in with their company account or gets password access, and every entry
 with its role, password access with its expiry. One line under the list names
@@ -133,9 +136,9 @@ reader's own marked. A Viewer or a Developer reads all of it without a
 control, and whom to ask to add someone.
 
 **Unlocking, for a person, is signing in again.** Whatever reads or writes a
-secret, makes a site public, restores data, mints a token, gives someone a
-role above Can open, or gives password access asks for the person's own
-unlock: *Unlock changes* sends them to the identity provider, which asks them
+secret, makes a site public, opens it with a code or gives it a new one,
+restores data, mints a token, gives someone a role above Can open, or gives
+password access asks for the person's own unlock: *Unlock changes* sends them to the identity provider, which asks them
 to prove themselves once more even if they are signed in there, and brings
 them back unlocked for ten minutes, for their session alone. The owner
 unlocks with the dashboard's password; neither unlock replaces the other, nor
@@ -177,9 +180,9 @@ A Viewer everywhere, without the create right, mints nothing, and sees no
   of every project the token reaches; one lowered turns them off for the whole
   token, and the person mints another for what they still administer. The
   installer reads the registry once more when it starts.
-- **An existing project keeps its general access.** A deployed site is switched
-  between Public and Restricted by its Admin or the owner, never by a
-  deployment: a Developer's token deploys a public project as it stands, and
+- **An existing project keeps its general access.** A deployed site's general
+  access, Public, Restricted or Anyone with the code, is chosen by its Admin or
+  the owner, never by a deployment: a Developer's token deploys a public project as it stands, and
   opens nothing. A new project is restricted unless the token may deploy
   public sites; leaving paths open to anyone (`portalExempt`) takes that
   option too.
@@ -293,7 +296,7 @@ it in `sitesolide.json` to make it explicit.
 | `egress` | the token may use outbound network | the hosts it lists are reached through the egress proxy, a way out all the same |
 | `domain` | the token may declare a domain | switching to it stays the owner's job |
 | `secrets` other than `<slug>.env` | never | the unit hands the file to the service as root |
-| `lock` | never | the preview code is the owner's (`sitesolide lock`) |
+| `lock` | never | a preview code is chosen in the site's *Access* section, by its Admin or the owner, or with `sitesolide lock` over the owner's SSH |
 | `memory` above 1G, more than 6 services | never | one machine serves everyone |
 
 A project that already exists keeps the general access the machine carries:
@@ -379,7 +382,7 @@ What a token may do is narrower than what an Admin or the owner may:
 | give it to people who sign in with a company account, by their company email | give password access: someone outside the company's domains is refused, and an Admin or the owner gives it from the dashboard |
 | give it to one of the company's domains, `OIDC_ALLOWED_DOMAINS` | give another domain, or any domain at all when that list is empty |
 | take a Can open entry off | give, change or take off Viewer, Developer or Admin: those are given from the dashboard, or by the owner over SSH |
-| | make a site Public: general access is the dashboard's, its Admin's or the owner's |
+| | change a site's general access, Public, Restricted or Anyone with the code: it is the dashboard's, its Admin's or the owner's |
 
 Giving access never touches Caddy, and a project not deployed yet is refused
 with `not-found`. A project whose general access is Public keeps its list, and

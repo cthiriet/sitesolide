@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { generateFragment } from "../borrowed/fragment";
 import { readManifest, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected, PORTAL_PORT } from "../borrowed/portal";
-import type { Machine } from "../src/gatekeeper/machine";
+import { installedCode } from "../borrowed/locks";
+import { DOOR_PAGE_MARKER } from "../borrowed/page";
+import type { GeneralMachine } from "../src/gatekeeper/machine";
 import { createMachine, writeResult, spawn, type MachineConfig, type Execution } from "../src/gatekeeper/real";
 import { run } from "../src/gatekeeper/transaction";
 
@@ -27,6 +29,8 @@ import { run } from "../src/gatekeeper/transaction";
  *
  * The block is the one `generateFragment` writes for production, with no
  * retouching: `sample.test-zone.invalid`, the portal on 127.0.0.1:3026. The
+ * preview locks are the ones `buildFragment` writes, imported by the wildcard
+ * block as in production, in front of `showcase`, a static site. The
  * names resolve on the loopback through the probe's Host header, and the
  * certificate is drawn here by a test authority. The test skips itself with no
  * `caddy` and no `openssl`, or when the portal's port is already taken on the
@@ -81,6 +85,9 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
   const caddyfile = join(D, "etc", "Caddyfile");
   const envFile = join(D, "etc", "cloudflare.env");
   const zoneFile = join(D, "etc", "sitesolide.env");
+  const locksFolder = join(D, "etc", "locks");
+  const codesFile = join(D, "etc", "locks-codes.json");
+  const doorPagesDir = join(D, "garde");
 
   /** What /etc/caddy/sitesolide.env carries, and systemd gives to Caddy. */
   const ZONE_VARIABLES = {
@@ -98,7 +105,7 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
   const log: string[] = [];
   let ca = "";
   let initialManifest = "";
-  let machine: Machine;
+  let machine: GeneralMachine;
   let config: MachineConfig;
 
   async function waitForCaddy(): Promise<void> {
@@ -236,6 +243,9 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
     chmodSync(join(sitesFolder, "sample", "sitesolide.json"), 0o640);
     mkdirSync(join(sitesFolder, "showcase", "public"), { recursive: true });
     writeFileSync(join(sitesFolder, "showcase", "public", "index.html"), "<p>showcase</p>");
+    writeFileSync(join(sitesFolder, "showcase", "sitesolide.json"), `${JSON.stringify({ slug: "showcase", publicDir: "public" }, null, 2)}\n`);
+    mkdirSync(locksFolder, { recursive: true });
+    mkdirSync(doorPagesDir, { recursive: true });
 
     // /etc/caddy: the block as `sitesolide deploy` lays it down, and a
     // Caddyfile that takes production's shape.
@@ -274,6 +284,7 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
         "\timport commun",
         `\troot * ${sitesFolder}/{labels.2}/public`,
         "\tfile_server",
+        `\timport ${locksFolder}/*.caddy`,
         "}",
         `portal.${ZONE} {`,
         "\timport tls-zone",
@@ -292,6 +303,9 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
       zoneEnvFile: zoneFile,
       caddy: CADDY!,
       runFolder: join(D, "run"),
+      locksFolder,
+      codesFile,
+      doorPagesDir,
       blockOwner: null,
       probeConfig: { address: "127.0.0.1", port: portHttps, ca },
       caddyUnit: "caddy.service",
@@ -334,7 +348,7 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
 
   test("setting the portal: valid, reloaded, the site answers through the portal", async () => {
     const pidBefore = caddy!.pid;
-    const result = await run(machine, { slug: "sample", active: true, zone: ZONE });
+    const result = await run(machine, { slug: "sample", action: "on", zone: ZONE });
 
     expect(result).toMatchObject({ result: "ok", requested: true, installed: true });
     expect(result.message).toContain("sample.test-zone.invalid answers the portal's 401");
@@ -368,13 +382,13 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
 
   test("setting it again: nothing to do, Caddy is not reloaded", async () => {
     const pidBefore = caddy!.pid;
-    const result = await run(machine, { slug: "sample", active: true, zone: ZONE });
+    const result = await run(machine, { slug: "sample", action: "on", zone: ZONE });
     expect(result).toMatchObject({ result: "ok", message: "already restricted", installed: true });
     expect(caddy!.pid).toBe(pidBefore);
   });
 
   test("removing the portal: the site answers again, the manifest comes back identical", async () => {
-    const result = await run(machine, { slug: "sample", active: false, zone: ZONE });
+    const result = await run(machine, { slug: "sample", action: "off", zone: ZONE });
     expect(result).toMatchObject({ result: "ok", requested: false, installed: false });
     expect(await machine.probe(`sample.${ZONE}`, "/", 5000)).toEqual({ code: 200, door: false, body: "site sample" });
     expect(readDeployedManifest()).toBe(initialManifest);
@@ -389,7 +403,7 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
     // token: Caddy quotes it back in its refusal (`module not registered:
     // http.encoders.<token>`), and it must not come out anywhere.
     let writes = 0;
-    const broken: Machine = {
+    const broken: GeneralMachine = {
       ...machine,
       writeBlock: (slug, text) =>
         machine.writeBlock(
@@ -397,7 +411,7 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
           ++writes === 1 ? `${text}\nsample.${ZONE} {\n\tencode {$CLOUDFLARE_API_TOKEN}\n}\n` : text,
         ),
     };
-    const result = await run(broken, { slug: "sample", active: true, zone: ZONE });
+    const result = await run(broken, { slug: "sample", action: "on", zone: ZONE });
 
     expect(result.result).toBe("failure");
     expect(result.message).toStartWith("validate: ");
@@ -419,7 +433,7 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
     const before = reloads();
     portalMode = "mute";
     try {
-      const result = await run(machine, { slug: "sample", active: true, zone: ZONE });
+      const result = await run(machine, { slug: "sample", action: "on", zone: ZONE });
       expect(result.result).toBe("failure");
       expect(result.message).toBe(
         "probe: sample.test-zone.invalid should answer the portal's 401, got 401; previous configuration restored",
@@ -433,6 +447,68 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
     expect(readBlock()).toBe(blockBefore);
     expect(readDeployedManifest()).toBe(initialManifest);
     expect(await machine.probe(`sample.${ZONE}`, "/", 5000)).toEqual({ code: 200, door: false, body: "site sample" });
+  }, 60_000);
+
+  /** The code each test draws: never one a passing draw could give. */
+  const code = (slug: string, value: string) => `lock_${slug}=${value}`;
+  const showcase = (draw: string) => ({ slug: "showcase", zone: ZONE, doorPagesDir, contact: `owner@${ZONE}`, draw: () => draw });
+
+  test("a static site opened with a code: the door page without it, the site with it", async () => {
+    const result = await run(machine, { ...showcase("K7M2PQ"), action: "code" });
+    expect(result).toMatchObject({ result: "ok" });
+    expect(result.message).toContain("showcase.test-zone.invalid answers the door page's 401 and opens with its code");
+    expect(result.message).not.toContain("K7M2PQ");
+    expect(log.join("\n")).not.toContain("K7M2PQ");
+
+    const without = await machine.probe(`showcase.${ZONE}`, "/", 5000);
+    expect(without).toMatchObject({ code: 401, door: false });
+    expect((without as { body: string }).body).toContain(DOOR_PAGE_MARKER);
+    expect(await machine.probe(`showcase.${ZONE}`, "/", 5000, code("showcase", "K7M2PQ"))).toEqual({ code: 200, door: false, body: "<p>showcase</p>" });
+    expect(await machine.probe(`showcase.${ZONE}`, "/", 5000, code("showcase", "W4XN8R"))).toMatchObject({ code: 401 });
+    // The other sites are untouched by it.
+    expect(await machine.probe(`sample.${ZONE}`, "/", 5000)).toMatchObject({ code: 200 });
+
+    expect(JSON.parse(readFileSync(join(sitesFolder, "showcase", "sitesolide.json"), "utf8")).lock).toBe(true);
+    expect(JSON.parse(readFileSync(codesFile, "utf8"))).toEqual({ showcase: "K7M2PQ" });
+    expect(installedCode(readFileSync(join(locksFolder, "verrous.caddy"), "utf8"), "showcase")).toBe("K7M2PQ");
+    expect(readFileSync(join(doorPagesDir, "showcase", "index.html"), "utf8")).toContain(`owner@${ZONE}`);
+    expect(existsSync(join(config.runFolder, "sauvegardes"))).toBe(false);
+  }, 60_000);
+
+  test("a new code: the old one no longer opens the site, the new one does", async () => {
+    const result = await run(machine, { ...showcase("W4XN8R"), action: "renew" });
+    expect(result.result).toBe("ok");
+    expect(result.message).toContain("opens with the new code, not the old one");
+    expect(await machine.probe(`showcase.${ZONE}`, "/", 5000, code("showcase", "K7M2PQ"))).toMatchObject({ code: 401, door: false });
+    expect(await machine.probe(`showcase.${ZONE}`, "/", 5000, code("showcase", "W4XN8R"))).toMatchObject({ code: 200 });
+    expect(JSON.parse(readFileSync(codesFile, "utf8"))).toEqual({ showcase: "W4XN8R" });
+  }, 60_000);
+
+  test("a fragment Caddy refuses: codes, manifest and fragment restored, Caddy never reloaded", async () => {
+    const pidBefore = caddy!.pid;
+    const fragmentBefore = readFileSync(join(locksFolder, "verrous.caddy"), "utf8");
+    // The first fragment written is broken, as a faulty generator's would be; the restore writes normally.
+    let writes = 0;
+    const broken: GeneralMachine = { ...machine, writeLocksFragment: (text) => machine.writeLocksFragment(++writes === 1 ? `${text}\nrespond {\n` : text) };
+    const result = await run(broken, { ...showcase("X2Y3Z4"), action: "off" });
+    expect(result.result).toBe("failure");
+    expect(result.message).toStartWith("validate: ");
+    expect(result.message).toEndWith("previous configuration restored");
+    expect(caddy!.pid).toBe(pidBefore);
+    expect(JSON.parse(readFileSync(codesFile, "utf8"))).toEqual({ showcase: "W4XN8R" });
+    expect(readFileSync(join(locksFolder, "verrous.caddy"), "utf8")).toBe(fragmentBefore);
+    expect(JSON.parse(readFileSync(join(sitesFolder, "showcase", "sitesolide.json"), "utf8")).lock).toBe(true);
+    expect(await machine.probe(`showcase.${ZONE}`, "/", 5000)).toMatchObject({ code: 401, door: false });
+  }, 60_000);
+
+  test("back to Public: the stanza and the code gone, the site opens without one", async () => {
+    const result = await run(machine, { ...showcase("X2Y3Z4"), action: "off" });
+    expect(result.result).toBe("ok");
+    expect(result.message).toContain("showcase.test-zone.invalid answers without a code");
+    expect(await machine.probe(`showcase.${ZONE}`, "/", 5000)).toEqual({ code: 200, door: false, body: "<p>showcase</p>" });
+    expect(JSON.parse(readFileSync(codesFile, "utf8"))).toEqual({});
+    expect(installedCode(readFileSync(join(locksFolder, "verrous.caddy"), "utf8"), "showcase")).toBeNull();
+    expect(JSON.parse(readFileSync(join(sitesFolder, "showcase", "sitesolide.json"), "utf8")).lock).toBeUndefined();
   }, 60_000);
 
   test("systemctl received only the permitted verbs", () => {
@@ -450,8 +526,7 @@ describe("never caddy stop nor caddy start", () => {
       join(root, "dashboard", "gatekeeper.ts"),
       ...readdirSync(join(root, "dashboard", "src", "gatekeeper")).map((name) => join(root, "dashboard", "src", "gatekeeper", name)),
       join(root, "bin", "deploy-gatekeeper.sh"),
-      join(root, "infra", "gatekeeper", "sitesolide-gatekeeper-on@.service"),
-      join(root, "infra", "gatekeeper", "sitesolide-gatekeeper-off@.service"),
+      ...["on", "off", "code", "renew"].map((action) => join(root, "infra", "gatekeeper", `sitesolide-gatekeeper-${action}@.service`)),
     ];
     for (const file of files) {
       const code = readFileSync(file, "utf8")

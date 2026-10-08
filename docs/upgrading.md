@@ -114,7 +114,8 @@ skipped, and it resumes at the one that failed.
 A machine upgrades one release at a time: from 0.1, follow
 [From 0.1 to 0.2](#from-01-to-02) first, then [From 0.2 to 0.3](#from-02-to-03),
 then `sitesolide upgrade` for every release after, reading the notes below
-for each, [Access: one registry](#access-one-registry) first.
+for each, [Access: one registry](#access-one-registry) first, then
+[Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
 ## Access: one registry
 
@@ -241,6 +242,53 @@ rebuilt registry in between are lost, and the tokens the sweep revoked stay
 revoked, to be minted again. The machine's backups do not hold the steward's
 state: make that copy yourself, `sudo cp -p` of the file, before you edit it
 by hand.
+
+## Anyone with the code, from the dashboard
+
+A site's general access is now chosen among its three from its *Access*
+section, Anyone with the code included: the owner and the site's Admins open a
+site with a code there, read the code, draw a new one, and go back to Public
+or Restricted, a switch between Restricted and the code in one transaction.
+`sitesolide lock` and `unlock` no longer change the machine themselves: they
+ask the steward on its owner socket, which launches the same gatekeeper. One
+path changes a site's general access, whoever asks.
+
+**What `sitesolide upgrade` brings**, in its usual order: the steward and its
+`POST /general` routes, the dashboard, then the gatekeeper and its four
+templates, `-on@`, `-off@`, `-code@` and `-renew@`. `bin/deploy-gatekeeper.sh`
+lays what they open for writing and cannot create, when missing:
+`/etc/caddy/locks/`, an empty `/etc/caddy/locks-codes.json` for the
+deployment account in `0600`, and `/srv/garde/`. A machine that has locked a
+preview before carries them already, and they are left as they are, codes in
+force included. The Caddyfile changes by a comment only, which upgrade
+redeploys through `bin/deploy-caddy.sh` all the same.
+
+**Until the gatekeeper step has run**, `sitesolide lock` on that machine says
+to run `sitesolide upgrade`, and the dashboard's *Use a code* is refused by a
+gatekeeper that does not know it: nothing changes, and running upgrade to the
+end mends both.
+
+**What changes for you.**
+
+- `bin/lock.sh enable`, `code` and `disable` are gone; `bin/lock.sh state`,
+  which `sitesolide lock --status` runs, stays, and reads what the machine's
+  manifest asks for rather than the repository's.
+- The next `sitesolide deploy` writes into `sitesolide.json` the general
+  access the machine carries, `lock` included, as it already did for
+  `portal`; `sitesolide lock` writes it at once.
+- `sitesolide lock` on a site that serves its own domain is refused, as the
+  dashboard refuses it: the code would close the preview and leave the domain
+  open. Switch the site back to its preview first, `sitesolide domain
+  --deactivate`. `LOCK_DESPITE_DOMAIN` is gone with the script that read it.
+- A Viewer or a Developer of a site that opens with a code reads that it opens
+  with one, no longer the code itself: its Admins and the owner hold it.
+
+**Going back.** The previous release's `bin/lock.sh` writes the same files the
+gatekeeper does, `sitesolide.json`, the codes file and `verrous.caddy`: a
+workstation still on it keeps working, without the dashboard knowing what it
+did until the next snapshot. Going back to the previous gatekeeper leaves the
+two new templates installed, which nothing launches once the previous steward
+is back.
 
 ## From 0.2 to 0.3
 

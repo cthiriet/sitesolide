@@ -558,7 +558,10 @@ describe("log", () => {
     expect(operationParts(portal)).toEqual({ verb: "Change general access", object: "wheels", kind: "project" })
     expect(operationParts({ ...portal, detail: "on, ok" }).verb).toBe("Restrict")
     expect(operationParts({ ...portal, detail: "off, failure" }).verb).toBe("Make public")
+    expect(operationParts({ ...portal, detail: "code, ok" }).verb).toBe("Use a code")
     expect(operationPlace(portal)).toEqual({ project: null, file: null })
+    // A new code: the site is its object, the code never part of it.
+    expect(operationParts(logEntry({ operation: "code", slug: "wheels", file: null, variable: null, detail: "renew, ok" }))).toEqual({ verb: "New code", object: "wheels", kind: "project" })
   })
 
   test("an unlock has no object", () => {
@@ -625,6 +628,7 @@ describe("log", () => {
     // `failure` is here the gatekeeper's error code, not a service's verdict.
     expect(operationOutcome(logEntry({ operation: "portal", result: "failure", detail: "on, failure" }))).toEqual({ tone: "error", text: "Failed" })
     expect(operationOutcome(logEntry({ operation: "portal", result: "rejects", detail: "on, rejects" }))).toEqual({ tone: "attention", text: "Refused" })
+    expect(operationOutcome(logEntry({ operation: "code", result: "failure", detail: "renew, failure" }))).toEqual({ tone: "error", text: "Failed" })
   })
 
   test("a site's log does not show another site, even if the relay returned it", () => {

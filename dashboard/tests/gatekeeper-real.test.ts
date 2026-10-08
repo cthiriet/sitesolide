@@ -33,6 +33,8 @@ function mount(systemctl?: (arguments_: string[]) => Execution, log: string[] = 
   const root = join(D, String(++number));
   mkdirSync(join(root, "srv", "sample"), { recursive: true });
   mkdirSync(join(root, "sites"), { recursive: true });
+  mkdirSync(join(root, "locks"), { recursive: true });
+  mkdirSync(join(root, "garde"), { recursive: true });
   const config: MachineConfig = {
     sitesDir: join(root, "srv"),
     blocksFolder: join(root, "sites"),
@@ -41,6 +43,9 @@ function mount(systemctl?: (arguments_: string[]) => Execution, log: string[] = 
     zoneEnvFile: join(root, "sitesolide.env"),
     caddy: "/nonexistent/caddy",
     runFolder: join(root, "run"),
+    locksFolder: join(root, "locks"),
+    codesFile: join(root, "locks-codes.json"),
+    doorPagesDir: join(root, "garde"),
     blockOwner: null,
     probeConfig: { address: "127.0.0.1", port: 9, ca: null },
     caddyUnit: "caddy.service",
@@ -206,6 +211,89 @@ describe("reads and writes", () => {
     await expect(machine.readManifest("../etc")).rejects.toThrow("invalid slug");
     await expect(machine.writeBlock("../../passwd", "x")).rejects.toThrow("invalid slug");
     await expect(machine.saveBackup("a/b", { manifest: { text: "", permissions: { uid: 0, gid: 0, mode: 0 } }, block: null })).rejects.toThrow();
+  });
+});
+
+describe("the preview locks", () => {
+  test("the codes file is rewritten in place: its mode and its inode stay, a shorter text leaves no tail", async () => {
+    const { machine, config } = mount();
+    expect(await machine.readCodes()).toBeNull();
+    writeFileSync(config.codesFile, '{\n  "sample": "K7M2PQ",\n  "other": "W4XN8R"\n}\n');
+    chmodSync(config.codesFile, 0o600);
+    const inode = statSync(config.codesFile).ino;
+    await machine.writeCodes('{\n  "sample": "K7M2PQ"\n}\n', null);
+    expect(readFileSync(config.codesFile, "utf8")).toBe('{\n  "sample": "K7M2PQ"\n}\n');
+    expect(statSync(config.codesFile).ino).toBe(inode);
+    expect(statSync(config.codesFile).mode & 0o777).toBe(0o600);
+    expect(await machine.readCodes()).toBe('{\n  "sample": "K7M2PQ"\n}\n');
+  });
+
+  test("a codes file that is missing is created 0600; a link is neither read nor written through", async () => {
+    const { machine, config, root } = mount();
+    await machine.writeCodes("{}\n", null);
+    expect(statSync(config.codesFile).mode & 0o777).toBe(0o600);
+    rmSync(config.codesFile);
+    writeFileSync(join(root, "elsewhere.json"), "{}\n");
+    symlinkSync(join(root, "elsewhere.json"), config.codesFile);
+    await expect(machine.readCodes()).rejects.toThrow("symbolic link");
+    await expect(machine.writeCodes('{"sample":"K7M2PQ"}\n', null)).rejects.toThrow();
+    expect(readFileSync(join(root, "elsewhere.json"), "utf8")).toBe("{}\n");
+  });
+
+  test("the fragment keeps the name the machine carries, 0644, written by rename and removed", async () => {
+    const { machine, config } = mount();
+    expect(await machine.readLocksFragment()).toBeNull();
+    await machine.writeLocksFragment("# Preview locks\n");
+    expect(readdirSync(config.locksFolder)).toEqual(["verrous.caddy"]);
+    expect(statSync(join(config.locksFolder, "verrous.caddy")).mode & 0o777).toBe(0o644);
+    expect(await machine.readLocksFragment()).toBe("# Preview locks\n");
+    await machine.removeLocksFragment();
+    await machine.removeLocksFragment();
+    expect(readdirSync(config.locksFolder)).toEqual([]);
+  });
+
+  test("every site's lock as the generator reads it, and a descriptor from before stops the reading", async () => {
+    const { machine, config } = mount();
+    writeFileSync(join(config.sitesDir, "sample", "sitesolide.json"), '{"slug":"sample","lock":true}');
+    mkdirSync(join(config.sitesDir, "open"));
+    writeFileSync(join(config.sitesDir, "open", "sitesolide.json"), '{"slug":"open"}');
+    mkdirSync(join(config.sitesDir, "test-zone.invalid"));
+    expect(await machine.readLockSites()).toEqual([
+      { slug: "open", lock: undefined },
+      { slug: "sample", lock: true },
+      { slug: "test-zone.invalid", lock: undefined },
+    ]);
+    mkdirSync(join(config.sitesDir, "older"));
+    writeFileSync(join(config.sitesDir, "older", "site.json"), '{"lock":true}');
+    await expect(machine.readLockSites()).rejects.toThrow("site.json is still there");
+    rmSync(join(config.sitesDir, "older"), { recursive: true });
+    writeFileSync(join(config.sitesDir, "open", "sitesolide.json"), "{");
+    await expect(machine.readLockSites()).rejects.toThrow("open: sitesolide.json unreadable");
+  });
+
+  test("the door page: its folder 0755, the page 0644, nothing outside the folder of door pages", async () => {
+    const { machine, config } = mount();
+    expect(await machine.readDoorPage("sample")).toBeNull();
+    await machine.writeDoorPage("sample", "<p>door</p>", null);
+    expect(statSync(join(config.doorPagesDir, "sample")).mode & 0o777).toBe(0o755);
+    expect(statSync(join(config.doorPagesDir, "sample", "index.html")).mode & 0o777).toBe(0o644);
+    expect(await machine.readDoorPage("sample")).toBe("<p>door</p>");
+    await machine.writeDoorPage("sample", "<p>door, again</p>", null);
+    expect(readdirSync(join(config.doorPagesDir, "sample"))).toEqual(["index.html"]);
+    await expect(machine.writeDoorPage("../etc", "x", null)).rejects.toThrow("invalid slug");
+  });
+
+  test("a backup with the preview locks keeps the codes and the fragment, or says they were absent", async () => {
+    const { machine, config } = mount();
+    await machine.saveBackup("sample", {
+      manifest: { text: '{"slug":"sample"}\n', permissions: { uid: 1, gid: 1, mode: 0o644 } },
+      block: null,
+      locks: { codes: '{"sample":"K7M2PQ"}\n', fragment: null },
+    });
+    const folder = backupFolder("sample", config.runFolder);
+    expect(readdirSync(folder).sort()).toEqual(["locks-codes.json", "permissions.json", "sample.caddy.absent", "sitesolide.json", "verrous.caddy.absent"]);
+    expect(statSync(join(folder, "locks-codes.json")).mode & 0o777).toBe(0o600);
+    await machine.clearBackup("sample");
   });
 });
 

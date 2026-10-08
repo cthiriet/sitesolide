@@ -21,7 +21,7 @@
  * missing, unreadable, badly protected or older than the launch says that the
  * gatekeeper has not spoken, and that is a failure.
  */
-import { gatekeeperUnit } from "../gatekeeper/instance";
+import { gatekeeperUnit, type Action } from "../gatekeeper/instance";
 import type { Examination } from "./system";
 
 /** The directory where the gatekeeper writes its results, root 0755, one 0644 file per site. */
@@ -75,8 +75,8 @@ export type GatekeeperResult = { result: ResultKind; message: string };
  * The name belongs to the contract that src/gatekeeper/instance.ts holds, which
  * the gatekeeper re-reads at its launch: it is not copied here.
  */
-export function gatekeeperUnitOf(active: boolean, slug: string): string | null {
-  return gatekeeperUnit(slug, active);
+export function gatekeeperUnitOf(action: Action, slug: string): string | null {
+  return gatekeeperUnit(slug, action);
 }
 
 const DEFAULTS: Record<ResultKind, string> = {

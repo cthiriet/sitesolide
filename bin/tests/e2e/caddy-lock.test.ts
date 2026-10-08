@@ -22,8 +22,10 @@ import { createFakeVm, type FakeVm } from "./fake-vm";
 /**
  * The lock that the CLI and the scripts share with the dashboard's
  * gatekeeper, put to the test where it serves: `sitesolide deploy`, `remove`,
- * bin/deploy-caddy.sh and bin/lock.sh, really run in front of a simulated VM
- * whose fake ssh executes the lock's scripts on its own tree.
+ * bin/deploy-caddy.sh, bin/generate-domains.sh and bin/deploy-gatekeeper.sh,
+ * really run in front of a simulated VM whose fake ssh executes the lock's
+ * scripts on its own tree. `sitesolide lock` takes none: the gatekeeper it
+ * reaches through the steward takes it for its own transaction.
  *
  * For each gesture: taken before the reading that decides, given back on every
  * path (success, failure, interruption), refused when the gatekeeper holds it,
@@ -89,7 +91,7 @@ function testRepo(blocks: Manifest[]): string {
   const repo = tempDir("repo-lock-");
   mkdirSync(join(repo, "bin"));
   copyFileSync(join(REPO, "bin", "sitesolide.ts"), join(repo, "bin", "sitesolide.ts"));
-  for (const name of ["cli", "config.sh", "deploy-caddy.sh", "portal-guard.ts", "lock.sh", "generate-domains.sh", "deploy-gatekeeper.sh"]) {
+  for (const name of ["cli", "config.sh", "deploy-caddy.sh", "portal-guard.ts", "generate-domains.sh", "deploy-gatekeeper.sh"]) {
     symlinkSync(join(REPO, "bin", name), join(repo, "bin", name));
   }
   mkdirSync(join(repo, "infra", "caddy"), { recursive: true });
@@ -272,53 +274,6 @@ describe("bin/deploy-caddy.sh holds the guard's lock to the end", () => {
     const r = await waitFor(script(testRepo([CMS]), "deploy-caddy.sh", ["--dry-run"]));
     expect(r.code).toBe(0);
     expect(vm.logs().some((line) => line.startsWith("LOCK"))).toBe(false);
-  });
-});
-
-describe("bin/lock.sh holds its guard's lock through the reload", () => {
-  const SHOWCASE: Manifest = { slug: "sample-static", publicDir: "public" };
-
-  test("held by the gatekeeper: refusal before the guard", async () => {
-    vm = createFakeVm();
-    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
-    const since = Date.now();
-    vm.setLock(`gatekeeper 4242 ${since}`);
-    const folder = project(SHOWCASE);
-    const r = await waitFor(script(testRepo([]), "lock.sh", ["enable", SHOWCASE.slug], { SITESOLIDE_PROJECT_DIR: folder }));
-    expect(r.code).toBe(1);
-    expect(r.error).toContain(`a portal change from the dashboard is in progress (since ${utcTime(since)}): try again in a moment`);
-    expect(vm.logs()).toEqual(["LOCK take lock"]);
-    expect(vm.lock()).toBe(`gatekeeper 4242 ${since}`);
-    expect(readFileSync(join(folder, "sitesolide.json"), "utf8")).toBe(text(SHOWCASE));
-  });
-
-  test("given back on an interruption", async () => {
-    vm = createFakeVm();
-    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
-    vm.pause(`READ ${SHOWCASE.slug}`);
-    const proc = script(testRepo([]), "lock.sh", ["disable", SHOWCASE.slug], { SITESOLIDE_PROJECT_DIR: project(SHOWCASE) });
-    await interruptAtPause(proc.pid, `READ ${SHOWCASE.slug}`);
-    const r = await waitFor(proc);
-    expect(r.code).toBe(143);
-    expect(vm.logs().at(-1)).toBe("LOCK release lock");
-    expect(vm.lock()).toBeNull();
-  });
-
-  test("ownership handed over by sitesolide remove: checked, neither taken again nor given back", async () => {
-    vm = createFakeVm();
-    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
-    const line = `deploy 777 ${Date.now()}`;
-    vm.setLock(line);
-    const r = await waitFor(
-      script(testRepo([]), "lock.sh", ["enable", SHOWCASE.slug], { SITESOLIDE_PROJECT_DIR: project(SHOWCASE), CADDY_LOCK_HELD: line }),
-    );
-    // What follows stops on the reading of the codes, refused by the simulated
-    // VM.
-    expect(r.code).not.toBe(0);
-    const logs = vm.logs();
-    expect(logs.slice(0, 2)).toEqual(["LOCK verify deploy", `READ ${SHOWCASE.slug}`]);
-    expect(logs.filter((entry) => entry.startsWith("LOCK"))).toEqual(["LOCK verify deploy"]);
-    expect(vm.lock()).toBe(line);
   });
 });
 
@@ -586,7 +541,7 @@ describe("bin/deploy-gatekeeper.sh does not install under a transaction", () => 
     writeFileSync(join(repo, "dashboard", "package.json"), JSON.stringify({ scripts: { borrow: "true" } }));
     writeFileSync(join(repo, "dashboard", "gatekeeper.ts"), 'console.log("test gatekeeper");\n');
     mkdirSync(join(repo, "infra", "gatekeeper"), { recursive: true });
-    for (const unit of ["sitesolide-gatekeeper-on@.service", "sitesolide-gatekeeper-off@.service"]) {
+    for (const unit of ["on", "off", "code", "renew"].map((action) => `sitesolide-gatekeeper-${action}@.service`)) {
       writeFileSync(join(repo, "infra", "gatekeeper", unit), "[Service]\n");
     }
     return repo;
@@ -755,10 +710,11 @@ describe("sitesolide remove of a site behind the portal", () => {
     const logs = vm.logs();
     const lockLines = logs.filter((line) => line.startsWith("LOCK"));
     expect(lockLines).toEqual(["LOCK take deploy", "LOCK verify deploy", "LOCK release deploy"]);
-    expect(logs[0]).toBe("LOCK take deploy");
-    expect(logs[1]).toBe("READ vineyard");
+    // A first reading, before the lock, says whether a code must go first; the
+    // one under the lock decides the order.
+    expect(logs.slice(0, 3)).toEqual(["READ vineyard", "LOCK take deploy", "READ vineyard"]);
     const publicDir = logs.indexOf("ACCEPTED sudo rm -rf /srv/sites/vineyard/public");
-    expect(publicDir).toBeGreaterThan(1);
+    expect(publicDir).toBeGreaterThan(2);
     expect(publicDir).toBeLessThan(logs.indexOf("CONNECT"));
     // The rest of the folder waits for a block that was removed, and it was
     // not.

@@ -21,8 +21,12 @@ export type ManifestRead = { text: string; permissions: Permissions };
  */
 export type Command = { ok: boolean; output: string };
 
-/** The state from before the action, kept in memory and on disk until the end. */
-export type Backup = { manifest: ManifestRead; block: string | null };
+/**
+ * The state from before the action, kept in memory and on disk until the end.
+ * `locks` when the action touches the preview locks: the codes file and the
+ * fragment, null for a missing one.
+ */
+export type Backup = { manifest: ManifestRead; block: string | null; locks?: { codes: string | null; fragment: string | null } };
 
 /** Gives Caddy's lock back. Without effect if it is no longer this gatekeeper's. Never fails. */
 export type Release = () => void;
@@ -71,12 +75,47 @@ export type Machine = {
 
   /** The directories of /srv/sites that serve something: a non-empty public/ or an active service. */
   servedSites: (timeoutMs: number) => Promise<string[]>;
-  /** `https://<host><path>`, resolved on the loopback, certificate verified. */
-  probe: (host: string, path: string, timeoutMs: number) => Promise<ProbeResponse>;
+  /**
+   * `https://<host><path>`, resolved on the loopback, certificate verified.
+   * `cookie`, a `name=value` pair sent as the request's only cookie: the code
+   * of a site that opens with one.
+   */
+  probe: (host: string, path: string, timeoutMs: number, cookie?: string) => Promise<ProbeResponse>;
 
   /** Without waiting for the end of the reading: the dashboard will see it within the second. */
   restartCollector: (timeoutMs: number) => Promise<Command>;
 };
+
+/**
+ * The preview locks, which a site's general access changes along with its
+ * manifest and its block: what the gatekeeper asks of the machine for them.
+ * The installer, which never changes a site's general access, mounts the
+ * same machine and asks none of it.
+ */
+export type LockFiles = {
+  /** `/etc/caddy/locks-codes.json`, null when missing. Throws if it is there but not readable without risk. */
+  readCodes: () => Promise<string | null>;
+  /**
+   * The codes file, rewritten in place: the unit may write that one file of
+   * /etc/caddy and create nothing beside it. Owner and mode kept; a missing
+   * file is created 0600 for `owner` where the folder allows it.
+   */
+  writeCodes: (text: string, owner: { uid: number; gid: number } | null) => Promise<void>;
+  /** `/etc/caddy/locks/verrous.caddy`, null when missing. */
+  readLocksFragment: () => Promise<string | null>;
+  /** Atomic, root 0644 as Caddy's other files. */
+  writeLocksFragment: (text: string) => Promise<void>;
+  removeLocksFragment: () => Promise<void>;
+  /** Every directory of /srv/sites and its manifest's `lock`. Throws when one does not read. */
+  readLockSites: () => Promise<{ slug: string; lock: unknown }[]>;
+  /** `/srv/garde/<slug>/index.html`, null when missing. */
+  readDoorPage: (slug: string) => Promise<string | null>;
+  /** Atomic, 0644 in a 0755 folder, both given to `owner` when there is one. */
+  writeDoorPage: (slug: string, text: string, owner: { uid: number; gid: number } | null) => Promise<void>;
+};
+
+/** The machine of a change of general access. */
+export type GeneralMachine = Machine & LockFiles;
 
 /**
  * Beyond that, a lock is stale whatever it says: no action on Caddy lasts that

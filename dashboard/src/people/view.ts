@@ -14,6 +14,10 @@ import type { Roles } from "./protocol";
  * The reading as a member may see it: their sites, the discrepancies of their
  * sites, their sites' audience. The machine's own figures, its memory, disk
  * and load, and its discrepancies that name no site, are the owner's.
+ *
+ * A site's preview code opens it to whoever holds it: an Admin of the site
+ * reads it, to send it; a Viewer or a Developer reads that the site opens
+ * with one, `withheld`, and asks an Admin.
  */
 export function memberReading(reading: Reading, roles: Roles): Reading {
   if (!reading.present) return reading;
@@ -25,7 +29,9 @@ export function memberReading(reading: Reading, roles: Roles): Reading {
     ...reading,
     snapshot: {
       ...snapshot,
-      sites: snapshot.sites.filter((site) => slugs.has(site.slug)),
+      sites: snapshot.sites
+        .filter((site) => slugs.has(site.slug))
+        .map((site) => (roles[site.slug] === "admin" || (site.lock?.code ?? null) === null ? site : { ...site, lock: { ...site.lock, code: null, url: null, withheld: true } })),
       discrepancies: snapshot.discrepancies.filter((discrepancy) => discrepancy.slug !== null && slugs.has(discrepancy.slug)),
       machine: null,
     },

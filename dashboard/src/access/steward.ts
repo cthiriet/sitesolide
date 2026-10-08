@@ -490,11 +490,12 @@ export type AccessRoutes = {
   };
   /**
    * A change of access made elsewhere that lets more people in: a site made
-   * public (src/secrets/steward.ts). Bounded as the registry's own changes
-   * are, the access log's room and the actor's hour, and counted. Null: go
-   * ahead.
+   * public, opened with a code, given a new code (src/secrets/steward.ts).
+   * Bounded as the registry's own changes are, the access log's room and the
+   * actor's hour, and counted; the owner over SSH generously, and past a full
+   * access log. Null: go ahead.
    */
-  widen: (channel: "dashboard" | "token", actor: string) => Promise<Response | null>;
+  widen: (channel: "dashboard" | "token" | "ssh", actor: string) => Promise<Response | null>;
   /**
    * A project removed from the machine (src/control/steward.ts, over the
    * owner's socket): its entries go with it, journaled, so that a project

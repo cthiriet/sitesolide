@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createAccessRoutes, grantable, ACCESS_LOCKED, ACCESS_NOT_AVAILABLE } from "../src/access/routes";
 import type { AccessSteward } from "../src/access/client";
 import { createTokens } from "../src/secrets/tokens";
@@ -25,7 +28,32 @@ const ACCESS = {
   portal: { reading: "steward", writtenAt: 1 },
 };
 
-function setup(who: "owner" | "person" | "none", answers: { status?: number; body?: Record<string, unknown> } = {}) {
+/** A snapshot whose blog opens with a code, as the collector would drop it. */
+function snapshotWithCode(): string {
+  const folder = mkdtempSync(join(tmpdir(), "access-routes-"));
+  const file = join(folder, "state.json");
+  writeFileSync(
+    file,
+    JSON.stringify({
+      generated: NOW,
+      zone: "test-zone.invalid",
+      folders: [{ slug: "blog", manifest: JSON.stringify({ slug: "blog", publicDir: "public", lock: true }), unit: null, bytes: 1, deployed: NOW }],
+      codes: '{"blog":"K7M2PQ"}',
+      domains: null,
+      ports: [],
+      blocks: {},
+      machine: null,
+      previous: null,
+    }),
+  );
+  return file;
+}
+
+function setup(
+  who: "owner" | "person" | "none",
+  answers: { status?: number; body?: Record<string, unknown> } = {},
+  more: { stateFile?: string; role?: "admin" | "developer" | "viewer" } = {},
+) {
   const calls: Call[] = [];
   const answer = (method: string, path: string, body: Record<string, unknown> | null) => {
     calls.push({ method, path, body });
@@ -39,6 +67,7 @@ function setup(who: "owner" | "person" | "none", answers: { status?: number; bod
     putPerson: (body) => answer("PUT", "/people/person", body as Record<string, unknown>),
     removePerson: (email) => answer("DELETE", "/people/person", { email }),
     portal: (body) => answer("POST", "/portal", body as Record<string, unknown>),
+    general: (body) => answer("POST", "/general", body as Record<string, unknown>),
   };
   const tokens = createTokens(() => NOW);
   const unlocks = createTokens(() => NOW);
@@ -50,14 +79,14 @@ function setup(who: "owner" | "person" | "none", answers: { status?: number; bod
         ? null
         : who === "owner"
           ? { session, token: "owner-session", identity: { kind: "owner" } }
-          : { session, token: "person-session", identity: { kind: "person", email: "ann@acme.test", name: null, roles: { blog: "admin" }, create: false, expiresAt: NOW + 1000 } },
+          : { session, token: "person-session", identity: { kind: "person", email: "ann@acme.test", name: null, roles: { blog: more.role ?? "admin" }, create: false, expiresAt: NOW + 1000 } },
     { forget: (hash: string) => void forgotten.push(hash) },
   );
   const routes = createAccessRoutes(
     {
       publicUrl: PUBLIC_URL,
       zone: "test-zone.invalid",
-      stateFile: "/nonexistent/state.json",
+      stateFile: more.stateFile ?? "/nonexistent/state.json",
       steward,
       members: { act: (method, path, body) => answer(method, path, body as Record<string, unknown>) },
       resolve,
@@ -87,6 +116,20 @@ describe("reading a project's access", () => {
     const body = await (await routes.list(request("GET", "/api/access?slug=blog"))).json();
     expect(body).toMatchObject({ you: { kind: "person", email: "ann@acme.test", role: "admin" }, grantable: ["visitor", "viewer", "developer", "admin"] });
     expect(calls).toEqual([{ method: "POST", path: "/access/person/list", body: { session: "person-session", slug: "blog" } }]);
+  });
+
+  test("the preview code, from the snapshot: the owner and the project's Admins read it, the others do not", async () => {
+    const coded = { body: { ...ACCESS, general: { access: "code", modifiable: true, reason: null } } };
+    const stateFile = snapshotWithCode();
+    const read = async (who: "owner" | "person", role?: "admin" | "developer" | "viewer") => {
+      const { routes, request } = setup(who, coded, { stateFile, ...(role === undefined ? {} : { role }) });
+      return ((await (await routes.list(request("GET", "/api/access?slug=blog"))).json()) as { code: unknown }).code;
+    };
+    const code = { code: "K7M2PQ", url: "https://blog.test-zone.invalid/?key=K7M2PQ" };
+    expect(await read("owner")).toEqual(code);
+    expect(await read("person", "admin")).toEqual(code);
+    expect(await read("person", "developer")).toBeNull();
+    expect(await read("person", "viewer")).toBeNull();
   });
 
   test("no session, no answer; one project at a time", async () => {
@@ -132,29 +175,52 @@ describe("changing it", () => {
     expect(calls[0]).toEqual({ method: "PUT", path: "/access/person/entry", body: { session: "person-session", token: "person-unlock-123456", slug: "blog", who: "b@acme.test", role: "developer" } });
   });
 
-  test("general access: public with the unlock and the slug retyped; restricted with neither; the code never here", async () => {
+  test("general access: public and the code with the unlock and the slug retyped, a new code with the unlock, restricted with neither", async () => {
     const { routes, calls, tokens, request } = setup("owner");
-    // Public without the unlock: the page's 423, the steward not even asked.
-    expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "public", confirmation: "blog" }))).status).toBe(423);
+    // Public, the code or a new one without the unlock: the page's 423, the steward not even asked.
+    for (const body of [
+      { slug: "blog", access: "public", confirmation: "blog" },
+      { slug: "blog", access: "code", confirmation: "blog" },
+      { slug: "blog", access: "code", renew: true },
+    ]) {
+      expect((await routes.general(request("PUT", "/api/access/general", body))).status).toBe(423);
+    }
     expect(calls).toEqual([]);
     // Restricted without the unlock: less exposure is never refused for want of one.
     expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "restricted" }))).status).toBe(200);
-    expect(calls).toEqual([{ method: "POST", path: "/portal", body: { slug: "blog", active: true, confirmation: "" } }]);
+    expect(calls).toEqual([{ method: "POST", path: "/general", body: { slug: "blog", access: "restricted", confirmation: "" } }]);
     tokens.set("h1", { token: "unlock-1234567890ab", expiresAt: NOW + 1000 });
     expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "public", confirmation: "blog" }))).status).toBe(200);
-    expect(calls.at(-1)).toEqual({ method: "POST", path: "/portal", body: { token: "unlock-1234567890ab", slug: "blog", active: false, confirmation: "blog" } });
-    expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "code" }))).status).toBe(400);
-    expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "open" }))).status).toBe(400);
+    expect(calls.at(-1)).toEqual({ method: "POST", path: "/general", body: { token: "unlock-1234567890ab", slug: "blog", access: "public", confirmation: "blog" } });
+    expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "code", confirmation: "blog" }))).status).toBe(200);
+    expect(calls.at(-1)).toEqual({ method: "POST", path: "/general", body: { token: "unlock-1234567890ab", slug: "blog", access: "code", confirmation: "blog" } });
+    expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "code", renew: true }))).status).toBe(200);
+    expect(calls.at(-1)).toEqual({ method: "POST", path: "/general", body: { token: "unlock-1234567890ab", slug: "blog", access: "code", renew: true, confirmation: "" } });
+    // Malformed: refused before the steward.
+    const before = calls.length;
+    for (const body of [{ slug: "blog", access: "open" }, { slug: "blog", access: "public", renew: true }, { slug: "blog", access: "code", renew: "yes" }, { access: "code" }]) {
+      expect((await routes.general(request("PUT", "/api/access/general", body))).status).toBe(400);
+    }
+    expect(calls).toHaveLength(before);
   });
 
-  test("a person's general access goes their way, their unlock only to make the site public", async () => {
+  test("the steward's answer, the code inside, goes back to the page as it stands", async () => {
+    const answer = { portal: { requested: false, installed: false, modifiable: true, reason: null }, general: { access: "code", modifiable: true, reason: null }, detail: "code set", code: { code: "K7M2PQ", url: "https://blog.test-zone.invalid/?key=K7M2PQ" } };
+    const { routes, tokens, request } = setup("owner", { body: answer });
+    tokens.set("h1", { token: "unlock-1234567890ab", expiresAt: NOW + 1000 });
+    const response = await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "code", confirmation: "blog" }));
+    expect(await response.json()).toEqual(answer);
+  });
+
+  test("a person's general access goes their way, their unlock but to restrict", async () => {
     const { routes, calls, unlocks, request } = setup("person");
     expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "public", confirmation: "blog" }))).status).toBe(423);
+    expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "code", confirmation: "blog" }))).status).toBe(423);
     expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "restricted" }))).status).toBe(200);
-    expect(calls).toEqual([{ method: "POST", path: "/people/portal", body: { session: "person-session", slug: "blog", active: true, confirmation: "" } }]);
+    expect(calls).toEqual([{ method: "POST", path: "/people/general", body: { session: "person-session", slug: "blog", access: "restricted", confirmation: "" } }]);
     unlocks.set("h1", { token: "person-unlock-123456", expiresAt: NOW + 1000 });
-    await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "public", confirmation: "blog" }));
-    expect(calls.at(-1)).toEqual({ method: "POST", path: "/people/portal", body: { session: "person-session", token: "person-unlock-123456", slug: "blog", active: false, confirmation: "blog" } });
+    await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "code", confirmation: "blog" }));
+    expect(calls.at(-1)).toEqual({ method: "POST", path: "/people/general", body: { session: "person-session", token: "person-unlock-123456", slug: "blog", access: "code", confirmation: "blog" } });
   });
 });
 

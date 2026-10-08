@@ -140,6 +140,7 @@ export const STEWARD_ACTIONS: Readonly<Record<string, string>> = {
   replace: "secrets.replace",
   password: "secrets.password",
   portal: "access.general",
+  code: "access.code",
   restart: "service.restart",
   "access.add": "access.add",
   "access.change": "access.change",

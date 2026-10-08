@@ -51,6 +51,7 @@
  *   GET    /people                                               -> PeopleResponse
  *   PUT    /people/person  { email, create }                     -> PersonResponse
  *   DELETE /people/person  { email }                             -> PersonResponse
+ *   POST   /general        { slug, access, renew? }              -> GeneralResponse, for `sitesolide lock` and `unlock`
  *
  * On the dashboard's socket, the same for the owner's session, `token` the
  * live unlock where the change needs it (a role above `visitor`, password
@@ -60,6 +61,12 @@
  *   POST   /access/person/list   { session, slug }                                   -> AccessResponse
  *   PUT    /access/person/entry  { session, token?, slug, who, role, expiresInS? }  -> EntryResponse
  *   DELETE /access/person/entry  { session, slug, who }                             -> EntryResponse
+ *
+ * General access, through the gatekeeper (src/secrets/steward.ts): the
+ * owner's `POST /general { token?, slug, access, renew?, confirmation }`, a
+ * person's `POST /people/general { session, token?, ... }`, `access` one of
+ * `public`, `restricted` or `code`, `renew` a new code. All but `restricted`
+ * take the unlock, and `public` and `code` the slug retyped.
  *
  * A token's (src/control/steward.ts), `visitor` entries alone:
  *
@@ -107,12 +114,35 @@ export const OWNER = "owner";
 
 export type GeneralAccess = "public" | "restricted" | "code";
 
+/** The three, in the order they are shown. */
+export const GENERAL_ACCESSES: readonly GeneralAccess[] = ["public", "restricted", "code"];
+
 /** What the machine carries for a project's general access, as the steward reads it. */
 export type GeneralView = {
   access: GeneralAccess;
-  /** May it be switched between public and restricted from here, and why not. */
+  /** May it change from here to at least one of the other two, and why not. */
   modifiable: boolean;
   reason: string | null;
+  /**
+   * Each of the three, null when the site may take it from here, otherwise
+   * why not: a static site cannot be restricted, a site on its own domain
+   * takes no code, a gatekeeper in flight stops all three. Absent from a
+   * steward that predates the code being chosen here.
+   */
+  choices?: Record<GeneralAccess, string | null>;
+};
+
+/**
+ * The steward's answer to a change of general access, `POST /general`: the
+ * portal read back, the general access, the gatekeeper's verdict, and the
+ * code in force when the site opens with one, for the owner and the
+ * project's Admins who asked. Never written to a journal.
+ */
+export type GeneralResponse = {
+  portal: { requested: boolean; installed: boolean; modifiable: boolean; reason: string | null };
+  general: GeneralView;
+  detail: string;
+  code: { code: string; url: string | null } | null;
 };
 
 export type EntryKind = "person" | "domain" | "password";
@@ -211,7 +241,7 @@ export type PersonResponse = { person: PersonView; change: "create" | "none" | "
 //   GET    /api/access?slug=<slug>                               -> AccessPageResponse   the owner, or anyone Viewer and above on it
 //   PUT    /api/access/entry    { slug, who, role, expiresInS? } -> EntryResponse        423 when it needs the unlock
 //   DELETE /api/access/entry    { slug, who }                    -> EntryResponse        never an unlock
-//   PUT    /api/access/general  { slug, access, confirmation }   -> the steward's PortalResponse; `public` retypes the slug
+//   PUT    /api/access/general  { slug, access, renew?, confirmation } -> GeneralResponse; `public` and `code` retype the slug, all but `restricted` need the unlock
 //   GET    /api/people                                           -> PeoplePageResponse   the owner's
 //   PUT    /api/people/person   { email, create }                -> PersonResponse       the create right; 423 to give it locked
 //   DELETE /api/people/person   { email }                        -> PersonResponse       off every project, signed out

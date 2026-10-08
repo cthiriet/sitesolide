@@ -84,4 +84,15 @@ describe("what a person sees of the snapshot", () => {
     expect(Object.keys(seen.audience.sites)).toEqual(["blog"]);
     expect(JSON.stringify(seen)).not.toContain("secret-project");
   });
+
+  test("a site's preview code: an Admin of it reads it, a Viewer or a Developer reads that there is one", () => {
+    const locked = (slug: string) => ({ slug, lock: { closed: true, code: "K7M2PQ", url: `https://${slug}.test-zone.invalid/?key=K7M2PQ` } }) as never;
+    const withCode = { ...reading, snapshot: { ...(reading as Extract<Reading, { present: true }>).snapshot, sites: [locked("blog"), locked("shop"), locked("cms")] } } as Reading;
+    const seen = memberReading(withCode, { blog: "admin", shop: "developer", cms: "viewer" });
+    if (!seen.present) throw new Error("absent");
+    const locks = Object.fromEntries(seen.snapshot.sites.map((one) => [one.slug, one.lock]));
+    expect(locks.blog).toEqual({ closed: true, code: "K7M2PQ", url: "https://blog.test-zone.invalid/?key=K7M2PQ" });
+    expect(locks.shop).toEqual({ closed: true, code: null, url: null, withheld: true });
+    expect(locks.cms).toEqual({ closed: true, code: null, url: null, withheld: true });
+  });
 });

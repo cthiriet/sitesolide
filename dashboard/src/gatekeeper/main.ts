@@ -12,6 +12,7 @@
  * launch (unit name, action, slug), or an unforeseen error.
  */
 import { readFileSync } from "node:fs";
+import { CODES_FILE, DOOR_PAGES_DIR, LOCKS_DIR } from "../../borrowed/locks";
 import { readLaunch } from "./instance";
 import { createMachine, writeResult, realSystemctl, type MachineConfig, type Systemctl } from "./real";
 import { run, type Result } from "./transaction";
@@ -24,6 +25,7 @@ export type Environment = Record<string, string | undefined>;
  *
  *   GATEKEEPER_ACTION=on SITES_DIR=$E/srv BLOCKS_FOLDER=$E/sites CADDYFILE=$E/Caddyfile \
  *     CADDY_ENV_FILE=$E/cloudflare.env RUN_FOLDER=$E/run BLOCK_OWNER= \
+ *     LOCKS_FOLDER=$E/locks CODES_FILE=$E/locks-codes.json DOOR_PAGES_DIR=$E/garde \
  *     PROBE_PORT=8443 PROBE_CA=$E/ca.pem SYSTEMCTL=/usr/bin/false \
  *     bun gatekeeper.ts sitesolide-gatekeeper-on@attempt.service
  */
@@ -47,6 +49,9 @@ export function configFrom(env: Environment, systemctl?: Systemctl): MachineConf
     // Absolute paths: under a minimal PATH, nothing to look for.
     caddy: env.CADDY ?? "/usr/bin/caddy",
     runFolder: env.RUN_FOLDER ?? "/run/sitesolide-gatekeeper",
+    locksFolder: env.LOCKS_FOLDER ?? LOCKS_DIR,
+    codesFile: env.CODES_FILE ?? CODES_FILE,
+    doorPagesDir: env.DOOR_PAGES_DIR ?? DOOR_PAGES_DIR,
     blockOwner,
     probeConfig: {
       address: env.PROBE_ADDRESS ?? "127.0.0.1",
@@ -78,7 +83,10 @@ export async function main(argv: string[], env: Environment): Promise<number> {
   if (zone === "") throw new Error("SITESOLIDE_ZONE: the served zone is required");
   let result: Result;
   try {
-    result = await run(createMachine(config), { ...instance, zone }, config.runFolder);
+    // The contact address the door page offers, from the same file as the
+    // zone: empty, the page offers none.
+    const demand = { ...instance, zone, contact: env.SITESOLIDE_CONTACT ?? "", doorPagesDir: config.doorPagesDir };
+    result = await run(createMachine(config), demand, config.runFolder);
   } catch (error) {
     console.error(`gatekeeper ${instance.slug}: unexpected error: ${(error as Error).message}`);
     try {

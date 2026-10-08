@@ -20,14 +20,16 @@ import {
   changeResult,
   changeTexts,
   closeOutcome,
-  codeCommands,
+  codeWithheld,
   confirmationValid,
   emptyListWarning,
   entryRow,
   generalLine,
-  generalNote,
   generalOptions,
   generalState,
+  mayRenew,
+  sharedReason,
+  stewardChoices,
   grantSentence,
   inertNote,
   isPlatform,
@@ -123,72 +125,97 @@ describe("general access", () => {
   })
 
   test("read from the snapshot: restricted with its public paths, the code with its link, public otherwise", () => {
-    expect(generalState(site({ portal: { wanted: true, installed: true, exemptions: ["/api/*"] } }))).toEqual({ current: "restricted", problem: null, exemptions: ["/api/*"], code: null, requested: true })
+    expect(generalState(site({ portal: { wanted: true, installed: true, exemptions: ["/api/*"] } }))).toEqual({ current: "restricted", requested: "restricted", problem: null, exemptions: ["/api/*"], code: null })
     expect(generalState(site({ lock: { closed: true, code: "K7PX3M", url: "https://x.test-zone.invalid/?code=K7PX3M" } }))).toMatchObject({
       current: "code",
       code: { code: "K7PX3M", url: "https://x.test-zone.invalid/?code=K7PX3M" },
     })
-    expect(generalState(site())).toEqual({ current: "public", problem: null, exemptions: [], code: null, requested: false })
+    expect(generalState(site())).toEqual({ current: "public", requested: "public", problem: null, exemptions: [], code: null })
   })
 
-  test("a disagreement with sitesolide.json comes first, and says how the server serves the site", () => {
+  test("a code withheld from whoever reads: the site opens with one, nobody is told it is in disagreement", () => {
+    const withheld = generalState(site({ lock: { closed: true, code: null, url: null, withheld: true } }))
+    expect(withheld).toMatchObject({ current: "code", problem: null, code: null })
+    expect(codeWithheld("cms")).toBe("An Admin of cms, or the owner, has the code.")
+  })
+
+  test("a disagreement with sitesolide.json comes first, and says how the server serves the site and what it asks", () => {
     const absent = generalState(site({ portal: { wanted: true, installed: false, exemptions: [] } }))
-    expect(absent.current).toBe("public")
-    expect(absent.problem).toMatchObject({ portal: true, title: "Restricted in sitesolide.json, public on the server" })
+    expect(absent).toMatchObject({ current: "public", requested: "restricted", problem: { title: "Restricted in sitesolide.json, public on the server" } })
     expect(absent.problem?.detail).toContain("Anyone can open it")
-    expect(generalState(site({ portal: { wanted: false, installed: true, exemptions: [] } }))).toMatchObject({ current: "restricted", problem: { portal: true } })
-    expect(generalState(site({ lock: { closed: false, code: "AB12CD", url: null } }))).toMatchObject({ current: "code", problem: { portal: false } })
-    expect(generalState(site({ lock: { closed: true, code: null, url: null } }))).toMatchObject({ current: "public", problem: { portal: false } })
+    expect(generalState(site({ portal: { wanted: false, installed: true, exemptions: [] } }))).toMatchObject({ current: "restricted", requested: "public" })
+    expect(generalState(site({ lock: { closed: false, code: "AB12CD", url: null } }))).toMatchObject({ current: "code", requested: "public", problem: { detail: expect.stringContaining("Choose one below.") } })
+    expect(generalState(site({ lock: { closed: true, code: null, url: null } }))).toMatchObject({ current: "public", requested: "code", problem: { detail: expect.stringContaining("Choose one below.") } })
+    // No disagreement sends anyone to the command line any more.
+    for (const state of [absent, generalState(site({ lock: { closed: false, code: "AB12CD", url: null } })), generalState(site({ lock: { closed: true, code: null, url: null } }))]) {
+      expect(state.problem?.detail).not.toContain("folder")
+    }
   })
 
-  const modifiable = { modifiable: true, reason: null }
+  const allowed = stewardChoices({ access: "public", modifiable: true, reason: null, choices: { public: null, restricted: null, code: null } })
 
-  test("an Admin or the owner switches between public and restricted, the button naming the change; no row carries a command", () => {
-    const options = generalOptions(generalState(site()), modifiable, true)
+  test("an Admin or the owner chooses any of the three, the button naming the change", () => {
+    const options = generalOptions(generalState(site()), allowed, true)
     expect(options.map((option) => [option.access, option.current, option.available, option.action])).toEqual([
       ["public", true, false, null],
       ["restricted", false, true, "Restrict"],
-      ["code", false, false, null],
+      ["code", false, true, "Use a code"],
     ])
-    expect(options.every((option) => option.side === null)).toBe(true)
-    expect(generalOptions(generalState(site({ portal: { wanted: true, installed: true, exemptions: [] } })), modifiable, true)[0]).toMatchObject({ available: true, action: "Make public" })
+    expect(options.every((option) => option.side === null && option.reason === null)).toBe(true)
+    expect(generalOptions(generalState(site({ portal: { wanted: true, installed: true, exemptions: [] } })), allowed, true)[0]).toMatchObject({ available: true, action: "Make public" })
   })
 
-  test("the preview code is said once, under the choices, by who reads it", () => {
-    const open = generalState(site())
+  test("a site that opens with a code: Public and Restricted chosen from it, and a new code beside it", () => {
     const coded = generalState(site({ lock: { closed: true, code: "K7PX3M", url: null } }))
-    expect(generalNote(open, "owner")).toBe("A preview code is set with sitesolide lock, in the project's folder.")
-    expect(generalNote(open, "admin")).toBe("Only the owner sets a preview code.")
-    // Once removed, the site opens as sitesolide.json says: said with the way to remove it.
-    expect(generalNote(coded, "owner")).toBe("To make it public or restricted, remove the code first: sitesolide unlock, in the project's folder. It then opens as sitesolide.json says: Public.")
-    expect(generalNote({ ...coded, requested: true }, "owner")).toEndWith("It then opens as sitesolide.json says: Restricted.")
-    expect(generalNote(coded, "admin")).toBe("Only the owner removes the code; ask them, then restrict it here.")
-    expect(generalNote(open, "reader")).toBeNull()
+    const options = generalOptions(coded, allowed, true)
+    expect(options.map((option) => option.action)).toEqual(["Make public", "Restrict", null])
+    expect(mayRenew(coded, allowed, true)).toBe(true)
+    expect(mayRenew(coded, allowed, false)).toBe(false)
+    expect(mayRenew(generalState(site()), allowed, true)).toBe(false)
   })
 
-  test("while a code is set, public and restricted wait for it to be removed, with the CLI's commands", () => {
-    const options = generalOptions(generalState(site({ lock: { closed: true, code: "K7PX3M", url: null } })), modifiable, true)
-    expect(options.filter((option) => option.available)).toEqual([])
-    expect(codeCommands(true).map((command) => command.command)).toEqual(["sitesolide lock --new-code", "sitesolide unlock"])
-    expect(codeCommands(false)).toEqual([{ label: "Give it a preview code", command: "sitesolide lock" }])
+  test("a choice the steward refuses says why under it; a reason for every choice is said once", () => {
+    const staticSite = stewardChoices({ access: "public", modifiable: true, reason: null, choices: { public: null, restricted: "a static site cannot be restricted yet", code: null } })
+    const options = generalOptions(generalState(site()), staticSite, true)
+    expect(options[1]).toMatchObject({ available: false, reason: "a static site cannot be restricted yet" })
+    expect(options[2]).toMatchObject({ available: true, action: "Use a code", reason: null })
+    expect(sharedReason(generalState(site()), staticSite)).toBeNull()
+    const busy = "a portal change is in progress for this site"
+    const blocked = stewardChoices({ access: "public", modifiable: false, reason: busy, choices: { public: busy, restricted: busy, code: busy } })
+    expect(sharedReason(generalState(site()), blocked)).toBe(busy)
+    expect(generalOptions(generalState(site()), blocked, true).every((option) => !option.available && option.reason === null)).toBe(true)
+    expect(mayRenew(generalState(site({ lock: { closed: true, code: "K7PX3M", url: null } })), blocked, true)).toBe(false)
   })
 
-  test("in disagreement, each side is marked and either may be chosen: keep the server's, or apply sitesolide.json's", () => {
-    const absent = generalOptions(generalState(site({ portal: { wanted: true, installed: false, exemptions: [] } })), modifiable, true)
+  test("a steward from before the code chosen here: Public and Restricted as it said, the code pointed to the upgrade", () => {
+    const older = stewardChoices({ access: "public", modifiable: true, reason: null })
+    const options = generalOptions(generalState(site()), older, true)
+    expect(options.map((option) => option.available)).toEqual([false, true, false])
+    expect(options[2]!.reason).toContain("run sitesolide upgrade")
+  })
+
+  test("in disagreement, each side is marked and either may be chosen; the third stays a plain choice", () => {
+    const absent = generalOptions(generalState(site({ portal: { wanted: true, installed: false, exemptions: [] } })), allowed, true)
     expect(absent.map((option) => [option.access, option.side, option.action])).toEqual([
       ["public", "On the server", "Keep Public"],
       ["restricted", "In sitesolide.json", "Apply Restricted"],
-      ["code", null, null],
+      ["code", null, "Use a code"],
     ])
-    const extra = generalOptions(generalState(site({ portal: { wanted: false, installed: true, exemptions: [] } })), modifiable, true)
-    expect(extra.map((option) => option.action)).toEqual(["Apply Public", "Keep Restricted", null])
+    const extra = generalOptions(generalState(site({ portal: { wanted: false, installed: true, exemptions: [] } })), allowed, true)
+    expect(extra.map((option) => option.action)).toEqual(["Apply Public", "Keep Restricted", "Use a code"])
+    // A code in force that sitesolide.json no longer asks for: keep it, or apply Public.
+    const stale = generalOptions(generalState(site({ lock: { closed: false, code: "AB12CD", url: null } })), allowed, true)
+    expect(stale.map((option) => option.action)).toEqual(["Apply Public", "Restrict", "Keep Anyone with the code"])
+    // Asked for, and no code on the server: apply it, which draws one.
+    const missing = generalOptions(generalState(site({ lock: { closed: true, code: null, url: null } })), allowed, true)
+    expect(missing.map((option) => option.action)).toEqual(["Keep Public", "Restrict", "Apply Anyone with the code"])
   })
 
-  test("nothing to choose for a Viewer or a Developer, nor before the steward answers, nor when it refuses", () => {
+  test("nothing to choose for a Viewer or a Developer, nor before the steward answers", () => {
     const state = generalState(site())
-    expect(generalOptions(state, modifiable, false).some((option) => option.available)).toBe(false)
+    expect(generalOptions(state, allowed, false).some((option) => option.available)).toBe(false)
     expect(generalOptions(state, null, true).some((option) => option.available)).toBe(false)
-    expect(generalOptions(state, { modifiable: false, reason: "Caddy's lock is held" }, true).some((option) => option.available)).toBe(false)
+    expect(stewardChoices(null)).toBeNull()
   })
 
   test("whoever only reads it gets one line: how the site opens, and who changes it", () => {
@@ -202,14 +229,25 @@ describe("general access", () => {
     expect(platformText("portal")).toBe("portal is part of the platform. Only the owner opens it when restricted; no one can be given a role on it.")
   })
 
-  test("the change says what it does in plain words; making a site public retypes its slug, without the blanks of an entry", () => {
-    expect(changeTexts("cms", "restricted")).toMatchObject({ title: "Restrict cms?", action: "Restrict", succeeded: "cms is restricted" })
-    expect(changeTexts("cms", "public")).toMatchObject({ title: "Make cms public?", action: "Make public", failure: "Couldn't make cms public" })
+  test("the change says what it does in plain words; making a site public or opening it with a code retypes its slug", () => {
+    expect(changeTexts("cms", "restricted")).toMatchObject({ title: "Restrict cms?", action: "Restrict", succeeded: "cms is restricted", typed: false })
+    expect(changeTexts("cms", "public")).toMatchObject({ title: "Make cms public?", action: "Make public", failure: "Couldn't make cms public", typed: true })
     expect(changeTexts("cms", "public").consequence).toBe("People with access keep their dashboard roles; Can open and password access stop mattering.")
-    // What making it public opens is said first, in red; restricting says none.
+    // What it opens is said first, in red; restricting says none.
     expect(changeTexts("cms", "public").warning).toBe("Anyone with its address can open it without signing in.")
+    expect(changeTexts("cms", "code")).toMatchObject({ title: "Use a code for cms?", action: "Use a code", succeeded: "cms opens with a code", typed: true })
+    expect(changeTexts("cms", "code").warning).toBe("Anyone who has the code can open it, without signing in.")
+    expect(changeTexts("cms", "code").consequence).toContain("shown here to the owner and cms's Admins")
     expect(changeTexts("cms", "restricted").warning).toBeNull()
-    expect(JSON.stringify([changeTexts("cms", "public"), changeTexts("cms", "restricted")])).not.toContain("Caddy")
+    // A new code: no typing, the old one stopping said first.
+    expect(changeTexts("cms", "renew")).toMatchObject({ title: "New code for cms?", action: "New code", warning: null, typed: false })
+    expect(changeTexts("cms", "renew").consequence).toStartWith("The current code stops working at once")
+    // Leaving a code says it stops working.
+    expect(changeTexts("cms", "restricted", "code").consequence).toStartWith("Its code stops working. ")
+    expect(changeTexts("cms", "public", "code").consequence).toStartWith("Its code is no longer asked. ")
+    const all = [changeTexts("cms", "public"), changeTexts("cms", "restricted"), changeTexts("cms", "code"), changeTexts("cms", "renew")]
+    expect(JSON.stringify(all)).not.toContain("Caddy")
+    expect(JSON.stringify(all)).not.toContain("sitesolide lock")
     expect(CHANGE_DURATION).toBe("Takes up to a minute. If anything fails, nothing changes.")
     expect(confirmationValid("  cms ", "cms")).toBe(true)
     expect(removalConfirmation("  cms ")).toBe("cms")
@@ -232,6 +270,12 @@ describe("general access", () => {
     expect(changeResult("public", "portal removed: validated, reloaded, a.example.com answers without the portal, 0 other site(s) still answer; already not answering before: b, c")).toBe(
       "a.example.com now opens without signing in. Already not answering before: b, c.",
     )
+    expect(changeResult("code", "code set: validated, reloaded, cms.example.com answers the door page's 401 and opens with its code, 4 other site(s) still answer")).toBe(
+      "cms.example.com now asks for its code. The 4 other sites still answer.",
+    )
+    expect(changeResult("renew", "new code set: validated, reloaded, cms.example.com answers the door page's 401 and opens with the new code, not the old one, 4 other site(s) still answer")).toBe(
+      "cms.example.com opens with the new code; the old one no longer does. The 4 other sites still answer.",
+    )
     expect(changeResult("restricted", "something else")).toBe("something else")
     expect(DEPLOY_NOTE).toBe("Your next sitesolide deploy writes this into sitesolide.json.")
   })
@@ -239,8 +283,9 @@ describe("general access", () => {
   /** The words of the gatekeeper the page reads are its own: a change of them there must show here. */
   test("the verdict the page reads is the gatekeeper's own wording", async () => {
     const transaction = await Bun.file(new URL("../../src/gatekeeper/transaction.ts", import.meta.url)).text()
-    expect(transaction).toContain("`${action}: validated, reloaded, ${checked}, ${others} other site(s) still answer${tail}`")
-    expect(transaction).toContain("`${target} answers the portal's 401`")
+    expect(transaction).toContain("`${words}: validated, reloaded, ${checked}, ${others} other site(s) still answer${tail}`")
+    expect(transaction).toContain("`${host} answers the portal's 401`")
+    expect(transaction).toContain("`${host} answers the door page's 401 and opens with its code`")
     expect(transaction).toContain("already not answering before: ")
   })
 
@@ -258,14 +303,6 @@ describe("general access", () => {
     const found = /export const MAX_PORTAL_MS = ([\d_]+)/.exec(protocol)
     expect(found).not.toBeNull()
     expect(CHANGE_SCALE_MS).toBeGreaterThanOrEqual(Number((found?.[1] ?? "").replaceAll("_", "")))
-  })
-
-  test("the code's commands are the CLI's, never a script of bin/ the binary runs itself", async () => {
-    const cli = await Bun.file(new URL("../../../bin/sitesolide.ts", import.meta.url)).text()
-    expect(cli).toContain('"  sitesolide lock   [--dry-run]')
-    expect(cli).toContain('"     --new-code ')
-    expect(cli).toContain('"  sitesolide unlock [--dry-run]')
-    for (const code of [false, true]) for (const { command } of codeCommands(code)) expect(command).not.toContain("bin/")
   })
 
   test("Can open changes nothing while the site is public or opened by its code", () => {

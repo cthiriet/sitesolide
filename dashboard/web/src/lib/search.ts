@@ -56,7 +56,7 @@ export function accessTexts(site: Pick<Site, "portal" | "lock">): string[] {
   const access = siteAccess(site)
   switch (access.kind) {
     case "code":
-      return ["Anyone with the code", access.code]
+      return access.code === null ? ["Anyone with the code"] : ["Anyone with the code", access.code]
     case "portal":
       return ["Restricted", ...access.exemptions]
     case "open":

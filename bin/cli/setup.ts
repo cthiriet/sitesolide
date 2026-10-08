@@ -666,6 +666,10 @@ export const COMPONENT_CONDITIONS = {
     present("gatekeeper-code", `${LIB}/gatekeeper.js`),
     present("gatekeeper-on", `${UNITS}/sitesolide-gatekeeper-on@.service`),
     present("gatekeeper-off", `${UNITS}/sitesolide-gatekeeper-off@.service`),
+    present("gatekeeper-code-unit", `${UNITS}/sitesolide-gatekeeper-code@.service`),
+    present("gatekeeper-renew", `${UNITS}/sitesolide-gatekeeper-renew@.service`),
+    // What the units open for writing and cannot create: the preview locks.
+    present("locks-codes", "/etc/caddy/locks-codes.json"),
   ],
   dashboard: [active("dashboard-active", "dashboard")],
   steward: [active("steward-active", "sitesolide-steward"), present("steward-code", `${LIB}/steward.js`)],

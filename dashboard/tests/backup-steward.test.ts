@@ -86,6 +86,8 @@ const system = {
     accountsFile: join(ROOT, "passwd"),
     caddyFolder: join(ROOT, "caddy"),
     gatekeeperFolder: join(ROOT, "gatekeeper"),
+    codesFile: join(ROOT, "locks-codes.json"),
+    locksFragment: join(ROOT, "verrous.caddy"),
     systemctl: "/path/that/does/not/exist",
   }),
   async systemctl(args: string[]): Promise<Command> {

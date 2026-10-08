@@ -1,7 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, test } from "bun:test";
 import {
   CODE_ALPHABET,
   isValidCode,
@@ -12,6 +9,10 @@ import {
   cookieName,
   isValidLockSlug,
   stanza,
+  readCodes,
+  encodeCodes,
+  lockField,
+  installedCode,
 } from "../src/locks";
 
 /** Deterministic randomness source: the byte sequence is imposed by the test. */
@@ -322,84 +323,45 @@ describe("previewHost", () => {
 });
 
 /**
- * The generator itself, launched the way `bin/lock.sh` launches it. What
- * `buildFragment` decides is tested above, without a disk; what follows
- * bears on reading the files, the only place where the switch to the manifest
- * could get lost.
+ * What the gatekeeper reads and writes around the fragment: the codes file,
+ * a manifest's lock, the code a stanza in service carries. The disk is the
+ * gatekeeper's (dashboard/tests/gatekeeper-real.test.ts); what is decided
+ * about the bytes is here.
  */
-describe("generate-locks.ts", () => {
-  const temporary: string[] = [];
-
-  afterEach(() => {
-    while (temporary.length > 0) rmSync(temporary.pop()!, { recursive: true, force: true });
+describe("the codes file and the fragment in service", () => {
+  test("a missing codes file is an empty table, anything but an object throws", () => {
+    expect(readCodes(null)).toEqual({});
+    expect(readCodes('{"agency":"A7B2K9"}')).toEqual({ agency: "A7B2K9" });
+    for (const text of ["", "{", "[]", "null", '"A7B2K9"']) expect(() => readCodes(text)).toThrow();
   });
 
-  /** A disposable /srv/sites tree, one folder per site. */
-  function sitesRoot(files: Record<string, Record<string, string>>): string {
-    const root = mkdtempSync(join(tmpdir(), "sitesolide-verrous-"));
-    temporary.push(root);
-    for (const [slug, contents] of Object.entries(files)) {
-      mkdirSync(join(root, slug), { recursive: true });
-      for (const [name, content] of Object.entries(contents)) {
-        writeFileSync(join(root, slug, name), content);
-      }
-    }
-    return root;
-  }
+  test("the codes are written sorted, one per line, with a final newline", () => {
+    expect(encodeCodes({ bravo: "K9A7B2", alpha: "A7B2K9" })).toBe('{\n  "alpha": "A7B2K9",\n  "bravo": "K9A7B2"\n}\n');
+    expect(readCodes(encodeCodes({ alpha: "A7B2K9" }))).toEqual({ alpha: "A7B2K9" });
+  });
 
-  async function generate(sitesDir: string, codes: Record<string, string>) {
-    const codesFile = join(mkdtempSync(join(tmpdir(), "sitesolide-codes-")), "codes.json");
-    temporary.push(join(codesFile, ".."));
-    writeFileSync(codesFile, JSON.stringify(codes));
+  test("a manifest's lock is read as it stands, and an unreadable one throws", () => {
+    expect(lockField('{"slug":"agency","lock":true}', "agency")).toBe(true);
+    expect(lockField('{"slug":"agency"}', "agency")).toBeUndefined();
+    expect(lockField('{"slug":"agency","lock":"yes"}', "agency")).toBe("yes");
+    expect(() => lockField("{", "agency")).toThrow("agency: sitesolide.json unreadable");
+  });
 
-    const child = Bun.spawn(
-      ["bun", join(import.meta.dir, "..", "scripts", "generate-locks.ts")],
-      {
-        env: {
-          ...process.env,
-          SITES_DIR: sitesDir,
-          CODES_FILE: codesFile,
-          SITESOLIDE_ZONE: "test-zone.invalid",
-        },
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-    const [output, stderrText] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
+  test("the code a stanza in service carries, and none for a site it does not close", () => {
+    const fragment = buildFragment([
+      { slug: "agency", host: "agency.test-zone.invalid", lock: true, code: "A7B2K9" },
+      { slug: "agency-two", host: "agency-two.test-zone.invalid", lock: true, code: "K9A7B2" },
     ]);
-    return { code: await child.exited, output, stderrText };
-  }
-
-  test("closes a site whose manifest carries lock", async () => {
-    const root = sitesRoot({
-      agency: { "sitesolide.json": '{"slug":"agency","lock":true}' },
-    });
-    const r = await generate(root, { agency: "A7B2K9" });
-    expect(r.code).toBe(0);
-    expect(r.output).toContain("agency.test-zone.invalid");
-    expect(r.output).toContain("A7B2K9");
+    expect(installedCode(fragment, "agency")).toBe("A7B2K9");
+    expect(installedCode(fragment, "agency-two")).toBe("K9A7B2");
+    expect(installedCode(fragment, "other")).toBeNull();
+    expect(installedCode(buildFragment([]), "agency")).toBeNull();
+    expect(installedCode(null, "agency")).toBeNull();
   });
 
-  test("leaves a manifest without lock open", async () => {
-    const root = sitesRoot({
-      agency: { "sitesolide.json": '{"slug":"agency"}' },
-    });
-    const r = await generate(root, {});
-    expect(r.code).toBe(0);
-    expect(r.output).not.toContain("agency.test-zone.invalid");
-  });
-
-  test("stops on a site.json left over from before the switch", async () => {
-    // The descriptor could ask for a lock nobody reads any more. Without this
-    // stop, the next regeneration would reopen the site silently, and its
-    // owner would believe it closed.
-    const root = sitesRoot({
-      agency: { "site.json": '{"domain":"acme.example","actif":false,"lock":true}' },
-    });
-    const r = await generate(root, { agency: "A7B2K9" });
-    expect(r.code).not.toBe(0);
-    expect(r.stderrText).toContain("sitesolide deploy");
+  test("the fragment's header says who writes it, and that it is never edited by hand", () => {
+    const header = buildFragment([]);
+    expect(header).toContain("Generated by the gatekeeper");
+    expect(header).not.toContain("bin/lock.sh");
   });
 });

@@ -253,7 +253,7 @@ export function readJournalEntry(line: string): Extract<OutputEvent, { type: "lo
 
 /** One row of `bin/lock.sh state`. Never the code itself: the table does not carry it. */
 export type LockState = {
-  /** What the manifest asks for. */
+  /** What the manifest on the machine asks for. */
   wanted: boolean;
   /** Whether Caddy carries the lock's stanza. */
   installed: boolean;

@@ -14,7 +14,7 @@ Someone with a role on a project signs in with their company account, and
 sees Sites and Activity reduced to their projects, and in a project the
 sections their role there opens: see [Access](#access).
 
-**Few writes, and each one is a decision.** No button sets a preview lock. One
+**Few writes, and each one is a decision.** One
 machine serves every site, with no staging and no automatic recovery: what
 touches their shared configuration stays in the workstation's scripts, under the
 eyes of whoever runs them. A few exceptions, and in each the dashboard only
@@ -29,10 +29,11 @@ relays to a component that judges for itself what it accepts:
 - **the secret files of every deployed project** in `/etc/sitesolide`, and the
   restart of its service, the *Secrets* section. The steward, a root daemon,
   decides;
-- **a project's general access, public or restricted**, in its *Access*
-  section, the only button in the dashboard that reloads Caddy. The steward
-  asks the gatekeeper, a root one-shot that validates, reloads, probes every
-  site and restores at the slightest discrepancy;
+- **a project's general access, Public, Restricted or Anyone with the code,
+  and a new code**, in its *Access* section, the only buttons in the dashboard
+  that reload Caddy. The steward asks the gatekeeper, a root one-shot that
+  draws the code, validates, reloads, probes every site and restores at the
+  slightest discrepancy;
 - **the egress proxy's connectors and their grants**, the *Connectors* page,
   written by the steward under the same unlock as a secret, see
   [Connectors](#connectors);
@@ -70,7 +71,7 @@ This detour is not excess caution, it is the only path:
 
 - removing the unit's confinement would weaken it for **every** project, the
   generator being shared;
-- `/etc/caddy/lock-codes.json` is `0600` and owned by the deployment account. A
+- `/etc/caddy/locks-codes.json` is `0600` and owned by the deployment account. A
   mount does not get around Unix permissions: a privileged reader is needed for
   the lock codes either way.
 
@@ -441,12 +442,14 @@ registry keeps:
 |---|---|---|
 | **Public** | anyone | the manifest's `portal` flag off, and its block |
 | **Restricted** | the people with access, signed in by the portal in front of the site | the manifest's `portal` flag on, and its block's `forward_auth` |
-| **Anyone with the code** | whoever has the preview code | the preview lock, `sitesolide lock` |
+| **Anyone with the code** | whoever has the preview code | the manifest's `lock` flag, the code in `/etc/caddy/locks-codes.json`, and its stanza in `/etc/caddy/locks/verrous.caddy` |
 
-Public and restricted switch from a site's *Access*, through the steward and
-the gatekeeper, making a site public under the unlock, restricting it without
-one: see [The portal, from the dashboard](#the-portal-from-the-dashboard). The code is set and removed with
-`sitesolide lock` alone, from the project's folder, never from the page.
+The three are chosen from a site's *Access*, through the steward and the
+gatekeeper: making a site public and opening it with a code under the unlock,
+the slug retyped, restricting it without one; a new code under the unlock. See
+[The portal, from the dashboard](#the-portal-from-the-dashboard).
+`sitesolide lock` and `unlock`, from the project's folder over the owner's
+SSH, reach the same steward and the same gatekeeper.
 
 **People with access** hold one rung of a ladder, each including the ones
 below it:
@@ -456,7 +459,7 @@ below it:
 | **Can open** (`visitor`) | opens the site when its general access is restricted, and sees nothing in the dashboard | none |
 | **Viewer** | also sees the project in the dashboard: its state, audience and activity | none |
 | **Developer** | also restarts its service; lists its secret files, names and metadata; sets, replaces and removes a variable, replaces a file read whole, creates a declared file, and never reads a value back; deploys it with a token of their own | to write, to mint a token |
-| **Admin** | everything of the project: what a Developer does, reads a value or a file back, restores a file's previous version, switches its general access between public and restricted, gives and takes away access to it, a role at most their own, lists and restores its backups; a token of theirs may also deploy it in the open, declare a domain and reach outside hosts | to read, write, restore, make a site public, give a role above Can open or password access, mint a token |
+| **Admin** | everything of the project: what a Developer does, reads a value or a file back, restores a file's previous version, chooses its general access, Public, Restricted or Anyone with the code, reads its code and draws a new one, gives and takes away access to it, a role at most their own, lists and restores its backups; a token of theirs may also deploy it in the open, declare a domain and reach outside hosts | to read, write, restore, make a site public, give it a code or a new one, give a role above Can open or password access, mint a token |
 
 Who may hold which role is the steward's to decide, alone
 ([src/access/rules.ts](src/access/rules.ts)), on rules few and strict:
@@ -507,8 +510,10 @@ projects, `dashboard`, `portal`, `api`, `analytics` and the landing, and the
 steward refuses a person any file it lays for root, `dashboard.env` and
 `portal.env` among them, whatever a registry edited by hand would claim. A
 password hash changes with the dashboard's own password, the owner's alone;
-so do the preview codes, the tokens of others, the connectors and the
-*People* page.
+so do the tokens of others, the connectors and the *People* page. A site's
+preview code is read only by the owner and the site's Admins: a Viewer or a
+Developer reads that the site opens with one, the snapshot withholding it from
+them (src/people/view.ts).
 
 ### One registry, the steward's
 
@@ -789,11 +794,11 @@ carries.
   and previous version from them, a write answers with the file's names
   only, and a read is refused by role before any file is opened, the refusal
   journaled with their role.
-- **General access goes the owner's road.** An Admin switching their site
-  between public and restricted takes `/people/portal`, under their unlock to
-  make it public, without one to restrict it, the steward checking the role
-  before it asks the gatekeeper, as it would for the owner. The preview code
-  stays `sitesolide lock`'s.
+- **General access goes the owner's road.** An Admin choosing their site's
+  general access takes `/people/general`, under their unlock to make it
+  public, give it a code or a new one, without one to restrict it, the steward
+  checking the role before it asks the gatekeeper, as it would for the owner.
+  The code comes back in the answer, never in the journal.
 - **People with access are the access routes'**, `/access/person/*`, judged
   by src/access/rules.ts with the Admin as the one who gives: see
   [Granting, changing, removing](#granting-changing-removing).
@@ -1005,7 +1010,9 @@ reading, giving Can open, removing, is what the owner's session allows.
 | dashboard's | `POST /people/restart` `{ session, slug }` | a Developer's or an Admin's restart, judged under the lock |
 | dashboard's | `POST /people/unlock` `{ session, assertion }` | a person's unlock, from a forced sign-in's assertion |
 | dashboard's | `POST /people/lock` `{ session, token }` | locks it |
-| dashboard's | `POST /people/secrets/projects`, `/people/secrets/value`, `/variable`, `/file`, `/restore`, `/content`, `/people/portal`, `/people/backups/restore` | a person's work on their projects, see src/people/actions.ts; `/people/portal` asks the unlock to make a site public, never to restrict it |
+| dashboard's | `POST /people/secrets/projects`, `/people/secrets/value`, `/variable`, `/file`, `/restore`, `/content`, `/people/general`, `/people/portal`, `/people/backups/restore` | a person's work on their projects, see src/people/actions.ts; `/people/general` `{ session, token?, slug, access, renew?, confirmation }` asks the unlock for all but Restricted; `/people/portal`, the route before the code, still answers |
+| owner's | `POST /general` `{ slug, access, renew? }` | root's general access, `sitesolide lock` and `unlock`: no unlock, no retyping, the owner's bound over SSH, journaled under `owner`; the code in the answer |
+| dashboard's | `POST /general` `{ token?, slug, access, renew?, confirmation }`, `POST /portal` | the owner's session's general access; `/portal`, `{ active }`, the route before the code, still answers in its shape |
 | dashboard's | `POST /control/access/list` `{ bearer, slug }`, `PUT` and `DELETE /control/access` `{ bearer, slug, who, role? }` | a token's, see [Access by token](#access-by-token) |
 | dashboard's | `GET /tokens/list`, `POST /tokens/create` `{ token, label, holder, expiresAt, scope }`, `POST /tokens/revoke` | the owner's: every token, one made for themselves (`holder: owner`) or for a person of People, minted within that person's roles |
 | dashboard's | `POST /tokens/person/list`, `/tokens/person/create`, `/tokens/person/revoke` | a person's own tokens, see [A person's own tokens](#a-persons-own-tokens) |
@@ -1303,73 +1310,96 @@ bin/deploy-steward.sh               # 2. optional: the backups' audit and the jo
 
 A site's *Access* section opens on its general access as the machine carries
 it, the three ways a site may open, the current one marked, a disagreement
-between the deployed manifest and the running block said first, in red, each
+between the deployed manifest and what Caddy serves said first, in red, each
 side then marked *On the server* or *In sitesolide.json*, with *Keep* or
 *Apply*; the site's Overview puts the two side by side in its *General
-access* panel. The owner and the project's Admins switch it between public
-and restricted when the steward accepts, *Make public* or *Restrict*:
-restricted is the portal turned on in front of the site, without an unlock;
-public the portal turned off, under the unlock, which retypes the slug to
-confirm. The confirmation says it "Takes up to a minute. If anything fails,
-nothing changes.", and the result what the site now does, "wheels.example.com
-now asks visitors to sign in. The 13 other sites still answer.", then that the
-next `sitesolide deploy` writes it into `sitesolide.json`. Anyone with the
-code, the preview lock, appears there too, read-only: it remains `sitesolide
-lock`'s business, and the owner reads `sitesolide lock --new-code` and
-`sitesolide unlock` while a code is set. Who may open a restricted site is
-the steward's registry, not this switch: see [Access](#access).
+access* panel. The owner and the project's Admins choose among the three when
+the steward accepts, *Make public*, *Restrict* or *Use a code*: restricted is
+the portal turned on in front of the site, without an unlock; public is
+neither portal nor code, under the unlock, which retypes the slug to confirm;
+Anyone with the code is the preview lock, under the unlock and the slug
+retyped too, since it opens the site to whoever holds the code. A site that
+opens with a code shows it, with the link that carries it, and *New code*,
+under the unlock, which stops the old one at once. A switch between Restricted
+and the code changes the portal and the code in the same transaction: the
+manifest refuses the two together. A choice the steward refuses says why
+under it, a site on its own domain taking no code, a static site no portal;
+a reason that stops all three, a change in progress, is said once under them.
+The confirmation says it "Takes up to a minute. If anything fails, nothing
+changes.", and the result what the site now does, "wheels.example.com now asks
+visitors to sign in. The 13 other sites still answer.", the code when there is
+one, then that the next `sitesolide deploy` writes it into `sitesolide.json`.
+Who may open a restricted site is the steward's registry, not this switch: see
+[Access](#access).
 
 ```
 page, Access
-   |  /api/access/general, /api/secrets/portal : session, Origin, unlocked to make public
+   |  /api/access/general : session, Origin, unlocked but to restrict
    v
 server.ts                  relays, with no rule; a person's request through src/people/relay.ts
    v
-steward.js                 rule, confirmation, writes one at a time
-   |  systemctl start sitesolide-gatekeeper-<on|off>@<slug>.service
+steward.js                 rule, confirmation, bound, writes one at a time; the owner's socket for sitesolide lock
+   |  systemctl start sitesolide-gatekeeper-<on|off|code|renew>@<slug>.service
    v
 gatekeeper.js              root, one-shot, one transaction per start
    |-- lock   /run/sitesolide-gatekeeper/caddy.lock
-   |-- writes /srv/sites/<slug>/sitesolide.json, /etc/caddy/sites/<slug>.caddy
+   |-- draws  the code, six characters, on the machine
+   |-- writes /srv/sites/<slug>/sitesolide.json, /etc/caddy/sites/<slug>.caddy,
+   |          /etc/caddy/locks-codes.json, /srv/garde/<slug>/index.html,
+   |          /etc/caddy/locks/verrous.caddy
    |-- runs   caddy validate, systemctl reload caddy
-   |-- probes https://<host>/ on 127.0.0.1:443, certificate verified
-   `-- writes /run/sitesolide-gatekeeper/<slug>.json, the result
+   |-- probes https://<host>/ on 127.0.0.1:443, certificate verified, with and without the code
+   `-- writes /run/sitesolide-gatekeeper/<slug>.json, the result, never the code
 ```
 
-### Why a gatekeeper, and two units
+The code never leaves the machine but in the steward's answer to whoever
+asked, read back from the codes file: not in the gatekeeper's result, which
+other accounts read, not in a message, not in a journal. The steward journals
+`portal` with `on`, `off` or `code`, the Activity page's `access.general`, and
+`code` for a new code, its `access.code`, under the owner or the Admin's
+email, kept 180 days with every change of access. Making a site public, opening
+it with a code and a new code count against the same bound as every change
+that lets more people in.
 
-**The steward never touches Caddy.** Putting the portal in front of a site
-rewrites a block and
-reloads the configuration that serves every site: the riskiest act on the
-platform. That act lives apart, in `dashboard/gatekeeper.ts` and
-`src/gatekeeper/`, tested without a machine all the way up to a real test Caddy.
-The gatekeeper does not travel with the dashboard:
-`bin/deploy-gatekeeper.sh` builds and installs it, like the steward. The steward
-keeps a unit with no network; the gatekeeper, which probes the sites, has no
-access to the secrets.
+### Why a gatekeeper, and four units
 
-**Two unit templates, one per action**, with the slug alone as the instance.
-They differ only by their action, which `tests/gatekeeper-units.test.ts` checks
-line by line. An instance carrying the action in its name (`on-cms`) would stop
-the unit from bounding writes to the site's directory: here
-`ReadWritePaths=/srv/sites/%i`, and a compromised gatekeeper holds only the site
-you name it for. The entry point receives `%n` and `GATEKEEPER_ACTION`, and refuses
-to start if the two do not say the same thing: an `-off@` file copied without
-changing its line does nothing rather than the opposite.
+**The steward never touches Caddy.** Changing a site's general access
+rewrites a block or the preview locks and reloads the configuration that
+serves every site: the riskiest act on the platform. That act lives apart, in
+`dashboard/gatekeeper.ts` and `src/gatekeeper/`, tested without a machine all
+the way up to a real test Caddy. The gatekeeper does not travel with the
+dashboard: `bin/deploy-gatekeeper.sh` builds and installs it, like the
+steward. The steward keeps a unit with no network; the gatekeeper, which
+probes the sites, has no access to the secrets. `sitesolide lock` is not a
+second path: it asks the steward on its owner socket, which launches the same
+gatekeeper.
+
+**Four unit templates, one per action**, `on`, `off`, `code` and `renew`, with
+the slug alone as the instance. They differ only by their action, which
+`tests/gatekeeper-units.test.ts` checks line by line. An instance carrying
+the action in its name (`on-cms`) would stop the unit from bounding writes to
+the site's directory: here `ReadWritePaths=/srv/sites/%i`, and a compromised
+gatekeeper holds only the site you name it for. The entry point receives `%n`
+and `GATEKEEPER_ACTION`, and refuses to start if the two do not say the same
+thing: an `-off@` file copied without changing its line does nothing rather
+than the opposite.
 
 **The unit bounds what the code does not guarantee**: `CAP_DAC_OVERRIDE`, to
-rewrite a manifest in a directory owned by the deployment account, and
-`CAP_CHOWN`, to give it back; the site's `app/` and `public/` readable, `data/`,
-`/etc/sitesolide` and the steward's state invisible; the loopback only, for the
-probe; `TimeoutStartSec=80s` and `MemoryMax=256M`. `/etc/caddy/sites` stays
-fully writable, the price of the act: a compromised gatekeeper can rewrite any
-site's block, but not its files.
+rewrite a manifest in a directory owned by the deployment account and the
+codes file it owns in 0600, and `CAP_CHOWN`, to give them back; the site's
+`app/` and `public/` readable, `data/`, `/etc/sitesolide` and the steward's
+state invisible; the loopback only, for the probe; `TimeoutStartSec=80s` and
+`MemoryMax=256M`. `/etc/caddy/sites` and `/etc/caddy/locks` stay fully
+writable, the price of the act: a compromised gatekeeper can rewrite any
+site's block or lock, but not its files. Of `/etc/caddy` itself it writes the
+codes file alone, in place, and `/srv/garde` for the door pages;
+`bin/deploy-gatekeeper.sh` lays the three when they are missing.
 
 ### The Caddy lock
 
 **One act on Caddy at a time, across every site**, whether it comes from the
 dashboard or from a workstation. `sitesolide deploy`, `remove`, `domain`,
-`bin/deploy-caddy.sh`, `bin/lock.sh` and every script that reloads Caddy take it
+`bin/deploy-caddy.sh`, `bin/generate-domains.sh` and every script that reloads Caddy take it
 like the gatekeeper: they read whether the machine puts the portal in front of
 a site, then write minutes later, and
 may restore a backup with `rsync --delete`. A gatekeeper action falling in that

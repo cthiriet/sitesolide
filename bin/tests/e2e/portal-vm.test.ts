@@ -16,7 +16,7 @@ import { generateFragment } from "../../cli/fragment";
 import { setPortal, type Manifest } from "../../cli/manifest";
 import { REPO, run, TEST_EMAIL, TEST_ZONE } from "./run";
 import { createFakeVm, type FakeVm } from "./fake-vm";
-import { SWITCHES } from "./fake-ssh";
+import { FAKE_CODE, FAKE_NEW_CODE, SWITCHES } from "./fake-ssh";
 
 /**
  * The portal of a deployed site is laid down from the dashboard, and the VM is
@@ -455,78 +455,102 @@ describe("deploy-caddy.sh does not contradict the VM", () => {
  */
 const SHOWCASE: Manifest = { slug: "sample-static-door", publicDir: "public" };
 
-describe("bin/lock.sh does not deposit a stale door", () => {
-  async function runLock(subcommand: string, folder: string) {
-    const proc = Bun.spawn(
-      ["bash", join(REPO, "bin", "lock.sh"), subcommand, SHOWCASE.slug],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        // The zone has no default: bin/config.sh refuses to guess a machine,
-        // and the tests' one resolves nowhere.
-        env: { SITESOLIDE_ZONE: TEST_ZONE, SITESOLIDE_EMAIL: TEST_EMAIL, ...process.env, ...vm.env, SITESOLIDE_PROJECT_DIR: folder },
-      },
-    );
-    const [output, error] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    return { code: await proc.exited, output, error };
-  }
-
-  test("a lock on a site closed from the dashboard is refused before any write", async () => {
-    vm = createFakeVm();
-    vm.writeManifest(SHOWCASE.slug, text({ ...SHOWCASE, portal: true }));
-    const folder = project(SHOWCASE);
-
-    const r = await runLock("enable", folder);
-    expect(r.code).toBe(1);
-    expect(r.error).toContain(`${SHOWCASE.slug} is restricted: make it public from the dashboard's Access section first`);
-    // The guard reads under the lock shared with the gatekeeper, and the
-    // refusal gives it back.
-    expect(vm.logs()).toEqual(["LOCK take lock", `READ ${SHOWCASE.slug}`, "LOCK release lock"]);
-    expect(vm.lock()).toBeNull();
-    expect(readFileSync(join(folder, "sitesolide.json"), "utf8")).toBe(text(SHOWCASE));
-  });
-
-  test("reopening the preview of a site closed from the dashboard points to deploy", async () => {
-    vm = createFakeVm();
-    vm.writeManifest(SHOWCASE.slug, text({ ...SHOWCASE, portal: true }));
-    const folder = project({ ...SHOWCASE, lock: true });
-
-    const r = await runLock("disable", folder);
-    expect(r.code).toBe(1);
-    expect(r.error).toContain(
-      `general access of ${SHOWCASE.slug} changed from the dashboard: run \`sitesolide deploy\` in its folder first`,
-    );
-    expect(vm.logs()).toEqual(["LOCK take lock", `READ ${SHOWCASE.slug}`, "LOCK release lock"]);
-  });
-
-  test("in agreement with the VM, the guard lets the gesture through", async () => {
-    // The gesture then stops on its first reading of the codes file, refused
-    // by the simulated VM: the guard, for its part, passed without a word.
+/**
+ * `sitesolide lock` and `unlock` deposit no manifest any more: they ask the
+ * steward on its owner socket, the gatekeeper behind it changes the machine,
+ * and the local manifest follows what the machine now carries.
+ */
+describe("sitesolide lock and unlock, through the steward", () => {
+  test("lock: one request, the code said once, the repository following, no Caddy lock taken here", async () => {
     vm = createFakeVm();
     vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
+    vm.acceptWrites();
     const folder = project(SHOWCASE);
 
-    const r = await runLock("enable", folder);
-    expect(r.error).not.toContain("portal");
-    const logs = vm.logs();
-    expect(logs.slice(0, 2)).toEqual(["LOCK take lock", `READ ${SHOWCASE.slug}`]);
-    expect(logs[2]).toStartWith("REFUSED sudo cat /etc/caddy/locks-codes.json");
-    // The failure that follows gives the lock back, through the exit trap.
-    expect(logs.at(-1)).toBe("LOCK release lock");
-    expect(vm.lock()).toBeNull();
+    const r = await run(folder, ["lock"], { vm });
+    expect(r.code).toBe(0);
+    expect(r.output).toContain(`Code   : ${FAKE_CODE}`);
+    expect(r.output).toContain(`Link   : https://${SHOWCASE.slug}.${TEST_ZONE}/?key=${FAKE_CODE}`);
+    expect(r.output).toContain("commit sitesolide.json");
+    expect(vm.logs()).toEqual([`GENERAL {"slug":"${SHOWCASE.slug}","access":"code"}`]);
+    expect(JSON.parse(readFileSync(join(folder, "sitesolide.json"), "utf8"))).toEqual({ ...SHOWCASE, lock: true });
+    // Never written into a file of the workstation.
+    expect(readFileSync(join(folder, "sitesolide.json"), "utf8")).not.toContain(FAKE_CODE);
+  });
+
+  test("--json: the code and its link in the result, for an agent to hand over", async () => {
+    vm = createFakeVm();
+    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
+    vm.acceptWrites();
+    const r = await run(project(SHOWCASE), ["lock", "--json"], { vm });
+    expect(r.code).toBe(0);
+    const result = JSON.parse(r.output.trim().split("\n").at(-1)!);
+    expect(result).toMatchObject({ type: "result", ok: true, command: "lock", slug: SHOWCASE.slug, access: "code", code: FAKE_CODE, url: `https://${SHOWCASE.slug}.${TEST_ZONE}/?key=${FAKE_CODE}`, manifestWritten: true });
+  });
+
+  test("--new-code asks for another one; unlock asks for Public, and the local lock goes", async () => {
+    vm = createFakeVm();
+    vm.writeManifest(SHOWCASE.slug, text({ ...SHOWCASE, lock: true }));
+    vm.acceptWrites();
+    const folder = project({ ...SHOWCASE, lock: true });
+    const renewed = await run(folder, ["lock", "--new-code"], { vm });
+    expect(renewed.code).toBe(0);
+    expect(renewed.output).toContain(`Code   : ${FAKE_NEW_CODE}`);
+    // Already asking for a code: nothing to commit.
+    expect(renewed.output).not.toContain("commit sitesolide.json");
+    const reopened = await run(folder, ["unlock"], { vm });
+    expect(reopened.code).toBe(0);
+    expect(reopened.output).toContain("is public again");
+    expect(vm.logs()).toEqual([
+      `GENERAL {"slug":"${SHOWCASE.slug}","access":"code","renew":true}`,
+      `GENERAL {"slug":"${SHOWCASE.slug}","access":"public"}`,
+    ]);
+    expect(JSON.parse(readFileSync(join(folder, "sitesolide.json"), "utf8"))).toEqual(SHOWCASE);
+  });
+
+  test("a restricted site switches to the code in one request, and the repository follows both fields", async () => {
+    vm = createFakeVm();
+    const app: Manifest = { slug: "sample-door", port: 3035, publicDir: "public", start: "bun run server.ts", portal: true };
+    vm.writeManifest(app.slug, text(app));
+    vm.acceptWrites();
+    const folder = project(app);
+    const r = await run(folder, ["lock"], { vm });
+    expect(r.code).toBe(0);
+    const { portal, ...rest } = app;
+    void portal;
+    expect(JSON.parse(readFileSync(join(folder, "sitesolide.json"), "utf8"))).toEqual({ ...rest, lock: true });
+  });
+
+  test("the steward's refusal comes back as it stands, and nothing is written on the workstation", async () => {
+    vm = createFakeVm();
+    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
+    vm.acceptWrites();
+    vm.setGeneral(403, { error: "out-of-scope", message: "it serves its own domain, sample-door.example, which a code would not close: switch it back to its preview first, sitesolide domain --deactivate" });
+    const folder = project(SHOWCASE);
+    const r = await run(folder, ["lock"], { vm });
+    expect(r.code).toBe(1);
+    expect(r.error).toContain("it serves its own domain, sample-door.example, which a code would not close");
     expect(readFileSync(join(folder, "sitesolide.json"), "utf8")).toBe(text(SHOWCASE));
   });
 
-  test("an unreadable answer stops the gesture", async () => {
+  test("a steward from before the code: the command says to upgrade", async () => {
     vm = createFakeVm();
-    vm.forceAnswer("PRESENT\n");
-    const r = await runLock("enable", project(SHOWCASE));
+    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
+    vm.acceptWrites();
+    vm.setGeneral(404, { error: "not-found", message: "no such route" });
+    const r = await run(project(SHOWCASE), ["lock", "--json"], { vm });
     expect(r.code).toBe(1);
-    expect(r.error).toContain(`cannot tell whether the general access of ${SHOWCASE.slug}`);
-    expect(vm.logs()).toEqual(["LOCK take lock", `READ ${SHOWCASE.slug}`, "LOCK release lock"]);
+    const error = JSON.parse(r.output.trim().split("\n").at(-1)!);
+    expect(error.message).toContain("cannot change a site's general access yet: run sitesolide upgrade first");
+    expect(error.hint).toContain("sitesolide upgrade");
+  });
+
+  test("a dry run asks the steward nothing", async () => {
+    vm = createFakeVm();
+    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
+    const r = await run(project(SHOWCASE), ["lock", "--dry-run"], { vm });
+    expect(r.code).toBe(0);
+    expect(vm.logs()).toEqual([]);
   });
 });
 
@@ -597,7 +621,23 @@ describe("sitesolide remove also removes the block laid from the dashboard", () 
     expect(publicDir).toBeGreaterThan(-1);
     expect(block).toBeGreaterThan(publicDir);
     expect(folder).toBeGreaterThan(block);
-    expect(vm.logs()).toEqual([`READ ${SHOWCASE.slug}`]);
+    // Read before the Caddy lock, for a code to take away first, and under it.
+    expect(vm.logs()).toEqual([`READ ${SHOWCASE.slug}`, `READ ${SHOWCASE.slug}`]);
+  });
+
+  test("a site that opens with a code goes back to Public through the steward first, then is removed", async () => {
+    vm = createFakeVm();
+    vm.writeManifest(SHOWCASE.slug, text({ ...SHOWCASE, lock: true }));
+    vm.acceptWrites();
+    const r = await run(project(SHOWCASE), ["remove", "--confirm", SHOWCASE.slug], { vm });
+    expect(r.code).toBe(0);
+    const logs = vm.logs();
+    const general = logs.indexOf(`GENERAL {"slug":"${SHOWCASE.slug}","access":"public"}`);
+    const lock = logs.indexOf("LOCK take deploy");
+    expect(general).toBeGreaterThan(-1);
+    // Before the Caddy lock, which the gatekeeper takes for its own transaction.
+    expect(lock).toBeGreaterThan(general);
+    expect(logs).toContain(`ACCEPTED sudo rm -rf /srv/sites/${SHOWCASE.slug}`);
   });
 
   test("for real, an open static site: gone, then its name released from the token that created it", async () => {

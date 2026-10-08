@@ -2,10 +2,18 @@
  * The contract between the steward and the gatekeeper: the unit to launch,
  * what systemd passes to the gatekeeper, and the paths the steward can re-read.
  *
- * **Two unit templates, one per action**, and the slug alone as the instance:
+ * **Four unit templates, one per action**, and the slug alone as the instance:
  *
- *   systemctl start sitesolide-gatekeeper-on@cms.service
- *   systemctl start sitesolide-gatekeeper-off@cms.service
+ *   systemctl start sitesolide-gatekeeper-on@cms.service      Restricted
+ *   systemctl start sitesolide-gatekeeper-off@cms.service     Public
+ *   systemctl start sitesolide-gatekeeper-code@cms.service    Anyone with the code
+ *   systemctl start sitesolide-gatekeeper-renew@cms.service   a new code
+ *
+ * Each action names the general access it leaves the site with, from
+ * whichever it had: `on` from the code takes the code away and puts the
+ * portal up in one transaction, `code` from Restricted the reverse. The
+ * action is in the template's name, never in the instance, so that a request
+ * can name nothing but a slug; the code is drawn by the gatekeeper itself.
  *
  * The slug is `%i` and not `%I`: the unescaped form would turn every dash into
  * a slash, and `attempt-api` would become `attempt/api` there. Each unit writes
@@ -15,8 +23,8 @@
  * **The entry point receives `%n`**, the full name systemd resolved, and
  * `GATEKEEPER_ACTION`, set by `Environment=` in each file. The two must say the
  * same action: an `-off@` file copied from `-on@` without changing its
- * `Environment=` line is refused before any reading at all, instead of putting
- * the door up when one wanted to take it away.
+ * `Environment=` line is refused before any reading at all, instead of
+ * restricting a site one wanted to make public.
  *
  * Anything that does not have exactly the expected form is refused, without
  * reading or writing anything: the slug ends up in paths written under root.
@@ -25,11 +33,30 @@
  */
 import { isValidSlug } from "../../borrowed/manifest";
 
-export type Instance = { slug: string; active: boolean };
+/** The general access each action leaves a site with. */
+export type GeneralAccess = "public" | "restricted" | "code";
 
-export type Action = "on" | "off";
+export type Action = "on" | "off" | "code" | "renew";
 
-/** The common prefix of the two templates, before `-on@` or `-off@`. */
+export const ACTIONS: readonly Action[] = ["on", "off", "code", "renew"];
+
+export type Instance = { slug: string; action: Action };
+
+/** What a site serves once the action succeeded: `renew` keeps the code, with another one. */
+export function targetOf(action: Action): GeneralAccess {
+  if (action === "on") return "restricted";
+  if (action === "off") return "public";
+  return "code";
+}
+
+/** The action that leaves a site with this general access, a new code when `renew`. */
+export function actionFor(access: GeneralAccess, renew = false): Action {
+  if (access === "restricted") return "on";
+  if (access === "public") return "off";
+  return renew ? "renew" : "code";
+}
+
+/** The common prefix of the templates, before `-<action>@`. */
 export const UNIT_PREFIX = "sitesolide-gatekeeper";
 
 /** Where the gatekeeper leaves results, backups and Caddy's lock. */
@@ -37,7 +64,7 @@ export const RUN_FOLDER = "/run/sitesolide-gatekeeper";
 
 /**
  * Caddy's lock, common to the gatekeeper and to the workstation's tools
- * (`bin/deploy-caddy.sh`, `bin/lock.sh`, `sitesolide deploy`). A directory,
+ * (`bin/deploy-caddy.sh`, `bin/generate-domains.sh`, `sitesolide deploy`). A directory,
  * created by `mkdir`, which is atomic; it carries a `holder` file.
  */
 export const LOCK_NAME = "caddy.lock";
@@ -47,9 +74,9 @@ export const HOLDER_NAME = "holder";
 export const BACKUPS_NAME = "sauvegardes";
 
 /** The unit to launch for this action, or null if the slug cannot go into it. */
-export function gatekeeperUnit(slug: string, active: boolean): string | null {
-  if (!isValidSlug(slug)) return null;
-  return `${UNIT_PREFIX}-${active ? "on" : "off"}@${slug}.service`;
+export function gatekeeperUnit(slug: string, action: Action): string | null {
+  if (!isValidSlug(slug) || !ACTIONS.includes(action)) return null;
+  return `${UNIT_PREFIX}-${action}@${slug}.service`;
 }
 
 /**
@@ -72,17 +99,17 @@ export type Launch = { ok: true; instance: Instance } | { ok: false; reason: str
  */
 export function readLaunch(argv: readonly string[], action: string | undefined): Launch {
   if (argv.length !== 1) return { ok: false, reason: "expected exactly one argument, the unit name (%n)" };
-  if (action !== "on" && action !== "off") return { ok: false, reason: "GATEKEEPER_ACTION must be on or off" };
+  if (!ACTIONS.includes(action as Action)) return { ok: false, reason: "GATEKEEPER_ACTION must be on, off, code or renew" };
 
   const name = argv[0]!;
-  const found = /^sitesolide-gatekeeper-(on|off)@([^@/]+)\.service$/.exec(name);
+  const found = /^sitesolide-gatekeeper-(on|off|code|renew)@([^@/]+)\.service$/.exec(name);
   if (found === null) {
-    return { ok: false, reason: "unexpected unit name, expected sitesolide-gatekeeper-<on|off>@<slug>.service" };
+    return { ok: false, reason: "unexpected unit name, expected sitesolide-gatekeeper-<on|off|code|renew>@<slug>.service" };
   }
   if (found[1] !== action) {
     return { ok: false, reason: `GATEKEEPER_ACTION=${action} does not match the ${found[1]} unit` };
   }
   const slug = found[2]!;
   if (!isValidSlug(slug)) return { ok: false, reason: "invalid slug in the unit name" };
-  return { ok: true, instance: { slug, active: action === "on" } };
+  return { ok: true, instance: { slug, action: action as Action } };
 }

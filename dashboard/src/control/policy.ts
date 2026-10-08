@@ -120,7 +120,7 @@ export function scopeRefusals(manifest: Manifest, scope: Scope, slug: string): s
     refusals.push("portalExempt: exempted paths are public, and your token may only deploy private sites; remove them, or ask the owner of the machine to allow public sites");
   }
   if (manifest.lock !== undefined) {
-    refusals.push("lock: the preview lock is set by the owner of the machine with sitesolide lock; remove the key");
+    refusals.push("lock: a preview code is chosen in the site's Access section, by its Admin or the owner, never by a deployment; remove the key");
   }
   for (const name of manifest.secrets ?? []) {
     if (name !== `${slug}.env`) {

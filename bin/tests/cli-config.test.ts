@@ -249,7 +249,8 @@ describe("the scripts under bin/ read the same configuration", () => {
     // zone, both of which systemd hands Caddy through EnvironmentFile: without
     // the zone every address is empty and the validation fails whatever was
     // changed. generate-domains.sh and lock.sh loaded the token alone, and no
-    // domain could be activated on 5 October 2026.
+    // domain could be activated on 5 October 2026. lock.sh no longer
+    // validates anything: the gatekeeper does, with the same two files.
     const root = join(import.meta.dir, "..");
     const calls: string[] = [];
     for await (const name of new Bun.Glob("*.sh").scan({ cwd: root })) {
@@ -260,7 +261,7 @@ describe("the scripts under bin/ read the same configuration", () => {
         expect({ name, token: line.includes(". /etc/caddy/cloudflare.env"), zone: line.includes(". /etc/caddy/sitesolide.env") }).toEqual({ name, token: true, zone: true });
       }
     }
-    expect(calls.sort()).toEqual(["deploy-caddy.sh", "generate-domains.sh", "lock.sh"]);
+    expect(calls.sort()).toEqual(["deploy-caddy.sh", "generate-domains.sh"]);
   });
 
   test("every deployment script requires the configuration before acting", async () => {

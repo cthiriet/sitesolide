@@ -87,6 +87,13 @@ export type SystemConfig = {
   caddyFolder: string;
   /** Where the gatekeeper leaves its result, `/run/sitesolide-gatekeeper`. */
   gatekeeperFolder: string;
+  /**
+   * The preview codes in force, `/etc/caddy/locks-codes.json`, read to hand a
+   * site's code to whoever may see it, never written: the gatekeeper writes it.
+   */
+  codesFile: string;
+  /** The preview locks' fragment in service, `/etc/caddy/locks/verrous.caddy`, read to say whether a code is applied. */
+  locksFragment: string;
   /** The command, `/usr/bin/systemctl` in production. */
   systemctl: string;
 };
@@ -163,6 +170,10 @@ export type System = {
   readFragment: (slug: string) => Promise<string | null>;
   /** The result the gatekeeper left for this site. */
   readGatekeeperResult: (slug: string) => Promise<Examination>;
+  /** The codes file's text, null if it is missing or is not an ordinary file. */
+  readCodes: () => Promise<string | null>;
+  /** The preview locks' fragment in service, null if it is missing or is not an ordinary file. */
+  readLocksFragment: () => Promise<string | null>;
   /**
    * Does a transaction backup remain for this site? Anything bearing its name
    * counts, link or file included: when in doubt, the site is not in a known
@@ -903,6 +914,14 @@ export function createSystem(config: SystemConfig): System {
 
     async readGatekeeperResult(slug) {
       return readBounded(join(config.gatekeeperFolder, `${siteName(slug)}.json`), MAX_RESULT_BYTES);
+    },
+
+    async readCodes() {
+      return boundedText(config.codesFile);
+    },
+
+    async readLocksFragment() {
+      return boundedText(config.locksFragment);
     },
 
     async gatekeeperBackup(slug) {

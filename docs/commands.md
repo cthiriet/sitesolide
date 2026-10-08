@@ -45,10 +45,10 @@ sitesolide people               everyone with access, their roles, who may creat
    <email> --may-create         let them create projects, Admin of what they create
    <email> --no-create          take that right back
    --migrate-without-portal     carry access over without the portal's database, when it does not read
-sitesolide lock   [--dry-run]   close the preview behind a code, or show it
+sitesolide lock   [--dry-run]   Anyone with the code: the site opens with a code, said once; or the one in force
    --status                     wanted / installed / measured, without touching
-   --new-code                   replace the code in force by a fresh one
-sitesolide unlock [--dry-run]   reopen the preview and drop its code
+   --new-code                   a new code, the old one no longer opens it
+sitesolide unlock [--dry-run]   back to Public, its code dropped
 sitesolide domain               where this project's own domain stands
    --activate [--force]         switch the site onto it, then rebuild the table
    --deactivate                 back to the preview subdomain
@@ -180,9 +180,8 @@ a refusal stops before the next, and says who was already given access.
 
 Nothing is sent to anyone: after giving someone access with an account, the
 command prints the line to send, `send:`, and for password access the
-password, once. Two things are never done here: general access, Public or
-Restricted, from the dashboard's *Access* section, and the preview code,
-`sitesolide lock`. `--domain` and `--only-admins`, from before, are refused
+password, once. Two things are never done here: general access, from the
+dashboard's *Access* section, and the preview code, `sitesolide lock`. `--domain` and `--only-admins`, from before, are refused
 with a pointer: a domain is written `@acme.com`.
 
 With `--json`, the `result` carries `slug`, `url`, `general` (`public`,
@@ -254,6 +253,47 @@ command is refused before anything is sent: it is the owner's. See
 [access.md](access.md#people-with-access-beside-tokens) for what each person sees,
 and [dashboard/README.md](../dashboard/README.md#access) for the machine's
 side.
+
+## The preview code
+
+A site's general access is Public, Restricted or Anyone with the code, chosen
+from its *Access* section in the dashboard, by its Admin or the owner. From
+the project's folder, over the owner's SSH, the code is set, replaced and
+dropped too:
+
+```bash
+sitesolide lock              # Anyone with the code, and the code; on a site that has one, the one in force
+sitesolide lock --new-code   # a new code: the link already sent stops opening the site
+sitesolide unlock            # Public again
+sitesolide lock --status     # what the machine wants, installs and serves, without touching
+```
+
+`lock` and `unlock` take the same path as the dashboard, and no other: root on
+the machine asks the steward on its owner socket, which launches the
+gatekeeper. The gatekeeper draws the code on the machine, six characters
+without O, I, 0 or 1, writes the manifest, the codes file and the locks'
+fragment in one transaction, a restricted site losing its portal in the same
+one, validates, reloads Caddy with systemctl, checks over HTTPS that the door
+page answers without the code and the site with it, a replaced code no longer
+opening it, and puts everything back at the slightest failure. The command
+prints the code and the link that carries it, once, and the local
+`sitesolide.json` then says what the machine does, to commit. The steward
+records the change under `owner`, never the code. A site that serves its own
+domain takes no code: the code would close its preview alone.
+
+```console
+$ sitesolide lock
+-> general access of notes: Anyone with the code, through the steward and the gatekeeper
+   code set: validated, reloaded, notes.example.com answers the door page's 401 and opens with its code, 13 other site(s) still answer
+
+   notes opens with its code.
+
+   Code   : K7M2PQ
+   Link   : https://notes.example.com/?key=K7M2PQ
+```
+
+With `--json`, the `result` carries `slug`, `access` (`code` or `public`),
+`code` and `url` (null once Public), and `manifestWritten`.
 
 ## A folder without a manifest
 

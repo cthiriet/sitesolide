@@ -623,38 +623,43 @@ it, the portal's `portal.env`.
 Restricted and Anyone with the code, one sentence each, the current one
 marked as the sidebar marks the current page, *Current* beside its name;
 under Restricted, the paths "Open to anyone, guarded by the app alone"; under
-Anyone with the code, the code and its link, to copy or open. Each other way
-has its button, *Make public* or *Restrict*, once the steward accepts, its
-reason otherwise, said once under the choices. A disagreement between
-`sitesolide.json` and the server is said above them in red, "Restricted in
-sitesolide.json, public on the server. Anyone can open it right now. Choose
-one below."; each row is then marked *On the server* or *In
-sitesolide.json*, and both are offered, *Keep Public* and *Apply
-Restricted*, or *Apply Public* and *Keep Restricted*. The preview code is
-said once under the choices: to the owner, "A preview code is set with
-sitesolide lock, in the project's folder."; to an Admin, "Only the owner sets
-a preview code."; while one is set, the owner reads "To make it public or
-restricted, remove the code first: sitesolide unlock, in the project's folder.
-It then opens as sitesolide.json says: Public." (or Restricted) over
-`sitesolide lock --new-code` and `sitesolide unlock`, an Admin "Only the owner
-removes the code; ask them, then restrict it here." A Viewer or a Developer reads
-general access in one line, "Restricted: only the people with access can
-open it, once signed in. Only an Admin of cms, or the owner, changes it.",
-the code or the exempt paths under it.
+Anyone with the code, the code and its link, to copy or open, and *New code*
+beside them. Each other way has its button, *Make public*, *Restrict* or *Use
+a code*, once the steward accepts; a choice it refuses says why under its
+row, "it serves its own domain, riverside-cycles.example, which a code would
+not close: switch it back to its preview first, sitesolide domain
+--deactivate", and a reason that stops all three, a change in progress, is
+said once under the choices. A disagreement between `sitesolide.json` and the
+server is said above them in red, "Restricted in sitesolide.json, public on
+the server. Anyone can open it right now. Choose one below."; each side is
+then marked *On the server* or *In sitesolide.json*, *Keep Public* and *Apply
+Restricted*, or *Apply Public* and *Keep Restricted*, and the third stays a
+plain choice; a code on the server that sitesolide.json no longer asks for
+reads *Apply Public* and *Keep Anyone with the code*. A Viewer or a Developer
+reads general access in one line, "Restricted: only the people with access
+can open it, once signed in. Only an Admin of cms, or the owner, changes
+it.", the exempt paths under it, and for a site that opens with a code "An
+Admin of cms, or the owner, has the code.": the code itself is the owner's
+and the Admins'.
 
-Restricting waits for no unlock; making public does, then opens its
-confirmation once unlocked: first a red banner, "cms becomes public. Anyone
-with its address can open it without signing in.", then "People with access
-keep their dashboard roles; Can open and password access stop mattering.",
-and the slug retyped. A site already restricted is left as it is, "already
-restricted: nothing to change". Restricting a site nobody is on the list of warns "Nobody is
-on the list yet: after this, only the owner and the admin emails can open
-wheels." Both say "Takes up to a minute. If anything fails, nothing
-changes."; the wait neither closes nor cancels and shows the time elapsed on
-a minute and a half's scale; the result says what the site now does,
-"wheels.example.com now asks visitors to sign in. The 13 other sites still
-answer." or "calendar.example.com now opens without signing in.", then "Your
-next sitesolide deploy writes this into sitesolide.json."
+Restricting waits for no unlock; making public, using a code and a new code
+do, then open their confirmation once unlocked. Making public and using a
+code say first, in a red banner, what they open, "cms becomes public. Anyone
+with its address can open it without signing in." or "cms opens to anyone
+with its code. Anyone who has the code can open it, without signing in.",
+then what they keep, and retype the slug; a new code says "The current code
+stops working at once, and the link that carries it." and asks no typing;
+leaving a code says "Its code stops working." first. A site already as asked
+is left as it is, "already restricted: nothing to change". Restricting a site
+nobody is on the list of warns "Nobody is on the list yet: after this, only
+the owner and the admin emails can open wheels." All say "Takes up to a
+minute. If anything fails, nothing changes."; the wait neither closes nor
+cancels and shows the time elapsed on a minute and a half's scale; the result
+says what the site now does, "wheels.example.com now asks visitors to sign
+in. The 13 other sites still answer.", "calendar.example.com now opens
+without signing in." or "cms.example.com now asks for its code.", with the
+code and its link when there is one, then "Your next sitesolide deploy writes
+this into sitesolide.json."
 
 Then **People with access**, its count the number of rows, and while the site
 is not restricted a note, "wheels is public, so anyone can open it. Viewer,
@@ -802,7 +807,9 @@ screenshots of the bench, in light and in dark:
 - Access as the owner, as an Admin and as a Viewer; *Add people* with a
   company account, a domain and someone who gets password access, locked and
   unlocked; the password dialog; making a site public, its confirmation, the
-  wait and the success, the restored failure; a site that opens with a code;
+  wait and the success, the restored failure; a site that opens with a code,
+  as the owner, an Admin and a Viewer; *Use a code* and *New code*, their
+  confirmation, the wait and the code shown;
   a platform project;
 - a person's shell, signed in through the bench's provider page, as a
   Viewer, a Developer and an Admin; the sign-in refusals, as

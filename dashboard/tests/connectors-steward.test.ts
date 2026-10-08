@@ -64,6 +64,8 @@ async function mount(options: Options = {}) {
       accountsFile: join(root, "passwd"),
       caddyFolder: folders.caddy!,
       gatekeeperFolder: folders.gatekeeper!,
+      codesFile: join(folders.gatekeeper!, "..", "locks-codes.json"),
+      locksFragment: join(folders.gatekeeper!, "..", "verrous.caddy"),
       systemctl: "/path/that/does/not/exist",
     }),
     systemctl: async () => ({ code: 1, output: "" }),

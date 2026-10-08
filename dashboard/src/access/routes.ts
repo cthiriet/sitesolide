@@ -6,7 +6,7 @@
  *   GET    /api/access?slug=<slug>      the owner, or anyone Viewer and above on the project
  *   PUT    /api/access/entry            someone given access, or their role changed
  *   DELETE /api/access/entry            someone taken off
- *   PUT    /api/access/general          public, with the unlock and the slug retyped; restricted, with neither; the preview code is `sitesolide lock`'s
+ *   PUT    /api/access/general          public or the code, with the unlock and the slug retyped; a new code, with the unlock; restricted, with neither
  *   GET    /api/people                  the owner's
  *   PUT    /api/people/person           the right to create projects
  *   DELETE /api/people/person           someone taken off every project
@@ -16,7 +16,8 @@
  * when it holds one, and relays to the steward, which judges every change
  * by the access rules (src/access/rules.ts) and writes the registry. What
  * the dashboard adds is what it already holds: the preview code of a
- * project whose general access is `code`, from its snapshot, and which roles
+ * project whose general access is `code`, from its snapshot, for the owner
+ * and the project's Admins alone, and which roles
  * the one signed in may give, from the steward's own rule, for the page to
  * offer what the steward will accept.
  */
@@ -74,7 +75,7 @@ const error = (status: number, code: string, message: string) => json({ error: c
 export const ACCESS_NOT_AVAILABLE = "The steward on this machine does not keep people with access yet: run sitesolide upgrade.";
 
 /** What the page reads when a change needs the unlock. */
-export const ACCESS_LOCKED = "Unlock first: giving someone a role above Can open, password access, a whole domain, the right to create projects, or making a site public needs it.";
+export const ACCESS_LOCKED = "Unlock first: giving someone a role above Can open, password access, a whole domain, the right to create projects, making a site public, or a code needs it.";
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -178,7 +179,9 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies, clock
       const until = (who.kind === "owner" ? dependencies.tokens : dependencies.unlocks).read(who.hash)?.expiresAt ?? null;
       const page: AccessPageResponse = {
         ...access,
-        code: access.general?.access === "code" ? await codeOf(slug) : null,
+        // The code opens the site to whoever holds it: the owner and the
+        // project's Admins see it, the others read that there is one.
+        code: access.general?.access === "code" && (you.kind === "owner" || you.role === "admin") ? await codeOf(slug) : null,
         you,
         grantable: grantable(you),
         until,
@@ -218,32 +221,37 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies, clock
     },
 
     /**
-     * General access, public or restricted: the portal turned off or on, the
-     * steward judging. Making a site public takes the unlock and its slug
-     * retyped; restricting it takes neither, less exposure being refused to
-     * nobody who manages it. A preview code is set and removed with
-     * `sitesolide lock`, never here.
+     * General access, one of the three, or a new code: the gatekeeper
+     * changes it, the steward judging. Making a site public and opening it
+     * with a code take the unlock and the slug retyped, since either lets in
+     * someone who was not; a new code takes the unlock; restricting takes
+     * neither, less exposure being refused to nobody who manages it. The
+     * steward's answer carries the code when the site opens with one: it goes
+     * back to the page as it stands, and is written nowhere here.
      */
     async general(req) {
       const who = await asker(req, true);
       if (who instanceof Response) return who;
       const body = await readBody(req);
       if (body === null) return error(400, "invalid", "Unreadable request body.");
-      if (body.access === "code") return error(400, "invalid", "A preview code is set and removed with sitesolide lock, from the project's folder.");
-      if (body.access !== "public" && body.access !== "restricted") return error(400, "invalid", "access: public or restricted.");
+      if (body.access !== "public" && body.access !== "restricted" && body.access !== "code") return error(400, "invalid", "access: public, restricted or code.");
       if (typeof body.slug !== "string" || body.slug === "" || body.slug.length > 128) return error(400, "invalid", "Name one project.");
-      const restricting = body.access === "restricted";
-      const fields = { slug: body.slug, active: restricting, confirmation: typeof body.confirmation === "string" ? body.confirmation : "" };
+      if (body.renew !== undefined && typeof body.renew !== "boolean") return error(400, "invalid", "renew: true or false.");
+      const access: "public" | "restricted" | "code" = body.access;
+      const renew = body.renew === true;
+      if (renew && access !== "code") return error(400, "invalid", "A new code is for a site that opens with a code.");
+      const restricting = access === "restricted";
+      const fields = { slug: body.slug, access, ...(renew ? { renew } : {}), confirmation: typeof body.confirmation === "string" ? body.confirmation : "" };
       if (who.kind === "owner") {
         const kept = dependencies.tokens.read(who.hash)?.token ?? null;
         if (!restricting && kept === null) return error(423, "locked", ACCESS_LOCKED);
-        const reached = await reach(() => steward.portal({ ...(kept === null ? {} : { token: kept }), ...fields }), kept === null ? [] : [kept]);
+        const reached = await reach(() => steward.general({ ...(kept === null ? {} : { token: kept }), ...fields }), kept === null ? [] : [kept]);
         return ownerAnswer(who, reached, kept);
       }
       const kept = dependencies.unlocks.read(who.hash)?.token ?? null;
       if (!restricting && kept === null) return error(423, "locked", ACCESS_LOCKED);
       const reached = await reach(
-        () => dependencies.members.act("POST", "/people/portal", { session: who.token, ...(kept === null ? {} : { token: kept }), ...fields }, true),
+        () => dependencies.members.act("POST", "/people/general", { session: who.token, ...(kept === null ? {} : { token: kept }), ...fields }, true),
         kept === null ? [who.token] : [who.token, kept],
       );
       return personAnswer(who, reached, kept);

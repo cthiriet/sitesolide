@@ -1113,7 +1113,7 @@ describe("the pure parts", () => {
   test("the access in lines: each general access, a project not deployed, and Can open on a public site", () => {
     expect(describeAccess(state())).toEqual(["   general access: Restricted: visitors are asked to sign in.", "   people with access: nobody yet", ALSO]);
     expect(describeAccess(state({ general: { access: "code", modifiable: false, reason: null } }))[0]).toBe(
-      "   general access: Anyone with the code: the preview code opens it, set with sitesolide lock.",
+      "   general access: Anyone with the code: the preview code opens it.",
     );
     // The admin emails set on the server, named once under the list, as the dashboard says it.
     expect(describeAccess(state({ signIn: { configured: true, allowedDomains: ["acme.test"], admins: ["root@acme.test"] } })).at(-1)).toBe(

@@ -82,8 +82,9 @@ someone access with an account. A `warning` that the portal still decides
 from its own tables means the machine is halfway through an upgrade: tell the
 user, whose owner runs `sitesolide upgrade`; what was given is kept.
 
-Never done this way: making a site Public, its general access, which is the
-dashboard's; the preview code, `sitesolide lock`, the owner's. With a token,
+Never done this way: changing a site's general access, Public, Restricted or
+Anyone with the code, which is the dashboard's, or `sitesolide lock` for the
+owner to run; never on an agent's own initiative. With a token,
 `share` gives Can open alone, to people who sign in with a company account or
 to one of the company's domains, never password access, and takes Can open
 entries off: see [access.md](access.md#giving-access-to-what-you-deployed).
@@ -225,6 +226,7 @@ What `result` carries:
 | `status` | `projects` (each with its `services`), `ports`, `memory`, in megabytes |
 | `logs` | `slug`, `units`, `entries` |
 | `lock --status` | `slug`, `lock`: `wanted`, `installed`, `withoutCode`, `withCode`, `domain` |
+| `lock`, `unlock` | `slug`, `access` (`code` or `public`), `code` and `url` (null once Public), `manifestWritten`; in a dry run `dryRun` alone |
 | `domain` | `slug`, `domain`: `name`, `aliases`, `active`, `table`, `dns`, `https` |
 | `remove` | `slug`, `dryRun` |
 | `share` | `slug`, `url`, `general` (`public`, `restricted`, `code`, or null for a project not deployed), `entries` (each `who`, `kind`, `role`, `by`, `createdAt`, `updatedAt`, `password`), `signIn` (`configured`, `allowedDomains`), `message` (null until signing in with a company account is set up), `changed`, and after a change `changes` (each `who`, `change`: `add`, `role`, `none` or `remove`, `role`, and `password` for password access just given) |

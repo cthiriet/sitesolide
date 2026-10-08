@@ -6,7 +6,10 @@ import { readManifest, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected } from "../borrowed/portal";
 import { MESSAGE_MAX } from "../src/secrets/portal";
 import { MAX_PORTAL_MS } from "../src/secrets/protocol";
-import type { Command, Permissions, Machine, ManifestRead } from "../src/gatekeeper/machine";
+import { buildFragment, cookieName, installedCode } from "../borrowed/locks";
+import { DOOR_PAGE_MARKER } from "../borrowed/page";
+import type { Action } from "../src/gatekeeper/instance";
+import type { Command, Permissions, GeneralMachine, ManifestRead } from "../src/gatekeeper/machine";
 import { redact } from "../src/gatekeeper/real";
 import type { ProbeResponse } from "../src/gatekeeper/probe";
 import {
@@ -24,9 +27,11 @@ import {
 /**
  * The transaction against a simulated machine: every step can fail, and on
  * every failure the machine has to come back to the state it was in before,
- * Caddy included. The model of Caddy is minimal: it serves the block read at
- * its last successful reload, and the site aimed at answers through the portal
- * if that block carries the guard.
+ * Caddy included. The model of Caddy is minimal: it serves the block and the
+ * preview locks read at its last successful reload; the site aimed at answers
+ * through the portal if that block carries the guard, and with the door page,
+ * a 401 that is not the portal's, if a stanza of the locks names it, unless
+ * the request carries the stanza's code in its cookie.
  */
 
 const ZONE = "test-zone.invalid";
@@ -59,6 +64,17 @@ function blockOf(raw: string): string {
 
 const OK: ProbeResponse = { code: 200, door: false, body: "" };
 const DOOR: ProbeResponse = { code: 401, door: true, body: "<html>" };
+/** The door page of a site that opens with a code: a 401 the portal did not write. */
+const DOOR_PAGE: ProbeResponse = { code: 401, door: false, body: "<html>" };
+
+/** Codes the tests draw, never one a draw could give by chance in another test. */
+const CODE = "K7M2PQ";
+const NEW_CODE = "W4XN8R";
+
+/** The locks' fragment as the generator writes it, for these sites and codes. */
+function locksFor(sites: Record<string, string>): string {
+  return buildFragment(Object.entries(sites).map(([slug, code]) => ({ slug, host: `${slug}.${ZONE}`, lock: true, code })));
+}
 
 type Counter = (n: number) => boolean;
 
@@ -85,18 +101,40 @@ type Options = {
   /** What changes on disk during the preconditions, like a deployment. */
   duringPreconditions?: (disk: { manifest: ManifestRead | null; block: string | null }) => void;
   /** Replaces a host's answer; undefined keeps the model's own. */
-  probeConfig?: (host: string, n: number, guarded: boolean) => ProbeResponse | undefined;
+  probeConfig?: (host: string, n: number, guarded: boolean, cookie?: string) => ProbeResponse | undefined;
   probeRaised?: boolean;
+  /** The codes file, absent by default; an Error when it does not read. */
+  codes?: string | null | Error;
+  /** The locks' fragment in service, absent by default. */
+  fragment?: string | null;
+  /** Every other site's lock, `[slug, lock]`; the site aimed at comes with its manifest's. */
+  lockSites?: [string, unknown][] | Error;
+  /** The door page in place for the site aimed at. */
+  doorPage?: string | null;
+  writeCodes?: Counter;
+  writeFragment?: Counter;
+  /** The code each draw gives, in turn. */
+  draws?: string[];
 };
 
 function simulate(options: Options = {}) {
   const slug = options.slug ?? "library";
   const initial = options.manifest === undefined ? OPEN : options.manifest;
-  const disk: { manifest: ManifestRead | null; block: string | null } = {
+  const disk: {
+    manifest: ManifestRead | null;
+    block: string | null;
+    codes: string | null;
+    fragment: string | null;
+    doorPage: string | null;
+  } = {
     manifest: initial === null ? null : { text: initial, permissions: PERMISSIONS },
     block: options.block === undefined ? (initial === null ? null : blockOf(initial)) : options.block,
+    codes: options.codes instanceof Error || options.codes === undefined ? null : options.codes,
+    fragment: options.fragment ?? null,
+    doorPage: options.doorPage ?? null,
   };
-  const served = { block: disk.block };
+  const served = { block: disk.block, fragment: disk.fragment };
+  const draws = [...(options.draws ?? [CODE])];
   const calls: string[] = [];
   const log: string[] = [];
   const count = new Map<string, number>();
@@ -113,7 +151,9 @@ function simulate(options: Options = {}) {
   const fails = (failure: Counter | undefined, n: number) => failure?.(n) === true;
   const command = (ok: boolean, output = ""): Command => ({ ok, output });
 
-  const machine: Machine = {
+  const lockOf = (raw: string | null): unknown => (raw === null ? undefined : (JSON.parse(raw) as { lock?: unknown }).lock);
+
+  const machine: GeneralMachine = {
     now: () => clock,
     wait: async (ms) => {
       clock += ms;
@@ -172,11 +212,13 @@ function simulate(options: Options = {}) {
     reloadCaddy: async () => {
       if (fails(options.reload, number("reload"))) return command(false, "Job for caddy.service failed.");
       served.block = disk.block;
+      served.fragment = disk.fragment;
       return command(true);
     },
     startCaddy: async () => {
       if (fails(options.start, number("start"))) return command(false, "start failed");
       served.block = disk.block;
+      served.fragment = disk.fragment;
       return command(true);
     },
     isCaddyActive: async () => !fails(options.active, number("active")),
@@ -184,19 +226,49 @@ function simulate(options: Options = {}) {
       options.duringPreconditions?.(disk);
       return options.sites ?? ["test-zone.invalid", "calendar", slug];
     },
-    probe: async (host, path) => {
-      const n = number(`probe ${host}${path}`);
+    probe: async (host, path, _timeout, cookie) => {
+      const n = number(cookie === undefined ? `probe ${host}${path}` : `probe ${host}${path} with ${cookie}`);
       if (options.probeRaised && n > 1) throw new Error("socket exploded");
       if (path === "/sante") return options.portalNotReady ? { error: "ECONNREFUSED" } : { ...OK, body: '{"configure":true}' };
       const guarded = served.block !== null && fragmentIsProtected(served.block);
-      const replaced = options.probeConfig?.(host, n, guarded);
+      const replaced = options.probeConfig?.(host, n, guarded, cookie);
       if (replaced !== undefined) return replaced;
-      if (host === `${slug}.${ZONE}`) return guarded ? DOOR : OK;
+      const named = host.endsWith(`.${ZONE}`) ? host.slice(0, -ZONE.length - 1) : null;
+      const locked = named === null ? null : installedCode(served.fragment, named);
+      if (host === `${slug}.${ZONE}` && guarded) return DOOR;
+      if (locked !== null) return cookie === `${cookieName(named!)}=${locked}` ? OK : DOOR_PAGE;
       return OK;
     },
     restartCollector: async () => {
       number("collector");
       return command(true);
+    },
+    readCodes: async () => {
+      if (options.codes instanceof Error) throw options.codes;
+      return disk.codes;
+    },
+    writeCodes: async (newText) => {
+      if (fails(options.writeCodes, number("writeCodes"))) throw new Error("EROFS");
+      disk.codes = newText;
+    },
+    readLocksFragment: async () => disk.fragment,
+    writeLocksFragment: async (newText) => {
+      if (fails(options.writeFragment, number("writeFragment"))) throw new Error("ENOSPC");
+      disk.fragment = newText;
+    },
+    removeLocksFragment: async () => {
+      number("removeFragment");
+      disk.fragment = null;
+    },
+    readLockSites: async () => {
+      if (options.lockSites instanceof Error) throw options.lockSites;
+      const others = (options.lockSites ?? []).filter(([name]) => name !== slug).map(([name, lock]) => ({ slug: name, lock }));
+      return [...others, { slug, lock: lockOf(disk.manifest?.text ?? null) }].sort((a, b) => a.slug.localeCompare(b.slug));
+    },
+    readDoorPage: async () => disk.doorPage,
+    writeDoorPage: async (_s, page) => {
+      number("writeDoorPage");
+      disk.doorPage = page;
     },
   };
 
@@ -209,7 +281,15 @@ function simulate(options: Options = {}) {
     backups,
     count: (name: string) => count.get(name) ?? 0,
     lockReleased: () => lockReleased,
-    spawn: (active: boolean): Promise<Result> => run(machine, { slug, active, zone: ZONE }),
+    /** `true` restricts, `false` makes public, as the two actions before the code; or any action. */
+    spawn: (action: boolean | Action): Promise<Result> =>
+      run(machine, {
+        slug,
+        action: action === true ? "on" : action === false ? "off" : action,
+        zone: ZONE,
+        contact: "owner@test-zone.invalid",
+        draw: () => draws.shift() ?? "Z9Z9Z9",
+      }),
   };
 }
 
@@ -571,7 +651,7 @@ describe("reading again just before writing", () => {
     const result = await s.spawn(true);
     expect(result).toMatchObject({ result: "rejects", requested: false, installed: false });
     expect(result.message).toBe(
-      "sitesolide.json or the Caddy block changed while the change was being prepared, nothing was changed: try again",
+      "sitesolide.json, the Caddy block or the preview locks changed while the change was being prepared, nothing was changed: try again",
     );
     for (const name of NOTHING) expect({ name, n: s.count(name) }).toEqual({ name, n: 0 });
     expect(s.disk.manifest!.text).toBe(deployed);
@@ -655,7 +735,7 @@ describe("messages and timeouts", () => {
   });
 
   test("the worst transaction fits under each unit's TimeoutStartSec, itself under MAX_PORTAL_MS", () => {
-    for (const action of ["on", "off"]) {
+    for (const action of ["on", "off", "code", "renew"]) {
       const name = `sitesolide-gatekeeper-${action}@.service`;
       const unit = readFileSync(join(import.meta.dir, "..", "..", "infra", "gatekeeper", name), "utf8");
       const found = /^TimeoutStartSec=(\d+)s$/m.exec(unit);
@@ -687,15 +767,241 @@ describe("messages and timeouts", () => {
 
   test("a Caddy refusal quoted in full no longer makes the page say everything is restored", async () => {
     const s = simulate({ validate: (n) => n >= 2 });
-    const machine: Machine = {
+    const machine: GeneralMachine = {
       ...s.machine,
       validateCaddy: async (timeout) => {
         const verdict = await s.machine.validateCaddy(timeout);
         return verdict.ok ? verdict : { ok: false, output: `Error: ${"w".repeat(400)}` };
       },
     };
-    const result = await run(machine, { slug: "library", active: true, zone: ZONE });
+    const result = await run(machine, { slug: "library", action: "on", zone: ZONE });
     expect(result.message.length).toBeLessThanOrEqual(MESSAGE_MAX);
     expect(result.message).toStartWith("restore failed, check Caddy now");
+  });
+});
+
+/**
+ * Anyone with the code: the same transaction, the preview locks written with
+ * the manifest. The code is drawn here and nowhere else, and never leaves
+ * through a message, the result or the log.
+ */
+describe("Anyone with the code", () => {
+  const LOCKED = text({ ...readManifest(OPEN).manifest!, lock: true });
+  const STATIC = text({ slug: "library", publicDir: "public" });
+  const codesOf = (s: ReturnType<typeof simulate>) => JSON.parse(s.disk.codes ?? "{}") as Record<string, string>;
+
+  /** Nothing said anywhere carries a code. */
+  function quiet(s: ReturnType<typeof simulate>, result: Result, ...codes: string[]) {
+    const said = [result.message, JSON.stringify(result), ...s.log].join("\n");
+    for (const code of codes) expect({ code, said: said.includes(code) }).toEqual({ code, said: false });
+  }
+
+  test("from Public: the code drawn, the manifest, the codes, the door page, the fragment, one reload", async () => {
+    const s = simulate();
+    const result = await s.spawn("code");
+
+    expect(result).toMatchObject({ result: "ok", requested: false, installed: false });
+    expect(result.message).toBe(
+      "code set: validated, reloaded, library.test-zone.invalid answers the door page's 401 and opens with its code, 3 other site(s) still answer",
+    );
+    expect(readManifest(s.disk.manifest!.text).manifest?.lock).toBe(true);
+    expect(codesOf(s)).toEqual({ library: CODE });
+    expect(installedCode(s.served.fragment, "library")).toBe(CODE);
+    expect(s.disk.doorPage).toContain(DOOR_PAGE_MARKER);
+    expect(s.disk.doorPage).toContain("owner@test-zone.invalid");
+    // The block of an app does not change: the code lives in the locks.
+    expect(s.disk.block).toBe(blockOf(OPEN));
+    // The order: door page before Caddy reads anything, the backup, the manifest, the codes, the fragment.
+    const order = ["writeDoorPage", "saveBackup", "writeManifest", "writeCodes", "writeFragment", "validate", "reload"];
+    expect(s.calls.filter((a) => order.includes(a))).toEqual(["validate", "writeDoorPage", "saveBackup", "writeManifest", "writeCodes", "writeFragment", "validate", "reload"]);
+    // Probed without a code, and with it.
+    expect(s.count(`probe library.test-zone.invalid/ with ${cookieName("library")}=${CODE}`)).toBe(1);
+    expect(s.count("probe portal.test-zone.invalid/sante")).toBe(0);
+    quiet(s, result, CODE);
+  });
+
+  test("from Restricted: the portal off and the code on, in one transaction, one reload", async () => {
+    const s = simulate({ slug: "cms", manifest: CLOSED });
+    const result = await s.spawn("code");
+
+    expect(result).toMatchObject({ result: "ok", requested: false, installed: false });
+    expect(result.message).toStartWith("portal removed, code set: validated, reloaded, cms.test-zone.invalid answers the door page's 401");
+    const manifest = readManifest(s.disk.manifest!.text).manifest!;
+    expect(manifest.portal).toBeUndefined();
+    expect(manifest.lock).toBe(true);
+    expect(manifest.portalExempt).toEqual(["/hooks/*"]);
+    expect(fragmentIsProtected(s.served.block!)).toBe(false);
+    expect(installedCode(s.served.fragment, "cms")).toBe(CODE);
+    expect(s.count("reload")).toBe(1);
+    quiet(s, result, CODE);
+  });
+
+  test("back to Restricted: the code taken away and the portal put up, in one transaction", async () => {
+    const s = simulate({
+      manifest: LOCKED,
+      block: blockOf(LOCKED),
+      codes: `{"library":"${CODE}"}`,
+      fragment: locksFor({ library: CODE }),
+    });
+    const result = await s.spawn("on");
+
+    expect(result).toMatchObject({ result: "ok", requested: true, installed: true });
+    expect(result.message).toStartWith("code removed, portal set: validated, reloaded, library.test-zone.invalid answers the portal's 401");
+    const manifest = readManifest(s.disk.manifest!.text).manifest!;
+    expect(manifest.portal).toBe(true);
+    expect(manifest.lock).toBeUndefined();
+    expect(codesOf(s)).toEqual({});
+    expect(installedCode(s.served.fragment, "library")).toBeNull();
+    expect(s.count("reload")).toBe(1);
+    expect(s.count("probe portal.test-zone.invalid/sante")).toBe(1);
+    quiet(s, result, CODE);
+  });
+
+  test("back to Public: the stanza gone, the site opens without a code", async () => {
+    const s = simulate({ manifest: LOCKED, block: blockOf(LOCKED), codes: `{"library":"${CODE}","other":"${NEW_CODE}"}`, fragment: locksFor({ library: CODE, other: NEW_CODE }), lockSites: [["other", true]] });
+    const result = await s.spawn("off");
+
+    expect(result.result).toBe("ok");
+    expect(result.message).toStartWith("code removed: validated, reloaded, library.test-zone.invalid answers without a code");
+    expect(readManifest(s.disk.manifest!.text).manifest?.lock).toBeUndefined();
+    // The other site keeps its code and its stanza.
+    expect(codesOf(s)).toEqual({ other: NEW_CODE });
+    expect(installedCode(s.served.fragment, "other")).toBe(NEW_CODE);
+    expect(installedCode(s.served.fragment, "library")).toBeNull();
+    quiet(s, result, CODE, NEW_CODE);
+  });
+
+  test("a new code: the old one stops opening the site, the new one opens it", async () => {
+    const s = simulate({ manifest: LOCKED, block: blockOf(LOCKED), codes: `{"library":"${CODE}"}`, fragment: locksFor({ library: CODE }), draws: [NEW_CODE] });
+    const result = await s.spawn("renew");
+
+    expect(result.result).toBe("ok");
+    expect(result.message).toStartWith("new code set: validated, reloaded, library.test-zone.invalid answers the door page's 401 and opens with the new code, not the old one");
+    expect(codesOf(s)).toEqual({ library: NEW_CODE });
+    expect(installedCode(s.served.fragment, "library")).toBe(NEW_CODE);
+    // The manifest asked for the code already: untouched.
+    expect(s.count("writeManifest")).toBe(0);
+    expect(s.count(`probe library.test-zone.invalid/ with ${cookieName("library")}=${CODE}`)).toBe(1);
+    quiet(s, result, CODE, NEW_CODE);
+  });
+
+  test("a new code is never the old one, even when the draw gives it back", async () => {
+    const s = simulate({ manifest: LOCKED, block: blockOf(LOCKED), codes: `{"library":"${CODE}"}`, fragment: locksFor({ library: CODE }), draws: [CODE, NEW_CODE] });
+    expect((await s.spawn("renew")).result).toBe("ok");
+    expect(codesOf(s)).toEqual({ library: NEW_CODE });
+  });
+
+  test("a new code for a site that does not open with one: refused, nothing touched", async () => {
+    const s = simulate();
+    const result = await s.spawn("renew");
+    expect(result).toMatchObject({ result: "rejects", message: "library does not open with a code: choose Anyone with the code first" });
+    expect(s.count("writeCodes") + s.count("writeFragment") + s.count("reload")).toBe(0);
+  });
+
+  test("already open with its code: nothing for Caddy, the code kept, the door page put back", async () => {
+    const s = simulate({ manifest: LOCKED, block: blockOf(LOCKED), codes: `{"library":"${CODE}"}`, fragment: locksFor({ library: CODE }) });
+    const result = await s.spawn("code");
+    expect(result).toMatchObject({ result: "ok", message: "already open with a code" });
+    expect(s.count("reload") + s.count("validate") + s.count("writeCodes")).toBe(0);
+    // The door page was missing: written again from the template.
+    expect(s.count("writeDoorPage")).toBe(1);
+    // A page the site placed itself, without the template's marker, is left alone.
+    const own = simulate({ manifest: LOCKED, block: blockOf(LOCKED), codes: `{"library":"${CODE}"}`, fragment: locksFor({ library: CODE }), doorPage: "<p>Our own page</p>" });
+    await own.spawn("code");
+    expect(own.disk.doorPage).toBe("<p>Our own page</p>");
+  });
+
+  test("a code in force without the manifest asking for it: kept, so the link already sent still opens", async () => {
+    const s = simulate({ codes: `{"library":"${CODE}"}`, fragment: locksFor({ library: CODE }) });
+    const result = await s.spawn("code");
+    expect(result.result).toBe("ok");
+    expect(codesOf(s)).toEqual({ library: CODE });
+    expect(readManifest(s.disk.manifest!.text).manifest?.lock).toBe(true);
+  });
+
+  test("a failure after the reload: manifest, codes and fragment come back, Caddy with them", async () => {
+    // The site does not open with its code: the stanza is wrong, the action is undone.
+    const s = simulate({ slug: "cms", manifest: CLOSED, probeConfig: (host, _n, _g, cookie) => (host === "cms.test-zone.invalid" && cookie !== undefined ? DOOR_PAGE : undefined) });
+    const result = await s.spawn("code");
+    expect(result.result).toBe("failure");
+    expect(result.message).toBe("probe: cms.test-zone.invalid should open with its code, got 401; previous configuration restored");
+    unchanged(s, CLOSED, blockOf(CLOSED));
+    expect(s.disk.codes).toBe("{}\n");
+    expect(s.disk.fragment).toBeNull();
+    expect(s.served.fragment).toBeNull();
+    expect(s.count("reload")).toBe(2);
+    quiet(s, result, CODE);
+  });
+
+  test("an old code that still opens the site: the new code is undone", async () => {
+    const s = simulate({
+      manifest: LOCKED,
+      block: blockOf(LOCKED),
+      codes: `{"library":"${CODE}"}`,
+      fragment: locksFor({ library: CODE }),
+      draws: [NEW_CODE],
+      probeConfig: (host, _n, _g, cookie) => (cookie === `${cookieName("library")}=${CODE}` ? OK : undefined),
+    });
+    const result = await s.spawn("renew");
+    expect(result.message).toBe("probe: library.test-zone.invalid still opens with the code it replaced, got 200; previous configuration restored");
+    expect(codesOf(s)).toEqual({ library: CODE });
+    expect(installedCode(s.served.fragment, "library")).toBe(CODE);
+    quiet(s, result, CODE, NEW_CODE);
+  });
+
+  test("writing the fragment fails: the codes and the manifest already written are put back", async () => {
+    const s = simulate({ writeFragment: (n) => n === 1 });
+    const result = await s.spawn("code");
+    expect(result.message).toBe("write: ENOSPC; previous configuration restored");
+    unchanged(s, OPEN, blockOf(OPEN));
+    expect(s.disk.codes).toBe("{}\n");
+    expect(s.count("reload")).toBe(0);
+  });
+
+  test("the backup holds the codes and the fragment from before", async () => {
+    const s = simulate({ codes: `{"other":"${NEW_CODE}"}`, fragment: locksFor({ other: NEW_CODE }), lockSites: [["other", true]], reload: () => true });
+    const result = await s.spawn("code");
+    expect(result.message).toStartWith("restore failed");
+    expect(s.backups.get("library")).toMatchObject({ locks: { codes: `{"other":"${NEW_CODE}"}`, fragment: locksFor({ other: NEW_CODE }) } });
+  });
+
+  test("a site on its own domain takes no code, a static site takes one but cannot be restricted", async () => {
+    const domain = text({ ...readManifest(OPEN).manifest!, domain: { name: "library.example", active: true } });
+    const s = simulate({ manifest: domain });
+    const result = await s.spawn("code");
+    expect(result.result).toBe("rejects");
+    expect(result.message).toContain("serves its own domain, library.example, which a code would not close");
+
+    const showcase = simulate({ manifest: STATIC, block: null });
+    expect((await showcase.spawn("code")).result).toBe("ok");
+    expect(showcase.disk.block).toBeNull();
+    expect((await simulate({ manifest: STATIC, block: null }).spawn("on")).message).toBe("a static site cannot be restricted yet");
+  });
+
+  test("the codes file does not read: a code is refused, restricting a site with no code is not", async () => {
+    const broken = new Error("/etc/caddy/locks-codes.json is a symbolic link");
+    const s = simulate({ codes: broken });
+    const result = await s.spawn("code");
+    expect(result.result).toBe("rejects");
+    expect(result.message).toContain("the codes file on the server does not read");
+    expect(s.count("writeManifest")).toBe(0);
+
+    const restricting = simulate({ codes: broken });
+    expect((await restricting.spawn("on")).result).toBe("ok");
+    expect(restricting.count("writeCodes") + restricting.count("writeFragment")).toBe(0);
+  });
+
+  test("another site asking for a code it does not have: the locks are not generated, nothing is touched", async () => {
+    const s = simulate({ lockSites: [["other", true]] });
+    const result = await s.spawn("code");
+    expect(result.result).toBe("rejects");
+    expect(result.message).toBe("the preview locks cannot be generated: other: lock requested without a valid code");
+    expect(s.count("writeManifest") + s.count("writeCodes")).toBe(0);
+  });
+
+  test("a site that has nothing to do with the locks is restricted without reading them", async () => {
+    const s = simulate({ lockSites: new Error("sitesolide.json unreadable") });
+    expect((await s.spawn("on")).result).toBe("ok");
+    expect(s.count("writeFragment")).toBe(0);
   });
 });

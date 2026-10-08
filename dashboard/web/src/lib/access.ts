@@ -17,7 +17,7 @@ import { cleanDomain, cleanEmail, domainOf, maySignIn } from "../../../borrowed/
 import { ago, dateTime, duration } from "./format"
 import { siteAccess } from "./sites"
 import type { Tone } from "./tones"
-import type { AccessPageResponse, AccessRole, EntryView, GeneralAccess, Site } from "./types"
+import type { AccessPageResponse, AccessRole, EntryView, GeneralAccess, GeneralView, Site } from "./types"
 
 // --- The roles -----------------------------------------------------------------------
 
@@ -65,86 +65,69 @@ export function generalTitle(access: GeneralAccess): string {
 }
 
 /** sitesolide.json and the server disagree: what it means, in words. */
-export type GeneralProblem = { title: string; detail: string; portal: boolean }
+export type GeneralProblem = { title: string; detail: string }
 
 export type GeneralState = {
   /** How the site opens right now, as the server serves it. */
   current: GeneralAccess
+  /** What the manifest on the server asks for; it differs from `current` in a disagreement. */
+  requested: GeneralAccess
   problem: GeneralProblem | null
   /** The paths a restricted site leaves to the app alone, `portalExempt` in sitesolide.json. */
   exemptions: string[]
-  /** The preview code and the link that carries it, when the site opens with one. */
+  /** The preview code and the link that carries it, when the site opens with one and the reader may see it. */
   code: { code: string; url: string | null } | null
-  /** Does sitesolide.json ask for Restricted: how the site opens once a preview code is removed. */
-  requested: boolean
 }
 
 /**
  * A site's general access from the snapshot: what the server does, and a
  * disagreement with sitesolide.json said first, since it is what leaves a
- * site open when you believe it restricted.
+ * site open when you believe it restricted, or with a code nobody asked for.
  */
 export function generalState(site: Pick<Site, "portal" | "lock">): GeneralState {
   const access = siteAccess(site)
   const exemptions = site.portal.exemptions
   const code = site.lock.code === null ? null : { code: site.lock.code, url: site.lock.url }
-  const requested = site.portal.wanted
   switch (access.kind) {
     case "portal":
-      return { current: "restricted", problem: null, exemptions, code: null, requested }
+      return { current: "restricted", requested: "restricted", problem: null, exemptions, code: null }
     case "code":
-      return { current: "code", problem: null, exemptions: [], code, requested }
+      return { current: "code", requested: "code", problem: null, exemptions: [], code }
     case "open":
-      return { current: "public", problem: null, exemptions: [], code: null, requested }
+      return { current: "public", requested: "public", problem: null, exemptions: [], code: null }
     case "mismatch":
       switch (access.key) {
         case "portal-absent":
           return {
             current: "public",
-            problem: {
-              title: "Restricted in sitesolide.json, public on the server",
-              detail: "Anyone can open it right now. Choose one below.",
-              portal: true,
-            },
+            requested: "restricted",
+            problem: { title: "Restricted in sitesolide.json, public on the server", detail: "Anyone can open it right now. Choose one below." },
             exemptions,
             code: null,
-            requested,
           }
         case "portal-extra":
           return {
             current: "restricted",
-            problem: {
-              title: "Restricted on the server, public in sitesolide.json",
-              detail: "Choose one below.",
-              portal: true,
-            },
+            requested: "public",
+            problem: { title: "Restricted on the server, public in sitesolide.json", detail: "Choose one below." },
             exemptions,
             code: null,
-            requested,
           }
         case "code-without-lock":
           return {
             current: "code",
-            problem: {
-              title: "A code on the server, none in sitesolide.json",
-              detail: "A preview code is in effect, but sitesolide.json no longer asks for one. Remove it from the project's folder.",
-              portal: false,
-            },
+            requested: "public",
+            problem: { title: "A code on the server, none in sitesolide.json", detail: "A preview code is in effect, but sitesolide.json no longer asks for one. Choose one below." },
             exemptions: [],
             code,
-            requested,
           }
         case "lock-without-code":
           return {
             current: "public",
-            problem: {
-              title: "A code in sitesolide.json, none on the server",
-              detail: "sitesolide.json asks for a preview code, but the server has no valid one. Set it again from the project's folder.",
-              portal: false,
-            },
+            requested: "code",
+            problem: { title: "A code in sitesolide.json, none on the server", detail: "sitesolide.json asks for a preview code, but the server has no valid one. Choose one below." },
             exemptions: [],
             code: null,
-            requested,
           }
       }
   }
@@ -155,60 +138,77 @@ export type ChoiceOption = GeneralChoice & {
   current: boolean
   /** It may be chosen here, now. */
   available: boolean
-  /** What its button says when it may: Make public, Restrict; in a disagreement, Keep or Apply. */
+  /** What its button says when it may: Make public, Restrict, Use a code; in a disagreement, Keep or Apply. */
   action: string | null
   /** In a disagreement between the server and sitesolide.json, which side this choice is. */
   side: "On the server" | "In sitesolide.json" | null
+  /** Why the steward refuses this one here, said under it; null when it may, or when the reason is said once for all. */
+  reason: string | null
 }
 
 /** What a choice's button says it will do, outside a disagreement. */
-const ACTIONS: Record<"public" | "restricted", string> = { public: "Make public", restricted: "Restrict" }
+const ACTIONS: Record<GeneralAccess, string> = { public: "Make public", restricted: "Restrict", code: "Use a code" }
+
+/** What the steward says may change, as the page reads it: each choice and its refusal, or nothing yet. */
+export type StewardChoices = { choices: Readonly<Record<GeneralAccess, string | null>> } | null
 
 /**
- * What each choice offers. Public and restricted change here, through the
- * steward, for those who may change general access; a preview code is
- * `sitesolide lock`'s, from the project's folder, said once under the
- * choices (`generalNote`), and while it is set the other two wait for it to
- * be removed. `steward` is null until the steward has said whether the site
- * may change; its reason, when it refuses, is said once too.
+ * The steward's view, read for the page: its choices when it says them, or,
+ * from a steward that predates the code being chosen here, Public and
+ * Restricted as `modifiable` said, and the code as the CLI's.
  */
-export function generalOptions(
-  state: GeneralState,
-  steward: { modifiable: boolean; reason: string | null } | null,
-  mayChange: boolean,
-): ChoiceOption[] {
-  const disagreement = state.problem?.portal === true
+export function stewardChoices(view: GeneralView | null): StewardChoices {
+  if (view === null) return null
+  if (view.choices !== undefined) return { choices: view.choices }
+  const shared = view.modifiable ? null : (view.reason ?? "It can't change from here.")
+  return { choices: { public: shared, restricted: shared, code: "This server sets a code with sitesolide lock: run sitesolide upgrade to choose it here." } }
+}
+
+/**
+ * The one reason the steward gives for every choice but the current one, when
+ * it is the same for all: a change in progress, an interrupted one, the
+ * platform's own site. Said once under the choices rather than on each row.
+ */
+export function sharedReason(state: GeneralState, steward: StewardChoices): string | null {
+  if (steward === null) return null
+  const others = GENERAL_CHOICES.filter((choice) => choice.access !== state.current).map((choice) => steward.choices[choice.access])
+  const first = others[0] ?? null
+  return first !== null && others.every((reason) => reason === first) ? first : null
+}
+
+/**
+ * What each choice offers, for those who may change general access, the
+ * owner and the project's Admins: the three change here, through the steward
+ * and the gatekeeper. `steward` is null until the steward has said whether
+ * the site may change; a refusal it gives for one choice is said under it,
+ * one it gives for all once under the choices (`sharedReason`). In a
+ * disagreement between the server and sitesolide.json, each side may be
+ * chosen, and either brings them together.
+ */
+export function generalOptions(state: GeneralState, steward: StewardChoices, mayChange: boolean): ChoiceOption[] {
+  const disagreement = state.problem !== null
+  const shared = sharedReason(state, steward)
   return GENERAL_CHOICES.map((choice) => {
     const current = choice.access === state.current
-    const side = !disagreement || choice.access === "code" ? null : current ? "On the server" : "In sitesolide.json"
-    const base: ChoiceOption = { ...choice, current, available: false, action: null, side }
-    if (!mayChange || choice.access === "code" || state.current === "code") return base
-    // In disagreement, both sides may be chosen: either brings them together.
+    const side = !disagreement ? null : current ? "On the server" : choice.access === state.requested ? "In sitesolide.json" : null
+    const base: ChoiceOption = { ...choice, current, available: false, action: null, side, reason: null }
+    if (!mayChange) return base
     if (current && !disagreement) return base
-    if (steward === null || !steward.modifiable) return base
-    const action = disagreement ? `${current ? "Keep" : "Apply"} ${choice.title}` : ACTIONS[choice.access as "public" | "restricted"]
+    if (steward === null) return base
+    const refusal = steward.choices[choice.access]
+    if (refusal !== null) return { ...base, reason: refusal === shared ? null : refusal }
+    const action = side === null ? ACTIONS[choice.access] : `${current ? "Keep" : "Apply"} ${choice.title}`
     return { ...base, available: true, action }
   })
 }
 
+/** May the site that opens with a code be given a new one, here, now? */
+export function mayRenew(state: GeneralState, steward: StewardChoices, mayChange: boolean): boolean {
+  return mayChange && state.current === "code" && state.problem === null && steward !== null && steward.choices.code === null
+}
+
 /** Who reads General access: the owner, an Admin of the project, or someone who only reads it. */
 export type GeneralReader = "owner" | "admin" | "reader"
-
-/**
- * The one line under the three choices about the preview code, said once
- * rather than on a row: the owner sets and removes it with the CLI, and
- * learns how the site opens once it is gone; an Admin cannot. Null when
- * there is nothing to say, for whoever only reads.
- */
-export function generalNote(state: GeneralState, reader: GeneralReader): string | null {
-  if (reader === "reader") return null
-  if (state.current === "code") {
-    return reader === "owner"
-      ? `To make it public or restricted, remove the code first: sitesolide unlock, in the project's folder. It then opens as sitesolide.json says: ${state.requested ? "Restricted" : "Public"}.`
-      : "Only the owner removes the code; ask them, then restrict it here."
-  }
-  return reader === "owner" ? "A preview code is set with sitesolide lock, in the project's folder." : "Only the owner sets a preview code."
-}
 
 /**
  * General access for someone who may not change it, in one line: how the
@@ -221,9 +221,17 @@ export function generalLine(state: GeneralState, slug: string, platform = false)
   return platform ? `${choice.title}: ${how}` : `${choice.title}: ${how} Only an Admin of ${slug}, or the owner, changes it.`
 }
 
+/** A site that opens with a code, for whoever may not see it: whom to ask. */
+export function codeWithheld(slug: string): string {
+  return `An Admin of ${slug}, or the owner, has the code.`
+}
+
+/** What changing general access may aim at: one of the three, or a new code. */
+export type ChangeTarget = GeneralAccess | "renew"
+
 export type ChangeTexts = {
   title: string
-  /** Said first, in red, before making a site public: what it opens. */
+  /** Said first, in red, before letting more people in: what it opens. */
   warning: string | null
   consequence: string
   action: string
@@ -231,31 +239,66 @@ export type ChangeTexts = {
   runningTitle: string
   succeeded: string
   failure: string
+  /** The slug retyped before it goes: making a site public, or opening it with a code. */
+  typed: boolean
 }
 
-/** What the confirmation, the wait and the result of a change of general access say. */
-export function changeTexts(slug: string, target: "public" | "restricted"): ChangeTexts {
-  if (target === "restricted") {
-    return {
-      title: `Restrict ${slug}?`,
-      warning: null,
-      consequence: `Only the people with access will open ${slug}, once signed in. Anyone else is asked to sign in, and refused.`,
-      action: "Restrict",
-      actionInProgress: "Restricting…",
-      runningTitle: `Restricting ${slug}…`,
-      succeeded: `${slug} is restricted`,
-      failure: `Couldn't restrict ${slug}`,
-    }
-  }
-  return {
-    title: `Make ${slug} public?`,
-    warning: "Anyone with its address can open it without signing in.",
-    consequence: "People with access keep their dashboard roles; Can open and password access stop mattering.",
-    action: "Make public",
-    actionInProgress: "Making public…",
-    runningTitle: `Making ${slug} public…`,
-    succeeded: `${slug} is public`,
-    failure: `Couldn't make ${slug} public`,
+/**
+ * What the confirmation, the wait and the result of a change of general
+ * access say. `from`, how the site opens now: leaving a code says the code
+ * stops working.
+ */
+export function changeTexts(slug: string, target: ChangeTarget, from: GeneralAccess = "public"): ChangeTexts {
+  const leavingCode = from === "code" && target !== "code" && target !== "renew"
+  switch (target) {
+    case "restricted":
+      return {
+        title: `Restrict ${slug}?`,
+        warning: null,
+        consequence: `${leavingCode ? "Its code stops working. " : ""}Only the people with access will open ${slug}, once signed in. Anyone else is asked to sign in, and refused.`,
+        action: "Restrict",
+        actionInProgress: "Restricting…",
+        runningTitle: `Restricting ${slug}…`,
+        succeeded: `${slug} is restricted`,
+        failure: `Couldn't restrict ${slug}`,
+        typed: false,
+      }
+    case "public":
+      return {
+        title: `Make ${slug} public?`,
+        warning: "Anyone with its address can open it without signing in.",
+        consequence: `${leavingCode ? "Its code is no longer asked. " : ""}People with access keep their dashboard roles; Can open and password access stop mattering.`,
+        action: "Make public",
+        actionInProgress: "Making public…",
+        runningTitle: `Making ${slug} public…`,
+        succeeded: `${slug} is public`,
+        failure: `Couldn't make ${slug} public`,
+        typed: true,
+      }
+    case "code":
+      return {
+        title: `Use a code for ${slug}?`,
+        warning: "Anyone who has the code can open it, without signing in.",
+        consequence: `The server draws a six-character code, shown here to the owner and ${slug}'s Admins with a link that carries it. People with access keep their dashboard roles; Can open and password access stop mattering.`,
+        action: "Use a code",
+        actionInProgress: "Setting a code…",
+        runningTitle: `Setting a code for ${slug}…`,
+        succeeded: `${slug} opens with a code`,
+        failure: `Couldn't set a code for ${slug}`,
+        typed: true,
+      }
+    case "renew":
+      return {
+        title: `New code for ${slug}?`,
+        warning: null,
+        consequence: "The current code stops working at once, and the link that carries it. Send the new one to whoever should still open the site.",
+        action: "New code",
+        actionInProgress: "Drawing a new code…",
+        runningTitle: `Drawing a new code for ${slug}…`,
+        succeeded: `${slug} has a new code`,
+        failure: `Couldn't give ${slug} a new code`,
+        typed: false,
+      }
   }
 }
 
@@ -277,10 +320,16 @@ export function emptyListWarning(slug: string, entries: number, admins: readonly
  * <host> answers the portal's 401, 13 other site(s) still answer`, is shown
  * as it stands when it does not read that way.
  */
-export function changeResult(target: "public" | "restricted", detail: string): string {
+export function changeResult(target: ChangeTarget, detail: string): string {
   const host = /: validated, reloaded, (\S+) answers /.exec(detail)?.[1]
   if (host === undefined) return detail
-  const lines = [target === "restricted" ? `${host} now asks visitors to sign in.` : `${host} now opens without signing in.`]
+  const first: Record<ChangeTarget, string> = {
+    restricted: `${host} now asks visitors to sign in.`,
+    public: `${host} now opens without signing in.`,
+    code: `${host} now asks for its code.`,
+    renew: `${host} opens with the new code; the old one no longer does.`,
+  }
+  const lines = [first[target]]
   const others = Number(/(\d+) other site\(s\) still answer/.exec(detail)?.[1] ?? 0)
   if (others === 1) lines.push("The other site still answers.")
   if (others > 1) lines.push(`The ${others} other sites still answer.`)
@@ -293,9 +342,9 @@ export function changeResult(target: "public" | "restricted", detail: string): s
 export const DEPLOY_NOTE = "Your next sitesolide deploy writes this into sitesolide.json."
 
 /**
- * The slug retyped to make a site public, without the blanks of a
- * thumb-typed entry. The button only acts on an exact match; the steward
- * checks it anyway, and it is this text that is sent.
+ * The slug retyped to make a site public or open it with a code, without the
+ * blanks of a thumb-typed entry. The button only acts on an exact match; the
+ * steward checks it anyway, and it is this text that is sent.
  */
 export function removalConfirmation(entry: string): string {
   return entry.trim()
@@ -321,22 +370,6 @@ export type ChangeProgress = { part: number; elapsed: string; slow: boolean }
 export function changeProgress(elapsedMs: number): ChangeProgress {
   const borne = Math.max(0, elapsedMs)
   return { part: Math.min(1, borne / CHANGE_SCALE_MS), elapsed: `${Math.floor(borne / 1000)}s`, slow: borne >= CHANGE_SLOW_MS }
-}
-
-export type CodeCommand = { label: string; command: string }
-
-/**
- * A preview code is given and removed from the workstation, with the CLI run
- * in the project's folder, which draws the code and shows it once: the
- * dashboard only shows it. Never `bin/lock.sh`: that script is the binary's
- * own, and someone who installed the binary has no `bin/` to run it from.
- */
-export function codeCommands(code: boolean): CodeCommand[] {
-  if (!code) return [{ label: "Give it a preview code", command: "sitesolide lock" }]
-  return [
-    { label: "Replace the code", command: "sitesolide lock --new-code" },
-    { label: "Remove the code", command: "sitesolide unlock" },
-  ]
 }
 
 // --- People with access ----------------------------------------------------------------

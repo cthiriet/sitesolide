@@ -408,7 +408,11 @@ export function AccessPanel({ site, actions, plain = false }: { site: Site; acti
 
         {access.kind === "code" && (
           <div className="pl-7">
-            <CodeChip slug={site.slug} code={access.code} url={access.url} large />
+            {access.code !== null ? (
+              <CodeChip slug={site.slug} code={access.code} url={access.url} large />
+            ) : (
+              <p className="text-xs text-muted-foreground">An Admin of {site.slug} has its code.</p>
+            )}
           </div>
         )}
 

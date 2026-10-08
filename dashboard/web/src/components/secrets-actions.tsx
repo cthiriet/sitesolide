@@ -38,12 +38,14 @@ import {
   type Refusal,
 } from "@/lib/secrets"
 import { isPerson, reauthUrl, unlockFailure } from "@/lib/identity"
+import type { ChangeTarget } from "@/lib/access"
+import type { GeneralAccess } from "@/lib/types"
 
 /**
  * The actions on a site's secrets and general access, and their dialogs,
  * shared by every section: unlock, read, set, remove, create, restore,
- * replace a file, change a password, restart, make a site public or
- * restricted.
+ * replace a file, change a password, restart, change a site's general
+ * access: Public, Restricted, Anyone with the code, a new code.
  *
  * Everything that writes goes through the steward, which judges. An action
  * asked while locked opens the unlock, then carries on once unlocked here;
@@ -99,7 +101,8 @@ export type SecretsActions = {
   changePassword: (target: VariableTarget) => void
   restart: (slug: string) => void
   /** `warning`, said in the confirmation: who still opens a site restricted with nobody on its list. */
-  changeAccess: (slug: string, target: "public" | "restricted", warning?: string | null) => void
+  /** `from`: how the site opens before the change. */
+  changeAccess: (slug: string, target: ChangeTarget, from: GeneralAccess, warning?: string | null) => void
   /** The common fate of a refusal: the session handed to the sign-in, the unlock asked again; the message to show otherwise. */
   refusal: OnRefusal
 }
@@ -576,12 +579,13 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
 
   // --- General access
 
-  function changeAccess(slug: string, target: "public" | "restricted", warning: string | null = null) {
+  function changeAccess(slug: string, target: ChangeTarget, from: GeneralAccess, warning: string | null = null) {
     const open = () => {
       openings.current += 1
-      setAccessChange({ slug, target, warning, open: true, opening: openings.current })
+      setAccessChange({ slug, target, from, warning, open: true, opening: openings.current })
     }
-    // Restricting lets nobody new in: it waits for no unlock. Making a site public does.
+    // Restricting lets nobody new in: it waits for no unlock. Making a site
+    // public, opening it with a code and a new code do.
     if (target === "restricted") {
       rememberOrigin()
       return open()
@@ -592,7 +596,12 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   function onAccessChanged() {
     afterAction()
     // The snapshot follows the Caddy block at the next reading: reading it again straight away costs nothing.
+    // The gatekeeper starts the collector as it ends, which writes within a
+    // couple of seconds: read once more then, so that the panel, the code
+    // included, shows what the server now does without waiting for the
+    // half-minute's reading.
     refresh()
+    window.setTimeout(refresh, 2500)
   }
 
   const actions: SecretsActions = {

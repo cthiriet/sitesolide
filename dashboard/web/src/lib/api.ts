@@ -15,7 +15,6 @@ import type {
   FileResponse,
   LogResponse,
   PasswordResponse,
-  PortalResponse,
   RestartResponse,
   DashboardResponse,
   ValueResponse,
@@ -30,6 +29,8 @@ import type {
   SessionResponse,
   AccessPageResponse,
   EntryResponse,
+  GeneralAccess,
+  GeneralResponse,
   PeoplePageResponse,
   PersonResponse,
 } from "./types"
@@ -107,11 +108,12 @@ export function removeAccess(slug: string, who: string) {
  * gatekeeper validates Caddy, reloads it and checks the site, up to
  * `MAX_PORTAL_MS` in the protocol: the page adds no timeout of its own.
  */
-export function setGeneralAccess(slug: string, access: "public" | "restricted", confirmation: string) {
-  return callApi<PortalResponse & SecretsRefusal>("/api/access/general", {
+/** A site's general access, one of the three, or a new code when `renew`. */
+export function setGeneralAccess(slug: string, access: GeneralAccess, confirmation: string, renew = false) {
+  return callApi<GeneralResponse & SecretsRefusal>("/api/access/general", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ slug, access, confirmation }),
+    body: JSON.stringify({ slug, access, ...(renew ? { renew } : {}), confirmation }),
   })
 }
 
