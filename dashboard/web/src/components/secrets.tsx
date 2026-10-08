@@ -81,6 +81,11 @@ function Terminal({ children }: { children: ReactNode }) {
   return <code className="font-mono text-xs whitespace-nowrap">{children}</code>
 }
 
+/**
+ * One file, a card of its own with its name on a tinted bar: as rows of one
+ * table, two files read as one, the column header weighing more than the name
+ * that starts the next file.
+ */
 function FileBlock({ slug, file }: { slug: string; file: FileView }) {
   const actions = useSecretsActions()
   const target: FileTarget = { slug, file: file.name }
@@ -94,8 +99,8 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
   const Icon = file.kind === "content" ? FileKey : FileText
 
   return (
-    <section aria-label={file.name} className="@container/file border-t first:border-t-0">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+    <section aria-label={file.name} className="@container/file overflow-hidden rounded-lg border">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 bg-muted/60 px-4 py-3">
         <div className="flex min-w-0 flex-1 basis-56 flex-wrap items-center gap-x-2.5 gap-y-1">
           <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
           <FileName name={file.name} />
@@ -338,7 +343,11 @@ export function FilesPanel({ project }: { project: ProjectView }) {
       {project.files.length === 0 ? (
         <EmptyState icon={FileText} title="No secret files" compact />
       ) : (
-        project.files.map((file) => <FileBlock key={file.name} slug={project.slug} file={file} />)
+        <div className="grid gap-3 p-3">
+          {project.files.map((file) => (
+            <FileBlock key={file.name} slug={project.slug} file={file} />
+          ))}
+        </div>
       )}
     </Panel>
   )

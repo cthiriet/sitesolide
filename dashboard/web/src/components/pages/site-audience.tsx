@@ -272,7 +272,7 @@ function Content({ site, audience, zone }: { site: Site; audience: Audience; zon
           {RANKINGS.map(({ key, title, unit }) => {
             const lines = measure.rankings[key] ?? []
             if (lines.length === 0) return null
-            return <Ranking key={key} key={key} title={title} unit={unit} lines={lines} />
+            return <Ranking key={key} title={title} unit={unit} lines={lines} />
           })}
         </div>
       )}
