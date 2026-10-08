@@ -8,7 +8,7 @@ import { Progress } from "@/components/ui/progress"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ABSENT } from "@/lib/format"
 import { BAR_CLASSES } from "@/lib/gauges"
-import { CodeChip } from "@/components/site-access"
+import { CodeChip } from "@/components/access-word"
 import { type Level } from "@/lib/gauges"
 import {
   SERVICE_THRESHOLD_POSITIONS,
@@ -370,7 +370,7 @@ export function AddressesPanel({ site }: { site: Site }) {
   )
 }
 
-// --- The door --------------------------------------------------------------------
+// --- General access ------------------------------------------------------------------
 
 const ACCESS_ICONS: Record<"code" | "portal" | "open" | "mismatch", LucideIcon> = {
   code: KeyRound,
@@ -379,14 +379,14 @@ const ACCESS_ICONS: Record<"code" | "portal" | "open" | "mismatch", LucideIcon> 
   mismatch: ShieldX,
 }
 
-/** The site's door as the snapshot sees it, on its Overview; `actions` leads to its Access section. */
+/** The site's general access as the snapshot sees it, on its Overview; `actions` leads to its Access section. */
 export function AccessPanel({ site, actions }: { site: Site; actions?: ReactNode }) {
   const reading = readAccess(site)
   const { access } = reading
   const Icon = ACCESS_ICONS[access.kind]
   const error = reading.tone === "error"
   return (
-    <Panel title="Access" full actions={actions}>
+    <Panel title="General access" full actions={actions}>
       <div className="grid gap-3 p-4">
         <div className="flex gap-3">
           <Icon
@@ -411,7 +411,7 @@ export function AccessPanel({ site, actions }: { site: Site; actions?: ReactNode
         {access.kind === "portal" && (
           <div className="grid gap-1.5 pl-7">
             <p className="text-xs text-muted-foreground">
-              {access.exemptions.length === 0 ? "No public paths: every request goes through the portal." : "Public paths, guarded by the site alone"}
+              {access.exemptions.length === 0 ? "Every path asks to sign in." : "Paths anyone can open, guarded by the app alone"}
             </p>
             {access.exemptions.length > 0 && (
               <ul className="flex flex-wrap gap-1.5">
@@ -428,11 +428,11 @@ export function AccessPanel({ site, actions }: { site: Site; actions?: ReactNode
 
       {reading.checks.length > 0 && (
         <table className="w-full border-t text-sm">
-          <caption className="sr-only">Each gate, as sitesolide.json asks and as the server applies it</caption>
+          <caption className="sr-only">Each setting, as sitesolide.json asks and as the server applies it</caption>
           <thead className="bg-muted text-xs text-muted-foreground">
             <tr>
               <th scope="col" className="h-8 py-0 pr-3 pl-4 text-left font-medium">
-                Gate
+                Setting
               </th>
               <th scope="col" className="h-8 px-3 py-0 text-left font-medium">
                 sitesolide.json
@@ -444,9 +444,9 @@ export function AccessPanel({ site, actions }: { site: Site; actions?: ReactNode
           </thead>
           <tbody className="divide-y divide-divider border-t">
             {reading.checks.map((check) => (
-              <tr key={check.door}>
+              <tr key={check.setting}>
                 <th scope="row" className="py-2.5 pr-3 pl-4 text-left align-top font-normal">
-                  {check.door}
+                  {check.setting}
                 </th>
                 <td className="px-3 py-2.5 align-top">{check.requested}</td>
                 <td className="py-2.5 pr-4 pl-3 align-top">

@@ -7,12 +7,12 @@ Every command runs from a project's folder, the one holding its
 ```text
 sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a no-op once done
    --zone <dns.zone> --email <you@example.com>
-   --contact <you@example.com>   shown on a locked preview's door
+   --contact <you@example.com>   shown on the page that asks for a preview code
    --user <name>                the account that deploys, deploy by default as root
    --skip-dns                   create the DNS records by hand: setup lists them and waits
    --dns-replace                replace records that point elsewhere, on your decision alone
    --cloudflare-token-stdin     read the Cloudflare token from standard input
-   --minimal                    leave out backups, the team installer and the egress proxy
+   --minimal                    leave out backups, the installer and the egress proxy
    --any-os                     go on with a system other than Debian 13, at your own risk
    --config-dir <dir>           another installation's own configuration folder
    --dry-run                    check every step, change nothing
@@ -22,7 +22,7 @@ sitesolide help                 this list, with or without a configuration; --he
 sitesolide --version            the release this binary was built from, dev from a checkout
 sitesolide init                 write ~/.config/sitesolide/config.json
    --server <user@host> --zone <dns.zone> --email <you@example.com>
-   --contact <you@example.com>   shown on a locked preview's door
+   --contact <you@example.com>   shown on the page that asks for a preview code
 sitesolide detect               the sitesolide.json this folder implies, written nowhere
    --write                      write it, never over an existing one
    --slug <name>                name the project, rather than after its folder
@@ -66,7 +66,7 @@ SITESOLIDE_CONFIG_DIR=<dir>     before any command: read that installation's con
 
 --json, on every command but init and run: one JSON event per line, see docs/agents.md
 secrets live on the server: manage them in the Secrets section of https://dashboard.<zone>
-the portal of a deployed site is set from the dashboard too: deploy follows the server
+general access of a deployed site is set from the dashboard too: deploy follows the server
 ```
 
 `sitesolide setup` is the whole base install of [install.md](install.md),
@@ -109,7 +109,7 @@ out of date  steward             differs: steward.js; would run bin/deploy-stewa
    dashboard/: sitesolide deploy --dry-run --compare, which builds it first
 out of date  dashboard           differs: /srv/sites/dashboard/public: 18 entries to send or delete; would run sitesolide deploy in dashboard/
 ...
-missing      team installer      not installed: sitesolide setup installs it
+missing      installer           not installed: sitesolide setup installs it
 ```
 
 Each component is checked first, reading only: what setup checks for it, and
@@ -130,7 +130,7 @@ Who may open a project, and who may do what on it, is one list per project,
 its people with access, which the steward keeps: each entry an email or a
 whole domain, `@acme.com`, with a role, Can open (`visitor`), Viewer,
 Developer or Admin, each including the ones before it.
-[team.md](team.md#people-with-access-beside-tokens) says what each role does.
+[access.md](access.md#people-with-access-beside-tokens) says what each role does.
 `sitesolide share`, in the project's folder, reads the list and changes it;
 the dashboard's *Access* section is the other way.
 
@@ -204,7 +204,7 @@ The steward judges the change by its access rules, writes the portal's
 projection and its registry, and records it in its journal under `owner`.
 Root is the owner: no unlock is asked. It touches nothing else, Caddy least of
 all. With a token, the command goes through the dashboard to the steward, and
-gives Can open alone: see [team.md](team.md#giving-access-to-what-you-deployed).
+gives Can open alone: see [access.md](access.md#giving-access-to-what-you-deployed).
 While the portal on the machine still decides from its own tables, halfway
 through an upgrade, the command warns of it: `sitesolide upgrade` deploys the
 portal that reads the registry.
@@ -249,7 +249,7 @@ project, `create`, `passwords`, each `slug`, `expiresAt`, `expired`, and
 Root on the machine asks the steward on its owner socket, as for `share`, and
 the steward records the change in its journal under `owner`. With a token, the
 command is refused before anything is sent: it is the owner's. See
-[team.md](team.md#people-with-access-beside-tokens) for what each person sees,
+[access.md](access.md#people-with-access-beside-tokens) for what each person sees,
 and [dashboard/README.md](../dashboard/README.md#access) for the machine's
 side.
 
@@ -310,7 +310,7 @@ change the machine itself, are not tools. Both are described in
 ## With a token
 
 A workstation with no `server`, but the dashboard's address and a token, never
-touches SSH: someone's own, or an agent's. See [team.md](team.md).
+touches SSH: someone's own, or an agent's. See [access.md](access.md).
 
 ```text
 sitesolide login --url <https://dashboard.zone>   keep the token, check it
@@ -333,7 +333,7 @@ the address in `config.json` under `api`. `SITESOLIDE_API` and
 A person's own token says so: `login` and `status` print whose roles bound
 it, and what it may do is the steward's reading of those roles at that
 moment. `share` gives Can open alone, and never password access, see
-[team.md](team.md#giving-access-to-what-you-deployed).
+[access.md](access.md#giving-access-to-what-you-deployed).
 
 `deploy` sends the manifest first, so that a refusal arrives before the build,
 then a gzip-compressed tar holding `app/` and `public/`, exactly what rsync
@@ -385,7 +385,7 @@ out, as `mini-lab` does.
 **2. What the machine runs from this repository**, before redeploying any other
 site: they recognise the Caddy blocks the new generator writes, whose file server
 hides `.git` and `.env*`. Until they are updated, the dashboard refuses to change
-the portal of a site redeployed with the new CLI ("redeploy the site first"), and
+the general access of a site redeployed with the new CLI ("redeploy the site first"), and
 a token's deploy of it stops on `edited-by-hand`; nothing served changes.
 
 ```bash

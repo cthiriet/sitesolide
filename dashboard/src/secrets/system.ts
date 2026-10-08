@@ -48,7 +48,15 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { RateLimitRead } from "./unlock";
-import { truncate } from "./log";
+import {
+  ACCESS_LOG_NAME,
+  ACCESS_PRUNE_BYTES,
+  ACCESS_PRUNE_INTERVAL_MS,
+  ACCESS_READ_BYTES,
+  accessLogSeed,
+  pruneAccessLog,
+  truncate,
+} from "./log";
 import {
   pathUnder,
   MAX_FILE_BYTES,
@@ -122,6 +130,16 @@ export type System = {
   removePrevious: (name: string) => Promise<void>;
   readLog: () => Promise<string>;
   appendLog: (line: string) => Promise<void>;
+  /** The access log's text (log.ts), null while there is none yet. */
+  readAccessLog: () => Promise<string | null>;
+  /**
+   * Appends to the access log, seeded from the journal first if it does not
+   * exist yet, then pruned when the last pruning is an hour old or the file
+   * has grown past its bound. `now` is the steward's clock.
+   */
+  appendAccessLog: (line: string, now: number) => Promise<void>;
+  /** At startup: the access log seeded from the journal if it does not exist yet, then pruned. */
+  prepareAccessLog: (now: number) => Promise<void>;
   readRateLimit: () => Promise<RateLimitRead>;
   writeRateLimit: (text: string) => Promise<void>;
   /** The file that carries PASSWORD_HASH, with its rights. */
@@ -381,10 +399,46 @@ export function readGroup(text: string, name: string): number | null {
 export function createSystem(config: SystemConfig): System {
   const previousFolder = join(config.stateFolder, "precedents");
   const logFile = join(config.stateFolder, "journal.jsonl");
+  const accessLogFile = join(config.stateFolder, ACCESS_LOG_NAME);
   const rateLimitFile = join(config.stateFolder, "rate-limit.json");
   const aRoot = { owner: null, mode: 0o600 };
 
   const prepareState = () => mkdirSync(previousFolder, { recursive: true, mode: 0o700 });
+
+  function readJournal(): string {
+    const examination = readBounded(logFile, 4 * 1024 * 1024);
+    return examination.kind === "present" && examination.bytes !== null ? decoder.decode(examination.bytes) : "";
+  }
+
+  /**
+   * The access log made from the journal's accepted changes of access when
+   * it does not exist yet, and never again once it does: what a steward from
+   * before it wrote there is not lost when the journal rotates. Written whole
+   * and atomically, empty when the journal holds none, so that its existence
+   * alone says the seeding is done. A journal that does not read seeds
+   * nothing, as it shows nothing in `GET /log` either.
+   */
+  function seedAccessLog(): void {
+    try {
+      lstatSync(accessLogFile);
+      return;
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") throw error;
+    }
+    prepareState();
+    writeAtomically(config.stateFolder, ACCESS_LOG_NAME, encoder.encode(accessLogSeed(readJournal())), aRoot);
+  }
+
+  /** When the access log was last pruned, by the steward's clock; null before the first time. */
+  let accessPrunedAt: number | null = null;
+
+  function pruneAccess(now: number): void {
+    accessPrunedAt = now;
+    const examination = readBounded(accessLogFile, ACCESS_READ_BYTES);
+    if (examination.kind !== "present" || examination.bytes === null) return;
+    const pruned = pruneAccessLog(decoder.decode(examination.bytes), now);
+    if (pruned !== null) writeAtomically(config.stateFolder, ACCESS_LOG_NAME, encoder.encode(pruned), aRoot);
+  }
 
   /** The directories where a temporary file of ours can remain: each root, and its secrets subdirectories. */
   function tempFolders(): string[] {
@@ -522,8 +576,7 @@ export function createSystem(config: SystemConfig): System {
     },
 
     async readLog() {
-      const examination = readBounded(logFile, 4 * 1024 * 1024);
-      return examination.kind === "present" && examination.bytes !== null ? decoder.decode(examination.bytes) : "";
+      return readJournal();
     },
 
     async appendLog(line) {
@@ -533,6 +586,25 @@ export function createSystem(config: SystemConfig): System {
       if (examination.kind !== "present" || examination.bytes === null) return;
       const truncated = truncate(decoder.decode(examination.bytes));
       if (truncated !== null) writeAtomically(config.stateFolder, "journal.jsonl", encoder.encode(truncated), aRoot);
+    },
+
+    async readAccessLog() {
+      const examination = readBounded(accessLogFile, ACCESS_READ_BYTES);
+      if (examination.kind === "absent") return null;
+      return examination.bytes === null ? "" : decoder.decode(examination.bytes);
+    },
+
+    async appendAccessLog(line, now) {
+      seedAccessLog();
+      appendFileSync(accessLogFile, line, { mode: 0o600 });
+      // A clock set back counts as an hour gone: the pruning is never put off for good.
+      const due = accessPrunedAt === null || now - accessPrunedAt >= ACCESS_PRUNE_INTERVAL_MS || now < accessPrunedAt;
+      if (due || lstatSync(accessLogFile).size > ACCESS_PRUNE_BYTES) pruneAccess(now);
+    },
+
+    async prepareAccessLog(now) {
+      seedAccessLog();
+      pruneAccess(now);
     },
 
     async readRateLimit() {

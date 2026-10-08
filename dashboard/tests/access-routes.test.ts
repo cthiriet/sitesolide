@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createAccessRoutes, grantable, ACCESS_LOCKED, ACCESS_NOT_AVAILABLE } from "../src/access/routes";
 import type { AccessSteward } from "../src/access/client";
 import { createTokens } from "../src/secrets/tokens";
-import type { Resolved } from "../src/members/identity";
+import type { Resolved } from "../src/people/identity";
 
 /**
  * The dashboard's access routes: they decide nothing, check the origin of a

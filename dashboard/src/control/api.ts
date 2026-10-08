@@ -98,7 +98,7 @@ export function failure(code: ControlErrorCode, message: string, extra: { detail
 
 const unreachable = () => failure("failure", "the dashboard cannot reach the steward on the machine: try again in a minute, then tell the owner of the machine", { status: 502 });
 const unavailable = () =>
-  failure("not-available", "this machine does not carry the control API yet: the owner must run sitesolide upgrade, then sitesolide setup again for this machine, without --minimal if the team installer is missing");
+  failure("not-available", "this machine does not carry the control API yet: the owner must run sitesolide upgrade, then sitesolide setup again for this machine, without --minimal if the installer is missing");
 const unreadable = () => failure("failure", "the steward sent an unreadable answer: tell the owner of the machine", { status: 502 });
 /** The steward's refusal, passed on with its code and message; the other outcomes said in the API's words. */
 function relayed(reached: Reached): Response {

@@ -8,7 +8,7 @@ import {
   sidebarShortcut,
   downServices,
 } from "../src/lib/sidebar"
-import { discrepancy, secretFile, guest, portalView, secretProject, service, secretService, site } from "./factory"
+import { discrepancy, secretFile, portalView, secretProject, service, secretService, site } from "./factory"
 
 const NOW = 1_800_000_000_000
 const HOUR = 3600_000
@@ -99,19 +99,19 @@ describe("inline script in main.astro", async () => {
 
 describe("the machine's indicators", () => {
   test("before any data, and with no discrepancy, nothing is shown", () => {
-    expect(machineIndicators(null)).toEqual({ home: null, activity: null, team: null, connectors: null, members: null })
-    expect(machineIndicators([])).toEqual({ home: null, activity: null, team: null, connectors: null, members: null })
+    expect(machineIndicators(null)).toEqual({ home: null, activity: null, people: null, tokens: null, connectors: null })
+    expect(machineIndicators([])).toEqual({ home: null, activity: null, people: null, tokens: null, connectors: null })
   })
 
   test("the discrepancies: in error if there is one, in attention otherwise; the activity reports nothing", () => {
     expect(machineIndicators([discrepancy("warning"), discrepancy("error")])).toEqual({
       home: { count: 2, tone: "error", label: "2 issues" },
       activity: null,
-      team: null,
+      people: null,
+      tokens: null,
       connectors: null,
-      members: null,
     })
-    expect(machineIndicators([discrepancy("warning")]).home).toEqual({ count: 1, tone: "attention", label: "1 refusal" })
+    expect(machineIndicators([discrepancy("warning")]).home).toEqual({ count: 1, tone: "attention", label: "1 issue" })
   })
 
   test("the downed services: an app stopped or with no unit, never a static site", () => {
@@ -126,12 +126,12 @@ describe("the machine's indicators", () => {
 })
 
 describe("a site's indicators", () => {
-  const empty = { discrepancies: null, project: null, site: null, guests: null, now: NOW, serverNow: NOW }
-  const nothing = { overview: null, audience: null, secrets: null, guests: null, sharing: null, access: null, backups: null, members: null }
+  const empty = { discrepancies: null, project: null, site: null, serverNow: NOW }
+  const nothing = { overview: null, audience: null, secrets: null, access: null, backups: null }
 
   test("before any data, and when all is well, nothing is shown", () => {
     expect(siteIndicators(empty)).toEqual(nothing)
-    expect(siteIndicators({ ...empty, discrepancies: [], project: secretProject(), site: site(), guests: [] })).toEqual(nothing)
+    expect(siteIndicators({ ...empty, discrepancies: [], project: secretProject(), site: site() })).toEqual(nothing)
   })
 
   test("Overview counts the site's discrepancies, at the worst one's tone", () => {
@@ -156,17 +156,8 @@ describe("a site's indicators", () => {
     expect(siteIndicators({ ...empty, project: secretProject({ service: secretService({ state: "failed", subState: "failed" }) }) }).secrets).toBeNull()
   })
 
-  test("Guests counts the active accesses, without the expired ones, in neutral", () => {
-    const guests = [
-      guest({ id: "a", expiresAt: null }),
-      guest({ id: "b", expiresAt: NOW + HOUR }),
-      guest({ id: "c", expiresAt: NOW - HOUR }),
-    ]
-    expect(siteIndicators({ ...empty, guests }).guests).toEqual({ count: 2, tone: "neutral", label: "2 active guests" })
-  })
-
-  test("Access reports a door in disagreement, seen from the steward or from the snapshot", () => {
-    const disagreement = { count: 1, tone: "error", label: "the gate disagrees with sitesolide.json" }
+  test("Access reports general access in disagreement, seen from the steward or from the snapshot; who has access is a choice, never a signal", () => {
+    const disagreement = { count: 1, tone: "error", label: "general access disagrees with sitesolide.json" }
     const requested = secretProject({ portal: portalView({ requested: true, installed: false }) })
     expect(siteIndicators({ ...empty, project: requested }).access).toEqual(disagreement)
     const agreed = secretProject({ portal: portalView({ requested: true, installed: true }) })

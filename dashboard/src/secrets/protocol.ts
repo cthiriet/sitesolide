@@ -267,6 +267,7 @@ export type Failure = { error: ErrorCode; message: string; wait?: number };
 //   GET    /projects              -> ProjectsResponse
 //   GET    /log[?slug=<s>]   -> LogResponse, the last 50, of the site if named
 //          [&limit=<n>[&before=<ms>]] -> LogResponse with `paged`, a page of `n`, dated before `ms`
+//          the journal and the access log read as one history, by date (src/secrets/log.ts)
 //   POST   /unlock  UnlockRequest -> UnlockResponse
 //   POST   /lock    WithToken             -> 204
 //   POST   /value         VariableRequest       -> ValueResponse

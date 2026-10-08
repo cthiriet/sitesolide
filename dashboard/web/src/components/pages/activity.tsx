@@ -233,7 +233,7 @@ export function ActivityPage() {
       <PageBody>
         <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
           Who did what on this server, from every component's own audit: deployments and tokens, sign-ins and who gets in,
-          egress refusals and connectors, backups and restores, secrets and portal changes. Values never appear here.
+          egress refusals and connectors, backups and restores, secrets and access changes. Values never appear here.
         </p>
 
         <SourceStates statuses={seen} />
@@ -275,7 +275,7 @@ export function ActivityPage() {
                 ? `${ready.scanned} entries read so far. Older ones may still match.`
                 : narrowed
                   ? "Try another actor, action or site, or a wider range of days."
-                  : "Deployments, sign-ins, sharing changes, egress refusals, backups and secret operations show up here."}
+                  : "Deployments, sign-ins, access changes, egress refusals, backups and secret operations show up here."}
             </EmptyState>
           )}
 

@@ -92,7 +92,7 @@ export function currentAge(age: number, receivedAt: number, now: number): number
  *
  * Assembled from the parts rather than through `format`: Bun's ICU writes
  * "Sep 22 at 21:03" where Chrome writes "Sep 22, 21:03", and the text copied
- * for a guest must not depend on the engine that produced it.
+ * for password access must not depend on the engine that produced it.
  */
 export function dateTime(ms: number, timeZone?: string): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -105,19 +105,4 @@ export function dateTime(ms: number, timeZone?: string): string {
   }).formatToParts(ms)
   const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((piece) => piece.type === type)?.value ?? ""
   return `${value("month")} ${value("day")}, ${value("hour")}:${value("minute")}`
-}
-
-/**
- * The label of a guest access duration, computed from the seconds.
- *
- * The portal supplies its own, `label`, but in French, and `portal/` is not
- * modified from this project. So the page starts from the seconds, the only
- * value the portal judges: a duration added to its menu gets a label without
- * coming through here.
- */
-export function guestDuration(seconds: number | null): string {
-  if (seconds === null) return "No expiry"
-  const hours = Math.round(seconds / 3600)
-  if (hours < 48) return hours === 1 ? "1 hour" : `${hours} hours`
-  return `${Math.round(hours / 24)} days`
 }

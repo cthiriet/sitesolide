@@ -151,7 +151,7 @@ export type Door = { portal: boolean } | { refusal: string };
  * `member`: a member's own token. An owner's token without the public
  * permission deploys private sites only, an existing public one included: a
  * stolen one publishes nothing. A member's token answers to the member's role
- * instead (src/members/tokens.ts): the door of an existing project was
+ * instead (src/people/tokens.ts): the door of an existing project was
  * decided by the owner or its Admin, a deployment never changes it,
  * and a Developer deploys the project as it stands, in the open if it is.
  * What opens a door, a new project in the open or paths exempted from the
@@ -185,7 +185,7 @@ export type ManifestDecision =
  * whatever else the manifest says, as the steward refuses it in decideSlug:
  * judged after the door, `dashboard`, public on the machine, came back to a
  * private token as "this site is public on the machine", a 422 telling it to
- * ask the owner, when docs/team.md promises a 403 that says to pick another
+ * ask the owner, when docs/access.md promises a 403 that says to pick another
  * slug, and nothing the owner could grant would ever change the answer.
  */
 export function decideManifest(manifest: Manifest, scope: Scope, onMachine: boolean | null, zone: string, member = false): ManifestDecision {

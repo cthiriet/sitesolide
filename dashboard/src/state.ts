@@ -547,21 +547,21 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         slug,
         severity: "error",
         message:
-          "Lock requested without a valid code: the next regeneration will fail, " +
-          `lock it again with "bin/lock.sh enable ${slug}"`,
+          "Preview code requested but none is valid: the next regeneration will fail, " +
+          `give it one again with "sitesolide lock" from the ${slug} folder`,
       });
     }
 
-    // The portal's door, in both directions. The first case is the worst
-    // possible state: the manifest says closed, Caddy serves in the clear.
+    // Restricted, in both directions. The first case is the worst possible
+    // state: the manifest says restricted, Caddy serves to anyone.
     const { portal } = site;
     if (portal.wanted && !portal.installed) {
       discrepancies.push({
         slug,
         severity: "error",
         message:
-          "Portal requested but missing from the live Caddy block: the site is " +
-          "served unprotected. Redeploy with \"sitesolide deploy --force\" from its folder",
+          "Restricted in sitesolide.json but not in the live Caddy block: anyone can " +
+          "open the site. Redeploy with \"sitesolide deploy --force\" from its folder",
       });
     }
 
@@ -570,8 +570,8 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         slug,
         severity: "error",
         message:
-          "Portal in the live Caddy block although the manifest no longer asks for it: " +
-          "the site stays closed, and nobody knows which of the two is authoritative",
+          "Restricted in the live Caddy block although sitesolide.json no longer asks for it: " +
+          "the site stays restricted, and nobody knows which of the two is authoritative",
       });
     }
 
@@ -580,8 +580,8 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         slug,
         severity: "error",
         message:
-          "Code in effect without a lock requested: the manifest lost its lock, " +
-          `remove the code with "bin/lock.sh disable ${slug}"`,
+          "Preview code in effect although sitesolide.json no longer asks for one: " +
+          `remove it with "sitesolide unlock" from the ${slug} folder`,
       });
     }
 
@@ -686,7 +686,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       slug: PORTAL_SLUG,
       severity: "error",
       message:
-        `${protectedSites.length} site(s) behind the portal, whose service is not running: ` +
+        `${protectedSites.length} restricted site(s), and the portal that signs people in is not running: ` +
         "they answer 502 and nobody gets in",
     });
   }

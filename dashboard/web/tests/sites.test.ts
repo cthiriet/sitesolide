@@ -74,11 +74,11 @@ describe("a site's door", () => {
     })
   })
 
-  test("the portal is shown with its public paths", () => {
+  test("a restricted site is shown with its public paths", () => {
     expect(siteAccess(site({ portal: portal(true, true) }))).toEqual({ kind: "portal", exemptions: ["/callbacks/*"] })
   })
 
-  test("neither lock nor portal: no gate", () => {
+  test("neither a code nor a restriction: public", () => {
     expect(siteAccess(site())).toEqual({ kind: "open" })
   })
 
@@ -87,22 +87,22 @@ describe("a site's door", () => {
     expect(siteAccess(site({ portal: portal(true, false), lock: lock(true, "K7PM4Q") }))).toEqual({
       kind: "mismatch",
       key: "portal-absent",
-      label: "Portal not applied: served unprotected",
+      label: "Restricted, not applied: open to anyone",
     })
   })
 
   test("every disagreement has its key and its label", () => {
     expect(siteAccess(site({ portal: portal(false, true) }))).toMatchObject({
       key: "portal-extra",
-      label: "Portal applied but not requested",
+      label: "Restricted, not requested",
     })
     expect(siteAccess(site({ lock: lock(false, "K7PM4Q") }))).toMatchObject({
       key: "code-without-lock",
-      label: "Code without lock",
+      label: "Code, not requested",
     })
     expect(siteAccess(site({ lock: lock(true, null) }))).toMatchObject({
       key: "lock-without-code",
-      label: "Lock has no code",
+      label: "Code requested, none in effect",
     })
   })
 })
@@ -257,14 +257,14 @@ describe("filters", () => {
   })
 
   /** A portal requested but missing is precisely what you come looking for under this filter. */
-  test("Portal also keeps the disagreements, both ways round", () => {
+  test("Restricted also keeps the disagreements, both ways round", () => {
     const extra = site({ slug: "extra", portal: { wanted: false, installed: true, exemptions: [] } })
-    expect(slugs(filterByKind([...SITES, extra], "portal", worst))).toEqual(["calendar", "expose", "extra"])
+    expect(slugs(filterByKind([...SITES, extra], "restricted", worst))).toEqual(["calendar", "expose", "extra"])
   })
 
   test("every filter counts what it would keep", () => {
-    expect(countFilters(SITES, worst)).toEqual({ all: 5, issues: 2, apps: 2, static: 2, portal: 2 })
-    expect(countFilters([], worst)).toEqual({ all: 0, issues: 0, apps: 0, static: 0, portal: 0 })
+    expect(countFilters(SITES, worst)).toEqual({ all: 5, issues: 2, apps: 2, static: 2, restricted: 2 })
+    expect(countFilters([], worst)).toEqual({ all: 0, issues: 0, apps: 0, static: 0, restricted: 0 })
   })
 
   /** Every chip's count comes from the same table as the chips: a filter added has its place there. */
@@ -336,7 +336,7 @@ describe("click on a row", () => {
 describe("the table's caption", () => {
   test("it states the order, then the filter and the search when there are any", () => {
     expect(sitesCaption("all", null)).toBe("Sites served by the server, issues first, then by name")
-    expect(sitesCaption("portal", null)).toBe("Sites served by the server, issues first, then by name, filtered by Portal")
+    expect(sitesCaption("restricted", null)).toBe("Sites served by the server, issues first, then by name, filtered by Restricted")
     expect(sitesCaption("all", "cms")).toBe('Sites served by the server, issues first, then by name, matching "cms"')
   })
 })

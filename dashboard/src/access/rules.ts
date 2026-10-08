@@ -16,6 +16,13 @@
  * And the narrowing nobody needs leave for: removing anyone, lowering anyone
  * the granter may grant, as soon as they may manage the project.
  *
+ * What asks for the granter's live unlock, the owner's password or an
+ * Admin's forced sign-in, is said by `Grant.unlock`, which the steward
+ * enforces: a role above `visitor` given or raised, and password access,
+ * which lets someone from outside the company in. Can open for a company
+ * account or a domain does not: those are people the company's own sign-in
+ * vouches for. Over the owner's socket root needs no unlock at all.
+ *
  * Whether a person may manage a project at all, an admin's role there, a
  * token's reach, is the caller's to judge first; these rules then judge the
  * change itself.
@@ -78,8 +85,15 @@ export type Grant = {
   existing: Entry | null;
   /** Someone new outside the company's domains: a password is drawn for them. */
   password: boolean;
-  /** A role above `visitor` given or raised, which asks for the granter's unlock. */
+  /** A role above `visitor` given or raised. */
   raises: boolean;
+  /**
+   * Does the change ask for the granter's live unlock: it raises someone
+   * above `visitor`, or draws a password, which lets someone from outside
+   * the company in. Its own field rather than `raises` stretched to cover a
+   * password: a password access raises nobody, and the page reads them apart.
+   */
+  unlock: boolean;
 };
 
 const ROLE_WORDS: Readonly<Record<Role, string>> = { visitor: "Can open", viewer: "Viewer", developer: "Developer", admin: "Admin" };
@@ -92,7 +106,8 @@ export function roleWord(role: Role): string {
 /**
  * May this granter give `who` this role on this project? The entry as it
  * stands is read from the registry; the answer says whether a password is to
- * be drawn and whether the change asks for an unlock.
+ * be drawn and whether the change asks for an unlock: raising someone above
+ * Can open, or giving password access.
  */
 export function judgeGrant(registry: Registry, slug: string, whoValue: unknown, role: Role, granter: Granter, signIn: SignInSettings): Grant | Refusal {
   const who = readWho(whoValue);
@@ -118,7 +133,7 @@ export function judgeGrant(registry: Registry, slug: string, whoValue: unknown, 
         code: "out-of-scope",
       };
     }
-    return { who, role, existing, password: false, raises: false };
+    return { who, role, existing, password: false, raises: false, unlock: false };
   }
 
   if (rank(role) > rank(ceiling)) {
@@ -137,7 +152,8 @@ export function judgeGrant(registry: Registry, slug: string, whoValue: unknown, 
 
   if (existing?.password !== undefined) {
     if (role !== "visitor") return { refusal: `${who.who} has password access, which opens the site and nothing more: remove it first to give them a role`, code: "out-of-scope" };
-    return { who, role, existing, password: false, raises: false };
+    // Kept as it is: no password drawn, nobody let in who was not already.
+    return { who, role, existing, password: false, raises: false, unlock: false };
   }
   if (!signsInWithAccount(who.email, signIn)) {
     const why = !signIn.configured
@@ -150,9 +166,12 @@ export function judgeGrant(registry: Registry, slug: string, whoValue: unknown, 
     if (existing === null && granter.kind === "token") {
       return { refusal: `${who.who} would get password access (${why}), which is given from the dashboard or by the owner over SSH, never with a token`, code: "out-of-scope" };
     }
-    if (existing === null) return { who, role, existing, password: true, raises: false };
+    // A password lets in someone the company's sign-in does not vouch for:
+    // a dashboard alone, compromised or not, must not hand one out.
+    if (existing === null) return { who, role, existing, password: true, raises: false, unlock: true };
   }
-  return { who, role, existing, password: false, raises: atLeast(role, "viewer") && (existing === null || rank(role) > rank(existing.role)) };
+  const raises = atLeast(role, "viewer") && (existing === null || rank(role) > rank(existing.role));
+  return { who, role, existing, password: false, raises, unlock: raises };
 }
 
 /**

@@ -1,0 +1,13 @@
+---
+import Layout from "@/layouts/main.astro"
+import { Application } from "@/components/application"
+---
+
+<Layout title="People · sitesolide">
+  <!--
+    The same island on every page, with the path of the served file. The
+    people arrive through /api/people, behind the owner's session; nothing is
+    rendered at build time.
+  -->
+  <Application client:load path="/people/" />
+</Layout>

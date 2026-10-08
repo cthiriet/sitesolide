@@ -125,11 +125,11 @@ describe("fields covered", () => {
     expect(found(":3041")).toEqual(["builder"])
   })
 
-  test("the access: portal, no gate, preview lock and its code", () => {
-    expect(found("portal")).toEqual(["calendar", "cms"])
-    expect(found("no gate")).toEqual(["dashboard", "builder"])
+  test("general access: restricted, public, anyone with the code and its code", () => {
+    expect(found("restricted")).toEqual(["calendar", "cms"])
+    expect(found("public")).toEqual(["dashboard", "builder"])
     expect(found("k7pm4q")).toEqual(["wheels"])
-    expect(found("preview lock")).toEqual(["wheels"])
+    expect(found("with the code")).toEqual(["wheels"])
   })
 
   /** The service's state is shown on every row: a downed service is found again by its word. */
@@ -140,13 +140,13 @@ describe("fields covered", () => {
     expect(slugs(filterSites([tombe, cms, showcase], "static files"))).toEqual(["wheels"])
   })
 
-  test("the public paths of a site behind the portal", () => {
+  test("the public paths of a restricted site", () => {
     expect(found("/hooks")).toEqual(["cms"])
   })
 
   test("an access anomaly is searched by its label", () => {
     const expose = site({ slug: "kanban", portal: { wanted: true, installed: false, exemptions: [] } })
-    expect(slugs(filterSites([expose, cms], "unprotected"))).toEqual(["kanban"])
+    expect(slugs(filterSites([expose, cms], "not applied"))).toEqual(["kanban"])
   })
 
   /** The preview link carries the code as a parameter, but only the code is displayed. */
@@ -180,12 +180,12 @@ describe("secrets", () => {
 
 describe("filtering", () => {
   test("several words must all match", () => {
-    expect(found("cms portal")).toEqual(["cms"])
-    expect(found("portal machine")).toEqual([])
+    expect(found("cms restricted")).toEqual(["cms"])
+    expect(found("restricted machine")).toEqual([])
   })
 
   test("the order of the words does not count", () => {
-    expect(found("portal cms")).toEqual(["cms"])
+    expect(found("restricted cms")).toEqual(["cms"])
   })
 
   test("a query that is empty or made of spaces returns every site, in their order", () => {

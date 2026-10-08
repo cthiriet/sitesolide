@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emailRole, readProjection, type Projection } from "../borrowed/access";
-import type { MemberPrincipal } from "../src/members/steward";
-import { createAccessRoutes, createAccessStore, passwordHash, type AccessEvent } from "../src/access/steward";
+import type { MemberPrincipal } from "../src/people/steward";
+import type { Resolved } from "../src/people/identity";
+import { createAccessRoutes, createAccessStore, passwordHash, PASSWORD_LOCKED, type AccessEvent } from "../src/access/steward";
+import { createAccessRoutes as createDashboardAccessRoutes, ACCESS_LOCKED } from "../src/access/routes";
+import type { AccessSteward } from "../src/access/client";
+import { createTokens } from "../src/secrets/tokens";
 import { createAccessSystem } from "../src/access/system";
 import { encodeRegistry, EMPTY_REGISTRY, putEntry, setCreate, type Registry } from "../src/access/registry";
 import type { SignInSettings } from "../src/access/protocol";
@@ -205,6 +209,44 @@ describe("the owner, in the dashboard", () => {
     expect((await call("dashboard", "PUT", "/people/person", { email: "maker@acme.test", create: true })).status).toBe(401);
     expect((await call("dashboard", "PUT", "/people/person", { email: "maker@acme.test", create: true, token: UNLOCK })).status).toBe(200);
   });
+
+  test("password access needs the unlock, since it lets someone from outside the company in; nothing is drawn or written without it", async () => {
+    const { call, saved, key, events } = bench(seed([]));
+    for (const token of [undefined, "wrong"]) {
+      const refused = await call("dashboard", "PUT", "/access/entry", { slug: "blog", who: "guest@example.org", role: "visitor", ...(token === undefined ? {} : { token }) });
+      expect(refused.status).toBe(401);
+      expect(await json(refused)).toEqual({ error: "locked", message: PASSWORD_LOCKED });
+    }
+    expect(saved().projects.blog ?? []).toEqual([]);
+    // Neither registry nor projection written: the portal was told nothing.
+    expect(existsSync(join(key, "access.json"))).toBe(false);
+    expect(events).toEqual([]);
+    const given = await call("dashboard", "PUT", "/access/entry", { slug: "blog", who: "guest@example.org", role: "visitor", token: UNLOCK });
+    expect(given.status).toBe(201);
+    expect(await json(given)).toMatchObject({ entry: { who: "guest@example.org", kind: "password" }, password: "Pass-word-1-xxxx" });
+  });
+
+  test("without company sign-in, everyone gets password access, and so everyone waits for the unlock", async () => {
+    const { call } = bench(seed([]), { signIn: { configured: false, allowedDomains: [], admins: [], providerName: null } });
+    expect((await call("dashboard", "PUT", "/access/entry", { slug: "blog", who: "alice@acme.test", role: "visitor" })).status).toBe(401);
+    expect((await call("dashboard", "PUT", "/access/entry", { slug: "blog", who: "alice@acme.test", role: "visitor", token: UNLOCK })).status).toBe(201);
+  });
+
+  test("locked, Can open for a company account or a domain, lowering and removing still go through", async () => {
+    const { call } = bench(seed([["blog", "dev@acme.test", "developer"], ["blog", "guest@example.org", "visitor"]]));
+    expect((await call("dashboard", "PUT", "/access/entry", { slug: "blog", who: "see@acme.test", role: "visitor" })).status).toBe(201);
+    expect((await call("dashboard", "PUT", "/access/entry", { slug: "blog", who: "@acme.test", role: "visitor" })).status).toBe(201);
+    expect((await call("dashboard", "PUT", "/access/entry", { slug: "blog", who: "dev@acme.test", role: "visitor" })).status).toBe(200);
+    expect((await call("dashboard", "DELETE", "/access/entry", { slug: "blog", who: "dev@acme.test" })).status).toBe(200);
+    expect((await call("dashboard", "DELETE", "/access/entry", { slug: "blog", who: "guest@example.org" })).status).toBe(200);
+  });
+
+  test("over the owner's socket, root gives password access with no token at all", async () => {
+    const { call } = bench(seed([]));
+    const given = await call("owner", "PUT", "/access/entry", { slug: "blog", who: "guest@example.org", role: "visitor" });
+    expect(given.status).toBe(201);
+    expect(await json(given)).toMatchObject({ entry: { kind: "password" }, password: "Pass-word-1-xxxx" });
+  });
 });
 
 describe("an Admin, through their session", () => {
@@ -235,6 +277,20 @@ describe("an Admin, through their session", () => {
     expect(events.at(-1)).toMatchObject({ operation: "access.add", result: "rejects", actor: "ann@acme.test", slug: "shop" });
   });
 
+  test("password access asks for their own unlock too; someone else's unlock opens nothing", async () => {
+    const { call, saved } = bench(registry(), { sessions });
+    const outsider = { slug: "blog", who: "guest@example.org", role: "visitor" };
+    const refused = await call("dashboard", "PUT", "/access/person/entry", { session: "s-admin", ...outsider });
+    expect(refused.status).toBe(401);
+    expect(await json(refused)).toEqual({ error: "locked", message: PASSWORD_LOCKED });
+    expect((await call("dashboard", "PUT", "/access/person/entry", { session: "s-admin", token: "u-dev", ...outsider })).status).toBe(401);
+    expect((await call("dashboard", "PUT", "/access/person/entry", { session: "s-admin", token: UNLOCK, ...outsider })).status).toBe(401);
+    expect(saved().projects.blog!.some((entry) => entry.who === "guest@example.org")).toBe(false);
+    const given = await call("dashboard", "PUT", "/access/person/entry", { session: "s-admin", token: "u-admin", ...outsider });
+    expect(given.status).toBe(201);
+    expect(await json(given)).toMatchObject({ entry: { who: "guest@example.org", kind: "password", by: "ann@acme.test" }, password: "Pass-word-1-xxxx" });
+  });
+
   test("a Developer gives nothing; an admin gives a domain only among the company's", async () => {
     const { call } = bench(registry(), { sessions });
     expect((await call("dashboard", "PUT", "/access/person/entry", { session: "s-dev", token: "u-dev", slug: "blog", who: "new@acme.test", role: "visitor" })).status).toBe(403);
@@ -249,6 +305,79 @@ describe("an Admin, through their session", () => {
     // Ann lowers herself: from then on she manages nothing there.
     expect((await call("dashboard", "PUT", "/access/person/entry", { session: "s-admin", slug: "blog", who: "ann@acme.test", role: "viewer" })).status).toBe(200);
     expect((await call("dashboard", "PUT", "/access/person/entry", { session: "s-admin", slug: "blog", who: "back@acme.test", role: "visitor" })).status).toBe(403);
+  });
+});
+
+describe("both halves: the dashboard's routes over the steward's", () => {
+  const NOW = Date.now();
+  const PUBLIC_URL = `https://dashboard.${ZONE}`;
+
+  /** The dashboard's access routes, relaying to these steward routes, for the owner's session or Ann's. */
+  function dashboard(who: "owner" | "ann") {
+    const sessions: Session[] = [{ session: "s-admin", email: "ann@acme.test", unlock: "u-admin-0123456789" }];
+    const steward = bench(seed([["blog", "ann@acme.test", "admin"]]), { sessions });
+    const relay: AccessSteward = {
+      list: (slug) => steward.call("dashboard", "GET", `/access?slug=${slug}`),
+      put: (body) => steward.call("dashboard", "PUT", "/access/entry", body),
+      remove: (body) => steward.call("dashboard", "DELETE", "/access/entry", body),
+      people: () => steward.call("dashboard", "GET", "/people"),
+      putPerson: (body) => steward.call("dashboard", "PUT", "/people/person", body),
+      removePerson: (email) => steward.call("dashboard", "DELETE", "/people/person", { email }),
+    };
+    const tokens = createTokens(() => NOW);
+    const unlocks = createTokens(() => NOW);
+    const session = { hash: "h1", createdAt: NOW, seenAt: NOW, identity: who === "owner" ? "owner" : "ann@acme.test" };
+    const resolve = Object.assign(
+      async (): Promise<Resolved> =>
+        who === "owner"
+          ? { session, token: "owner-session", identity: { kind: "owner" } }
+          : { session, token: "s-admin", identity: { kind: "member", email: "ann@acme.test", name: null, roles: { blog: "admin" }, create: false, expiresAt: NOW + 60_000 } },
+      { forget: () => {} },
+    );
+    const routes = createDashboardAccessRoutes(
+      {
+        publicUrl: PUBLIC_URL,
+        zone: ZONE,
+        stateFile: "/nonexistent/state.json",
+        steward: relay,
+        members: { act: (method, path, body) => steward.call("dashboard", method, path, body as object) },
+        resolve,
+        ownerSession: async () => (who === "owner" ? session : null),
+        tokens,
+        unlocks,
+        providerName: async () => "Acme",
+        togglePortal: async () => Response.json({}),
+      },
+      () => NOW,
+    );
+    const put = (body: object) => routes.put(new Request(`${PUBLIC_URL}/api/access/entry`, { method: "PUT", headers: { origin: PUBLIC_URL }, body: JSON.stringify(body) }));
+    return { put, tokens, unlocks, saved: steward.saved };
+  }
+
+  const outsider = { slug: "blog", who: "guest@example.org", role: "visitor" };
+
+  test("the owner's session without a live unlock gets the page's 423 for password access, and the password once unlocked", async () => {
+    const { put, tokens, saved } = dashboard("owner");
+    const locked = await put(outsider);
+    expect(locked.status).toBe(423);
+    expect(await locked.json()).toEqual({ error: "locked", message: ACCESS_LOCKED });
+    expect(saved().projects.blog!.map((entry) => entry.who)).toEqual(["ann@acme.test"]);
+    tokens.set("h1", { token: UNLOCK, expiresAt: NOW + 60_000 });
+    const given = await put(outsider);
+    expect(given.status).toBe(201);
+    expect(await given.json()).toMatchObject({ entry: { who: "guest@example.org", kind: "password" }, password: "Pass-word-1-xxxx" });
+    // Can open for a company account never waited.
+    tokens.forget("h1");
+    expect((await put({ slug: "blog", who: "see@acme.test", role: "visitor" })).status).toBe(201);
+  });
+
+  test("an Admin without their unlock gets the 423, and gives password access under it", async () => {
+    const { put, unlocks } = dashboard("ann");
+    expect((await put(outsider)).status).toBe(423);
+    unlocks.set("h1", { token: "u-admin-0123456789", expiresAt: NOW + 60_000 });
+    const given = await put(outsider);
+    expect(given.status).toBe(201);
+    expect(await given.json()).toMatchObject({ entry: { kind: "password", by: "ann@acme.test" } });
   });
 });
 

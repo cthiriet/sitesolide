@@ -8,7 +8,7 @@ import { useSecretsActions } from "@/components/secrets-actions"
 import { SecretsLog } from "@/components/secrets-log"
 import { SitePage, useSite } from "@/components/site"
 import { UNREACHABLE } from "@/lib/secrets"
-import { roleOn } from "@/lib/members"
+import { roleOn } from "@/lib/identity"
 
 /*
  * Nothing here knows any site in particular. The platform deploys sites whose

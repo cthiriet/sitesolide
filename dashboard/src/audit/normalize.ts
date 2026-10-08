@@ -127,7 +127,7 @@ export function fromTableRow(source: AuditSource, raw: unknown): SourceRow | nul
 /**
  * The steward's operations, and the action each one is listed under. The
  * secrets' own keep their name under `secrets.`; the two that are not about a
- * secret say what they change: a site's portal door, a service's restart.
+ * secret say what they change: a site's general access, a service's restart.
  */
 export const STEWARD_ACTIONS: Readonly<Record<string, string>> = {
   unlock: "secrets.unlock",
@@ -139,7 +139,7 @@ export const STEWARD_ACTIONS: Readonly<Record<string, string>> = {
   restore: "secrets.restore",
   replace: "secrets.replace",
   password: "secrets.password",
-  portal: "door.update",
+  portal: "access.general",
   restart: "service.restart",
   "access.add": "access.add",
   "access.change": "access.change",

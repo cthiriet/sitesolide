@@ -697,7 +697,7 @@ describe("the passwords", () => {
 });
 
 describe("what setup runs", () => {
-  test("--minimal leaves out backups, the team installer and the egress proxy", async () => {
+  test("--minimal leaves out backups, the installer and the egress proxy", async () => {
     const { b } = world();
     const r = await setup(b, options("--minimal"));
     expect(r.code).toBe(0);

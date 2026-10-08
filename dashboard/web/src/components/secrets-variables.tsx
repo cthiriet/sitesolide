@@ -380,7 +380,7 @@ export function VariableRow({
  */
 /**
  * A password hash: never shown, changed only with the dashboard's own
- * password, which is the super admin's. `onChangePassword` null: a member,
+ * password, which is the owner's. `onChangePassword` null: a person,
  * who sees the name and nothing to do with it.
  */
 export function PasswordRow({ name, onChangePassword }: { name: string; onChangePassword: (() => void) | null }) {
@@ -389,7 +389,7 @@ export function PasswordRow({ name, onChangePassword }: { name: string; onChange
       <code className="font-mono text-[0.8125rem] wrap-anywhere">{name}</code>
       <span className="col-span-2 row-start-2 pb-1 text-xs text-pretty text-muted-foreground @xl/file:col-span-1 @xl/file:col-start-2 @xl/file:row-start-1 @xl/file:pb-0 @xl/file:text-sm">
         {onChangePassword === null
-          ? "A password hash. It never shows, and only the super admin changes it."
+          ? "A password hash. It never shows, and only the owner changes it."
           : "A password hash. It never shows: change the password instead."}
       </span>
       <div className="col-start-2 row-start-1 flex justify-end @xl/file:col-start-3">

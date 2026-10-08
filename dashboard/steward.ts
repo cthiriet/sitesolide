@@ -43,10 +43,10 @@ import { createControlSystem } from "./src/control/system";
 import { INSTALLER_RUN_FOLDER } from "./src/control/protocol";
 import { BACKUP_FOLDER } from "./borrowed/backups";
 import { createBackupReader } from "./src/backup/reader";
-import { createMembersSystem } from "./src/members/system";
+import { createMembersSystem } from "./src/people/system";
 import { createAccessSystem } from "./src/access/system";
-import { OWNER_SOCKET, PORTAL_KEY_FOLDER } from "./src/members/protocol";
-import { PORTAL_RELAY_SOCKET, relayedPortal } from "./src/members/portal";
+import { OWNER_SOCKET, PORTAL_KEY_FOLDER } from "./src/people/protocol";
+import { PORTAL_RELAY_SOCKET, relayedPortal } from "./src/people/portal";
 
 const SITES_DIR = process.env.SITES_DIR ?? "/srv/sites";
 const SECRETS_FOLDER = process.env.SECRETS_FOLDER ?? "/etc/sitesolide";
@@ -192,7 +192,7 @@ const handler = createSteward(system, {
   backups,
   // Access: the registry of who may do what on each project, the portal's
   // projection of it, the sessions of the people who sign in, the key pair
-  // the portal signs with. See src/access/ and src/members/.
+  // the portal signs with. See src/access/ and src/people/.
   members: {
     system: createMembersSystem({
       stateFolder: STATE_FOLDER,

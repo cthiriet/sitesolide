@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label"
 import { Logo } from "@/components/logo"
 import { ThemeToggleButton } from "@/components/theme"
 import { signIn } from "@/lib/api"
-import { signInFailure, signInUrl } from "@/lib/members"
+import { signInFailure, signInUrl } from "@/lib/identity"
 import { waitMessage, signInRefusal } from "@/lib/signin"
 import type { SsoOffer } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -25,11 +25,11 @@ function currentReturn(): string {
 }
 
 /**
- * The dashboard's door. Full page on opening; as an overlay when the session
+ * The dashboard's sign-in. Full page on opening; as an overlay when the session
  * expired while the page is open, so that nothing underneath is lost, starting
- * with a guest password that is only shown once.
+ * with a password that is only shown once.
  *
- * Two ways in: a member signs in with the portal's identity provider, a link
+ * Two ways in: a person signs in with the portal's identity provider, a link
  * and not a form, since the flow leaves for the portal's own host; the owner
  * types the dashboard's password. A sign-in with the provider that came back
  * without a session says why, from the address (`?signin=`).
@@ -141,7 +141,7 @@ export function SignIn({
             <>
               <a href={signInUrl(currentReturn())} className={cn(buttonVariants({ variant: "outline" }), "h-10 w-full")}>
                 <LogIn />
-                Sign in with {sso.providerName ?? "your work account"}
+                Sign in with {sso.providerName ?? "your company account"}
               </a>
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
                 <span aria-hidden="true" className="h-px flex-1 bg-border" />

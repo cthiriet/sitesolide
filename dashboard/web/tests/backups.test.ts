@@ -31,9 +31,8 @@ function restore(partial: Partial<RestoreView> = {}): RestoreView {
 }
 
 describe("the Backups section's place", () => {
-  test("is a site's last section before a project's Members, at its own address", () => {
-    expect(SECTIONS.at(-2)).toEqual({ section: "backups", title: "Backups", path: "/site/backups/" })
-    expect(SECTIONS.at(-1)).toEqual({ section: "members", title: "Members", path: "/site/members/" })
+  test("is a site's last section, at its own address", () => {
+    expect(SECTIONS.at(-1)).toEqual({ section: "backups", title: "Backups", path: "/site/backups/" })
     expect(siteUrl("cms", "backups")).toBe("/site/backups/?s=cms")
     expect(pageFromUrl("/site/backups/", "?s=cms")).toEqual({ name: "site", slug: "cms", section: "backups" })
   })

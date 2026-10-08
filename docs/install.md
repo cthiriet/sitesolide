@@ -88,8 +88,8 @@ closed to root, ufw, fail2ban, automatic security updates), creates the four
 DNS records, installs Caddy with its DNS module and Bun, then deploys every
 service of the platform in the order a fresh machine accepts: the shared API,
 the dashboard and the root daemon behind it, the portal, the rule that isolates
-services on the loopback, the monitor, backups, the team installer and the
-egress proxy. It writes `~/.config/sitesolide/config.json`, which every other
+services on the loopback, the monitor, backups, the installer that deploys
+with a token, and the egress proxy. It writes `~/.config/sitesolide/config.json`, which every other
 command reads.
 
 It shows two passwords, once each: the dashboard's and the portal's. Store
@@ -139,13 +139,14 @@ What the monitor finds down also shows among the dashboard's Issues.
 ## 6. Let others in, without SSH
 
 Colleagues and agents deploy with a personal token instead of root SSH: create
-one on the dashboard's *Tokens* page, and send its holder to [team.md](team.md),
+one on the dashboard's *Tokens* page, and send its holder to [access.md](access.md),
 "People and tokens". Setup installed what it needs, unless it ran with
 `--minimal`. Once signing in with a company account is set up
-([portal/README.md](../portal/README.md#signing-in-with-a-work-account)), give
-colleagues a role on a project instead, `sitesolide share <email> --role
-developer` in its folder: they sign in to the dashboard and mint their own
-tokens, never stronger than their roles.
+([portal/README.md](../portal/README.md#signing-in-with-a-company-account)), give
+colleagues a role on a project instead, from its *Access* section in the
+dashboard or with `sitesolide share <email> --role developer` in its folder:
+they sign in to the dashboard and mint their own tokens, never stronger than
+their roles.
 
 ## Another DNS provider
 

@@ -270,13 +270,13 @@ export function confirmDoorUnderLock(slug: string, applied: boolean, reading: De
  * for the lock.
  */
 export function switchAnnouncement(portal: boolean, dryRun: boolean): { title: string; details: string[] } {
-  const direction = portal ? "on" : "off";
+  const access = portal ? "Restricted" : "Public";
   return {
     title: dryRun
-      ? `portal was turned ${direction} from the dashboard; a real deploy updates sitesolide.json, then commit it`
-      : `portal was turned ${direction} from the dashboard; sitesolide.json updated, commit it`,
+      ? `general access was set to ${access} from the dashboard; a real deploy updates sitesolide.json, then commit it`
+      : `general access was set to ${access} from the dashboard; sitesolide.json updated, commit it`,
     details: [
-      "the server is the source of truth for the portal of a deployed site:",
+      "the server is the source of truth for the general access of a deployed site:",
       "change it from the dashboard, an edit of this field in sitesolide.json is put back",
     ],
   };

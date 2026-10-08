@@ -10,16 +10,13 @@ import { CONTAINER, EmptyState, HeaderSkeleton, PageBody, PageHeader, Panel, Pan
 import { HomePage } from "@/components/pages/home"
 import { ActivityPage } from "@/components/pages/activity"
 import { ConnectorsPage } from "@/components/pages/connectors"
-import { TeamPage } from "@/components/pages/team"
-import { MembersPage } from "@/components/pages/members"
+import { TokensPage } from "@/components/pages/tokens"
+import { PeoplePage } from "@/components/pages/people"
 import { AccessSection } from "@/components/pages/site-access"
 import { BackupsSection } from "@/components/pages/site-backups"
 import { OverviewSection } from "@/components/pages/site-overview"
 import { AudienceSection } from "@/components/pages/site-audience"
-import { GuestsSection } from "@/components/pages/site-guests"
-import { SharingSection } from "@/components/pages/site-sharing"
 import { SecretsSection } from "@/components/pages/site-secrets"
-import { ProjectMembersSection } from "@/components/pages/site-members"
 import { SecretsActionsProvider } from "@/components/secrets-actions"
 import { SIDEBAR_WIDTH, readCollapsed, storeCollapsed } from "@/lib/sidebar"
 import { PAGE_TITLE_ID, mayOpen, pendingTitle, documentTitle, pageTitle, pageUrl, type Page } from "@/lib/pages"
@@ -33,45 +30,31 @@ function Section({ page }: { page: Extract<Page, { name: "site" }> }) {
       return <AudienceSection slug={page.slug} />
     case "secrets":
       return <SecretsSection slug={page.slug} />
-    case "guests":
-      return <GuestsSection slug={page.slug} />
-    case "sharing":
-      return <SharingSection slug={page.slug} />
     case "access":
       return <AccessSection slug={page.slug} />
     case "backups":
       return <BackupsSection slug={page.slug} />
-    case "members":
-      return <ProjectMembersSection slug={page.slug} />
   }
 }
 
 /**
- * What someone reads where the page is not theirs: a member on the super
- * admin's pages, or on a section their role there does not open, the super
- * admin on a project's Members. The service refuses it too, this only says so
- * instead of showing an error.
+ * What someone reads where the page is not theirs: a person on the owner's
+ * pages, or on a section their role there does not open. The service refuses
+ * it too, this only says so instead of showing an error.
  */
 function NotYours({ page }: { page: Page }) {
-  const { identity } = useData()
-  const member = identity !== null && identity.kind === "member"
   return (
     <>
       <PageHeader title={pageTitle(page)} />
       <PageBody>
         <Panel>
-          {!member ? (
-            <EmptyState icon={ShieldOff} title="On the Members page">
-              A project's members are its Project admins' to look after here. As the super admin, you see every member on
-              the machine's Members page.
-            </EmptyState>
-          ) : page.name === "site" ? (
+          {page.name === "site" ? (
             <EmptyState icon={ShieldOff} title="Not part of your role">
-              Your role on {page.slug} doesn't open this section. Ask its Project admin, or the super admin, for another role.
+              Your role on {page.slug} doesn't open this section. Ask an Admin of {page.slug}, or the owner, for another role.
             </EmptyState>
           ) : (
-            <EmptyState icon={ShieldOff} title="Not available to members">
-              This part of the dashboard is the super admin's. You see the projects you hold a role on, from Sites.
+            <EmptyState icon={ShieldOff} title="Only the owner's">
+              This part of the dashboard is the owner's. You see the projects you have a role on, from Sites.
             </EmptyState>
           )}
         </Panel>
@@ -102,10 +85,10 @@ function CurrentPage({ page }: { page: Page }) {
         <HomePage />
       ) : page.name === "connectors" ? (
         <ConnectorsPage />
-      ) : page.name === "team" ? (
-        <TeamPage />
-      ) : page.name === "members" ? (
-        <MembersPage />
+      ) : page.name === "tokens" ? (
+        <TokensPage />
+      ) : page.name === "people" ? (
+        <PeoplePage />
       ) : (
         <ActivityPage />
       )}

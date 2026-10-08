@@ -145,7 +145,7 @@ describe("planPortal, on the manifests from the sites repository", () => {
 
   test("a static site does not go behind the portal as long as validate() refuses it", () => {
     const plan = planPortal("vineyard", true, { manifest: VINEYARD, block: null });
-    expect(plan).toEqual({ kind: "rejects", message: "a static site cannot sit behind the portal yet" });
+    expect(plan).toEqual({ kind: "rejects", message: "a static site cannot be restricted yet" });
   });
 });
 
@@ -202,7 +202,7 @@ describe("planPortal refuses what the rules refuse", () => {
     const lock = `${JSON.stringify({ ...parsed(LIBRARY), lock: true }, null, 2)}\n`;
     expect(planPortal("library", true, { manifest: lock, block: blockOf(lock) })).toEqual({
       kind: "rejects",
-      message: "remove the preview lock first: bin/lock.sh disable",
+      message: "remove the preview code first: sitesolide unlock",
     });
   });
 });

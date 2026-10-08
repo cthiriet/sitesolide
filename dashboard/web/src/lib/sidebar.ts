@@ -3,9 +3,6 @@
  * the machine level as inside a site. Pure: the storage arrives as a parameter,
  * and so does the data.
  */
-import { readPortal } from "./access"
-import { splitGuests } from "./invitations"
-import type { Guest } from "./guests"
 import type { MachinePage, Section } from "./pages"
 import { fileProblems } from "./secrets"
 import { siteAccess, serviceSummaryOf } from "./sites"
@@ -65,7 +62,7 @@ export function downServices(sites: readonly Site[], now: number): number {
 function discrepancyIndicator(discrepancies: readonly Discrepancy[] | null): Indicator | null {
   if (discrepancies === null || discrepancies.length === 0) return null
   const error = discrepancies.some((discrepancy) => discrepancy.severity === "error")
-  return { count: discrepancies.length, tone: error ? "error" : "attention", label: plural(discrepancies.length, "refusal", "issues") }
+  return { count: discrepancies.length, tone: error ? "error" : "attention", label: plural(discrepancies.length, "issue", "issues") }
 }
 
 /**
@@ -74,7 +71,7 @@ function discrepancyIndicator(discrepancies: readonly Discrepancy[] | null): Ind
  * reports nothing, it is read when you go looking for it. Zero is not shown.
  */
 export function machineIndicators(discrepancies: readonly Discrepancy[] | null): Record<MachinePage, Indicator | null> {
-  return { home: discrepancyIndicator(discrepancies), activity: null, team: null, connectors: null, members: null }
+  return { home: discrepancyIndicator(discrepancies), activity: null, people: null, tokens: null, connectors: null }
 }
 
 export type SiteSources = {
@@ -82,30 +79,31 @@ export type SiteSources = {
   discrepancies: readonly Discrepancy[] | null
   /** The steward's project; null until it has been read. */
   project: ProjectView | null
-  /** The site in the snapshot, for its door; null if it is not there. */
+  /** The site in the snapshot, for its general access; null if it is not there. */
   site: Pick<Site, "portal" | "lock"> | null
-  /** This site's guest accesses alone; null until they have been read. */
-  guests: readonly Guest[] | null
-  now: number
   /** The server's time, against which the steward's dates are compared. */
   serverNow: number
 }
 
-/** The steward's portal if it has been read, the snapshot's otherwise: a disagreement has to show from both. */
-function gateDisagrees(project: ProjectView | null, site: Pick<Site, "portal" | "lock"> | null): boolean {
+/**
+ * General access in disagreement with sitesolide.json: the steward's view of
+ * the portal if it has been read, the snapshot's otherwise, a disagreement
+ * having to show from both.
+ */
+function accessDisagrees(project: ProjectView | null, site: Pick<Site, "portal" | "lock"> | null): boolean {
   const portal: Pick<PortalView, "requested" | "installed"> | null = project?.portal ?? null
-  if (portal !== null && readPortal(portal, "").tone === "error") return true
+  if (portal !== null && portal.requested !== portal.installed) return true
   return site !== null && siteAccess(site).kind === "mismatch"
 }
 
 /**
  * A site's sections, each with what makes you open it: its discrepancies for
  * Overview, what its files ask for in Secrets (a missing file as an error,
- * unmanaged or restart pending as attention), its active guests for Guests, a
- * door in disagreement for Access. Zero is not shown.
+ * unmanaged or restart pending as attention), general access in disagreement
+ * for Access. Zero is not shown.
  */
 export function siteIndicators(sources: SiteSources): Record<Section, Indicator | null> {
-  const { discrepancies, project, site, guests, now, serverNow } = sources
+  const { discrepancies, project, site, serverNow } = sources
 
   let secrets: Indicator | null = null
   if (project !== null) {
@@ -117,19 +115,13 @@ export function siteIndicators(sources: SiteSources): Record<Section, Indicator 
     }
   }
 
-  const active = guests === null ? 0 : splitGuests(guests, now).active.length
-  const guestsIndicator: Indicator | null =
-    active > 0 ? { count: active, tone: "neutral", label: plural(active, "active guest", "active guests") } : null
-
-  const access: Indicator | null = gateDisagrees(project, site)
-    ? { count: 1, tone: "error", label: "the gate disagrees with sitesolide.json" }
+  const access: Indicator | null = accessDisagrees(project, site)
+    ? { count: 1, tone: "error", label: "general access disagrees with sitesolide.json" }
     : null
 
   // Audience reports nothing: it is looked at, not watched over, and a pill on
-  // a traffic figure would cry wolf every Monday.
-  // Sharing reports nothing either: who a site is shared with is a choice,
-  // not a problem. Backups neither: their state is read by the section itself,
-  // and a failed run reaches the monitor.
-  // Members neither: who holds a role is a choice too.
-  return { overview: discrepancyIndicator(discrepancies), audience: null, secrets, guests: guestsIndicator, sharing: null, access, backups: null, members: null }
+  // a traffic figure would cry wolf every Monday. Who has access is a choice,
+  // not a problem: Access only reports a disagreement. Backups neither: their
+  // state is read by the section itself, and a failed run reaches the monitor.
+  return { overview: discrepancyIndicator(discrepancies), audience: null, secrets, access, backups: null }
 }

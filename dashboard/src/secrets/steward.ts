@@ -59,7 +59,7 @@ import {
   checkValue,
   type EnvDocument,
 } from "./envfile";
-import { latest, page, readPageQuery, RETURNED_ENTRIES, encodeEntry, MAX_FIELD, reread } from "./log";
+import { latest, page, readPageQuery, RETURNED_ENTRIES, encodeEntry, isAccessChange, mergeLogs, MAX_FIELD, reread } from "./log";
 import {
   MAX_FILE_BYTES,
   expectedText,
@@ -121,13 +121,13 @@ import { createConnectorRoutes } from "../connectors/steward";
 import type { ConnectorStore } from "../connectors/store";
 import { createBackupRoutes } from "../backup/routes";
 import type { BackupReader } from "../backup/reader";
-import { createMemberRoutes, type KeyState } from "../members/steward";
-import type { MembersSystem } from "../members/system";
-import { OWNER_ACTOR, type Roles } from "../members/protocol";
-import { createMemberActions, type Who } from "../members/actions";
+import { createMemberRoutes, type KeyState } from "../people/steward";
+import type { MembersSystem } from "../people/system";
+import { OWNER_ACTOR, type Roles } from "../people/protocol";
+import { createMemberActions, type Who } from "../people/actions";
 import type { MemberAuthority } from "../control/steward";
-import { machineRefusal, may } from "../members/powers";
-import { portalReading, type PortalAdmin } from "../members/portal";
+import { machineRefusal, may } from "../people/powers";
+import { portalReading, type PortalAdmin } from "../people/portal";
 import { createAccessRoutes, createAccessStore, type AccessRoutes, type AccessStore } from "../access/steward";
 import type { AccessSystem } from "../access/system";
 import type { GeneralView } from "../access/protocol";
@@ -178,7 +178,7 @@ export type StewardOptions = {
   backups?: BackupReader | null;
   /**
    * Access and the people who sign in to the dashboard, see src/access/ and
-   * src/members/. Absent, their routes do not exist, as on a steward that
+   * src/people/. Absent, their routes do not exist, as on a steward that
    * predates them, and the owner's socket answers nothing.
    */
   members?: {
@@ -187,7 +187,7 @@ export type StewardOptions = {
     access: AccessSystem;
     zone: string;
     /**
-     * The portal's admin API through the relay (src/members/portal.ts), asked
+     * The portal's admin API through the relay (src/people/portal.ts), asked
      * whether the portal reads the projection. Absent, it is not asked.
      */
     portal?: PortalAdmin | null;
@@ -445,12 +445,28 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   // --- Log -------------------------------------------------------------------
 
+  // The access log seeded from the journal if it does not exist yet, before
+  // the journal's next rotation can take what an earlier steward wrote there,
+  // then pruned: at startup, as the rate limiting is read.
+  const accessLogPrepared: Promise<void> = (async () => {
+    try {
+      await system.prepareAccessLog(system.now());
+    } catch (e) {
+      console.error(`access log: not prepared (${errorName(e)}), seeded at the first change of access`);
+    }
+  })();
+
   /**
    * The log never makes an operation fail: it keeps quiet and says so.
    * `variable` is passed separately and not read from the body: on a refusal, a
    * token pasted in the place of a name never enters it. `who` is what this
    * steward verified: the dashboard's password unless said otherwise, never a
    * name a request carries.
+   *
+   * Every line goes through here, whoever writes it: the access store, the
+   * access routes, a token's changes through the control routes, the people
+   * and their sessions. An accepted change of access goes to the access log,
+   * kept 180 days, everything else to the journal (log.ts).
    */
   async function writeLog(
     operation: Operation,
@@ -472,10 +488,16 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       variable,
       detail,
     };
+    const toAccessLog = isAccessChange(entry);
     try {
-      await system.appendLog(encodeEntry(entry));
+      if (toAccessLog) {
+        await accessLogPrepared;
+        await system.appendAccessLog(encodeEntry(entry), system.now());
+      } else {
+        await system.appendLog(encodeEntry(entry));
+      }
     } catch (e) {
-      console.error(`log: cannot write (${errorName(e)})`);
+      console.error(`${toAccessLog ? "access log" : "log"}: cannot write (${errorName(e)})`);
     }
   }
 
@@ -610,7 +632,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   /**
    * The site and the file a request names, within the scope. For a member,
    * never the machine's own: a platform project, or a file kept for root,
-   * whatever role a hand-edited registry would claim (src/members/powers.ts).
+   * whatever role a hand-edited registry would claim (src/people/powers.ts).
    */
   async function target(operation: Operation, body: Body, who: Who = OWNER): Promise<Target | Response> {
     const found = checkSite(await sites(), body.slug);
@@ -927,7 +949,11 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     if (slug !== null && !isSiteFolder(slug)) return error("invalid", "not a site name");
     const asked = readPageQuery(params);
     if (asked !== null && "error" in asked) return error("invalid", asked.error);
-    const entries = reread(await system.readLog());
+    // One history, the journal's and the access log's, sorted by date before
+    // `latest` takes its last lines or `page` its dates.
+    await accessLogPrepared;
+    const accessLog = await system.readAccessLog();
+    const entries = mergeLogs(reread(await system.readLog()), accessLog === null ? null : reread(accessLog));
     const body: LogResponse = asked === null ? { entries: latest(entries, RETURNED_ENTRIES, slug) } : { entries: page(entries, asked, slug), paged: true };
     return Response.json(body);
   }
@@ -1528,7 +1554,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
-   * A member's restart, the role already judged by src/members/steward.ts and
+   * A member's restart, the role already judged by src/people/steward.ts and
    * judged again here once the lock is taken. Unlike the Secrets section's, it
    * does not ask whether the unit reads a managed file: a member restarts a
    * service to restart it, not to apply a secret. The platform's own projects
@@ -1570,7 +1596,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   // --- Access and the people who sign in -----------------------------------------
 
   // The registry is the access store's (src/access/steward.ts); the people's
-  // sessions, keys and unlocks are the members routes' (src/members/steward.ts),
+  // sessions, keys and unlocks are the members routes' (src/people/steward.ts),
   // which read their roles from it at every request.
   const journalEvent = (event: { operation: Operation; result: "ok" | "rejects"; actor: string; member: string | null; slug?: string; detail: string | null }) =>
     writeLog(event.operation, event.result, event.slug === undefined ? null : { slug: event.slug }, bounded(event.detail), null, { actor: event.actor, member: event.member });
@@ -1645,7 +1671,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   // --- A person's work on their projects ------------------------------------------
 
   // The operations above, with the person as requester: their role judged by
-  // src/members/actions.ts, their session, unlock and role asked again under
+  // src/people/actions.ts, their session, unlock and role asked again under
   // the lock, the machine's own projects and files refused by `target`.
   const memberActions =
     members === null

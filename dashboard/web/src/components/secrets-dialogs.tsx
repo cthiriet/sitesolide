@@ -76,10 +76,10 @@ export function UnlockDialog({
     >
       <DialogContent initialFocus={field} finalFocus={focusReturn} className={cn("sm:max-w-md", INPUT_DIALOG)}>
         <DialogHeader>
-          <DialogTitle>Unlock secrets</DialogTitle>
+          <DialogTitle>Unlock</DialogTitle>
           <DialogDescription>
-            Enter the dashboard password again to show, copy and change values. Secrets lock again on their own after a
-            few minutes.
+            Enter the dashboard password again. For a few minutes you can then show and change secrets, give roles and
+            password access, and create tokens. It locks again on its own.
           </DialogDescription>
         </DialogHeader>
         <UnlockForm
@@ -97,11 +97,11 @@ export function UnlockDialog({
 }
 
 /**
- * A member's unlock: no password, which they do not have, but a forced sign-in
- * at the provider, which the page leaves for and comes back from. The steward
- * opens ten minutes for that member's session alone.
+ * A person's unlock: no password, which they do not have, but a forced
+ * sign-in at the provider, which the page leaves for and comes back from. The
+ * steward opens ten minutes for that person's session alone.
  */
-export function MemberUnlockDialog({
+export function PersonUnlockDialog({
   open,
   providerName,
   href,

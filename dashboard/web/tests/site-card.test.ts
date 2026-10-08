@@ -225,36 +225,36 @@ describe("a site's door", () => {
     url: code === null ? null : `https://a.test-zone.invalid/?key=${code}`,
   })
 
-  test("with no gate: no check, and what that means depending on the type", () => {
-    expect(readAccess(site())).toMatchObject({ title: "No gate", tone: "neutral", checks: [] })
+  test("public: no check, and what that means depending on the type", () => {
+    expect(readAccess(site())).toMatchObject({ title: "Public", tone: "neutral", checks: [] })
     expect(readAccess(site()).detail).toContain("the app handles its own sign-in")
-    expect(readAccess(site({ type: "static" })).detail).toContain("anyone with the address")
+    expect(readAccess(site({ type: "static" })).detail).toContain("Anyone with the address")
   })
 
-  test("the portal, requested and applied", () => {
+  test("restricted, requested and applied", () => {
     expect(readAccess(site({ portal: portal(true, true, ["/api/*"]) }))).toMatchObject({
       access: { kind: "portal", exemptions: ["/api/*"] },
-      title: "Portal",
+      title: "Restricted",
       tone: "neutral",
-      checks: [{ door: "Portal", requested: "Requested", applied: "In the live Caddy block", tone: "ok" }],
+      checks: [{ setting: "Restricted", requested: "Requested", applied: "In the live Caddy block", tone: "ok" }],
     })
   })
 
-  test("the preview lock, requested and its code in effect", () => {
+  test("the preview code, requested and in effect", () => {
     expect(readAccess(site({ lock: lock(true, "K7PX3M") }))).toMatchObject({
       access: { kind: "code", code: "K7PX3M" },
-      title: "Preview lock",
-      checks: [{ door: "Preview lock", requested: "Requested", applied: "Code in effect", tone: "ok" }],
+      title: "Anyone with the code",
+      checks: [{ setting: "Preview code", requested: "Requested", applied: "Code in effect", tone: "ok" }],
     })
   })
 
   /** The worst state: the manifest says closed, Caddy serves in the clear. The check shows which side. */
   test("a disagreement reads as an error, with the side that is missing", () => {
     const expose = readAccess(site({ portal: portal(true, false) }))
-    expect(expose).toMatchObject({ title: "Portal not applied: served unprotected", tone: "error" })
-    expect(expose.detail).toContain("anyone can reach the site")
+    expect(expose).toMatchObject({ title: "Restricted, not applied: open to anyone", tone: "error" })
+    expect(expose.detail).toContain("anyone can open the site")
     expect(expose.checks).toEqual([
-      { door: "Portal", requested: "Requested", applied: "Missing from the live Caddy block", tone: "error" },
+      { setting: "Restricted", requested: "Requested", applied: "Missing from the live Caddy block", tone: "error" },
     ])
 
     expect(readAccess(site({ portal: portal(false, true) })).checks[0]).toMatchObject({

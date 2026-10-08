@@ -216,7 +216,7 @@ export function viewOf(team: Team, record: TokenRecord): TokenView {
   return { ...view, scope: { ...record.scope, slugs: [...record.scope.slugs] }, owned: ownedBy(team, record.id), member: member ?? null };
 }
 
-/** The holder as minted. A member's token is narrowed to the member's rights before anyone reads it (src/members/tokens.ts). */
+/** The holder as minted. A member's token is narrowed to the member's rights before anyone reads it (src/people/tokens.ts). */
 export function identityOf(team: Team, record: TokenRecord): Identity {
   return {
     id: record.id,

@@ -16,7 +16,7 @@
  * look for their password first.
  *
  * **A member mints their own tokens**, under their own unlock, never stronger
- * than their roles (src/members/tokens.ts): this steward reads the members
+ * than their roles (src/people/tokens.ts): this steward reads the members
  * registry when one is minted, and again at every use of it, so that a role
  * lowered, the create right taken back or a member removed holds from the
  * next request. A project a member's token creates makes that member its
@@ -35,9 +35,9 @@
 import type { RandomSource } from "../sessions";
 import { isValidSlug, servicesOf, readManifest as parseManifest } from "../../borrowed/manifest";
 import { unitArgument } from "../../borrowed/unit";
-import type { MemberEvent, MemberPrincipal } from "../members/steward";
+import type { MemberEvent, MemberPrincipal } from "../people/steward";
 import type { AccessRoutes } from "../access/steward";
-import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../members/tokens";
+import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../people/tokens";
 import { decideSlug, reservedReason, type SlugDecision } from "./policy";
 import {
   CONTROL_STATUSES,
@@ -74,7 +74,7 @@ import {
 } from "./tokens";
 
 /**
- * What this steward asks the members routes (src/members/steward.ts) for a
+ * What this steward asks the members routes (src/people/steward.ts) for a
  * member's tokens: their session and unlock, their rights as the registry
  * reads now, and the project one of their tokens creates.
  */

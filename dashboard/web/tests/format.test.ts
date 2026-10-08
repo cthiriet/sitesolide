@@ -5,12 +5,10 @@ import {
   fromNow,
   dateTime,
   duration,
-  guestDuration,
   ago,
   size,
   sizeOutOf,
 } from "../src/lib/format"
-import { GUEST_DURATIONS } from "../src/lib/guests"
 
 const SECONDE = 1000
 const MINUTE = 60 * SECONDE
@@ -108,24 +106,5 @@ describe("expiry dates", () => {
   test("an expiry carries the month, the day and the time", () => {
     expect(dateTime(Date.UTC(2026, 8, 22, 21, 3), "UTC")).toBe("Sep 22, 21:03")
     expect(dateTime(Date.UTC(2026, 0, 5, 9, 0), "UTC")).toBe("Jan 5, 09:00")
-  })
-})
-
-describe("guest access durations", () => {
-  /**
-   * The portal supplies a label in French, which the page does not display: its
-   * own is computed from the seconds, the only value the portal judges.
-   */
-  test("every duration in the menu gets an English label", () => {
-    expect(GUEST_DURATIONS.map((option) => guestDuration(option.seconds))).toEqual([
-      "24 hours",
-      "7 days",
-      "30 days",
-      "No expiry",
-    ])
-  })
-
-  test("a single hour is stated in the singular", () => {
-    expect(guestDuration(3600)).toBe("1 hour")
   })
 })

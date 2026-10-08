@@ -16,7 +16,7 @@
  * choose, no padding, and a signature that does not depend on a random draw
  * at signing time. The key pair is drawn by the steward, which keeps the
  * public half and lays the private half where only the portal's account reads
- * it: see dashboard/src/members/keys.ts.
+ * it: see dashboard/src/people/keys.ts.
  *
  * ## The shape
  *

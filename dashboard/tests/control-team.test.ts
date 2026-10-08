@@ -53,19 +53,19 @@ const REQUEST = { label: "Ada", email: "ada@test-zone.invalid", expiresAt: null,
 
 describe("the Team page's routes", () => {
   test("the list needs a session, and says when the steward is too old", async () => {
-    expect((await setup({ signedIn: false }).routes.team(new Request("http://x/api/team"))).status).toBe(401);
-    expect(await (await setup().routes.team(new Request("http://x/api/team"))).json()).toMatchObject({ available: true, tokens: [view], until: null });
-    expect(await (await setup({ old: true }).routes.team(new Request("http://x/api/team"))).json()).toMatchObject({ available: false, reason: NOT_AVAILABLE_REASON });
+    expect((await setup({ signedIn: false }).routes.team(new Request("http://x/api/tokens"))).status).toBe(401);
+    expect(await (await setup().routes.team(new Request("http://x/api/tokens"))).json()).toMatchObject({ available: true, tokens: [view], until: null });
+    expect(await (await setup({ old: true }).routes.team(new Request("http://x/api/tokens"))).json()).toMatchObject({ available: false, reason: NOT_AVAILABLE_REASON });
   });
 
   test("creating: the exact origin, a session, the dashboard unlocked", async () => {
     const s = setup();
-    expect((await s.routes.createToken(post("/api/team/tokens", REQUEST, "https://evil.test-zone.invalid"))).status).toBe(403);
-    expect((await s.routes.createToken(post("/api/team/tokens", REQUEST))).status).toBe(423);
+    expect((await s.routes.createToken(post("/api/tokens", REQUEST, "https://evil.test-zone.invalid"))).status).toBe(403);
+    expect((await s.routes.createToken(post("/api/tokens", REQUEST))).status).toBe(423);
     expect(s.sent).toEqual([]);
 
     s.tokens.set(SESSION, { token: "unlock-token", expiresAt: Date.now() + 60_000 });
-    const response = await s.routes.createToken(post("/api/team/tokens", REQUEST));
+    const response = await s.routes.createToken(post("/api/tokens", REQUEST));
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual({ token: view, secret: "sst_the-value-shown-once" });
     expect(s.sent).toEqual([{ token: "unlock-token", ...REQUEST }]);
@@ -77,14 +77,14 @@ describe("the Team page's routes", () => {
   test("an unlock the steward forgot is forgotten here too", async () => {
     const s = setup({ stewardLocked: true });
     s.tokens.set(SESSION, { token: "stale", expiresAt: Date.now() + 60_000 });
-    expect((await s.routes.createToken(post("/api/team/tokens", REQUEST))).status).toBe(423);
+    expect((await s.routes.createToken(post("/api/tokens", REQUEST))).status).toBe(423);
     expect(s.tokens.read(SESSION)).toBeNull();
   });
 
   test("revoking needs a session and the origin, not the unlock, and is audited", async () => {
     const s = setup();
-    expect((await s.routes.revokeToken(post("/api/team/revoke", { id: view.id }, "null"))).status).toBe(403);
-    const response = await s.routes.revokeToken(post("/api/team/revoke", { id: view.id }));
+    expect((await s.routes.revokeToken(post("/api/tokens/revoke", { id: view.id }, "null"))).status).toBe(403);
+    const response = await s.routes.revokeToken(post("/api/tokens/revoke", { id: view.id }));
     expect(response.status).toBe(200);
     expect(s.store.listAudit(5)[0]).toMatchObject({ actor: "owner", action: "token.revoke", detail: { id: view.id } });
   });
@@ -92,8 +92,8 @@ describe("the Team page's routes", () => {
   test("what the Activity page reads of a creation and a revocation carries neither the token nor the unlock", async () => {
     const s = setup();
     s.tokens.set(SESSION, { token: "unlock-token-never-audited", expiresAt: Date.now() + 60_000 });
-    expect((await s.routes.createToken(post("/api/team/tokens", REQUEST))).status).toBe(201);
-    expect((await s.routes.revokeToken(post("/api/team/revoke", { id: view.id }))).status).toBe(200);
+    expect((await s.routes.createToken(post("/api/tokens", REQUEST))).status).toBe(201);
+    expect((await s.routes.revokeToken(post("/api/tokens/revoke", { id: view.id }))).status).toBe(200);
     const rows = s.store.readAudit(null, 10);
     expect(rows.map((row) => row.action)).toEqual(["token.revoke", "token.create"]);
     const handed = JSON.stringify(rows);

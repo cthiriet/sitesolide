@@ -1,5 +1,5 @@
 /**
- * The Tokens page's routes, `/api/team/*`: the owner's side of the control API,
+ * The Tokens page's routes, `/api/tokens`: the owner's side of the control API,
  * behind the dashboard's session like every other page.
  *
  * Same stance as src/secrets/routes.ts: the dashboard checks the origin, the
@@ -13,7 +13,7 @@
  * back once, in the answer to the creation, and is never stored here.
  *
  * Every creation and revocation goes into the audit, actor `owner`. A member's
- * own tokens answer at the same addresses through src/members/relay.ts, and
+ * own tokens answer at the same addresses through src/people/relay.ts, and
  * the steward journals them under the member's email.
  */
 import type { SessionReader } from "../routes";
@@ -62,7 +62,7 @@ async function readBody(req: Request): Promise<Record<string, unknown> | null> {
 
 /** What the page says when the steward does not carry the control routes yet. */
 export const NOT_AVAILABLE_REASON =
-  "The steward on this machine does not have the control API yet: run sitesolide upgrade, then sitesolide setup again for this machine, without --minimal if the team installer is missing.";
+  "The steward on this machine does not have the control API yet: run sitesolide upgrade, then sitesolide setup again for this machine, without --minimal if the installer is missing.";
 
 export function createTeamRoutes(dependencies: TeamDependencies, clock: () => number = Date.now): TeamRoutes {
   const { session, publicUrl, steward, tokens, store } = dependencies;

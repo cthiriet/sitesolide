@@ -21,7 +21,7 @@ import { createMachine, type Systemctl } from "../gatekeeper/real";
 import { readBounded, writeAtomically } from "../secrets/system";
 import { readRegistry, rightsOf } from "../access/registry";
 import { REGISTRY_NAME } from "../access/protocol";
-import { installScope, type MemberRights } from "../members/tokens";
+import { installScope, type MemberRights } from "../people/tokens";
 import { INSTALLER_RUN_FOLDER, MAX_ENTRIES, MAX_EXTRACTED_BYTES, MAX_LOG_LINE, MAX_LOG_LINES, MAX_PATH_BYTES, type InstallerResult, type InstallRequest } from "../control/protocol";
 import { extract } from "./extract";
 import { readLaunch, readRequest } from "./instance";
@@ -182,7 +182,7 @@ export async function main(argv: string[], env: Environment, overrides: { comman
 
   // A member's token: its scope narrowed once more to the member's roles as
   // the registry reads now, the request's copy being the steward's of a few
-  // seconds ago. See src/members/tokens.ts.
+  // seconds ago. See src/people/tokens.ts.
   if (request.token.member !== null) {
     const narrowed = installScope(request.scope, memberRights(stateFolder, request.token.member), slug, request.creating);
     if ("refusal" in narrowed) {

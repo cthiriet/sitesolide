@@ -1,10 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { SignIn } from "@/components/signin"
 import { UnreachableScreen } from "@/components/page"
-import { signOut as postSignOut, readState, readGuests, readSecrets, readSession } from "@/lib/api"
+import { signOut as postSignOut, readState, readSecrets, readSession } from "@/lib/api"
 import { currentAge } from "@/lib/format"
-import { loadFailureReason } from "@/lib/invitations"
-import type { Guest } from "@/lib/guests"
 import {
   UNREACHABLE,
   clockOffset,
@@ -21,7 +19,7 @@ import { NO_DATA, verdict as judge, type Verdict } from "@/lib/verdict"
  * reads nothing again, and the sidebar counts what the pages show.
  *
  * The reads live here; the writes stay in the pages that make them (secrets,
- * guests), which call `reload()` afterwards.
+ * access), which call `reload()` afterwards.
  */
 
 /** The page refreshes twice a minute, the collector reading once. */
@@ -101,7 +99,7 @@ export function useSecrets(generation: number, onSessionExpired: () => void, ena
     return tache
   }, [onSessionExpired])
 
-  // Read only by whom it concerns: a member who is a Viewer everywhere has none.
+  // Read only by whom it concerns: a person who is a Viewer everywhere has none.
   useEffect(() => {
     if (enabled) void reload()
   }, [reload, generation, enabled])
@@ -112,49 +110,6 @@ export function useSecrets(generation: number, onSessionExpired: () => void, ena
     () => ({ projects, until, problem, reload, setUnlockedUntil: setUnlockedUntil, reportUnreachable }),
     [projects, until, problem, reload, reportUnreachable],
   )
-}
-
-// --- The guest accesses ----------------------------------------------------------
-
-export type GuestList =
-  | { state: "loading" }
-  | { state: "error"; message: string }
-  | { state: "ready"; guests: Guest[] }
-
-export type GuestsData = {
-  list: GuestList
-  /** Reads the list again. `showLoading` goes back to the skeleton first, for a "Retry". */
-  reload: (options?: { showLoading?: boolean }) => Promise<void>
-}
-
-/**
- * The guest accesses, read again with every snapshot: a guest's last visit
- * moves while the page stays open. A failure after a successful read replaces
- * the list with its reason: a stale list of accesses would suggest that an
- * access revoked elsewhere still opens.
- */
-export function useGuests(generation: number, onSessionExpired: () => void, enabled = true): GuestsData {
-  const [list, setList] = useState<GuestList>({ state: "loading" })
-
-  const reload = useCallback(
-    async (options: { showLoading?: boolean } = {}) => {
-      if (options.showLoading === true) setList({ state: "loading" })
-      const { status, body } = await readGuests()
-      if (status === 401) return onSessionExpired()
-      if (status === 200 && body !== null && Array.isArray(body.guests)) {
-        return setList({ state: "ready", guests: body.guests })
-      }
-      setList({ state: "error", message: loadFailureReason(status) })
-    },
-    [onSessionExpired],
-  )
-
-  // Read only by whom it concerns: the super admin, a Project admin.
-  useEffect(() => {
-    if (enabled) void reload()
-  }, [reload, generation, enabled])
-
-  return useMemo(() => ({ list, reload }), [list, reload])
 }
 
 // --- The context -----------------------------------------------------------------
@@ -180,13 +135,12 @@ export type Data = {
   refresh: () => void
   secrets: SecretsData
   secretsBySite: ReadonlyMap<string, SiteSecretsPanel>
-  guests: GuestsData
   /** To be called on a 401: the sign-in comes over the top of the page, losing nothing. */
   sessionExpired: () => void
   signOut: () => void
-  /** Who is signed in: the owner, or a member and their roles. */
+  /** Who is signed in: the owner, or a person and their roles. */
   identity: IdentityView | null
-  /** Whether the portal offers its provider, and under which name: a member unlocks through it. */
+  /** Whether the portal offers its provider, and under which name: a person unlocks through it. */
   sso: SsoOffer
 }
 
@@ -202,7 +156,7 @@ export function useData(): Data {
 type Received = { reading: Reading; receivedAt: number }
 
 /**
- * An open session: the snapshot, its cadence, the secrets and the guests.
+ * An open session: the snapshot, its cadence and the secrets.
  * Unmounted on sign-out, and everything it held with it.
  */
 function OpenSession({
@@ -225,7 +179,7 @@ function OpenSession({
   const [currentConfigured, setConfigured] = useState(configured)
   const [currentIdentity, setIdentity] = useState(identity)
   const [currentSso, setSso] = useState(sso)
-  const member = currentIdentity !== null && currentIdentity.kind === "member"
+  const person = currentIdentity !== null && currentIdentity.kind === "person"
   const [generation, setGeneration] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const inFlight = useRef(false)
@@ -306,12 +260,10 @@ function OpenSession({
     void postSignOut().then(() => onClosed(currentConfigured))
   }, [onClosed, currentConfigured])
 
-  // A member reads the secrets of the projects where they are a Developer or
-  // a Project admin, and the guests of those where they are a Project admin;
-  // the steward and the service decide what comes back.
-  const roles = currentIdentity !== null && currentIdentity.kind === "member" ? Object.values(currentIdentity.roles) : []
-  const secrets = useSecrets(generation, sessionExpired, !member || roles.some((role) => role !== "viewer"))
-  const guests = useGuests(generation, sessionExpired, !member || roles.includes("admin"))
+  // A person reads the secrets of the projects where they are a Developer or
+  // an Admin; the steward and the service decide what comes back.
+  const roles = currentIdentity !== null && currentIdentity.kind === "person" ? Object.values(currentIdentity.roles) : []
+  const secrets = useSecrets(generation, sessionExpired, !person || roles.some((role) => role !== "viewer"))
   const bySite = useMemo(() => secretsBySite(secrets.projects), [secrets.projects])
 
   const reading = received?.reading ?? null
@@ -332,15 +284,14 @@ function OpenSession({
       refresh: () => void refresh(),
       secrets,
       secretsBySite: bySite,
-      guests,
       sessionExpired,
       signOut,
       identity: currentIdentity,
       sso: currentSso,
     }
-  }, [reading, receivedAt, now, failure, inProgress, generation, refresh, secrets, bySite, guests, sessionExpired, signOut, currentIdentity, currentSso])
+  }, [reading, receivedAt, now, failure, inProgress, generation, refresh, secrets, bySite, sessionExpired, signOut, currentIdentity, currentSso])
 
-  // Signed in again: who it is may have changed, a member in the owner's place.
+  // Signed in again: who it is may have changed, a person in the owner's place.
   const open = useCallback(() => {
     void readSession().then(({ body }) => {
       if (body !== null && body.open) setIdentity(body.identity)

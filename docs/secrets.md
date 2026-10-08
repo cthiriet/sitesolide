@@ -31,7 +31,7 @@ the owner ever changes a password hash, which takes the dashboard's own
 password, nor touches a file of the platform's projects. A Developer or an
 Admin unlocks by signing in again with the identity provider, never with a
 password, for ten minutes: see
-[team.md](team.md#people-with-access-beside-tokens) and
+[access.md](access.md#people-with-access-beside-tokens) and
 [dashboard/README.md](../dashboard/README.md#access).
 
 ## Where a secret lands, and to whom it belongs

@@ -1,8 +1,11 @@
 /**
- * The log of the steward's operations, one JSON line per operation.
+ * The log of the steward's operations, one JSON line per operation, in two
+ * files: the journal, `journal.jsonl`, and the access log, `access-log.jsonl`,
+ * which keeps the accepted changes of access apart (see "The access log"
+ * below).
  *
- * Pure: encodes, re-reads, truncates. Appending to the file belongs to
- * system.ts.
+ * Pure: encodes, re-reads, truncates, prunes, merges. Appending to the files
+ * belongs to system.ts.
  *
  * No entry carries a value, nor the hash of a value: the hash of a short value
  * is found again by raw force. The shape of `LogEntry` already forbids
@@ -258,7 +261,7 @@ export function latest(entries: LogEntry[], n: number = RETURNED_ENTRIES, slug: 
   return kept.slice(-n).reverse();
 }
 
-/** The most `GET /log` hands over at once when asked for a page: half the file at its fullest. */
+/** The most `GET /log` hands over at once when asked for a page: half the journal at its fullest. */
 export const MAX_PAGE_ENTRIES = 500;
 
 export type PageQuery = { limit: number; before: number | null };
@@ -304,4 +307,137 @@ export function truncate(text: string, max: number = MAX_LINES, kept: number = K
   if (lines[lines.length - 1] === "") lines.pop();
   if (lines.length <= max) return null;
   return `${lines.slice(-kept).join("\n")}\n`;
+}
+
+// --- The access log ------------------------------------------------------------------
+
+/**
+ * The access log: every accepted change of access, kept 180 days, in a file
+ * of its own beside the journal, in the journal's very format.
+ *
+ * **Why a file of its own.** The journal rotates by line count, past 1,000
+ * lines down to its last 500, and every unlock, read and sign-in writes to
+ * it: on a busy week a change of access made a month ago is pushed out, and
+ * who let whom in is the question an audit is read for. Rows marked to be
+ * kept inside the journal would not do either: once the protected rows alone
+ * passed its cap, every append would rewrite a file that only grows. A
+ * separate file has its own bound and its own rule, by age, and since its
+ * lines are the journal's (`LogEntry`, `encodeEntry`, `reread`), nothing
+ * that reads lines changes. The portal kept sharing and guest changes 180
+ * days before the steward took them over: the same, here.
+ *
+ * **What goes there**: a line whose operation is a change of access and
+ * whose result is `ok` (`isAccessChange`). A refusal is not a change: it
+ * stays in the journal, bounded per minute, rotated with the rest.
+ */
+export const ACCESS_LOG_NAME = "access-log.jsonl";
+
+/**
+ * The operations of a change of access: the registry's, and the names a
+ * journal written before it carries, so that the rows of an earlier steward
+ * are recognized when the access log is seeded and when the journal is
+ * filtered.
+ */
+export const ACCESS_OPERATIONS: ReadonlySet<Operation> = new Set<Operation>([
+  "access.add",
+  "access.change",
+  "access.remove",
+  "access.migrate",
+  "people.create",
+  "member.invite",
+  "member.role",
+  "member.remove",
+  "sharing",
+  "guest.create",
+  "guest.revoke",
+]);
+
+/** How long a change of access is kept: the portal's audit kept them as long. */
+export const ACCESS_RETENTION_MS = 180 * 24 * 3600 * 1000;
+
+/**
+ * The bound on the access log whatever happens, a flood of changes by a
+ * token included: past it, the oldest go, young as they may be. Some 5 MB
+ * at the length of a usual line.
+ */
+export const ACCESS_MAX_LINES = 20_000;
+
+/** The access log is pruned at most this often, on the append that follows, and at startup. */
+export const ACCESS_PRUNE_INTERVAL_MS = 3600 * 1000;
+
+/**
+ * Past this size it is pruned on the next append whatever the hour: within
+ * an hour a flood could otherwise take the file past what it is read with,
+ * after which neither a reader nor the pruning itself could read it again.
+ */
+export const ACCESS_PRUNE_BYTES = 12 * 1024 * 1024;
+
+/**
+ * What the access log is read with: a third above the size that has it
+ * pruned, so that it always reads whole. Its cap fills some 5 MB.
+ */
+export const ACCESS_READ_BYTES = 16 * 1024 * 1024;
+
+/** Does this line belong in the access log rather than the journal: an accepted change of access. */
+export function isAccessChange(entry: LogEntry): boolean {
+  return ACCESS_OPERATIONS.has(entry.operation) && entry.result === "ok";
+}
+
+/** The date of a line as it was written, null for one that does not parse or carries none. */
+function lineDate(line: string): number | null {
+  try {
+    const parsed: unknown = JSON.parse(line);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    const a = (parsed as Record<string, unknown>).a;
+    return typeof a === "number" && Number.isFinite(a) ? a : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The access log pruned: the lines older than the retention dropped, then
+ * the newest `max` kept, newest by place in the file, which only grows at
+ * its end. A line that carries no date is dropped too: no reader could read
+ * it either. Null when nothing is dropped, so that the file is rewritten
+ * only when it changes.
+ */
+export function pruneAccessLog(text: string, now: number, retentionMs: number = ACCESS_RETENTION_MS, max: number = ACCESS_MAX_LINES): string | null {
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  const cutoff = now - retentionMs;
+  const recent = lines.filter((line) => {
+    const a = lineDate(line);
+    return a !== null && a >= cutoff;
+  });
+  const kept = recent.length > max ? recent.slice(-max) : recent;
+  if (kept.length === lines.length) return null;
+  return kept.length === 0 ? "" : `${kept.join("\n")}\n`;
+}
+
+/**
+ * The access log's first content, made from the journal when the file does
+ * not exist yet: the accepted changes of access an earlier steward wrote
+ * there, which the journal's rotation would otherwise take away. Encoded
+ * again, so that a line from before the actor was named reads the same in
+ * either file.
+ */
+export function accessLogSeed(journalText: string): string {
+  return reread(journalText).filter(isAccessChange).map(encodeEntry).join("");
+}
+
+/**
+ * What `GET /log` reads: the journal and the access log as one history, by
+ * date, oldest first, as `latest` and `page` expect. Within one millisecond
+ * the order is the files' own, the journal's lines before the access log's,
+ * so that a page asked again lists them in the same order.
+ *
+ * The journal's own accepted changes of access are left out: an access log
+ * that exists was seeded with them. Null, no access log yet, and the
+ * journal is read whole, as before it.
+ */
+export function mergeLogs(journal: LogEntry[], accessLog: LogEntry[] | null): LogEntry[] {
+  if (accessLog === null) return [...journal].sort((x, y) => x.a - y.a);
+  // A stable sort: equal dates keep the order of the concatenation.
+  return [...journal.filter((entry) => !isAccessChange(entry)), ...accessLog].sort((x, y) => x.a - y.a);
 }

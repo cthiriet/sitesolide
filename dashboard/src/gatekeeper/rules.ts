@@ -40,8 +40,8 @@ export function fixedRefusal(slug: string, manifest: Manifest | null): string | 
  * the page must say them: what would have to be changed, not the rule broken.
  */
 const REASONS: [prefix: string, reason: string][] = [
-  ["portal: only a project with `start`", "a static site cannot sit behind the portal yet"],
-  ["portal: a site behind the portal needs no preview lock", "remove the preview lock first: bin/lock.sh disable"],
+  ["portal: only a project with `start`", "a static site cannot be restricted yet"],
+  ["portal: a site behind the portal needs no preview lock", "remove the preview code first: sitesolide unlock"],
   ["portal: not yet on a customer domain", "not on a customer domain, only under the served zone"],
 ];
 

@@ -125,7 +125,7 @@ export function createDashboardAdmin(options: DashboardAdminOptions, clock: () =
   /** Why nothing is offered, or null when everything a dashboard sign-in needs is there. */
   function unavailable(): Response | null {
     if (options.key === null || options.settings === null || host === null || !isValidHost(host)) {
-      return respond({ error: "not-offered", message: "signing in with a work account is not configured on this portal" }, 404);
+      return respond({ error: "not-offered", message: "signing in with a company account is not configured on this portal" }, 404);
     }
     return null;
   }

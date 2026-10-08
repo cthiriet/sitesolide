@@ -152,7 +152,7 @@ export function readSettings(env: Record<string, string | undefined>, publicUrl:
       clientSecret,
       allowedDomains: domains.values,
       admins: admins.values,
-      providerName: named?.slice(0, 40) ?? KNOWN_PROVIDERS[new URL(issuer).hostname] ?? "your work account",
+      providerName: named?.slice(0, 40) ?? KNOWN_PROVIDERS[new URL(issuer).hostname] ?? "your company account",
       redirectUri: `${origin}/oidc/callback`,
       portalOrigin: origin,
     },

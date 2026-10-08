@@ -19,11 +19,11 @@ export type SourceEntry = { key: AuditSource; label: string; description: string
 
 /** In the order the server lists them. */
 export const SOURCES: readonly SourceEntry[] = [
-  { key: "dashboard", label: "Dashboard", description: "Team tokens, and the deployments they make" },
-  { key: "portal", label: "Portal", description: "Sign-ins, sign-outs and who gets in" },
+  { key: "dashboard", label: "Dashboard", description: "Tokens, and the deployments they make" },
+  { key: "portal", label: "Portal", description: "Sign-ins and sign-outs on restricted sites" },
   { key: "egress", label: "Egress", description: "Refused destinations, connector calls and changes" },
   { key: "backups", label: "Backups", description: "Scheduled runs and restores" },
-  { key: "steward", label: "Steward", description: "Secrets, portal doors and restarts" },
+  { key: "steward", label: "Steward", description: "Secrets, access and restarts" },
 ]
 
 export function sourceLabel(source: AuditSource): string {
@@ -180,13 +180,13 @@ const times = (n: number | null) => (n === null || n <= 1 ? null : `${n} times`)
 /** Why the portal refused a sign-in, in words. An unknown reason is shown as it is. */
 const SIGNIN_REFUSALS: Readonly<Record<string, string>> = {
   "domain-not-allowed": "domain not allowed",
-  "unmanaged-account": "not a work account",
+  "unmanaged-account": "not a company account",
   "unverified-email": "email not verified",
   "no-email": "no email shared",
   "unusable-email": "unusable email",
   "provider-error": "cancelled or refused by the provider",
   "provider-unreachable": "provider unreachable",
-  "not-shared": "site not shared with them",
+  "not-shared": "no access to the site",
   "expired-session": "session expired",
 }
 
@@ -202,9 +202,10 @@ function word(table: Readonly<Record<string, string>>, key: string | null): stri
 }
 
 /**
- * The steward's operations on secrets, doors and services, as distinct from
- * its members' events and from a Project admin's change it refused before it
- * reached the portal or the backups, which record those that go through.
+ * The steward's operations on secrets, general access and services, as
+ * distinct from its access and sign-in events and from an Admin's change it
+ * refused before it reached the portal or the backups, which record those
+ * that go through.
  */
 type StewardOperation = Exclude<
   Operation,
@@ -222,20 +223,21 @@ type StewardOperation = Exclude<
   | "project.remove"
 >
 
-/** What a Project admin's change the steward refused tried to do. */
+/** What an Admin's change the steward refused tried to do, in rows written before the access registry. */
 const REFUSED_CHANGES: Readonly<Record<string, string>> = {
-  "sharing.update": "Tried to change who gets in",
-  "guest.create": "Tried to give a guest access",
-  "guest.revoke": "Tried to revoke a guest access",
+  "sharing.update": "Tried to change who can open it",
+  "guest.create": "Tried to give password access",
+  "guest.revoke": "Tried to remove password access",
   "backup.restore": "Tried to restore a snapshot",
 }
 
-/** A member's role, or its absence, as the steward journals a refusal by role. */
+/** A person's role, or its absence, as the steward journals a refusal by role. */
 function roleNote(note: string | null): string | null {
   if (note === null) return null
   if (note === "no role") return "Refused: no role on this project"
   const role = note.startsWith("role ") ? note.slice("role ".length) : null
-  return role === null ? `Refused: ${note}` : `Refused: ${role === "admin" ? "project admin" : role} here`
+  const words: Readonly<Record<string, string>> = { visitor: "Can open", viewer: "Viewer", developer: "Developer", admin: "Admin" }
+  return role === null ? `Refused: ${note}` : `Refused: ${Object.hasOwn(words, role) ? words[role] : role} here`
 }
 
 /** The steward's operation behind an action, for the words its own Activity always used. */
@@ -249,7 +251,7 @@ const STEWARD_OPERATIONS: Readonly<Record<string, StewardOperation>> = {
   "secrets.restore": "restore",
   "secrets.replace": "replace",
   "secrets.password": "password",
-  "door.update": "portal",
+  "access.general": "portal",
   "service.restart": "restart",
 }
 
@@ -263,7 +265,7 @@ const DONE: Readonly<Record<StewardOperation, string>> = {
   restore: "Restored the previous",
   replace: "Replaced",
   password: "Changed",
-  portal: "Changed the portal",
+  portal: "Changed general access",
   restart: "Restarted",
 }
 
@@ -277,11 +279,11 @@ const TRIED: Readonly<Record<StewardOperation, string>> = {
   restore: "Tried to restore the previous",
   replace: "Tried to replace",
   password: "Tried to change",
-  portal: "Tried to change the portal",
+  portal: "Tried to change general access",
   restart: "Tried to restart",
 }
 
-/** Why the steward refused a member's sign-in, in words. An unknown reason is shown as it is. */
+/** Why the steward refused a person's sign-in, in words. An unknown reason is shown as it is. */
 const MEMBER_REFUSALS: Readonly<Record<string, string>> = {
   "not-a-member": "no role on the dashboard",
   "no-role": "no role on the dashboard",
@@ -311,10 +313,10 @@ function stewardWords(row: AuditRow, operation: StewardOperation): AuditWords {
   const ok = entry.result === "ok"
   const tone: Tone = outcome.tone === "ok" ? "neutral" : outcome.tone
   if (operation === "portal") {
-    // The journal writes the door's direction first: "on, ok", "off, failure".
+    // The journal writes the direction first: "on, ok" restricted the site, "off, failure" tried to make it public.
     const direction = entry.detail?.split(",")[0]?.trim()
-    const door = direction === "on" ? "on" : direction === "off" ? "off" : null
-    const summary = door === null ? (ok ? DONE.portal : TRIED.portal) : `${ok ? "Turned" : "Tried to turn"} ${door} the portal`
+    const summary =
+      direction === "on" ? (ok ? "Restricted it" : "Tried to restrict it") : direction === "off" ? (ok ? "Made it public" : "Tried to make it public") : ok ? DONE.portal : TRIED.portal
     return { summary, note: ok ? null : entry.result === "rejects" ? "Refused" : "Failed", tone }
   }
   const { object, kind } = operationParts(entry)
@@ -333,7 +335,7 @@ export function auditWords(row: AuditRow): AuditWords {
   if (Object.hasOwn(REFUSED_CHANGES, row.action) && row.source === "steward") {
     return { summary: REFUSED_CHANGES[row.action]!, note: roleNote(text(detail.note)), tone: "attention" }
   }
-  // A Project admin's change of a member: the project is the target, the member in the detail.
+  // An Admin's change of someone's access: the project is the target, the person in the detail.
   const member = text(detail.member)
 
   switch (row.action) {
@@ -355,17 +357,17 @@ export function auditWords(row: AuditRow): AuditWords {
       return { summary: "Dashboard sign-in refused", note: word(MEMBER_REFUSALS, text(detail.note)), tone: "attention" }
     case "dashboard.signout":
       return { summary: "Signed out of the dashboard", note: null, tone: "neutral" }
-    // Rows written before the access registry.
+    // Rows written before the access registry, in today's words.
     case "member.invite":
-      if (text(detail.result) === "rejects") return { summary: "Tried to invite someone", note: roleNote(text(detail.note)), tone: "attention" }
-      return { summary: `Invited ${member ?? row.target ?? "a member"}`, note: text(detail.note), tone: "neutral" }
+      if (text(detail.result) === "rejects") return { summary: "Tried to give someone a role", note: roleNote(text(detail.note)), tone: "attention" }
+      return { summary: `Gave ${member ?? row.target ?? "someone"} a role`, note: text(detail.note), tone: "neutral" }
     case "member.role":
       if (text(detail.result) === "rejects") return { summary: "Tried to change someone's role", note: roleNote(text(detail.note)), tone: "attention" }
-      return { summary: `Changed the roles of ${member ?? row.target ?? "a member"}`, note: text(detail.note), tone: "neutral" }
+      return { summary: `Changed the roles of ${member ?? row.target ?? "someone"}`, note: text(detail.note), tone: "neutral" }
     case "member.remove":
-      return { summary: `Removed the member ${member ?? row.target ?? ""}`.trim(), note: null, tone: "neutral" }
+      return { summary: `Took ${member ?? row.target ?? "someone"} off every project`, note: null, tone: "neutral" }
     case "member.signin":
-      return { summary: "Signed in to the dashboard with a work account", note: null, tone: "neutral" }
+      return { summary: "Signed in to the dashboard with a company account", note: null, tone: "neutral" }
     case "member.signin_failed":
       return { summary: "Dashboard sign-in refused", note: word(MEMBER_REFUSALS, text(detail.note)), tone: "attention" }
     case "member.signout":
@@ -373,7 +375,7 @@ export function auditWords(row: AuditRow): AuditWords {
 
     case "token.create":
     case "token.revoke": {
-      // A member's own token, journaled by the steward: its id and scope in the note.
+      // A person's own token, journaled by the steward: its id and scope in the note.
       if (row.source === "steward") {
         const refused = text(detail.result) === "rejects"
         if (row.action === "token.create") {
@@ -388,7 +390,7 @@ export function auditWords(row: AuditRow): AuditWords {
       return { summary: row.action === "token.create" ? `Created a token for ${holder}` : `Revoked the token of ${holder}`, note: null, tone: "neutral" }
     }
     case "project.create":
-      return { summary: "Created the project with a token, project admin of it", note: text(detail.note), tone: "neutral" }
+      return { summary: "Created the project with a token, Admin of it", note: text(detail.note), tone: "neutral" }
     case "project.remove":
       return { summary: "Removed the project: its name free for another token", note: text(detail.note), tone: "neutral" }
     case "deploy.start":
@@ -428,17 +430,17 @@ export function auditWords(row: AuditRow): AuditWords {
         [list(detail.domainsRemoved).length, "domain removed", "domains removed"],
       ] as const
       const note = changes.filter(([n]) => n > 0).map(([n, one, many]) => plural(n, one, many)).join(", ")
-      const summary = mode !== null && mode !== previous ? `Changed who gets in to ${word(SHARING_MODES, mode)}` : "Changed who gets in"
+      const summary = mode !== null && mode !== previous ? `Changed who can open it to ${word(SHARING_MODES, mode)}` : "Changed who can open it"
       return { summary, note: note === "" ? null : note, tone: "neutral" }
     }
 
     case "guest.create": {
       const label = text(detail.label)
-      return { summary: label === null ? "Gave a guest access" : `Gave a guest access to ${label}`, note: null, tone: "neutral" }
+      return { summary: label === null ? "Gave password access" : `Gave password access to ${label}`, note: null, tone: "neutral" }
     }
     case "guest.revoke": {
       const label = text(detail.label)
-      return { summary: label === null ? "Revoked a guest access" : `Revoked the guest access of ${label}`, note: null, tone: "neutral" }
+      return { summary: label === null ? "Removed a password access" : `Removed the password access of ${label}`, note: null, tone: "neutral" }
     }
 
     case "egress.denied":
@@ -469,7 +471,7 @@ export function auditWords(row: AuditRow): AuditWords {
   }
 }
 
-/** Who acted. A token says whose it is when the row knows: the member whose own token it is, or the holder's email. */
+/** Who acted. A token says whose it is when the row knows: the person whose own token it is, or the holder's email. */
 export function actorLabel(row: AuditRow): string {
   const email = text(row.detail?.member) ?? text(row.detail?.email)
   if (row.actor.startsWith("token:") && email !== null) return `${email} (${row.actor})`

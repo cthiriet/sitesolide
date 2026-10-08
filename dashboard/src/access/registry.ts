@@ -250,7 +250,7 @@ export function isDashboardPerson(registry: Registry, email: string): boolean {
 /**
  * What a person who signs in holds now: their roles above Can open, and the
  * create right; null for someone who does not sign in to the dashboard.
- * The shape of src/members/tokens.ts's `MemberRights`, which a person's own
+ * The shape of src/people/tokens.ts's `MemberRights`, which a person's own
  * tokens are narrowed to at every use, and by the installer when it starts.
  */
 export function rightsOf(registry: Registry, email: string): { email: string; roles: Record<string, "viewer" | "developer" | "admin">; create: boolean } | null {

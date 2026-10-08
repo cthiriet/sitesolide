@@ -43,7 +43,7 @@ steward (root) --> /etc/sitesolide-portal/access.json, root:site-portal 0640
                    who may open each site, written after every change of access;
                    the portal reads it again whenever it changes
 
-dashboard (site-dashboard) --> portal 127.0.0.1:3026 /admin/sharing (how people sign in), /admin/audit,
+dashboard (site-dashboard) --> portal 127.0.0.1:3026 /admin/sharing (how people sign in, its old name kept), /admin/audit,
                                /admin/dashboard/flow, /admin/dashboard/redeem
                                never through Caddy
 root, the steward's relay   --> portal 127.0.0.1:3026 /admin/access, what the portal reads its access from
@@ -109,7 +109,7 @@ asks you to commit it. Until then `bin/deploy-caddy.sh`, `sitesolide lock`,
 `unlock`, `domain` and `remove` refuse to contradict the machine, and say so.
 
 General access is switched by the owner, or by an Admin of the project,
-unlocked (see [docs/team.md](../docs/team.md#people-with-access-beside-tokens)).
+unlocked (see [docs/access.md](../docs/access.md#people-with-access-beside-tokens)).
 A token never switches it: a deployment leaves an existing site's general
 access as it finds it.
 
@@ -166,12 +166,13 @@ then: 24 hours, 7 days (the default), 30 days or none. A token never gives it.
   provider, so it is no identity.
 - **Changing the owner's password** also signs password access out, without
   invalidating the passwords.
-- **Given before the registry, as guest access**, it was carried over with its
-  identifier, its hash and its expiry: the passwords handed out and the cookies
-  in circulation keep working. One given under a name rather than an email
+- **Given before the registry**, when the portal kept these passwords in its
+  own `invites` table, it was carried over with its identifier, its hash and
+  its expiry: the passwords handed out and the cookies in circulation keep
+  working. One given under a name rather than an email
   keeps that name ("Client Bob"), and signs in as `password:<id>` in the audit.
 
-## Signing in with a work account
+## Signing in with a company account
 
 Optional, and off until the portal's environment says otherwise: without the
 settings below the portal behaves exactly as it always has, and its sign-in page
@@ -260,7 +261,7 @@ portal runs.
 | `OIDC_CLIENT_SECRET` | its secret; read back only after Unlock, like any secret |
 | `OIDC_ALLOWED_DOMAINS` | optional, comma separated: only emails at these domains may sign in at all, and with Google only accounts of their Workspace (`hd`), see below. They are the company's domains of the access rules: a person at one of them may be given any role, anyone else password access. Empty, anyone the provider vouches for may sign in, and still only opens the sites they have access to |
 | `OIDC_ADMIN_EMAILS` | optional, comma separated: always let in, on every restricted site, as `admin`, and shown as such in the dashboard's *People* |
-| `OIDC_PROVIDER_NAME` | optional, the button's label after "Sign in with". Defaults to Google or Microsoft from their issuer, "your work account" otherwise |
+| `OIDC_PROVIDER_NAME` | optional, the button's label after "Sign in with". Defaults to Google or Microsoft from their issuer, "your company account" otherwise |
 
 The callback to register at the provider is the portal's own address followed
 by `/oidc/callback`: **`https://portal.<zone>/oidc/callback`**, with your zone in
@@ -394,8 +395,8 @@ nobody signs in to the dashboard; the sites are untouched.
 
 **A forced sign-in, for a person's unlock.** Someone signed in to the
 dashboard reads or writes their projects' secrets, changes a site's general
-access, restores its data, or gives someone a role above Can open only
-unlocked, and they unlock by signing in again
+access, restores its data, gives someone a role above Can open, or gives
+password access only unlocked, and they unlock by signing in again
 ([dashboard/README.md](../dashboard/README.md#a-persons-unlock)). The
 dashboard then asks for a flow with `reauth`: the portal's session spares
 nothing, the provider is asked for `max_age=0`, and for `prompt=login` unless
@@ -431,7 +432,7 @@ The steward decides, the portal reads. A restricted site opens to:
 **Every role opens the site.** Viewer, Developer and Admin are the project's
 roles in the dashboard, each including the ones below, and Can open is the
 lowest rung: someone given Developer on a project opens its restricted site
-as someone given Can open does. [docs/team.md](../docs/team.md#people-with-access-beside-tokens)
+as someone given Can open does. [docs/access.md](../docs/access.md#people-with-access-beside-tokens)
 says what each role does in the dashboard. The portal only asks "may this
 person open the site", and passes the role on.
 
@@ -451,9 +452,10 @@ it in its journal, `access.add`, `access.change` or `access.remove`:
 
 A domain is Can open only, and only once a provider is configured. A person
 outside the company's domains is Can open only, with password access. Giving
-someone a role above Can open asks for the unlock of whoever gives it in the
-dashboard; Can open, removing someone and lowering them never wait.
-[docs/team.md](../docs/team.md#giving-access-to-what-you-deployed) has the
+someone a role above Can open, or password access, asks for the unlock of
+whoever gives it in the dashboard; Can open for a company account or a
+domain, removing someone and lowering them never wait.
+[docs/access.md](../docs/access.md#giving-access-to-what-you-deployed) has the
 holder's side.
 
 **The projection.** After every change the steward writes
@@ -510,8 +512,8 @@ copies it onto the request the site receives:
 | `X-Sitesolide-Role` | `admin` for the owner's password and an admin email; for a company account, the role of their entry, the higher of their own and their domain's: `visitor` (Can open), `viewer`, `developer` or `admin`; `visitor` for password access |
 
 **It changed with the access registry.** Before it, the role read `member` for
-anyone the site's sharing let in and `guest` for a password guest. An app that
-compared it with either must be updated: `guest` is now `visitor` with no
+anyone the site's list let in and `guest` for someone with a password. An app
+that compared it with either must be updated: `guest` is now `visitor` with no
 `X-Sitesolide-User`, and `member` is now the person's own role. Password access
 carries no `X-Sitesolide-User` because its email was typed by whoever gave the
 access, never verified by a provider.
@@ -626,10 +628,10 @@ of the repository shares (`id`, `at` in ISO 8601 UTC, `actor`, `action`,
 | `portal.signin` | `owner`, the email, or for password access the email it was given to, `password:<id>` for a name carried over from before the registry | `method`: `password`, `password-access` or `oidc`, and the `role` for an identity; `count` when repeated |
 | `portal.signin_failed` | `anonymous`, or the email when the provider named one | `method`, and for a provider the `reason`: `bad-signature`, `wrong-audience`, `expired`, `wrong-nonce`, `unverified-email`, `unusable-email`, `domain-not-allowed`, `unmanaged-account`, `not-shared`, `wrong-browser`, `expired-session`...; a dashboard's sign-in refused here names the dashboard's host, and a code carried to the wrong side reads `wrong-audience` too |
 | `portal.signout` | who the cookie names, as for a sign-in | none, or `count` when repeated |
-| `sharing.update`, `guest.create`, `guest.revoke` | in rows written before the registry alone, as they were written | a site's old sharing changed, a guest access created or revoked; the portal writes none any more |
+| `sharing.update`, `guest.create`, `guest.revoke` | in rows written before the registry alone, as they were written | who could open a site changed, a password access given or removed; the portal writes none any more |
 
-Rows from before the registry also name a guest's sign-in `guest:<access>`,
-its `method` `guest`, and read as they were written. A change of who may open
+Rows from before the registry also name a password access's sign-in
+`guest:<access>`, its `method` `guest`, and read as they were written. A change of who may open
 a site is the steward's to record now, in its journal, under the owner, an
 Admin's email or `token:<id>`: `access.add`, `access.change`, `access.remove`,
 and `access.migrate` once, actor `system`, when the registry was made. The
@@ -731,13 +733,13 @@ account*, which asks the provider to choose.
   change the registry, which is root's, nor the projection, which root writes
   and it only reads; and it records no change of access any more, so it can
   write none under anyone's name.
-- A compromised dashboard cannot give anyone a role above Can open, nor the
-  right to create projects, without the owner's live unlock or a person's
-  forced sign-in, which it does not hold. It can give Can open, password
-  access included, under the owner's name or that of a person whose session
-  passes through it, as it could share a site and create guest access before:
-  only through the steward, which judges the change by its rules and records
-  it. It can take off anyone the owner, or that person, may take off, since
+- A compromised dashboard cannot give anyone a role above Can open, password
+  access, nor the right to create projects, without the owner's live unlock or
+  a person's forced sign-in, which it does not hold. It can give Can open to
+  people who sign in with a company account and to the company's domains,
+  under the owner's name or that of a person whose session passes through it,
+  as it could open a site to them before the registry: only through the
+  steward, which judges the change by its rules and records it. It can take off anyone the owner, or that person, may take off, since
   closing never waits. It never sees a password hash nor an access's
   identifier, the steward handing it views alone; a password it gives, it sees
   once, as the person at the page would. During an unlock it can also make a site Public, retyping the slug
@@ -822,7 +824,7 @@ wait for the next. Every command is run by the author, from the workstation.
    no sign-in asked; a password access still opens its site. The blocks of the other sites are
    untouched: they keep working, and pass no identity yet.
 2. **The dashboard.** `cd dashboard && sitesolide deploy`. It starts saying, for
-   a site behind the portal, that signing in with a work account is not set up,
+   a site behind the portal, that signing in with a company account is not set up,
    and its snapshot which blocks pass the identity headers.
 3. **The steward**, `bin/deploy-steward.sh`, before setting any `OIDC_*`
    variable: an older steward refuses them in `portal.env`, and declares a

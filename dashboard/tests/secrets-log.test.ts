@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  ACCESS_MAX_LINES,
+  ACCESS_OPERATIONS,
+  ACCESS_RETENTION_MS,
+  accessLogSeed,
+  isAccessChange,
+  mergeLogs,
+  pruneAccessLog,
   EARLIER_FIELDS,
   EARLIER_OPERATIONS,
   EARLIER_RESULTS,
@@ -272,5 +279,99 @@ describe("pages, for the Activity page", () => {
   test("of one site when it is named", () => {
     const entries = [entry(1, { slug: "cms" }), entry(2, { slug: "shop" }), entry(3, { slug: "cms" })];
     expect(page(entries, { limit: 10, before: null }, "cms").map((one) => one.a)).toEqual([3, 1]);
+  });
+});
+
+describe("the access log", () => {
+  const DAY = 24 * 3600 * 1000;
+  const NOW = 1_800_000_000_000;
+  const access = (a: number, others: Partial<LogEntry> = {}) =>
+    entry(a, { operation: "access.add", actor: "owner", member: "carol@acme.test", slug: "blog", file: null, variable: null, detail: "carol@acme.test: Can open", ...others });
+  const text = (entries: LogEntry[]) => entries.map(encodeEntry).join("");
+
+  test("an accepted change of access goes there, a refusal and everything else stay in the journal", () => {
+    for (const operation of ["access.add", "access.change", "access.remove", "access.migrate", "people.create"] as const) {
+      expect(isAccessChange(access(1, { operation }))).toBe(true);
+      expect(isAccessChange(access(1, { operation, result: "rejects" }))).toBe(false);
+      expect(isAccessChange(access(1, { operation, result: "failure" }))).toBe(false);
+    }
+    // The names an earlier steward wrote changes of access under.
+    for (const operation of ["member.invite", "member.role", "member.remove", "sharing", "guest.create", "guest.revoke"] as const) {
+      expect(isAccessChange(access(1, { operation }))).toBe(true);
+    }
+    for (const operation of ["unlock", "read", "set", "dashboard.signin", "member.signin", "token.create", "project.create"] as const) {
+      expect(isAccessChange(access(1, { operation }))).toBe(false);
+    }
+    for (const operation of ACCESS_OPERATIONS) expect(OPERATIONS).toContain(operation);
+  });
+
+  test("pruned by age: older than 180 days goes, the very day of the bound stays; nothing dropped, nothing rewritten", () => {
+    const lines = [access(NOW - ACCESS_RETENTION_MS - 1, { detail: "old" }), access(NOW - ACCESS_RETENTION_MS, { detail: "bound" }), access(NOW - DAY, { detail: "recent" })];
+    const pruned = pruneAccessLog(text(lines), NOW);
+    expect(pruned).not.toBeNull();
+    expect(reread(pruned!).map((one) => one.detail)).toEqual(["bound", "recent"]);
+    expect(pruned!.endsWith("\n")).toBe(true);
+    expect(pruneAccessLog(pruned!, NOW)).toBeNull();
+    expect(pruneAccessLog("", NOW)).toBeNull();
+    // Everything too old: an empty file, not a refusal to prune.
+    expect(pruneAccessLog(text([access(NOW - 200 * DAY)]), NOW)).toBe("");
+  });
+
+  test("pruned by count: past the cap the newest by place in the file stay, however young the rest", () => {
+    const lines = Array.from({ length: 7 }, (_, i) => access(NOW - DAY, { detail: `line ${i}` }));
+    expect(reread(pruneAccessLog(text(lines), NOW, ACCESS_RETENTION_MS, 5)!).map((one) => one.detail)).toEqual(["line 2", "line 3", "line 4", "line 5", "line 6"]);
+    expect(pruneAccessLog(text(lines.slice(0, 5)), NOW, ACCESS_RETENTION_MS, 5)).toBeNull();
+    expect(ACCESS_MAX_LINES).toBe(20_000);
+    expect(ACCESS_RETENTION_MS).toBe(180 * DAY);
+  });
+
+  test("a line that carries no date is dropped: no reader could read it either", () => {
+    const kept = access(NOW - DAY);
+    const pruned = pruneAccessLog(`${encodeEntry(kept)}{"a":"soon"}\n{torn\n[]\n`, NOW);
+    expect(pruned).toBe(encodeEntry(kept));
+  });
+
+  test("seeded from the journal with its accepted changes of access alone, a line from before the actor was named included", () => {
+    const earlier = JSON.stringify({ a: 5, operation: "sharing", result: "ok", slug: "blog", file: null, variable: null, detail: "on" });
+    const journal = [
+      encodeEntry(entry(1)),
+      encodeEntry(access(2)),
+      encodeEntry(access(3, { result: "rejects", detail: "refused" })),
+      encodeEntry(access(4, { operation: "people.create", slug: null, detail: "carol@acme.test: may create projects" })),
+      `${earlier}\n`,
+      "{torn",
+    ].join("");
+    const seed = accessLogSeed(journal);
+    expect(reread(seed).map((one) => [one.a, one.operation, one.actor])).toEqual([
+      [2, "access.add", "owner"],
+      [4, "people.create", "owner"],
+      [5, "sharing", "owner"],
+    ]);
+    // In the journal's very format: encoded again, read back the same.
+    expect(text(reread(seed))).toBe(seed);
+    expect(accessLogSeed("")).toBe("");
+  });
+
+  test("one history: by date, the journal's lines before the access log's within a millisecond, each file in its order", () => {
+    const journal = [entry(10, { variable: "J1" }), entry(30, { variable: "J2" }), entry(20, { variable: "J3" }), entry(30, { variable: "J4" })];
+    const accessLog = [access(15, { detail: "A1" }), access(30, { detail: "A2" }), access(30, { detail: "A3" })];
+    const merged = mergeLogs(journal, accessLog);
+    expect(merged.map((one) => one.variable ?? one.detail)).toEqual(["J1", "A1", "J3", "J2", "J4", "A2", "A3"]);
+    // `latest` takes the end of it, `page` its dates, both newest first.
+    expect(latest(merged, 3).map((one) => one.variable ?? one.detail)).toEqual(["A3", "A2", "J4"]);
+    expect(page(merged, { limit: 3, before: null }).map((one) => one.variable ?? one.detail)).toEqual(["A3", "A2", "J4"]);
+    expect(page(merged, { limit: 10, before: 30 }).map((one) => one.variable ?? one.detail)).toEqual(["J3", "A1", "J1"]);
+    // Asked again, the same order.
+    expect(mergeLogs(journal, accessLog)).toEqual(merged);
+  });
+
+  test("the journal's own accepted changes of access are left out once there is an access log, which holds them; refusals stay", () => {
+    const journal = [entry(1), access(2, { detail: "seeded" }), access(3, { result: "rejects", detail: "refused" })];
+    const accessLog = [access(2, { detail: "seeded" }), access(4, { detail: "new" })];
+    expect(mergeLogs(journal, accessLog).map((one) => one.detail ?? one.variable)).toEqual(["TOKEN", "seeded", "refused", "new"]);
+    // No access log yet: the journal is read whole.
+    expect(mergeLogs(journal, null).map((one) => one.detail ?? one.variable)).toEqual(["TOKEN", "seeded", "refused"]);
+    // Of one site, as before.
+    expect(latest(mergeLogs(journal, [...accessLog, access(5, { slug: "shop", detail: "shop" })]), 50, "shop").map((one) => one.detail)).toEqual(["shop"]);
   });
 });

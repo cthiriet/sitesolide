@@ -108,7 +108,7 @@ describe("the lock", () => {
     );
     expect(messages(snapshot, "client")).toHaveLength(1);
     expect(snapshot.discrepancies[0]?.severity).toBe("error");
-    expect(snapshot.discrepancies[0]?.message).toContain("lock.sh enable client");
+    expect(snapshot.discrepancies[0]?.message).toContain('"sitesolide lock" from the client folder');
   });
 
   test("a lower-case or too short code does not count as a code", () => {
@@ -128,7 +128,7 @@ describe("the lock", () => {
       }),
     );
     expect(snapshot.discrepancies[0]?.severity).toBe("error");
-    expect(snapshot.discrepancies[0]?.message).toContain("lock.sh disable client");
+    expect(snapshot.discrepancies[0]?.message).toContain('"sitesolide unlock" from the client folder');
   });
 
   test("an unreadable code table says so instead of keeping quiet", () => {
@@ -432,13 +432,13 @@ describe("the machine's special cases", () => {
 });
 
 describe("the portal's door", () => {
-  const PROTEGE = { slug: "kanban", port: 3045, start: "bun run server.ts", portal: true };
+  const RESTRICTED = { slug: "kanban", port: 3045, start: "bun run server.ts", portal: true };
   /** What bin/cli/portal.ts writes into the block, and the collector reads back. */
   const WITH_DOOR = "forward_auth @portal_guard 127.0.0.1:3026 {\n\turi /verifier\n}";
 
   test("a protected site whose block carries the door has nothing to flag", () => {
     const snapshot = buildSnapshot(
-      raw([folder("kanban", PROTEGE), folder("portal", { slug: "portal", port: 3026, start: "bun run server.ts" }, { unit: unit() })], {
+      raw([folder("kanban", RESTRICTED), folder("portal", { slug: "portal", port: 3026, start: "bun run server.ts" }, { unit: unit() })], {
         blocks: { kanban: WITH_DOOR },
       }),
     );
@@ -450,7 +450,7 @@ describe("the portal's door", () => {
 
   test("a block that hands the site who is in says so", () => {
     const current = generateFragment({ slug: "kanban", port: 3045, start: "bun run server.ts", portal: true })!;
-    const snapshot = buildSnapshot(raw([folder("kanban", PROTEGE)], { blocks: { kanban: current } }));
+    const snapshot = buildSnapshot(raw([folder("kanban", RESTRICTED)], { blocks: { kanban: current } }));
     expect(snapshot.sites[0]?.portal).toMatchObject({ installed: true, identity: true });
   });
 
@@ -459,23 +459,23 @@ describe("the portal's door", () => {
     // believes their site is closed. That is exactly what this dashboard
     // exists to show.
     const snapshot = buildSnapshot(
-      raw([folder("kanban", PROTEGE)], { blocks: { kanban: "reverse_proxy 127.0.0.1:3045" } }),
+      raw([folder("kanban", RESTRICTED)], { blocks: { kanban: "reverse_proxy 127.0.0.1:3045" } }),
     );
     expect(snapshot.sites[0]?.portal.installed).toBe(false);
-    expect(messages(snapshot, "kanban")).toContainEqual(expect.stringContaining("served unprotected"));
+    expect(messages(snapshot, "kanban")).toContainEqual(expect.stringContaining("anyone can open the site"));
     expect(snapshot.discrepancies.find((e) => e.slug === "kanban")?.severity).toBe("error");
   });
 
   test("a door installed that the manifest no longer asks for", () => {
     const snapshot = buildSnapshot(
-      raw([folder("kanban", { ...PROTEGE, portal: undefined })], { blocks: { kanban: WITH_DOOR } }),
+      raw([folder("kanban", { ...RESTRICTED, portal: undefined })], { blocks: { kanban: WITH_DOOR } }),
     );
     expect(messages(snapshot, "kanban")).toContainEqual(expect.stringContaining("no longer asks for it"));
   });
 
   test("the exemptions are taken from the manifest, never guessed", () => {
     const snapshot = buildSnapshot(
-      raw([folder("roster", { ...PROTEGE, slug: "roster", portalExempt: ["/webhooks/*", 42] })], {
+      raw([folder("roster", { ...RESTRICTED, slug: "roster", portalExempt: ["/webhooks/*", 42] })], {
         blocks: { roster: WITH_DOOR },
       }),
     );
@@ -484,12 +484,12 @@ describe("the portal's door", () => {
 
   test("the portal's service being stopped is said once, not per site", () => {
     const snapshot = buildSnapshot(
-      raw([folder("kanban", PROTEGE), folder("roster", { ...PROTEGE, slug: "roster" })], {
+      raw([folder("kanban", RESTRICTED), folder("roster", { ...RESTRICTED, slug: "roster" })], {
         blocks: { kanban: WITH_DOOR, roster: WITH_DOOR },
       }),
     );
     expect(messages(snapshot, "portal")).toContainEqual(
-      expect.stringContaining("2 site(s) behind the portal"),
+      expect.stringContaining("2 restricted site(s)"),
     );
   });
 

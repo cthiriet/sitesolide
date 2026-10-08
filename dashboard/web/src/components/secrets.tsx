@@ -30,9 +30,11 @@ import { cn } from "@/lib/utils"
  * Locked, a single button says what it does, with a key rather than a padlock:
  * a closed "Locked" pill beside an open padlock on the button read as two
  * states at once. Unlocked, a warning pill with the time left joins it, since
- * the values are then one click away, and the button locks again.
+ * the values are then one click away, and the button locks again. `quiet`
+ * where the page's own primary action is elsewhere, Add on Access and the
+ * like: one primary per view.
  */
-export function SecretsLockControl() {
+export function SecretsLockControl({ quiet = false }: { quiet?: boolean }) {
   const { state, locking, lockButtonRef, unlock, lock } = useSecretsActions()
   return (
     <>
@@ -50,7 +52,7 @@ export function SecretsLockControl() {
       {/* One single button, whose label changes: focus stays on it from one state to the next. */}
       <Button
         ref={lockButtonRef}
-        variant={state.open ? "outline" : "default"}
+        variant={state.open || quiet ? "outline" : "default"}
         disabled={locking}
         onClick={state.open ? lock : unlock}
         className="max-md:h-10 max-md:px-3.5"
@@ -193,7 +195,7 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
               const variableTarget = { ...target, variable }
               const rowOffer = variableOffer(file, variable)
               if (rowOffer === "password") {
-                return <PasswordRow key={variable} name={variable} onChangePassword={actions.member ? null : () => actions.changePassword(variableTarget)} />
+                return <PasswordRow key={variable} name={variable} onChangePassword={actions.person ? null : () => actions.changePassword(variableTarget)} />
               }
               return (
                 <VariableRow

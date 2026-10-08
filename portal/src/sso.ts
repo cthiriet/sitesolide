@@ -132,7 +132,7 @@ export const SIGNED_OUT_DURATION_S = 30 * 24 * 3600;
 const REFUSALS: Record<string, string> = {
   "domain-not-allowed": "This account's domain isn't allowed to sign in here.",
   "stale-authentication": "Your identity provider didn't ask you to sign in again. Go back to the dashboard and unlock again; if it keeps happening, your provider ignores forced sign-ins.",
-  "unmanaged-account": "This account isn't one of your organization's: sign in with your work account.",
+  "unmanaged-account": "This account isn't one of your organization's: sign in with your company account.",
   "unverified-email": "Your identity provider didn't confirm this account's email address.",
   "no-email": "Your identity provider didn't share this account's email address.",
   "unusable-email": "Your identity provider sent an email address this server can't use.",
@@ -220,7 +220,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
     // portal knows, whatever host the flow names.
     const dashboard = options.dashboardOrigin ?? null;
     if (flow.audience === "dashboard" && dashboard === null) {
-      return page(404, "Not available.", "Signing in to the dashboard with a work account isn't available on this server.", null, cookies);
+      return page(404, "Not available.", "Signing in to the dashboard with a company account isn't available on this server.", null, cookies);
     }
     const minting = options.handoffs.mint(
       { host: flow.host, binding: flow.binding, returnTo: flow.returnTo, identity, sessionExpiry, authTime, audience: flow.audience, reauth },
@@ -244,7 +244,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       const params = new URL(req.url).searchParams;
       const returnTo = safeReturnTo(params.get("retour"));
       if (options.key === null || options.settings === null) {
-        return door(returnTo, 404, "Signing in with a work account isn't available here.", []);
+        return door(returnTo, 404, "Signing in with a company account isn't available here.", []);
       }
 
       const now = clock();
@@ -260,7 +260,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
 
     async start(req) {
       if (options.key === null || options.settings === null || options.provider === null) {
-        return page(404, "Not available.", "Signing in with a work account isn't configured on this server.", null);
+        return page(404, "Not available.", "Signing in with a company account isn't configured on this server.", null);
       }
       const now = clock();
       const nowS = Math.floor(now / 1000);
@@ -310,7 +310,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
 
     async callback(req) {
       if (options.key === null || options.settings === null || options.provider === null) {
-        return page(404, "Not available.", "Signing in with a work account isn't configured on this server.", null);
+        return page(404, "Not available.", "Signing in with a company account isn't configured on this server.", null);
       }
       const now = clock();
       const nowS = Math.floor(now / 1000);
@@ -370,7 +370,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       const host = hostOf(req);
       if (host === null) return new Response("portal: unknown host", { status: 400, headers: headers([]) });
       if (options.key === null || options.settings === null) {
-        return door("/", 404, "Signing in with a work account isn't available here.", []);
+        return door("/", 404, "Signing in with a company account isn't available here.", []);
       }
       const now = clock();
       // The binding is spent with the code: one flow, one redemption.
@@ -407,7 +407,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
 
     signOut(req) {
       if (options.key === null || options.settings === null) {
-        return page(404, "Not available.", "Signing in with a work account isn't configured on this server.", null);
+        return page(404, "Not available.", "Signing in with a company account isn't configured on this server.", null);
       }
       const host = readSignOut(options.key, new URL(req.url).searchParams.get("ticket"), Math.floor(clock() / 1000));
       if (host === null) {

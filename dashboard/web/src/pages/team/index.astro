@@ -3,11 +3,11 @@ import Layout from "@/layouts/main.astro"
 import { Application } from "@/components/application"
 ---
 
-<Layout title="Team · sitesolide">
+<Layout title="sitesolide">
   <!--
-    The same island on every page, with the path of the served file. The tokens
-    arrive through /api/team, behind the session; nothing is rendered at build
-    time.
+    An address from before the Tokens page, kept so that bookmarks keep
+    working: the island reads it as its equivalent, then replaces the address
+    with the new one (lib/pages.ts, redirect).
   -->
   <Application client:load path="/team/" />
 </Layout>

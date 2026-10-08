@@ -1,0 +1,13 @@
+---
+import Layout from "@/layouts/main.astro"
+import { Application } from "@/components/application"
+---
+
+<Layout title="Tokens · sitesolide">
+  <!--
+    The same island on every page, with the path of the served file. The tokens
+    arrive through /api/tokens, behind the session; nothing is rendered at build
+    time.
+  -->
+  <Application client:load path="/tokens/" />
+</Layout>

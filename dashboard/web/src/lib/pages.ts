@@ -4,12 +4,10 @@
  * into an address, and the navigation component uses it both ways.
  *
  * Two levels. The machine's: the home page, where the machine, its
- * discrepancies and the list of sites live, the machine's audit, the
- * connectors the egress proxy lends, and the team, whose tokens deploy
- * without SSH. A
- * site's: seven sections, Overview, Audience, Secrets, Guests, Sharing, Access
- * and Backups, the site as a parameter, and an eighth, Members, for a
- * project's Project admins.
+ * discrepancies and the list of sites live, the machine's audit, the People
+ * with a role somewhere, the Tokens that deploy without SSH, and the
+ * connectors the egress proxy lends. A site's: five sections, Overview,
+ * Audience, Secrets, Access and Backups, the site as a parameter.
  *
  * Every page is a file of the build, `site/secrets/index.html` for
  * `/site/secrets/`: Caddy serves `public/` through `file_server`, with no
@@ -20,18 +18,20 @@
  * Addresses are written with the trailing slash. `file_server` redirects
  * `/site` to `/site/`, and a link without it would cost a round trip.
  *
- * The addresses from before the per-site page, `/sites/`, `/secrets/` and
- * `/guests/`, keep their file so bookmarks keep working: they are read like
- * their equivalent, and navigation replaces the address with the new one.
+ * Older addresses keep their file so bookmarks keep working: `/sites/`,
+ * `/secrets/` and `/guests/` from before the per-site page, `/team/` and
+ * `/members/` from before Tokens and People, and a site's Guests, Sharing and
+ * Members from before its one Access section. They are read like their
+ * equivalent, and navigation replaces the address with the new one.
  */
 import type { IdentityView, Role } from "./types"
 import type { Verdict } from "./verdict"
 
 /** A site's sections, in the order of the sidebar and the tabs. */
-export type Section = "overview" | "audience" | "secrets" | "guests" | "sharing" | "access" | "backups" | "members"
+export type Section = "overview" | "audience" | "secrets" | "access" | "backups"
 
 /** The pages of the machine level. */
-export type MachinePage = "home" | "activity" | "team" | "connectors" | "members"
+export type MachinePage = "home" | "activity" | "people" | "tokens" | "connectors"
 
 export type Page = { name: MachinePage } | { name: "site"; slug: string; section: Section }
 
@@ -42,58 +42,59 @@ export type SectionEntry = { section: Section; title: string; path: string }
 export const MACHINE_PAGES: readonly MachineEntry[] = [
   { name: "home", title: "Sites", path: "/" },
   { name: "activity", title: "Activity", path: "/activity/" },
-  { name: "team", title: "Team", path: "/team/" },
-  { name: "members", title: "Members", path: "/members/" },
+  { name: "people", title: "People", path: "/people/" },
+  { name: "tokens", title: "Tokens", path: "/tokens/" },
   { name: "connectors", title: "Connectors", path: "/connectors/" },
 ]
 
 /**
- * What a member sees: their projects on the home page, the activity of their
- * projects, the Team page for their own tokens when a role or the create
- * right lets them mint one, and in a site the sections their role there
- * opens, the steward's own table (src/members/powers.ts): a Viewer its
- * Overview and Audience; a Developer its Secrets too, values write-only; a
- * Project admin everything of the site, and its Members. The rest is the
- * super admin's, hidden here and refused by the service.
+ * What a person signed in with their company account sees: their projects on
+ * the home page, the activity of their projects, Tokens for their own tokens
+ * when a role or the create right lets them mint one, and in a site the
+ * sections their role there opens, the steward's own table
+ * (src/people/powers.ts): a Viewer its Overview, Audience and Access, read
+ * only; a Developer its Secrets too, values write-only; an Admin everything
+ * of the site. The rest is the owner's, hidden here and refused by the
+ * service.
  */
-const MEMBER_PAGES: readonly MachinePage[] = ["home", "activity"]
+const PERSON_PAGES: readonly MachinePage[] = ["home", "activity"]
 
-/** May this member mint a token of their own: a Developer or a Project admin somewhere, or the create right. A Viewer mints nothing. */
-export function mayMint(identity: Extract<IdentityView, { kind: "member" }>): boolean {
+/** May this person mint a token of their own: a Developer or an Admin somewhere, or the create right. A Viewer mints nothing. */
+export function mayMint(identity: Extract<IdentityView, { kind: "person" }>): boolean {
   return identity.create || Object.values(identity.roles).some((role) => role === "developer" || role === "admin")
 }
 
-function memberPages(identity: Extract<IdentityView, { kind: "member" }>): readonly MachinePage[] {
-  return mayMint(identity) ? [...MEMBER_PAGES, "team"] : MEMBER_PAGES
+function personPages(identity: Extract<IdentityView, { kind: "person" }>): readonly MachinePage[] {
+  return mayMint(identity) ? [...PERSON_PAGES, "tokens"] : PERSON_PAGES
 }
+
 const ROLE_SECTIONS: Readonly<Record<Role, readonly Section[]>> = {
-  viewer: ["overview", "audience"],
-  developer: ["overview", "audience", "secrets"],
-  admin: ["overview", "audience", "secrets", "guests", "sharing", "access", "backups", "members"],
+  viewer: ["overview", "audience", "access"],
+  developer: ["overview", "audience", "secrets", "access"],
+  admin: ["overview", "audience", "secrets", "access", "backups"],
 }
 
-/** The super admin keeps a project's members on the machine's Members page. */
-const OWNER_SECTIONS: readonly Section[] = ["overview", "audience", "secrets", "guests", "sharing", "access", "backups"]
+const OWNER_SECTIONS: readonly Section[] = ["overview", "audience", "secrets", "access", "backups"]
 
-function isMemberIdentity(identity: IdentityView | null): identity is Extract<IdentityView, { kind: "member" }> {
-  return identity !== null && identity.kind === "member"
+function isPersonIdentity(identity: IdentityView | null): identity is Extract<IdentityView, { kind: "person" }> {
+  return identity !== null && identity.kind === "person"
 }
 
-/** The member's role on a project, null when they hold none or are the super admin. */
+/** The person's role on a project, null when they hold none or are the owner. */
 export function roleIn(identity: IdentityView | null, slug: string): Role | null {
-  if (!isMemberIdentity(identity)) return null
+  if (!isPersonIdentity(identity)) return null
   return Object.hasOwn(identity.roles, slug) ? identity.roles[slug]! : null
 }
 
 /** The machine's pages this person may open, in the sidebar's order. */
 export function machinePagesFor(identity: IdentityView | null): readonly MachineEntry[] {
-  if (!isMemberIdentity(identity)) return MACHINE_PAGES
-  const pages = memberPages(identity)
+  if (!isPersonIdentity(identity)) return MACHINE_PAGES
+  const pages = personPages(identity)
   return MACHINE_PAGES.filter((entry) => pages.includes(entry.name))
 }
 
 function allowedSections(identity: IdentityView | null, slug: string): readonly Section[] {
-  if (!isMemberIdentity(identity)) return OWNER_SECTIONS
+  if (!isPersonIdentity(identity)) return OWNER_SECTIONS
   const role = roleIn(identity, slug)
   return role === null ? ROLE_SECTIONS.viewer : ROLE_SECTIONS[role]
 }
@@ -104,10 +105,10 @@ export function sectionsFor(identity: IdentityView | null, slug: string): readon
   return SECTIONS.filter((entry) => allowed.includes(entry.section))
 }
 
-/** May this person open this page? A member asking for one that is not theirs is told so. */
+/** May this person open this page? A person asking for one that is not theirs is told so. */
 export function mayOpen(page: Page, identity: IdentityView | null): boolean {
   if (page.name === "site") return allowedSections(identity, page.slug).includes(page.section)
-  return !isMemberIdentity(identity) || memberPages(identity).includes(page.name)
+  return !isPersonIdentity(identity) || personPages(identity).includes(page.name)
 }
 
 /** The order of the sidebar and the tabs, inside a site. */
@@ -115,11 +116,8 @@ export const SECTIONS: readonly SectionEntry[] = [
   { section: "overview", title: "Overview", path: "/site/" },
   { section: "audience", title: "Audience", path: "/site/audience/" },
   { section: "secrets", title: "Secrets", path: "/site/secrets/" },
-  { section: "guests", title: "Guests", path: "/site/guests/" },
-  { section: "sharing", title: "Sharing", path: "/site/sharing/" },
   { section: "access", title: "Access", path: "/site/access/" },
   { section: "backups", title: "Backups", path: "/site/backups/" },
-  { section: "members", title: "Members", path: "/site/members/" },
 ]
 
 /** The parameter that names the site: `/site/secrets/?s=cms`. */
@@ -134,11 +132,22 @@ export type SearchParams = Pick<URLSearchParams, "get" | "getAll" | "has">
 /** The page title's id, where focus returns after a navigation. */
 export const PAGE_TITLE_ID = "title-page"
 
-/** The older addresses, and the section they open when they name a site. */
-const LEGACY_PATHS: Readonly<Record<string, Section | null>> = {
-  "/sites/": "overview",
-  "/secrets/": "secrets",
-  "/guests/": null,
+/**
+ * An older address: a machine page it now names, or a site's section and the
+ * parameter that carried the site there (null: no section, the home page).
+ */
+type Legacy = { kind: "machine"; page: MachinePage } | { kind: "section"; section: Section | null; param: string }
+
+/** The older addresses, and what they open now. */
+export const LEGACY_PATHS: Readonly<Record<string, Legacy>> = {
+  "/sites/": { kind: "section", section: "overview", param: LEGACY_PARAM },
+  "/secrets/": { kind: "section", section: "secrets", param: LEGACY_PARAM },
+  "/guests/": { kind: "section", section: null, param: LEGACY_PARAM },
+  "/team/": { kind: "machine", page: "tokens" },
+  "/members/": { kind: "machine", page: "people" },
+  "/site/guests/": { kind: "section", section: "access", param: SITE_PARAM },
+  "/site/sharing/": { kind: "section", section: "access", param: SITE_PARAM },
+  "/site/members/": { kind: "section", section: "access", param: SITE_PARAM },
 }
 
 /**
@@ -178,9 +187,10 @@ export function pageFromUrl(path: string, search = ""): Page {
   }
 
   if (Object.hasOwn(LEGACY_PATHS, normalized)) {
-    const legacySection = LEGACY_PATHS[normalized] ?? null
-    const slug = requestedSite(params, LEGACY_PARAM)
-    return legacySection === null || slug === null ? { name: "home" } : { name: "site", slug, section: legacySection }
+    const legacy = LEGACY_PATHS[normalized]!
+    if (legacy.kind === "machine") return { name: legacy.page }
+    const slug = requestedSite(params, legacy.param)
+    return legacy.section === null || slug === null ? { name: "home" } : { name: "site", slug, section: legacy.section }
   }
 
   const machine = MACHINE_PAGES.find((candidate) => candidate.path === normalized)
@@ -249,7 +259,7 @@ export function pageTitle(page: Page): string {
  */
 export function documentTitle(page: Page, verdict: Verdict | null): string {
   const parts: string[] = []
-  if (page.name === "activity" || page.name === "team" || page.name === "connectors" || page.name === "members") parts.push(pageTitle(page))
+  if (page.name !== "home" && page.name !== "site") parts.push(pageTitle(page))
   if (page.name === "site") {
     if (page.section !== "overview") parts.push(sectionEntry(page.section).title)
     parts.push(page.slug)
@@ -266,6 +276,9 @@ export function documentTitle(page: Page, verdict: Verdict | null): string {
 export function pendingTitle(path: string): string | null {
   const normalized = normalizePath(path)
   if (SECTIONS.some((candidate) => candidate.path === normalized)) return null
+  const legacy = Object.hasOwn(LEGACY_PATHS, normalized) ? LEGACY_PATHS[normalized]! : null
+  // A site's older section, which carries its site the way the new ones do.
+  if (legacy !== null && legacy.kind === "section" && legacy.param === SITE_PARAM) return null
   return pageTitle(pageFromUrl(path))
 }
 

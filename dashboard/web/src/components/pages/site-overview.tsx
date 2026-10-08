@@ -1,12 +1,11 @@
 import { useData } from "@/components/data"
-import { MemberRestartButton } from "@/components/member-restart"
-import { SiteGuestsPanel } from "@/components/guests-site"
+import { RestartButton } from "@/components/restart-button"
 import { ExternalLink } from "@/components/link"
 import { PanelSkeleton } from "@/components/page"
 import { SiteSecretsPanel } from "@/components/secrets-site"
 import { SiteState, SectionLink, SitePage, useSite } from "@/components/site"
 import { SiteDiscrepancies, AccessPanel, AddressesPanel, ServicePanel, ServicesPanel, StoragePanel } from "@/components/site-card"
-import { isMember, mayRestart, roleOn } from "@/lib/members"
+import { isPerson, mayRestart, roleOn } from "@/lib/identity"
 import { siteAddress } from "@/lib/sites"
 import type { Discrepancy, Site } from "@/lib/types"
 
@@ -42,20 +41,18 @@ function OverviewSkeleton() {
 /**
  * A site's Overview, under `/site/?s=<slug>`: its discrepancies first, then two
  * columns. On the left the site on the machine, what is running, where it
- * answers and what it weighs; on the right what opens it and what it keeps, its
- * door, its guests and its secrets, each with the way to its section. A single
- * column below that width, in document order. Guests and secrets render nothing
+ * answers and what it weighs; on the right what opens it and what it keeps,
+ * its general access and its secrets, each with the way to its section. A
+ * single column below that width, in document order. Secrets render nothing
  * for a site that has none.
  */
 export function OverviewSection({ slug }: { slug: string }) {
   const { now, identity } = useData()
-  // A member sees what their role on the site opens: its secrets from
-  // Developer up, its door and guests as Project admin, and restarts its
-  // service as a Developer or a Project admin; the steward decides.
-  const member = isMember(identity)
+  // A person sees what their role on the site opens: its secrets from
+  // Developer up, and its service's restart as a Developer or an Admin; the
+  // steward decides. Everyone with a role sees who has access.
   const role = roleOn(identity, slug)
-  const admin = !member || role === "admin"
-  const secrets = !member || role === "developer" || role === "admin"
+  const secrets = !isPerson(identity) || role === "developer" || role === "admin"
   const { site, discrepancies } = useSite(slug)
   return (
     <SitePage
@@ -69,14 +66,13 @@ export function OverviewSection({ slug }: { slug: string }) {
           <SiteDiscrepancies discrepancies={discrepancies} />
           <div className="grid items-start gap-6 @4xl/body:grid-cols-2">
             <div className="grid min-w-0 gap-6">
-              <ServicePanel site={snapshot} now={now} action={mayRestart(identity, slug) && snapshot.type === "app" ? <MemberRestartButton slug={slug} /> : undefined} />
+              <ServicePanel site={snapshot} now={now} action={mayRestart(identity, slug) && snapshot.type === "app" ? <RestartButton slug={slug} /> : undefined} />
               <ServicesPanel site={snapshot} />
               <AddressesPanel site={snapshot} />
               <StoragePanel site={snapshot} now={now} />
             </div>
             <div className="grid min-w-0 gap-6">
-              <AccessPanel site={snapshot} actions={admin ? <SectionLink slug={slug} section="access" /> : undefined} />
-              {admin && <SiteGuestsPanel slug={slug} />}
+              <AccessPanel site={snapshot} actions={<SectionLink slug={slug} section="access" />} />
               {secrets && <SiteSecretsPanel slug={slug} />}
             </div>
           </div>

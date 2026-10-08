@@ -44,6 +44,7 @@ import {
   type StewardOptions,
 } from "../src/secrets/steward";
 import { createSystem, isTemporary, readAccount, readGroup, type Command, type SystemConfig, type System } from "../src/secrets/system";
+import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_RETENTION_MS, encodeEntry, reread } from "../src/secrets/log";
 
 /**
  * The steward set up on a throwaway tree: real files, real atomic writes, but a
@@ -163,7 +164,7 @@ type Bench = {
 };
 
 async function mount(options: Mount = {}): Promise<Bench> {
-  const root = mkdtempSync(join(tmpdir(), "secretaire-"));
+  const root = mkdtempSync(join(tmpdir(), "steward-"));
   toClean.push(root);
   const sites = join(root, "sites");
   const secrets = join(root, "secrets");
@@ -2030,9 +2031,9 @@ describe("POST /password", () => {
     });
     const token = await unlock(bench);
     const responses = await Promise.all([
-      bench.call("POST", "/password", requested(token, { newPassword: "premier-mot-de-passe-du-portal" })),
+      bench.call("POST", "/password", requested(token, { newPassword: "first-password-of-the-portal" })),
       bench.call("POST", "/unlock", { password: PASSWORD }),
-      bench.call("POST", "/password", requested(token, { newPassword: "second-mot-de-passe-du-portal" })),
+      bench.call("POST", "/password", requested(token, { newPassword: "second-password-of-the-portal" })),
     ]);
     expect(account.max).toBe(1);
     // The concurrent unlock replaces the token: whatever comes after it is locked.
@@ -2747,6 +2748,100 @@ describe("the real system", () => {
     expect(readdirSync(join(root, "state")).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
+  describe("the access log", () => {
+    const NOW = 1_800_000_000_000;
+    const DAY = 24 * 3600 * 1000;
+    const line = (a: number, others: Partial<LogEntry> = {}) =>
+      encodeEntry({ a, operation: "access.add", result: "ok", actor: "owner", member: "carol@acme.test", slug: "blog", file: null, variable: null, detail: "carol@acme.test: Can open", ...others });
+    const accessLog = (root: string) => join(root, "state", "access-log.jsonl");
+    const details = (root: string) => reread(readFileSync(accessLog(root), "utf8")).map((one) => one.detail);
+
+    test("seeded at startup from the journal's accepted changes of access, root's alone, and never again", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "state"));
+      const journal = [
+        line(NOW - 3 * DAY, { detail: "given" }),
+        line(NOW - 2 * DAY, { operation: "unlock", member: null, slug: null, detail: null }),
+        line(NOW - 2 * DAY, { result: "rejects", detail: "refused" }),
+        line(NOW - DAY, { operation: "access.remove", detail: "removed" }),
+      ].join("");
+      writeFileSync(join(root, "state", "journal.jsonl"), journal);
+      const system = systemOn(root);
+      expect(await system.readAccessLog()).toBeNull();
+
+      await system.prepareAccessLog(NOW);
+      expect(details(root)).toEqual(["given", "removed"]);
+      expect(statSync(accessLog(root)).mode & 0o777).toBe(0o600);
+      // The journal is left as it was: the reader filters it.
+      expect(readFileSync(join(root, "state", "journal.jsonl"), "utf8")).toBe(journal);
+
+      // An access log that exists is never seeded again, by a restart or an append.
+      writeFileSync(join(root, "state", "journal.jsonl"), journal + line(NOW, { detail: "journal only" }));
+      await systemOn(root).prepareAccessLog(NOW);
+      await systemOn(root).appendAccessLog(line(NOW, { detail: "appended" }), NOW);
+      expect(details(root)).toEqual(["given", "removed", "appended"]);
+      expect(readdirSync(join(root, "state")).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    });
+
+    test("with no journal, it is laid empty: its existence alone says the seeding is done", async () => {
+      const root = throwawayRoot();
+      const system = systemOn(root);
+      await system.prepareAccessLog(NOW);
+      expect(await system.readAccessLog()).toBe("");
+      writeFileSync(join(root, "state", "journal.jsonl"), line(NOW, { detail: "too late" }));
+      await system.prepareAccessLog(NOW);
+      expect(await system.readAccessLog()).toBe("");
+    });
+
+    test("an append before any startup seeds first, so the journal's rows come before it", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "state"));
+      writeFileSync(join(root, "state", "journal.jsonl"), line(NOW - DAY, { detail: "earlier" }));
+      await systemOn(root).appendAccessLog(line(NOW, { detail: "now" }), NOW);
+      expect(details(root)).toEqual(["earlier", "now"]);
+    });
+
+    test("pruned at startup, then at most once an hour on the append that follows", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "state"));
+      writeFileSync(accessLog(root), line(NOW - ACCESS_RETENTION_MS - 1, { detail: "expired at startup" }) + line(NOW - DAY, { detail: "kept" }), { mode: 0o600 });
+      const system = systemOn(root);
+      await system.prepareAccessLog(NOW);
+      expect(details(root)).toEqual(["kept"]);
+
+      // Within the hour, a line already past its 180 days waits for the next pruning.
+      await system.appendAccessLog(line(NOW - ACCESS_RETENTION_MS - 1, { detail: "expired" }), NOW + 1000);
+      await system.appendAccessLog(line(NOW + 2000, { detail: "fresh" }), NOW + 2000);
+      expect(details(root)).toEqual(["kept", "expired", "fresh"]);
+      await system.appendAccessLog(line(NOW + ACCESS_PRUNE_INTERVAL_MS, { detail: "an hour on" }), NOW + ACCESS_PRUNE_INTERVAL_MS);
+      expect(details(root)).toEqual(["kept", "fresh", "an hour on"]);
+      expect(statSync(accessLog(root)).mode & 0o777).toBe(0o600);
+      expect(readdirSync(join(root, "state")).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    });
+
+    test("grown past its size within the hour, it is pruned on the next append all the same", async () => {
+      const root = throwawayRoot();
+      const system = systemOn(root);
+      await system.prepareAccessLog(NOW);
+      const padding = "x".repeat(1000);
+      const expired = `{"a":${NOW - ACCESS_RETENTION_MS - 1},"p":"${padding}"}\n`;
+      writeFileSync(accessLog(root), expired.repeat(Math.ceil(ACCESS_PRUNE_BYTES / expired.length) + 1));
+      await system.appendAccessLog(line(NOW + 1000, { detail: "after the flood" }), NOW + 1000);
+      expect(details(root)).toEqual(["after the flood"]);
+    });
+
+    test("bounded to its newest lines whatever their age", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "state"));
+      const many = Array.from({ length: ACCESS_MAX_LINES + 5 }, (_, i) => `{"a":${NOW - DAY + i}}\n`).join("");
+      writeFileSync(accessLog(root), many, { mode: 0o600 });
+      await systemOn(root).prepareAccessLog(NOW);
+      const lines = readFileSync(accessLog(root), "utf8").split("\n").filter((one) => one !== "");
+      expect(lines.length).toBe(ACCESS_MAX_LINES);
+      expect(lines[0]).toBe(`{"a":${NOW - DAY + 5}}`);
+    });
+  });
+
   test("a named pipe in place of a secret is never opened", async () => {
     const root = throwawayRoot();
     mkdirSync(join(root, "secrets"));
@@ -2793,7 +2888,7 @@ describe("the real system", () => {
     const root = throwawayRoot();
     mkdirSync(join(root, "secrets", "builder-secrets"), { recursive: true });
     const system = systemOn(root);
-    await system.writeSecret("builder-secrets/registry", new TextEncoder().encode("premier\n"), { owner: null, mode: 0o400 });
+    await system.writeSecret("builder-secrets/registry", new TextEncoder().encode("first\n"), { owner: null, mode: 0o400 });
     await system.writeSecret("builder-secrets/registry", new TextEncoder().encode("second\n"), { owner: null, mode: 0o400 });
     expect(readFileSync(join(root, "secrets", "builder-secrets", "registry"), "utf8")).toBe("second\n");
     expect(statSync(join(root, "secrets", "builder-secrets", "registry")).mode & 0o777).toBe(0o400);
@@ -2823,12 +2918,12 @@ describe("the real system", () => {
     ];
     for (const path of [...ours, ...others]) writeFileSync(join(root, path), "x");
     // A link matching our pattern is not one of our files.
-    symlinkSync(join(root, "secrets", "cms.env"), join(root, "secrets", ".lien.env.aaaaaaaaaaaaaaaa.tmp"));
+    symlinkSync(join(root, "secrets", "cms.env"), join(root, "secrets", ".link.env.aaaaaaaaaaaaaaaa.tmp"));
 
     expect(await systemOn(root).cleanTemporaries()).toBe(ours.length);
     for (const path of ours) expect(existsSync(join(root, path))).toBe(false);
     for (const path of others) expect(existsSync(join(root, path))).toBe(true);
-    expect(lstatSync(join(root, "secrets", ".lien.env.aaaaaaaaaaaaaaaa.tmp")).isSymbolicLink()).toBe(true);
+    expect(lstatSync(join(root, "secrets", ".link.env.aaaaaaaaaaaaaaaa.tmp")).isSymbolicLink()).toBe(true);
     expect(isTemporary(".cms.env.0123456789abcdef.tmp")).toBe(true);
     expect(isTemporary("cms.env")).toBe(false);
   });

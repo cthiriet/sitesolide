@@ -1,11 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
-import { PortalDialog, type ToggleState } from "@/components/portal"
+import { GeneralAccessDialog, type ChangeState } from "@/components/access-general"
 import { ContentDialog } from "@/components/secrets-content"
 import {
   ConfirmDialog,
-  MemberUnlockDialog,
+  PersonUnlockDialog,
   UnlockDialog,
   RestartDialog,
   VariableDialog,
@@ -37,12 +37,13 @@ import {
   type UnlockStatus,
   type Refusal,
 } from "@/lib/secrets"
-import { isMember, reauthUrl, unlockFailure } from "@/lib/members"
+import { isPerson, reauthUrl, unlockFailure } from "@/lib/identity"
 
 /**
- * The actions on a site's secrets and portal, and their dialogs, shared by
- * every section: unlock, read, set, remove, create, restore, replace a file,
- * change a password, restart, turn the portal on or off.
+ * The actions on a site's secrets and general access, and their dialogs,
+ * shared by every section: unlock, read, set, remove, create, restore,
+ * replace a file, change a password, restart, make a site public or
+ * restricted.
  *
  * Everything that writes goes through the steward, which judges. A 423 locks
  * and asks for the password without replaying the action, a 401 hands over to
@@ -61,21 +62,21 @@ export type SecretsActions = {
   locking: boolean
   /** The refusal of a lock, to be shown at the top of the page. */
   lockError: string
-  /** A member's unlock that came back without unlocking, and why, to be shown at the top of the page. */
+  /** A person's unlock that came back without unlocking, and why, to be shown at the top of the page. */
   unlockNotice: string | null
   /**
-   * A member signed in, not the super admin: they unlock through a forced
+   * A person signed in, not the owner: they unlock through a forced
    * sign-in at the provider, and their role decides what the steward accepts.
    */
-  member: boolean
+  person: boolean
   /** Changes after every operation: the log is read again. */
   revision: number
   /** The key of the file whose creation is in flight. */
   creation: string | null
   /** Per file, the refusal of a creation. */
   errors: Readonly<Record<string, string>>
-  /** The last successful action on this site's portal, which the repository has to follow. */
-  portalChanged: { active: boolean } | null
+  /** The last successful change of this site's general access, which the repository has to follow. */
+  accessChanged: { target: "public" | "restricted" } | null
   /** The header's lock button, where focus returns after a forced lock. */
   lockButtonRef: (element: HTMLButtonElement | null) => void
   unlock: () => void
@@ -90,7 +91,9 @@ export type SecretsActions = {
   replace: (target: FileTarget) => void
   changePassword: (target: VariableTarget) => void
   restart: (slug: string) => void
-  togglePortal: (slug: string, active: boolean) => void
+  changeAccess: (slug: string, target: "public" | "restricted") => void
+  /** The common fate of a refusal: the session handed to the sign-in, the unlock asked again; the message to show otherwise. */
+  refusal: OnRefusal
 }
 
 export const fileKey = ({ slug, file }: FileTarget) => `${slug}/${file}`
@@ -127,8 +130,8 @@ const pause = (ms: number) => new Promise((done) => window.setTimeout(done, ms))
 
 export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   const announce = useAnnounce()
-  const { secrets: data, guests, now, offset, sessionExpired, refresh, identity, sso } = useData()
-  const member = isMember(identity)
+  const { secrets: data, now, offset, sessionExpired, refresh, identity, sso } = useData()
+  const person = isPerson(identity)
   const state = unlockStatus(data.until, now, offset)
   const serverNow = now + offset
   const { projects, reload, setUnlockedUntil, reportUnreachable } = data
@@ -142,8 +145,8 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   const [restartState, setRestartState] = useState<RestartState | null>(null)
   const [replacement, setReplacement] = useState<Opening<FileTarget> | null>(null)
   const [password, setPassword] = useState<Opening<VariableTarget> | null>(null)
-  const [portalToggle, setPortalToggle] = useState<ToggleState | null>(null)
-  const [portalChanged, setPortalChanged] = useState<{ active: boolean } | null>(null)
+  const [accessChange, setAccessChange] = useState<ChangeState | null>(null)
+  const [accessChanged, setAccessChanged] = useState<{ target: "public" | "restricted" } | null>(null)
   const [creation, setCreation] = useState<string | null>(null)
   const [fileErrors, setFileErrors] = useState<Record<string, string>>({})
   const [locking, setLocking] = useState(false)
@@ -151,7 +154,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   const [unlockNotice, setUnlockNotice] = useState<string | null>(null)
   const [revision, setRevision] = useState(0)
 
-  // A member's unlock comes back to this page, with why when it did not go
+  // A person's unlock comes back to this page, with why when it did not go
   // through: said once, and taken off the address.
   useEffect(() => {
     const url = new URL(window.location.href)
@@ -246,7 +249,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     setRestartState((before) => before && { ...before, open: false })
     setReplacement((before) => before && { ...before, open: false })
     setPassword((before) => before && { ...before, open: false })
-    setPortalToggle((before) => before && { ...before, open: false })
+    setAccessChange((before) => before && { ...before, open: false })
   }
 
   /** The common fate of refusals. Returns the message to show where the action took place. */
@@ -485,9 +488,9 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   // --- Restarting
 
   function askRestart(slug: string) {
-    // A member restarts with their session alone, the steward judging their
-    // role; the super admin restarts from an unlocked Secrets section.
-    if (member) {
+    // A person restarts with their session alone, the steward judging their
+    // role; the owner restarts from an unlocked Secrets section.
+    if (person) {
       rememberOrigin()
       return setRestartState({ ...NEW_RESTART, slug, open: true })
     }
@@ -511,7 +514,6 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     setUnlockedUntil(null)
     refresh()
     void reload()
-    void guests.reload()
     setRevision((before) => before + 1)
     setRestartState((before) => before && { ...before, reconnect: "back" })
     announce("The dashboard is back. Unlock again to change secrets.")
@@ -549,17 +551,17 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     await runRestart(slug, file)
   }
 
-  // --- The portal
+  // --- General access
 
-  function togglePortal(slug: string, active: boolean) {
+  function changeAccess(slug: string, target: "public" | "restricted") {
     require(() => {
       openings.current += 1
-      setPortalToggle({ slug, active, open: true, opening: openings.current })
+      setAccessChange({ slug, target, open: true, opening: openings.current })
     })
   }
 
-  function onPortalToggled(active: boolean) {
-    setPortalChanged({ active })
+  function onAccessChanged(target: "public" | "restricted") {
+    setAccessChanged({ target })
     afterAction()
     // The snapshot follows the Caddy block at the next reading: reading it again straight away costs nothing.
     refresh()
@@ -571,11 +573,11 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     locking,
     lockError,
     unlockNotice,
-    member,
+    person,
     revision,
     creation,
     errors: fileErrors,
-    portalChanged,
+    accessChanged,
     lockButtonRef,
     unlock: () => {
       rememberOrigin()
@@ -592,7 +594,8 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     replace,
     changePassword,
     restart: askRestart,
-    togglePortal,
+    changeAccess,
+    refusal: onRefusal,
   }
 
   const restartedProject = projects?.find((project) => project.slug === restartState?.slug) ?? null
@@ -602,8 +605,8 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     <ActionsContext.Provider value={actions}>
       {children}
 
-      {member ? (
-        <MemberUnlockDialog
+      {person ? (
+        <PersonUnlockDialog
           open={unlockOpen}
           providerName={sso.providerName}
           href={reauthUrl(window.location.pathname, window.location.search)}
@@ -649,10 +652,10 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
         focusReturn={actionFocusReturn}
       />
 
-      <PortalDialog
-        state={portalToggle}
-        onClose={() => setPortalToggle((before) => before && { ...before, open: false })}
-        onToggled={onPortalToggled}
+      <GeneralAccessDialog
+        state={accessChange}
+        onClose={() => setAccessChange((before) => before && { ...before, open: false })}
+        onChanged={onAccessChanged}
         onRefusal={onRefusal}
         focusReturn={actionFocusReturn}
       />

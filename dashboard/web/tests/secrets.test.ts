@@ -545,7 +545,7 @@ describe("log", () => {
     }
   })
 
-  test("replacing a file, changing a password, changing the portal", () => {
+  test("replacing a file, changing a password, changing general access", () => {
     const replacement = logEntry({ operation: "replace", file: "builder-ssh", variable: null, slug: "builder" })
     expect(operationParts(replacement)).toEqual({ verb: "Replace", object: "builder-ssh", kind: "file" })
     expect(operationPlace(replacement)).toEqual({ project: "builder", file: null })
@@ -555,7 +555,9 @@ describe("log", () => {
     expect(operationPlace(password)).toEqual({ project: "portal", file: "portal.env" })
 
     const portal = logEntry({ operation: "portal", slug: "wheels", file: null, variable: null })
-    expect(operationParts(portal)).toEqual({ verb: "Portal", object: "wheels", kind: "project" })
+    expect(operationParts(portal)).toEqual({ verb: "Change general access", object: "wheels", kind: "project" })
+    expect(operationParts({ ...portal, detail: "on, ok" }).verb).toBe("Restrict")
+    expect(operationParts({ ...portal, detail: "off, failure" }).verb).toBe("Make public")
     expect(operationPlace(portal)).toEqual({ project: null, file: null })
   })
 
@@ -617,14 +619,12 @@ describe("log", () => {
     expect(operationOutcome(logEntry({ operation: "restart", detail: "looping, activating/auto-restart, 3 restarts" })).tone).toBe("error")
   })
 
-  test("a portal action says what the steward recorded, without judging", () => {
-    expect(operationOutcome(logEntry({ operation: "portal", detail: "off" }))).toEqual({ tone: "neutral", text: "Off" })
+  test("a change of general access says only how it ended: its verb says which way", () => {
+    expect(operationOutcome(logEntry({ operation: "portal", detail: "off, ok" }))).toEqual({ tone: "ok", text: null })
     expect(operationOutcome(logEntry({ operation: "portal", detail: null }))).toEqual({ tone: "ok", text: null })
     // `failure` is here the gatekeeper's error code, not a service's verdict.
-    expect(operationOutcome(logEntry({ operation: "portal", result: "failure", detail: "failure" }))).toEqual({
-      tone: "error",
-      text: "Failed: failed",
-    })
+    expect(operationOutcome(logEntry({ operation: "portal", result: "failure", detail: "on, failure" }))).toEqual({ tone: "error", text: "Failed" })
+    expect(operationOutcome(logEntry({ operation: "portal", result: "rejects", detail: "on, rejects" }))).toEqual({ tone: "attention", text: "Refused" })
   })
 
   test("a site's log does not show another site, even if the relay returned it", () => {

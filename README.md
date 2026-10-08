@@ -5,8 +5,8 @@
   </picture>
 </h1>
 
-**A small cloud for the software your team and its agents write, on one server
-you own.**
+**A small cloud for the software your company and its agents write, on one
+server you own.**
 
 Internal tools, dashboards, prototypes: `sitesolide deploy` in a folder, typed
 by you or run by an agent, puts it live on HTTPS, behind your company's
@@ -75,7 +75,7 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
 - [How it works](docs/concepts.md): the parts, and who may touch what
 - [The manifest](docs/manifest.md): every key of `sitesolide.json`
 - [Commands](docs/commands.md): everything the CLI does
-- [People and tokens](docs/team.md): roles on a project, and deploying with a token instead of SSH
+- [People and tokens](docs/access.md): roles on a project, and deploying with a token instead of SSH
 - [Secrets](docs/secrets.md): where they live, and why never in git
 - [Agents](docs/agents.md): `--json`, the MCP server and the skill
 - [Upgrading](docs/upgrading.md): from one release to the next on a running machine

@@ -27,8 +27,8 @@ import { read } from "../read";
 import type { SessionReader } from "../routes";
 import { isAcceptableOrigin } from "../sessions";
 import type { Tokens } from "../secrets/tokens";
-import type { MembersSteward } from "../members/client";
-import type { IdentityResolver } from "../members/identity";
+import type { MembersSteward } from "../people/client";
+import type { IdentityResolver } from "../people/identity";
 import type { AccessSteward } from "./client";
 import type { AccessPageResponse, AccessResponse, AccessViewer, PeoplePageResponse } from "./protocol";
 
@@ -80,7 +80,7 @@ const error = (status: number, code: string, message: string) => json({ error: c
 export const ACCESS_NOT_AVAILABLE = "The steward on this machine does not keep people with access yet: run sitesolide upgrade.";
 
 /** What the page reads when a change needs the unlock. */
-export const ACCESS_LOCKED = "Unlock first: giving someone a role above Can open, or the right to create projects, needs it.";
+export const ACCESS_LOCKED = "Unlock first: giving someone a role above Can open, password access, or the right to create projects needs it.";
 
 const MAX_BODY_BYTES = 16 * 1024;
 

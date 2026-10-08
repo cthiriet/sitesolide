@@ -2806,12 +2806,12 @@ function usage(zone: string | null): string {
     "  sitesolide --version            the release this binary was built from, dev from a checkout",
     "  sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a no-op once done",
     "     --zone <dns.zone> --email <you@example.com>",
-    "     --contact <you@example.com>   shown on a locked preview's door",
+    "     --contact <you@example.com>   shown on the page that asks for a preview code",
     "     --user <name>                the account that deploys, deploy by default as root",
     "     --skip-dns                   create the DNS records by hand: setup lists them and waits",
     "     --dns-replace                replace records that point elsewhere, on your decision alone",
     "     --cloudflare-token-stdin     read the Cloudflare token from standard input",
-    "     --minimal                    leave out backups, the team installer and the egress proxy",
+    "     --minimal                    leave out backups, the installer and the egress proxy",
     "     --any-os                     go on with a system other than Debian 13, at your own risk",
     "     --config-dir <dir>           another installation's own configuration folder",
     "     --dry-run                    check every step, change nothing",
@@ -2819,7 +2819,7 @@ function usage(zone: string | null): string {
     "     --dry-run                    list each component, up to date, out of date or missing, change nothing",
     "  sitesolide init                 write ~/.config/sitesolide/config.json",
     "     --server <user@host> --zone <dns.zone> --email <you@example.com>",
-    "     --contact <you@example.com>   shown on a locked preview's door",
+    "     --contact <you@example.com>   shown on the page that asks for a preview code",
     "  sitesolide detect               the sitesolide.json this folder implies, written nowhere",
     "     --write                      write it, never over an existing one",
     "     --slug <name>                name the project, rather than after its folder",
@@ -2863,7 +2863,7 @@ function usage(zone: string | null): string {
     "",
     "--json, on every command but init and run: one JSON event per line, see docs/agents.md",
     `secrets live on the server: manage them in the Secrets section of ${zone === null ? "https://dashboard.<zone>" : dashboardAddress(zone)}`,
-    "the portal of a deployed site is set from the dashboard too: deploy follows the server",
+    "general access of a deployed site is set from the dashboard too: deploy follows the server",
   ].join("\n");
 }
 

@@ -103,7 +103,7 @@ describe("deploy reads the door on the VM", () => {
 
     const r = await run(folder, ["deploy", "--dry-run"], { vm });
     expect(r.code).toBe(0);
-    expect(r.output).toContain("portal was turned on from the dashboard");
+    expect(r.output).toContain("general access was set to Restricted from the dashboard");
     expect(r.output).toContain(`[dry-run] write ${join(folder, "sitesolide.json")}`);
 
     // The block shown carries the door, the portal is checked before anything
@@ -128,7 +128,7 @@ describe("deploy reads the door on the VM", () => {
 
     const r = await run(folder, ["deploy", "--dry-run"], { vm });
     expect(r.code).toBe(0);
-    expect(r.output).toContain("portal was turned off from the dashboard");
+    expect(r.output).toContain("general access was set to Public from the dashboard");
     expect(r.output).not.toContain("forward_auth @portal_guard");
     expect(r.output).not.toContain("check https://portal.");
     // The block leaves after the restart, as for any open site.
@@ -172,7 +172,7 @@ describe("deploy reads the door on the VM", () => {
 
     const r = await run(folder, ["deploy"], { vm });
     expect(r.output).toContain(
-      "portal was turned off from the dashboard; sitesolide.json updated, commit it",
+      "general access was set to Public from the dashboard; sitesolide.json updated, commit it",
     );
     expect(readFileSync(join(folder, "sitesolide.json"), "utf8")).toBe(
       setPortal(text(PROTECTED), false),
@@ -242,7 +242,7 @@ describe("the block in service follows the dashboard's door", () => {
     vm.writeManifest("sample-door", text(PROTECTED));
     vm.writeBlock("sample-door", generateFragment(PROTECTED, "cookie")!);
     const r = await run(project(APP), ["deploy"], { vm });
-    expect(r.output).toContain("portal was turned on from the dashboard");
+    expect(r.output).toContain("general access was set to Restricted from the dashboard");
     expect(r.output).toContain("was written by an earlier release, the current one replaces it");
     expect(r.all).not.toContain("no longer matches");
   });

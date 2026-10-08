@@ -17,7 +17,6 @@ import {
 } from "@/components/page"
 import { SearchField, SiteFilterChips } from "@/components/site-search"
 import { SiteList } from "@/components/sites"
-import { activeByHost } from "@/lib/invitations"
 import { siteUrl } from "@/lib/pages"
 import { searchAnnouncement, filterSites, countLabel, queryWords } from "@/lib/search"
 import { withSecrets } from "@/lib/secrets"
@@ -38,10 +37,10 @@ const memory: { query: string; filter: SiteFilter } = { query: "", filter: "all"
 
 /** What a filter says when it keeps no site, with no search in progress. */
 const EMPTY_FILTER: Record<Exclude<SiteFilter, "all">, string> = {
-  issues: "No site has an refusal",
+  issues: "No site has an issue",
   apps: "No apps on this server",
   static: "No static sites on this server",
-  portal: "No site is behind the portal",
+  restricted: "No site is restricted",
 }
 
 /**
@@ -94,7 +93,7 @@ function IssuesPanel({ discrepancies, sites }: { discrepancies: readonly Discrep
 }
 
 function Inventory({ snapshot }: { snapshot: Snapshot }) {
-  const { now, secretsBySite, guests } = useData()
+  const { now, secretsBySite } = useData()
   const announce = useAnnounce()
   const [query, setQueryState] = useState(memory.query)
   const [filter, setFilterState] = useState<SiteFilter>(memory.filter)
@@ -109,12 +108,7 @@ function Inventory({ snapshot }: { snapshot: Snapshot }) {
     setFilterState(value)
   }
 
-  const list = guests.list
   const worst = useMemo(() => worstSeverities(snapshot.discrepancies), [snapshot.discrepancies])
-  const activeGuests = useMemo(
-    () => (list.state === "ready" ? activeByHost(list.guests, now) : null),
-    [list, now],
-  )
   // Enriched once per read: the search and the rows read the same objects.
   const sites = useMemo(() => withSecrets(snapshot.sites, secretsBySite), [snapshot.sites, secretsBySite])
   const found = useMemo(() => filterSites(sites, query), [sites, query])
@@ -170,7 +164,6 @@ function Inventory({ snapshot }: { snapshot: Snapshot }) {
         <SiteList
           sites={visible}
           worst={worst}
-          activeGuests={activeGuests}
           now={now}
           caption={sitesCaption(filter, search ? displayedQuery : null)}
         />
@@ -230,13 +223,13 @@ function HomeSkeleton() {
 
 /**
  * The home page: the machine, what is wrong, then each site as one row that
- * leads to it, its pills included (restart pending, portal and active guests).
+ * leads to it, its pills included (restart pending, general access).
  * A search and filters, the sites in discrepancy at the top.
  */
 export function HomePage() {
   const { snapshot, identity } = useData()
-  // The machine's own figures are the super admin's: a member sees their projects.
-  const member = identity !== null && identity.kind === "member"
+  // The machine's own figures are the owner's: a person sees their projects.
+  const person = identity !== null && identity.kind === "person"
   return (
     <>
       <PageHeader title="Sites" count={snapshot?.sites.length} />
@@ -244,7 +237,7 @@ export function HomePage() {
         <WithSnapshot skeleton={<HomeSkeleton />}>
           {(snapshot) => (
             <>
-              {!member && <MachinePlate snapshot={snapshot} />}
+              {!person && <MachinePlate snapshot={snapshot} />}
               <IssuesPanel discrepancies={snapshot.discrepancies} sites={snapshot.sites} />
               <Inventory snapshot={snapshot} />
             </>

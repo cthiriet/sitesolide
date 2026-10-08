@@ -250,7 +250,7 @@ function Toggle({ open, controls, onToggle, labelled = false }: { open: boolean;
 
 // --- The log ---------------------------------------------------------------------
 
-/** Newest first: a table from 48 rem of panel, five columns needing more than the Guests table, a list below, each row with its details on demand. */
+/** Newest first: a table from 48 rem of panel, five columns needing a wide panel, a list below, each row with its details on demand. */
 export function AuditLog({ rows, known, serverNow, caption }: { rows: readonly AuditRow[]; known: ReadonlySet<string>; serverNow: number; caption: string }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
   const base = useId()

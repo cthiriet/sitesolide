@@ -147,7 +147,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
 
 /**
  * The hints of a run through the dashboard's control API, by the code its
- * refusal carries: the API's own (docs/team.md), the installer's for a
+ * refusal carries: the API's own (docs/access.md), the installer's for a
  * deployment that failed on the machine, and the CLI's for what it refuses
  * before a request leaves. Their messages are worded on the machine, where no
  * pattern of HINTS reads them; a code this table lacks falls back to them.

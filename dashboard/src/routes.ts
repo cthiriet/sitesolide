@@ -5,8 +5,8 @@
  */
 import { remainingWait, isPasswordValid, isAcceptableSubmission } from "./auth";
 import { read } from "./read";
-import { memberReading } from "./members/view";
-import type { Roles } from "./members/protocol";
+import { memberReading } from "./people/view";
+import type { Roles } from "./people/protocol";
 import {
   clearCookie,
   readCookie,
@@ -39,7 +39,7 @@ export type Options = {
   /**
    * The roles that bound what a session sees of the snapshot: null for the
    * owner, who sees the whole machine. Absent, everyone sees it whole, as
-   * before members. See src/members/view.ts.
+   * before members. See src/people/view.ts.
    */
   roles?: (req: Request, now: number) => Promise<Roles | null | "no-session" | "unreachable">;
   /**

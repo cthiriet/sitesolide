@@ -648,7 +648,7 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
     <>
       <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
         The server saves {slug}'s data folder every hour. Restoring puts a snapshot in place of the current data, which is
-        saved first, so a restore can be undone. {actions.member ? "It asks you to sign in again with your provider." : "It asks for the dashboard password."}
+        saved first, so a restore can be undone. {actions.person ? "It asks you to sign in again with your provider." : "It asks for the dashboard password."}
       </p>
 
       {actions.unlockNotice !== null && <Banner tone="error">{actions.unlockNotice}</Banner>}

@@ -11,7 +11,7 @@
  *   dashboard      the dashboard              sitesolide deploy in dashboard/
  *   collector      the collector's units      bin/deploy-collector.sh, after the dashboard
  *   gatekeeper     the gatekeeper             bin/deploy-gatekeeper.sh, after the dashboard
- *   installer      the team installer         bin/deploy-installer.sh, after the steward
+ *   installer      the installer              bin/deploy-installer.sh, after the steward
  *   caddy-config   the Caddyfile              bin/deploy-caddy.sh
  *   api            the shared service         bin/deploy-api.sh
  *   portal         the portal                 sitesolide deploy in portal/
@@ -432,7 +432,7 @@ export function upgradeComponents(): Component[] {
     },
     {
       id: "installer",
-      title: "team installer",
+      title: "installer",
       installed: present("installed", `${LIB}/installer.js`),
       plan: "bin/deploy-installer.sh",
       check: async (context) => machineState(context, "installer", [...C.installer, ...(await scriptFingerprints(context, "deploy-installer.sh"))]),
@@ -573,7 +573,7 @@ export async function runUpgrade(options: UpgradeOptions, deps: UpgradeDependenc
       `upgrade brings the machine ${join(folder, "config.json")} names to this release: it names none`,
       "a machine installed with setup has it written already: SITESOLIDE_CONFIG_DIR=<dir> before upgrade for another installation",
       "a machine installed by hand: sitesolide init --server <user@host> --zone <dns.zone> --email <address>",
-      "a team token cannot upgrade a machine: its owner runs upgrade, over SSH",
+      "a token cannot upgrade a machine: its owner runs upgrade, over SSH",
     ]);
   }
   const at = config.server.lastIndexOf("@");

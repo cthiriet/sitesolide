@@ -1,6 +1,6 @@
 # The steward's one road to the portal: a Unix socket only root opens, behind
 # which systemd-socket-proxyd reaches the portal's admin API on the loopback.
-# See sitesolide-portal-relay.service and dashboard/src/members/portal.ts.
+# See sitesolide-portal-relay.service and dashboard/src/people/portal.ts.
 #
 # Why a relay rather than a network for the steward: the steward holds every
 # secret of the machine as root, and its unit keeps no network at all,

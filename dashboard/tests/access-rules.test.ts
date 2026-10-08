@@ -106,11 +106,12 @@ describe("the role ladder and who may give what", () => {
 
   test("raising someone above Can open asks for the unlock; Can open, lowering and keeping do not", () => {
     const current = registry({ blog: [["dev@acme.test", "developer"], ["see@acme.test", "visitor"]] });
-    expect(judgeGrant(current, "blog", "new@acme.test", "viewer", OWNER, SSO)).toMatchObject({ raises: true });
-    expect(judgeGrant(current, "blog", "see@acme.test", "developer", OWNER, SSO)).toMatchObject({ raises: true });
-    expect(judgeGrant(current, "blog", "dev@acme.test", "viewer", OWNER, SSO)).toMatchObject({ raises: false });
-    expect(judgeGrant(current, "blog", "dev@acme.test", "developer", OWNER, SSO)).toMatchObject({ raises: false });
-    expect(judgeGrant(current, "blog", "new@acme.test", "visitor", OWNER, SSO)).toMatchObject({ raises: false });
+    expect(judgeGrant(current, "blog", "new@acme.test", "viewer", OWNER, SSO)).toMatchObject({ raises: true, unlock: true });
+    expect(judgeGrant(current, "blog", "see@acme.test", "developer", OWNER, SSO)).toMatchObject({ raises: true, unlock: true });
+    expect(judgeGrant(current, "blog", "dev@acme.test", "viewer", OWNER, SSO)).toMatchObject({ raises: false, unlock: false });
+    expect(judgeGrant(current, "blog", "dev@acme.test", "developer", OWNER, SSO)).toMatchObject({ raises: false, unlock: false });
+    expect(judgeGrant(current, "blog", "new@acme.test", "visitor", OWNER, SSO)).toMatchObject({ raises: false, unlock: false });
+    expect(judgeGrant(current, "blog", "@acme.test", "visitor", OWNER, SSO)).toMatchObject({ raises: false, unlock: false });
   });
 });
 
@@ -144,8 +145,15 @@ describe("domains", () => {
 describe("people outside the company's domains: password access", () => {
   test("Can open only, with a password drawn for them", () => {
     expect(judgeGrant(registry({}), "blog", "guest@example.org", "visitor", OWNER, SSO)).toMatchObject({ password: true, role: "visitor" });
+    expect(judgeGrant(registry({}), "blog", "guest@example.org", "visitor", admin("ann@acme.test", "admin"), SSO)).toMatchObject({ password: true, role: "visitor" });
     expect(judgeGrant(registry({}), "blog", "guest@example.org", "viewer", OWNER, SSO)).toMatchObject({ refusal: expect.stringContaining("password access"), code: "invalid" });
     expect(judgeGrant(registry({}), "blog", "guest@example.org", "admin", admin("ann@acme.test", "admin"), SSO)).toMatchObject({ code: "invalid" });
+  });
+
+  test("giving it asks for the unlock, since it lets someone from outside the company in, though it raises nobody", () => {
+    expect(judgeGrant(registry({}), "blog", "guest@example.org", "visitor", OWNER, SSO)).toMatchObject({ password: true, raises: false, unlock: true });
+    expect(judgeGrant(registry({}), "blog", "guest@example.org", "visitor", admin("ann@acme.test", "admin"), SSO)).toMatchObject({ password: true, unlock: true });
+    expect(judgeGrant(registry({}), "blog", "alice@acme.test", "visitor", OWNER, NO_SSO)).toMatchObject({ password: true, unlock: true });
   });
 
   test("without company sign-in, everyone is outside: Can open with a password, nothing higher", () => {
@@ -169,7 +177,8 @@ describe("people outside the company's domains: password access", () => {
   test("password access opens the site and nothing more: it is given once, never raised", () => {
     const put = putEntry(EMPTY_REGISTRY, "blog", "guest@example.org", "visitor", "owner", NOW, PASSWORD);
     if ("refusal" in put) throw new Error(put.refusal);
-    expect(judgeGrant(put.registry, "blog", "guest@example.org", "visitor", OWNER, SSO)).toMatchObject({ password: false });
+    // Kept as it is, it draws nothing and lets nobody new in: no unlock.
+    expect(judgeGrant(put.registry, "blog", "guest@example.org", "visitor", OWNER, SSO)).toMatchObject({ password: false, unlock: false });
     expect(judgeGrant(put.registry, "blog", "guest@example.org", "viewer", OWNER, SSO)).toMatchObject({ code: "out-of-scope" });
     expect(putEntry(put.registry, "blog", "guest@example.org", "viewer", "owner", NOW)).toMatchObject({ code: "out-of-scope" });
   });

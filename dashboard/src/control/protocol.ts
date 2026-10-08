@@ -71,7 +71,7 @@ export type TokenView = {
   /**
    * The dashboard's member who minted it, null for a token the owner created.
    * A member's token is never stronger than its member: the steward narrows
-   * it to their roles at every use (src/members/tokens.ts).
+   * it to their roles at every use (src/people/tokens.ts).
    */
   member: string | null;
 };
@@ -282,7 +282,7 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   DELETE /control/access        { bearer, slug, who }       -> EntryResponse
 //
 // A member's own tokens, judged by their session, their unlock to create, and
-// their roles (src/members/tokens.ts):
+// their roles (src/people/tokens.ts):
 //
 //   POST   /team/member/list      { session }                                     -> MemberTeamResponse
 //   POST   /team/member/tokens    { session, token, label, expiresAt, scope }     -> CreatedTokenResponse   (their unlock)
@@ -312,11 +312,11 @@ export type DeployResponse = { deployment: string; slug: string; creating: boole
 export type LogsRequest = { bearer: string; slug: string; lines: number; cursor: string | null };
 export type LogsResponse = { lines: string[]; cursor: string | null };
 
-// --- The Tokens page's routes, under /api/team, behind the session ----------------
+// --- The Tokens page's routes, under /api/tokens, behind the session --------------
 //
-//   GET    /api/team                               -> TeamPageResponse
-//   POST   /api/team/tokens   { label, email, expiresAt, scope }  -> CreatedTokenResponse   (unlocked)
-//   POST   /api/team/revoke   { id }               -> { token: TokenView }
+//   GET    /api/tokens                             -> TeamPageResponse
+//   POST   /api/tokens        { label, email, expiresAt, scope }  -> CreatedTokenResponse   (unlocked)
+//   POST   /api/tokens/revoke { id }               -> { token: TokenView }
 
 /** One line of the dashboard's audit, in the shape every component shares. */
 export type AuditEntry = {

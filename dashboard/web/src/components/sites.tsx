@@ -4,7 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ExternalLink } from "@/components/link"
 import { InternalLink, useNavigation } from "@/components/navigation"
 import { SeverityIcon, Panel, Status } from "@/components/page"
-import { Gate } from "@/components/site-access"
+import { AccessWord } from "@/components/access-word"
 import { ago, size } from "@/lib/format"
 import { BAR_CLASSES } from "@/lib/gauges"
 import { siteUrl } from "@/lib/pages"
@@ -139,22 +139,12 @@ function ServiceCell({ site, now }: { site: Site; now: number }) {
   )
 }
 
-/** The active guest accesses of a site behind the portal, beside its door: zero is not written. */
-function ActiveGuests({ count, className }: { count: number | undefined; className?: string }) {
-  if (count === undefined || count === 0) return null
-  return (
-    <span className={cn("text-xs whitespace-nowrap text-muted-foreground tabular-nums", className)}>
-      {count === 1 ? "1 active guest" : `${count} active guests`}
-    </span>
-  )
-}
-
 const HEAD = "h-10 px-3 text-xs font-medium text-muted-foreground"
 const CELL = "px-3 py-3 align-top whitespace-normal"
 
-type RowProps = { site: SiteWithSecrets; severity: Severity | null; guests: number | undefined; now: number }
+type RowProps = { site: SiteWithSecrets; severity: Severity | null; now: number }
 
-function SiteRow({ site, severity, guests, now }: RowProps) {
+function SiteRow({ site, severity, now }: RowProps) {
   const click = useRowClick(siteUrl(site.slug))
   const access = siteAccess(site)
   return (
@@ -180,13 +170,12 @@ function SiteRow({ site, severity, guests, now }: RowProps) {
       </TableCell>
       <TableCell className={CELL}>
         <div className="grid justify-items-start gap-0.5">
-          <Gate site={site} />
+          <AccessWord site={site} />
           {access.kind === "portal" && access.exemptions.length > 0 && (
-            <span className="text-xs text-muted-foreground" title="Public paths, guarded by the site alone">
+            <span className="text-xs text-muted-foreground" title="Paths anyone can open, guarded by the app alone">
               <span className="font-mono">{access.exemptions.join(" ")}</span> public
             </span>
           )}
-          <ActiveGuests count={guests} />
         </div>
       </TableCell>
       <TableCell className={CELL}>
@@ -209,10 +198,10 @@ function SiteRow({ site, severity, guests, now }: RowProps) {
 
 /**
  * An entry in the mobile list: the name and the service's state on the first
- * line, the description, the address, then the door and the sizes. The whole
+ * line, the description, the address, then general access and the sizes. The whole
  * entry leads to the site, like a table row.
  */
-function SiteEntry({ site, severity, guests, now }: RowProps) {
+function SiteEntry({ site, severity, now }: RowProps) {
   const click = useRowClick(siteUrl(site.slug))
   const summary = serviceSummaryOf(site, now)
   const address = siteAddress(site)
@@ -235,9 +224,8 @@ function SiteEntry({ site, severity, guests, now }: RowProps) {
         <AddressCell address={address} />
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground tabular-nums">
           <span className="text-foreground">
-            <Gate site={site} large />
+            <AccessWord site={site} large />
           </span>
-          <ActiveGuests count={guests} />
           {summary.kind === "active" && (
             <span className="flex items-center gap-1.5 whitespace-nowrap">
               <MemoryBar summary={summary} className="w-8" />
@@ -267,14 +255,11 @@ function SiteEntry({ site, severity, guests, now }: RowProps) {
 export function SiteList({
   sites,
   worst,
-  activeGuests,
   now,
   caption,
 }: {
   sites: readonly SiteWithSecrets[]
   worst: ReadonlyMap<string, Severity>
-  /** The active accesses by host; null until the portal has answered. */
-  activeGuests: ReadonlyMap<string, number> | null
   now: number
   caption: string
 }) {
@@ -300,7 +285,6 @@ export function SiteList({
                 key={site.slug}
                 site={site}
                 severity={worst.get(site.slug) ?? null}
-                guests={activeGuests?.get(site.address)}
                 now={now}
               />
             ))}
@@ -313,7 +297,6 @@ export function SiteList({
               key={site.slug}
               site={site}
               severity={worst.get(site.slug) ?? null}
-              guests={activeGuests?.get(site.address)}
               now={now}
             />
           ))}

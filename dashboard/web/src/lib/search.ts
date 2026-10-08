@@ -56,11 +56,11 @@ export function accessTexts(site: Pick<Site, "portal" | "lock">): string[] {
   const access = siteAccess(site)
   switch (access.kind) {
     case "code":
-      return ["Preview lock", access.code]
+      return ["Anyone with the code", access.code]
     case "portal":
-      return ["Portal", ...access.exemptions]
+      return ["Restricted", ...access.exemptions]
     case "open":
-      return ["No gate"]
+      return ["Public"]
     case "mismatch":
       return [access.label]
   }

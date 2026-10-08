@@ -126,7 +126,7 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
 
       {list.state === "ready" && list.entries.length === 0 && (
         <EmptyState icon={History} title="No activity yet" compact>
-          {withSite ? "Unlocks, reads, changes, restarts and portal changes show up here." : `Reads, changes, restarts and portal changes on ${slug} show up here.`}
+          {withSite ? "Unlocks, reads, changes, restarts and access changes show up here." : `Reads, changes, restarts and access changes on ${slug} show up here.`}
         </EmptyState>
       )}
 

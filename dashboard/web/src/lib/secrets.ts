@@ -442,7 +442,7 @@ const OPERATION_NAMES: Record<Operation, string> = {
   restore: "Restore",
   replace: "Replace",
   password: "Change password",
-  portal: "Portal",
+  portal: "Change general access",
   restart: "Restart",
   "access.add": "Give access",
   "access.change": "Change role",
@@ -452,15 +452,15 @@ const OPERATION_NAMES: Record<Operation, string> = {
   "dashboard.signin": "Sign in",
   "dashboard.signin_failed": "Sign-in refused",
   "dashboard.signout": "Sign out",
-  "member.invite": "Invite member",
+  "member.invite": "Give a role",
   "member.role": "Change roles",
-  "member.remove": "Remove member",
+  "member.remove": "Remove from the dashboard",
   "member.signin": "Sign in",
   "member.signin_failed": "Sign-in refused",
   "member.signout": "Sign out",
-  sharing: "Change sharing",
-  "guest.create": "Give guest access",
-  "guest.revoke": "Revoke guest access",
+  sharing: "Change who can open it",
+  "guest.create": "Give password access",
+  "guest.revoke": "Remove password access",
   "backup.restore": "Restore backup",
   "token.create": "Create token",
   "token.revoke": "Revoke token",
@@ -475,8 +475,14 @@ const OPERATION_NAMES: Record<Operation, string> = {
  */
 export type OperationParts = { verb: string; object: string | null; kind: "variable" | "file" | "project" | null }
 
+/** A change of general access, by the direction the steward writes first in its detail: "on, ok", "off, failure". */
+function generalVerb(detail: string | null): string {
+  const direction = detail?.split(",")[0]?.trim()
+  return direction === "on" ? "Restrict" : direction === "off" ? "Make public" : OPERATION_NAMES.portal
+}
+
 export function operationParts(entry: LogEntry): OperationParts {
-  const verb = OPERATION_NAMES[entry.operation]
+  const verb = entry.operation === "portal" ? generalVerb(entry.detail) : OPERATION_NAMES[entry.operation]
   switch (entry.operation) {
     case "read":
     case "set":
@@ -551,14 +557,17 @@ export type OperationOutcome = { tone: Tone; text: string | null }
  * rather than vanishing.
  */
 export function operationOutcome(entry: LogEntry): OperationOutcome {
+  // A change of general access: its verb already says which way; only how it ended is left to say.
+  if (entry.operation === "portal") {
+    if (entry.result === "ok") return { tone: "ok", text: null }
+    return entry.result === "rejects" ? { tone: "attention", text: "Refused" } : { tone: "error", text: "Failed" }
+  }
   const detail = entry.detail
   const read = detail === null ? null : translate(detail, entry.operation)
   if (entry.result === "ok") {
-    const saysSomething = entry.operation === "restart" || entry.operation === "portal"
-    if (!saysSomething || read === null || read === "") return { tone: "ok", text: null }
+    if (entry.operation !== "restart" || read === null || read === "") return { tone: "ok", text: null }
     // Alone in its column, the verdict takes its capital, like the dialog's word.
     const text = read.charAt(0).toUpperCase() + read.slice(1)
-    if (entry.operation === "portal") return { tone: "neutral", text }
     // The steward writes the verdict first, then the systemd state:
     // "active, active/running, 0 restarts". The first word decides.
     const verdict = detail?.split(",")[0]?.trim()

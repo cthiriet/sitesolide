@@ -23,8 +23,8 @@
  *   (builder.env's included) that changes only through `/password` and is never
  *   restored, `dashboard.env` and `portal.env` which carry nothing but their
  *   hash, one log per site, and an unlocking by the same password;
- * - a simulated gatekeeper behind `/portal`, which takes six seconds: it puts
- *   up and takes away the door of `wheels` or of `bookshop`, always
+ * - a simulated gatekeeper behind `/portal`, which takes six seconds: it
+ *   restricts `wheels` or `bookshop` and makes them public again, always
  *   fails on `photos` and restores, refuses `roster` because Caddy's
  *   lock is held from the workstation, and refuses `library`, for which a
  *   backup of an interrupted action has remained: its state is unknown. The
@@ -34,15 +34,17 @@
  *   people sign in, `/admin/access` like `portal/src/admin.ts`, and
  *   `/admin/audit` with sign-ins of every kind;
  * - access, with the steward's own access and sign-in routes
- *   (src/access/steward.ts, src/members/steward.ts) on the fake steward's
+ *   (src/access/steward.ts, src/people/steward.ts) on the fake steward's
  *   socket, the registry made by the real migration from a `members.json`
  *   and a portal database from before it, written in the temporary
  *   directory: alice@example.com is a Developer on `cms`, an Admin on
- *   `calendar` and a Viewer on `photos`, people and domains can open `cms`
- *   and `calendar`, and four password accesses are carried over. *Sign in
- *   with Google* on the sign-in page goes through the fake portal's
- *   `/admin/dashboard/flow` to a page of its own that signs in alice, or
- *   stranger@example.com, whom the registry does not name, then back with a
+ *   `calendar` and a Viewer on `photos`, bruno@example.com an Admin on `cms`
+ *   and a Developer on `calendar`, chloe@example.com a Viewer on
+ *   `calendar`, maya@example.com may create projects; people and a domain
+ *   can open `cms` and `calendar`, and five password accesses are carried
+ *   over. *Sign in with Google* on the sign-in page goes through the fake
+ *   portal's `/admin/dashboard/flow` to a page of its own that signs in one
+ *   of them, or stranger@example.com, whom the registry does not name, then back with a
  *   code the fake portal redeems for an assertion signed with the steward's
  *   key, as the real one does;
  * - with the dashboard's own audit of tokens and deployments, written below,
@@ -66,6 +68,7 @@
  *   BENCH_NO_STEWARD=1  no steward: Secrets and Access say 502
  *   BENCH_NO_PORTAL=1     no portal: the sign-in page offers no provider, Activity can't read it
  *   BENCH_NO_SSO=1        a portal with passwords only: everyone outside gets password access
+ *   BENCH_OLD_PORTAL=1    a portal that still reads its own lists: Access says changes don't reach it
  *   BENCH_NO_EGRESS=1     no egress proxy: the Connectors page's activity says so, and Activity
  *   BENCH_EMPTY=1             no snapshot at all: the "No snapshot" state
  *   BENCH_SHOWCASE=1          the same fleet healed, for the README's screenshots
@@ -96,12 +99,12 @@ import {
 } from "../borrowed/connectors";
 import { benchBackupRoutes } from "./bench-backups";
 import { readPrivateKey, signAssertion } from "../borrowed/assertion";
-import { createMemberRoutes } from "../src/members/steward";
+import { createMemberRoutes } from "../src/people/steward";
 import { createAccessRoutes, createAccessStore } from "../src/access/steward";
 import { createAccessSystem } from "../src/access/system";
-import { mintRefusals, scopeText } from "../src/members/tokens";
-import { may, needsUnlock, powerRefusal, type Power } from "../src/members/powers";
-import { createMembersSystem } from "../src/members/system";
+import { mintRefusals, scopeText } from "../src/people/tokens";
+import { may, needsUnlock, powerRefusal, type Power } from "../src/people/powers";
+import { createMembersSystem } from "../src/people/system";
 
 const PASSWORD = "demo";
 
@@ -285,7 +288,7 @@ const FOLDERS: FakeFolder[] = [
     slug: "portal",
     manifest: {
       slug: "portal",
-      description: "Common door of the personal sites",
+      description: "Sign-in in front of the restricted sites",
       start: "bun run server.ts",
       port: 3026,
       secrets: ["portal.env"],
@@ -326,6 +329,8 @@ const FOLDERS: FakeFolder[] = [
       start: "bun run server.ts",
       port: 3045,
       secrets: ["roster.env"],
+      // Restricted in sitesolide.json, not in the live block: general access in disagreement.
+      ...(SHOWCASE ? {} : { portal: true }),
     },
     unit: {
       active: "activating",
@@ -1017,7 +1022,7 @@ const teamTokens: BenchToken[] = [
   { id: "a1b2c3d4e5f6", label: "Alice's laptop", email: "alice@example.com", createdAt: start - 12 * DAY, expiresAt: start + 78 * DAY, revokedAt: null, lastUsedAt: start - 3 * HOUR, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false }, owned: ["notes"], member: null },
   { id: "0f1e2d3c4b5a", label: "Release agent", email: "agent@example.com", createdAt: start - 40 * DAY, expiresAt: start + 4 * DAY, revokedAt: null, lastUsedAt: start - DAY, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: true }, owned: [], member: null },
   { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com", createdAt: start - 90 * DAY, expiresAt: null, revokedAt: start - 20 * DAY, lastUsedAt: start - 21 * DAY, scope: { slugs: [], create: true, outbound: false, domain: false, public: false }, owned: ["mockups"], member: null },
-  // A member's own, minted from her Team page: a Developer on cms, a Project admin on calendar.
+  // A person's own, minted from her Tokens page: a Developer on cms, an Admin on calendar.
   { id: "c0ffee123456", label: "Alice's agent", email: "alice@example.com", createdAt: start - 2 * DAY, expiresAt: start + 88 * DAY, revokedAt: null, lastUsedAt: start - 5 * HOUR, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: false }, owned: [], member: "alice@example.com" },
 ];
 
@@ -1054,11 +1059,11 @@ Bun.spawnSync(
   { cwd: PROJECT_ROOT, env: { ...process.env, DATA_DIR: folder }, stdout: "inherit", stderr: "inherit" },
 );
 
-// --- The members, with the steward's own routes ---------------------------------
+// --- The people who sign in, with the steward's own routes -------------------------
 //
 // The registry, the sessions and the key pair in the temporary directory, the
 // projects those of the snapshot, the portal's settings the fake portal's. A
-// restart is simulated, and recorded in the steward's log under the member.
+// restart is simulated, and recorded in the steward's log under the person.
 
 const membersState = join(folder, "members-state");
 const portalKeyFolder = join(folder, "portal-key");
@@ -1084,7 +1089,14 @@ const portalData = join(folder, "portal-data");
 mkdirSync(portalData, { recursive: true });
 writeFileSync(
   join(membersState, "members.json"),
-  JSON.stringify({ members: [{ email: "alice@example.com", roles: { cms: "developer", calendar: "admin", photos: "viewer" }, create: false, invitedBy: "owner", createdAt: start - 20 * DAY, updatedAt: start - 20 * DAY }] }),
+  JSON.stringify({
+    members: [
+      { email: "alice@example.com", roles: { cms: "developer", calendar: "admin", photos: "viewer" }, create: false, invitedBy: "owner", createdAt: start - 20 * DAY, updatedAt: start - 20 * DAY },
+      { email: "bruno@example.com", roles: { calendar: "developer", cms: "admin" }, create: false, invitedBy: "owner", createdAt: start - 12 * DAY, updatedAt: start - 3 * DAY },
+      { email: "chloe@example.com", roles: { calendar: "viewer" }, create: false, invitedBy: "alice@example.com", createdAt: start - 4 * DAY, updatedAt: start - 4 * DAY },
+      { email: "maya@example.com", roles: {}, create: true, invitedBy: "owner", createdAt: start - 2 * DAY, updatedAt: start - 2 * DAY },
+    ],
+  }),
 );
 {
   // A fixture, written once and read once by the migration's checked copy.
@@ -1095,6 +1107,7 @@ writeFileSync(
   const invite = fixture.query("INSERT INTO invites (id, hote, libelle, empreinte, cree_a, expire_a, vu_a) VALUES (?, ?, ?, ?, ?, ?, NULL)");
   invite.run("benchGuest000001", "cms.example.com", "client@example.org", hashOf("bench one"), start - 6 * DAY - 19 * HOUR, start + 5 * HOUR);
   invite.run("benchGuest000002", "calendar.example.com", "Example Accounting", hashOf("bench two"), start - DAY, start + 6 * DAY);
+  invite.run("benchGuest000005", "calendar.example.com", "auditor@partner.example", hashOf("bench five"), start - 3 * DAY, start + 14 * HOUR);
   invite.run("benchGuest000003", "photos.example.com", "Bob and Carol", hashOf("bench three"), start - 41 * DAY, null);
   invite.run("benchGuest000004", "library.example.com", "Dave, intern", hashOf("bench four"), start - 32 * DAY, start - 2 * DAY);
   const policy = fixture.query("INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES (?, ?, ?, ?, ?)");
@@ -1154,7 +1167,7 @@ const accessRoutes = createAccessRoutes({
     const restricted = view !== undefined && projectView(view).portal.requested === true && projectView(view).portal.installed === true;
     return { access: restricted ? "restricted" : "public", modifiable: true, reason: null };
   },
-  portalReading: async () => ({ reading: "steward", writtenAt: Date.now() }),
+  portalReading: async () => ({ reading: process.env.BENCH_OLD_PORTAL === "1" ? "portal" : "steward", writtenAt: Date.now() }),
   isUnlocked: async (value) => isValidToken({ token: value }),
   readBody: async (req, fields) => {
     const body = await readBody(req);
@@ -1167,10 +1180,10 @@ const accessRoutes = createAccessRoutes({
 });
 
 /**
- * A member's work on their projects, as src/members/actions.ts judges it: the
+ * A member's work on their projects, as src/people/actions.ts judges it: the
  * session, the member's unlock where the power needs one, the role, then the
  * owner's fake operation. Enough for the page; the real decisions are tested
- * in tests/members-actions.test.ts.
+ * in tests/people-actions.test.ts.
  */
 function memberAction(power: Power, operation: (req: Request) => Response | Promise<Response>) {
   return async (req: Request): Promise<Response> => {
@@ -1248,7 +1261,7 @@ const steward =
               return Response.json({ token: created, secret: `sst_${draw(43, ALPHABET)}` }, { status: 201 });
             },
           },
-          // A member's own tokens, judged by the real rules (src/members/tokens.ts) on her session and unlock.
+          // A member's own tokens, judged by the real rules (src/people/tokens.ts) on her session and unlock.
           "/team/member/list": {
             POST: async (req) => {
               const requested = await readBody(req);
@@ -1742,7 +1755,7 @@ const portal =
           // How people sign in, and what the portal reads its access from,
           // like portal/src/admin.ts.
           "/admin/sharing": { GET: () => Response.json({ sso, sites: [] }) },
-          "/admin/access": { GET: () => Response.json({ reading: "steward", writtenAt: Date.now() }) },
+          "/admin/access": { GET: () => Response.json({ reading: process.env.BENCH_OLD_PORTAL === "1" ? "portal" : "steward", writtenAt: Date.now() }) },
           "/admin/audit": { GET: (req) => Response.json({ events: page(portalEvents, new URL(req.url).searchParams) }) },
 
           // A member's sign-in, as portal/src/dashboard.ts: the flow sealed
@@ -1762,7 +1775,7 @@ const portal =
             if (!benchFlows.has(flow)) return new Response("unknown flow", { status: 400 });
             const choice = (email: string, label: string) => `<p><a href="/oidc/pick?flow=${flow}&email=${encodeURIComponent(email)}">Sign in as ${label}</a></p>`;
             return new Response(
-              `<!doctype html><meta charset="utf-8"><title>Bench provider</title><h1>Bench identity provider</h1>${choice("alice@example.com", "alice@example.com, a member")}${choice("stranger@example.com", "stranger@example.com, not a member")}`,
+              `<!doctype html><meta charset="utf-8"><title>Bench provider</title><h1>Bench identity provider</h1>${choice("alice@example.com", "alice@example.com: Admin of calendar, Developer of cms, Viewer of photos")}${choice("bruno@example.com", "bruno@example.com: Admin of cms, Developer of calendar")}${choice("chloe@example.com", "chloe@example.com: Viewer of calendar")}${choice("stranger@example.com", "stranger@example.com, no role anywhere")}`,
               { headers: { "Content-Type": "text/html; charset=utf-8" } },
             );
           },

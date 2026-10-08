@@ -108,7 +108,7 @@ describe("the hints", () => {
     for (const hint of Object.values(REMOTE_HINTS)) {
       if (hint.includes("--force")) expect(hint).toMatch(/do not re-run with --force/);
     }
-    // The codes the installer stops on, as docs/team.md lists them.
+    // The codes the installer stops on, as docs/access.md lists them.
     for (const code of ["install-failed", "secret-missing", "edited-by-hand", "system-unit", "caddy-busy", "bundle-refused", "service-failed", "verify-failed"]) {
       expect(Object.hasOwn(REMOTE_HINTS, code)).toBe(true);
     }

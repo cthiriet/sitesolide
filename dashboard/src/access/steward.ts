@@ -21,17 +21,22 @@
  *
  * **Who asks.** The owner, over SSH on the owner's socket, or in the
  * dashboard on its own, with the live unlock for what raises someone above
- * Can open; an admin of the project, through their session, their unlock for
- * the same; a token, through the control routes, Can open alone. Removing
- * or lowering someone never waits for an unlock. Someone who no longer has a
- * role above Can open anywhere, nor the create right, no longer signs in to
- * the dashboard: their sessions close and their tokens are revoked (`leave`),
- * outside this queue, as a person removed's always were.
+ * Can open or gives password access; an admin of the project, through their
+ * session, their unlock for the same; a token, through the control routes,
+ * Can open alone, never password access. Password access asks for the unlock
+ * because it lets someone from outside the company in, whom no company
+ * account vouches for: a dashboard session alone, which a compromised
+ * dashboard holds, must not hand that out. Can open for a company account
+ * or a domain, removing and lowering someone never wait for an unlock.
+ * Someone who no longer has a role above Can open anywhere, nor the create
+ * right, no longer signs in to the dashboard: their sessions close and their
+ * tokens are revoked (`leave`), outside this queue, as a person removed's
+ * always were.
  */
 import { atLeast, isRole, type Role } from "../../borrowed/access";
 import { cleanEmail } from "../../borrowed/sharing";
 import { generatePassword } from "../password";
-import type { MemberPrincipal } from "../members/steward";
+import type { MemberPrincipal } from "../people/steward";
 import { reportText, migrate, readMembersFile } from "./migrate";
 import {
   MAX_DASHBOARD_PEOPLE,
@@ -103,6 +108,9 @@ function errorName(e: unknown): string {
   if (typeof code === "string") return code;
   return e instanceof Error ? e.name : "unknown";
 }
+
+/** The steward's refusal of password access without the unlock: the dashboard turns it into the page's 423. */
+export const PASSWORD_LOCKED = "locked: giving password access needs the unlock, since it lets someone from outside the company in";
 
 const REGISTRY_UNREADABLE = "the access registry does not read on the machine: the owner must check /var/lib/sitesolide-steward/access.json";
 
@@ -272,7 +280,7 @@ export type AccessRoutesDependencies = {
   signIn: () => Promise<SignInSettings>;
   /** The project's general access as the machine carries it, null when it is not deployed. */
   general: (slug: string) => Promise<GeneralView | null>;
-  /** What the portal says it reads its access from (src/members/portal.ts). */
+  /** What the portal says it reads its access from (src/people/portal.ts). */
   portalReading: () => Promise<AccessResponse["portal"]>;
   /** Is this the live unlock token of the owner's secrets routes? */
   isUnlocked: (token: unknown) => Promise<boolean>;
@@ -360,8 +368,9 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
   /**
    * An entry given or changed. `granterNow` reads the granter again from the
    * registry once the turn has come: an admin lowered while the request
-   * waited gives nothing. `unlocked` is asked only when the change raises
-   * someone above Can open.
+   * waited gives nothing. `unlocked` is asked only when the change needs
+   * it (`Grant.unlock`): it raises someone above Can open, or gives password
+   * access.
    */
   async function grant(
     slugValue: unknown,
@@ -391,7 +400,9 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
       if (project !== null) return refuse(project.code ?? "invalid", project.refusal);
       const judged = judgeGrant(registry, slug, whoValue, role, granter, signIn);
       if ("refusal" in judged) return refuse(judged.code ?? "invalid", judged.refusal);
-      if (judged.raises && !(await unlocked())) return fail("locked", "locked: giving someone a role above Can open needs the unlock");
+      if (judged.unlock && !(await unlocked())) {
+        return fail("locked", judged.password ? PASSWORD_LOCKED : "locked: giving someone a role above Can open needs the unlock");
+      }
       if (atLeast(role, "viewer") && !isDashboardPerson(registry, judged.who.who) && dashboardPeople(registry).length >= MAX_DASHBOARD_PEOPLE) {
         return fail("invalid", `${MAX_DASHBOARD_PEOPLE} people sign in to the dashboard at most: take someone who left off first`);
       }
@@ -469,7 +480,7 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
     return listResponse(wanted[0]!);
   }
 
-  /** `asRoot`: the owner's socket, which only root opens, needs no unlock token. */
+  /** `asRoot`: the owner's socket, which only root opens, needs no unlock token, password access included. */
   function ownerGrant(asRoot: boolean): Handler {
     return async (req) => {
       const body = await readBody(req, asRoot ? ["slug", "who", "role", "expiresInS"] : ["token", "slug", "who", "role", "expiresInS"]);

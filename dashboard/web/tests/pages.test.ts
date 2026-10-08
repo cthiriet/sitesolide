@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  LEGACY_PATHS,
   MACHINE_PAGES,
   SECTIONS,
   ariaCurrent,
@@ -29,7 +30,7 @@ describe("the page for an address", () => {
   test("every section of a site is read from its path and ?s=", () => {
     expect(pageFromUrl("/site/", "?s=cms")).toEqual({ name: "site", slug: "cms", section: "overview" })
     expect(pageFromUrl("/site/secrets/", "?s=cms")).toEqual({ name: "site", slug: "cms", section: "secrets" })
-    expect(pageFromUrl("/site/guests/", "?s=cms")).toEqual({ name: "site", slug: "cms", section: "guests" })
+    expect(pageFromUrl("/site/backups/", "?s=cms")).toEqual({ name: "site", slug: "cms", section: "backups" })
     expect(pageFromUrl("/site/access/", "?s=test-zone.invalid")).toEqual({
       name: "site",
       slug: "test-zone.invalid",
@@ -83,6 +84,13 @@ describe("older addresses", () => {
     expect(pageFromUrl("/secrets/", "?site=cms")).toEqual({ name: "site", slug: "cms", section: "secrets" })
     expect(pageFromUrl("/guests/")).toEqual({ name: "home" })
     expect(pageFromUrl("/guests/", "?site=cms")).toEqual({ name: "home" })
+    // Tokens and People, and a site's one Access section, from before them.
+    expect(pageFromUrl("/team/")).toEqual({ name: "tokens" })
+    expect(pageFromUrl("/members/")).toEqual({ name: "people" })
+    for (const old of ["/site/guests/", "/site/sharing/", "/site/members/"]) {
+      expect(pageFromUrl(old, "?s=cms")).toEqual({ name: "site", slug: "cms", section: "access" })
+      expect(pageFromUrl(old)).toEqual({ name: "home" })
+    }
   })
 
   test("they redirect to the new address", () => {
@@ -93,6 +101,12 @@ describe("older addresses", () => {
     expect(redirect("/secrets/", "?site=cms")).toBe("/site/secrets/?s=cms")
     expect(redirect("/secrets/", "?site=")).toBe("/")
     expect(redirect("/guests/")).toBe("/")
+    expect(redirect("/team/")).toBe("/tokens/")
+    expect(redirect("/members/index.html")).toBe("/people/")
+    expect(redirect("/site/guests/", "?s=cms")).toBe("/site/access/?s=cms")
+    expect(redirect("/site/sharing/", "?s=cms")).toBe("/site/access/?s=cms")
+    expect(redirect("/site/members/", "?s=a%26b")).toBe("/site/access/?s=a%26b")
+    expect(redirect("/site/members/")).toBe("/")
   })
 
   test("the old slug is re-encoded, tricky ones included", () => {
@@ -154,7 +168,7 @@ describe("the address of a page", () => {
 
   test("a site encodes its slug, and Overview is the default section", () => {
     expect(siteUrl("cms")).toBe("/site/?s=cms")
-    expect(siteUrl("cms", "guests")).toBe("/site/guests/?s=cms")
+    expect(siteUrl("cms", "access")).toBe("/site/access/?s=cms")
     expect(siteUrl("a&s=c")).toBe("/site/?s=a%26s%3Dc")
   })
 
@@ -165,7 +179,7 @@ describe("the address of a page", () => {
       { name: "site", slug: "test-zone.invalid", section: "secrets" },
       { name: "site", slug: "a&s=b", section: "access" },
       { name: "site", slug: "../secrets/", section: "overview" },
-      { name: "site", slug: "é ?#", section: "guests" },
+      { name: "site", slug: "é ?#", section: "backups" },
     ]
     for (const page of pages) {
       const url = new URL(pageUrl(page), "http://page.invalid")
@@ -181,10 +195,9 @@ describe("the address of a page", () => {
     const expected = [
       ...MACHINE_PAGES.map((entry) => entry.path),
       ...SECTIONS.map((entry) => entry.path),
-      "/sites/",
-      "/secrets/",
-      "/guests/",
+      ...Object.keys(LEGACY_PATHS),
     ]
+    expect(Object.keys(LEGACY_PATHS).sort()).toEqual(["/guests/", "/members/", "/secrets/", "/site/guests/", "/site/members/", "/site/sharing/", "/sites/", "/team/"])
     expect(paths.sort()).toEqual(expected.sort())
   })
 })
@@ -222,9 +235,10 @@ describe("titles", () => {
   test("the verdict comes first when it is not good", () => {
     const bad = verdict([discrepancy("error"), discrepancy("warning")], false)
     expect(documentTitle({ name: "home" }, bad)).toBe("1 error · 1 warning · sitesolide")
-    expect(documentTitle({ name: "site", slug: "cms", section: "guests" }, bad)).toBe(
-      "1 error · 1 warning · Guests · cms · sitesolide",
+    expect(documentTitle({ name: "site", slug: "cms", section: "access" }, bad)).toBe(
+      "1 error · 1 warning · Access · cms · sitesolide",
     )
+    expect(documentTitle({ name: "people" }, bad)).toBe("1 error · 1 warning · People · sitesolide")
     expect(documentTitle({ name: "activity" }, NO_DATA)).toBe("No data · Activity · sitesolide")
     expect(documentTitle({ name: "home" }, verdict([], true))).toBe("Stale data · sitesolide")
   })
@@ -236,6 +250,8 @@ describe("titles", () => {
     expect(pendingTitle("/site/")).toBeNull()
     expect(pendingTitle("/site/secrets/")).toBeNull()
     expect(pendingTitle("/sites/")).toBe("Sites")
+    expect(pendingTitle("/team/")).toBe("Tokens")
+    expect(pendingTitle("/site/sharing/")).toBeNull()
   })
 })
 

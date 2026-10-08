@@ -27,12 +27,12 @@ import {
 } from "./src/database";
 import { createSessionReader, createRoutes, ownerSessions } from "./src/routes";
 import { isMemberSession } from "./src/sessions";
-import { localDashboardPortal, localMembersSteward } from "./src/members/client";
-import { createIdentityResolver } from "./src/members/identity";
-import { createSignInLimiter } from "./src/members/limiter";
-import { MEMBER_SESSION_DURATION_MS } from "./src/members/protocol";
-import { createMembersRoutes } from "./src/members/routes";
-import { createMemberRelay } from "./src/members/relay";
+import { localDashboardPortal, localMembersSteward } from "./src/people/client";
+import { createIdentityResolver } from "./src/people/identity";
+import { createSignInLimiter } from "./src/people/limiter";
+import { MEMBER_SESSION_DURATION_MS } from "./src/people/protocol";
+import { createMembersRoutes } from "./src/people/routes";
+import { createMemberRelay } from "./src/people/relay";
 import { createPortalAuditRoute, localPortalAudit } from "./src/portal-audit";
 import { localAccessSteward } from "./src/access/client";
 import { createAccessRoutes } from "./src/access/routes";
@@ -84,7 +84,7 @@ const store = {
 
 // One reader for every session, the owner's and the members'; the super
 // admin's routes take the owner's alone, so that a member reads as nobody
-// there even where a route forgot to ask. See src/members/.
+// there even where a route forgot to ask. See src/people/.
 const sessionReader = createSessionReader(store, {
   online: ONLINE,
   sessionDurationMs: SESSION_DURATION_MS,
@@ -137,7 +137,7 @@ setInterval(() => void tracker.tick(), 3_000);
 
 // The people who sign in: with the portal's provider, the steward opens their
 // sessions and judges their writes, and this process shows each of them
-// their own projects. See src/members/.
+// their own projects. See src/people/.
 const membersSteward = localMembersSteward(STEWARD_SOCKET);
 const identity = createIdentityResolver({ session: sessionReader, online: ONLINE, steward: membersSteward, closeSession });
 // A member's own unlock tokens, by session hash: never the owner's store,
@@ -159,7 +159,7 @@ const members = createMembersRoutes({
 
 // What a person reaches of a site's Secrets, general access and Backups: the
 // same addresses as the owner's, relayed to the steward with their session
-// and unlock. See src/members/relay.ts.
+// and unlock. See src/people/relay.ts.
 const memberRelay = createMemberRelay({
   publicUrl: PUBLIC_URL,
   resolve: identity,
@@ -233,7 +233,7 @@ function long(
  * sign-out, the snapshot and the audit, both filtered to their projects,
  * their restart, a site's Secrets, Access, Sharing, Guests and Backups, and
  * their own tokens on the Tokens page, which `either()` sends to
- * src/members/relay.ts, where the steward judges each by role. Every other route is the owner's: `owner()` answers a
+ * src/people/relay.ts, where the steward judges each by role. Every other route is the owner's: `owner()` answers a
  * member 403 before its handler runs, and the handler itself reads the
  * owner's sessions alone (`ownerReader`), so that a route forgetting the
  * first still refuses a member. The control API is reached with a team
@@ -251,7 +251,7 @@ function owner<R extends Request, S extends { timeout: (req: Request, seconds: n
 /**
  * One address, two handlers: the owner's, which reads the owner's
  * sessions alone, and a member's, which relays to the steward with their
- * session (src/members/relay.ts). The page asks the same routes whoever is
+ * session (src/people/relay.ts). The page asks the same routes whoever is
  * signed in; what a member may do there, the steward decides.
  */
 function either<R extends Request, S extends { timeout: (req: Request, seconds: number) => void }>(
@@ -343,10 +343,9 @@ const server = Bun.serve({
     "/api/connectors/grant": { PUT: owner((req, server) => long(req, server, connectors.setGrant)) },
 
     // The owner sees and revokes every token; a member, their own, minted
-    // within their roles and judged by the steward (src/members/relay.ts).
-    "/api/team": { GET: either(team.team, memberRelay.team) },
-    "/api/team/tokens": { POST: either(team.createToken, memberRelay.createToken) },
-    "/api/team/revoke": { POST: either(team.revokeToken, memberRelay.revokeToken) },
+    // within their roles and judged by the steward (src/people/relay.ts).
+    "/api/tokens": { GET: either(team.team, memberRelay.team), POST: either(team.createToken, memberRelay.createToken) },
+    "/api/tokens/revoke": { POST: either(team.revokeToken, memberRelay.revokeToken) },
 
     // The control API. The archive streams for as long as it takes to arrive:
     // Bun's ten seconds of silence would cut a slow upload in the middle.
@@ -367,7 +366,7 @@ const server = Bun.serve({
       PUT: (req) => api.putProjectAccess(req, req.params.slug),
       DELETE: (req) => api.removeProjectAccess(req, req.params.slug),
     },
-    "/api/v1/*": () => failure("not-found", "no such route: see docs/team.md for the control API's routes"),
+    "/api/v1/*": () => failure("not-found", "no such route: see docs/access.md for the control API's routes"),
     // The backups go through the steward too: it reads them as root, and starts
     // a restore under the same lock and the same unlocking as the secrets.
     "/api/backups": { GET: either(secrets.backups, memberRelay.backups) },
@@ -377,7 +376,6 @@ const server = Bun.serve({
     // Signing in with the provider, and a person's restart, which the steward judges.
     "/api/sso/begin": { GET: members.begin },
     "/api/sso/complete": { GET: members.complete },
-    "/api/members/restart": { POST: (req, server) => long(req, server, members.restart) },
   },
 
   /**

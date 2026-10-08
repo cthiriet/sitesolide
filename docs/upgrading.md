@@ -56,7 +56,7 @@ component (active, enabled, its files present), plus:
 | dashboard | `sitesolide deploy --dry-run --compare` finds a difference: a file to send or delete, its manifest, a missing unit, its Caddy block | `sitesolide deploy` in `dashboard/` |
 | collector | one of its two units differs | `bin/deploy-collector.sh` |
 | gatekeeper | `gatekeeper.js` or one of its templates differs, or the single template from before is still there | `bin/deploy-gatekeeper.sh` |
-| team installer | `installer.js`, its template or its environment file differs | `bin/deploy-installer.sh` |
+| installer | `installer.js`, its template or its environment file differs | `bin/deploy-installer.sh` |
 | the Caddyfile | `/etc/caddy/Caddyfile` differs from the release's | `bin/deploy-caddy.sh`, which validates, reloads, verifies and restores on failure |
 | shared service | the release in service differs from `api/`, file by file, or its unit does | `bin/deploy-api.sh` |
 | portal | as the dashboard | `sitesolide deploy` in `portal/` |
@@ -82,7 +82,7 @@ service, the portal and the monitor last.
 
 - **Install a component.** One the machine does not carry is reported
   `missing`, and left alone: `sitesolide setup`, run again for that machine,
-  installs it, the backups, the team installer and the egress proxy of a
+  installs it, the backups, the installer and the egress proxy of a
   machine set up with `--minimal` for instance.
 - **Touch a secret.** No file of `/etc/sitesolide` is read, no password is drawn
   nor rotated: those are setup's first install and the dashboard's.
@@ -128,19 +128,42 @@ all it takes; read this first, for what changes for the sites and for you.
   before the portal is: the header now carries the role, `admin` for the
   owner's password and the admin emails, `visitor`, `viewer`, `developer` or
   `admin` for someone signed in with a company account, `visitor` for password
-  access, which carries no `X-Sitesolide-User`. `member` and `guest` are
-  gone. An app that let `guest` read only now tests `role === "visitor" &&
-  user === null`, or better, the role it means.
+  access, which carries no `X-Sitesolide-User`. Its old values, `member` and
+  `guest`, are gone. An app that let `guest` read only now tests
+  `role === "visitor" && user === null`, or better, the role it means.
 - **Everyone with a role above Can open on a project opens its site** when it
-  is restricted: a Developer of a site behind the portal no longer needs to
-  be shared with besides. Read each restricted site's people with access
-  afterwards, `sitesolide share` in its folder.
+  is restricted: a Developer of a restricted site no longer needs Can open
+  besides. Read each restricted site's people with access afterwards,
+  `sitesolide share` in its folder.
 - `sitesolide members` is gone: `sitesolide share <email> --role <role>`
   from a project's folder gives a role, `sitesolide people` lists everyone and
   `sitesolide people <email> --may-create` gives the right to create projects.
   `sitesolide share --domain` and `--only-admins` are gone too: a domain is
   written `@acme.com`, and general access, public or restricted, is the
   dashboard's.
+
+**What changes in the dashboard.**
+
+- **One place per question.** In a site, one *Access* section replaces its
+  *Access*, *Sharing*, *Guests* and *Members*: its general access first,
+  Public, Restricted or Anyone with the code, then its people with access,
+  each with a role, and *Add people*. At the machine level, *People*, the
+  owner's, replaces *Members*: everyone across projects, their roles, who may
+  create projects, the domains; *Tokens* replaces *Team*, unchanged
+  otherwise. The old addresses, bookmarks included, lead to the new pages.
+- **Password access waits for the unlock** when it is given from the
+  dashboard, as a role above Can open does: the owner's password, or an
+  Admin's forced sign-in, since it lets in someone from outside the company.
+  Can open for a company account or a domain, lowering and removing still
+  never wait, and the owner's `sitesolide share` over SSH asks for nothing.
+- **Activity** lists a change of general access as `access.general`, where it
+  said `door.update`: a filter or an export that looked for the old name looks
+  for the new one, or for `access.` to find every change of access. The rows
+  written before the registry still read, in today's words.
+- **Changes of access are kept 180 days.** The steward writes every accepted
+  change of access to a file of its own, `access-log.jsonl` beside its
+  journal, at most 20,000 lines, and fills it once, at its first start, with
+  the changes the journal already holds; refusals stay in the journal.
 
 **What `sitesolide upgrade` runs, in this order.**
 
@@ -151,10 +174,9 @@ all it takes; read this first, for what changes for the sites and for you.
    the old one, keeps deciding from its own tables, which still say the same.
    `bin/deploy-steward.sh` ends on `access registry 600 root:root, its
    projection for the portal 640 root:site-portal`.
-2. **The dashboard.** Its access API speaks to the steward; the old pages,
-   Sharing, Guests and Members, keep working on it until the next release
-   replaces them with one Access section and the People page.
-3. **The team installer**, which reads the registry when it starts.
+2. **The dashboard.** Its access API speaks to the steward, and its pages
+   are the ones above: a site's Access, People and Tokens.
+3. **The installer**, which reads the registry when it starts.
 4. **The portal**, last: from its first request it decides from the
    projection, and leaves the mark that keeps it from ever reading its old
    tables again.
@@ -173,10 +195,12 @@ ssh deploy@203.0.113.10 'sudo curl -s http://127.0.0.1:3026/admin/access'
 
 `people` lists everyone with their roles; `share` lists the site's people
 with access and says nothing of the portal; the portal answers `"reading":
-"steward"`. A guest password handed out before the upgrade still opens its
-site, and a cookie set before it is still valid.
+"steward"`. A password the portal handed out before the upgrade still opens
+its site, as password access, and a cookie set before it is still valid. In
+the dashboard, a site's *Access* lists the same people as `share`, and
+*People* the same as `people`.
 
-**Going back** is the previous commit of the steward, the dashboard, the team
+**Going back** is the previous commit of the steward, the dashboard, the
 installer and the portal, which read the old stores as they stood at the
 migration: every change of access made since is lost for them. See
 [migration.md](migration.md#going-back).
@@ -234,7 +258,7 @@ probe opening a fresh connection to every site every second throughout. No
 request failed because of the upgrade itself. Every Caddy reload, though,
 resets the connections that are being opened at that instant, for about a
 tenth of a second: that is how Caddy behaves on every deploy, in 0.1 as in 0.2.
-Steps 3, 4 and 6 each reload Caddy, as does turning a portal on or off; in the
+Steps 3, 4 and 6 each reload Caddy, as does switching a site between public and restricted; in the
 rehearsal one reload out of ten fell on the probe and reset that second's
 requests. Upgrade when traffic is lowest.
 
@@ -298,7 +322,7 @@ They accept the old dashboard and the new one, and change nothing served.
 
 ```bash
 bin/deploy-backup.sh install   # the backup component's folders and units; starts nothing
-bin/deploy-steward.sh          # the new routes: team tokens, backups, connectors, the new secret files
+bin/deploy-steward.sh          # the new routes: tokens, backups, connectors, the new secret files
 ```
 
 The backup install comes first because the steward's unit makes its state
@@ -320,11 +344,12 @@ an earlier release, the current one replaces it" and replaces it without
 `bin/deploy-caddy.sh`, which deposits the repository's Caddyfile with it. Its
 file servers start hiding `.git` and `.env*` here, and the landing starts
 taking the identity headers off what visitors send. The gatekeeper embeds
-the block generator: it comes right after, so that turning a portal on or off
-from the dashboard writes the current blocks. Check: the new pages (*Team*,
-*Connectors*) and sections (*Sharing*, *Backups*) appear and say what is not
-installed yet; with the dashboard unlocked, turning a test site's portal off and
-on still works. Pick a site whose `/` answers 200 without the portal: the
+the block generator: it comes right after, so that switching a site between
+public and restricted from the dashboard writes the current blocks. Check: the
+new pages, for tokens and connectors, and sections, *Backups* among them,
+appear and say what is not installed yet; with the dashboard unlocked, making
+a test site public, then restricted again, still works. Pick a site whose `/`
+answers 200 without the portal: the
 gatekeeper restores the previous block when the open site answers 404, as
 analytics does, which is a correct refusal and no sign of trouble. Back:
 deploy the previous `dashboard/`, run the previous gatekeeper script; the new

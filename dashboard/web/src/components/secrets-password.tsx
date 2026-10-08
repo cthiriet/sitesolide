@@ -17,7 +17,7 @@ import { Banner, INPUT_DIALOG } from "@/components/page"
 import type { FocusReturn, OnRefusal } from "@/components/secrets-dialogs"
 import { changePassword } from "@/lib/api"
 import { waitMessage } from "@/lib/signin"
-import { closeOutcome } from "@/lib/invitations"
+import { closeOutcome } from "@/lib/access"
 import {
   passwordAnnouncement,
   passwordToSend,
@@ -118,10 +118,10 @@ function PasswordFlow({
   const [copyState, setCopied] = useState(false)
   const [warned, setWarned] = useState(false)
 
-  // Closing the drawn password screen without having copied it takes two gestures, as for a guest.
+  // Closing the drawn password screen without having copied it takes two gestures, as for password access.
   function askToClose() {
     if (inProgress) return
-    if (step.phase !== "generated" || closeOutcome(copyState, warned) === "closeButton") return onClose()
+    if (step.phase !== "generated" || closeOutcome(copyState, warned) === "close") return onClose()
     setWarned(true)
     announce(COPY_WARNING)
   }

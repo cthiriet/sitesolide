@@ -13,8 +13,6 @@ import { SidebarMenuButton } from "@/components/ui/sidebar"
 import { useData } from "@/components/data"
 import { InternalLink } from "@/components/navigation"
 import { WithSnapshot, PageBody, EmptyState, PageHeader, Panel, Status } from "@/components/page"
-import { siteGuests } from "@/lib/invitations"
-import type { Guest } from "@/lib/guests"
 import { SECTIONS, siteUrl, type Section } from "@/lib/pages"
 import { siteDiscrepancies, siteState } from "@/lib/site-card"
 import { TONE_DOT } from "@/lib/tones"
@@ -23,7 +21,7 @@ import { cn } from "@/lib/utils"
 
 /**
  * A site's level: what a section reads of it, the breadcrumb up to it, the
- * switcher that moves from one site to another, and the page shared by the four
+ * switcher that moves from one site to another, and the page shared by its
  * sections. A section does not write its own version of any of them.
  */
 
@@ -35,22 +33,18 @@ export type SiteData = {
   discrepancies: Discrepancy[]
   /** The steward's project; null until it has been read, or if it does not list it. */
   project: ProjectView | null
-  /** Its guest accesses, active then expired; null until the list has been read. */
-  guests: { active: Guest[]; expired: Guest[] } | null
 }
 
 export function useSite(slug: string): SiteData {
-  const { snapshot, secrets, guests, now } = useData()
-  const list = guests.list
+  const { snapshot, secrets } = useData()
   return useMemo(() => {
     const site = snapshot?.sites.find((candidate) => candidate.slug === slug) ?? null
     return {
       site,
       discrepancies: snapshot === null ? [] : siteDiscrepancies(snapshot.discrepancies, slug),
       project: secrets.projects?.find((project) => project.slug === slug) ?? null,
-      guests: site !== null && list.state === "ready" ? siteGuests(list.guests, site.address, now) : null,
     }
-  }, [snapshot, secrets.projects, list, slug, now])
+  }, [snapshot, secrets.projects, slug])
 }
 
 /** A site's state in one word and one tone, for the switcher and the sidebar: the same as under its title. */

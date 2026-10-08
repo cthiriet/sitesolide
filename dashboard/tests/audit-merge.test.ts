@@ -125,7 +125,7 @@ describe("each source's rows, in one shape", () => {
       },
       {
         position: [T, 1],
-        row: { id: `steward:${T}.1`, source: "steward", at: iso(T), actor: "owner", action: "door.update", target: "cms", detail: { result: "failure", note: "off, failure" } },
+        row: { id: `steward:${T}.1`, source: "steward", at: iso(T), actor: "owner", action: "access.general", target: "cms", detail: { result: "failure", note: "off, failure" } },
       },
       {
         position: [T - 1000, 0],

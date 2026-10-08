@@ -163,12 +163,12 @@ test("the snapshot covers every case", () => {
 // --- The copied rules ------------------------------------------------------------
 
 describe("the page and the server say the same thing", () => {
-  test("a door out of agreement is an anomaly on both sides", () => {
+  test("general access out of agreement is an anomaly on both sides", () => {
     const rules: Record<Mismatch, string> = {
-      "portal-absent": "Portal requested but missing",
-      "portal-extra": "Portal in the live Caddy block although",
-      "code-without-lock": "Code in effect without a lock",
-      "lock-without-code": "Lock requested without a valid code",
+      "portal-absent": "Restricted in sitesolide.json but not in",
+      "portal-extra": "Restricted in the live Caddy block although",
+      "code-without-lock": "Preview code in effect although",
+      "lock-without-code": "Preview code requested but none is valid",
     };
     let anomalies = 0;
     for (const site of SITES) {

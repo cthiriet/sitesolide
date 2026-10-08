@@ -1,6 +1,6 @@
 /**
  * What the site inventory decides, rather than the component: which address is
- * the main one, which door closes the site, what its service says, which sites
+ * the main one, how the site opens, what its service says, which sites
  * a filter keeps and in what order they are read. Pure, and therefore testable
  * without a browser.
  *
@@ -45,7 +45,7 @@ export function siteAddress(site: Pick<Site, "address" | "domain">): Address {
   return { ...preversion, note: { text: `Pending: ${domain.name}`, warn: false } }
 }
 
-// --- The door --------------------------------------------------------------------
+// --- General access ------------------------------------------------------------------
 
 /** The four possible disagreements between what the manifest asks for and what is running. */
 export type Mismatch = "portal-absent" | "portal-extra" | "code-without-lock" | "lock-without-code"
@@ -57,7 +57,7 @@ export type Access =
   | { kind: "mismatch"; key: Mismatch; label: string }
 
 /**
- * How the site is closed, if it is. The two doors never coexist: the manifest
+ * How the site opens. A code and a restriction never coexist: the manifest
  * refuses "portal" and "lock" together. A disagreement between the manifest and
  * what is running comes before everything else, because it is what leaves a
  * site open when its owner believes it closed.
@@ -65,16 +65,16 @@ export type Access =
 export function siteAccess(site: Pick<Site, "portal" | "lock">): Access {
   const { wanted, installed, exemptions } = site.portal
   if (wanted && !installed) {
-    return { kind: "mismatch", key: "portal-absent", label: "Portal not applied: served unprotected" }
+    return { kind: "mismatch", key: "portal-absent", label: "Restricted, not applied: open to anyone" }
   }
   if (!wanted && installed) {
-    return { kind: "mismatch", key: "portal-extra", label: "Portal applied but not requested" }
+    return { kind: "mismatch", key: "portal-extra", label: "Restricted, not requested" }
   }
   if (wanted) return { kind: "portal", exemptions }
 
   const { closed, code, url } = site.lock
-  if (!closed && code !== null) return { kind: "mismatch", key: "code-without-lock", label: "Code without lock" }
-  if (closed && code === null) return { kind: "mismatch", key: "lock-without-code", label: "Lock has no code" }
+  if (!closed && code !== null) return { kind: "mismatch", key: "code-without-lock", label: "Code, not requested" }
+  if (closed && code === null) return { kind: "mismatch", key: "lock-without-code", label: "Code requested, none in effect" }
   if (closed && code !== null) return { kind: "code", code, url }
   return { kind: "open" }
 }
@@ -195,15 +195,15 @@ export function serviceSummaryOf(site: Pick<Site, "type" | "service"> & Partial<
 
 // --- Filters and order -----------------------------------------------------------
 
-export type SiteFilter = "all" | "issues" | "apps" | "static" | "portal"
+export type SiteFilter = "all" | "issues" | "apps" | "static" | "restricted"
 
 /** The inventory's filters, in the order they are displayed. */
 export const FILTERS: readonly { key: SiteFilter; label: string; description: string }[] = [
   { key: "all", label: "All", description: "All sites" },
-  { key: "issues", label: "Issues", description: "Sites with an refusal" },
+  { key: "issues", label: "Issues", description: "Sites with an issue" },
   { key: "apps", label: "Apps", description: "Apps, which run a service" },
   { key: "static", label: "Static", description: "Static sites, served as files" },
-  { key: "portal", label: "Portal", description: "Sites behind the portal" },
+  { key: "restricted", label: "Restricted", description: "Sites only the people with access can open" },
 ]
 
 /**
@@ -225,7 +225,7 @@ export function inFilter(
       return site.type === "app"
     case "static":
       return site.type === "static"
-    case "portal":
+    case "restricted":
       return site.portal.wanted || site.portal.installed
   }
 }
@@ -243,7 +243,7 @@ export function countFilters(
   sites: readonly Pick<Site, "slug" | "type" | "portal">[],
   worst: ReadonlyMap<string, Severity>,
 ): Record<SiteFilter, number> {
-  const counts = { all: 0, issues: 0, apps: 0, static: 0, portal: 0 }
+  const counts = { all: 0, issues: 0, apps: 0, static: 0, restricted: 0 }
   for (const site of sites) {
     for (const { key } of FILTERS) if (inFilter(site, key, worst)) counts[key] += 1
   }

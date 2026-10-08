@@ -85,7 +85,7 @@ Never done this way: making a site Public, its general access, which is the
 dashboard's; the preview code, `sitesolide lock`, the owner's. With a token,
 `share` gives Can open alone, to people who sign in with a company account or
 to one of the company's domains, never password access, and takes Can open
-entries off: see [team.md](team.md#giving-access-to-what-you-deployed).
+entries off: see [access.md](access.md#giving-access-to-what-you-deployed).
 
 The refusals, each carrying its `hint`:
 

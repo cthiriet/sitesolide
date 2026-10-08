@@ -74,14 +74,14 @@ describe("portalModifiable", () => {
   test("a static site cannot take the door, and says so", () => {
     expect(portalModifiable("vineyard", staticSite)).toEqual({
       modifiable: false,
-      reason: "a static site cannot sit behind the portal yet",
+      reason: "a static site cannot be restricted yet",
     });
   });
 
   test("a site under a preview lock, or on its own domain: what would have to change", () => {
     expect(portalModifiable("tool", { ...appSite, lock: true })).toEqual({
       modifiable: false,
-      reason: "remove the preview lock first: bin/lock.sh disable",
+      reason: "remove the preview code first: sitesolide unlock",
     });
     expect(portalModifiable("tool", { ...appSite, domain: { name: "example.test", active: true } })).toEqual({
       modifiable: false,
@@ -94,7 +94,7 @@ describe("portalModifiable", () => {
     expect(portalModifiable("tool", guarded)).toEqual({ modifiable: true, reason: null });
     expect(actionRefusal(guarded, false)).toBeNull();
     expect(actionRefusal(staticSite, false)).toBeNull();
-    expect(actionRefusal(staticSite, true)).toBe("a static site cannot sit behind the portal yet");
+    expect(actionRefusal(staticSite, true)).toBe("a static site cannot be restricted yet");
   });
 
   test.skipIf(!existsSync(SITES))("the manifests from the sites repository", () => {

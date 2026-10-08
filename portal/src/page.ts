@@ -299,7 +299,7 @@ export function signInPage(returnTo: string, message = "", sso: SsoOffer | null 
     : "";
   return template({
     title: "This site is private.",
-    text: "Sign in with your work account, or enter a password.",
+    text: "Sign in with your company account, or enter a password.",
     form: `    <a class="sso" href="${begin(false)}">Sign in with ${escapeHtml(sso.providerName)}</a>${another}
     <p class="or">or</p>
 ${passwordForm}`,

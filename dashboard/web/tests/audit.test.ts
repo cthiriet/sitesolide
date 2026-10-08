@@ -125,25 +125,25 @@ describe("a row in words", () => {
     expect(auditWords(row({ source: "dashboard", action: "deploy.failure", detail: { error: "install-failed" } }))).toEqual({ summary: "Deployment failed", note: "install-failed", tone: "error" })
   })
 
-  test("the portal: sign-ins, refusals, sign-outs, and the sharing and guests of rows written before the access registry", () => {
+  test("the portal: sign-ins, refusals, sign-outs, and the changes of rows written before the access registry, in today's words", () => {
     expect(auditWords(row({ detail: { method: "oidc", role: "developer" } })).summary).toBe("Signed in with a company account, as developer")
     expect(auditWords(row({ detail: { method: "password", count: 4 } }))).toEqual({ summary: "Signed in with the shared password", note: "4 times", tone: "neutral" })
     expect(auditWords(row({ actor: "eve@elsewhere.test", detail: { method: "password-access" } })).summary).toBe("Signed in with password access")
     // A guest's sign-in, written before the access registry, reads the same.
     expect(auditWords(row({ detail: { method: "guest" } })).summary).toBe("Signed in with password access")
     expect(auditWords(row({ detail: { method: "something-new" } })).summary).toBe("Signed in")
-    expect(auditWords(row({ action: "portal.signin_failed", detail: { method: "oidc", reason: "not-shared" } }))).toEqual({ summary: "Sign-in refused", note: "site not shared with them", tone: "attention" })
+    expect(auditWords(row({ action: "portal.signin_failed", detail: { method: "oidc", reason: "not-shared" } }))).toEqual({ summary: "Sign-in refused", note: "no access to the site", tone: "attention" })
     expect(auditWords(row({ action: "portal.signin_failed", detail: { method: "password" } })).note).toBe("wrong password")
     expect(auditWords(row({ action: "portal.signin_failed", detail: { method: "oidc", reason: "constructor" } })).note).toBe("constructor")
     expect(auditWords(row({ action: "portal.signout" })).summary).toBe("Signed out")
     expect(
       auditWords(row({ actor: "owner", action: "sharing.update", detail: { mode: "people", previousMode: "admins", peopleAdded: ["bob@test-zone.invalid"], peopleRemoved: [], domainsAdded: [], domainsRemoved: [] } })),
-    ).toEqual({ summary: "Changed who gets in to specific people", note: "1 person added", tone: "neutral" })
+    ).toEqual({ summary: "Changed who can open it to specific people", note: "1 person added", tone: "neutral" })
     expect(
       auditWords(row({ action: "sharing.update", detail: { mode: "domain", previousMode: "domain", peopleAdded: [], peopleRemoved: ["a@x.invalid", "b@x.invalid"], domainsAdded: ["test-zone.invalid"], domainsRemoved: [] } })),
-    ).toEqual({ summary: "Changed who gets in", note: "2 people removed, 1 domain added", tone: "neutral" })
-    expect(auditWords(row({ actor: "owner", action: "guest.create", detail: { guest: "AAAAAAAAAAAAAAA0", label: "Alice", expiresAt: null } })).summary).toBe("Gave a guest access to Alice")
-    expect(auditWords(row({ actor: "owner", action: "guest.revoke", detail: { guest: "AAAAAAAAAAAAAAA0", label: "Alice", expiresAt: null } })).summary).toBe("Revoked the guest access of Alice")
+    ).toEqual({ summary: "Changed who can open it", note: "2 people removed, 1 domain added", tone: "neutral" })
+    expect(auditWords(row({ actor: "owner", action: "guest.create", detail: { guest: "AAAAAAAAAAAAAAA0", label: "Alice", expiresAt: null } })).summary).toBe("Gave password access to Alice")
+    expect(auditWords(row({ actor: "owner", action: "guest.revoke", detail: { guest: "AAAAAAAAAAAAAAA0", label: "Alice", expiresAt: null } })).summary).toBe("Removed the password access of Alice")
   })
 
   test("the egress proxy, in the words of the Connectors page", () => {
@@ -169,8 +169,8 @@ describe("a row in words", () => {
     expect(steward("secrets.unlock", { result: "rejects", note: "wrong password" }, null)).toEqual({ summary: "Tried to unlock the secrets", note: "Refused: wrong password", tone: "attention" })
     expect(steward("secrets.replace", { result: "ok", file: "builder-secrets/registry" }).summary).toBe("Replaced builder-secrets/registry")
     expect(steward("service.restart", { result: "failure", note: "looping" })).toEqual({ summary: "Tried to restart", note: "Failed: crash loop", tone: "error" })
-    expect(steward("door.update", { result: "ok", note: "on, ok" })).toEqual({ summary: "Turned on the portal", note: null, tone: "neutral" })
-    expect(steward("door.update", { result: "failure", note: "off, failure" })).toEqual({ summary: "Tried to turn off the portal", note: "Failed", tone: "error" })
+    expect(steward("access.general", { result: "ok", note: "on, ok" })).toEqual({ summary: "Restricted it", note: null, tone: "neutral" })
+    expect(steward("access.general", { result: "failure", note: "off, failure" })).toEqual({ summary: "Tried to make it public", note: "Failed", tone: "error" })
   })
 
   test("the steward's access registry: given, changed, taken away, carried over, and who may create projects", () => {
@@ -214,17 +214,17 @@ describe("a row in words", () => {
   })
 })
 
-describe("a member's own tokens, in words", () => {
+describe("a person's own tokens, in words", () => {
   test("the steward's rows: a token created, refused above their roles, revoked, and a project created", () => {
     const steward = (action: string, detail: Record<string, unknown>, actor = "ada@acme.test") => row({ source: "steward", actor, action, target: null, detail })
     expect(auditWords(steward("token.create", { result: "ok", note: "abc: alpha" }))).toMatchObject({ summary: "Created a token of their own", note: "abc: alpha" })
     expect(auditWords(steward("token.create", { result: "rejects", note: "scope.slugs: ..." }))).toMatchObject({ summary: "Tried to create a token above their roles", tone: "attention" })
     expect(auditWords(steward("token.revoke", { result: "ok", note: "abc" }))).toMatchObject({ summary: "Revoked a token of their own" })
     expect(auditWords(steward("token.revoke", { result: "ok", member: "ada@acme.test", note: "abc: gone" }, "owner"))).toMatchObject({ summary: "Revoked the tokens of ada@acme.test" })
-    expect(auditWords(steward("project.create", { result: "ok", note: "admin, created with token abc" }))).toMatchObject({ summary: "Created the project with a token, project admin of it" })
+    expect(auditWords(steward("project.create", { result: "ok", note: "admin, created with token abc" }))).toMatchObject({ summary: "Created the project with a token, Admin of it" })
   })
 
-  test("a deployment by a member's token names the member as whose it is", () => {
+  test("a deployment by a person's token names the person as whose it is", () => {
     expect(actorLabel(row({ actor: "token:abc", action: "deploy.start", detail: { email: "ada@acme.test", member: "ada@acme.test" } }))).toBe("ada@acme.test (token:abc)")
   })
 })

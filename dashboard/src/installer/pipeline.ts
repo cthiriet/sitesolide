@@ -262,7 +262,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
         throw new Stop("portal-not-ready", `the portal is not ready at https://${portalHost(zone)}/sante, a site behind it would be closed to everyone: the owner must deploy portal/ first`);
       }
     }
-    host.log("   the block, the ports and the doors agree");
+    host.log("   the block, the ports and general access agree");
 
     // --- 3. the build happened on the client ----------------------------------
     // --- 4. the account, the directories, the archive, `install` ---------------
@@ -372,7 +372,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     served = true;
 
     if (block !== null && behindPortal) {
-      host.log("-> Caddy block, before the files: the door goes up first");
+      host.log("-> Caddy block, before the files: the restriction goes up first");
       const outcome = await installBlock(host.machine, { slug, zone, text: block, protected: true, runFolder: options.runFolder });
       if (!outcome.ok) throw new Stop("caddy-refused", outcome.message);
       host.log(`   ${outcome.detail}`);

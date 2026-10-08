@@ -1025,7 +1025,7 @@ export function installSteps(): Step<SetupContext>[] {
     },
     {
       id: "installer",
-      title: "team installer",
+      title: "installer",
       skip: optional,
       check: installCheck("setup:installer:check", COMPONENT_CONDITIONS.installer),
       run: (context) => script(context, "deploy-installer.sh"),
@@ -1308,7 +1308,7 @@ export async function runSetup(options: SetupOptions, deps: SetupDependencies): 
   const next = [
     `cd <your project> && ${environmentPrefix}sitesolide deploy`,
     "the monitor's heartbeat, five minutes: monitor/README.md, \"Alerting: healthchecks.io in five minutes\"",
-    ...(options.minimal ? ["backups, the team installer and the egress proxy were left out: run setup again without --minimal"] : []),
+    ...(options.minimal ? ["backups, the installer and the egress proxy were left out: run setup again without --minimal"] : []),
   ];
   out.say("");
   out.say(ran.length === 0 ? `-> ${server} was already installed: nothing was changed` : `-> sitesolide is installed on ${server}`);

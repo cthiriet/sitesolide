@@ -1,6 +1,6 @@
 /**
  * What a site's card composes from the snapshot: its discrepancies, its state
- * in one sentence, its service, its addresses, its door and its storage. Pure,
+ * in one sentence, its service, its addresses, its general access and its storage. Pure,
  * and therefore testable without a browser.
  *
  * Nothing is judged anew here. The discrepancies come from `src/state.ts`,
@@ -291,33 +291,33 @@ export function siteAddresses(site: Pick<Site, "slug" | "address" | "domain">): 
   return lines
 }
 
-// --- The door --------------------------------------------------------------------
+// --- General access ------------------------------------------------------------------
 
-/** A door seen from both sides: what the manifest asks for, what the machine applies. */
-export type Check = { door: string; requested: string; applied: string; tone: Tone }
+/** A setting seen from both sides: what the manifest asks for, what the machine applies. */
+export type Check = { setting: string; requested: string; applied: string; tone: Tone }
 
 export type AccessReading = {
   access: Access
   title: string
   tone: Tone
   detail: string
-  /** The doors at play, requested or applied: empty for a site with no door. */
+  /** The settings at play, requested or applied: empty for a public site. */
   checks: Check[]
 }
 
 const ANOMALY_DETAILS: Record<Mismatch, string> = {
   "portal-absent":
-    "sitesolide.json asks for the portal, but the live Caddy block doesn't apply it: anyone can reach the site.",
+    "sitesolide.json asks for Restricted, but the live Caddy block doesn't apply it: anyone can open the site.",
   "portal-extra":
-    "The live Caddy block applies the portal, but sitesolide.json no longer asks for it. The site stays closed.",
-  "code-without-lock": "A preview code is in effect, but sitesolide.json no longer asks for a lock.",
+    "The live Caddy block restricts the site, but sitesolide.json no longer asks for it. The site stays restricted.",
+  "code-without-lock": "A preview code is in effect, but sitesolide.json no longer asks for one.",
   "lock-without-code":
-    "sitesolide.json asks for a lock, but the server has no valid code: the next regeneration will fail.",
+    "sitesolide.json asks for a preview code, but the server has no valid one: the next regeneration will fail.",
 }
 
 /**
- * A site's door for its card: its name, what it does to the visitor, and each
- * door at play from both sides, so that a disagreement reads without having to
+ * A site's general access for its card: its name, what it does to the visitor,
+ * and each setting at play from both sides, so that a disagreement reads without having to
  * go back to the discrepancy's message.
  */
 export function readAccess(site: Pick<Site, "type" | "portal" | "lock">): AccessReading {
@@ -326,7 +326,7 @@ export function readAccess(site: Pick<Site, "type" | "portal" | "lock">): Access
   const checks: Check[] = []
   if (portal.wanted || portal.installed) {
     checks.push({
-      door: "Portal",
+      setting: "Restricted",
       requested: portal.wanted ? "Requested" : "Not requested",
       applied: portal.installed ? "In the live Caddy block" : "Missing from the live Caddy block",
       tone: portal.wanted === portal.installed ? "ok" : "error",
@@ -334,7 +334,7 @@ export function readAccess(site: Pick<Site, "type" | "portal" | "lock">): Access
   }
   if (lock.closed || lock.code !== null) {
     checks.push({
-      door: "Preview lock",
+      setting: "Preview code",
       requested: lock.closed ? "Requested" : "Not requested",
       applied: lock.code === null ? "No code on the server" : "Code in effect",
       tone: lock.closed === (lock.code !== null) ? "ok" : "error",
@@ -345,28 +345,28 @@ export function readAccess(site: Pick<Site, "type" | "portal" | "lock">): Access
     case "portal":
       return {
         access,
-        title: "Portal",
+        title: "Restricted",
         tone: "neutral",
-        detail: "Visitors sign in through the shared portal before they reach the site.",
+        detail: "Only the people with access can open the site, once signed in.",
         checks,
       }
     case "code":
       return {
         access,
-        title: "Preview lock",
+        title: "Anyone with the code",
         tone: "neutral",
-        detail: "Visitors enter the code once, then their browser remembers it.",
+        detail: "Visitors enter the preview code once, then their browser remembers it.",
         checks,
       }
     case "open":
       return {
         access,
-        title: "No gate",
+        title: "Public",
         tone: "neutral",
         detail:
           site.type === "app"
-            ? "Neither a preview lock nor the portal: the app handles its own sign-in, if any."
-            : "Neither a preview lock nor the portal: anyone with the address can see the site.",
+            ? "Anyone with the address can open the site: the app handles its own sign-in, if any."
+            : "Anyone with the address can open the site.",
         checks,
       }
     case "mismatch":

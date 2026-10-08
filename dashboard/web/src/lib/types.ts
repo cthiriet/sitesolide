@@ -41,7 +41,6 @@ export type {
   ContentRequest,
   FileRequest,
   PasswordRequest,
-  PortalRequest,
   SetRequest,
   ProjectRequest,
   VariableRequest,
@@ -86,7 +85,7 @@ export type {
 } from "../../../src/connectors/protocol"
 
 /**
- * The control API's shapes, for the Team page: the tokens as the steward shows
+ * The control API's shapes, for the Tokens page: the tokens as the steward shows
  * them, and what they may do. `import type` as above: the rules of who may
  * deploy what stay with the steward and the installer.
  */
@@ -94,10 +93,10 @@ export type { Scope, TokenView, DeploymentState, AuditEntry, TeamDeployment, Tea
 
 /**
  * Who is signed in, from the contract of the people who sign in
- * (src/members/protocol.ts). Types only: what a person may do is the
+ * (src/people/protocol.ts). Types only: what a person may do is the
  * steward's to decide.
  */
-export type { IdentityView, Roles, SessionResponse, SsoOffer, DashboardRole as Role } from "../../../src/members/protocol"
+export type { IdentityView, Roles, SessionResponse, SsoOffer, DashboardRole as Role } from "../../../src/people/protocol"
 
 /**
  * Access, from its contract (src/access/protocol.ts): a project's general
@@ -108,45 +107,12 @@ export type {
   EntryResponse,
   EntryView,
   GeneralAccess,
+  GeneralView,
   PeoplePageResponse,
   PersonResponse,
   PersonView,
   Role as AccessRole,
 } from "../../../src/access/protocol"
-
-/**
- * The shapes the pages written before the access registry read, which
- * lib/api.ts builds from it: someone with roles above Can open, as the
- * People page lists them, and a project's, as its Admins see them.
- */
-export type MemberView = {
-  email: string
-  roles: import("../../../src/members/protocol").Roles
-  create: boolean
-  invitedBy: string
-  createdAt: number
-  updatedAt: number
-}
-
-export type MembersPageResponse = {
-  available: boolean
-  reason: string | null
-  members: MemberView[]
-  signIn: { configured: boolean; allowedDomains: string[] }
-  dashboardUrl: string
-  providerName: string | null
-  projects: string[]
-  until: number | null
-}
-
-export type ProjectMembersResponse = {
-  slug: string
-  members: { email: string; role: import("../../../src/members/protocol").DashboardRole; invitedBy: string; updatedAt: number }[]
-  signIn: { configured: boolean; allowedDomains: string[] }
-  dashboardUrl: string
-  providerName: string | null
-  until: number | null
-}
 
 /**
  * The machine's audit, every component's in one shape (src/audit/protocol.ts).

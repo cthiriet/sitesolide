@@ -2,7 +2,6 @@
  * Fake sites, discrepancies and accesses for the tests, complete by default:
  * each test only states what it examines.
  */
-import type { Guest } from "../src/lib/guests"
 import type {
   LogEntry,
   Discrepancy,
@@ -53,18 +52,6 @@ export function site(partial: Partial<Site> = {}): Site {
 
 export function discrepancy(severity: Discrepancy["severity"], slug: string | null = "calendar", message = "m"): Discrepancy {
   return { slug, severity, message }
-}
-
-export function guest(partial: Partial<Guest> = {}): Guest {
-  return {
-    id: "AAAAAAAAAAAAAAAA",
-    host: "forum.test-zone.invalid",
-    label: "Alice",
-    createdAt: 0,
-    expiresAt: null,
-    seenAt: null,
-    ...partial,
-  }
 }
 
 export function secretFile(partial: Partial<FileView> = {}): FileView {

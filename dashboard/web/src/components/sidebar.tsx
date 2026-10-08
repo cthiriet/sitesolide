@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { ChartNoAxesColumn, ChevronLeft, Contact, DatabaseBackup, Gauge, Globe, History, KeyRound, LogOut, PanelLeft, Plug, Share2, ShieldCheck, Users, UsersRound, type LucideIcon } from "lucide-react"
+import { ChartNoAxesColumn, ChevronLeft, DatabaseBackup, Gauge, Globe, History, KeyRound, KeySquare, LogOut, PanelLeft, Plug, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -26,8 +26,8 @@ import { cn } from "@/lib/utils"
 export const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
   home: Globe,
   activity: History,
-  team: Users,
-  members: Contact,
+  people: UsersRound,
+  tokens: KeySquare,
   connectors: Plug,
 }
 
@@ -36,11 +36,8 @@ export const SECTION_ICONS: Record<Section, LucideIcon> = {
   overview: Gauge,
   audience: ChartNoAxesColumn,
   secrets: KeyRound,
-  guests: UsersRound,
-  sharing: Share2,
   access: ShieldCheck,
   backups: DatabaseBackup,
-  members: Contact,
 }
 
 
@@ -50,10 +47,9 @@ type NavEntry = { key: string; target: Page; title: string; Icon: LucideIcon; si
 /** The entries of the current level: the machine's pages, or the site's sections. */
 function useNavEntries(): NavEntry[] {
   const { page } = useNavigation()
-  const { snapshot, guests, now, offset, identity } = useData()
+  const { snapshot, now, offset, identity } = useData()
   const slug = page.name === "site" ? page.slug : ""
   const { site, discrepancies, project } = useSite(slug)
-  const list = guests.list
 
   return useMemo(() => {
     if (page.name !== "site") {
@@ -66,14 +62,10 @@ function useNavEntries(): NavEntry[] {
         signal: signals[entry.name],
       }))
     }
-    const siteGuestsList =
-      site === null || list.state !== "ready" ? null : list.guests.filter((guest) => guest.host === site.address)
     const signals = siteIndicators({
       discrepancies: snapshot === null ? null : discrepancies,
       project,
       site,
-      guests: siteGuestsList,
-      now,
       serverNow: now + offset,
     })
     return sectionsFor(identity, page.slug).map((entry) => ({
@@ -83,7 +75,7 @@ function useNavEntries(): NavEntry[] {
       Icon: SECTION_ICONS[entry.section],
       signal: signals[entry.section],
     }))
-  }, [page, snapshot, site, discrepancies, project, list, now, offset, identity])
+  }, [page, snapshot, site, discrepancies, project, now, offset, identity])
 }
 
 /** An indicator's word for screen readers, which the figure alone does not say. */
@@ -219,7 +211,7 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="pb-3">
-        {identity !== null && identity.kind === "member" && (
+        {identity !== null && identity.kind === "person" && (
           <p className="truncate px-2.5 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden" title={identity.email}>
             {identity.email}
           </p>

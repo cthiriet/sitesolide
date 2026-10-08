@@ -67,7 +67,7 @@ export function readRequest(text: string | null, slug: string, now: number): Req
   if (!isObject(token) || typeof token.id !== "string" || typeof token.email !== "string") return { ok: false, reason: "the steward's request names no token" };
   // A request from a steward before members' tokens names no member: an owner's token.
   const member = token.member === undefined || token.member === null ? null : token.member;
-  if (member !== null && (typeof member !== "string" || !/^[^\s@]+@[^\s@]+$/.test(member))) return { ok: false, reason: "the steward's request names a member that is no email" };
+  if (member !== null && (typeof member !== "string" || !/^[^\s@]+@[^\s@]+$/.test(member))) return { ok: false, reason: "the steward's request names a person by something that is no email" };
   if (!isScope(scope)) return { ok: false, reason: "the steward's request carries no scope" };
   if (typeof creating !== "boolean") return { ok: false, reason: "the steward's request does not say whether the project is new" };
   if (typeof manifest !== "string") return { ok: false, reason: "the steward's request carries no manifest" };

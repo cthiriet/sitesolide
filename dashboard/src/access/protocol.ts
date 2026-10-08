@@ -23,7 +23,9 @@
  *   with their company account and may hold any role;
  * - a person outside them, or anyone when no company sign-in is set up, is
  *   `visitor` only, and opens the site with a password drawn for them, shown
- *   once, until an expiry chosen when it is given: password access;
+ *   once, until an expiry chosen when it is given: password access, which
+ *   lets someone from outside the company in, and so asks for the granter's
+ *   unlock wherever a role above `visitor` does;
  * - an admin grants at most their own role, on their project alone; the owner
  *   grants anything;
  * - removing someone, or lowering them, holds from their next request.
@@ -51,8 +53,9 @@
  *   DELETE /people/person  { email }                             -> PersonResponse
  *
  * On the dashboard's socket, the same for the owner's session, `token` the
- * live unlock where the change needs it (a role above `visitor`, the create
- * right); and for a person's session, an admin of the project:
+ * live unlock where the change needs it (a role above `visitor`, password
+ * access, the create right); and for a person's session, an admin of the
+ * project, `token` their own unlock for the same:
  *
  *   POST   /access/person/list   { session, slug }                                   -> AccessResponse
  *   PUT    /access/person/entry  { session, token?, slug, who, role, expiresInS? }  -> EntryResponse
@@ -202,7 +205,7 @@ export type AccessPageResponse = AccessResponse & {
   you: AccessViewer;
   /** The roles the one signed in may give here, from the lowest. */
   grantable: Role[];
-  /** End of this session's unlock, null when locked: giving a role above Can open asks for it. */
+  /** End of this session's unlock, null when locked: giving a role above Can open, or password access, asks for it. */
   until: number | null;
   /** The dashboard's address and the provider's name, for the line to send someone given a role. */
   dashboardUrl: string;

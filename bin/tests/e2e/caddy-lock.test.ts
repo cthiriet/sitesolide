@@ -682,7 +682,7 @@ describe("sitesolide deploy leaves the other sites' blocks alone", () => {
     const folder = project(APP, "touch built");
     const r = await run(folder, ["deploy", "--dry-run", "--build"], { vm, cli: join(repo, "bin", "sitesolide.ts") });
     expect(r.code).toBe(0);
-    expect(r.output).toContain("portal was turned on from the dashboard");
+    expect(r.output).toContain("general access was set to Restricted from the dashboard");
     expect(existsSync(join(folder, "built"))).toBe(true);
   });
 

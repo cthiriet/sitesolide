@@ -193,16 +193,16 @@ describe("the door that deploy applies", () => {
 
   test("the announcement says the direction, that the manifest is rewritten, and that it must be committed", () => {
     expect(switchAnnouncement(true, false).title).toBe(
-      "portal was turned on from the dashboard; sitesolide.json updated, commit it",
+      "general access was set to Restricted from the dashboard; sitesolide.json updated, commit it",
     );
     expect(switchAnnouncement(false, false).title).toBe(
-      "portal was turned off from the dashboard; sitesolide.json updated, commit it",
+      "general access was set to Public from the dashboard; sitesolide.json updated, commit it",
     );
   });
 
   test("in a dry run, the announcement does not claim to have rewritten anything", () => {
     const { title } = switchAnnouncement(true, true);
-    expect(title).toContain("portal was turned on from the dashboard");
+    expect(title).toContain("general access was set to Restricted from the dashboard");
     expect(title).not.toContain("updated,");
     expect(title).toContain("commit it");
   });

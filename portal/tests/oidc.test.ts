@@ -51,7 +51,7 @@ describe("the settings", () => {
       clientSecret: "not-a-real-secret",
       allowedDomains: ["acme.test"],
       admins: ["owner@acme.test"],
-      providerName: "your work account",
+      providerName: "your company account",
       redirectUri: "https://portal.test-zone.invalid/oidc/callback",
       portalOrigin: "https://portal.test-zone.invalid",
     });

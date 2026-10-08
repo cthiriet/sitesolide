@@ -47,7 +47,7 @@ export type BackupRoutes = {
   /**
    * The restore itself, under a lock its caller already holds, the body
    * judged and its requester set: an Admin's, through
-   * src/members/actions.ts, with the email the steward verified.
+   * src/people/actions.ts, with the email the steward verified.
    */
   start: (req: Request, body: Record<string, unknown>) => Promise<Response>;
 };

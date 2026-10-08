@@ -415,7 +415,7 @@ bin/deploy-gatekeeper.sh
 The blocks in service send `/_portail/*` to the portal, the new ones
 `/_portal/*`, and the new portal only answers the second: the portal and every
 protected block switch together. The portal also renames its data files, and
-**without the renames below every guest access is lost**, the new portal
+**without the renames below every password access is lost**, the new portal
 opening an empty `portal.db` beside the old one.
 
 ```bash
@@ -515,7 +515,7 @@ sudo systemctl daemon-reload'
 ```
 
 Then sign in once on a protected site, and open the dashboard: Activity shows
-the history, Secrets answers, and a portal change goes through.
+the history, Secrets answers, and a change of general access goes through.
 
 ### 10. Clean up
 
@@ -554,9 +554,10 @@ reads, what it writes, what it refuses to guess, and how to go back.
 
 Before it, who may do what lived in three places: the dashboard's people and
 their roles in the steward's `members.json` (a release that never shipped,
-on the machines that ran it), and, in the portal's database, each site's
-sharing (a mode, a list of people, a list of domains) and its guest
-passwords. After it there is one registry, the steward's,
+on the machines that ran it), and, in the portal's database, who could open
+each site (a mode, a list of people, a list of domains, its `sharing` table)
+and the passwords it handed out to people outside the company (its `invites`
+table). After it there is one registry, the steward's,
 `/var/lib/sitesolide-steward/access.json`, root `0600`, and the portal reads a
 projection of it, `/etc/sitesolide-portal/access.json`, `root:site-portal
 0640`, which the steward writes after every change.
@@ -566,13 +567,13 @@ projection of it, `/etc/sitesolide-portal/access.json`, `root:site-portal
 | Store | Where | How |
 |---|---|---|
 | the dashboard's people and roles | `/var/lib/sitesolide-steward/members.json` | the steward's own file, read whole |
-| each site's sharing | the `sharing` table of `/srv/sites/portal/data/portal.db` | a checked copy, see below |
-| the guest passwords | the `invites` table of the same database (`id`, `hote`, `libelle`, `empreinte`, `cree_a`, `expire_a`) | the same copy |
+| who could open each site | the `sharing` table of `/srv/sites/portal/data/portal.db` | a checked copy, see below |
+| the passwords handed out | the `invites` table of the same database (`id`, `hote`, `libelle`, `empreinte`, `cree_a`, `expire_a`) | the same copy |
 
 **Why the portal's database is read by root, as a copy, and not asked of the
 portal.** The steward is upgraded before the portal, so at its first start
 the portal running is the old one, which has no route that hands over
-password hashes; and such a route would be one more door on the loopback,
+password hashes; and such a route would be one more way in on the loopback,
 open long after the one read it was made for. The steward already reads
 `/srv` with `CAP_DAC_READ_SEARCH` under `ProtectSystem=strict`, so no
 directive of its unit changes. What it never does is let SQLite open a file
@@ -590,32 +591,33 @@ was taken, or that does not check out, is taken again, five times at most.
 |---|---|
 | a role in `members.json`, on a deployed project or one since removed | the same role on that project, who gave it and when kept |
 | the right to create projects | the same right |
-| a person a site's sharing let in (mode `people` or `domain`) | Can open |
-| a domain a site's sharing let in (mode `domain`) | Can open, written `@acme.com` |
-| a guest password | password access, Can open, with its identifier, its SHA-256 and its expiry: the passwords handed out and the cookies in circulation keep opening what they opened |
-| a guest whose label is an email | that email as who it was given to |
-| a guest whose label is a name | that name, kept as it stands ("Client Bob"); two under one name become `Client` and `Client (2)` |
-| an expired guest password | carried with its expiry, and opens nothing, as before |
-| a revoked guest password | nothing: revoking deleted it from the portal's database |
+| a person the site's list let in (mode `people` or `domain`) | Can open |
+| a domain the site's list let in (mode `domain`) | Can open, written `@acme.com` |
+| a password handed out | password access, Can open, with its identifier, its SHA-256 and its expiry: the passwords handed out and the cookies in circulation keep opening what they opened |
+| one whose label is an email | that email as who it was given to |
+| one whose label is a name | that name, kept as it stands ("Client Bob"); two under one name become `Client` and `Client (2)` |
+| an expired one | carried with its expiry, and opens nothing, as before |
+| a revoked one | nothing: revoking deleted it from the portal's database |
 
-**Conflicts go to the higher role.** Someone both shared with and given a
-role keeps the role, which includes opening the site. A guest password given
-to an email that also holds Viewer, Developer or Admin on that site is set
-aside: the role already opens it with their company account. One given to
-someone the sharing let in joins their entry, which then opens with either.
+**Conflicts go to the higher role.** Someone both on a site's list and given
+a role keeps the role, which includes opening the site. A password handed
+out to an email that also holds Viewer, Developer or Admin on that site is
+set aside: the role already opens it with their company account. One handed
+out to someone the site's list let in joins their entry, which then opens
+with either.
 
 ### What it refuses to guess
 
 Kept in the registry's `migration.setAside`, each with its reason, and never
 given access:
 
-- **people and domains a sharing kept for later while its mode let them
+- **people and domains a site's list kept for later while its mode let them
   out.** The mode `admins` kept both lists, `people` kept its domains. Giving
   them access would open the site to people who could not open it the day
   before;
 - a role on one of the platform's projects (the dashboard, the portal, the
   shared service, analytics, the landing);
-- a sharing or a guest password for a host the zone gives no project.
+- a list or a password for a host the zone gives no project.
 
 A store that does not read stops the migration: no registry is written,
 every person is refused until it is repaired, the steward's log and every
@@ -626,8 +628,8 @@ tries again. Guessing at who may do what is the one thing not to do.
 
 Everyone with a role above Can open on a project, Viewer, Developer or Admin,
 now opens its site when its general access is restricted: the role includes
-it. Before, the dashboard's roles and the portal's sharing were separate, and
-a Developer of a site behind the portal needed sharing besides. Read the list
+it. Before, the dashboard's roles and the portal's lists were separate, and
+a Developer of a site behind the portal needed to be on its list besides. Read the list
 of people with access of each restricted site after the upgrade
 (`sitesolide share` in its folder) if that matters for one of them.
 
@@ -635,7 +637,8 @@ of people with access of each restricted site after the upgrade
 the role: `admin` for the owner's password and the admin emails, `visitor`,
 `viewer`, `developer` or `admin` for a company account, `visitor` for password
 access, which carries no `X-Sitesolide-User`. An app that compared it with
-`member` or `guest` must be updated before the portal is deployed.
+its old values, `member` or `guest`, must be updated before the portal is
+deployed.
 
 ### Made once
 
@@ -646,6 +649,14 @@ old stores stay where they are, read-only until the next release:
 yet decides from those tables as it did, so the order of the upgrade opens
 and closes nothing; once it has read one, it leaves a mark in its data folder,
 `access-from-steward`, and never reads them again.
+
+The steward's access log is made once too. At its first start, finding no
+`/var/lib/sitesolide-steward/access-log.jsonl`, the steward copies into it
+the accepted changes of access its journal already holds, `access.migrate`
+among them, so that the journal's rotation, past 1,000 lines, cannot take
+them away; from then on it appends every accepted change there, keeps them
+180 days, 20,000 lines at most, and never fills it from the journal again.
+Refusals stay in the journal.
 
 ### Check
 
@@ -665,7 +676,7 @@ its `migration` field.
 
 ### Going back
 
-Deploy the steward, the dashboard, the team installer and the portal of the
+Deploy the steward, the dashboard, the installer and the portal of the
 commit before, from a checkout of it: `bin/deploy-steward.sh`, then
 `sitesolide deploy` in `dashboard/`, then `bin/deploy-installer.sh`, then
 `sitesolide deploy --force` in `portal/`. The installer goes back too: this
@@ -674,9 +685,9 @@ one, and would narrow a person's deployments by a registry frozen at the
 rollback. They read
 `members.json` and the portal's tables as they stood when the registry was
 made: **every change of access made since is lost for them**, and password
-access given since does not exist for them. `access.json` and the projection
-stay beside them, unread; `X-Sitesolide-Role` goes back to `member` and
-`guest`.
+access given since does not exist for them. `access.json`, the projection
+and `access-log.jsonl` stay beside them, unread; `X-Sitesolide-Role` goes
+back to `member` and `guest`.
 
 Upgrading again afterwards keeps the registry as it stood when you went back,
 and the changes made under the old code in between are not carried over. To
