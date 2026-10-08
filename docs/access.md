@@ -45,7 +45,7 @@ Admin the highest, and each role includes the ones below it:
 |---|---|
 | Can open (`visitor`) | opens its site when its general access is Restricted, and nothing in the dashboard |
 | Viewer | also sees the project in the dashboard: its state, audience and activity |
-| Developer | also deploys it with a token of their own, restarts its service, and sets, replaces and removes its secrets without ever reading one back: the dashboard shows them names, the steward never hands them a value |
+| Developer | also deploys it with a token of their own, restarts its service, and sets, replaces and removes its secrets without ever reading one back: the dashboard shows them names, the server never hands them a value |
 | Admin | everything of the project: reads its secrets, switches its general access between Public and Restricted, gives people access to it, a role at most their own, and restores its backups |
 
 **Every role opens the site** when its general access is Restricted: a
@@ -101,8 +101,8 @@ from their next request.
 
 Signing in to the dashboard goes through the portal: the dashboard sends the
 browser there, the portal runs its usual sign-in with the provider, and hands
-the dashboard a short assertion it signed, which the steward checks as root
-before it opens the session ([dashboard/README.md](../dashboard/README.md#access)).
+the dashboard a short assertion it signed, which the server checks before
+it opens the session ([dashboard/README.md](../dashboard/README.md#access)).
 A person sees Sites and Activity, each reduced to their projects, *Tokens*
 for their own tokens when a role or the create right lets them mint one, and
 in a project the sections their role opens:
@@ -138,14 +138,16 @@ to prove themselves once more even if they are signed in there, and brings
 them back unlocked for ten minutes, for their session alone. The owner
 unlocks with the dashboard's password; neither unlock replaces the other, nor
 another person's. Restricting a site, giving Can open to a company account or
-a domain, removing someone, lowering them and restarting a service never wait
-for an unlock.
+to one of the company's listed domains, removing someone, lowering them and
+restarting a service never wait for an unlock. A whole domain does while the
+company's domains are not listed on the server, `OIDC_ALLOWED_DOMAINS` empty:
+anyone the provider vouches for would then come in.
 
 ## Your own tokens
 
 Someone who signs in to the dashboard deploys with a token they mint
 themselves on its *Tokens* page: for their workstation's CLI, for an agent.
-The steward judges it, never the dashboard, and **a person's token is never
+The server judges it, never the dashboard, and **a person's token is never
 stronger than its person**:
 
 | A token of theirs | Takes |
@@ -166,7 +168,7 @@ A Viewer everywhere, without the create right, mints nothing, and sees no
   once, as the owner's are. Its row on *Tokens* names each project with
   their role there today, "calendar (Admin)", or "cms (paused: Viewer now)"
   where it no longer deploys.
-- **Narrowed live.** The steward reads the access registry at every use of the
+- **Narrowed live.** The server reads the access registry at every use of the
   token, not only when it was minted: a role lowered to Viewer or Can open
   stops that project's deployments at the next request, the create right taken
   back stops new projects, and the options hold only while the person is Admin
@@ -182,7 +184,7 @@ A Viewer everywhere, without the create right, mints nothing, and sees no
 - **Giving access**, `sitesolide share`, takes the person's own power: Can open
   alone, on a project where they are Admin now.
 - **When they no longer sign in to the dashboard, their tokens go with them**:
-  revoked by the steward at once, under whoever removed or lowered them, and
+  revoked by the server at once, under whoever removed or lowered them, and
   refused anyway, since the registry no longer gives them a role. Revoking one
   needs no unlock, from their *Tokens* page, or the owner's, which lists every
   token and who made it, "Made by alice@example.com" or "Made by you for
@@ -190,7 +192,7 @@ A Viewer everywhere, without the create right, mints nothing, and sees no
 - **Ten live tokens per person**, so that one person cannot fill the
   machine's registry.
 
-Everything is audited under the person: the steward journals `token.create`
+Everything is audited under the person: the server journals `token.create`
 and `token.revoke` under their email, and `project.create` for a project
 their token created; the dashboard's deployments, under `token:<id>`, name the
 person in their detail.
@@ -358,14 +360,15 @@ $ sitesolide share alice@acme.com
    people with access:
      alice@acme.com  Can open
      @acme.com       Can open
-   Also open it: the owner, and owner@acme.com (an admin email set on the server; sites see them as admin).
+   The owner also opens it.
    send: Open https://notes.example.com/ and sign in with your company account.
 ```
 
 The `send:` line comes only after a change that gives someone access with an
-account, never on a plain listing. The steward judges each change by the
-access rules, writes it, and records it in its journal under your token,
-`token:<id>`, never as the owner; the portal reads it from the next request.
+account, never on a plain listing. A token never reads the admin emails, so
+the line before it names the owner alone. The server judges each change by
+the access rules, writes it, and records it under your token, `token:<id>`,
+never as the owner; it holds from the next request.
 What a token may do is narrower than what an Admin or the owner may:
 
 | You may | You may not |
@@ -429,7 +432,7 @@ curl -s -H "$AUTH" -X PUT -H 'Content-Type: application/json' \
 | Code | Status | What to do |
 |---|---|---|
 | `unauthenticated` | 401 | the token is missing, unknown, expired or revoked, or its person no longer signs in to the dashboard: ask the owner, or mint another if it is your own |
-| `too-many-attempts` | 429 | too many wrong tokens from your address: wait `wait` seconds |
+| `too-many-attempts` | 429 | too many wrong tokens from your address: wait `wait` seconds; or, creating a project, your changes of access for this hour used up: try again later |
 | `out-of-scope` | 403 | the token may not do this: outside its scope, its person's role no longer allows it, or, for access, a role above Can open, someone who would need password access, a domain outside the company's, an entry above Can open to take off; the message says whom to ask |
 | `reserved` | 403 | the slug belongs to the platform: pick another |
 | `invalid-manifest` | 422 | fix every point of `details` |
@@ -438,7 +441,7 @@ curl -s -H "$AUTH" -X PUT -H 'Content-Type: application/json' \
 | `busy` | 409 | a deployment of this project is already running, or, when the archive arrives, three deployments already run on the machine: send it again in a minute, the deployment waits for it until its 15 minutes are up |
 | `too-large` | 413 | exclude dependencies and caches |
 | `expired` | 410 | the archive arrived after 15 minutes: start again |
-| `not-available` | 503 | the machine does not carry the control API yet, or its steward or dashboard predates the access registry: tell the owner, who runs `sitesolide upgrade` |
+| `not-available` | 503 | the machine does not carry the control API yet, or predates the access registry: tell the owner, who runs `sitesolide upgrade`; or, creating a project, the access log is full: ask the owner |
 | `failure` | 500, 502 | something broke on the machine, an access registry that does not read among others: the message says where the owner should look |
 
 `locked` never comes back from this API: it is the dashboard's answer to a
@@ -460,6 +463,14 @@ message that says what to do.
   open, someone outside the company's domains, who needs password access, or
   a domain the company does not list. Ask an Admin of the project, or the
   owner, to give it from the dashboard; never try another token.
+- **Too many changes, or the access log full**: the server keeps every change
+  of access 180 days and never pushes one out early, and counts, per person
+  or token and per hour, the changes that let more people in or more done:
+  adding someone, raising a role, creating a project. Past 120 in the hour it
+  refuses them: wait, then try again. Once the access log is full it refuses
+  them until older changes age out, while removing and lowering someone still
+  work: ask the owner, who still changes access from their workstation with
+  `sitesolide share` and `sitesolide people`.
 - **A warning that the portal still decides from its own tables**: the machine
   is halfway through an upgrade. What you give is kept, and opens the site
   once the owner has run `sitesolide upgrade`, which deploys the portal.

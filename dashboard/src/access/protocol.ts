@@ -83,6 +83,9 @@ export const LEGACY_REGISTRY_NAME = "members.json";
 /** The portal's database, where who could open a site and password access lived before the registry. */
 export const PORTAL_DATABASE = "portal.db";
 
+/** What the registry's file is read with: a few hundred entries per project are never near it. */
+export const REGISTRY_MAX_BYTES = 8 * 1024 * 1024;
+
 /** Entries on one project: a few hundred people, a few domains. */
 export const MAX_ENTRIES = 600;
 
@@ -138,6 +141,12 @@ export type SignInSettings = {
   providerName: string | null;
 };
 
+/** A live token of someone who would leave the dashboard, as a confirmation names it: their leaving revokes it. */
+export type LeavingToken = { id: string; label: string; madeBy: "them" | "owner" };
+
+/** Someone a change took out of the dashboard, and the tokens of theirs it revoked. */
+export type Left = { who: string; tokens: LeavingToken[] };
+
 export type AccessResponse = {
   slug: string;
   host: string;
@@ -154,6 +163,14 @@ export type AccessResponse = {
    * from it; `unknown`, it could not be asked.
    */
   portal: { reading: "steward" | "portal" | "unreadable" | "unknown"; writtenAt: number | null };
+  /**
+   * By `who`, the people whom removing from this project, or lowering to Can
+   * open, takes out of the dashboard, no other role above Can open nor the
+   * create right left to them, and their live tokens, which go with them: a
+   * confirmation names both first. For those who may change the list alone,
+   * the owner and the project's Admins; empty for anyone else.
+   */
+  leaving: Record<string, LeavingToken[]>;
 };
 
 export type EntryChange = "add" | "role" | "none" | "remove";
@@ -164,6 +181,8 @@ export type EntryResponse = {
   change: EntryChange;
   /** Drawn for password access, shown this once: the registry keeps its hash alone. */
   password?: string;
+  /** Someone the change took out of the dashboard, and the tokens it revoked. */
+  left?: Left;
 };
 
 /** Everyone across projects, for the owner. */
@@ -185,11 +204,11 @@ export type PeopleResponse = {
   signIn: SignInSettings;
 };
 
-export type PersonResponse = { person: PersonView; change: "create" | "none" | "remove" };
+export type PersonResponse = { person: PersonView; change: "create" | "none" | "remove"; left?: Left };
 
 // --- The dashboard's routes, for the page ------------------------------------------
 //
-//   GET    /api/access?slug=<slug>                               -> AccessPageResponse   the owner, or the project's Admin
+//   GET    /api/access?slug=<slug>                               -> AccessPageResponse   the owner, or anyone Viewer and above on it
 //   PUT    /api/access/entry    { slug, who, role, expiresInS? } -> EntryResponse        423 when it needs the unlock
 //   DELETE /api/access/entry    { slug, who }                    -> EntryResponse        never an unlock
 //   PUT    /api/access/general  { slug, access, confirmation }   -> the steward's PortalResponse; `public` retypes the slug

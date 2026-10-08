@@ -14,6 +14,7 @@ import {
   parseSlugs,
   reachedProjects,
   scopeSummary,
+  scopeLines,
   liveReach,
   madeByLine,
   tokenRefusal,
@@ -191,5 +192,30 @@ describe("whose a token is", () => {
     expect(liveReach(token, { cms: "visitor" }).find((one) => one.slug === "cms")).toEqual({ slug: "cms", text: "cms (paused: Can open now)", paused: true })
     // The owner's own token: which projects it created.
     expect(liveReach({ ...token, member: null }, null).map((one) => one.text)).toEqual(["notes (created)", "calendar", "cms", "photos"])
+  })
+})
+
+describe("a person's token, what it may still do", () => {
+  const token = { owned: [] as string[], member: "alice@example.com", scope: { slugs: ["cms", "calendar"], create: true, outbound: true, domain: false, public: false } }
+
+  test("each option on, paused and said why while the person no longer holds it", () => {
+    expect(scopeLines(token, { roles: { cms: "admin", calendar: "admin" }, create: true })).toEqual([
+      { text: "Can create projects", paused: false },
+      { text: "Can use outbound network", paused: false },
+    ])
+    expect(scopeLines(token, { roles: { cms: "developer", calendar: "admin" }, create: false })).toEqual([
+      { text: "Can create projects (paused: no longer allowed)", paused: true },
+      { text: "Can use outbound network (paused: not Admin of cms now)", paused: true },
+    ])
+    // A project where it no longer deploys does not hold an option back: it is paused there already.
+    expect(scopeLines(token, { roles: { cms: "viewer", calendar: "admin" }, create: true })[1]).toEqual({ text: "Can use outbound network", paused: false })
+    expect(scopeLines({ ...token, scope: { ...token.scope, create: false } }, { roles: {}, create: false })).toEqual([{ text: "Can use outbound network (paused: no project to deploy now)", paused: true }])
+  })
+
+  test("the owner's own, or rights not known: as it was made", () => {
+    expect(scopeLines({ ...token, member: null }, null)).toEqual([
+      { text: "Can create projects", paused: false },
+      { text: "Can use outbound network", paused: false },
+    ])
   })
 })

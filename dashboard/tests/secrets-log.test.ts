@@ -417,12 +417,14 @@ describe("GET /log's history, a full access log behind it", () => {
 
   function source(accessText: string) {
     const counts = { journal: 0, access: 0 };
-    let stamp = "1";
+    let stamp = 1;
+    let journalStamp = 1;
     return {
       counts,
-      touch: () => void (stamp = String(Number(stamp) + 1)),
+      touch: () => void stamp++,
+      touchJournal: () => void journalStamp++,
       source: {
-        stamps: () => ({ journal: "j", access: stamp }),
+        stamps: () => ({ journal: `j${journalStamp}`, access: String(stamp) }),
         readJournal: async () => {
           counts.journal++;
           return encodeEntry({ ...row(0), operation: "unlock", member: null, slug: null, detail: null });
@@ -435,7 +437,7 @@ describe("GET /log's history, a full access log behind it", () => {
     };
   }
 
-  test("parsed once per change of either file, however many read it, and read again once it changes", async () => {
+  test("each file parsed once per change of its own, however many read it, and read again once it changes", async () => {
     const bench = source(full);
     const history = createHistory(bench.source);
     const answers = await Promise.all(Array.from({ length: 8 }, () => history.read((entries) => latest(entries, 50).length)));
@@ -443,7 +445,17 @@ describe("GET /log's history, a full access log behind it", () => {
     expect(bench.counts).toEqual({ journal: 1, access: 1 });
     bench.touch();
     expect(await history.read((entries) => entries.length)).toBe(ACCESS_MAX_LINES + 1);
-    expect(bench.counts).toEqual({ journal: 2, access: 2 });
+    expect(bench.counts).toEqual({ journal: 1, access: 2 });
+  });
+
+  test("a line added to the journal, which every unlock and sign-in writes, parses the journal again and never the access log", async () => {
+    const bench = source(full);
+    const history = createHistory(bench.source);
+    for (let n = 0; n < 20; n++) {
+      bench.touchJournal();
+      expect(await history.read((entries) => entries.length)).toBe(ACCESS_MAX_LINES + 1);
+    }
+    expect(bench.counts).toEqual({ journal: 20, access: 1 });
   });
 
   test("one read at a time: a burst never runs two in parallel", async () => {

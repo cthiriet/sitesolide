@@ -184,9 +184,9 @@ function identityView(identity: Identity): Record<string, unknown> {
 }
 
 function relayRefusal(reached: Reached): Response {
-  if (reached.kind === "unreachable") return error(502, "failure", "Can't reach the steward.");
+  if (reached.kind === "unreachable") return error(502, "failure", "Can't reach the server.");
   if (reached.kind === "unavailable") return error(503, "not-available", MEMBERS_NOT_AVAILABLE);
-  if (reached.kind === "unreadable") return error(502, "failure", "The steward sent an unreadable answer.");
+  if (reached.kind === "unreadable") return error(502, "failure", "The server sent an unreadable answer.");
   return json({ error: reached.body.error, message: reached.body.message }, reached.status);
 }
 
@@ -245,7 +245,7 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
     async session(req) {
       const now = clock();
       const resolved = await resolve(req, now);
-      if (resolved === "unreachable") return error(502, "failure", "Can't reach the steward to say who this person is.");
+      if (resolved === "unreachable") return error(502, "failure", "Can't reach the server to say who this person is.");
       return json({
         open: resolved !== null,
         configured: dependencies.passwordConfigured,
@@ -380,7 +380,7 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
       if (!isAcceptableOrigin(req.headers.get("origin"), publicUrl)) return json({ error: "origin-refused" }, 403);
       const now = clock();
       const resolved = await resolve(req, now);
-      if (resolved === "unreachable") return error(502, "failure", "Can't reach the steward.");
+      if (resolved === "unreachable") return error(502, "failure", "Can't reach the server.");
       if (resolved === null) return json({ error: "no-session" }, 401);
       if (resolved.identity.kind !== "person") {
         return error(403, "out-of-scope", "The owner restarts a service from its Secrets section, unlocked.");

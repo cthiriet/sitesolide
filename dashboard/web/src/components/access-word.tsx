@@ -95,7 +95,12 @@ export function AccessWord({ site, large = false }: { site: Pick<Site, "slug" | 
   const access = siteAccess(site)
   switch (access.kind) {
     case "code":
-      return <CodeChip slug={site.slug} code={access.code} url={access.url} large={large} />
+      return (
+        <span className="grid justify-items-start gap-1">
+          <span className="whitespace-nowrap">Anyone with the code</span>
+          <CodeChip slug={site.slug} code={access.code} url={access.url} large={large} />
+        </span>
+      )
     case "portal":
       return (
         <span className="inline-flex items-center gap-1.5 whitespace-nowrap">

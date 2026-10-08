@@ -86,9 +86,11 @@ export function currentAge(age: number, receivedAt: number, now: number): number
 }
 
 /**
- * A deadline, "Sep 22, 21:03". The time of day matters: a 24 hour access
- * created at 9 pm does not end at midnight. The time zone is a parameter for
- * the tests; the page takes the browser's.
+ * A deadline, "Sep 22, 21:03 GMT+2". The time of day matters: a 24 hour
+ * access created at 9 pm does not end at midnight. The dashboard says local
+ * time with its zone named, wherever it shows one, and the CLI says UTC: a
+ * date copied from either reads right elsewhere. The time zone is a
+ * parameter for the tests; the page takes the browser's.
  *
  * Assembled from the parts rather than through `format`: Bun's ICU writes
  * "Sep 22 at 21:03" where Chrome writes "Sep 22, 21:03", and the text copied
@@ -101,8 +103,9 @@ export function dateTime(ms: number, timeZone?: string): string {
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
+    timeZoneName: "short",
     timeZone: timeZone,
   }).formatToParts(ms)
   const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((piece) => piece.type === type)?.value ?? ""
-  return `${value("month")} ${value("day")}, ${value("hour")}:${value("minute")}`
+  return `${value("month")} ${value("day")}, ${value("hour")}:${value("minute")} ${value("timeZoneName")}`.trimEnd()
 }

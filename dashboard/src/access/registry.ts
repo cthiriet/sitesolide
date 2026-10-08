@@ -14,10 +14,10 @@
  * parameter. The rules of who may grant what are rules.ts's; reading and
  * writing the file are system.ts's.
  */
-import { atLeast, encodeProjection, isAccessId, isRole, PROJECTION_VERSION, rank, readProjection, WHO_MAX, type PasswordGrant, type Projection, type Role, type SiteAccess } from "../../borrowed/access";
+import { encodeProjection, isAccessId, isRole, PROJECTION_MAX_BYTES, PROJECTION_VERSION, rank, readProjection, WHO_MAX, type PasswordGrant, type Projection, type Role, type SiteAccess } from "../../borrowed/access";
 import { cleanDomain, cleanEmail, domainOf } from "../../borrowed/sharing";
 import { isValidSlug } from "../../borrowed/manifest";
-import { MAX_DASHBOARD_PEOPLE, MAX_ENTRIES, type EntryKind, type EntryView, type PersonView } from "./protocol";
+import { MAX_DASHBOARD_PEOPLE, MAX_ENTRIES, REGISTRY_MAX_BYTES, type EntryKind, type EntryView, type PersonView } from "./protocol";
 
 export { encodeProjection };
 
@@ -416,9 +416,9 @@ export function removePerson(registry: Registry, email: string): { registry: Reg
 
 /**
  * A project a person created, through a token of theirs that may create:
- * they become its Admin, alone. Recorded once the installer has succeeded,
- * never before: a creation refused or undone leaves nobody Admin of a name
- * the machine does not carry.
+ * they become its Admin, alone. Recorded once the installer has finished
+ * and the machine carries the project, never before: a creation refused or
+ * undone leaves nobody Admin of a name the machine does not carry.
  *
  * **A new project starts from an empty list.** Entries left under its slug,
  * by a project of that name removed by hand, or a registry edited by hand,
@@ -443,24 +443,24 @@ export function forgetProject(registry: Registry, slug: string): { registry: Reg
   return dropped.length === 0 ? { registry, dropped } : { registry: withEntries(registry, slug, []), dropped };
 }
 
-/** Does this change raise someone above `visitor`, the changes that ask for an unlock? */
-export function raisesAboveVisitor(before: Role | null, after: Role): boolean {
-  return atLeast(after, "viewer") && (before === null || rank(after) > rank(before));
-}
-
 // --- the portal's projection ---------------------------------------------------------
 
 /**
  * Does this registry, and the projection made from it, read back whole? The
  * steward asks before it writes either: a registry it could not read again
  * would refuse everyone at the next request, and a projection the portal
- * could not read would close every restricted site. A change that would
+ * could not read would close every restricted site. Their shape, and their
+ * size in bytes, which each is read with a bound on. A change that would
  * write either is refused instead, and nothing is written. Null: both read.
  */
 export function readsBack(registry: Registry, projection: Projection): string | null {
-  const again = readRegistry(encodeRegistry(registry));
+  const text = encodeRegistry(registry);
+  if (Buffer.byteLength(text) > REGISTRY_MAX_BYTES) return `access.json would pass the ${REGISTRY_MAX_BYTES / 1024 / 1024} MB it is read with`;
+  const again = readRegistry(text);
   if ("unreadable" in again) return again.unreadable;
-  const portal = readProjection(encodeProjection(projection));
+  const portalText = encodeProjection(projection);
+  if (Buffer.byteLength(portalText) > PROJECTION_MAX_BYTES) return `the portal's projection would pass the ${PROJECTION_MAX_BYTES / 1024 / 1024} MB it is read with`;
+  const portal = readProjection(portalText);
   if ("unreadable" in portal) return portal.unreadable;
   return null;
 }

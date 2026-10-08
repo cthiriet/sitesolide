@@ -13,6 +13,9 @@ import {
   readTeam,
   readTokenRequest,
   migrateTeam,
+  DEAD_TOKEN_RETENTION_MS,
+  MAX_TOKEN_RECORDS,
+  pruneTeam,
   readHolder,
   viewOf,
   revokeMemberTokens,
@@ -185,6 +188,53 @@ describe("the registry", () => {
   test("the view never carries the hash", async () => {
     const { team } = await teamWith();
     expect(JSON.stringify(views(team))).not.toContain(team.tokens[0]!.hash);
+  });
+});
+
+describe("dead tokens do not pile up", () => {
+  /** A registry of records written by hand: `dead` days since each was revoked, null for a live one. */
+  function teamOf(records: { id: string; dead: number | null; slugs?: number }[], owners: Record<string, string> = {}): Team {
+    return {
+      version: 2,
+      tokens: records.map((one, n) => ({
+        id: one.id,
+        hash: n.toString(16).padStart(64, "0"),
+        label: "ci",
+        email: "ada@acme.test",
+        member: "ada@acme.test",
+        createdAt: NOW - 400 * 86_400_000 + n,
+        expiresAt: null,
+        revokedAt: one.dead === null ? null : NOW - one.dead * 86_400_000,
+        lastUsedAt: null,
+        scope: { slugs: Array.from({ length: one.slugs ?? 0 }, (_, i) => `${"project-with-a-long-name-".repeat(2)}${String(i).padStart(3, "0")}`), create: false, outbound: false, domain: false, public: false },
+      })),
+      owners,
+    };
+  }
+  const id = (n: number) => n.toString(16).padStart(12, "0");
+
+  test("revoked or expired past their 90 days, they go at the next write; younger ones, live ones and one that created a project stay", () => {
+    const team = teamOf([{ id: id(1), dead: 91 }, { id: id(2), dead: 89 }, { id: id(3), dead: null }, { id: id(4), dead: 300 }], { blog: id(4) });
+    const expired = { ...team, tokens: [...team.tokens, { ...team.tokens[2]!, id: id(5), hash: "f".repeat(64), expiresAt: NOW - DEAD_TOKEN_RETENTION_MS - 1 }] };
+    const kept = pruneTeam(expired, NOW, 1024 * 1024);
+    expect(kept?.tokens.map((one) => one.id)).toEqual([id(2), id(3), id(4)]);
+    // Nothing to drop: the same registry back.
+    expect(pruneTeam(kept!, NOW, 1024 * 1024)).toBe(kept);
+  });
+
+  test("past its cap of records or of bytes, the oldest dead go first, before their time; when the live alone do not fit, the change is refused", () => {
+    const many = teamOf(Array.from({ length: MAX_TOKEN_RECORDS + 3 }, (_, n) => ({ id: id(n + 1), dead: n < MAX_TOKEN_RECORDS ? 10 + (MAX_TOKEN_RECORDS - n) / 1000 : null })));
+    const capped = pruneTeam(many, NOW, 8 * 1024 * 1024)!;
+    expect(capped.tokens).toHaveLength(MAX_TOKEN_RECORDS);
+    // The oldest revoked, the first ones, went.
+    expect(capped.tokens.some((one) => one.id === id(1))).toBe(false);
+    const heavy = teamOf(Array.from({ length: 200 }, (_, n) => ({ id: id(n + 1), dead: n < 150 ? 1 : null, slugs: 100 })));
+    const fitted = pruneTeam(heavy, NOW, 1024 * 1024)!;
+    expect(Buffer.byteLength(encodeTeam(fitted))).toBeLessThanOrEqual(1024 * 1024);
+    expect(fitted.tokens.filter((one) => one.revokedAt === null)).toHaveLength(50);
+    expect(readTeam(encodeTeam(fitted))).not.toHaveProperty("unreadable");
+    const live = teamOf(Array.from({ length: 200 }, (_, n) => ({ id: id(n + 1), dead: null, slugs: 100 })));
+    expect(pruneTeam(live, NOW, 1024 * 1024)).toBeNull();
   });
 });
 

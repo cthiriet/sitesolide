@@ -198,7 +198,7 @@ import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState
 import { machine } from "./cli/machine";
 import { eventOutput, humanOutput, login, remoteMode, REMOTE_USAGE, runRemote } from "./cli/remote";
 import { KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
-import { people, share, sshAccess, sshPeople } from "./cli/access";
+import { PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshPeople } from "./cli/access";
 import {
   foreignUnit,
   listUnitsCommand,
@@ -2882,6 +2882,9 @@ function asksForHelp(arguments_: string[]): boolean {
  * configuration file, and an unreadable one only loses the zone.
  */
 function helpText(arguments_: string[]): string {
+  // `share --help` and `people --help`: their own usage, short, rather than every command.
+  if (arguments_[0] === "share") return SHARE_USAGE.join("\n");
+  if (arguments_[0] === "people") return PEOPLE_USAGE.join("\n");
   if (remoteMode(arguments_, process.env)) return REMOTE_USAGE.join("\n");
   let zone: string | null = process.env.SITESOLIDE_ZONE ?? null;
   try {
@@ -3011,7 +3014,7 @@ if (import.meta.main) {
         die(`missing settings: ${error.missing.join(", ")}`, [
           "run: sitesolide init",
           `it writes ${configPath()}, which says which machine to serve and under which zone`,
-          "a team member with a token from the owner runs instead: sitesolide login --url https://dashboard.<zone>",
+          "someone with a token runs instead: sitesolide login --url https://dashboard.<zone>",
         ]);
       }
       throw error;
@@ -3059,7 +3062,7 @@ if (import.meta.main) {
     case "share":
       // The steward's access registry, on its owner socket, as root over SSH:
       // see bin/cli/access.ts.
-      process.exit(await share(arguments_, readProject(folder).manifest.slug, sshAccess((remote, input) => executor.execute(config, remote, input)), remoteOutput));
+      process.exit(await share(arguments_, readProject(folder).manifest.slug, sshAccess((remote, input) => executor.execute(config, remote, input), dashboardAddress(config.zone)), remoteOutput));
     case "people":
       // The same registry, machine-wide. It reads no project folder.
       process.exit(await people(arguments_, dashboardAddress(config.zone), sshPeople((remote, input) => executor.execute(config, remote, input)), remoteOutput));

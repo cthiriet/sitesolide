@@ -94,13 +94,11 @@ export type Grant = {
   existing: Entry | null;
   /** Someone new outside the company's domains: a password is drawn for them. */
   password: boolean;
-  /** A role above `visitor` given or raised. */
-  raises: boolean;
   /**
-   * Does the change ask for the granter's live unlock: it raises someone
-   * above `visitor`, or draws a password, which lets someone from outside
-   * the company in. Its own field rather than `raises` stretched to cover a
-   * password: a password access raises nobody, and the page reads them apart.
+   * Does the change ask for the granter's live unlock: it gives or raises a
+   * role above `visitor`, draws a password, which lets someone from outside
+   * the company in, or gives a whole domain while the company's domains are
+   * not listed.
    */
   unlock: boolean;
 };
@@ -142,7 +140,7 @@ export function judgeGrant(registry: Registry, slug: string, whoValue: unknown, 
     if (unlock && granter.kind === "token") {
       return { refusal: `${who.who}: the company's domains are not listed on this machine (OIDC_ALLOWED_DOMAINS), so a whole domain is given from the dashboard, unlocked, or by the owner over SSH, never with a token`, code: "out-of-scope" };
     }
-    return { who, role, existing, password: false, raises: false, unlock };
+    return { who, role, existing, password: false, unlock };
   }
 
   if (rank(role) > rank(ceiling)) {
@@ -162,12 +160,12 @@ export function judgeGrant(registry: Registry, slug: string, whoValue: unknown, 
   if (existing?.password !== undefined) {
     if (role !== "visitor") return { refusal: `${who.who} has password access, which opens the site and nothing more: remove it first to give them a role`, code: "out-of-scope" };
     // Kept as it is: no password drawn, nobody let in who was not already.
-    return { who, role, existing, password: false, raises: false, unlock: false };
+    return { who, role, existing, password: false, unlock: false };
   }
   // Lowering is always allowed, to any lower role: someone whose domain left
   // the company's since keeps nothing they are no longer meant to have.
   if (existing !== null && rank(role) < rank(existing.role)) {
-    return { who, role, existing, password: false, raises: false, unlock: false };
+    return { who, role, existing, password: false, unlock: false };
   }
   if (!signsInWithAccount(who.email, signIn)) {
     const why = !signIn.configured
@@ -182,10 +180,10 @@ export function judgeGrant(registry: Registry, slug: string, whoValue: unknown, 
     }
     // A password lets in someone the company's sign-in does not vouch for:
     // a dashboard alone, compromised or not, must not hand one out.
-    if (existing === null) return { who, role, existing, password: true, raises: false, unlock: true };
+    if (existing === null) return { who, role, existing, password: true, unlock: true };
   }
   const raises = atLeast(role, "viewer") && (existing === null || rank(role) > rank(existing.role));
-  return { who, role, existing, password: false, raises, unlock: raises };
+  return { who, role, existing, password: false, unlock: raises };
 }
 
 /**

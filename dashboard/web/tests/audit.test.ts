@@ -48,8 +48,8 @@ describe("the sources", () => {
   test("the sources read only to their latest entries are named once their end is reached", () => {
     const status = (name: SourceStatus["name"], window: number | null, state: SourceStatus["state"] = "ok"): SourceStatus => ({ name, state, message: null, window })
     expect(windowNote([status("portal", null)])).toBeNull()
-    expect(windowNote([status("steward", 50)])).toBe("Steward hands the dashboard its latest 50 entries; older ones stay on the server.")
-    expect(windowNote([status("backups", 50), status("steward", 50), status("portal", null)])).toBe("Backups and Steward hand the dashboard their latest 50 entries; older ones stay on the server.")
+    expect(windowNote([status("steward", 50)])).toBe("Access hands the dashboard its latest 50 entries; older ones stay on the server.")
+    expect(windowNote([status("backups", 50), status("steward", 50), status("portal", null)])).toBe("Backups and Access hand the dashboard their latest 50 entries; older ones stay on the server.")
     expect(windowNote([status("steward", 50, "unavailable")])).toBeNull()
   })
 

@@ -23,7 +23,7 @@ export const SOURCES: readonly SourceEntry[] = [
   { key: "portal", label: "Portal", description: "Sign-ins and sign-outs on restricted sites" },
   { key: "egress", label: "Egress", description: "Refused destinations, connector calls and changes" },
   { key: "backups", label: "Backups", description: "Scheduled runs and restores" },
-  { key: "steward", label: "Steward", description: "Secrets, access and restarts" },
+  { key: "steward", label: "Access", description: "Who may do what, secrets and restarts" },
 ]
 
 export function sourceLabel(source: AuditSource): string {

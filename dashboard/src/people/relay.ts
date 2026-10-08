@@ -139,7 +139,7 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
   async function member(req: Request, writing: boolean): Promise<Open | Response> {
     if (writing && !isAcceptableOrigin(req.headers.get("origin"), dependencies.publicUrl)) return json({ error: "origin-refused" }, 403);
     const resolved: Resolved = await resolve(req, clock());
-    if (resolved === "unreachable") return error(502, "failure", "Can't reach the steward to say who this person is.");
+    if (resolved === "unreachable") return error(502, "failure", "Can't reach the server to say who this person is.");
     if (resolved === null) return json({ error: "no-session" }, 401);
     if (resolved.identity.kind !== "person") return error(403, "out-of-scope", "This route is a person's.");
     return { session: resolved.session, token: resolved.token, identity: resolved.identity };
@@ -197,7 +197,7 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
       const received = await reach(() => steward.act("POST", "/people/secrets/projects", { session: open.token }), null, [open.token]);
       if (received.kind !== "received" || received.status !== 200) return answer(open, received);
       const projects = received.body?.projects;
-      if (!Array.isArray(projects)) return error(502, "failure", "The steward sent an unreadable answer.");
+      if (!Array.isArray(projects)) return error(502, "failure", "The server sent an unreadable answer.");
       return json({ projects, until: tokens.read(open.session.hash)?.expiresAt ?? null });
     },
 
@@ -279,7 +279,7 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
       if (received.kind !== "received" || received.status !== 200) return answer(open, received);
       const listed = received.body?.tokens;
       const rights = received.body?.rights;
-      if (!Array.isArray(listed) || !isObject(rights)) return error(502, "failure", "The steward sent an unreadable answer.");
+      if (!Array.isArray(listed) || !isObject(rights)) return error(502, "failure", "The server sent an unreadable answer.");
       const mine = listed as TokenView[];
       const ids = new Set(mine.map((token) => token.id));
       const deployments = dependencies.control

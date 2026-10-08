@@ -39,6 +39,14 @@ export type InviteRow = { id: string; hote: string; libelle: string; empreinte: 
 
 export type PortalRows = { sharing: SharingRow[]; invites: InviteRow[] };
 
+/**
+ * What the record lists at most of what was set aside: past it, one line
+ * says how many more, which stay in the stores before the registry, kept
+ * read-only. A portal full of hosts this zone does not name would otherwise
+ * make a registry too big to read back, and the migration would never end.
+ */
+export const MAX_SET_ASIDE = 500;
+
 export type MigrationReport = {
   roles: number;
   people: number;
@@ -249,15 +257,23 @@ export function migrate(
   for (const [slug, entries] of [...projects.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     if (entries.size > 0) registryProjects[slug] = sortEntries([...entries.values()]);
   }
-  if (options.withoutPortal === true) setAside.push(WITHOUT_PORTAL);
   report.setAside = setAside.length;
+  const listed = setAside.length <= MAX_SET_ASIDE ? setAside : setAside.slice(0, MAX_SET_ASIDE - 1);
+  if (listed !== setAside) {
+    const more = setAside.length - listed.length;
+    listed.push({ source: setAside[listed.length]!.source, slug: null, who: `${more} more`, reason: `${more} more set aside, not listed here: they stay in the stores before the registry, kept read-only` });
+  }
+  if (options.withoutPortal === true) {
+    listed.push(WITHOUT_PORTAL);
+    report.setAside++;
+  }
   const from = ["members.json", ...(portal === null ? [] : ["portal.db"])];
   return {
     registry: {
       version: 1,
       projects: registryProjects,
       creators: creators.sort((a, b) => a.email.localeCompare(b.email)),
-      migration: { at: now, from, setAside },
+      migration: { at: now, from, setAside: listed },
     },
     report,
   };

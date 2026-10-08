@@ -96,15 +96,18 @@ export function failure(code: ControlErrorCode, message: string, extra: { detail
   return json(body, extra.status ?? CONTROL_STATUSES[code], headers);
 }
 
-const unreachable = () => failure("failure", "the dashboard cannot reach the steward on the machine: try again in a minute, then tell the owner of the machine", { status: 502 });
+const unreachable = () => failure("failure", "the dashboard cannot reach the control service on the machine: try again in a minute, then tell the owner of the machine", { status: 502 });
 const unavailable = () =>
   failure("not-available", "this machine does not carry the control API yet: the owner must run sitesolide upgrade, then sitesolide setup again for this machine, without --minimal if the installer is missing");
-const unreadable = () => failure("failure", "the steward sent an unreadable answer: tell the owner of the machine", { status: 502 });
+const unreadable = () => failure("failure", "the server sent an unreadable answer: tell the owner of the machine", { status: 502 });
 /** The steward's refusal, passed on with its code and message; the other outcomes said in the API's words. */
 function relayed(reached: Reached): Response {
   if (reached.kind === "unreachable") return unreachable();
   if (reached.kind === "unavailable") return unavailable();
   if (reached.kind === "unreadable") return unreadable();
+  // The access registry's bounds, a token's change refused for them, in the API's own codes.
+  if (reached.body.error === "too-many-changes") return failure("too-many-attempts", String(reached.body.message));
+  if (reached.body.error === "log-full") return failure("not-available", String(reached.body.message));
   const code = reached.body.error as ControlErrorCode;
   const known = Object.hasOwn(CONTROL_STATUSES, code) && code !== "locked";
   if (!known) return failure("failure", String(reached.body.message), { status: 502 });
@@ -241,7 +244,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
 
   const visible = (identity: Identity, slug: string) => identity.owned.includes(slug) || identity.scope.slugs.includes(slug);
 
-  const accessUnavailable = () => failure("not-available", "the steward on this machine does not carry the access registry yet: the owner must run sitesolide upgrade");
+  const accessUnavailable = () => failure("not-available", "this machine does not carry the access registry yet: the owner must run sitesolide upgrade");
 
   /** The steward's access answer, as a token reads it: never the admin emails. */
   function projectAccess(body: Record<string, unknown>): ProjectAccess | null {

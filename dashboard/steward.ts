@@ -45,6 +45,7 @@ import { BACKUP_FOLDER } from "./borrowed/backups";
 import { createBackupReader } from "./src/backup/reader";
 import { createMembersSystem } from "./src/people/system";
 import { createAccessSystem } from "./src/access/system";
+import type { LeavingToken } from "./src/access/protocol";
 import { OWNER_SOCKET, PORTAL_KEY_FOLDER } from "./src/people/protocol";
 import { PORTAL_RELAY_SOCKET, relayedPortal } from "./src/people/portal";
 
@@ -180,10 +181,11 @@ const backups = createBackupReader({
   unitsFolder: UNITS_FOLDER,
 });
 
-// The control routes are built after this handler, and the members routes
-// ask them to revoke the tokens of someone who no longer signs in: the call
-// is filled in below.
-let revokeMemberTokens: (email: string, actor: string) => Promise<number> = async () => 0;
+// The control routes are built after this handler, and the members and
+// access routes ask them to revoke the tokens of someone who no longer signs
+// in, and which tokens that would be: the calls are filled in below.
+let revokeMemberTokens: (email: string, actor: string) => Promise<LeavingToken[]> = async () => [];
+let memberTokens: (email: string) => Promise<LeavingToken[]> = async () => [];
 
 const handler = createSteward(system, {
   secretsFolder: SECRETS_FOLDER,
@@ -215,6 +217,7 @@ const handler = createSteward(system, {
     zone: process.env.SITESOLIDE_ZONE ?? "",
     portal: PORTAL_RELAY === "" ? null : relayedPortal(PORTAL_RELAY),
     revokeTokens: (email, actor) => revokeMemberTokens(email, actor),
+    tokensOf: (email) => memberTokens(email),
   },
 });
 
@@ -251,6 +254,7 @@ const control = createControlSteward(
   },
 );
 revokeMemberTokens = control.revokeMember;
+memberTokens = control.tokensOf;
 
 // The access registry: made from members.json and the portal's database at the
 // first start on this code, then its projection written again for the portal.
@@ -268,8 +272,9 @@ void handler
   .catch((e: unknown) => console.error(`steward: access registry not ready (${(e as Error).name})`));
 
 // A person becomes Admin of what their token created once its installer has
-// succeeded: the dashboard's tracker reads every result within seconds, which
-// settles it; this settles it too when nobody reads.
+// finished and the machine carries the project: the dashboard's tracker reads
+// every result within seconds, which settles it; this settles it too when
+// nobody reads.
 setInterval(() => void control.settleCreations().catch((e: unknown) => console.error(`steward: creations not settled (${(e as Error).name})`)), 30_000);
 
 /**

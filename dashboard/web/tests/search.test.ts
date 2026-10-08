@@ -146,7 +146,7 @@ describe("fields covered", () => {
 
   test("an access anomaly is searched by its label", () => {
     const expose = site({ slug: "kanban", portal: { wanted: true, installed: false, exemptions: [] } })
-    expect(slugs(filterSites([expose, cms], "not applied"))).toEqual(["kanban"])
+    expect(slugs(filterSites([expose, cms], "public on the server"))).toEqual(["kanban"])
   })
 
   /** The preview link carries the code as a parameter, but only the code is displayed. */

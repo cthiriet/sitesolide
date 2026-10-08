@@ -19,6 +19,7 @@ import {
   roleName,
   readWho,
   share,
+  leftText,
   sshAccess,
   sshPeople,
   type AccessState,
@@ -259,7 +260,7 @@ describe("share with a token, through the API", () => {
     const cases = [
       { status: 403, error: "out-of-scope", message: "@gmail.test: only the owner gives a domain outside the company's (acme.test) access", hint: "never pick another slug, role or token" },
       { status: 404, error: "not-found", message: "no project kanban for this token", hint: "sitesolide status" },
-      { status: 503, error: "not-available", message: "the steward on this machine does not carry the access registry yet: the owner must run sitesolide upgrade", hint: "the access registry" },
+      { status: 503, error: "not-available", message: "this machine does not carry the access registry yet: the owner must run sitesolide upgrade", hint: "the access registry" },
       { status: 500, error: "failure", message: "the steward did not answer", hint: "tell the owner of the machine" },
       { status: 429, error: "too-many-attempts", message: "too many requests", details: ["retry in 30 s"], hint: "never retry in a loop" },
     ];
@@ -369,7 +370,7 @@ describe("share and people as the owner, over SSH to the steward's owner socket"
       changed: true,
       changes: [{ who: "bob@acme.test", change: "add", role: "developer" }],
       entries: [{ who: "bob@acme.test", kind: "person", role: "developer" }],
-      message: SEND,
+      message: expect.stringContaining("To deploy, create a token on the Tokens page, then run sitesolide login --url https://dashboard.test-zone.invalid."),
     });
     expect(machine.access().projects.kanban!.entries.map((one) => [one.who, one.role])).toEqual([["bob@acme.test", "developer"]]);
 
@@ -642,6 +643,8 @@ function fakeTransport(before: AccessState, answers: Record<string, Reading<Entr
   let reads = 0;
   const transport: AccessTransport = {
     via: "over a fake",
+    owner: true,
+    dashboard: "https://dashboard.test-zone.invalid",
     async list(slug) {
       calls.push(`list ${slug}`);
       return reads++ === 0 ? { ok: true, value: before } : after;
@@ -745,6 +748,18 @@ describe("share, over a fake transport", () => {
     expect(none.results[0]!.fields.message).toBeNull();
   });
 
+  test("given Viewer, the line to send names the dashboard too; given Developer or Admin, how to deploy as well", async () => {
+    const viewer = recorder();
+    await share(["share", "alice@acme.test", "--role", "viewer"], "kanban", fakeTransport(state()).transport, viewer.output);
+    expect(viewer.said).toContain(`   send: kanban is at ${URL_}, and in the dashboard at https://dashboard.test-zone.invalid. Sign in with your Google account.`);
+    const developer = recorder();
+    await share(["share", "alice@acme.test", "--role", "developer"], "kanban", fakeTransport(state()).transport, developer.output);
+    expect(developer.said).toContain(
+      `   send: kanban is at ${URL_}, and in the dashboard at https://dashboard.test-zone.invalid. Sign in with your Google account. To deploy, create a token on the Tokens page, then run sitesolide login --url https://dashboard.test-zone.invalid.`,
+    );
+    expect(developer.results[0]!.fields.message).toContain("To deploy, create a token on the Tokens page");
+  });
+
   test("a portal that does not read the registry is warned of right after the first line", async () => {
     for (const [reading, start] of [
       ["portal", "!! the portal on this machine still decides from its own tables"],
@@ -773,6 +788,19 @@ describe("share, over a fake transport", () => {
     const first = recorder();
     await share(["share", "b@acme.test"], "kanban", fakeTransport(state(), { "b@acme.test": { ok: false, failure: refusal } }).transport, first.output);
     expect(first.said.some((line) => line.includes("already done"))).toBe(false);
+  });
+
+  test("someone a removal or a lowering took out of the dashboard is said after it, with the tokens that went with them", async () => {
+    const left = { who: "chloe@acme.test", tokens: [{ label: "alice-ci", madeBy: "them" as const }, { label: "Alice's laptop", madeBy: "owner" as const }] };
+    const answers = { "chloe@acme.test": { ok: true as const, value: { entry: entry("chloe@acme.test"), change: "remove" as const, left } } };
+    const owner = recorder();
+    await share(["share", "--remove", "chloe@acme.test"], "kanban", fakeTransport(state(), answers).transport, owner.output);
+    expect(owner.said).toContain("   chloe@acme.test no longer signs in to the dashboard. Also revoked 2 tokens: alice-ci (made by them), Alice's laptop (made by you).");
+    expect(owner.results[0]!.fields.changes).toEqual([{ who: "chloe@acme.test", change: "remove", role: null, left }]);
+    const token = recorder();
+    await share(["share", "--remove", "chloe@acme.test"], "kanban", { ...fakeTransport(state(), answers).transport, owner: false }, token.output);
+    expect(token.said).toContain("   chloe@acme.test no longer signs in to the dashboard. Also revoked 2 tokens: alice-ci (made by them), Alice's laptop (made by the owner).");
+    expect(leftText({ who: "dan@acme.test", tokens: [] }, true)).toBe("dan@acme.test no longer signs in to the dashboard.");
   });
 
   test("a read that fails after the changes falls back to the access read before", async () => {

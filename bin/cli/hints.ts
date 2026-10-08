@@ -184,7 +184,7 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   locked: "this change needs the dashboard's unlock: make it from the dashboard, or over the owner's SSH",
   migrating: "the machine is carrying access over to its registry: run the same command again in a minute; if it lasts, tell the owner of the machine, who reads the steward's log",
   "too-many-changes": "too many changes of access this hour: wait, then run the same command again; never retry in a loop",
-  "log-full": "the access log is full of recent changes, which are kept 180 days: tell the owner of the machine; nothing more can be changed until older ones age out",
+  "log-full": "the access log is full of recent changes, which are kept 180 days: nobody more is let in until older ones age out, while removing and lowering still work; the owner may still change access from their workstation, with sitesolide share",
   conflict: "the access registry is already made: there is nothing left to carry over",
   "no-portal": "the project is not restricted: its general access is the dashboard's Access section",
   // --- a deployment that failed on the machine

@@ -25,7 +25,21 @@
  *
  * **Leaving.** Someone the registry no longer gives a role above Can open,
  * nor the create right, no longer signs in: `leave` closes their sessions
- * and unlocks at once, and revokes their tokens, outside this file's queue.
+ * and unlocks at once, in the registry's queue, then revokes their tokens
+ * once it has left it.
+ *
+ * **The queues, and their one order.** Four queues run one change at a time
+ * each: the control routes' (tokens), the creations' (both in
+ * src/control/steward.ts), the registry's (src/access/steward.ts), and this
+ * file's (sessions and keys). A task may wait on a queue further down that
+ * list, never on one above it: the control routes' queue waits on the
+ * creations' to note a creation, the creations' on the registry's to record
+ * one, the registry's on this file's to close sessions. So nothing that holds
+ * the registry's queue or the creations' revokes a token: `leave` revokes
+ * them after the registry's queue, and the creations hand their leavers back
+ * (`recordCreation`) for the control routes to see off once their turn is
+ * over. Two queues waiting on each other would stop every change of access
+ * and every deployment until the steward restarts.
  *
  * The order of the checks is the order of the risk, as in src/secrets/steward.ts:
  * shape of the body, credential, registry, machine, writing.
@@ -55,6 +69,7 @@ import { may, mayRestart, powerRefusal } from "./powers";
 import type { AccessStore } from "../access/steward";
 import { emailOf, isDashboardPerson, opensASite, recordCreation as creationRecorded, rightsOf, rolesText, type Registry } from "../access/registry";
 import type { AccessEvent } from "../access/steward";
+import type { LeavingToken } from "../access/protocol";
 import type { MemberRights } from "./tokens";
 import { attemptWait, countAttempt, EMPTY_UNLOCKS, failed, grant, isUnlocked, revokeMember, revokeSession, unlockedUntil, type UnlockBook } from "./unlocks";
 import { dropMember, dropSession, encodeBook, findSession, openMemberSession, readBook, spendNonce, type SessionBook } from "./sessions";
@@ -123,12 +138,13 @@ export type MemberRoutesDependencies = {
   restart: (req: Request, slug: string, actor: string, allowed: () => Promise<boolean>) => Promise<Response>;
   /**
    * Someone who no longer signs in: every token of theirs revoked, journaled
-   * under `actor` (src/control/steward.ts, `revokeMember`). Called outside
-   * this file's queue: the control routes' queue may be waiting on the
-   * registry's for a creation. Absent, nothing to revoke, and their tokens
-   * are refused all the same.
+   * under `actor` (src/control/steward.ts, `revokeMember`), which judges
+   * them again in its own queue. Called outside the registry's queue and
+   * this file's: the control routes' queue may be waiting on the registry's
+   * for a creation. Absent, nothing to revoke, and their tokens are refused
+   * all the same.
    */
-  revokeTokens?: (email: string, actor: string) => Promise<number>;
+  revokeTokens?: (email: string, actor: string) => Promise<LeavingToken[]>;
   random?: RandomSource;
   /** Failed sign-ins journaled per minute at most, so that a flood cannot push the journal's history out. */
   failuresPerMinute?: number;
@@ -154,16 +170,20 @@ export type MemberRoutes = {
   rights: (email: string) => Promise<MemberRights | null | Response>;
   /**
    * A project a person's token created, the installer done: they become its
-   * Admin, alone, and the journal says so under their email. Null once
-   * recorded, or the refusal.
+   * Admin, alone, and the journal says so under their email. Once recorded,
+   * the people whose last role the entries left under that name were, for
+   * the caller to see off with `leave` once it holds no queue; or the
+   * refusal.
    */
-  recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | null>;
+  recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | { leaving: string[] }>;
   /**
    * Someone who may no longer sign in: their sessions and unlocks closed,
    * their tokens revoked under `actor`. Judged again in the registry's queue:
-   * given a role again since, they keep everything.
+   * given a role again since, they keep everything. The tokens revoked, null
+   * when they keep everything. Never called while the registry's queue or
+   * the creations' is held: see the queues above.
    */
-  leave: (email: string, actor: string) => Promise<void>;
+  leave: (email: string, actor: string) => Promise<LeavingToken[] | null>;
 };
 
 export type KeyState = { kind: "ready"; publicKey: PublicKey } | { kind: "unavailable"; reason: string };
@@ -267,31 +287,34 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
    * A failure there is said and left: their tokens are refused anyway, the
    * registry no longer giving them a role.
    */
-  async function revokeTokensOf(email: string, actor: string): Promise<void> {
-    if (dependencies.revokeTokens === undefined) return;
+  async function revokeTokensOf(email: string, actor: string): Promise<LeavingToken[]> {
+    if (dependencies.revokeTokens === undefined) return [];
     try {
-      await dependencies.revokeTokens(email, actor);
+      return await dependencies.revokeTokens(email, actor);
     } catch (e) {
       console.error(`dashboard sign-in: the tokens of ${email} not revoked (${errorName(e)}), refused all the same`);
+      return [];
     }
   }
 
   /**
    * In the registry's queue, so that no change slips in between: the person
    * judged again first, a role given back since the change that took them out
-   * keeping everything; then their sessions, unlocks and tokens.
+   * keeping everything; then their sessions and unlocks. Their tokens once
+   * that queue is left, judged again in the control routes' own.
    */
-  async function leave(email: string, actor: string): Promise<void> {
+  async function leave(email: string, actor: string): Promise<LeavingToken[] | null> {
     const left = await dependencies.access.change<boolean>(async (current) => {
       if (isDashboardPerson(current, email)) return { registry: current, value: false };
       await serially(async () => {
         await system.writeBook(encodeBook(dropMember(await book(), email)));
         unlocks = revokeMember(unlocks, email);
       });
-      await revokeTokensOf(email, actor);
       return { registry: current, value: true };
     });
-    if (left === true) console.log(`dashboard sign-in: ${email} no longer signs in, sessions closed`);
+    if (left !== true) return null;
+    console.log(`dashboard sign-in: ${email} no longer signs in, sessions closed`);
+    return revokeTokensOf(email, actor);
   }
 
   // --- the sessions --------------------------------------------------------------------
@@ -342,7 +365,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
         // Someone who may open a site, and nothing more, is told so: the dashboard starts at Viewer.
         if (opensASite(again, claims.email)) {
           await journalFailure(claims.email, "can-open-only");
-          return fail("can-open-only", `${claims.email} can open the sites shared with them, and the dashboard starts at Viewer: ask an Admin of the project for more`);
+          return fail("can-open-only", `${claims.email} holds Can open alone: they open the sites they can open, and the dashboard starts at Viewer; ask an Admin of the project for more`);
         }
         await journalFailure(claims.email, "no-role");
         return fail("no-role", `${claims.email} has no access to any project here: ask the owner, or an Admin of the project, to add them`);
@@ -511,9 +534,10 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
    * create right is read again; journaled as `project.create` under their
    * email, the token in the detail, with whatever entries a project of that
    * name left behind and that were dropped. Someone those entries were the
-   * last role of leaves the dashboard.
+   * last role of is handed back, to leave the dashboard once the caller's
+   * queue is left.
    */
-  async function recordCreation(slug: string, email: string, tokenId: string): Promise<Response | null> {
+  async function recordCreation(slug: string, email: string, tokenId: string): Promise<Response | { leaving: string[] }> {
     const leaving: string[] = [];
     const answer = await dependencies.access.change<null>(async (current) => {
       const result = creationRecorded(current, email, slug, system.now());
@@ -537,8 +561,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
       console.log(`access: ${email} created ${slug} with token ${tokenId}, its Admin`);
       return { registry: result.registry, value: null };
     });
-    if (answer === null) for (const other of leaving) await leave(other, email);
-    return answer;
+    return answer instanceof Response ? answer : { leaving };
   }
 
   return {

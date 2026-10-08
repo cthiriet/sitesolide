@@ -88,7 +88,7 @@ describe("a site's service", () => {
         peakDetail: "Peak 221 MB, 86% of the limit",
       },
       facts: [
-        { label: "Up", value: "20h", detail: "since Jan 14, 16:00", tone: "neutral" },
+        { label: "Up", value: "20h", detail: "since Jan 14, 16:00 UTC", tone: "neutral" },
         { label: "CPU", value: "5%", detail: "of one core, over the last minute", tone: "neutral" },
         { label: "Restarts", value: "0", detail: "Automatic restarts by systemd", tone: "neutral" },
         { label: "Port", value: "3043", detail: "Listening on the loopback interface", tone: "neutral" },
@@ -251,7 +251,7 @@ describe("a site's door", () => {
   /** The worst state: the manifest says closed, Caddy serves in the clear. The check shows which side. */
   test("a disagreement reads as an error, with the side that is missing", () => {
     const expose = readAccess(site({ portal: portal(true, false) }))
-    expect(expose).toMatchObject({ title: "Restricted, not applied: open to anyone", tone: "error" })
+    expect(expose).toMatchObject({ title: "Restricted in sitesolide.json, public on the server", tone: "error" })
     expect(expose.detail).toContain("anyone can open the site")
     expect(expose.checks).toEqual([
       { setting: "Restricted", requested: "Requested", applied: "Missing from the live Caddy block", tone: "error" },
@@ -289,7 +289,7 @@ describe("a site's storage", () => {
   test("the size and the date of the last deployment", () => {
     expect(siteStorage(site({ bytes: 48 * MO, deployed: NOW - 20 * HOUR }), NOW, "UTC")).toEqual([
       { label: "On disk", value: "48 MB", detail: null, tone: "neutral" },
-      { label: "Deployed", value: "20h ago", detail: "Jan 14, 16:00", tone: "neutral" },
+      { label: "Deployed", value: "20h ago", detail: "Jan 14, 16:00 UTC", tone: "neutral" },
     ])
   })
 

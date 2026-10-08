@@ -130,7 +130,7 @@ import { machineRefusal, may } from "../people/powers";
 import { portalReading, type PortalAdmin } from "../people/portal";
 import { createAccessRoutes, createAccessStore, type AccessRoutes, type AccessStore } from "../access/steward";
 import type { AccessSystem } from "../access/system";
-import type { GeneralView } from "../access/protocol";
+import type { GeneralView, LeavingToken } from "../access/protocol";
 
 export type StewardOptions = {
   secretsFolder: string;
@@ -196,7 +196,9 @@ export type StewardOptions = {
      * them off. The control routes' (src/control/steward.ts), built after
      * this handler, hence a function of their own the entry point fills in.
      */
-    revokeTokens?: (email: string, actor: string) => Promise<number>;
+    revokeTokens?: (email: string, actor: string) => Promise<LeavingToken[]>;
+    /** A person's live tokens, as a confirmation names them (src/control/steward.ts, `tokensOf`). */
+    tokensOf?: (email: string) => Promise<LeavingToken[]>;
   };
 };
 
@@ -286,7 +288,7 @@ const GENERIC_MESSAGE = "unexpected error, see the steward's log on the server";
 
 /** 503 and not 500: nothing is broken, the request can be made again in a moment. */
 function busy(): Response {
-  const body: Failure = { error: "failure", message: "the steward is busy, try again in a moment" };
+  const body: Failure = { error: "failure", message: "the server is busy, try again in a moment" };
   return Response.json(body, { status: 503 });
 }
 
@@ -1408,8 +1410,12 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   /**
    * Puts up or takes away a site's portal through the gatekeeper, under the
    * exclusion lock: two actions on Caddy never cross. Making a site public
-   * takes the unlock, and its name retyped; restricting it takes neither:
-   * less exposure is never refused for want of a password.
+   * takes the unlock, and its name retyped, and is bounded as every change
+   * that lets more people in (src/access/steward.ts, `widen`); restricting it
+   * takes neither: less exposure is never refused for want of a password, nor
+   * for the access log's room. A site already restricted is left as it is:
+   * nothing started, nothing logged, so that restricting, which nothing
+   * refuses, never fills the access log either.
    */
   async function togglePortal(req: Request): Promise<Response> {
     const body = await readBody(req, ["token", "slug", "confirmation", "active"]);
@@ -1434,7 +1440,12 @@ export function createSteward(system: System, options: StewardOptions): StewardH
         if (machine !== null) return refuse("portal", body, { error: "out-of-scope", message: machine }, null, who);
       }
 
-      const { modifiable, reason } = await portalView(site);
+      const view = await portalView(site);
+      if (active && view.requested && view.installed) {
+        const response: PortalResponse = { portal: view, detail: `${site.folder} is already restricted: nothing to change` };
+        return Response.json(response);
+      }
+      const { modifiable, reason } = view;
       const unit = gatekeeperUnitOf(active, site.folder);
       if (!modifiable || unit === null) {
         return refuse("portal", body, { error: "out-of-scope", message: reason ?? "the portal of this site cannot be changed" }, null, who);
@@ -1442,6 +1453,10 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       // Taking away the portal makes the site public: the name is retyped.
       if (!active && body.confirmation !== site.folder) {
         return refuse("portal", body, { error: "invalid", message: `type ${site.folder} to confirm removing the portal` }, null, who);
+      }
+      if (!active && access !== null) {
+        const bounded = await access.widen("dashboard", who.actor);
+        if (bounded !== null) return bounded;
       }
       // Checked again just before the launch: re-reading the site and its block
       // took time, and a gatekeeper launched for a requester who has gone would
@@ -1681,6 +1696,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           journalRefusal: members.journalRefusal,
           authorize: members.authorize,
           leave: members.leave,
+          ...(options.members.tokensOf === undefined ? {} : { tokensOf: options.members.tokensOf }),
         });
 
   // --- Backups -----------------------------------------------------------------
@@ -1807,6 +1823,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
             unlockedUntil: members.unlockedUntil,
             rights: members.rights,
             recordCreation: members.recordCreation,
+            leave: members.leave,
             journal: members.journal,
             journalRefusal: members.journalRefusal,
           },

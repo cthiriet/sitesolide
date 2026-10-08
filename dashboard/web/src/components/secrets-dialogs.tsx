@@ -106,12 +106,15 @@ export function PersonUnlockDialog({
   open,
   providerName,
   href,
+  onLeave,
   onClose,
   focusReturn,
 }: {
   open: boolean
   providerName: string | null
   href: string
+  /** Just before leaving for the provider: what the page keeps for the way back. */
+  onLeave?: () => void
   onClose: () => void
   focusReturn: FocusReturn
 }) {
@@ -128,7 +131,7 @@ export function PersonUnlockDialog({
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <a ref={action} href={href} className={buttonVariants({ variant: "default" })}>
+          <a ref={action} href={href} onClick={() => onLeave?.()} className={buttonVariants({ variant: "default" })}>
             <LockOpen />
             Sign in again
           </a>

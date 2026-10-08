@@ -25,8 +25,9 @@
  * (`sqlite_master.sql`, against `EXPECTED_TABLES`), nothing else hung on
  * them, no trigger, no index of their own, no generated column; the schema
  * is not trusted to run functions (`trusted_schema = OFF`); the rows are
- * counted, and their sizes measured without being read, before any is read
- * (`octet_length`). Anything else stops the migration, which the owner can
+ * counted, and their sizes measured without being read, each and all of a
+ * table together, before any is read (`octet_length`). Anything else stops
+ * the migration, which the owner can
  * finish without the portal's database. The reasons are error names, never
  * a path or a message that could quote one.
  */
@@ -36,7 +37,7 @@ import { join } from "node:path";
 import { PROJECTION_NAME } from "../../borrowed/access";
 import { readBounded, readGroup, writeAtomically } from "../secrets/system";
 import type { PortalRows, SharingRow, InviteRow } from "./migrate";
-import { LEGACY_REGISTRY_NAME, PORTAL_DATABASE, REGISTRY_NAME } from "./protocol";
+import { LEGACY_REGISTRY_NAME, PORTAL_DATABASE, REGISTRY_MAX_BYTES, REGISTRY_NAME } from "./protocol";
 
 export type AccessSystemConfig = {
   /** /var/lib/sitesolide-steward */
@@ -70,8 +71,6 @@ export type AccessSystem = {
   writeProjection: (text: string) => Promise<ProjectionWrite>;
 };
 
-/** The registry, a few hundred entries per project: never near this. */
-const MAX_REGISTRY_BYTES = 8 * 1024 * 1024;
 /** The portal's database: its audit is bounded to a few tens of megabytes. */
 const MAX_DATABASE_BYTES = 512 * 1024 * 1024;
 
@@ -190,6 +189,13 @@ export const MAX_SHARING_ROWS = 10_000;
 export const MAX_INVITE_ROWS = 50_000;
 
 /**
+ * The bytes of one table's values read at most, all its rows together: a
+ * table within every bound of a row and of a count could still hold more than
+ * the steward's 128M, the product of the two.
+ */
+export const MAX_TABLE_BYTES = 16 * 1024 * 1024;
+
+/**
  * Each value's type and size, in bytes, before any is read: a value bigger
  * than any the portal ever wrote stops the migration rather than filling the
  * steward's memory. `octet_length` reads a value's size from its record,
@@ -204,8 +210,12 @@ const INVITE_BOUNDS =
   "AND typeof(libelle) = 'text' AND octet_length(libelle) <= 1024 AND typeof(empreinte) = 'text' AND octet_length(empreinte) = 64 " +
   "AND typeof(cree_a) = 'integer' AND (expire_a IS NULL OR typeof(expire_a) = 'integer')";
 
+/** The bytes of a row's text values, read as `octet_length` reads them: from the record, without loading them. */
+const SHARING_SIZE = "octet_length(host) + octet_length(mode) + octet_length(people) + octet_length(domains)";
+const INVITE_SIZE = "octet_length(id) + octet_length(hote) + octet_length(libelle) + octet_length(empreinte)";
+
 /** Why a table may not be read, or null; "absent" for a portal from before it. */
-function tableRefusal(db: Database, name: "sharing" | "invites", maxRows: number, bounds: string): string | null | "absent" {
+function tableRefusal(db: Database, name: "sharing" | "invites", maxRows: number, bounds: string, size: string): string | null | "absent" {
   const objects = db
     .query<{ type: string; name: string; sql: string | null }, [string, string]>("SELECT type, name, sql FROM sqlite_master WHERE tbl_name = ? OR name = ? LIMIT 16")
     .all(name, name);
@@ -222,6 +232,8 @@ function tableRefusal(db: Database, name: "sharing" | "invites", maxRows: number
   if (rows > maxRows) return "too-many-rows";
   const outside = db.query<{ n: number }, []>(`SELECT count(*) AS n FROM ${name} WHERE NOT (${bounds})`).get()?.n ?? 0;
   if (outside > 0) return "oversized-rows";
+  const total = db.query<{ n: number }, []>(`SELECT coalesce(sum(${size}), 0) AS n FROM ${name}`).get()?.n ?? 0;
+  if (total > MAX_TABLE_BYTES) return "oversized-table";
   return null;
 }
 
@@ -236,9 +248,9 @@ export function readCopy(path: string): PortalRows | { reason: string } {
     db.run("PRAGMA trusted_schema = OFF");
     const check = db.query<{ quick_check: string }, []>("PRAGMA quick_check").get();
     if (check?.quick_check !== "ok") return { reason: "check-failed" };
-    const sharing = tableRefusal(db, "sharing", MAX_SHARING_ROWS, SHARING_BOUNDS);
+    const sharing = tableRefusal(db, "sharing", MAX_SHARING_ROWS, SHARING_BOUNDS, SHARING_SIZE);
     if (sharing !== null && sharing !== "absent") return { reason: sharing };
-    const invites = tableRefusal(db, "invites", MAX_INVITE_ROWS, INVITE_BOUNDS);
+    const invites = tableRefusal(db, "invites", MAX_INVITE_ROWS, INVITE_BOUNDS, INVITE_SIZE);
     if (invites !== null && invites !== "absent") return { reason: invites };
     return {
       sharing: sharing === "absent" ? [] : db.query<SharingRow, []>(`SELECT host, mode, people, domains, updated_at FROM sharing ORDER BY host LIMIT ${MAX_SHARING_ROWS}`).all(),
@@ -269,13 +281,13 @@ export function createAccessSystem(config: AccessSystemConfig, checkOwner: boole
       }
     },
 
-    readRegistry: async () => readRootFile(registryFile, MAX_REGISTRY_BYTES),
+    readRegistry: async () => readRootFile(registryFile, REGISTRY_MAX_BYTES),
     async writeRegistry(text) {
       prepare();
       writeAtomically(config.stateFolder, REGISTRY_NAME, encoder.encode(text), ROOT_ONLY);
     },
 
-    readLegacyMembers: async () => readRootFile(join(config.stateFolder, LEGACY_REGISTRY_NAME), MAX_REGISTRY_BYTES),
+    readLegacyMembers: async () => readRootFile(join(config.stateFolder, LEGACY_REGISTRY_NAME), REGISTRY_MAX_BYTES),
 
     async readPortalDatabase() {
       // A copy left by a stop in the middle of a read goes first.

@@ -57,19 +57,19 @@ type Bench = {
   /** What the access store journaled, refusals included. */
   journal: AccessEvent[];
   /** The registry laid as the owner would have left it. */
-  seed: (people: People) => void;
+  seed: (people: People, creators?: string[]) => void;
   call: (method: string, path: string, body?: unknown) => Promise<Response>;
 };
 
 /** kanban, roster and notes are deployed; ghost is not. Ada: Admin of kanban, Developer on roster. */
-function bench(options: { access?: boolean } = {}): Bench {
+function bench(options: { access?: boolean; full?: () => boolean; changesPerHour?: number } = {}): Bench {
   const root = mkdtempSync(join(tmpdir(), "control-access-"));
   toClean.push(root);
   for (const folder of ["state", "sites", "units", "installer", "portal-key"]) mkdirSync(join(root, folder));
   writeFileSync(join(root, "units", INSTALLER_TEMPLATE), "[Service]\n");
   for (const slug of ["kanban", "roster", "notes"]) mkdirSync(join(root, "sites", slug));
   const state = join(root, "state");
-  const seed = (people: People) => writeRegistry(state, registryOf(people));
+  const seed = (people: People, creators: string[] = []) => writeRegistry(state, registryOf(people, creators));
   seed({ [ADA]: { kanban: "admin", roster: "developer" } });
 
   const signIn: SignInSettings = { configured: true, allowedDomains: ["acme.test", "acme-labs.test"], admins: ["ceo@acme.test"], providerName: "Acme" };
@@ -80,6 +80,7 @@ function bench(options: { access?: boolean } = {}): Bench {
     zone: ZONE,
     hostOf,
     journal: async (event) => void journal.push(event),
+    ...(options.full === undefined ? {} : { logFull: async () => options.full!() }),
   });
   const refuse = (error: string, message: string, status: number) => Response.json({ error, message }, { status });
   const routes = createAccessRoutes({
@@ -95,7 +96,8 @@ function bench(options: { access?: boolean } = {}): Bench {
     journal: async (event) => void journal.push(event),
     journalRefusal: async (event) => void journal.push(event),
     authorize: async () => refuse("signed-out", "no session in these tests", 401),
-    leave: async () => {},
+    leave: async () => [],
+    ...(options.changesPerHour === undefined ? {} : { changesPerHour: options.changesPerHour }),
   });
 
   // Ada's session and unlock, for minting her own token; her rights read from the registry.
@@ -114,7 +116,8 @@ function bench(options: { access?: boolean } = {}): Bench {
       const registry = await store.read();
       return registry instanceof Response ? registry : rightsOf(registry, email);
     },
-    recordCreation: async () => null,
+    recordCreation: async () => ({ leaving: [] }),
+    leave: async () => {},
     journal: async () => {},
     journalRefusal: async () => {},
   };
@@ -157,6 +160,39 @@ async function adaToken(b: Bench, slugs: string[]): Promise<{ token: TokenView; 
 async function answer(response: Response): Promise<{ status: number } & Record<string, unknown>> {
   return { status: response.status, ...((await response.json()) as Record<string, unknown>) };
 }
+
+describe("the steward: a project created by a person's token is a change of access", () => {
+  const deploy = (b: Bench, secret: string, slug: string, deployment: string) => b.call("POST", "/control/deploy", { bearer: secret, deployment, slug, manifest: JSON.stringify({ slug }) });
+  const create = async (b: Bench) => {
+    const response = await b.call("POST", "/team/member/tokens", { session: "ada-session", token: "ada-unlock", label: "maker", expiresAt: null, scope: { ...SCOPE, slugs: ["kanban"], create: true } });
+    expect(response.status).toBe(201);
+    return ((await response.json()) as { secret: string }).secret;
+  };
+
+  test("refused before anything starts while the access log has no room for it", async () => {
+    let full = false;
+    const b = bench({ full: () => full });
+    b.seed({ [ADA]: { kanban: "admin" } }, [ADA]);
+    const secret = await create(b);
+    full = true;
+    const refused = await answer(await deploy(b, secret, "fresh", "aaaaaaaaaaaaaaaaaaaaaaaa"));
+    expect(refused).toMatchObject({ status: 503, error: "not-available", message: expect.stringContaining("the access log is full") });
+    expect(existsSync(join(b.root, "state", "installs", "fresh.json"))).toBe(false);
+    expect(existsSync(join(b.root, "state", "creations.json"))).toBe(false);
+    // An existing project deploys all the same: nothing about access changes.
+    expect((await deploy(b, secret, "kanban", "bbbbbbbbbbbbbbbbbbbbbbbb")).status).toBe(202);
+    full = false;
+    expect((await deploy(b, secret, "fresh", "cccccccccccccccccccccccc")).status).toBe(202);
+  });
+
+  test("counted among their changes of the hour", async () => {
+    const b = bench({ changesPerHour: 1 });
+    b.seed({ [ADA]: { kanban: "admin" } }, [ADA]);
+    const secret = await create(b);
+    expect((await deploy(b, secret, "fresh", "aaaaaaaaaaaaaaaaaaaaaaaa")).status).toBe(202);
+    expect(await answer(await deploy(b, secret, "another", "bbbbbbbbbbbbbbbbbbbbbbbb"))).toMatchObject({ status: 429, error: "too-many-attempts" });
+  });
+});
 
 describe("the steward: reading a project's access with a token", () => {
   test("its project: the people with access, its general access, how people sign in, and what the portal reads", async () => {
@@ -380,6 +416,7 @@ function stewardAccess(slug: string): AccessResponse {
     entries: [{ who: CAROL, kind: "person", role: "visitor", by: "owner", createdAt: 1, updatedAt: 1, password: null }],
     signIn: { configured: true, allowedDomains: ["acme.test"], admins: ["ceo@acme.test"], providerName: "Acme" },
     portal: { reading: "steward", writtenAt: 1 },
+    leaving: {},
   };
 }
 
@@ -528,6 +565,13 @@ describe("the API: changing it, as its token", () => {
       message: "a token gives people Can open alone: Admin is given from the dashboard, or by the owner over SSH",
     });
     expect(stewardState.asked.map((one) => one.route)).toEqual(["put"]);
+  });
+
+  test("the access registry's bounds in the API's own codes: an hour used up is 429, a full access log 503", async () => {
+    stewardState.refusal = { status: 429, error: "too-many-changes", message: "120 changes of access per hour at most: try again later" };
+    expect(await answer(await change("PUT", "kanban", { who: CAROL }))).toMatchObject({ status: 429, error: "too-many-attempts", message: "120 changes of access per hour at most: try again later" });
+    stewardState.refusal = { status: 507, error: "log-full", message: "the access log is full of changes younger than 180 days" };
+    expect(await answer(await change("PUT", "kanban", { who: CAROL }))).toMatchObject({ status: 503, error: "not-available", message: "the access log is full of changes younger than 180 days" });
   });
 
   test("another token's project reads as unknown, before the body is even judged", async () => {

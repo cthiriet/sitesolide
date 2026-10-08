@@ -84,7 +84,10 @@ export type AccessState = {
   portal?: { reading: string; writtenAt: number | null };
 };
 
-export type EntryAnswer = { entry: EntryView; change: "add" | "role" | "none" | "remove"; password?: string };
+/** Someone a change took out of the dashboard, and the tokens of theirs it revoked. */
+export type Left = { who: string; tokens: { label: string; madeBy: "them" | "owner" }[] };
+
+export type EntryAnswer = { entry: EntryView; change: "add" | "role" | "none" | "remove"; password?: string; left?: Left };
 
 export type Reading<T> = { ok: true; value: T } | { ok: false; failure: Failure };
 
@@ -92,6 +95,10 @@ export type Reading<T> = { ok: true; value: T } | { ok: false; failure: Failure 
 export type AccessTransport = {
   /** For the first line: "through https://dashboard.example.com", "over SSH, as the owner". */
   via: string;
+  /** Is it the owner who asks: the tokens they made are "made by you". */
+  owner: boolean;
+  /** The dashboard's address, for the line to send someone given a role above Can open; null when not known. */
+  dashboard: string | null;
   list: (slug: string) => Promise<Reading<AccessState>>;
   give: (slug: string, who: string, role: Role, expiresInS: number | null | undefined) => Promise<Reading<EntryAnswer>>;
   remove: (slug: string, who: string) => Promise<Reading<EntryAnswer>>;
@@ -256,12 +263,31 @@ export function alsoOpens(admins: readonly string[]): string {
   return `Also open it: the owner, and ${admins.join(", ")} (${admins.length > 1 ? "admin emails" : "an admin email"} set on the server; sites see them as admin).`;
 }
 
-/** The line to send someone given access with an account: where to go, with what. */
-export function accessMessage(state: AccessState): string | null {
+/**
+ * What a change took with it, as the dashboard says it before confirming:
+ * `chloe@example.com no longer signs in to the dashboard. Also revoked 2
+ * tokens: ci (made by them), laptop (made by you).` `byYou`: the owner reads
+ * it, who made the tokens the owner made.
+ */
+export function leftText(left: Left, byYou: boolean): string {
+  const first = `${left.who} no longer signs in to the dashboard.`;
+  if (left.tokens.length === 0) return first;
+  const named = left.tokens.map((token) => `${token.label} (made by ${token.madeBy === "them" ? "them" : byYou ? "you" : "the owner"})`).join(", ");
+  return `${first} Also revoked ${left.tokens.length === 1 ? "1 token" : `${left.tokens.length} tokens`}: ${named}.`;
+}
+
+/**
+ * The line to send someone given access with an account: where to go, with
+ * what; from Viewer up the dashboard too, and from Developer up how to
+ * deploy. The dashboard's line as it says it after the same change.
+ */
+export function accessMessage(state: AccessState, role: Role = "visitor", dashboard: string | null = null): string | null {
   if (!state.signIn.configured) return null;
   const name = state.signIn.providerName ?? null;
   const account = name === null || name === "your work account" ? "your company account" : `your ${name} account`;
-  return `Open ${state.url} and sign in with ${account}.`;
+  if (role === "visitor" || dashboard === null) return `Open ${state.url} and sign in with ${account}.`;
+  const line = `${state.slug} is at ${state.url}, and in the dashboard at ${dashboard}. Sign in with ${account}.`;
+  return role === "viewer" ? line : `${line} To deploy, create a token on the Tokens page, then run sitesolide login --url ${dashboard}.`;
 }
 
 /** The project's access in lines, for a person. */
@@ -335,7 +361,7 @@ export async function share(arguments_: string[], slug: string, transport: Acces
     return 0;
   }
 
-  const changes: { who: string; change: string; role: string | null; password?: string }[] = [];
+  const changes: { who: string; change: string; role: string | null; password?: string; left?: Left }[] = [];
   for (const who of request.who) {
     const done = request.action === "give" ? await transport.give(slug, who, request.role, request.expiresInS) : await transport.remove(slug, who);
     if (!done.ok) {
@@ -343,11 +369,12 @@ export async function share(arguments_: string[], slug: string, transport: Acces
       output.failed(done.failure);
       return 1;
     }
-    const { entry, change, password } = done.value;
-    changes.push({ who: entry.who, change, role: change === "remove" ? null : roleName(entry.role), ...(password === undefined ? {} : { password }) });
+    const { entry, change, password, left } = done.value;
+    changes.push({ who: entry.who, change, role: change === "remove" ? null : roleName(entry.role), ...(password === undefined ? {} : { password }), ...(left === undefined ? {} : { left }) });
     if (change === "remove") output.say(`-> ${entry.who} no longer has access to ${slug}: refused from their next request`);
     else if (change === "none") output.say(`   nothing to change: ${entry.who} already has ${entryText(entry)}`);
     else output.say(`-> ${entry.who}: ${entryText(entry)} on ${slug}${change === "role" ? ", from their next request" : ""}`);
+    if (left !== undefined) output.say(`   ${leftText(left, transport.owner)}`);
     if (password !== undefined) {
       output.say(`   password for ${entry.who}: ${password}`);
       output.say("   shown once: send it to them yourself, with the address; the machine keeps only its hash");
@@ -356,11 +383,11 @@ export async function share(arguments_: string[], slug: string, transport: Acces
   const after = await transport.list(slug);
   const state = after.ok ? after.value : before;
   for (const line of describeAccess(state)) output.say(line);
-  const message = accessMessage(state);
+  const message = request.action === "give" ? accessMessage(state, request.role, transport.dashboard) : accessMessage(state);
   if (message !== null && request.action === "give" && changes.some((one) => one.password === undefined && one.change !== "none" && !one.who.startsWith("@"))) {
     output.say(`   send: ${message}`);
   }
-  output.succeeded("share", resultFields(state, { changed: changes.some((one) => one.change !== "none"), changes }));
+  output.succeeded("share", resultFields(state, { changed: changes.some((one) => one.change !== "none"), changes, message }));
   return 0;
 }
 
@@ -382,7 +409,7 @@ export type PeopleState = {
 
 export type PeopleTransport = {
   list: () => Promise<Reading<PeopleState>>;
-  setCreate: (email: string, create: boolean) => Promise<Reading<{ person: PersonView; change: string }>>;
+  setCreate: (email: string, create: boolean) => Promise<Reading<{ person: PersonView; change: string; left?: Left }>>;
   /** The registry made from members.json alone, the portal's database left out at the owner's word. */
   migrateWithoutPortal: () => Promise<Reading<{ people: number; projects: number }>>;
 };
@@ -455,7 +482,7 @@ export async function people(arguments_: string[], dashboardUrl: string, transpo
     output.failed(set.failure);
     return 1;
   }
-  const { person, change } = set.value;
+  const { person, change, left } = set.value;
   output.say(
     change === "none"
       ? `   nothing to change: ${request.email} ${request.create ? "may already" : "may not"} create projects`
@@ -464,7 +491,8 @@ export async function people(arguments_: string[], dashboardUrl: string, transpo
         : `-> ${request.email} may no longer create projects`,
   );
   output.say(`   ${person.who}  ${personText(person)}`);
-  output.succeeded("people", { email: request.email, create: person.create, roles: printedRoles(person.roles), change, changed: change !== "none" });
+  if (left !== undefined) output.say(`   ${leftText(left, true)}`);
+  output.succeeded("people", { email: request.email, create: person.create, roles: printedRoles(person.roles), change, changed: change !== "none", ...(left === undefined ? {} : { left }) });
   return 0;
 }
 
@@ -554,9 +582,11 @@ function readEntry(body: Record<string, unknown>): EntryAnswer | null {
 const unreadable = (what: string): { ok: false; failure: Failure } => ({ ok: false, failure: { error: "failure", message: `the steward's ${what} does not read: nothing was changed` } });
 
 /** The owner's transport for `share`: root on the machine asks the steward's owner socket. */
-export function sshAccess(run: RunOnMachine): AccessTransport {
+export function sshAccess(run: RunOnMachine, dashboard: string | null = null): AccessTransport {
   return {
     via: "over SSH, as the owner",
+    owner: true,
+    dashboard,
     async list(slug) {
       if (!SLUG.test(slug)) return { ok: false, failure: { error: "invalid", message: `${slug} is not a project's slug` } };
       const read = await askSteward(run, ownerReadCommand(`/access?slug=${slug}`));
@@ -593,7 +623,7 @@ export function sshPeople(run: RunOnMachine): PeopleTransport {
       const read = await askSteward(run, ownerWriteCommand("PUT", "/people/person"), JSON.stringify({ email, create }));
       if (!read.ok) return read;
       if (!isObject(read.value.person) || typeof read.value.change !== "string") return unreadable("answer");
-      return { ok: true, value: read.value as unknown as { person: PersonView; change: string } };
+      return { ok: true, value: read.value as unknown as { person: PersonView; change: string; left?: Left } };
     },
     async migrateWithoutPortal() {
       const read = await askSteward(run, ownerWriteCommand("POST", "/access/migrate"), JSON.stringify({ withoutPortal: true }));

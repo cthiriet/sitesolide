@@ -244,6 +244,7 @@ export function SitePage({
   skeleton: ReactNode
   children: (site: Site) => ReactNode
 }) {
+  const { identity } = useData()
   return (
     <>
       <PageHeader
@@ -259,18 +260,22 @@ export function SitePage({
           {(snapshot) => {
             const site = snapshot.sites.find((candidate) => candidate.slug === slug)
             if (site === undefined) {
+              // A person sees their projects alone: one they hold no role on reads as absent, and whom to ask.
+              const person = identity !== null && identity.kind === "person"
               return (
                 <Panel>
                   <EmptyState
                     icon={SearchX}
-                    title={`No site named "${slug}"`}
+                    title={person ? `No project named ${slug} that you have a role on` : `No site named "${slug}"`}
                     action={
                       <InternalLink href="/" className={cn(buttonVariants({ variant: "outline" }), "max-md:h-10")}>
-                        Show all sites
+                        {person ? "Show your projects" : "Show all sites"}
                       </InternalLink>
                     }
                   >
-                    The server doesn't serve a folder by that name. It may have been removed, or the link is mistyped.
+                    {person
+                      ? `If someone sent you this link, ask the owner or an Admin of ${slug} to add you.`
+                      : "The server doesn't serve a folder by that name. It may have been removed, or the link is mistyped."}
                   </EmptyState>
                 </Panel>
               )

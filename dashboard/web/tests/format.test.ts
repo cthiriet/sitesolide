@@ -104,7 +104,9 @@ describe("snapshot age on the client side", () => {
 
 describe("expiry dates", () => {
   test("an expiry carries the month, the day and the time", () => {
-    expect(dateTime(Date.UTC(2026, 8, 22, 21, 3), "UTC")).toBe("Sep 22, 21:03")
-    expect(dateTime(Date.UTC(2026, 0, 5, 9, 0), "UTC")).toBe("Jan 5, 09:00")
+    expect(dateTime(Date.UTC(2026, 8, 22, 21, 3), "UTC")).toBe("Sep 22, 21:03 UTC")
+    expect(dateTime(Date.UTC(2026, 0, 5, 9, 0), "UTC")).toBe("Jan 5, 09:00 UTC")
+    // Local time, its zone named: never a time that reads the same in two places.
+    expect(dateTime(Date.UTC(2026, 8, 22, 21, 3), "America/New_York")).toMatch(/^Sep 22, 17:03 (EDT|GMT-4)$/)
   })
 })

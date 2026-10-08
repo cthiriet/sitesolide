@@ -75,6 +75,8 @@ export type GeneralState = {
   exemptions: string[]
   /** The preview code and the link that carries it, when the site opens with one. */
   code: { code: string; url: string | null } | null
+  /** Does sitesolide.json ask for Restricted: how the site opens once a preview code is removed. */
+  requested: boolean
 }
 
 /**
@@ -86,13 +88,14 @@ export function generalState(site: Pick<Site, "portal" | "lock">): GeneralState 
   const access = siteAccess(site)
   const exemptions = site.portal.exemptions
   const code = site.lock.code === null ? null : { code: site.lock.code, url: site.lock.url }
+  const requested = site.portal.wanted
   switch (access.kind) {
     case "portal":
-      return { current: "restricted", problem: null, exemptions, code: null }
+      return { current: "restricted", problem: null, exemptions, code: null, requested }
     case "code":
-      return { current: "code", problem: null, exemptions: [], code }
+      return { current: "code", problem: null, exemptions: [], code, requested }
     case "open":
-      return { current: "public", problem: null, exemptions: [], code: null }
+      return { current: "public", problem: null, exemptions: [], code: null, requested }
     case "mismatch":
       switch (access.key) {
         case "portal-absent":
@@ -105,6 +108,7 @@ export function generalState(site: Pick<Site, "portal" | "lock">): GeneralState 
             },
             exemptions,
             code: null,
+            requested,
           }
         case "portal-extra":
           return {
@@ -116,6 +120,7 @@ export function generalState(site: Pick<Site, "portal" | "lock">): GeneralState 
             },
             exemptions,
             code: null,
+            requested,
           }
         case "code-without-lock":
           return {
@@ -127,6 +132,7 @@ export function generalState(site: Pick<Site, "portal" | "lock">): GeneralState 
             },
             exemptions: [],
             code,
+            requested,
           }
         case "lock-without-code":
           return {
@@ -138,6 +144,7 @@ export function generalState(site: Pick<Site, "portal" | "lock">): GeneralState 
             },
             exemptions: [],
             code: null,
+            requested,
           }
       }
   }
@@ -189,13 +196,16 @@ export type GeneralReader = "owner" | "admin" | "reader"
 
 /**
  * The one line under the three choices about the preview code, said once
- * rather than on a row: the owner sets it with the CLI; an Admin cannot.
- * Null when there is nothing to say, for whoever only reads.
+ * rather than on a row: the owner sets and removes it with the CLI, and
+ * learns how the site opens once it is gone; an Admin cannot. Null when
+ * there is nothing to say, for whoever only reads.
  */
 export function generalNote(state: GeneralState, reader: GeneralReader): string | null {
   if (reader === "reader") return null
   if (state.current === "code") {
-    return reader === "owner" ? "Set and replaced with the sitesolide CLI, in the project's folder. Shown here to copy." : "Only the owner replaces or removes the preview code."
+    return reader === "owner"
+      ? `To make it public or restricted, remove the code first: sitesolide unlock, in the project's folder. It then opens as sitesolide.json says: ${state.requested ? "Restricted" : "Public"}.`
+      : "Only the owner removes the code; ask them, then restrict it here."
   }
   return reader === "owner" ? "A preview code is set with sitesolide lock, in the project's folder." : "Only the owner sets a preview code."
 }
@@ -213,6 +223,8 @@ export function generalLine(state: GeneralState, slug: string, platform = false)
 
 export type ChangeTexts = {
   title: string
+  /** Said first, in red, before making a site public: what it opens. */
+  warning: string | null
   consequence: string
   action: string
   actionInProgress: string
@@ -226,6 +238,7 @@ export function changeTexts(slug: string, target: "public" | "restricted"): Chan
   if (target === "restricted") {
     return {
       title: `Restrict ${slug}?`,
+      warning: null,
       consequence: `Only the people with access will open ${slug}, once signed in. Anyone else is asked to sign in, and refused.`,
       action: "Restrict",
       actionInProgress: "Restricting…",
@@ -236,6 +249,7 @@ export function changeTexts(slug: string, target: "public" | "restricted"): Chan
   }
   return {
     title: `Make ${slug} public?`,
+    warning: "Anyone with its address can open it without signing in.",
     consequence: "People with access keep their dashboard roles; Can open and password access stop mattering.",
     action: "Make public",
     actionInProgress: "Making public…",
@@ -418,7 +432,7 @@ export function planAddition(
 
   const existing = page.entries.find((entry) => entry.who === who.who) ?? null
   if (existing !== null) {
-    return { ...none, state: "existing", who: who.who, kind: who.kind, hint: `${who.who} is already on the list, as ${roleLabel(existing.role)}. Change it below.` }
+    return { ...none, state: "existing", who: who.who, kind: who.kind, hint: `${who.who} is already on the list, as ${roleLabel(existing.role)}.` }
   }
 
   if (who.kind === "domain") {
@@ -455,6 +469,15 @@ export function planAddition(
 /** Does this change wait for the unlock? A role above Can open, or a password drawn: the steward's rule. */
 export function needsUnlock(role: AccessRole, password: boolean): boolean {
   return password || rank(role) > rank("visitor")
+}
+
+/**
+ * What waits for the unlock, said under the field before Add is pressed:
+ * "Giving Developer needs Unlock changes first.", "Password access needs
+ * Unlock changes first." The words of the button that unlocks.
+ */
+export function unlockLine(role: AccessRole, password: boolean): string {
+  return password ? "Password access needs Unlock changes first." : `Giving ${roleLabel(role)} needs Unlock changes first.`
 }
 
 /** Does changing someone from one role to another wait for the unlock? Raising above Can open does; lowering never. */
@@ -574,6 +597,27 @@ export function grantSentence(who: string, role: AccessRole, slug: string): stri
   return role === "visitor" ? `${who} can now open ${slug}.` : `${who} is now ${roleLabel(role)} on ${slug}.`
 }
 
+/**
+ * Lowering someone to Can open, or removing them, when that leaves them no
+ * role above Can open and no right to create projects: they no longer sign
+ * in to the dashboard, and their tokens are revoked. Said before it is done:
+ * "chloe@example.com will no longer sign in to the dashboard. Also revokes 2
+ * tokens: alice-ci (made by them), Alice's laptop (made by you)." Null when
+ * the change takes nobody out; the steward said whom it would, in `leaving`.
+ */
+export function leavingWarning(who: string, role: AccessRole | null, page: Pick<AccessPageResponse, "leaving" | "you">): string | null {
+  if (role !== null && role !== "visitor") return null
+  const leaving = page.leaving ?? {}
+  if (!Object.hasOwn(leaving, who)) return null
+  const tokens = leaving[who]!
+  const self = page.you.kind === "person" && page.you.email === who
+  const first = self ? "You will no longer sign in to the dashboard." : `${who} will no longer sign in to the dashboard.`
+  if (tokens.length === 0) return first
+  const maker = (madeBy: "them" | "owner") => (madeBy === "them" ? (self ? "you" : "them") : page.you.kind === "owner" ? "you" : "the owner")
+  const named = tokens.map((token) => `${token.label} (made by ${maker(token.madeBy)})`).join(", ")
+  return `${first} Also revokes ${tokens.length === 1 ? "1 token" : `${tokens.length} tokens`}: ${named}.`
+}
+
 /** An Admin lowering or removing themselves: what they give up, said before it is done. */
 export function selfChangeWarning(slug: string): string {
   return `You'll no longer manage ${slug}. Only another Admin or the owner can give it back.`
@@ -626,7 +670,10 @@ export function sendLine(entry: Pick<EntryView, "who" | "kind" | "role">, page: 
   const account = accountWords(page.providerName)
   if (entry.kind === "domain") return `Open ${page.url} and sign in with ${account}.`
   if (entry.role === "visitor") return `Open ${page.url} and sign in with ${account}.`
-  return `${page.slug} is at ${page.url}, and in the dashboard at ${page.dashboardUrl}. Sign in with ${account}.`
+  const line = `${page.slug} is at ${page.url}, and in the dashboard at ${page.dashboardUrl}. Sign in with ${account}.`
+  // Developer and Admin deploy: how, from their workstation.
+  if (entry.role === "viewer") return line
+  return `${line} To deploy, create a token on the Tokens page, then run sitesolide login --url ${page.dashboardUrl}.`
 }
 
 /** What the password's "Copy message" puts on the clipboard: the address, the password, the expiry if any. */

@@ -53,10 +53,11 @@ import {
   ACCESS_PRUNE_BYTES,
   ACCESS_PRUNE_INTERVAL_MS,
   ACCESS_READ_BYTES,
+  ACCESS_RETENTION_MS,
   accessLogSeed,
   accessLogTopUp,
   isAccessLogFull,
-  pruneAccessLog,
+  isRecentLine,
   truncate,
 } from "./log";
 import {
@@ -180,6 +181,7 @@ const MAX_TEXT_BYTES = 256 * 1024;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
+const NEWLINE = new Uint8Array([10]);
 
 function errorCode(error: unknown): string | undefined {
   return (error as { code?: string } | null)?.code;
@@ -270,6 +272,104 @@ export function readBounded(path: string, max: number): Examination {
   }
 }
 
+/** A line longer than this is no line of a log: visited empty, so that its reader drops it. */
+const MAX_LINE_BYTES = 64 * 1024;
+
+function joined(a: Uint8Array, b: Uint8Array): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
+/** Opened as readBounded opens: without following a link, and only a regular file with one name. */
+function openPlain(path: string): number | "absent" | "not-plain" {
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") return "absent";
+    if (code === "ELOOP") return "not-plain";
+    throw error;
+  }
+  const info = fstatSync(fd);
+  if (!info.isFile() || info.nlink > 1) {
+    closeSync(fd);
+    return "not-plain";
+  }
+  return fd;
+}
+
+/**
+ * Every line of a file, its newline left out, read in pieces of a megabyte
+ * rather than whole: a log past what is ever read at once is gone through all
+ * the same. A last line without its newline is visited too. `visit` must be
+ * done with the bytes it is handed before it returns: they are reused.
+ */
+export function eachLine(path: string, visit: (line: Uint8Array) => void): "absent" | "not-plain" | "read" {
+  const fd = openPlain(path);
+  if (typeof fd === "string") return fd;
+  try {
+    const buffer = new Uint8Array(1024 * 1024);
+    let carry: Uint8Array<ArrayBuffer> = new Uint8Array(0);
+    let overlong = false;
+    for (;;) {
+      const n = readSync(fd, buffer, 0, buffer.length, null);
+      if (n === 0) break;
+      const chunk = buffer.subarray(0, n);
+      let start = 0;
+      for (let end = chunk.indexOf(10); end !== -1; end = chunk.indexOf(10, start)) {
+        const piece = chunk.subarray(start, end);
+        visit(overlong || carry.length + piece.length > MAX_LINE_BYTES ? new Uint8Array(0) : carry.length === 0 ? piece : joined(carry, piece));
+        carry = new Uint8Array(0);
+        overlong = false;
+        start = end + 1;
+      }
+      const rest = chunk.subarray(start);
+      if (overlong || carry.length + rest.length > MAX_LINE_BYTES) {
+        overlong = true;
+        carry = new Uint8Array(0);
+      } else {
+        carry = joined(carry, rest);
+      }
+    }
+    if (overlong) visit(new Uint8Array(0));
+    else if (carry.length > 0) visit(carry);
+    return "read";
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * The last `max` bytes of a file, from the first whole line in them: the
+ * newest part of a log bigger than what is read at once. Null when absent.
+ */
+export function readTail(path: string, max: number): Uint8Array | null | "not-plain" {
+  const fd = openPlain(path);
+  if (fd === "absent") return null;
+  if (fd === "not-plain") return fd;
+  try {
+    const size = fstatSync(fd).size;
+    const from = Math.max(0, size - max);
+    const buffer = new Uint8Array(size - from);
+    let read = 0;
+    while (read < buffer.length) {
+      const n = readSync(fd, buffer, read, buffer.length - read, from + read);
+      if (n === 0) break;
+      read += n;
+    }
+    const bytes = buffer.subarray(0, read);
+    if (from === 0) return bytes;
+    // Cut into a line: it starts after the first newline.
+    const newline = bytes.indexOf(10);
+    return newline === -1 ? new Uint8Array(0) : bytes.subarray(newline + 1);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function boundedText(path: string): string | null {
   const examination = readBounded(path, MAX_TEXT_BYTES);
   if (examination.kind === "absent" || examination.bytes === null) return null;
@@ -310,6 +410,15 @@ export function isTemporary(name: string): boolean {
  * the directory so that the rename survives a power cut.
  */
 export function writeAtomically(root: string, name: string, bytes: Uint8Array, permissions: Permissions): void {
+  writeAtomicallyWith(root, name, permissions, (write) => write(bytes));
+}
+
+/**
+ * The same, the content handed over in pieces by `fill`, which calls `write`
+ * as many times as it needs: a file bigger than anyone would hold in memory
+ * at once, the access log pruned, is rewritten whole all the same.
+ */
+export function writeAtomicallyWith(root: string, name: string, permissions: Permissions, fill: (write: (bytes: Uint8Array) => void) => void): void {
   const final = subState(root, name);
   const folder = dirname(final);
   const temporary = join(folder, `.${basename(final)}.${randomSuffix()}.tmp`);
@@ -324,8 +433,10 @@ export function writeAtomically(root: string, name: string, bytes: Uint8Array, p
     try {
       fchmodSync(fd, permissions.mode);
       if (permissions.owner !== null) fchownSync(fd, permissions.owner.uid, permissions.owner.gid);
-      let written = 0;
-      while (written < bytes.length) written += writeSync(fd, bytes, written, bytes.length - written);
+      fill((bytes) => {
+        let written = 0;
+        while (written < bytes.length) written += writeSync(fd, bytes, written, bytes.length - written);
+      });
       fsyncSync(fd);
     } finally {
       closeSync(fd);
@@ -443,20 +554,58 @@ export function createSystem(config: SystemConfig): System {
   let accessPrunedAt: number | null = null;
   /** Its lines and bytes once pruned, kept as it grows: null until the first pruning reads it. */
   let accessCount: { lines: number; bytes: number } | null = null;
+  /** Was it still full once pruned? Then the next pruning waits for its hour rather than the next append. */
+  let fullOncePruned = false;
 
+  /**
+   * The access log pruned by age, gone through line by line rather than read
+   * whole: a file past what is ever read at once is pruned all the same, and
+   * never counts full for good. Rewritten only when a line goes; its lines
+   * and bytes counted on the way.
+   */
   function pruneAccess(now: number): void {
     accessPrunedAt = now;
-    const examination = readBounded(accessLogFile, ACCESS_READ_BYTES);
-    if (examination.kind !== "present" || examination.bytes === null) {
-      // Absent, nothing in it; a file that cannot be read whole counts as full.
-      accessCount = examination.kind === "absent" ? { lines: 0, bytes: 0 } : { lines: Number.MAX_SAFE_INTEGER, bytes: Number.MAX_SAFE_INTEGER };
+    const cutoff = now - ACCESS_RETENTION_MS;
+    const lenient = new TextDecoder();
+    const keep = (line: Uint8Array) => isRecentLine(lenient.decode(line), cutoff);
+    let lines = 0;
+    let bytes = 0;
+    let dropped = 0;
+    const seen = eachLine(accessLogFile, (line) => {
+      if (!keep(line)) {
+        dropped++;
+        return;
+      }
+      lines++;
+      bytes += line.length + 1;
+    });
+    if (seen !== "read") {
+      // Absent, nothing in it; anything but a plain file counts as full.
+      accessCount = seen === "absent" ? { lines: 0, bytes: 0 } : { lines: Number.MAX_SAFE_INTEGER, bytes: Number.MAX_SAFE_INTEGER };
+      fullOncePruned = seen !== "absent";
       return;
     }
-    const text = decoder.decode(examination.bytes);
-    const pruned = pruneAccessLog(text, now);
-    const kept = pruned ?? text;
-    if (pruned !== null) writeAtomically(config.stateFolder, ACCESS_LOG_NAME, encoder.encode(pruned), aRoot);
-    accessCount = { lines: kept === "" ? 0 : kept.split("\n").length - (kept.endsWith("\n") ? 1 : 0), bytes: encoder.encode(kept).length };
+    if (dropped > 0) {
+      writeAtomicallyWith(config.stateFolder, ACCESS_LOG_NAME, aRoot, (write) => {
+        // A megabyte at a time rather than a write per line.
+        let pending: Uint8Array[] = [];
+        let size = 0;
+        const flush = () => {
+          if (size > 0) write(Buffer.concat(pending));
+          pending = [];
+          size = 0;
+        };
+        eachLine(accessLogFile, (line) => {
+          if (!keep(line)) return;
+          pending.push(Buffer.from(line), NEWLINE);
+          size += line.length + 1;
+          if (size >= 1024 * 1024) flush();
+        });
+        flush();
+      });
+    }
+    accessCount = { lines, bytes };
+    fullOncePruned = isAccessLogFull(accessCount);
   }
 
   /** A clock set back counts as an hour gone: the pruning is never put off for good. */
@@ -622,16 +771,19 @@ export function createSystem(config: SystemConfig): System {
     },
 
     async readAccessLog() {
-      const examination = readBounded(accessLogFile, ACCESS_READ_BYTES);
-      if (examination.kind === "absent") return null;
-      return examination.bytes === null ? "" : decoder.decode(examination.bytes);
+      // Its newest part when it has grown past what is read at once (log.ts).
+      const tail = readTail(accessLogFile, ACCESS_READ_BYTES);
+      if (tail === null) return null;
+      return tail === "not-plain" ? "" : decoder.decode(tail);
     },
 
     async appendAccessLog(line, now) {
       seedAccessLog();
       appendFileSync(accessLogFile, line, { mode: 0o600 });
       if (accessCount !== null) accessCount = { lines: accessCount.lines + 1, bytes: accessCount.bytes + encoder.encode(line).length };
-      if (pruneDue(now) || lstatSync(accessLogFile).size > ACCESS_PRUNE_BYTES) pruneAccess(now);
+      // Past its bound, pruned at once, unless it was still full the last
+      // time: then within the hour, rather than read through at every append.
+      if (pruneDue(now) || (!fullOncePruned && lstatSync(accessLogFile).size > ACCESS_PRUNE_BYTES)) pruneAccess(now);
     },
 
     async prepareAccessLog(now) {

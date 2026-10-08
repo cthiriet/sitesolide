@@ -380,8 +380,8 @@ function PasswordForm({
         </div>
         <p className="text-xs text-pretty text-muted-foreground">
           {mode === "draw"
-            ? "The steward draws a long random password and shows it to you once."
-            : "Type it twice. The steward says if it is too weak."}
+            ? "A long random password is drawn and shown to you once."
+            : "Type it twice. The server says if it is too weak."}
         </p>
       </fieldset>
 

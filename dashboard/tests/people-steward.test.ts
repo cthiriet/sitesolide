@@ -148,8 +148,9 @@ async function mount(): Promise<Bench> {
         zone: ZONE,
         revokeTokens: async (email, actor) => {
           revoked.push([email, actor]);
-          return 1;
+          return [{ id: "aaaaaaaaaaaa", label: "laptop", madeBy: "them" }];
         },
+        tokensOf: async () => [{ id: "aaaaaaaaaaaa", label: "laptop", madeBy: "them" }],
       },
     });
   let dashboard = make();
@@ -343,7 +344,7 @@ describe("signing in", () => {
     for (const email of [carol, BOB]) {
       const response = await signIn(bench, await assertion(bench, email));
       expect([email, response.status]).toEqual([email, 403]);
-      expect(await response.json()).toMatchObject({ error: "can-open-only", message: expect.stringContaining("can open the sites shared with them") });
+      expect(await response.json()).toMatchObject({ error: "can-open-only", message: expect.stringContaining("holds Can open alone") });
     }
     expect(bench.journal().at(-1)).toMatchObject({ operation: "dashboard.signin_failed", actor: BOB, detail: "can-open-only" });
     const nobody = await signIn(bench, await assertion(bench, dora));
@@ -569,6 +570,17 @@ describe("the access log", () => {
     expect(new Set(rows.map((row) => row.id)).size).toBe(everything.length);
   });
 
+  test("a change for an address of 254 characters, the longest, is kept like any other", async () => {
+    const bench = await mount();
+    bench.seed({ [ALICE]: { blog: "admin" } });
+    let domain = "example.org";
+    while (domain.length < 254 - 65) domain = `${"b".repeat(Math.min(63, 254 - 65 - domain.length - 1))}.${domain}`;
+    const who = `${"a".repeat(254 - domain.length - 1)}@${domain}`;
+    expect(who.length).toBe(254);
+    expect((await bench.asRoot("PUT", "/access/entry", { slug: "blog", who, role: "visitor" })).status).toBe(201);
+    expect(accessLog(bench).at(-1)).toMatchObject({ operation: "access.add", actor: "owner", member: who, slug: "blog" });
+  });
+
   test("what a steward from before it wrote in the journal is carried over at the next start, once, and read once", async () => {
     const bench = await mount();
     const t0 = bench.clock.t;
@@ -585,6 +597,39 @@ describe("the access log", () => {
     bench.restartSteward();
     expect(named(accessLog(bench))).toEqual(["access.add ok"]);
     expect(named((await read(bench, "")).entries)).toEqual(["access.add rejects", "unlock ok", "access.add ok"]);
+  });
+});
+
+describe("general access and the access log's bounds", () => {
+  /** blog restricted on the machine: the portal asked for in its manifest, and its block guarded. */
+  function restrictBlog(bench: Bench): void {
+    const path = join(bench.root, "sites", "blog", "sitesolide.json");
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), portal: true }));
+    writeFileSync(join(bench.root, "caddy", "blog.caddy"), "forward_auth @portal_guard 127.0.0.1:3026 {\n}\n");
+  }
+  const lines = (bench: Bench) => readFileSync(join(bench.root, "state", "access-log.jsonl"), "utf8").split("\n").filter((one) => one !== "").length;
+
+  test("making a site public is refused while the log is full, nothing started; restricting one already restricted starts nothing and writes nothing", async () => {
+    const bench = await mount();
+    withAlice(bench);
+    restrictBlog(bench);
+    const token = await unlock(bench);
+    // The log full of young rows, counted again at the next hour's pruning.
+    writeFileSync(join(bench.root, "state", "access-log.jsonl"), Array.from({ length: 20_000 }, (_, i) => `{"a":${bench.clock.t - 1000 + i}}\n`).join(""), { mode: 0o600 });
+    bench.clock.t += 3_600_001;
+    const opened = await bench.call("POST", "/portal", { token: await unlock(bench), slug: "blog", active: false, confirmation: "blog" });
+    expect(opened.status).toBe(507);
+    expect(await opened.json()).toMatchObject({ error: "log-full" });
+    expect(bench.calls.filter((call) => call[0] === "start")).toEqual([]);
+    const before = lines(bench);
+    for (let n = 0; n < 3; n++) {
+      const restricted = await bench.call("POST", "/portal", { slug: "blog", active: true, confirmation: "" });
+      expect(restricted.status).toBe(200);
+      expect(await restricted.json()).toMatchObject({ portal: { requested: true, installed: true }, detail: "blog is already restricted: nothing to change" });
+    }
+    expect(bench.calls.filter((call) => call[0] === "start")).toEqual([]);
+    expect(lines(bench)).toBe(before);
+    void token;
   });
 });
 
@@ -617,14 +662,15 @@ describe("the create right, and a person's own tokens", () => {
     expect(await authority.rights("eve@acme.test")).toBeNull();
     // Can open alone: no rights on the dashboard.
     expect(await authority.rights("carol@acme.test")).toBeNull();
-    expect(await authority.recordCreation("omega", ALICE, "aaaaaaaaaaaa")).toBeNull();
+    expect(await authority.recordCreation("omega", ALICE, "aaaaaaaaaaaa")).toEqual({ leaving: [] });
     expect(await authority.rights(ALICE)).toMatchObject({ roles: { blog: "developer", omega: "admin" } });
     // A project created is a change of access: kept 180 days in the access log, not rotated with the journal.
     const kept = reread(readFileSync(join(bench.root, "state", "access-log.jsonl"), "utf8"));
     expect(kept.findLast((event) => event.operation === "project.create")).toMatchObject({ result: "ok", actor: ALICE, member: ALICE, slug: "omega", detail: "admin, created with token aaaaaaaaaaaa" });
     const refused = await authority.recordCreation("omega", "eve@acme.test", "aaaaaaaaaaaa");
-    expect(refused?.status).toBe(403);
-    expect(await refused?.json()).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("eve@acme.test may no longer create projects") });
+    if (!(refused instanceof Response)) throw new Error("recorded for someone who may not create");
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("eve@acme.test may no longer create projects") });
   });
 });
 
@@ -679,7 +725,7 @@ describe("leaving", () => {
             revokeTokens: async (email: string, actor: string) => {
               if (revokeTokens === "throws") throw Object.assign(new Error("the control routes are down"), { code: "EIO" });
               revoked.push([email, actor]);
-              return 2;
+              return [];
             },
           }),
     });

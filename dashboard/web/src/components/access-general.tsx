@@ -323,15 +323,14 @@ function ChangeFlow({
     <form noValidate onSubmit={confirm} className="grid gap-5" aria-busy={inProgress || undefined}>
       <DialogHeader>
         <DialogTitle>{inProgress ? texts.runningTitle : texts.title}</DialogTitle>
+        {/* What it opens, first and in red, before what it keeps. */}
+        {texts.warning !== null && !inProgress && (
+          <Banner tone="error">
+            <span className="font-medium">{slug} becomes public.</span> {texts.warning}
+          </Banner>
+        )}
         <DialogDescription className="text-pretty">{texts.consequence}</DialogDescription>
       </DialogHeader>
-
-      {opening && !inProgress && (
-        <Banner tone="error">
-          <span className="font-medium">{slug} becomes public.</span> Anyone with its address can open it without
-          signing in, from the moment Caddy reloads.
-        </Banner>
-      )}
 
       {!opening && !inProgress && state.warning !== null && <Banner tone="attention">{state.warning}</Banner>}
 
@@ -396,7 +395,7 @@ function ChangeWait({ start }: { start: number }) {
     <div className="grid gap-2">
       <Track part={part} elapsed={elapsed} usual={null} finish="1.5 min" label={slow ? "Still working, taking longer than usual" : "Waiting for the server"} />
       <p className="text-xs text-pretty text-muted-foreground">
-        {slow ? "Caddy can take a while to reload. Keep this open: the result always comes." : "Keep this open to see the result."}
+        {slow ? "The server can take a while to apply it. Keep this open: the result always comes." : "Keep this open to see the result."}
       </p>
     </div>
   )

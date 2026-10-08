@@ -3,7 +3,7 @@
  * access, and the machine's People. Built around their dependencies like the
  * others: the tests drive them with a simulated steward.
  *
- *   GET    /api/access?slug=<slug>      the owner, or the project's Admin
+ *   GET    /api/access?slug=<slug>      the owner, or anyone Viewer and above on the project
  *   PUT    /api/access/entry            someone given access, or their role changed
  *   DELETE /api/access/entry            someone taken off
  *   PUT    /api/access/general          public, with the unlock and the slug retyped; restricted, with neither; the preview code is `sitesolide lock`'s
@@ -95,9 +95,9 @@ async function readBody(req: Request): Promise<Record<string, unknown> | null> {
 }
 
 function relayed(reached: Reached): Response {
-  if (reached.kind === "unreachable") return error(502, "failure", "Can't reach the steward.");
+  if (reached.kind === "unreachable") return error(502, "failure", "Can't reach the access service on the server.");
   if (reached.kind === "unavailable") return error(503, "not-available", ACCESS_NOT_AVAILABLE);
-  if (reached.kind === "unreadable") return error(502, "failure", "The steward sent an unreadable answer.");
+  if (reached.kind === "unreadable") return error(502, "failure", "The server sent an unreadable answer.");
   return json(reached.body, reached.status);
 }
 
@@ -119,7 +119,7 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies, clock
   async function asker(req: Request, writing: boolean): Promise<Asker | Response> {
     if (writing && !isAcceptableOrigin(req.headers.get("origin"), dependencies.publicUrl)) return json({ error: "origin-refused" }, 403);
     const resolved = await resolve(req, clock());
-    if (resolved === "unreachable") return error(502, "failure", "Can't reach the steward to say who is signed in.");
+    if (resolved === "unreachable") return error(502, "failure", "Can't reach the server to say who is signed in.");
     if (resolved === null) return json({ error: "no-session" }, 401);
     if (resolved.identity.kind === "owner") return { kind: "owner", hash: resolved.session.hash };
     return { kind: "person", hash: resolved.session.hash, token: resolved.token, email: resolved.identity.email, roles: resolved.identity.roles };

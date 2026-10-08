@@ -264,7 +264,7 @@ export function createRoutes(store: Store, options: Options, clock: () => number
       const roles = options.roles === undefined ? null : await options.roles(req, now);
       if (roles === "no-session") return Response.json({ error: "no-session" }, { status: 401 });
       if (roles === "unreachable") {
-        return Response.json({ error: "failure", message: "Can't reach the steward to say what this person may see." }, { status: 502 });
+        return Response.json({ error: "failure", message: "Can't reach the server to say what this person may see." }, { status: 502 });
       }
 
       const reading = await read(options.stateFile, now);

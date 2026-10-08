@@ -93,7 +93,7 @@ function IssuesPanel({ discrepancies, sites }: { discrepancies: readonly Discrep
 }
 
 function Inventory({ snapshot }: { snapshot: Snapshot }) {
-  const { now, secretsBySite } = useData()
+  const { now, secretsBySite, identity } = useData()
   const announce = useAnnounce()
   const [query, setQueryState] = useState(memory.query)
   const [filter, setFilterState] = useState<SiteFilter>(memory.filter)
@@ -138,6 +138,18 @@ function Inventory({ snapshot }: { snapshot: Snapshot }) {
   }
 
   if (sites.length === 0) {
+    // A person sees their projects alone: none yet is no word about the server.
+    if (identity !== null && identity.kind === "person") {
+      return (
+        <Panel>
+          <EmptyState icon={Globe} title="No project of yours yet">
+            {identity.create
+              ? "You may create projects: create a token on the Tokens page, then run sitesolide deploy in the project's folder. You become its Admin."
+              : "A project appears here once an Admin of it, or the owner, gives you a role on it."}
+          </EmptyState>
+        </Panel>
+      )
+    }
     return (
       <Panel>
         <EmptyState icon={Globe} title="No sites on this server">

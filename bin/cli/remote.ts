@@ -615,6 +615,9 @@ export function apiAccess(remote: Remote, fetcher?: Fetch): AccessTransport {
   };
   return {
     via: `through ${remote.api}`,
+    owner: false,
+    // A token gives Can open alone: the line to send names the site, not the dashboard.
+    dashboard: null,
     async list(slug) {
       const answer: Answer<{ access: AccessState }> = await call(remote, path(slug), {}, fetcher);
       const old = outdated(answer);

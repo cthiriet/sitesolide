@@ -57,6 +57,32 @@ export function scopeSummary(scope: Scope): string[] {
   return parts
 }
 
+export type ScopeLine = { text: string; paused: boolean }
+
+/**
+ * What a token may do beyond deploying, as its row says it, what is on alone:
+ * a person's said paused, greyed, while they no longer hold it, as the
+ * steward narrows it at every use (src/people/tokens.ts, `narrowIdentity`).
+ * The create right while they hold it; each option while they are Admin of
+ * every project the token still deploys: "Can create projects (paused: no
+ * longer allowed)", "Can use outbound network (paused: not Admin of cms
+ * now)". `rights` null: the owner's own, or rights not known.
+ */
+export function scopeLines(token: Pick<TokenView, "owned" | "scope" | "member">, rights: { roles: Readonly<Record<string, Role | "visitor">>; create: boolean } | null): ScopeLine[] {
+  const words = scopeSummary(token.scope)
+  if (token.member === null || rights === null) return words.map((text) => ({ text, paused: false }))
+  const roleOf = (slug: string) => (Object.hasOwn(rights.roles, slug) ? rights.roles[slug]! : null)
+  const deploys = (slug: string) => roleOf(slug) === "developer" || roleOf(slug) === "admin"
+  const reached = [...new Set([...token.scope.slugs, ...token.owned])].filter(deploys).sort()
+  const create = token.scope.create && rights.create
+  const notAdmin = reached.filter((slug) => roleOf(slug) !== "admin")
+  const optionPause = reached.length === 0 && !create ? "paused: no project to deploy now" : notAdmin.length > 0 ? `paused: not Admin of ${notAdmin.join(", ")} now` : null
+  return words.map((text) => {
+    const pause = text === "Can create projects" ? (rights.create ? null : "paused: no longer allowed") : optionPause
+    return pause === null ? { text, paused: false } : { text: `${text} (${pause})`, paused: true }
+  })
+}
+
 /** The projects a token reaches: those it created, then those granted, each once. */
 export function reachedProjects(token: Pick<TokenView, "owned" | "scope">): { slug: string; how: "created" | "granted" }[] {
   const created = token.owned.map((slug) => ({ slug, how: "created" as const }))

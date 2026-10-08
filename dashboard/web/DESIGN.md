@@ -315,7 +315,7 @@ afterwards. A page never reads `window.location` itself.
 | Name | When |
 |---|---|
 | `PageBody` | the content container, and the `body` query container |
-| `SitePage` | a site's section: header with breadcrumb and switcher, body, "No site named x" for an unknown slug |
+| `SitePage` | a site's section: header with breadcrumb and switcher, body, "No site named x" for an unknown slug, "No project named x that you have a role on" for a person, with whom to ask |
 | `Panel` | a bordered card, `rounded-xl`; with `title`, a 44 px header row; `full` for a table or list that touches the edges |
 | `WithSnapshot` | loading, dashboard unreachable, snapshot incomplete, rendered the same everywhere |
 | `EmptyState` | nothing to show: the title states the state, the text says what to do |
@@ -422,15 +422,15 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | General access | General access, Public, Restricted, Anyone with the code, Current; Make public, Restrict; in a disagreement, On the server, In sitesolide.json, Keep Public, Apply Restricted; Preview code, Replace the code, Remove the code; Open to anyone, guarded by the app alone (the exempt paths); See changes in Activity | Door, Gate, Portal on, Portal off, Turn on portal, Behind the portal, Private, Password protected, Enable, Disable |
 | People with access | People with access, Add people, Add, Unlock to add, Remove; Can open, Viewer, Developer, Admin; company account, password access, Password access lasts, No expiry, expires in 5d, Expired, Added by; Can't sign in until company sign-in is set up; Copy message; What each role can do, a disclosure from Can open to Admin, (your role), (you); Also open it | Sharing, Share, Guest, Member, Team, Invite, Permissions, ACL, work account, Super admin, Project admin; an Owner row or rung |
 | People | People, May create projects, Let someone create projects, Allow, Unlock to allow, Remove from every project, Remove expired, Domains; Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
-| Tokens | Tokens, New token, Unlock to create, Create token, Whose token, Mine; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network; calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only |
+| Tokens | Tokens, New token, Unlock to create, Create token, Whose token, Mine; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network, Can create projects (paused: no longer allowed); calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only |
 | The lock | Unlock changes, Lock, Changes unlocked, 9 min left; in its dialog, Unlock, Sign in again; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked |
 | Secrets | Restart pending, Unmanaged, Missing, Write-only, Restart service, Restore previous, Add variable, Create file, Replace, Reveal | Vault, Decrypt, Edit file |
 | Passwords | Change password, Dashboard password, Generate a strong one, Set my own, New password, Copy password | Set hash, Regenerate |
 | Backups | Snapshot, Scheduled, Before restore, Server, Offsite only, Restore, Restoring..., Restored, Offsite copy, Show all | Backup file, Revert, Rollback, Recover |
 | Activity | Event, Actor, Action, Target, Source, Site or host, From, To, Details, Load older, Export, CSV, JSON lines, Clear filters, Access changes; a source is Read, Latest 50, Can't read, Needs updating, Not installed; an actor is Owner, The server, Someone, alice@example.com (token), Example Accounting (password access) | Log entry, Audit trail, Download, Reset |
-| Unreachable | Can't reach the dashboard., Can't reach the steward., Can't reach the access service on the server. | is not answering |
-| Common actions | Refresh, Retry, Sign in, Sign out, Copy, Copied, Cancel, Close, Done, Manage | Reload, Try again, Log out, Submit |
-| Empty states | No issues, No sites match "x", No site is restricted, Nobody else has access to cms yet, Nobody has access to a project yet, cms has no secret files, Not part of your role, Only the owner's | Nothing here! |
+| Unreachable | Can't reach the dashboard., Can't reach the server's secrets., Can't reach the access service on the server. | is not answering |
+| Common actions | Refresh, Retry, Sign in, Sign out, Copy, Copied, Cancel, Close, Done, Manage, See | Reload, Try again, Log out, Submit |
+| Empty states | No issues, No sites match "x", No site is restricted, No project of yours yet, No project named x that you have a role on, Nobody else has access to cms yet, Nobody has access to a project yet, cms has no secret files, Not part of your role, Only the owner's | Nothing here! |
 
 "Portal" names the component, on the machine: Activity's source for sign-ins,
 the banner saying the portal on the server still reads its own lists, the
@@ -470,11 +470,16 @@ panel, errors first (a disagreement on general access names each side,
 site. Choose one in its Access section"), then the search, the filters (All,
 Issues, Apps, Static, Restricted, each with its count) and the
 inventory, sites in discrepancy at the top: Site, Address, Access, Service,
-Size. The Access column gives the general access in a word, *Restricted*,
-*Public*, or for *Anyone with the code* the code itself with its copy and
-open buttons; a disagreement with `sitesolide.json` in red. A person sees their
-role as a tag beside each site's name, *Your role* as its title. Summaries
-live in the rows, not in cards.
+Size. The Access column gives the general access in the Access section's
+words, *Restricted* with the paths "Open to anyone, guarded by the app
+alone", *Public*, or *Anyone with the code* over the code itself with its
+copy and open buttons; a disagreement with `sitesolide.json` in red, in the
+same words ("Restricted in sitesolide.json, public on the server"). A person
+sees their role as a tag beside each site's name, *Your role* as its title;
+with no project yet, "No project of yours yet", and with the create right
+"You may create projects: create a token on the Tokens page, then run
+sitesolide deploy in the project's folder. You become its Admin.", never the
+server's folders. Summaries live in the rows, not in cards.
 
 **Activity.** The machine's audit, every component's in one log, newest first,
 read with the session alone since no row holds a value. *Export* in the header,
@@ -527,7 +532,10 @@ you*, *Made by you for alice@example.com*, *Made by alice@example.com*; a
 person reads *Made by you* or *Made by the owner for you*), its state
 (*Active*, *Expires in 5d* in attention, *Expired*, *Revoked*), what it may
 do beyond deploying, only what is on (*Can create projects*, *Can deploy
-public sites*, *Can declare a domain*, *Can use outbound network*), the
+public sites*, *Can declare a domain*, *Can use outbound network*), a
+person's greyed and said paused while they no longer hold it, "Can create
+projects (paused: no longer allowed)", "Can use outbound network (paused: not
+Admin of cms now)", the
 projects it reaches, a person's with their role there today, "calendar
 (Admin)", "cms (paused: Viewer now)", "photos (paused: no role now)", the
 owner's own with those it created, "notes (created)", when it was created,
@@ -550,9 +558,9 @@ three only for projects they administer. The token is then shown once, with
 <provider>*, an outline link to `/api/sso/begin` and not a form, the flow
 leaving for the portal's host; then a rule with *or with the owner's
 password* in its middle. A sign-in that came back without a session says why
-above both, in `destructive`: `can-open-only`, "You can open the sites shared
-with you. The dashboard is for Viewers and above: ask an Admin of the project
-if you need more."; `no-role`, "This account has no access to any project
+above both, in `destructive`: `can-open-only`, "You hold Can open alone: you
+open the sites you can open, and the dashboard is for Viewers and above. Ask
+an Admin of the project if you need more."; `no-role`, "This account has no access to any project
 here. Ask the owner, or an Admin of the project, to add you."; a domain not
 allowed, expired, not available.
 
@@ -573,11 +581,12 @@ columns: on the left the site on the machine, **Service**, **Addresses**,
 **Storage**; on the right what opens it and what it keeps, **General
 access** and **Secrets**, each with *Manage* to its section, General access's
 after who has access in a few words, "6 people and 1 domain have access ·
-Manage". **General access** names how the site opens and what that does to a
+Manage", *See* for whoever only reads who has access, a Viewer or a
+Developer. **General access** names how the site opens and what that does to a
 visitor, the code for *Anyone with the code*, the exempt paths for
 *Restricted*, and, when it disagrees, `sitesolide.json` and the server side by
 side. Every role sees it,
-with its *Manage*; **Secrets** shows from Developer up. A Developer or an
+with its *Manage* or *See*; **Secrets** shows from Developer up. A Developer or an
 Admin finds *Restart* in **Service**'s header, which confirms, waits for the
 steward's verdict and says it in plain words, or shows the steward's refusal
 as it stands.
@@ -624,18 +633,21 @@ sitesolide.json*, and both are offered, *Keep Public* and *Apply
 Restricted*, or *Apply Public* and *Keep Restricted*. The preview code is
 said once under the choices: to the owner, "A preview code is set with
 sitesolide lock, in the project's folder."; to an Admin, "Only the owner sets
-a preview code."; while one is set, the owner reads "Set and replaced with
-the sitesolide CLI, in the project's folder. Shown here to copy." over
-`sitesolide lock --new-code` and `sitesolide unlock`, an Admin "Only the
-owner replaces or removes the preview code." A Viewer or a Developer reads
+a preview code."; while one is set, the owner reads "To make it public or
+restricted, remove the code first: sitesolide unlock, in the project's folder.
+It then opens as sitesolide.json says: Public." (or Restricted) over
+`sitesolide lock --new-code` and `sitesolide unlock`, an Admin "Only the owner
+removes the code; ask them, then restrict it here." A Viewer or a Developer reads
 general access in one line, "Restricted: only the people with access can
 open it, once signed in. Only an Admin of cms, or the owner, changes it.",
 the code or the exempt paths under it.
 
-Restricting waits for no unlock; making public does, under a red banner
-saying anyone with its address then opens it, and makes you retype the slug:
-"People with access keep their dashboard roles; Can open and password access
-stop mattering." Restricting a site nobody is on the list of warns "Nobody is
+Restricting waits for no unlock; making public does, then opens its
+confirmation once unlocked: first a red banner, "cms becomes public. Anyone
+with its address can open it without signing in.", then "People with access
+keep their dashboard roles; Can open and password access stop mattering.",
+and the slug retyped. A site already restricted is left as it is, "already
+restricted: nothing to change". Restricting a site nobody is on the list of warns "Nobody is
 on the list yet: after this, only the owner and the admin emails can open
 wheels." Both say "Takes up to a minute. If anything fails, nothing
 changes."; the wait neither closes nor cancels and shows the time elapsed on
@@ -658,11 +670,20 @@ company's domains: they get password access, to open the site only.", with
 its end; "Nobody at acme.com can sign in here: only example.com accounts can.
 Add people from acme.com by email: they get password access.", with no *Add*;
 "Already covered by @example.com."; "owner@example.com already opens every
-site, as admin: it's set on the server." *Unlock to add* stands for *Add*
-when the role or the password waits for the unlock. After adding,
-"dana@example.com can now open cms." or "dana@example.com is now Viewer on
-cms.", with the line to send and *Copy*, since no email is sent, cleared when
-that row changes;
+site, as admin: it's set on the server."; "erin@example.com is already on the
+list, as Viewer." *Unlock to add* stands for *Add* when the role or the
+password waits for the unlock, said under the field: "Giving Developer needs
+Unlock changes first.", "Password access needs Unlock changes first." The
+owner, once unlocked, finds the addition made; a person, back from signing in
+again at their provider, finds the field and the role as they left them, and
+"Unlocked. Press Add to finish." After adding, "dana@example.com can now open
+cms." or "dana@example.com is now Viewer on cms.", with the line to send and
+*Copy*, since no email is sent, cleared when that row changes; from Viewer up
+it names the dashboard too, "calendar is at https://calendar.example.com/,
+and in the dashboard at https://dashboard.example.com. Sign in with your
+Google account.", and from Developer up adds "To deploy, create a token on
+the Tokens page, then run sitesolide login --url
+https://dashboard.example.com.";
 for password access, a dialog with the address, the password and its end, and
 *Copy message*. Under the field, *What each role can do*, a disclosure,
 closed for the owner and Admins, open for a Viewer or a Developer: Can open
@@ -679,9 +700,14 @@ sign-in is set up.", for a person or a domain, "Can't sign in: acme.com isn't
 one of the company's domains."); who added it and when, quietly, except on what was carried over;
 its role in a menu when the viewer may change it, as a word otherwise,
 greyed for someone who can't sign in, *Expired* greyed for a password access
-that ended; and *Remove*, which confirms. An Admin lowering or removing
-themselves is asked first: "You'll no longer manage cms. Only another Admin
-or the owner can give it back." Under the list, one quiet line: "Also open
+that ended; and *Remove*, which confirms. A role raised once unlocked is
+given at once. An Admin lowering or removing themselves is asked first:
+"You'll no longer manage cms. Only another Admin or the owner can give it
+back." Lowering someone to Can open, or removing them, when they keep no
+role above Can open nor the create right, is asked first too, naming what
+goes with it: "chloe@example.com will no longer sign in to the dashboard.
+Also revokes 2 tokens: alice-ci (made by them), Alice's laptop (made by
+you)." Under the list, one quiet line: "Also open
 it: the owner, and owner@example.com (an admin email set on the server; sites
 see them as admin).", or "The owner also opens it."
 

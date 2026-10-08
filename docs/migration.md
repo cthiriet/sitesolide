@@ -609,7 +609,8 @@ with either.
 ### What it refuses to guess
 
 Kept in the registry's `migration.setAside`, each with its reason, and never
-given access:
+given access; past 500, one line says how many more, which stay in the old
+stores, read-only:
 
 - **people and domains a site's list kept for later while its mode let them
   out.** The mode `admins` kept both lists, `people` kept its domains. Giving
@@ -622,7 +623,14 @@ given access:
 A store that does not read stops the migration: no registry is written,
 every person is refused until it is repaired, the steward's log and every
 answer say which store and why, and the next request, or the next start,
-tries again. Guessing at who may do what is the one thing not to do.
+tries again. Guessing at who may do what is the one thing not to do. Each of
+the portal's two tables is measured before it is read, 16 MB of values at
+most, and refused `oversized-table` past it. When the portal's database is
+the store that does not read, you may carry the rest over without it:
+`sitesolide people --migrate-without-portal`. Who could open which site, and
+the passwords handed out, then stay in `portal.db`, read-only, and open
+nothing once the portal reads the projection; the registry's `migration`
+field says so, and `access.migrate` is journaled under `owner`.
 
 ### What widens, by design
 
@@ -650,13 +658,28 @@ yet decides from those tables as it did, so the order of the upgrade opens
 and closes nothing; once it has read one, it leaves a mark in its data folder,
 `access-from-steward`, and never reads them again.
 
-The steward's access log is made once too. At its first start, finding no
+The steward's access log starts with it. Finding no
 `/var/lib/sitesolide-steward/access-log.jsonl`, the steward copies into it
 the accepted changes of access its journal already holds, `access.migrate`
 among them, so that the journal's rotation, past 1,000 lines, cannot take
-them away; from then on it appends every accepted change there, keeps them
-180 days, 20,000 lines at most, and never fills it from the journal again.
+them away, and at each start it tops it up with those of the journal it
+lacks. It appends every accepted change there and keeps each 180 days,
+never pushing one out younger: once it holds 20,000 of them, or 12 MB, a
+change that lets more people in is refused until older ones age out.
 Refusals stay in the journal.
+
+The tokens are made someone's once too, when the registry first reads, or at
+once after `--migrate-without-portal`. A token whose email, what the owner
+typed when creating it and shown as its label, is the address of a person
+who signs in to the dashboard, a role above Can open or the create right,
+becomes that person's, made by the owner: narrowed to their roles from then
+on, and revoked when they leave, removed or lowered so that they keep no
+role above Can open and no create right. Every other token becomes the
+owner's own, its scope unchanged; each one made a person's is journaled as
+`token.create`, actor `system`. A shared CI token whose email is a person's
+is kept the owner's by making a new one on the *Tokens* page, *Whose token*
+set to *Mine*, with the same projects, putting it in the CI, then revoking
+the one that became the person's.
 
 ### Check
 

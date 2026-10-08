@@ -13,8 +13,14 @@
  * **A token deploys what its scope allows, and the projects it created.** The
  * ownership is recorded at the start of a project's first deployment, before
  * anything is written on the machine: a first deployment that fails half way
- * leaves a directory its creator can still deploy again, and nobody else can
- * take.
+ * leaves a directory nobody else can take, which its token deploys again,
+ * and whose creator, for a person's token, is its Admin all the same once
+ * the installer has stopped (src/control/steward.ts, `settleCreations`).
+ *
+ * **Dead tokens do not pile up.** A revoked or expired token is kept 90 days
+ * for the Tokens page, then dropped, sooner when the file needs the room, the
+ * oldest first; one that created a project is kept as long as its name is
+ * its own (`pruneTeam`).
  *
  * Pure: the registry comes in as a value, a new one goes out; the clock and the
  * random source are parameters. Reading and writing the file belong to
@@ -62,6 +68,12 @@ export const MAX_GRANTED = 100;
 
 /** The registry's last-use date moves by whole hours, so that a busy token does not rewrite it on every call. */
 export const LAST_USE_STEP_MS = 60 * 60 * 1000;
+
+/** How long a revoked or expired token is still listed. */
+export const DEAD_TOKEN_RETENTION_MS = 90 * 24 * 3600 * 1000;
+
+/** Records kept at most, live and dead: the live ones are capped lower, at `MAX_TOKENS`. */
+export const MAX_TOKEN_RECORDS = 1_000;
 
 const EMAIL_SHAPE = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/;
 const ID_SHAPE = /^[0-9a-f]{12}$/;
@@ -224,6 +236,48 @@ export function readTeam(text: string | null): Team | { unreadable: string } {
 
 export function encodeTeam(team: Team): string {
   return `${JSON.stringify({ version: team.version, tokens: team.tokens, owners: team.owners }, null, 2)}\n`;
+}
+
+/** Since when a token is dead, revoked or expired; null while it is live. */
+function deadSince(record: TokenRecord, now: number): number | null {
+  if (record.revokedAt !== null) return record.revokedAt;
+  if (record.expiresAt !== null && now >= record.expiresAt) return record.expiresAt;
+  return null;
+}
+
+/**
+ * The registry as it is to be written: the dead tokens past their retention
+ * left out, then, while it holds more records than `MAX_TOKEN_RECORDS` or
+ * would encode past `maxBytes`, the oldest dead ones before their time. A
+ * token that created a project stays, dead or not: `owners` names it. Null
+ * when even with every other dead token left out it would not fit: the
+ * caller refuses the change, and writes nothing.
+ */
+export function pruneTeam(team: Team, now: number, maxBytes: number): Team | null {
+  const owning = new Set(Object.values(team.owners));
+  const dead = team.tokens
+    .filter((record) => !owning.has(record.id) && deadSince(record, now) !== null)
+    .sort((a, b) => deadSince(a, now)! - deadSince(b, now)! || a.createdAt - b.createdAt);
+  const expired = dead.filter((record) => now - deadSince(record, now)! >= DEAD_TOKEN_RETENTION_MS).length;
+  const without = (n: number): Team => {
+    if (n === 0) return team;
+    const gone = new Set(dead.slice(0, n).map((record) => record.id));
+    return { version: team.version, tokens: team.tokens.filter((record) => !gone.has(record.id)), owners: team.owners };
+  };
+  const fits = (candidate: Team) => candidate.tokens.length <= MAX_TOKEN_RECORDS && Buffer.byteLength(encodeTeam(candidate)) <= maxBytes;
+  // The fewest dead tokens left out past those whose time is up: the more
+  // left out, the smaller, so a search by halves finds it in a few encodings.
+  let low = Math.max(expired, team.tokens.length - MAX_TOKEN_RECORDS);
+  if (low > dead.length) return null;
+  if (fits(without(low))) return without(low);
+  let high = dead.length;
+  if (!fits(without(high))) return null;
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (fits(without(middle))) high = middle;
+    else low = middle;
+  }
+  return without(high);
 }
 
 /**

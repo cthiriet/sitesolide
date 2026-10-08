@@ -31,6 +31,8 @@ import {
   grantSentence,
   inertNote,
   isPlatform,
+  leavingWarning,
+  unlockLine,
   lowers,
   needsUnlock,
   passwordExpiry,
@@ -111,12 +113,12 @@ describe("general access", () => {
   })
 
   test("read from the snapshot: restricted with its public paths, the code with its link, public otherwise", () => {
-    expect(generalState(site({ portal: { wanted: true, installed: true, exemptions: ["/api/*"] } }))).toEqual({ current: "restricted", problem: null, exemptions: ["/api/*"], code: null })
+    expect(generalState(site({ portal: { wanted: true, installed: true, exemptions: ["/api/*"] } }))).toEqual({ current: "restricted", problem: null, exemptions: ["/api/*"], code: null, requested: true })
     expect(generalState(site({ lock: { closed: true, code: "K7PX3M", url: "https://x.test-zone.invalid/?code=K7PX3M" } }))).toMatchObject({
       current: "code",
       code: { code: "K7PX3M", url: "https://x.test-zone.invalid/?code=K7PX3M" },
     })
-    expect(generalState(site())).toEqual({ current: "public", problem: null, exemptions: [], code: null })
+    expect(generalState(site())).toEqual({ current: "public", problem: null, exemptions: [], code: null, requested: false })
   })
 
   test("a disagreement with sitesolide.json comes first, and says how the server serves the site", () => {
@@ -147,8 +149,10 @@ describe("general access", () => {
     const coded = generalState(site({ lock: { closed: true, code: "K7PX3M", url: null } }))
     expect(generalNote(open, "owner")).toBe("A preview code is set with sitesolide lock, in the project's folder.")
     expect(generalNote(open, "admin")).toBe("Only the owner sets a preview code.")
-    expect(generalNote(coded, "owner")).toBe("Set and replaced with the sitesolide CLI, in the project's folder. Shown here to copy.")
-    expect(generalNote(coded, "admin")).toBe("Only the owner replaces or removes the preview code.")
+    // Once removed, the site opens as sitesolide.json says: said with the way to remove it.
+    expect(generalNote(coded, "owner")).toBe("To make it public or restricted, remove the code first: sitesolide unlock, in the project's folder. It then opens as sitesolide.json says: Public.")
+    expect(generalNote({ ...coded, requested: true }, "owner")).toEndWith("It then opens as sitesolide.json says: Restricted.")
+    expect(generalNote(coded, "admin")).toBe("Only the owner removes the code; ask them, then restrict it here.")
     expect(generalNote(open, "reader")).toBeNull()
   })
 
@@ -192,6 +196,10 @@ describe("general access", () => {
     expect(changeTexts("cms", "restricted")).toMatchObject({ title: "Restrict cms?", action: "Restrict", succeeded: "cms is restricted" })
     expect(changeTexts("cms", "public")).toMatchObject({ title: "Make cms public?", action: "Make public", failure: "Couldn't make cms public" })
     expect(changeTexts("cms", "public").consequence).toBe("People with access keep their dashboard roles; Can open and password access stop mattering.")
+    // What making it public opens is said first, in red; restricting says none.
+    expect(changeTexts("cms", "public").warning).toBe("Anyone with its address can open it without signing in.")
+    expect(changeTexts("cms", "restricted").warning).toBeNull()
+    expect(JSON.stringify([changeTexts("cms", "public"), changeTexts("cms", "restricted")])).not.toContain("Caddy")
     expect(CHANGE_DURATION).toBe("Takes up to a minute. If anything fails, nothing changes.")
     expect(confirmationValid("  cms ", "cms")).toBe(true)
     expect(removalConfirmation("  cms ")).toBe("cms")
@@ -406,13 +414,54 @@ describe("the people with access", () => {
   })
 })
 
+describe("a lowering or a removal that takes someone out of the dashboard", () => {
+  const tokens = [
+    { id: "aaaaaaaaaaaa", label: "alice-ci", madeBy: "them" as const },
+    { id: "bbbbbbbbbbbb", label: "Alice's laptop", madeBy: "owner" as const },
+  ]
+  const owner = { you: { kind: "owner" as const }, leaving: { "chloe@example.com": tokens, "dan@example.com": [] } }
+
+  test("said before it is done, with the tokens it revokes and who made each", () => {
+    expect(leavingWarning("chloe@example.com", "visitor", owner)).toBe(
+      "chloe@example.com will no longer sign in to the dashboard. Also revokes 2 tokens: alice-ci (made by them), Alice's laptop (made by you).",
+    )
+    expect(leavingWarning("chloe@example.com", null, owner)).toStartWith("chloe@example.com will no longer sign in")
+    expect(leavingWarning("dan@example.com", null, owner)).toBe("dan@example.com will no longer sign in to the dashboard.")
+    // An Admin reads the owner's tokens as the owner's.
+    const admin = { ...owner, you: { kind: "person" as const, email: "ann@example.com", role: "admin" as const } }
+    expect(leavingWarning("chloe@example.com", "visitor", admin)).toContain("Alice's laptop (made by the owner)")
+    // Oneself, in the second person.
+    const self = { leaving: { "ann@example.com": [tokens[0]!] }, you: { kind: "person" as const, email: "ann@example.com", role: "admin" as const } }
+    expect(leavingWarning("ann@example.com", null, self)).toBe("You will no longer sign in to the dashboard. Also revokes 1 token: alice-ci (made by you).")
+  })
+
+  test("nothing said when they keep a role above Can open, or the steward names nobody", () => {
+    expect(leavingWarning("chloe@example.com", "viewer", owner)).toBeNull()
+    expect(leavingWarning("bob@example.com", "visitor", owner)).toBeNull()
+    expect(leavingWarning("chloe@example.com", "visitor", { ...owner, leaving: {} })).toBeNull()
+  })
+
+  test("what waits for the unlock, in the button's words", () => {
+    expect(unlockLine("developer", false)).toBe("Giving Developer needs Unlock changes first.")
+    expect(unlockLine("visitor", true)).toBe("Password access needs Unlock changes first.")
+  })
+})
+
 describe("what is sent and shown after a change", () => {
   const where = { slug: "cms", url: "https://cms.test-zone.invalid/", dashboardUrl: "https://dashboard.test-zone.invalid", providerName: "Google" }
 
   test("the line to send: the site for Can open and a domain, the dashboard too for a role; none for password access", () => {
     expect(sendLine({ who: "bob@acme.test", kind: "person", role: "visitor" }, where)).toBe("Open https://cms.test-zone.invalid/ and sign in with your Google account.")
     expect(sendLine({ who: "@acme.test", kind: "domain", role: "visitor" }, where)).toBe("Open https://cms.test-zone.invalid/ and sign in with your Google account.")
-    expect(sendLine({ who: "bob@acme.test", kind: "person", role: "developer" }, where)).toContain("in the dashboard at https://dashboard.test-zone.invalid")
+    expect(sendLine({ who: "bob@acme.test", kind: "person", role: "viewer" }, where)).toBe(
+      "cms is at https://cms.test-zone.invalid/, and in the dashboard at https://dashboard.test-zone.invalid. Sign in with your Google account.",
+    )
+    // Developer and Admin deploy: how, said with the rest.
+    for (const role of ["developer", "admin"] as const) {
+      expect(sendLine({ who: "bob@acme.test", kind: "person", role }, where)).toBe(
+        "cms is at https://cms.test-zone.invalid/, and in the dashboard at https://dashboard.test-zone.invalid. Sign in with your Google account. To deploy, create a token on the Tokens page, then run sitesolide login --url https://dashboard.test-zone.invalid.",
+      )
+    }
     expect(sendLine({ who: "eve@out.test", kind: "password", role: "visitor" }, where)).toBeNull()
     expect(accountWords(null)).toBe("your company account")
     expect(accountWords("your company account")).toBe("your company account")
@@ -420,7 +469,7 @@ describe("what is sent and shown after a change", () => {
 
   test("password access: the address, the password and the expiry, one per line; closing uncopied takes two gestures", () => {
     expect(passwordMessage("https://cms.test-zone.invalid/", "four-word-pass-phrase", Date.UTC(2026, 9, 9, 21, 3), "UTC")).toBe(
-      "https://cms.test-zone.invalid/\nPassword: four-word-pass-phrase\nValid until Oct 9, 21:03",
+      "https://cms.test-zone.invalid/\nPassword: four-word-pass-phrase\nValid until Oct 9, 21:03 UTC",
     )
     expect(passwordMessage("https://cms.test-zone.invalid/", "p", null)).toBe("https://cms.test-zone.invalid/\nPassword: p")
     expect(closeOutcome(false, false)).toBe("warn")

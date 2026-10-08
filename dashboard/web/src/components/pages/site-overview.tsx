@@ -102,7 +102,10 @@ export function OverviewSection({ slug }: { slug: string }) {
                 actions={
                   <>
                     {summary !== null && <span className="text-xs text-muted-foreground">{summary} ·</span>}
-                    <SectionLink slug={slug} section="access" />
+                    {/* Who only reads the people with access sees them there; an Admin, or the owner, manages them. */}
+                    <SectionLink slug={slug} section="access">
+                      {!isPerson(identity) || role === "admin" ? "Manage" : "See"}
+                    </SectionLink>
                   </>
                 }
               />

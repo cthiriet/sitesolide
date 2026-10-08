@@ -592,8 +592,8 @@ describe("the steward's refusals go back out as they are", () => {
 });
 
 describe("steward unreachable or unreadable: 502", () => {
-  const UNREACHABLE = { error: "failure", message: "Can't reach the steward." };
-  const UNREADABLE = { error: "failure", message: "The steward sent an unreadable answer." };
+  const UNREACHABLE = { error: "failure", message: "Can't reach the server's secrets." };
+  const UNREADABLE = { error: "failure", message: "The server sent an unreadable answer." };
 
   const failures: [string, () => never][] = [
     ["rejection", () => { throw new TypeError("fetch failed"); }],
@@ -904,7 +904,7 @@ describe("changing a password", () => {
     for (const leak of leaks) {
       fake.responses.changePassword = leak;
       const parsed = await read(secrets.changePassword(requested("/password", { body: body(), cookie: open.cookie })));
-      expect(parsed).toMatchObject({ status: 502, body: { error: "failure", message: "The steward sent an unreadable answer." } });
+      expect(parsed).toMatchObject({ status: 502, body: { error: "failure", message: "The server sent an unreadable answer." } });
     }
     // In its JSON form too, quote and backslash escaped.
     const special = `pass "wor" d ${String.fromCharCode(92)} of the dashboard`;
@@ -1138,7 +1138,7 @@ describe("localSteward, on a real Unix socket", () => {
     const open = await openSession();
     const parsed = await read(secrets.dashboard(requested("", { method: "GET", cookie: open.cookie })));
     expect(parsed.status).toBe(502);
-    expect(parsed.body).toEqual({ error: "failure", message: "Can't reach the steward." });
+    expect(parsed.body).toEqual({ error: "failure", message: "Can't reach the server's secrets." });
   });
 
   test("end to end: the token goes to the steward and never to the browser", async () => {

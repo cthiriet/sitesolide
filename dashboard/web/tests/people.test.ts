@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createFieldError, createRefusal, domainGroups, expiredAccesses, mayGetCreate, mayRemove, projectRoles, revokedTokensLine } from "../src/lib/people"
+import { createFieldError, createRefusal, domainGroups, expiredAccesses, mayGetCreate, mayRemove, projectRoles, removalSentence, revokedTokensLine } from "../src/lib/people"
 import type { SignIn } from "../src/lib/access"
 
 const NOW = 1_791_000_000_000
@@ -70,5 +70,18 @@ describe("the People page", () => {
     expect(revokedTokensLine(tokens, "alice@acme.test", NOW)).toBe("Also revokes 2 tokens: Alice's laptop (made by you), alice-ci (made by them).")
     expect(revokedTokensLine(tokens, "bob@acme.test", NOW)).toBe("Also revokes 1 token: bob's (made by you).")
     expect(revokedTokensLine(tokens, "carol@acme.test", NOW)).toBeNull()
+  })
+})
+
+describe("removing someone from every project", () => {
+  test("says the create right only when they held it, and the dashboard only when they signed in to it", () => {
+    expect(removalSentence({ roles: { cms: "developer" }, create: true, passwords: [] })).toBe(
+      "They lose every role at their next request, may no longer create projects, and are signed out of the dashboard.",
+    )
+    expect(removalSentence({ roles: { cms: "developer" }, create: false, passwords: [] })).toBe("They lose every role at their next request, and are signed out of the dashboard.")
+    expect(removalSentence({ roles: { cms: "visitor" }, create: false, passwords: [{ slug: "cms", expiresAt: null, expired: false }] })).toBe(
+      "They lose every role and password access at their next request.",
+    )
+    expect(removalSentence(null)).toBe("")
   })
 })

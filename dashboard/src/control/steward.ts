@@ -24,9 +24,23 @@
  * that a role lowered, the create right taken back or a person removed holds
  * from the next request, and a person removed takes every token of theirs
  * with them, whoever made it. A project a person's token creates makes that
- * person its Admin once the installer has succeeded (`settleCreations`), and
- * the token owns its name from its first deployment. The tokens from before
- * every token belonged to someone are made someone's once (`migrateTokens`).
+ * person its Admin once the installer has finished and the machine carries
+ * it, succeeded or failed after serving it (`settleCreations`), and the token
+ * owns its name from its first deployment. The tokens from before every
+ * token belonged to someone are made someone's once (`migrateTokens`).
+ *
+ * **Two queues here**, the tokens' and the creations', in the order
+ * src/people/steward.ts sets for every queue of this steward: the tokens'
+ * may wait on the creations', which may wait on the registry's, never the
+ * other way. So a creation recorded hands back whoever it took out of the
+ * dashboard, seen off (`leave`, then `revokeMember`) once the creations'
+ * turn is over.
+ *
+ * **team.json stays readable.** Revoked and expired tokens are kept 90 days,
+ * then dropped, sooner when room is needed, the oldest first; a token that
+ * created a project is kept, its name is its own. A change that would still
+ * leave the file past what it is read with is refused, and nothing is
+ * written (`pruneTeam`, `save`).
  *
  * **A token's changes of access are judged here**, the token first, then
  * the access rules (src/access/rules.ts), which let a token give Can open
@@ -42,8 +56,10 @@ import { isValidSlug, servicesOf, readManifest as parseManifest } from "../../bo
 import { unitArgument } from "../../borrowed/unit";
 import type { MemberEvent, MemberPrincipal } from "../people/steward";
 import type { AccessRoutes } from "../access/steward";
+import type { LeavingToken } from "../access/protocol";
 import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../people/tokens";
 import { CREATION_MAX_AGE_MS, encodeCreations, MAX_PENDING, readCreations, type PendingCreation } from "./creations";
+import { MAX_CONTROL_FILE_BYTES, type ControlSystem } from "./system";
 import { decideSlug, reservedReason, type SlugDecision } from "./policy";
 import {
   CONTROL_STATUSES,
@@ -62,7 +78,6 @@ import {
   OWNER_HOLDER,
 } from "./protocol";
 import { cleanLine, interrupted, judgeResult } from "./results";
-import type { ControlSystem } from "./system";
 import {
   authenticate,
   createToken,
@@ -70,6 +85,7 @@ import {
   forgetOwnership,
   liveTokensOf,
   migrateTeam,
+  pruneTeam,
   readHolder,
   readTeam,
   readTokenRequest,
@@ -78,6 +94,7 @@ import {
   revokeMemberTokens,
   revokeToken,
   touch,
+  viewOf,
   views,
   type Team,
 } from "./tokens";
@@ -93,8 +110,14 @@ export type MemberAuthority = {
   unlockedUntil: (session: unknown) => Promise<number | null>;
   /** Their rights now; null: they do not sign in; a Response: the registry does not read. */
   rights: (email: string) => Promise<MemberRights | null | Response>;
-  /** They become Admin of what their token created, the installer done, journaled; a Response when it cannot be recorded. */
-  recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | null>;
+  /**
+   * They become Admin of what their token created, the installer done,
+   * journaled; whoever that took out of the dashboard, to see off with
+   * `leave` once no queue is held; a Response when it cannot be recorded.
+   */
+  recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | { leaving: string[] }>;
+  /** Someone who no longer signs in: sessions closed, tokens revoked (`revokeMember`). Never called while a queue of this file is held. */
+  leave: (email: string, actor: string) => Promise<unknown>;
   journal: (event: MemberEvent) => Promise<void>;
   /** A refusal, bounded per minute. */
   journalRefusal: (event: MemberEvent) => Promise<void>;
@@ -139,7 +162,10 @@ type Body = Record<string, unknown>;
  * them out, and the handler of the owner's socket, which only root opens.
  */
 export type ControlHandler = Handler & {
-  revokeMember: (email: string, actor: string) => Promise<number>;
+  /** Every live token of theirs revoked, once judged again; the ones revoked. */
+  revokeMember: (email: string, actor: string) => Promise<LeavingToken[]>;
+  /** A person's live tokens, as a confirmation names them: what their leaving would revoke. */
+  tokensOf: (email: string) => Promise<LeavingToken[]>;
   /** `DELETE /tokens/project`: a project removed from the machine, its token ownership and its people with access forgotten. */
   owner: Handler;
   /** Every token made someone's, once the access registry reads: true once done, false to try again later. */
@@ -255,6 +281,21 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
+   * The registry written, the dead tokens it no longer needs left out first;
+   * a refusal, and nothing written, when even then it would pass what it is
+   * read with: every token on the machine would be refused at the next read.
+   */
+  async function save(next: Team): Promise<Response | null> {
+    const kept = pruneTeam(next, system.now(), MAX_CONTROL_FILE_BYTES);
+    if (kept === null) {
+      console.error("control: team.json would pass what it is read with: nothing written");
+      return failure("invalid", "the token registry is full: revoke the tokens nobody uses, then try again");
+    }
+    await system.writeTeam(encodeTeam(kept));
+    return null;
+  }
+
+  /**
    * The bearer's holder, or the refusal. A person's token is narrowed to
    * their rights as the registry reads now, and refused once they no longer
    * sign in. The last use moves forward at most once an hour.
@@ -286,7 +327,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         const current = await team();
         if (current instanceof Response) return;
         const again = touch(current, result.identity.id, now);
-        if (again !== null) await system.writeTeam(encodeTeam(again));
+        if (again !== null) await save(again);
       }).catch((e) => console.error(`control: last use not written (${errorName(e)})`));
     }
     return holder;
@@ -366,7 +407,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       }
       const created = await createToken(registry, request, system.now(), options.random, member, member !== null);
       if ("refusal" in created) return failure("invalid", created.refusal);
-      await system.writeTeam(encodeTeam(created.team));
+      const refused = await save(created.team);
+      if (refused !== null) return refused;
       if (member !== null) {
         await options.members?.journal({ operation: "token.create", result: "ok", actor: OWNER_HOLDER, member, detail: line(`${created.view.id}: ${scopeText(created.view.scope)}; made by the owner for ${member}`) });
       }
@@ -385,7 +427,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       const result = revokeToken(registry, body.id, system.now());
       if ("refusal" in result) return failure(result.refusal === "no such token" ? "not-found" : "invalid", result.refusal);
       if (result.team !== registry) {
-        await system.writeTeam(encodeTeam(result.team));
+        const refused = await save(result.team);
+        if (refused !== null) return refused;
         console.log(`control: token ${result.view.id} revoked`);
       }
       return Response.json({ token: result.view });
@@ -428,6 +471,9 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     const { identity } = holder;
     const { deployment, slug, manifest } = body;
     if (typeof deployment !== "string" || !DEPLOYMENT_ID_SHAPE.test(deployment)) return failure("invalid", "not a deployment id");
+    // An id is used once: a result already there is another deployment's,
+    // which a creation would otherwise be settled by.
+    if ((await system.readResult(deployment)).kind !== "absent") return failure("invalid", "this deployment id was already used: create a new deployment");
     if (typeof manifest !== "string" || new TextEncoder().encode(manifest).length > MAX_MANIFEST_BYTES) {
       return failure("invalid", "manifest: the text of sitesolide.json, 64 KiB at most");
     }
@@ -457,16 +503,26 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
       if (decision.creating) {
         // The token owns the name from its first deployment; a person
-        // becomes its Admin once the installer has succeeded, noted here so
+        // becomes its Admin once the installer has finished, noted here so
         // that it is settled then, even across a restart of this steward.
         if (identity.member !== null && options.members !== undefined) {
+          // A project created is a change of access, its creator's: bounded
+          // as theirs are, before anything starts.
+          const bounded = (await options.access?.widen(identity.member)) ?? null;
+          if (bounded !== null) {
+            const { message } = (await bounded.json()) as { message: string };
+            return failure(bounded.status === 429 ? "too-many-attempts" : "not-available", message);
+          }
           const noted = await notePending({ deployment, slug: target, email: identity.member, token: identity.id, at: system.now() });
           if (noted !== null) return noted;
         }
         const registry = await team();
         if (registry instanceof Response) return registry;
         const owned = recordOwnership(registry, target, identity.id);
-        if (owned !== null) await system.writeTeam(encodeTeam(owned));
+        if (owned !== null) {
+          const refused = await save(owned);
+          if (refused !== null) return refused;
+        }
       }
 
       const request: InstallRequest = {
@@ -623,7 +679,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       }
       const created = await createToken(registry, request, system.now(), options.random, email);
       if ("refusal" in created) return failure("invalid", created.refusal);
-      await system.writeTeam(encodeTeam(created.team));
+      const refused = await save(created.team);
+      if (refused !== null) return refused;
       await members.journal({ operation: "token.create", result: "ok", actor: email, member: email, detail: line(`${created.view.id}: ${scopeText(created.view.scope)}`) });
       console.log(`control: token ${created.view.id} created by ${email}`);
       const response: CreatedTokenResponse = { token: created.view, secret: created.secret };
@@ -646,7 +703,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       const result = revokeToken(registry, body.id, system.now());
       if ("refusal" in result) return failure("invalid", result.refusal);
       if (result.team !== registry) {
-        await system.writeTeam(encodeTeam(result.team));
+        const refused = await save(result.team);
+        if (refused !== null) return refused;
         await members.journal({ operation: "token.revoke", result: "ok", actor: principal.email, member: principal.email, detail: result.view.id });
         console.log(`control: token ${result.view.id} revoked by ${principal.email}`);
       }
@@ -654,18 +712,39 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     });
   }
 
-  /** Every live token of a person who left, whoever made it, revoked, journaled under whoever took them out. */
-  function revokeMember(email: string, actor: string): Promise<number> {
+  /** A token as a confirmation names it. */
+  const leavingToken = (view: { id: string; label: string; by: string }): LeavingToken => ({ id: view.id, label: view.label, madeBy: view.by === OWNER_HOLDER ? "owner" : "them" });
+
+  async function tokensOf(email: string): Promise<LeavingToken[]> {
+    const registry = await team();
+    if (registry instanceof Response) return [];
+    return liveTokensOf(registry, email, system.now()).map((record) => leavingToken(viewOf(registry, record)));
+  }
+
+  /**
+   * Every live token of a person who left, whoever made it, revoked,
+   * journaled under whoever took them out. Judged again in this queue: given
+   * a role again since they left, they keep their tokens; a registry that
+   * does not read revokes nothing, their tokens being refused meanwhile.
+   */
+  function revokeMember(email: string, actor: string): Promise<LeavingToken[]> {
     return serially(async () => {
+      const rights = members === undefined ? null : await members.rights(email);
+      if (rights instanceof Response) {
+        console.error(`control: the tokens of ${email} not revoked, the access registry does not read; refused meanwhile`);
+        return [];
+      }
+      if (rights !== null) return [];
       const registry = await team();
-      if (registry instanceof Response) return 0;
+      if (registry instanceof Response) return [];
       const result = revokeMemberTokens(registry, email, system.now());
-      if (result.revoked.length === 0) return 0;
-      await system.writeTeam(encodeTeam(result.team));
+      if (result.revoked.length === 0) return [];
+      const refused = await save(result.team);
+      if (refused !== null) return [];
       const ids = result.revoked.map((view) => view.id).join(", ");
       await members?.journal({ operation: "token.revoke", result: "ok", actor, member: email, detail: line(`${ids}: ${email} no longer has a role on this dashboard`) });
       console.log(`control: ${result.revoked.length} token(s) of ${email} revoked, no role left`);
-      return result.revoked.length;
+      return result.revoked.map(leavingToken);
     });
   }
 
@@ -693,7 +772,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       if (registry instanceof Response) return registry;
       const forgotten = forgetOwnership(registry, slug);
       if (forgotten === null) return null;
-      await system.writeTeam(encodeTeam(forgotten.team));
+      const refused = await save(forgotten.team);
+      if (refused !== null) return refused;
       console.log(`control: ${slug} removed, no longer token ${forgotten.id}'s`);
       return forgotten.id;
     });
@@ -750,38 +830,49 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
-   * Every creation whose installer has finished: succeeded, its person made
-   * Admin, in the registry's queue, where their create right is read again;
-   * failed, or too old to be waiting still, dropped. A result not there yet
-   * waits for the next call.
+   * Every creation whose installer has finished, or never will: when the
+   * machine carries the project, succeeded or failed after serving it, its
+   * person made Admin, in the registry's queue, where their create right is
+   * read again; when it does not, the creation undone, dropped. Only a result
+   * started after the creation was noted counts: an earlier one, of a project
+   * of that name removed since, is another deployment's. A result not there
+   * yet waits for the next call. Whoever a creation took out of the
+   * dashboard leaves once this turn is over: see the queues above.
    */
-  function settleCreations(): Promise<void> {
-    return inCreationsTurn(async () => {
+  async function settleCreations(): Promise<void> {
+    const leaving: { email: string; actor: string }[] = [];
+    await inCreationsTurn(async () => {
       const current = await pending();
       if (current instanceof Response || current.length === 0) return;
       const left: PendingCreation[] = [];
       for (const creation of current) {
         const judgement = judgeResult(await system.readResult(creation.deployment), creation.deployment, options.uidRoot);
-        const state = judgement.kind === "read" && judgement.result.slug === creation.slug ? judgement.result.state : null;
-        if (state === "succeeded" && options.members !== undefined) {
-          const recorded = await options.members.recordCreation(creation.slug, creation.email, creation.token);
-          // The registry being made or unreadable: tried again at the next call.
-          if (recorded !== null && recorded.status >= 500) {
-            left.push(creation);
-            continue;
-          }
-          if (recorded !== null) console.log(`control: ${creation.email} not made Admin of ${creation.slug}, refused by the registry`);
+        const result = judgement.kind === "read" && judgement.result.slug === creation.slug && judgement.result.startedAt >= creation.at ? judgement.result : null;
+        const finished = result !== null && result.state !== "running";
+        const abandoned = system.now() - creation.at >= CREATION_MAX_AGE_MS;
+        if (!finished && !abandoned) {
+          left.push(creation);
           continue;
         }
-        if (state === "failed") continue;
-        if (system.now() - creation.at >= CREATION_MAX_AGE_MS) {
-          console.log(`control: the creation of ${creation.slug} by ${creation.email} never finished: dropped, nobody made Admin`);
+        if (!(await system.projectExists(creation.slug)) || options.members === undefined) {
+          console.log(`control: the creation of ${creation.slug} by ${creation.email} ${finished ? "undone" : "never finished"}: dropped, nobody made Admin`);
           continue;
         }
-        left.push(creation);
+        const recorded = await options.members.recordCreation(creation.slug, creation.email, creation.token);
+        // The registry being made or unreadable: tried again at the next call.
+        if (recorded instanceof Response && recorded.status >= 500) {
+          left.push(creation);
+          continue;
+        }
+        if (recorded instanceof Response) {
+          console.log(`control: ${creation.email} not made Admin of ${creation.slug}, refused by the registry`);
+          continue;
+        }
+        for (const email of recorded.leaving) leaving.push({ email, actor: creation.email });
       }
       if (left.length !== current.length) await system.writeCreations(encodeCreations(left));
     });
+    for (const one of leaving) await options.members?.leave(one.email, one.actor);
   }
 
   /**
@@ -805,7 +896,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         people.set(email, rights !== null);
       }
       const migrated = migrateTeam(registry, (email) => people.get(email) === true);
-      await system.writeTeam(encodeTeam(migrated.team));
+      if ((await save(migrated.team)) !== null) return false;
       for (const record of migrated.persons) {
         await members.journal({ operation: "token.create", result: "ok", actor: "system", member: record.member ?? null, detail: line(`${record.id}: now ${record.member}'s, narrowed to their roles; made by the owner before every token belonged to someone`) });
       }
@@ -845,7 +936,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   /** One socket's routes, behind the same bound on requests in flight and the same catch. */
   const serve = (table: Record<string, Record<string, Handler>>): Handler => async (req) => {
     if (inFlight >= maxInFlight) {
-      return Response.json({ error: "failure", message: "the steward is busy, try again in a moment" } satisfies ControlFailure, { status: 503 });
+      return Response.json({ error: "failure", message: "the server is busy, try again in a moment" } satisfies ControlFailure, { status: 503 });
     }
     inFlight++;
     try {
@@ -869,6 +960,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   };
   return Object.assign(serve(routes), {
     revokeMember,
+    tokensOf,
     // `/team/project`: what a CLI from before the rename calls, kept one release.
     owner: serve({ "/tokens/project": { DELETE: forgetProject }, "/team/project": { DELETE: forgetProject } }),
     migrateTokens,

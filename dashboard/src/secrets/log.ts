@@ -68,6 +68,13 @@ export const RESULTS: OperationResult[] = ["ok", "rejects", "failure"];
 /** A slug, a file name, a variable name, a short reason: nothing longer. */
 export const MAX_FIELD = 160;
 
+/**
+ * An actor or the person a line is about: an email may run to 254
+ * characters, and an accepted change for such an address must be kept like
+ * any other, never dropped for its length.
+ */
+export const MAX_WHO = 254;
+
 /** Beyond `MAX_LINES`, the file is rewritten with its last `KEPT_LINES` lines. */
 export const MAX_LINES = 1000;
 export const KEPT_LINES = 500;
@@ -175,8 +182,8 @@ export function underCurrentNames(entry: unknown): unknown {
   return { ...e, operation, result, detail };
 }
 
-const field = (value: unknown): boolean =>
-  value === null || (typeof value === "string" && value.length <= MAX_FIELD && !/[\n\r\0]/.test(value));
+const field = (value: unknown, max = MAX_FIELD): boolean =>
+  value === null || (typeof value === "string" && value.length <= max && !/[\n\r\0]/.test(value));
 
 export function isValidEntry(entry: unknown): entry is LogEntry {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
@@ -189,9 +196,9 @@ export function isValidEntry(entry: unknown): entry is LogEntry {
     OPERATIONS.includes(e.operation as Operation) &&
     RESULTS.includes(e.result as OperationResult) &&
     typeof e.actor === "string" &&
-    e.actor.length <= MAX_FIELD &&
+    e.actor.length <= MAX_WHO &&
     ACTOR.test(e.actor) &&
-    field(e.member) &&
+    field(e.member, MAX_WHO) &&
     (e.member === null || ACTOR.test(e.member as string)) &&
     field(e.slug) &&
     field(e.file) &&
@@ -333,9 +340,11 @@ export function truncate(text: string, max: number = MAX_LINES, kept: number = K
  * the rest.
  *
  * **Never pushed out young.** A row younger than the retention is kept,
- * whatever the count: the steward refuses a change of access once the log
- * holds `ACCESS_MAX_LINES` of them (`isAccessLogFull`), and counts each
- * actor's changes per hour, so that no flood takes away who let whom in.
+ * whatever the count: the steward refuses a change that lets more people in
+ * once the log holds `ACCESS_MAX_LINES` of them (`isAccessLogFull`), and
+ * counts each actor's per hour, so that no flood takes away who let whom in.
+ * What narrows is never refused (src/access/steward.ts): its rows are bounded
+ * by the widening ones before it.
  */
 export const ACCESS_LOG_NAME = "access-log.jsonl";
 
@@ -383,8 +392,11 @@ export const ACCESS_PRUNE_INTERVAL_MS = 3600 * 1000;
 export const ACCESS_PRUNE_BYTES = 12 * 1024 * 1024;
 
 /**
- * What the access log is read with: a third above the size that has it
- * counted full, so that it always reads whole. Its cap fills some 5 MB.
+ * What `GET /log` reads of the access log: its newest 16 MB, a third above
+ * the size that has it counted full. The rows a full log still takes, those
+ * that narrow and the owner's over SSH, may carry it past that: the oldest
+ * are then left out of the page, never out of the file, which is pruned by
+ * age line by line, whatever its size.
  */
 export const ACCESS_READ_BYTES = 16 * 1024 * 1024;
 
@@ -406,19 +418,26 @@ function lineDate(line: string): number | null {
 }
 
 /**
+ * Is this line of the access log one to keep: dated, and not before
+ * `cutoff`? A line that carries no date goes: no reader could read it either.
+ */
+export function isRecentLine(line: string, cutoff: number): boolean {
+  const a = lineDate(line);
+  return a !== null && a >= cutoff;
+}
+
+/**
  * The access log pruned: the lines older than the retention dropped, and
- * those alone, however many younger ones there are. A line that carries no
- * date is dropped too: no reader could read it either. Null when nothing is
- * dropped, so that the file is rewritten only when it changes.
+ * those alone, however many younger ones there are. Null when nothing is
+ * dropped, so that the file is rewritten only when it changes. The steward
+ * prunes the file itself line by line, never whole (src/secrets/system.ts),
+ * with the same rule.
  */
 export function pruneAccessLog(text: string, now: number, retentionMs: number = ACCESS_RETENTION_MS): string | null {
   const lines = text.split("\n");
   if (lines[lines.length - 1] === "") lines.pop();
   const cutoff = now - retentionMs;
-  const recent = lines.filter((line) => {
-    const a = lineDate(line);
-    return a !== null && a >= cutoff;
-  });
+  const recent = lines.filter((line) => isRecentLine(line, cutoff));
   if (recent.length === lines.length) return null;
   return recent.length === 0 ? "" : `${recent.join("\n")}\n`;
 }
@@ -490,26 +509,38 @@ export type HistorySource = {
 };
 
 /**
- * The journal and the access log as one history, parsed once per change of
- * either file and kept, then read one request at a time: a burst of `GET
- * /log`, a compromised dashboard's included, never holds more than one parsed
- * copy of a full access log, and a page asked again costs a `stat` and a
- * slice. `use` runs on the history in turn and must not keep it.
+ * The journal and the access log as one history, each file parsed once per
+ * change of its own and kept, then read one request at a time: a burst of
+ * `GET /log`, a compromised dashboard's included, never holds more than one
+ * parsed copy of a full access log; a line added to the journal, which every
+ * unlock and sign-in writes, parses the journal again and merges, never the
+ * access log; a page asked again costs a `stat` and a slice. `use` runs on
+ * the history in turn and must not keep it.
  */
 export function createHistory(source: HistorySource): { read: <T>(use: (entries: LogEntry[]) => T) => Promise<T> } {
-  let kept: { key: string; entries: LogEntry[] } | null = null;
+  let accessLog: { stamp: string; entries: LogEntry[] | null } | null = null;
+  let journal: { stamp: string; entries: LogEntry[] } | null = null;
+  let merged: { key: string; entries: LogEntry[] } | null = null;
   let turn: Promise<unknown> = Promise.resolve();
 
   async function entries(): Promise<LogEntry[]> {
     const stamps = source.stamps();
-    const key = `${stamps.journal ?? "-"}|${stamps.access ?? "-"}`;
-    if (kept !== null && kept.key === key) return kept.entries;
-    // The old copy let go before the new one is read: never two at once.
-    kept = null;
-    const accessLog = await source.readAccessLog();
-    const merged = mergeLogs(reread(await source.readJournal()), accessLog === null ? null : reread(accessLog));
-    kept = { key, entries: merged };
-    return merged;
+    const accessStamp = stamps.access ?? "-";
+    const journalStamp = stamps.journal ?? "-";
+    const key = `${journalStamp}|${accessStamp}`;
+    if (merged !== null && merged.key === key) return merged.entries;
+    merged = null;
+    if (accessLog === null || accessLog.stamp !== accessStamp) {
+      // The old copy let go before the new one is read: never two at once.
+      accessLog = null;
+      const text = await source.readAccessLog();
+      accessLog = { stamp: accessStamp, entries: text === null ? null : reread(text) };
+    }
+    if (journal === null || journal.stamp !== journalStamp) {
+      journal = { stamp: journalStamp, entries: reread(await source.readJournal()) };
+    }
+    merged = { key, entries: mergeLogs(journal.entries, accessLog.entries) };
+    return merged.entries;
   }
 
   return {

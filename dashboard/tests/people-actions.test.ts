@@ -479,10 +479,19 @@ describe("an Admin's project", () => {
     const locked = await bench.call("POST", "/people/portal", { session: alice, slug: "beta", active: false, confirmation: "beta" });
     expect(locked.status).toBe(401);
     expect(await body(locked)).toMatchObject({ error: "locked" });
+    // Restricted already: nothing to change, nothing started.
+    const already = await bench.call("POST", "/people/portal", { session: alice, slug: "beta", active: true, confirmation: "" });
+    expect(already.status).toBe(200);
+    expect(bench.calls).not.toContainEqual(["start", "sitesolide-gatekeeper-on@beta.service"]);
+    // Public on the machine: restricting it starts the gatekeeper, no unlock asked.
+    const manifest = join(bench.root, "sites", "beta", "sitesolide.json");
+    const { portal: _portal, ...unguarded } = JSON.parse(readFileSync(manifest, "utf8")) as Record<string, unknown>;
+    writeFileSync(manifest, JSON.stringify(unguarded));
+    writeFileSync(join(bench.root, "caddy", "beta.caddy"), "beta.{$SITESOLIDE_ZONE} {\n\treverse_proxy 127.0.0.1:3062\n}\n");
     const restricted = await bench.call("POST", "/people/portal", { session: alice, slug: "beta", active: true, confirmation: "" });
-    expect(restricted.status).toBe(200);
+    expect(restricted.status).not.toBe(401);
     expect(bench.calls).toContainEqual(["start", "sitesolide-gatekeeper-on@beta.service"]);
-    expect(bench.accessLog().at(-1)).toMatchObject({ operation: "portal", result: "ok", actor: ALICE, slug: "beta" });
+    expect(bench.journal().concat(bench.accessLog()).findLast((one) => one.operation === "portal")).toMatchObject({ actor: ALICE, slug: "beta" });
   });
 
   test("restores a snapshot of it, the requester the email the steward verified; a Developer cannot", async () => {

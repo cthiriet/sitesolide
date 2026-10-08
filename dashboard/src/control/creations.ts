@@ -4,12 +4,13 @@
  *
  * **A person becomes Admin of what they created once it exists.** The steward
  * notes the creation when it starts the installer, and records the person as
- * the project's Admin only once the installer's result says it succeeded
- * (src/control/steward.ts, `settleCreations`): a creation refused or undone
- * makes nobody Admin of a name the machine does not carry, and the create
- * right is read again then, in the registry's queue. Kept on disk rather than
- * in memory, so that a steward restarted while an installer ran still
- * settles it.
+ * the project's Admin once the installer has finished and the machine carries
+ * the project (src/control/steward.ts, `settleCreations`): succeeded, or
+ * failed after serving it, a secret missing for instance, which its creator
+ * must be able to deploy again. A creation refused or undone makes nobody
+ * Admin of a name the machine does not carry, and the create right is read
+ * again then, in the registry's queue. Kept on disk rather than in memory, so
+ * that a steward restarted while an installer ran still settles it.
  *
  * Pure: the file comes in as text, goes out as text.
  */
@@ -28,7 +29,7 @@ export type PendingCreation = {
 
 export const CREATIONS_NAME = "creations.json";
 
-/** Past this, an installer that never left a final result has long stopped: the creation is dropped, nobody made Admin. */
+/** Past this, an installer that never left a final result has long stopped: settled by whether the machine carries the project. */
 export const CREATION_MAX_AGE_MS = 24 * 3600 * 1000;
 
 /** A handful run at once at most; a list longer than this is not this steward's. */

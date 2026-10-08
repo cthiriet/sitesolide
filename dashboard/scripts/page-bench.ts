@@ -1134,7 +1134,19 @@ const accessStore = createAccessStore({
 // Made from the fixture above before anything asks, as the steward does at startup.
 await accessStore.start();
 
+/** A person's live tokens, as the steward's control routes name them for a confirmation (src/control/steward.ts, `tokensOf`). */
+function liveTokensOf(email: string): { id: string; label: string; madeBy: "them" | "owner" }[] {
+  return teamTokens
+    .filter((token) => token.member === email && token.revokedAt === null && (token.expiresAt === null || Date.now() < token.expiresAt))
+    .map((token) => ({ id: token.id, label: token.label, madeBy: token.by === "owner" ? ("owner" as const) : ("them" as const) }));
+}
+
 const memberRoutes = createMemberRoutes({
+  revokeTokens: async (email) => {
+    const gone = liveTokensOf(email);
+    for (const token of teamTokens) if (gone.some((one) => one.id === token.id)) token.revokedAt = Date.now();
+    return gone;
+  },
   system: {
     ...createMembersSystem({
       stateFolder: membersState,
@@ -1185,6 +1197,7 @@ const accessRoutes = createAccessRoutes({
   journalRefusal: benchJournal,
   authorize: memberRoutes.authorize,
   leave: memberRoutes.leave,
+  tokensOf: async (email) => liveTokensOf(email),
 });
 
 /**

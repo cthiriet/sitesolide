@@ -2,6 +2,7 @@ import { useState } from "react"
 import { RotateCcw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useData } from "@/components/data"
+import { isPerson } from "@/lib/identity"
 import { ErrorState, Panel, RowsSkeleton, Status } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { SectionLink } from "@/components/site"
@@ -91,7 +92,8 @@ function Content({ project }: { project: ProjectView }) {
  * that declares secrets in its manifest.
  */
 export function SiteSecretsPanel({ slug }: { slug: string }) {
-  const { secrets, snapshot } = useData()
+  const { secrets, snapshot, identity } = useData()
+  const person = isPerson(identity)
   const { projects, problem, reload } = secrets
   const [rereading, setRereading] = useState(false)
   const project = projects?.find((candidate) => candidate.slug === slug) ?? null
@@ -117,12 +119,15 @@ export function SiteSecretsPanel({ slug }: { slug: string }) {
           </div>
         ) : (
           <ErrorState title={problem} onRetry={() => void retry()} inProgress={rereading} compact>
-            {problem === UNREACHABLE && (
-              <>
-                Check <code className="font-mono text-xs whitespace-nowrap">systemctl status sitesolide-steward</code> on
-                the server.
-              </>
-            )}
+            {problem === UNREACHABLE &&
+              (person ? (
+                "If it lasts, tell the owner of the server."
+              ) : (
+                <>
+                  Check <code className="font-mono text-xs whitespace-nowrap">systemctl status sitesolide-steward</code> on
+                  the server.
+                </>
+              ))}
           </ErrorState>
         )}
       </Panel>

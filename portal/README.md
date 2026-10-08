@@ -458,8 +458,10 @@ it in its journal, `access.add`, `access.change` or `access.remove`:
 A domain is Can open only, and only once a provider is configured. A person
 outside the company's domains is Can open only, with password access. Giving
 someone a role above Can open, or password access, asks for the unlock of
-whoever gives it in the dashboard; Can open for a company account or a
-domain, removing someone, lowering them and restricting a site never wait.
+whoever gives it in the dashboard, and so does a whole domain while
+`OIDC_ALLOWED_DOMAINS` is empty; Can open for a company account or one of the
+listed domains, removing someone, lowering them and restricting a site never
+wait.
 [docs/access.md](../docs/access.md#giving-access-to-what-you-deployed) has the
 holder's side.
 
@@ -578,7 +580,7 @@ steward's relay:
 |---|---|
 | `GET /admin/access` | what the portal decides who may open a site from: `{ "reading", "writtenAt" }`, `reading` being `steward` (the projection), `portal` (its own tables, no projection read yet) or `unreadable` (a projection that does not read, or none since the mark), and `writtenAt` the projection's date when it reads one, null otherwise. The steward asks it through its relay, and says it in every access answer |
 | `GET /admin/sharing` | how people sign in: configured or not, the provider's name, the portal's address, the admin emails and allowed domains, never the client secret nor its identifier; and `sites: []`, kept empty for a dashboard from before the registry |
-| `PUT /admin/sharing/:host`, `GET` and `POST /admin/guests`, `DELETE /admin/invites/:id` | `410 moved`: who may open a site is the steward's now. The actor rule below still comes first |
+| `PUT /admin/sharing/:host`, `GET` and `POST /admin/guests`, `DELETE /admin/invites/:id` | `410 moved`, to whoever asks: who may open a site is the steward's now |
 | `GET /admin/audit?limit=&before=` | the audit, most recent first, by pages |
 | `POST /admin/dashboard/flow` | `{ binding, returnTo, chooseAccount, reauth }`: a flow sealed for the dashboard's host, a forced sign-in with `reauth`, and the address to send the browser to; `not-offered` without a provider |
 | `POST /admin/dashboard/redeem` | `{ code, binding }`: the code burnt, and, minted for the dashboard on this binding, an assertion signed for it, the path to come back to, and `reauth` |
@@ -729,11 +731,11 @@ account*, which asks the provider to choose.
 - A compromised dashboard cannot give anyone a role above Can open, password
   access, nor the right to create projects, without the owner's live unlock or
   a person's forced sign-in, which it does not hold. It can give Can open to
-  people who sign in with a company account and to the company's domains,
-  under the owner's name or that of a person whose session passes through it,
-  as it could open a site to them before the registry: only through the
-  steward, which judges the change by its rules and records it. It can take
-  off anyone the owner, or that person, may take off, and restrict their
+  people who sign in with a company account and to the company's listed
+  domains, under the owner's name or that of a person whose session passes
+  through it, as it could open a site to them before the registry: only
+  through the steward, which judges the change by its rules and records it.
+  It can take off anyone the owner, or that person, may take off, and restrict their
   sites, since closing never waits. It never sees a password hash nor an access's
   identifier, the steward handing it views alone; a password it gives, it sees
   once, as the person at the page would. During an unlock it can also make a site Public, retyping the slug

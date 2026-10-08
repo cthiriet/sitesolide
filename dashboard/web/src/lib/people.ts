@@ -77,3 +77,17 @@ export function revokedTokensLine(tokens: readonly Pick<TokenView, "label" | "me
   const named = theirs.map((token) => `${token.label} (made by ${token.by === "owner" ? "you" : "them"})`)
   return `Also revokes ${theirs.length === 1 ? "1 token" : `${theirs.length} tokens`}: ${named.join(", ")}.`
 }
+
+/**
+ * What removing someone from every project takes, said before it is done:
+ * the create right only when they held it, the dashboard only when they
+ * signed in to it, a role above Can open or the create right.
+ */
+export function removalSentence(person: Pick<PersonView, "roles" | "create" | "passwords"> | null): string {
+  if (person === null) return ""
+  const signsIn = person.create || Object.values(person.roles).some((role) => role !== "visitor")
+  const parts = [`They lose every role${person.passwords.length > 0 ? " and password access" : ""} at their next request`]
+  if (person.create) parts.push("may no longer create projects")
+  if (signsIn) parts.push("are signed out of the dashboard")
+  return parts.length === 1 ? `${parts[0]}.` : `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)}.`
+}

@@ -236,7 +236,7 @@ export function createReaders(dependencies: AuditDependencies): Readers {
     async read(after, size) {
       const asked = Math.min(size, PAGE_MAX);
       const answer = await receive(() => backups.readBackupAudit(null, { limit: asked, before: after?.[0] ?? null }));
-      if (answer.kind === "unreachable") return failed("unavailable", "Can't reach the steward.");
+      if (answer.kind === "unreachable") return failed("unavailable", "Can't reach the access service on the server.");
       if (answer.status !== 200) return stewardRefusal(answer, "The steward on this server predates backups. Run sitesolide upgrade.");
       const entries = answer.body?.entries;
       const rows = readRows("backups", entries, "The steward");
@@ -259,7 +259,7 @@ export function createReaders(dependencies: AuditDependencies): Readers {
     async read(after, size) {
       const asked = Math.min(size, PAGE_MAX);
       const answer = await receive(() => steward.readLog(null, { limit: asked, before: after === null ? null : after[0] + 1 }));
-      if (answer.kind === "unreachable") return failed("unavailable", "Can't reach the steward.");
+      if (answer.kind === "unreachable") return failed("unavailable", "Can't reach the access service on the server.");
       if (answer.status !== 200) return stewardRefusal(answer, "The steward on this server predates its log. Run sitesolide upgrade.");
       const entries = answer.body?.entries;
       const rows = readRows("steward", entries, "The steward");

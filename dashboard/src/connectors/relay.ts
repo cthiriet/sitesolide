@@ -115,7 +115,7 @@ export function createConnectorsRoutes(dependencies: ConnectorsDependencies, clo
       if (received.kind !== "received" || received.status < 200 || received.status >= 300) return relay(received);
       const body = received.body;
       if (!isObject(body) || !Array.isArray(body.connectors) || !Array.isArray(body.grants) || typeof body.installed !== "boolean") {
-        return json({ error: "failure", message: "The steward sent an unreadable answer." }, 502);
+        return json({ error: "failure", message: "The server sent an unreadable answer." }, 502);
       }
       const until = tokens.read(open.hash)?.expiresAt ?? null;
       return json({ ...(body as Omit<DashboardConnectorsResponse, "until">), until } satisfies DashboardConnectorsResponse);

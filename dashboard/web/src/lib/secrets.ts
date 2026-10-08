@@ -35,10 +35,10 @@ export const LOG_MAX = 20
 /** A generated token: 32 bytes, that is 256 bits, 43 characters in base64url. */
 export const TOKEN_BYTES = 32
 
-/** Like "Can't reach the dashboard." and "Can't reach the portal.": what did not answer. */
-export const UNREACHABLE = "Can't reach the steward."
+/** Like "Can't reach the dashboard." and "Can't reach the portal.": what did not answer, in a person's words. */
+export const UNREACHABLE = "Can't reach the server's secrets."
 
-export const BUSY = "The steward is busy. Try again in a moment."
+export const BUSY = "The server is busy. Try again in a moment."
 
 export const PENDING_LABEL = "Restart pending"
 

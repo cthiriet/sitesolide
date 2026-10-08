@@ -75,9 +75,9 @@ export function createTeamRoutes(dependencies: TeamDependencies, clock: () => nu
   }
 
   function relayRefusal(reached: Awaited<ReturnType<typeof reach>>): Response {
-    if (reached.kind === "unreachable") return error(502, "failure", "Can't reach the steward.");
+    if (reached.kind === "unreachable") return error(502, "failure", "Can't reach the token service on the server.");
     if (reached.kind === "unavailable") return error(503, "not-available", NOT_AVAILABLE_REASON);
-    if (reached.kind === "unreadable") return error(502, "failure", "The steward sent an unreadable answer.");
+    if (reached.kind === "unreadable") return error(502, "failure", "The server sent an unreadable answer.");
     return json({ error: reached.body.error, message: reached.body.message }, reached.status);
   }
 
@@ -94,7 +94,7 @@ export function createTeamRoutes(dependencies: TeamDependencies, clock: () => nu
         return json({ available: false, reason: NOT_AVAILABLE_REASON, member: null, tokens: [], until, deployments, audit } satisfies TeamPageResponse);
       }
       if (reached.kind !== "received" || reached.status !== 200) return relayRefusal(reached);
-      if (!Array.isArray(reached.body.tokens)) return error(502, "failure", "The steward sent an unreadable answer.");
+      if (!Array.isArray(reached.body.tokens)) return error(502, "failure", "The server sent an unreadable answer.");
       return json({ available: true, reason: null, member: null, tokens: reached.body.tokens as TokenView[], until, deployments, audit } satisfies TeamPageResponse);
     },
 

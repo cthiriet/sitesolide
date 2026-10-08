@@ -4,10 +4,10 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readProjection } from "../borrowed/access";
-import { migrate, readMembersFile, slugOfHost, WITHOUT_PORTAL, type InviteRow, type SharingRow } from "../src/access/migrate";
-import { readRegistry, type Registry } from "../src/access/registry";
+import { MAX_SET_ASIDE, migrate, readMembersFile, slugOfHost, WITHOUT_PORTAL, type InviteRow, type SharingRow } from "../src/access/migrate";
+import { encodeRegistry, readRegistry, readsBack, projectionOf, type Registry } from "../src/access/registry";
 import { createAccessStore, MIGRATING, MIGRATION_RETRY_MS, type AccessEvent } from "../src/access/steward";
-import { createAccessSystem, EXPECTED_TABLES, MAX_SHARING_ROWS, normalizedSql, readCopy } from "../src/access/system";
+import { createAccessSystem, EXPECTED_TABLES, MAX_SHARING_ROWS, MAX_TABLE_BYTES, normalizedSql, readCopy } from "../src/access/system";
 
 /**
  * The registry made once from the stores before it, `members.json` and the
@@ -129,6 +129,20 @@ describe("the portal's password access", () => {
     const { registry } = migrate([], { sharing: [], invites: [{ ...invite("AAAAAAAAAAAAAAA1", "blog", "x@example.org", 1), hote: "blog.elsewhere.test" }, { ...invite("short", "blog", "y@example.org", 2) }] }, ZONE, NOW);
     expect(registry.projects).toEqual({});
     expect(registry.migration!.setAside).toHaveLength(2);
+  });
+
+  test("the record lists what was set aside up to its bound, then says how many more: the registry always reads back", () => {
+    const invites = Array.from({ length: MAX_SET_ASIDE + 100 }, (_, n) => ({ ...invite(`A${String(n).padStart(15, "0")}`, "blog", `p${n}@example.org`, n), hote: "blog.elsewhere.test" }));
+    const { registry, report } = migrate([], { sharing: [], invites }, ZONE, NOW);
+    expect(report.setAside).toBe(MAX_SET_ASIDE + 100);
+    expect(registry.migration!.setAside).toHaveLength(MAX_SET_ASIDE);
+    const last = registry.migration!.setAside.at(-1)!;
+    expect([last.slug, last.who]).toEqual([null, "101 more"]);
+    expect(last.reason).toContain("101 more set aside");
+    expect(readsBack(registry, projectionOf(registry, (slug) => `${slug}.${ZONE}`, NOW))).toBeNull();
+    // Without the portal's database, the record still says so, last.
+    const without = migrate([], { sharing: [], invites }, ZONE, NOW, { withoutPortal: true });
+    expect(without.registry.migration!.setAside.at(-1)).toEqual(WITHOUT_PORTAL);
   });
 
   test("a host names its slug under the zone, and nothing else", () => {
@@ -316,6 +330,20 @@ describe("the migration on the machine's files", () => {
     expect(again.status).toBe(409);
   });
 
+  test("carried over without the portal's database while the attempts wait their ten minutes: they end at once, and what waits on them goes on", async () => {
+    const paths = tree();
+    writeFileSync(join(paths.state, "members.json"), JSON.stringify({ members: [member("ann@acme.test", { blog: "admin" })] }));
+    writeFileSync(join(paths.data, "portal.db"), "not a database");
+    // Waits that never end by themselves: only being woken ends them.
+    const access = store(paths, [], () => new Promise(() => {}));
+    let started = false;
+    const attempts = access.start().then(() => void (started = true));
+    await Bun.sleep(50);
+    expect(started).toBe(false);
+    expect((await access.migrateWithoutPortal()).status).toBe(200);
+    expect(await Promise.race([attempts.then(() => "done"), Bun.sleep(2000).then(() => "still waiting")])).toBe("done");
+  });
+
   test("its answers name errors, never a path", async () => {
     const paths = tree();
     writeFileSync(join(paths.state, "members.json"), JSON.stringify({ members: [member("ann@acme.test", { blog: "admin" })] }));
@@ -392,6 +420,13 @@ describe("a portal database the portal's account could have written", () => {
       if (values.length > 0) rows.push(`INSERT INTO sharing VALUES ${values.join(", ")}`);
     }
     expect(readCopy(hostile("many", [SHARING, ...rows]))).toEqual({ reason: "too-many-rows" });
+  });
+
+  test("rows each within their bounds, but more bytes together than a migration may hold: measured, never read, refused", () => {
+    const value = `'[' || printf('%.*c', 250000, 'x') || ']'`;
+    const count = Math.ceil(MAX_TABLE_BYTES / 250_000) + 1;
+    const rows = Array.from({ length: count }, (_, i) => `INSERT INTO sharing VALUES ('h${i}.test', 'people', ${value}, '[]', 1)`);
+    expect(readCopy(hostile("heavy", [SHARING, ...rows]))).toEqual({ reason: "oversized-table" });
   });
 
   test("a file that is no database is a reason by name, never a message", () => {

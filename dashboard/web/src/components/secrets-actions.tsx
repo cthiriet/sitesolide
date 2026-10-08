@@ -45,10 +45,13 @@ import { isPerson, reauthUrl, unlockFailure } from "@/lib/identity"
  * replace a file, change a password, restart, make a site public or
  * restricted.
  *
- * Everything that writes goes through the steward, which judges. A 423 locks
- * and asks for the password without replaying the action, a 401 hands over to
- * the sign-in, an unreachable steward raises the page's banner, a busy steward
- * is reported where the action took place.
+ * Everything that writes goes through the steward, which judges. An action
+ * asked while locked opens the unlock, then carries on once unlocked here;
+ * a person's unlock leaves for their provider and comes back to the page,
+ * where what they were doing may be kept (`beforeLeave`). A 423 locks and
+ * asks for the password without replaying the action, a 401 hands over to
+ * the sign-in, an unreachable steward raises the page's banner, a busy
+ * steward is reported where the action took place.
  */
 
 export type FileTarget = { slug: string; file: string }
@@ -78,7 +81,12 @@ export type SecretsActions = {
   /** The last successful change of this site's general access, which the repository has to follow. */
   /** The header's lock button, where focus returns after a forced lock. */
   lockButtonRef: (element: HTMLButtonElement | null) => void
-  unlock: () => void
+  /**
+   * The unlock, asked for. `then` runs once unlocked on this page, the
+   * owner's; a person leaves for their provider instead, `beforeLeave` run
+   * just before, to keep what they were doing for when they come back.
+   */
+  unlock: (options?: { then?: () => void; beforeLeave?: () => void }) => void
   lock: () => void
   read: (target: VariableTarget) => Promise<ReadResult>
   readContent: (target: FileTarget) => Promise<ReadResult>
@@ -166,6 +174,18 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
 
   /** The element an action starts from, where focus returns when its dialog closes. */
   const origin = useRef<HTMLElement | null>(null)
+  /** What asked for the unlock, carried on once unlocked; dropped when the unlock is cancelled. */
+  const afterUnlock = useRef<{ then: (() => void) | null; beforeLeave: (() => void) | null }>({ then: null, beforeLeave: null })
+
+  function askUnlock(then: (() => void) | null = null, beforeLeave: (() => void) | null = null) {
+    afterUnlock.current = { then, beforeLeave }
+    setUnlockOpen(true)
+  }
+
+  function cancelUnlock() {
+    afterUnlock.current = { then: null, beforeLeave: null }
+    setUnlockOpen(false)
+  }
   /**
    * The lock buttons: the page header renders its actions twice, for the
    * computer and for the phone, and only one of the two is displayed.
@@ -263,7 +283,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
         unlockShown.current = true
         closeDialogs()
         setUnlockedUntil(null)
-        setUnlockOpen(true)
+        askUnlock()
         // The steward answered: an unreachable banner is left over from a previous read.
         void reload()
         return null
@@ -279,7 +299,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   /** An action that requires the token: locked, the page asks for the password first, without replaying the action. */
   function require(action: () => void) {
     rememberOrigin()
-    if (!state.open) return setUnlockOpen(true)
+    if (!state.open) return askUnlock(action)
     action()
   }
 
@@ -294,6 +314,10 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     setUnlockOpen(false)
     setLockError("")
     announce(`Secrets ${unlockStatus(until, Date.now(), offset).label.toLowerCase()}`)
+    const { then } = afterUnlock.current
+    afterUnlock.current = { then: null, beforeLeave: null }
+    // What asked for the unlock carries on: its dialog, or its change.
+    if (then !== null) return then()
     afterAction()
   }
 
@@ -582,9 +606,9 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     creation,
     errors: fileErrors,
     lockButtonRef,
-    unlock: () => {
+    unlock: (options) => {
       rememberOrigin()
-      setUnlockOpen(true)
+      askUnlock(options?.then ?? null, options?.beforeLeave ?? null)
     },
     lock: () => void lock(),
     read,
@@ -613,13 +637,14 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
           open={unlockOpen}
           providerName={sso.providerName}
           href={reauthUrl(window.location.pathname, window.location.search)}
-          onClose={() => setUnlockOpen(false)}
+          onLeave={() => afterUnlock.current.beforeLeave?.()}
+          onClose={cancelUnlock}
           focusReturn={returnFocus}
         />
       ) : (
         <UnlockDialog
           open={unlockOpen}
-          onClose={() => setUnlockOpen(false)}
+          onClose={cancelUnlock}
           onUnlocked={unlocked}
           onRefusal={onRefusal}
           focusReturn={returnFocus}

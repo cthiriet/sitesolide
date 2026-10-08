@@ -87,22 +87,22 @@ describe("a site's door", () => {
     expect(siteAccess(site({ portal: portal(true, false), lock: lock(true, "K7PM4Q") }))).toEqual({
       kind: "mismatch",
       key: "portal-absent",
-      label: "Restricted, not applied: open to anyone",
+      label: "Restricted in sitesolide.json, public on the server",
     })
   })
 
   test("every disagreement has its key and its label", () => {
     expect(siteAccess(site({ portal: portal(false, true) }))).toMatchObject({
       key: "portal-extra",
-      label: "Restricted, not requested",
+      label: "Restricted on the server, public in sitesolide.json",
     })
     expect(siteAccess(site({ lock: lock(false, "K7PM4Q") }))).toMatchObject({
       key: "code-without-lock",
-      label: "Code, not requested",
+      label: "A code on the server, none in sitesolide.json",
     })
     expect(siteAccess(site({ lock: lock(true, null) }))).toMatchObject({
       key: "lock-without-code",
-      label: "Code requested, none in effect",
+      label: "A code in sitesolide.json, none on the server",
     })
   })
 })

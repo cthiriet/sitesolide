@@ -12,7 +12,7 @@ import { CreateTokenDialog, RevokeTokenDialog } from "@/components/token-dialogs
 import { readPeople, readTokens, revokeToken } from "@/lib/api"
 import { isPerson } from "@/lib/identity"
 import { ago, dateTime } from "@/lib/format"
-import { auditLine, deploymentLabel, deploymentTone, isLive, liveReach, madeByLine, scopeSummary, tokenHolders, tokenStatus } from "@/lib/tokens"
+import { auditLine, deploymentLabel, deploymentTone, isLive, liveReach, madeByLine, scopeLines, tokenHolders, tokenStatus } from "@/lib/tokens"
 import type { AccessRole, Roles, TeamPageResponse, TokenView } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -45,19 +45,19 @@ function TokenRow({
   token,
   now,
   mine,
-  roles,
+  rights,
   onRevoke,
 }: {
   token: TokenView
   now: number
   mine: boolean
-  /** The roles of the person the token belongs to, as they are now; null when not known. */
-  roles: Readonly<Record<string, AccessRole>> | null
+  /** The rights of the person the token belongs to, as they are now; null when not known. */
+  rights: { roles: Readonly<Record<string, AccessRole>>; create: boolean } | null
   onRevoke: (token: TokenView) => void
 }) {
   const status = tokenStatus(token, now)
-  const reach = liveReach(token, roles)
-  const scope = scopeSummary(token.scope)
+  const reach = liveReach(token, rights?.roles ?? null)
+  const scope = scopeLines(token, rights)
   const live = isLive(token, now)
   return (
     <li className="flex flex-wrap items-start gap-x-4 gap-y-2 px-4 py-3">
@@ -69,7 +69,16 @@ function TokenRow({
         <p className="text-xs text-muted-foreground wrap-break-word">
           <Who value={madeByLine(token, mine ? "person" : "owner")} />
         </p>
-        {scope.length > 0 && <p className="text-xs text-muted-foreground">{scope.join(" · ")}</p>}
+        {scope.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {scope.map(({ text, paused }, index) => (
+              <span key={text}>
+                {index > 0 && " · "}
+                <span className={cn(paused ? "text-muted-foreground" : "text-foreground")}>{text}</span>
+              </span>
+            ))}
+          </p>
+        )}
         <p className="text-xs text-muted-foreground">
           {reach.length === 0
             ? "No project yet."
@@ -104,8 +113,8 @@ export function TokensPage() {
   const serverNow = now + offset
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" })
   const [holders, setHolders] = useState<{ email: string; roles: Roles; create: boolean }[]>([])
-  // Every person's roles now, for the owner: where each person's token deploys today.
-  const [people, setPeople] = useState<ReadonlyMap<string, Readonly<Record<string, AccessRole>>>>(new Map())
+  // Every person's rights now, for the owner: where each person's token deploys today, and what it may still do.
+  const [people, setPeople] = useState<ReadonlyMap<string, { roles: Readonly<Record<string, AccessRole>>; create: boolean }>>(new Map())
   const [creating, setCreating] = useState<{ open: boolean; opening: number }>({ open: false, opening: 0 })
   const [revoking, setRevoking] = useState<{ token: TokenView | null; open: boolean; inProgress: boolean; error: string }>({
     token: null,
@@ -120,7 +129,7 @@ export function TokensPage() {
     if (status === 401) return sessionExpired()
     if (status !== 200 || body === null || !Array.isArray(body.people)) return
     setHolders(tokenHolders(body.people))
-    setPeople(new Map(body.people.map((one) => [one.who, one.roles])))
+    setPeople(new Map(body.people.map((one) => [one.who, { roles: one.roles, create: one.create }])))
   }, [sessionExpired])
 
   const reload = useCallback(async () => {
@@ -167,8 +176,8 @@ export function TokensPage() {
   const knownSlugs = snapshot?.sites.map((site) => site.slug) ?? []
   const list = loaded.state === "ready" ? loaded.list : null
   const person = list?.member ?? null
-  const rolesOf = (token: TokenView): Readonly<Record<string, AccessRole>> | null =>
-    token.member === null ? null : person !== null ? person.roles : (people.get(token.member) ?? null)
+  const rightsOf = (token: TokenView): { roles: Readonly<Record<string, AccessRole>>; create: boolean } | null =>
+    token.member === null ? null : person !== null ? { roles: person.roles, create: person.create } : (people.get(token.member) ?? null)
 
   return (
     <>
@@ -217,7 +226,7 @@ export function TokensPage() {
                     token={token}
                     now={serverNow}
                     mine={person !== null}
-                    roles={rolesOf(token)}
+                    rights={rightsOf(token)}
                     onRevoke={(chosen) => setRevoking({ token: chosen, open: true, inProgress: false, error: "" })}
                   />
                 ))}

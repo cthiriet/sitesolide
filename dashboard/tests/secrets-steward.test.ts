@@ -44,7 +44,7 @@ import {
   type StewardOptions,
 } from "../src/secrets/steward";
 import { createSystem, isTemporary, readAccount, readGroup, type Command, type SystemConfig, type System } from "../src/secrets/system";
-import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_RETENTION_MS, encodeEntry, reread } from "../src/secrets/log";
+import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_READ_BYTES, ACCESS_RETENTION_MS, encodeEntry, reread } from "../src/secrets/log";
 
 /**
  * The steward set up on a throwaway tree: real files, real atomic writes, but a
@@ -471,7 +471,7 @@ describe("what a compromised dashboard can send is bounded", () => {
 
     const refused = await bench.call("GET", "/projects");
     expect(refused.status).toBe(503);
-    expect(await errorOf(refused)).toEqual({ error: "failure", message: "the steward is busy, try again in a moment" });
+    expect(await errorOf(refused)).toEqual({ error: "failure", message: "the server is busy, try again in a moment" });
 
     for (const { close } of lents) close();
     expect((await Promise.all(inProgress)).every((response) => response.status === 400)).toBe(true);
@@ -2095,10 +2095,9 @@ describe("POST /portal", () => {
     expect(accessLogOf(bench).at(-1)).toMatchObject({ operation: "portal", result: "ok", actor: "owner", detail: "on, ok" });
     const opened = await bench.call("POST", "/portal", { slug: "cms", active: false, confirmation: "cms" });
     expect(opened.status).toBe(401);
-    expect(bench.systemctlCalls.filter((call) => call[0] === "start")).toEqual([
-      ["start", "sitesolide-gatekeeper-on@cms.service"],
-      ["start", "sitesolide-gatekeeper-on@cms.service"],
-    ]);
+    // Restricted already the second time: nothing started again, nothing logged again.
+    expect(bench.systemctlCalls.filter((call) => call[0] === "start")).toEqual([["start", "sitesolide-gatekeeper-on@cms.service"]]);
+    expect(accessLogOf(bench).filter((one) => one.operation === "portal")).toHaveLength(1);
   });
 
   test("removing requires the site's name retyped: without it, 400 and nothing is started", async () => {
@@ -2875,6 +2874,40 @@ describe("the real system", () => {
       expect(await system.accessLogFull(NOW)).toBe(true);
       // Once 180 days have passed for them, they age out and room comes back.
       expect(await system.accessLogFull(NOW + ACCESS_RETENTION_MS + 2 * DAY)).toBe(false);
+    });
+
+    test("past what is ever read at once, it is still pruned by age, line by line, and GET /log reads its newest part", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "state"));
+      // A flood a day old, pushed past the read bound by rows nothing refuses,
+      // then one recent row at the end.
+      const old = line(NOW - DAY, { operation: "portal", detail: "on, ok" });
+      const flood = old.repeat(Math.ceil((ACCESS_READ_BYTES + 1024 * 1024) / old.length));
+      writeFileSync(accessLog(root), flood + line(NOW, { detail: "the newest" }), { mode: 0o600 });
+      writeFileSync(join(root, "state", "journal.jsonl"), "", { mode: 0o600 });
+      const system = systemOn(root);
+      await system.prepareAccessLog(NOW);
+      expect(statSync(accessLog(root)).size).toBeGreaterThan(ACCESS_READ_BYTES);
+      expect(await system.accessLogFull(NOW)).toBe(true);
+      // Its newest 16 MB, from a whole line: the latest change is there.
+      const read = (await system.readAccessLog())!;
+      expect(read.length).toBeLessThanOrEqual(ACCESS_READ_BYTES);
+      expect(read.startsWith("{")).toBe(true);
+      expect(reread(read).at(-1)?.detail).toBe("the newest");
+      // 200 days later every flooded row is past its 180 days: pruned, room again.
+      const later = NOW + 200 * DAY;
+      await system.appendAccessLog(line(later, { detail: "much later" }), later);
+      expect(details(root)).toEqual(["much later"]);
+      expect(await system.accessLogFull(later)).toBe(false);
+      expect(readdirSync(join(root, "state")).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    });
+
+    test("a line longer than any a log writes, or one without a date, is dropped by the pruning", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "state"));
+      writeFileSync(accessLog(root), `${"y".repeat(200_000)}\nnot json\n${line(NOW - DAY, { detail: "kept" })}${line(NOW - ACCESS_RETENTION_MS - 1, { detail: "old" })}`, { mode: 0o600 });
+      await systemOn(root).prepareAccessLog(NOW);
+      expect(readFileSync(accessLog(root), "utf8")).toBe(line(NOW - DAY, { detail: "kept" }));
     });
 
     test("counted as it grows: below its cap, it has room; at it, it is full", async () => {

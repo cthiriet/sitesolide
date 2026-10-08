@@ -11,7 +11,7 @@ import type { AccessSteward } from "../src/access/client";
 import { createTokens } from "../src/secrets/tokens";
 import { createAccessSystem } from "../src/access/system";
 import { encodeRegistry, EMPTY_REGISTRY, putEntry, readRegistry, setCreate, type Registry } from "../src/access/registry";
-import type { SignInSettings } from "../src/access/protocol";
+import type { LeavingToken, SignInSettings } from "../src/access/protocol";
 
 /**
  * The steward's access routes on a throwaway tree: the owner over SSH and in
@@ -49,7 +49,10 @@ function seed(entries: [string, string, "visitor" | "viewer" | "developer" | "ad
 }
 
 /** The routes over a temp tree; the people's sessions are a table of the test's. */
-function bench(registry: Registry, options: { signIn?: SignInSettings; sessions?: Session[]; zone?: string; full?: () => boolean; changesPerHour?: number; ownerChangesPerHour?: number; clock?: { value: number } } = {}) {
+function bench(
+  registry: Registry,
+  options: { signIn?: SignInSettings; sessions?: Session[]; zone?: string; full?: () => boolean; changesPerHour?: number; ownerChangesPerHour?: number; clock?: { value: number }; tokens?: Record<string, LeavingToken[]> } = {},
+) {
   const root = mkdtempSync(join(tmpdir(), "access-steward-"));
   folders.push(root);
   const state = join(root, "state");
@@ -59,6 +62,7 @@ function bench(registry: Registry, options: { signIn?: SignInSettings; sessions?
   writeFileSync(join(state, "access.json"), encodeRegistry(registry), { mode: 0o600 });
   const events: AccessEvent[] = [];
   const left: { email: string; actor: string }[] = [];
+  const tokens = options.tokens ?? {};
   const sessions = options.sessions ?? [];
   const zone = options.zone ?? ZONE;
   const system = createAccessSystem({ stateFolder: state, portalKeyFolder: key, groupsFile: "/etc/group", portalGroup: "", portalDataFolder: join(root, "no-portal") }, false);
@@ -94,7 +98,11 @@ function bench(registry: Registry, options: { signIn?: SignInSettings; sessions?
       const principal: MemberPrincipal = { email: found.email, roles: {}, create: false, session: found.session };
       return principal;
     },
-    leave: async (email, actor) => void left.push({ email, actor }),
+    leave: async (email, actor) => {
+      left.push({ email, actor });
+      return tokens[email] ?? [];
+    },
+    tokensOf: async (email) => tokens[email] ?? [],
     drawPassword: () => `Pass-word-${++drawn}-xxxx`,
     drawId: () => `id${String(drawn).padStart(14, "0")}`,
   });
@@ -261,11 +269,11 @@ describe("an Admin, through their session", () => {
   ];
   const registry = () => seed([["blog", "ann@acme.test", "admin"], ["blog", "dev@acme.test", "developer"], ["shop", "ann@acme.test", "viewer"]]);
 
-  test("reads its project's people from Viewer up, never the admin emails; Can open, or no role there, is refused", async () => {
+  test("reads its project's people from Viewer up, and the admin emails, who open it too; Can open, or no role there, is refused", async () => {
     const { call } = bench(seed([["blog", "ann@acme.test", "admin"], ["blog", "dev@acme.test", "developer"], ["shop", "ann@acme.test", "viewer"], ["shop", "dev@acme.test", "visitor"]]), { sessions });
     const asAdmin = await call("dashboard", "POST", "/access/person/list", { session: "s-admin", slug: "blog" });
     expect(asAdmin.status).toBe(200);
-    expect(await json(asAdmin)).toMatchObject({ signIn: { admins: [] } });
+    expect(await json(asAdmin)).toMatchObject({ signIn: { admins: ["boss@elsewhere.test"] } });
     expect((await call("dashboard", "POST", "/access/person/list", { session: "s-dev", slug: "blog" })).status).toBe(200);
     expect((await call("dashboard", "POST", "/access/person/list", { session: "s-admin", slug: "shop" })).status).toBe(200);
     expect((await call("dashboard", "POST", "/access/person/list", { session: "s-dev", slug: "shop" })).status).toBe(403);
@@ -470,6 +478,38 @@ describe("nothing is written that would not read back", () => {
     expect(saved().projects).toEqual({});
   });
 
+  test("a change that would take the registry past the 8 MB it is read with is refused, nothing written", async () => {
+    // A registry just under its bound, written by hand: entries of the longest kind on many projects.
+    let registry: Registry = { ...EMPTY_REGISTRY, migration: { at: 1, from: [], setAside: [] } };
+    const projects: Registry["projects"] = {};
+    for (let p = 0; p < 40; p++) {
+      projects[`p${p}`] = Array.from({ length: 600 }, (_, i) => ({ who: `${String(i).padStart(4, "0")}${"q".repeat(56)}@${"d".repeat(60)}.${"e".repeat(60)}.${"f".repeat(60)}.example`, role: "visitor" as const, by: "owner", createdAt: 1, updatedAt: 1 }));
+    }
+    const limit = 8 * 1024 * 1024;
+    let names = Object.keys(projects);
+    for (;;) {
+      registry = { ...registry, projects: Object.fromEntries(names.map((name) => [name, projects[name]!])) };
+      if (Buffer.byteLength(encodeRegistry(registry)) <= limit) break;
+      names = names.slice(0, -1);
+    }
+    // Topped up entry by entry until one more of the same would not fit.
+    const spare = [...(projects[`p${names.length}`] ?? [])];
+    while (spare.length > 0) {
+      const next = { ...registry, projects: { ...registry.projects, extra: [...(registry.projects.extra ?? []), spare[0]!] } };
+      if (Buffer.byteLength(encodeRegistry(next)) > limit - 200) break;
+      registry = next;
+      spare.shift();
+    }
+    const { call, saved } = bench(registry);
+    const before = JSON.stringify(saved());
+    const response = await call("owner", "PUT", "/access/entry", { slug: "blog", who: addressOf(254), role: "visitor" });
+    expect(response.status).toBe(400);
+    expect(await json(response)).toMatchObject({ error: "invalid", message: expect.stringContaining("could not read back") });
+    expect(JSON.stringify(saved())).toBe(before);
+    // And the steward still reads its registry.
+    expect((await call("owner", "GET", "/access?slug=blog")).status).toBe(200);
+  });
+
   test("a change whose projection the portal could not read is refused before anything is written", async () => {
     // A zone so long that a site's address outgrows a host name.
     const zone = `${"z".repeat(60)}.${"y".repeat(60)}.${"x".repeat(60)}.${"w".repeat(60)}.invalid`;
@@ -509,26 +549,82 @@ describe("the projection repairs itself", () => {
   });
 });
 
+describe("who would leave the dashboard, said before and after", () => {
+  const laptop: LeavingToken = { id: "aaaaaaaaaaaa", label: "dev's laptop", madeBy: "them" };
+  const ci: LeavingToken = { id: "bbbbbbbbbbbb", label: "ci", madeBy: "owner" };
+  const people = () =>
+    seed(
+      [["blog", "dev@acme.test", "developer"], ["blog", "two@acme.test", "viewer"], ["shop", "two@acme.test", "admin"], ["blog", "see@acme.test", "viewer"], ["blog", "out@acme.test", "visitor"], ["blog", "ann@acme.test", "admin"], ["blog", "red@acme.test", "viewer"]],
+      ["see@acme.test", "maker@acme.test"],
+    );
+
+  test("the list names whom removing or lowering to Can open takes out, and their tokens, to those who may change it alone", async () => {
+    const sessions: Session[] = [{ session: "s-admin", email: "ann@acme.test", unlock: null }, { session: "s-red", email: "red@acme.test", unlock: null }];
+    const { call } = bench(people(), { sessions, tokens: { "dev@acme.test": [laptop, ci] } });
+    const owner = await json(await call("owner", "GET", "/access?slug=blog"));
+    // two keeps shop, see the create right, out holds Can open alone.
+    expect(owner.leaving).toEqual({ "dev@acme.test": [laptop, ci], "ann@acme.test": [], "red@acme.test": [] });
+    const admin = await json(await call("dashboard", "POST", "/access/person/list", { session: "s-admin", slug: "blog" }));
+    expect(admin.leaving).toEqual(owner.leaving);
+    const viewer = await json(await call("dashboard", "POST", "/access/person/list", { session: "s-red", slug: "blog" }));
+    expect(viewer.leaving).toEqual({});
+  });
+
+  test("the answer to a removal, or a lowering to Can open, says who left and which tokens went with them", async () => {
+    const { call } = bench(people(), { tokens: { "dev@acme.test": [laptop, ci] } });
+    const lowered = await json(await call("owner", "PUT", "/access/entry", { slug: "blog", who: "dev@acme.test", role: "visitor" }));
+    expect(lowered.left).toEqual({ who: "dev@acme.test", tokens: [laptop, ci] });
+    const removed = await json(await call("owner", "DELETE", "/access/entry", { slug: "blog", who: "two@acme.test" }));
+    expect(removed.left).toBeUndefined();
+    // see keeps Viewer on blog; maker had the right alone.
+    expect((await json(await call("owner", "PUT", "/people/person", { email: "see@acme.test", create: false }))).left).toBeUndefined();
+    const taken = await json(await call("owner", "PUT", "/people/person", { email: "maker@acme.test", create: false }));
+    expect(taken.left).toEqual({ who: "maker@acme.test", tokens: [] });
+  });
+});
+
 describe("the access log's bounds", () => {
-  test("a full log of rows younger than 180 days refuses every change, and says why", async () => {
+  test("a full log of rows younger than 180 days refuses whatever lets more people in, and says why", async () => {
     let full = false;
-    const { call, saved } = bench(seed([["blog", "dev@acme.test", "developer"]]), { full: () => full });
+    const sessions: Session[] = [{ session: "s-admin", email: "ann@acme.test", unlock: "u-admin" }];
+    const { call, saved } = bench(seed([["blog", "dev@acme.test", "developer"], ["blog", "ann@acme.test", "admin"]]), { full: () => full, sessions });
     full = true;
-    for (const [method, path, body] of [
-      ["PUT", "/access/entry", { slug: "blog", who: "new@acme.test", role: "visitor" }],
-      ["DELETE", "/access/entry", { slug: "blog", who: "dev@acme.test" }],
-      ["PUT", "/people/person", { email: "maker@acme.test", create: true }],
-      ["DELETE", "/people/person", { email: "dev@acme.test" }],
+    for (const [table, method, path, body] of [
+      ["dashboard", "PUT", "/access/entry", { token: UNLOCK, slug: "blog", who: "new@acme.test", role: "visitor" }],
+      ["dashboard", "PUT", "/access/entry", { token: UNLOCK, slug: "blog", who: "dev@acme.test", role: "admin" }],
+      ["dashboard", "PUT", "/people/person", { token: UNLOCK, email: "maker@acme.test", create: true }],
+      ["dashboard", "PUT", "/access/person/entry", { session: "s-admin", slug: "blog", who: "new@acme.test", role: "visitor" }],
     ] as const) {
-      const response = await call("owner", method, path, body);
+      const response = await call(table, method, path, body);
       expect({ path, method, status: response.status }).toEqual({ path, method, status: 507 });
       expect(await json(response)).toMatchObject({ error: "log-full", message: LOG_FULL });
     }
-    expect(saved().projects.blog).toHaveLength(1);
+    expect(saved().projects.blog).toHaveLength(2);
     // Reading is never refused.
     expect((await call("owner", "GET", "/access?slug=blog")).status).toBe(200);
-    full = false;
+    // The owner over SSH is the way out: still heard.
     expect((await call("owner", "PUT", "/access/entry", { slug: "blog", who: "new@acme.test", role: "visitor" })).status).toBe(201);
+    full = false;
+    expect((await call("dashboard", "PUT", "/access/entry", { token: UNLOCK, slug: "blog", who: "late@acme.test", role: "visitor" })).status).toBe(201);
+  });
+
+  test("what narrows is never refused, full log or used-up hour: lowering, removing, the create right taken back, a person taken off", async () => {
+    const full = true;
+    const sessions: Session[] = [{ session: "s-admin", email: "ann@acme.test", unlock: "u-admin" }];
+    const { call, saved, left } = bench(
+      seed([["blog", "dev@acme.test", "developer"], ["blog", "see@acme.test", "viewer"], ["blog", "ann@acme.test", "admin"], ["shop", "dev@acme.test", "viewer"], ["blog", "out@acme.test", "visitor"]], ["maker@acme.test"]),
+      { full: () => full, sessions, changesPerHour: 0, ownerChangesPerHour: 0 },
+    );
+    expect((await call("dashboard", "PUT", "/access/entry", { token: UNLOCK, slug: "blog", who: "dev@acme.test", role: "visitor" })).status).toBe(200);
+    expect((await call("dashboard", "PUT", "/access/person/entry", { session: "s-admin", slug: "blog", who: "see@acme.test", role: "visitor" })).status).toBe(200);
+    expect((await call("dashboard", "DELETE", "/access/person/entry", { session: "s-admin", slug: "blog", who: "out@acme.test" })).status).toBe(200);
+    expect((await call("owner", "PUT", "/people/person", { email: "maker@acme.test", create: false })).status).toBe(200);
+    expect((await call("dashboard", "DELETE", "/people/person", { email: "dev@acme.test" })).status).toBe(200);
+    expect(saved().projects.blog?.map((entry) => [entry.who, entry.role])).toEqual([["ann@acme.test", "admin"], ["see@acme.test", "visitor"]]);
+    expect(saved().creators).toEqual([]);
+    expect(left.map((one) => one.email).sort()).toEqual(["dev@acme.test", "maker@acme.test", "see@acme.test"]);
+    // Anything that widens is still refused.
+    expect((await call("dashboard", "PUT", "/access/entry", { token: UNLOCK, slug: "blog", who: "see@acme.test", role: "viewer" })).status).toBe(507);
   });
 
   test("each actor's accepted changes are counted per hour; the owner over SSH has a generous allowance of their own", async () => {

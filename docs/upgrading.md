@@ -154,7 +154,8 @@ all it takes; read this first, for what changes for the sites and for you.
 - **Password access waits for the unlock** when it is given from the
   dashboard, as a role above Can open does: the owner's password, or an
   Admin's forced sign-in, since it lets in someone from outside the company.
-  Can open for a company account or a domain, lowering and removing still
+  So does a whole domain while `OIDC_ALLOWED_DOMAINS` is empty. Can open for
+  a company account or one of the listed domains, lowering and removing still
   never wait, nor does restricting a site, and the owner's `sitesolide share`
   over SSH asks for nothing.
 - **Someone who can only open sites is told so** when they try the dashboard,
@@ -163,10 +164,26 @@ all it takes; read this first, for what changes for the sites and for you.
   said `door.update`: a filter or an export that looked for the old name looks
   for the new one, or for `access.` to find every change of access. The rows
   written before the registry still read, in today's words.
-- **Changes of access are kept 180 days.** The steward writes every accepted
-  change of access to a file of its own, `access-log.jsonl` beside its
-  journal, at most 20,000 lines, and fills it once, at its first start, with
-  the changes the journal already holds; refusals stay in the journal.
+- **Changes of access are kept 180 days, and bounded.** The steward writes
+  every accepted change of access to a file of its own, `access-log.jsonl`
+  beside its journal, seeded from the journal and topped up at each start
+  with what it lacks; refusals stay in the journal. Its rows are never pushed
+  out before 180 days: once it holds 20,000 of them, or 12 MB, a change that
+  lets more people in is refused, `log-full`, until older ones age out, while
+  removing and lowering still work, and you still change access from your
+  workstation with `sitesolide share` and `sitesolide people`. Such changes
+  are also counted, 120 an hour for each person, each token and you in the
+  dashboard, 2,000 for you over SSH, `too-many-changes` past it.
+- **Every token from before becomes someone's**, once, at the steward's first
+  start. A token whose email, what you typed when creating it and shown as
+  its label, is the address of a person who signs in to the dashboard, a role
+  above Can open or the create right, becomes that person's, made by you: it
+  is narrowed to their roles from then on, and revoked when they leave,
+  removed or lowered so that they keep no role above Can open and no create
+  right. Every other token becomes your own, its scope unchanged. To keep a
+  shared CI token yours when its email is a person's: after upgrading, on the
+  *Tokens* page, make a token with *Whose token* set to *Mine* and the same
+  projects, put it in the CI, then revoke the one that became the person's.
 
 **What `sitesolide upgrade` runs, in this order.**
 
@@ -176,7 +193,11 @@ all it takes; read this first, for what changes for the sites and for you.
    says what it carries over, what it sets aside and why. The running portal,
    the old one, keeps deciding from its own tables, which still say the same.
    `bin/deploy-steward.sh` ends on `access registry 600 root:root, its
-   projection for the portal 640 root:site-portal`.
+   projection for the portal 640 root:site-portal`. A store that does not
+   read leaves no registry, and is tried again later; when it is the portal's
+   database, a table past 16 MB (`oversized-table`) among others, `sitesolide
+   people --migrate-without-portal` carries the rest over without it, and the
+   tokens are made someone's at once.
 2. **The dashboard.** Its access API speaks to the steward, and its pages
    are the ones above: a site's Access, People and Tokens.
 3. **The installer**, which reads the registry when it starts.

@@ -189,8 +189,8 @@ function SiteRow({ site, severity, now }: RowProps) {
         <div className="grid justify-items-start gap-0.5">
           <AccessWord site={site} />
           {access.kind === "portal" && access.exemptions.length > 0 && (
-            <span className="text-xs text-muted-foreground" title="Open to anyone, guarded by the app alone">
-              <span className="font-mono">{access.exemptions.join(" ")}</span> open to anyone
+            <span className="text-xs text-muted-foreground">
+              Open to anyone, guarded by the app alone: <span className="font-mono">{access.exemptions.join(" ")}</span>
             </span>
           )}
         </div>

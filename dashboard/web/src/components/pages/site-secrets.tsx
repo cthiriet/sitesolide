@@ -8,7 +8,7 @@ import { useSecretsActions } from "@/components/secrets-actions"
 import { SecretsLog } from "@/components/secrets-log"
 import { SitePage, useSite } from "@/components/site"
 import { UNREACHABLE } from "@/lib/secrets"
-import { roleOn } from "@/lib/identity"
+import { isPerson, roleOn } from "@/lib/identity"
 
 /*
  * Nothing here knows any site in particular. The platform deploys sites whose
@@ -52,7 +52,8 @@ function Intro({ slug }: { slug: string }) {
 }
 
 function Content({ slug }: { slug: string }) {
-  const { secrets } = useData()
+  const { secrets, identity } = useData()
+  const person = isPerson(identity)
   const actions = useSecretsActions()
   const { project } = useSite(slug)
   const { projects, problem, reload } = secrets
@@ -108,10 +109,14 @@ function Content({ slug }: { slug: string }) {
             inProgress={rereading}
           >
             {problem === UNREACHABLE ? (
-              <>
-                The rest of the dashboard works, but no file can be read or changed until it answers. Check{" "}
-                <code className="font-mono text-xs">systemctl status sitesolide-steward</code> on the server.
-              </>
+              person ? (
+                "The rest of the dashboard works, but no file can be read or changed until it answers. If it lasts, tell the owner of the server."
+              ) : (
+                <>
+                  The rest of the dashboard works, but no file can be read or changed until it answers. Check{" "}
+                  <code className="font-mono text-xs">systemctl status sitesolide-steward</code> on the server.
+                </>
+              )
             ) : (
               problem
             )}
@@ -123,7 +128,7 @@ function Content({ slug }: { slug: string }) {
         <Panel>
           <EmptyState icon={FileText} title={`${slug} has no secret files`}>
             {project === null ? (
-              <>The steward doesn't list {slug}. A site is listed once it is deployed.</>
+              <>The server doesn't list {slug}. A site is listed once it is deployed.</>
             ) : (
               <>
                 To give it some, declare them under <Code>secrets</Code> in its <Code>sitesolide.json</Code>, then run{" "}

@@ -192,7 +192,7 @@ describe("the backups", () => {
   test("a steward that cannot be reached is unavailable", async () => {
     expect(failure(await createReaders(dependencies({ backups: { readBackupAudit: refuse, readBackups: refuse } })).backups.read(null, 10))).toEqual({
       state: "unavailable",
-      message: "Can't reach the steward.",
+      message: "Can't reach the access service on the server.",
     });
   });
 });

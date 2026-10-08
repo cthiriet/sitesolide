@@ -28,10 +28,12 @@ import {
   entryRow,
   grantSentence,
   inertNote,
+  leavingWarning,
   needsUnlock,
   passwordMessage,
   lowers,
   raiseNeedsUnlock,
+  unlockLine,
   planAddition,
   plannedEnd,
   roleLabel,
@@ -54,8 +56,10 @@ import { cn } from "@/lib/utils"
  *
  * The page sends each change as it is made; the steward judges it and its
  * refusal is shown as it stands. Giving a role above Can open, or password
- * access, waits for the unlock; removing and lowering never do. A Viewer or
- * a Developer reads the same list, without a control, and whom to ask.
+ * access, waits for the unlock, then goes on; removing and lowering never
+ * wait, and are confirmed first when they take someone out of the dashboard.
+ * A Viewer or a Developer reads the same list, without a control, and whom
+ * to ask.
  */
 
 /** The native select the page styles, a field's look: see DESIGN.md, "a hand-drawn control takes a field's". */
@@ -104,6 +108,41 @@ const fromChoice = (choice: string) => (choice === NONE ? null : Number(choice))
 type Created = { who: string; password: string; expiresAt: number | null }
 
 type Notice = { who: string; role: AccessRole; line: string | null }
+
+/**
+ * What the field held when a person left to unlock at their provider, kept
+ * in this tab for the way back: the page comes back to the field as it was,
+ * and says the last step. Never a password: none is drawn before Add.
+ */
+const PENDING_KEY = "sitesolide.access.pending"
+const PENDING_MAX_MS = 15 * 60_000
+
+type PendingAdd = { slug: string; text: string; role: AccessRole; duration: string; at: number }
+
+function keepPending(pending: PendingAdd): void {
+  try {
+    window.sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending))
+  } catch {
+    // No storage in this tab: the field starts empty on the way back.
+  }
+}
+
+/** The field as it was for this project, taken once; null when there is none, or it is old. */
+function takePending(slug: string, now: number): PendingAdd | null {
+  try {
+    const text = window.sessionStorage.getItem(PENDING_KEY)
+    if (text === null) return null
+    window.sessionStorage.removeItem(PENDING_KEY)
+    const pending = JSON.parse(text) as Partial<PendingAdd>
+    if (pending.slug !== slug || typeof pending.text !== "string" || typeof pending.duration !== "string" || typeof pending.at !== "number") return null
+    if (now - pending.at > PENDING_MAX_MS || !ROLE_KEYS.includes(pending.role as AccessRole)) return null
+    return pending as PendingAdd
+  } catch {
+    return null
+  }
+}
+
+const ROLE_KEYS = Object.keys(ROLE_TEXTS) as AccessRole[]
 
 /** What was just given, and the line to send, copied as it is. */
 function SendNotice({ notice, slug, onClose }: { notice: Notice; slug: string; onClose: () => void }) {
@@ -180,8 +219,20 @@ function AddPeople({
   const [tried, setTried] = useState(false)
   const [error, setError] = useState("")
   const [inProgress, setInProgress] = useState(false)
+  /** The field came back from a person's unlock at their provider. */
+  const [restored, setRestored] = useState(false)
   const field = useRef<HTMLInputElement>(null)
   const id = useId()
+
+  useEffect(() => {
+    const pending = takePending(page.slug, Date.now())
+    if (pending === null) return
+    setText(pending.text)
+    setRole(pending.role)
+    setDuration(pending.duration)
+    setRestored(true)
+    field.current?.focus()
+  }, [page.slug])
 
   const plan = planAddition(text, page)
   const chosen: AccessRole = plan.state === "ready" && !plan.roles.includes(role) ? "visitor" : role
@@ -193,20 +244,15 @@ function AddPeople({
   // What the field holds is said as it is typed, a fault only once Add was pressed.
   const fault = plan.state === "blocked" || plan.state === "existing" || (tried && plan.state === "invalid")
 
-  async function add(event: SyntheticEvent) {
-    event.preventDefault()
-    if (inProgress || !offered) return
-    setTried(true)
-    setError("")
-    if (plan.state !== "ready" || plan.who === null) return field.current?.focus()
-    if (unlockFirst) return actions.unlock()
+  async function send(who: string, given: AccessRole, password: boolean) {
     setInProgress(true)
     try {
-      const { status, body } = await putAccess(page.slug, plan.who, chosen, plan.password ? fromChoice(duration) : undefined)
+      const { status, body } = await putAccess(page.slug, who, given, password ? fromChoice(duration) : undefined)
       if ((status === 200 || status === 201) && body !== null && body.entry !== undefined) {
         setText("")
         setTried(false)
         setRole("visitor")
+        setRestored(false)
         onAdded({ entry: body.entry, password: typeof body.password === "string" ? body.password : null })
         return
       }
@@ -218,6 +264,24 @@ function AddPeople({
     } finally {
       setInProgress(false)
     }
+  }
+
+  async function add(event: SyntheticEvent) {
+    event.preventDefault()
+    if (inProgress || !offered) return
+    setTried(true)
+    setError("")
+    if (plan.state !== "ready" || plan.who === null) return field.current?.focus()
+    const who = plan.who
+    const password = plan.password
+    // Unlocked here, the addition goes on; a person who leaves to unlock comes back to the field as it was.
+    if (unlockFirst) {
+      return actions.unlock({
+        then: () => void send(who, chosen, password),
+        beforeLeave: () => keepPending({ slug: page.slug, text, role: chosen, duration, at: Date.now() }),
+      })
+    }
+    await send(who, chosen, password)
   }
 
   const hintId = `${id}-hint`
@@ -276,6 +340,10 @@ function AddPeople({
           <p role="alert" className="text-destructive">
             {error}
           </p>
+        ) : restored && actions.state.open && plan.state === "ready" ? (
+          <p role="status" className={TONE_TEXT.ok}>
+            Unlocked. Press Add to finish.
+          </p>
         ) : covered !== null ? (
           <p className="text-muted-foreground">{covered}</p>
         ) : (
@@ -286,12 +354,7 @@ function AddPeople({
         {plan.state === "ready" && plan.password && error === "" && (
           <p className="text-muted-foreground tabular-nums">{plannedEnd(fromChoice(duration), now)}</p>
         )}
-        {unlockFirst && offered && error === "" && (
-          <p className="text-muted-foreground">
-            {plan.password ? "Password access lets someone from outside the company in" : `${roleLabel(chosen)} is more than opening the site`}: it waits for
-            the unlock.
-          </p>
-        )}
+        {unlockFirst && offered && error === "" && <p className="text-muted-foreground">{unlockLine(chosen, plan.password)}</p>}
       </div>
     </form>
   )
@@ -458,7 +521,10 @@ function PasswordDialog({ created, url, onClose }: { created: Created | null; ur
   )
 }
 
-/** A change waiting for its confirmation: someone's removal, or an Admin lowering their own role. */
+/**
+ * A change waiting for its confirmation: someone's removal, an Admin lowering
+ * their own role, or a lowering that takes someone out of the dashboard.
+ */
 type Pending = { entry: EntryView; role: AccessRole | null; open: boolean; inProgress: boolean; error: string }
 
 /**
@@ -505,11 +571,17 @@ export function PeopleWithAccess({
   async function changeRole(entry: EntryView, role: AccessRole) {
     if (role === entry.role) return
     setRowError("")
-    if (raiseNeedsUnlock(entry.role, role) && !actions.state.open) return actions.unlock()
-    // An Admin lowering themselves gives up managing the project: said first.
-    if (own(entry) && entry.role === "admin" && lowers(entry.role, role)) {
+    // Unlocked here, the role picked is given at once.
+    if (raiseNeedsUnlock(entry.role, role) && !actions.state.open) return actions.unlock({ then: () => void applyRole(entry, role) })
+    // An Admin lowering themselves gives up managing the project, and a
+    // lowering may take someone out of the dashboard: said first.
+    if ((own(entry) && entry.role === "admin" && lowers(entry.role, role)) || leavingWarning(entry.who, role, page) !== null) {
       return setPending({ entry, role, open: true, inProgress: false, error: "" })
     }
+    await applyRole(entry, role)
+  }
+
+  async function applyRole(entry: EntryView, role: AccessRole) {
     setBusy(entry.who)
     try {
       const message = await sendRole(entry, role)
@@ -543,6 +615,7 @@ export function PeopleWithAccess({
   const count = entries.length
   const removing = pending !== null && pending.role === null
   const self = pending !== null && own(pending.entry) && pending.entry.role === "admin"
+  const leaving = pending === null ? null : leavingWarning(pending.entry.who, pending.role, page)
 
   return (
     <Panel title="People with access" count={count > 0 ? count : undefined} description={inertNote(page.slug, general, manages) ?? undefined} full>
@@ -612,25 +685,32 @@ export function PeopleWithAccess({
                 <>
                   Remove {self ? "yourself" : <Who value={pending.entry.who} />} from {page.slug}?
                 </>
-              ) : (
+              ) : self ? (
                 `Become ${pending === null || pending.role === null ? "" : roleLabel(pending.role)} on ${page.slug}?`
+              ) : (
+                <>
+                  Change <Who value={pending?.entry.who ?? ""} /> to {pending === null || pending.role === null ? "" : roleLabel(pending.role)}?
+                </>
               )}
             </AlertDialogTitle>
             <AlertDialogDescription className="text-pretty">
               {self
                 ? selfChangeWarning(page.slug)
-                : pending?.entry.kind === "domain"
-                  ? `Everyone at ${pending.entry.who.slice(1)} loses access at their next request, except the people added by name.`
-                  : pending?.entry.kind === "password"
-                    ? "Their password stops opening the site at their next request."
-                    : `They lose access to ${page.slug} at their next request, on the site and in the dashboard.`}
+                : !removing
+                  ? `They keep opening ${page.slug} when its access is restricted, and lose what more they could do at their next request.`
+                  : pending?.entry.kind === "domain"
+                    ? `Everyone at ${pending.entry.who.slice(1)} loses access at their next request, except the people added by name.`
+                    : pending?.entry.kind === "password"
+                      ? "Their password stops opening the site at their next request."
+                      : `They lose access to ${page.slug} at their next request, on the site and in the dashboard.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {leaving !== null && <Banner tone="attention">{leaving}</Banner>}
           {pending !== null && pending.error !== "" && <Banner tone="error">{pending.error}</Banner>}
           <AlertDialogFooter>
             <AlertDialogCancel className="max-sm:h-11">Cancel</AlertDialogCancel>
             <AlertDialogAction variant="destructive" disabled={pending?.inProgress ?? false} onClick={() => void confirm()} className="max-sm:h-11">
-              {pending?.inProgress ? (removing ? "Removing…" : "Saving…") : removing ? "Remove" : "Change my role"}
+              {pending?.inProgress ? (removing ? "Removing…" : "Saving…") : removing ? "Remove" : self ? "Change my role" : "Change role"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -139,8 +139,8 @@ const refusedOrigin = () => json({ error: "origin-refused" }, 403);
 const missingSession = () => json({ error: "no-session" }, 401);
 
 const locked = () => error(423, "locked", "Unlock secrets first.");
-const unreachable = () => error(502, "failure", "Can't reach the steward.");
-const unreadable = () => error(502, "failure", "The steward sent an unreadable answer.");
+const unreachable = () => error(502, "failure", "Can't reach the server's secrets.");
+const unreadable = () => error(502, "failure", "The server sent an unreadable answer.");
 const unreadableBody = () => error(400, "invalid", "Unreadable request body.");
 
 function isObject(value: unknown): value is Record<string, unknown> {

@@ -22,7 +22,7 @@ import { useSecretsActions } from "@/components/secrets-actions"
 import { readPeople, readTokens, removeAccess, removePerson, setCreate } from "@/lib/api"
 import { ACCESS_UNREACHABLE, refusalText } from "@/lib/access"
 import { siteUrl } from "@/lib/pages"
-import { createFieldError, createRefusal, domainGroups, expiredAccesses, mayRemove, projectRoles, revokedTokensLine } from "@/lib/people"
+import { createFieldError, createRefusal, domainGroups, expiredAccesses, mayRemove, projectRoles, removalSentence, revokedTokensLine } from "@/lib/people"
 import { refusalOf } from "@/lib/secrets"
 import { TONE_TEXT } from "@/lib/tones"
 import type { PeoplePageResponse, PersonView } from "@/lib/types"
@@ -412,8 +412,7 @@ export function PeoplePage() {
               Remove <Who value={removing.person?.who ?? ""} /> from every project?
             </AlertDialogTitle>
             <AlertDialogDescription className="text-pretty">
-              They lose every role and password access at their next request, may no longer create projects, and are
-              signed out of the dashboard.
+              {removalSentence(removing.person)}
               {removing.tokens !== null && ` ${removing.tokens}`}
             </AlertDialogDescription>
           </AlertDialogHeader>

@@ -129,9 +129,11 @@ unlock**: a forced sign-in at the provider, which the portal asks for
 and the steward checks again, for ten minutes and that person's session
 alone. The owner's unlock is the dashboard's password, retyped. Password
 access waits because it lets in someone from outside the company, whom no
-company account vouches for. Giving Can open to a company account or a
-domain, restricting a site, and taking access away, never wait for either:
-closing someone out must not wait for a password.
+company account vouches for. Giving Can open to a company account or to one
+of the company's listed domains, restricting a site, and taking access away,
+never wait for either: closing someone out must not wait for a password. A
+whole domain waits while the company's domains are not listed, since anyone
+the provider vouches for would then come in.
 The steward never hands a Developer a value, whatever the dashboard relays.
 
 **A person's own tokens are never stronger than the person.** A Developer
@@ -171,11 +173,7 @@ opens to the portal's port and to nothing else, so that the steward's own unit
 keeps no network at all. Nobody changes who may open a site through the
 portal any more: the steward writes the projection the portal reads, and the
 routes that did it, `PUT /admin/sharing/:host`, `/admin/guests` and
-`DELETE /admin/invites/:id`, answer `410 moved`. The portal still tells root
-from the dashboard the way the egress proxy tells its callers apart, by the
-uid of the connection's other end in `/proc/net/tcp`: a route that takes an
-actor believes an email or a token from root alone, and the dashboard speaks
-as `owner`, whatever it sends.
+`DELETE /admin/invites/:id`, answer `410 moved` to whoever asks.
 
 And one set: a project that declares several `services` reaches its own ports,
 and nobody else's. Its front calls its API, its API its worker, and a neighbour
@@ -347,13 +345,13 @@ rotates by line count: a refusal stays in the journal.
 | Event | Source | Actor | Target | What it records |
 |---|---|---|---|---|
 | `token.create`, `token.revoke` | dashboard | `owner` | none | a token created or revoked from the owner's *Tokens* page, its label, email and scope |
-| `token.create`, `token.revoke` | steward | a person's email, or who took their last role | none | a person's own token created or revoked, its id and scope; one refused above their roles, with the steward's reason; the tokens of someone who no longer signs in, revoked under the owner or the Admin who took their last role above Can open |
+| `token.create`, `token.revoke` | steward | a person's email, or who took their last role; `system` at the upgrade | none | a person's own token created or revoked, its id and scope; one refused above their roles, with the steward's reason; the tokens of someone who no longer signs in, revoked under the owner or the Admin who took their last role above Can open; a token from before made a person's, once, at the upgrade |
 | `project.create` | steward | a person's email | slug | a project a person's own token created, which made them its Admin; the token in the detail |
 | `project.remove` | steward | `owner` | slug | a project `sitesolide remove` took off the machine: the name its token owned, free again for another token; that token in the detail |
 | `deploy.start` | dashboard | `token:<id>` | slug | a token's deployment handed to the installer; the person's email in the `member` field, for a person's own token |
 | `deploy.success`, `deploy.failure` | dashboard | `token:<id>` | slug | how it ended, the error's code for a failure; the `member` field for a person's own token |
 | `access.add`, `access.change`, `access.remove` | steward | `owner`, an Admin's email, or `token:<id>` | slug, the person's email in the detail; the email alone for someone taken off every project | someone given access, their role changed, or their access taken away, as "who: Role", with the expiry of password access; a change refused, with the steward's reason, a minute holding twenty refusals at most |
-| `access.migrate` | steward | `system` | none | the registry made, once, from the stores before it: the counts carried over and set aside |
+| `access.migrate` | steward | `system`, or `owner` without the portal's database | none | the registry made, once, from the stores before it: the counts carried over and set aside |
 | `people.create` | steward | `owner` | the person's email | the right to create projects given or taken back |
 | `dashboard.signin` | steward | the person's email | the person's email | a session opened, from an assertion it verified, with their roles and create right |
 | `dashboard.signin_failed` | steward | the email, or `anonymous` when the assertion did not verify | the email, or none | a sign-in refused: `can-open-only` for someone who only opens sites, `no-role` for someone on no list, an assertion replayed, signed by another key, expired, too old; a minute holds twenty refusals at most |

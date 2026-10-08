@@ -101,17 +101,17 @@ describe("the role ladder and who may give what", () => {
     const current = registry({ blog: [["top@acme.test", "admin"]] });
     const token: Granter = { kind: "token", id: "t1", email: null, role: null };
     expect(judgeGrant(current, "blog", "top@acme.test", "visitor", token, SSO)).toMatchObject({ code: "out-of-scope" });
-    expect(judgeGrant(current, "blog", "top@acme.test", "viewer", admin("ann@acme.test", "admin"), SSO)).toMatchObject({ role: "viewer", raises: false });
+    expect(judgeGrant(current, "blog", "top@acme.test", "viewer", admin("ann@acme.test", "admin"), SSO)).toMatchObject({ role: "viewer", unlock: false });
   });
 
   test("raising someone above Can open asks for the unlock; Can open, lowering and keeping do not", () => {
     const current = registry({ blog: [["dev@acme.test", "developer"], ["see@acme.test", "visitor"]] });
-    expect(judgeGrant(current, "blog", "new@acme.test", "viewer", OWNER, SSO)).toMatchObject({ raises: true, unlock: true });
-    expect(judgeGrant(current, "blog", "see@acme.test", "developer", OWNER, SSO)).toMatchObject({ raises: true, unlock: true });
-    expect(judgeGrant(current, "blog", "dev@acme.test", "viewer", OWNER, SSO)).toMatchObject({ raises: false, unlock: false });
-    expect(judgeGrant(current, "blog", "dev@acme.test", "developer", OWNER, SSO)).toMatchObject({ raises: false, unlock: false });
-    expect(judgeGrant(current, "blog", "new@acme.test", "visitor", OWNER, SSO)).toMatchObject({ raises: false, unlock: false });
-    expect(judgeGrant(current, "blog", "@acme.test", "visitor", OWNER, SSO)).toMatchObject({ raises: false, unlock: false });
+    expect(judgeGrant(current, "blog", "new@acme.test", "viewer", OWNER, SSO)).toMatchObject({ unlock: true });
+    expect(judgeGrant(current, "blog", "see@acme.test", "developer", OWNER, SSO)).toMatchObject({ unlock: true });
+    expect(judgeGrant(current, "blog", "dev@acme.test", "viewer", OWNER, SSO)).toMatchObject({ unlock: false });
+    expect(judgeGrant(current, "blog", "dev@acme.test", "developer", OWNER, SSO)).toMatchObject({ unlock: false });
+    expect(judgeGrant(current, "blog", "new@acme.test", "visitor", OWNER, SSO)).toMatchObject({ unlock: false });
+    expect(judgeGrant(current, "blog", "@acme.test", "visitor", OWNER, SSO)).toMatchObject({ unlock: false });
   });
 });
 
@@ -154,7 +154,7 @@ describe("lowering is always allowed", () => {
   test("someone whose domain left the company's since is lowered to any lower role, not only Can open", () => {
     const current = registry({ blog: [["dev@gone.test", "admin"]] });
     for (const role of ["developer", "viewer", "visitor"] as const) {
-      expect(judgeGrant(current, "blog", "dev@gone.test", role, OWNER, SSO)).toMatchObject({ role, raises: false, unlock: false, password: false });
+      expect(judgeGrant(current, "blog", "dev@gone.test", role, OWNER, SSO)).toMatchObject({ role, unlock: false, password: false });
       expect(judgeGrant(current, "blog", "dev@gone.test", role, admin("ann@acme.test", "admin"), SSO)).toMatchObject({ role, unlock: false });
     }
     // Raising them again is not lowering: refused, they no longer sign in with their account.
@@ -191,7 +191,7 @@ describe("people outside the company's domains: password access", () => {
   });
 
   test("giving it asks for the unlock, since it lets someone from outside the company in, though it raises nobody", () => {
-    expect(judgeGrant(registry({}), "blog", "guest@example.org", "visitor", OWNER, SSO)).toMatchObject({ password: true, raises: false, unlock: true });
+    expect(judgeGrant(registry({}), "blog", "guest@example.org", "visitor", OWNER, SSO)).toMatchObject({ password: true, unlock: true });
     expect(judgeGrant(registry({}), "blog", "guest@example.org", "visitor", admin("ann@acme.test", "admin"), SSO)).toMatchObject({ password: true, unlock: true });
     expect(judgeGrant(registry({}), "blog", "alice@acme.test", "visitor", OWNER, NO_SSO)).toMatchObject({ password: true, unlock: true });
   });
