@@ -509,7 +509,9 @@ describe("nothing is written that would not read back", () => {
     expect(JSON.stringify(saved())).toBe(before);
     // And the steward still reads its registry.
     expect((await call("owner", "GET", "/access?slug=blog")).status).toBe(200);
-  });
+    // Topping up entry by entry encodes 8 MB each time: a few seconds here,
+    // past the default 5 on the release runner.
+  }, 30_000);
 
   test("a change whose projection the portal could not read is refused before anything is written", async () => {
     // A zone so long that a site's address outgrows a host name.
