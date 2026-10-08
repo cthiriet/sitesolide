@@ -251,8 +251,8 @@ export const STEP_MS = 500;
 /**
  * Sixteen requests at a time fit in a few MiB, 8 MiB at worst with sixteen
  * contents. Without a cap, a thousand bodies of 64 KiB never finished cost from
- * 42 to 111 MiB and a burst of `GET /projects` 300 MiB, under a MemoryMax of
- * 128M.
+ * 42 to 111 MiB and a burst of `GET /projects` 300 MiB, under the MemoryMax of
+ * 128M the steward then had.
  */
 export const MAX_IN_FLIGHT = 16;
 export const MAX_QUEUED = 4;
@@ -444,8 +444,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   // Two queues: a write never waits for an unlocking, and an unlocking does not
   // wait for the eight seconds of a restart. The verifications and the argon2id
   // hashes go through one by one, unlocking and password change in the same
-  // queue: two at once get the service killed at 128M
-  // (the bench results, m2), and a burst would otherwise go
+  // queue: two at once got the service killed at 128M on the bench (m2),
+  // three at 192M, and a burst would otherwise go
   // through in its entirety before the first failure is counted.
   const exclusive = createLock(options.maxQueued ?? MAX_QUEUED);
   const oneAtATime = createLock(options.maxQueued ?? MAX_QUEUED);
@@ -1826,7 +1826,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
             rights: members.rights,
             rightless: members.rightless,
             recordCreation: members.recordCreation,
-            leave: members.leave,
             journal: members.journal,
             journalRefusal: members.journalRefusal,
           },

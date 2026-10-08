@@ -191,7 +191,7 @@ export const MAX_INVITE_ROWS = 50_000;
 /**
  * The bytes of one table's values read at most, all its rows together: a
  * table within every bound of a row and of a count could still hold more than
- * the steward's 128M, the product of the two.
+ * the steward's 192M, the product of the two.
  */
 export const MAX_TABLE_BYTES = 16 * 1024 * 1024;
 

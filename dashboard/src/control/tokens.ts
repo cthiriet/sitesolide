@@ -13,9 +13,11 @@
  * **A token deploys what its scope allows, and the projects it created.** The
  * ownership is recorded at the start of a project's first deployment, before
  * anything is written on the machine: a first deployment that fails half way
- * leaves a directory nobody else can take, which its token deploys again,
- * and whose creator, for a person's token, is its Admin all the same once
- * the installer has stopped (src/control/steward.ts, `settleCreations`).
+ * leaves a directory nobody else can take. For a person's token, its creator
+ * is made its Admin once that installer has ended, however it ended, when
+ * nobody has access to the project yet (src/control/steward.ts,
+ * `settleCreations`); their role then decides whether the token deploys it
+ * again.
  *
  * **Dead tokens do not pile up.** A revoked or expired token is kept 90 days
  * for the Tokens page, then dropped, sooner when the file needs the room, the

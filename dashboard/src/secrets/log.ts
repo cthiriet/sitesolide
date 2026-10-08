@@ -391,40 +391,21 @@ export const ACCESS_PRUNE_INTERVAL_MS = 3600 * 1000;
  */
 export const ACCESS_PRUNE_BYTES = 12 * 1024 * 1024;
 
-/**
- * What `GET /log` reads of the access log at once, every site's rows: its
- * newest megabyte, some 4,000 rows of a usual length, many times the fifty
- * it answers or the page of 500 it hands out at most; of one site, the rows
- * the answer needs (`windowBytes`). A page further back reads the megabyte
- * that ends at its date (`AccessWindow`), so the whole history is still
- * read, a page at a time. Never more than that, parsed for the one request
- * alone, and collected before the next (`createHistory`): the steward runs
- * under MemoryMax=128M, an argon2id verification takes 64 MiB of it, and a
- * parse of a full log kept between requests left the owner unable to unlock.
- */
-export const ACCESS_READ_BYTES = 1024 * 1024;
-
 /** No row the steward writes comes near this: a longer line is no entry, and is not read into a window. */
 export const MAX_ENTRY_BYTES = 8 * 1024;
 
 /**
- * What one `GET /log` reads of the access log: the newest rows dated before
- * `before` (all of them when null), of `slug` alone when it is named, `need`
- * of them at least when the file holds as many, then as many more as fit in
- * `windowBytes`.
+ * What one `GET /log` reads of the access log: the newest `need` rows dated
+ * before `before` (all of them when null), of `slug` alone when it names
+ * one, the rows the answer holds at most and nothing more. A page further
+ * back reads the rows that end at its date, so the whole history is still
+ * read, a page at a time. Never more than that, parsed for the one request
+ * alone, and collected before the next (`createHistory`): the steward's
+ * MemoryMax holds one argon2id verification, 64 MiB, beside one such read,
+ * and a window of a megabyte of every site's rows, or the garbage of a
+ * site's walk through the whole file, had it killed in a burst of reads.
  */
 export type AccessWindow = { before: number | null; slug: string | null; need: number };
-
-/**
- * What a window holds past the `need` rows it asks for: as many more as fit
- * in `ACCESS_READ_BYTES` when it reads every site, none when it reads one.
- * A site's rows lie apart in the file, every line between two of them read
- * and decoded on the way: a megabyte of them could lie at the far end of a
- * log of any size, for an answer that holds `need` rows at most.
- */
-export function windowBytes(window: Pick<AccessWindow, "slug">): number {
-  return window.slug === null ? ACCESS_READ_BYTES : 0;
-}
 
 /** Does this line belong in the access log rather than the journal: an accepted change of access. */
 export function isAccessChange(entry: LogEntry): boolean {
@@ -571,7 +552,7 @@ export type HistorySource = {
 /**
  * The journal and the access log as one history, read one request at a time
  * and kept by none: each request reads the journal, bounded by its rotation,
- * and the window of the access log it asks for (`windowBytes`), parses both,
+ * and the window of the access log it asks for (`AccessWindow`), parses both,
  * and lets go of them once `use` has answered. `use` runs on the history in
  * turn and must not keep it.
  *
@@ -580,8 +561,8 @@ export type HistorySource = {
  * `GET /log`, a compromised dashboard's or the Activity page's own, piled up
  * the garbage of read after read, a site's window decoding every line it
  * walks past, until the owner's unlock, whose argon2id verification takes
- * 64 MiB, had the steward killed by its MemoryMax=128M: one read at a time
- * was not one read's memory at a time. So each read ends with a full
+ * 64 MiB, had the steward killed by its MemoryMax: one read at a time was
+ * not one read's memory at a time. So each read ends with a full
  * collection, `collect`, inside its turn, once its answer is made: the next
  * read starts from a heap that holds nothing of the one before. Some 6 ms a
  * read; `collect` is a parameter for the tests alone.

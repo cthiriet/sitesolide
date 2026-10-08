@@ -36,10 +36,9 @@
  * creations' to note a creation, the creations' on the registry's to record
  * one, the registry's on this file's to close sessions. So nothing that holds
  * the registry's queue or the creations' revokes a token: `leave` revokes
- * them after the registry's queue, and the creations hand their leavers back
- * (`recordCreation`) for the control routes to see off once their turn is
- * over. Two queues waiting on each other would stop every change of access
- * and every deployment until the steward restarts.
+ * them after the registry's queue, and a creation recorded takes nobody out
+ * (`recordCreation`). Two queues waiting on each other would stop every
+ * change of access and every deployment until the steward restarts.
  *
  * The order of the checks is the order of the risk, as in src/secrets/steward.ts:
  * shape of the body, credential, registry, machine, writing.
@@ -67,7 +66,7 @@ import {
 } from "./protocol";
 import { may, mayRestart, powerRefusal } from "./powers";
 import type { AccessStore } from "../access/steward";
-import { emailOf, isDashboardPerson, opensASite, recordCreation as creationRecorded, rightsOf, rolesText, type Registry } from "../access/registry";
+import { isDashboardPerson, opensASite, recordCreation as creationRecorded, rightsOf, rolesText, type Registry } from "../access/registry";
 import type { AccessEvent } from "../access/steward";
 import type { LeavingToken } from "../access/protocol";
 import type { MemberRights } from "./tokens";
@@ -172,12 +171,10 @@ export type MemberRoutes = {
   rightless: (emails: readonly string[]) => Promise<string[] | Response>;
   /**
    * A project a person's token created, the installer done: they become its
-   * Admin, alone, and the journal says so under their email. Once recorded,
-   * the people whose last role the entries left under that name were, for
-   * the caller to see off with `leave` once it holds no queue; or the
-   * refusal.
+   * Admin, on a project nobody has access to yet, and the journal says so
+   * under their email: null. Or the refusal.
    */
-  recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | { leaving: string[] }>;
+  recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | null>;
   /**
    * Someone who may no longer sign in: their sessions and unlocks closed,
    * their tokens revoked under `actor`. Judged again in the registry's queue:
@@ -537,39 +534,25 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
   }
 
   /**
-   * A project created by a person's token, once the installer succeeded: its
-   * creator becomes its Admin, alone, in the registry's queue, where the
-   * create right is read again; journaled as `project.create` under their
-   * email, the token in the detail, with whatever entries a project of that
-   * name left behind and that were dropped. Someone those entries were the
-   * last role of is handed back, to leave the dashboard once the caller's
-   * queue is left.
+   * A project created by a person's token, once the installer has ended: its
+   * creator becomes its Admin, in the registry's queue, where the create
+   * right is read again and the project must have nobody with access yet;
+   * journaled as `project.create` under their email, the token in the
+   * detail. Nothing is taken from anyone: a project someone already has
+   * access to is refused instead, the refusal journaled.
    */
-  async function recordCreation(slug: string, email: string, tokenId: string): Promise<Response | { leaving: string[] }> {
-    const leaving: string[] = [];
+  async function recordCreation(slug: string, email: string, tokenId: string): Promise<Response | null> {
     const answer = await dependencies.access.change<null>(async (current) => {
       const result = creationRecorded(current, email, slug, system.now());
       if ("refusal" in result) {
         await journalRefusal({ operation: "project.create", result: "rejects", actor: email, member: email, detail: result.refusal.slice(0, 150), slug });
         return fail("out-of-scope", result.refusal);
       }
-      const dropped = result.dropped.filter((entry) => entry.who !== email);
-      for (const entry of dropped) {
-        const other = emailOf(entry);
-        if (other !== null && isDashboardPerson(current, other) && !isDashboardPerson(result.registry, other)) leaving.push(other);
-      }
-      await journal({
-        operation: "project.create",
-        result: "ok",
-        actor: email,
-        member: email,
-        detail: `admin, created with token ${tokenId}${dropped.length === 0 ? "" : `; left from before and dropped: ${dropped.map((entry) => entry.who).join(", ")}`}`,
-        slug,
-      });
+      await journal({ operation: "project.create", result: "ok", actor: email, member: email, detail: `admin, created with token ${tokenId}`, slug });
       console.log(`access: ${email} created ${slug} with token ${tokenId}, its Admin`);
       return { registry: result.registry, value: null };
     });
-    return answer instanceof Response ? answer : { leaving };
+    return answer instanceof Response ? answer : null;
   }
 
   return {

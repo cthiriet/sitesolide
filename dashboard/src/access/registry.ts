@@ -416,21 +416,20 @@ export function removePerson(registry: Registry, email: string): { registry: Reg
 
 /**
  * A project a person created, through a token of theirs that may create:
- * they become its Admin, alone. Recorded once the installer has finished
- * and the machine carries the project, never before: a creation refused or
- * undone leaves nobody Admin of a name the machine does not carry.
+ * they become its Admin. Recorded once the installer has ended and the
+ * machine carries the project, never before: a creation refused or undone
+ * leaves nobody Admin of a name the machine does not carry.
  *
- * **A new project starts from an empty list.** Entries left under its slug,
- * by a project of that name removed by hand, or a registry edited by hand,
- * are someone else's project's: they are dropped, and returned so that the
- * journal says so. The create right is read here, in the registry's own
- * queue: taken back while the installer ran, nothing is recorded.
+ * **Only on a project nobody has access to.** An entry already under its
+ * slug, given meanwhile by the owner, or left by a project of that name, says
+ * the project is someone's: nothing is recorded, and nothing is taken away.
+ * The create right is read here too, in the registry's own queue: taken back
+ * while the installer ran, nothing is recorded.
  */
-export function recordCreation(registry: Registry, email: string, slug: string, now: number): (Put & { dropped: Entry[] }) | Refusal {
+export function recordCreation(registry: Registry, email: string, slug: string, now: number): Put | Refusal {
   if (!mayCreate(registry, email)) return { refusal: `${email} may no longer create projects: the owner took that right back while the project was being created`, code: "out-of-scope" };
-  const dropped = entriesOf(registry, slug);
-  const put = putEntry(withEntries(registry, slug, []), slug, email, "admin", email, now);
-  return "refusal" in put ? put : { ...put, dropped };
+  if (entriesOf(registry, slug).length > 0) return { refusal: `${slug} already has people with access: nobody is made its Admin by its creation, the owner gives its roles`, code: "out-of-scope" };
+  return putEntry(registry, slug, email, "admin", email, now);
 }
 
 /**

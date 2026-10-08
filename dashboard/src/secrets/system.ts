@@ -60,7 +60,6 @@ import {
   isRecentLine,
   MAX_ENTRY_BYTES,
   truncate,
-  windowBytes,
   type AccessWindow,
 } from "./log";
 import {
@@ -137,11 +136,10 @@ export type System = {
   readLog: () => Promise<string>;
   appendLog: (line: string) => Promise<void>;
   /**
-   * A window of the access log (log.ts, `AccessWindow`), oldest first; its
-   * newest `ACCESS_READ_BYTES` when none is named; null while there is no
-   * access log yet.
+   * A window of the access log (log.ts, `AccessWindow`), oldest first; null
+   * while there is no access log yet.
    */
-  readAccessLog: (window?: AccessWindow) => Promise<string | null>;
+  readAccessLog: (window: AccessWindow) => Promise<string | null>;
   /**
    * Appends to the access log, seeded from the journal first if it does not
    * exist yet, then pruned when the last pruning is an hour old or the file
@@ -347,15 +345,29 @@ export function eachLine(path: string, visit: (line: Uint8Array) => void): "abse
   }
 }
 
+/** Does this line hold these bytes somewhere? Each first byte found natively, the rest compared from there. */
+function holds(line: Uint8Array, needle: Uint8Array): boolean {
+  const last = line.length - needle.length;
+  for (let at = line.indexOf(needle[0]!); at !== -1 && at <= last; at = line.indexOf(needle[0]!, at + 1)) {
+    let same = true;
+    for (let i = 1; i < needle.length && same; i++) same = line[at + i] === needle[i];
+    if (same) return true;
+  }
+  return false;
+}
+
 /**
- * The newest lines of a log that `keep` accepts, read from its end backwards
- * a megabyte at a time, oldest first, each newline included: `need` of them
- * at least when the file holds as many, then as many more as fit in `max`
- * bytes. What is held at once is one piece of the file and the lines kept,
- * whatever the file's size. A line longer than `MAX_ENTRY_BYTES` is no row
- * of a log, and is passed over. Null when absent.
+ * The newest `need` lines of a log that `keep` accepts, fewer when the file
+ * holds fewer, read from its end backwards a megabyte at a time, oldest
+ * first, each newline included. What is held at once is one piece of the
+ * file and the lines kept, whatever the file's size. A line longer than
+ * `MAX_ENTRY_BYTES` is no row of a log, and is passed over; so is one that
+ * does not hold `needle`'s bytes, before it is decoded: a site's rows lie
+ * apart in the file, and a walk that decoded every line on its way would
+ * leave a megabyte of garbage for every megabyte of the file. Null when
+ * absent.
  */
-export function readWindow(path: string, max: number, need: number, keep: (line: string) => boolean): string | null | "not-plain" {
+export function readWindow(path: string, need: number, keep: (line: string) => boolean, needle: Uint8Array | null = null): string | null | "not-plain" {
   const fd = openPlain(path);
   if (fd === "absent") return null;
   if (fd === "not-plain") return fd;
@@ -364,24 +376,19 @@ export function readWindow(path: string, max: number, need: number, keep: (line:
     const buffer = new Uint8Array(1024 * 1024);
     /** Newest first, as they are met. */
     const kept: string[] = [];
-    let bytes = 0;
-    let full = false;
+    let full = need <= 0;
     /** The end of a line whose start lies further back. */
     let carry: Uint8Array<ArrayBuffer> = new Uint8Array(0);
     /** The line being gone through is past any entry's length: its start is passed over too. */
     let overlong = false;
     const visit = (line: Uint8Array) => {
       if (line.length === 0 || line.length > MAX_ENTRY_BYTES) return;
+      if (needle !== null && needle.length > 0 && !holds(line, needle)) return;
       const text = lenient.decode(line);
       if (!keep(text)) return;
-      if (kept.length >= need && bytes + line.length + 1 > max) {
-        full = true;
-        return;
-      }
       kept.push(text);
-      bytes += line.length + 1;
-      // Nothing more fits: the walk stops here rather than at the next line kept.
-      if (kept.length >= need && bytes >= max) full = true;
+      // Enough: the walk stops here rather than at the next line kept.
+      if (kept.length >= need) full = true;
     };
     let position = fstatSync(fd).size;
     while (position > 0 && !full) {
@@ -814,9 +821,11 @@ export function createSystem(config: SystemConfig): System {
       if (truncated !== null) writeAtomically(config.stateFolder, "journal.jsonl", encoder.encode(truncated), aRoot);
     },
 
-    async readAccessLog(window = { before: null, slug: null, need: 0 }) {
-      // A window of it, however big it has grown (log.ts).
-      const read = readWindow(accessLogFile, windowBytes(window), window.need, (line) => inWindow(line, window));
+    async readAccessLog(window) {
+      // A window of it, however big it has grown (log.ts); a site's rows
+      // found by the bytes of its name before any line is decoded.
+      const needle = window.slug === null ? null : encoder.encode(window.slug);
+      const read = readWindow(accessLogFile, window.need, (line) => inWindow(line, window), needle);
       return read === "not-plain" ? "" : read;
     },
 

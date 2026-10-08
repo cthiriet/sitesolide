@@ -162,12 +162,21 @@ SystemCallArchitectures=native
 # it is not measured on x86_64, where the JIT may behave otherwise.
 SystemCallFilter=@system-service
 
-# An argon2id verification costs about 65 MiB, and two simultaneous ones get the
-# service killed at 128M (m2) just as three do at 192M: raising the ceiling only
-# moves the threshold. The code conducts only one at a time, bounds the requests
-# in flight and keeps the rate limiting on disk, so that a stop for lack of memory
-# does not reset the attempt counter to zero.
-MemoryMax=128M
+# What has to fit: one argon2id verification at a time, about 65 MiB, beside one
+# bounded read of the history at a time (src/secrets/log.ts, `createHistory`),
+# and the steward's own heap. Measured on 8 October 2026 with the bundle
+# bin/deploy-steward.sh builds, in a Linux container capped like this unit,
+# without swap: the access log at 6.5, 12 (its byte cap, longest rows) and 16
+# MB, the journal empty and at its 1,000 lines, bursts of 20 + 20 GET /log, a
+# site that matches nothing among them, and the owner's unlock in the middle.
+# The anonymous memory peaked at 111 MB, the unlock alone at 83 MB: 192M leaves
+# some 80 MB, where 128M left 17 and the page cache squeezed to nothing. Two
+# verifications at once got the service killed at 128M on the bench (m2) and
+# three at 192M: a higher ceiling only moves that threshold, so the code
+# conducts one at a time, bounds the requests in flight and keeps the rate
+# limiting on disk, so that a stop for lack of memory does not reset the
+# attempt counter to zero.
+MemoryMax=192M
 
 [Install]
 WantedBy=multi-user.target

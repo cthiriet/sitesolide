@@ -662,7 +662,7 @@ describe("the create right, and a person's own tokens", () => {
     expect(await authority.rights("eve@acme.test")).toBeNull();
     // Can open alone: no rights on the dashboard.
     expect(await authority.rights("carol@acme.test")).toBeNull();
-    expect(await authority.recordCreation("omega", ALICE, "aaaaaaaaaaaa")).toEqual({ leaving: [] });
+    expect(await authority.recordCreation("omega", ALICE, "aaaaaaaaaaaa")).toBeNull();
     expect(await authority.rights(ALICE)).toMatchObject({ roles: { blog: "developer", omega: "admin" } });
     // A project created is a change of access: kept 180 days in the access log, not rotated with the journal.
     const kept = reread(readFileSync(join(bench.root, "state", "access-log.jsonl"), "utf8"));
@@ -671,6 +671,11 @@ describe("the create right, and a person's own tokens", () => {
     if (!(refused instanceof Response)) throw new Error("recorded for someone who may not create");
     expect(refused.status).toBe(403);
     expect(await refused.json()).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("eve@acme.test may no longer create projects") });
+    // A project someone has access to already is nobody's creation: shop's Can open stays, and nobody is made Admin.
+    const taken = await authority.recordCreation("shop", ALICE, "aaaaaaaaaaaa");
+    if (!(taken instanceof Response)) throw new Error("recorded on a project someone has access to");
+    expect(await taken.json()).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("shop already has people with access") });
+    expect(await authority.rights(ALICE)).toMatchObject({ roles: { blog: "developer", omega: "admin" } });
   });
 });
 

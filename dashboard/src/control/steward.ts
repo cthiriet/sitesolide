@@ -23,15 +23,14 @@
  * the access registry when one is minted, and again at every use of it, so
  * that a role lowered, the create right taken back or a person removed holds
  * from the next request, and a person removed takes every token of theirs
- * with them, whoever made it. A project a person's token creates makes that
- * person its Admin once the installer has finished and the machine carries
- * it, succeeded or failed after serving it, and only while that token still
- * owns its name (`settleCreations`); the token owns its name from its first
- * deployment, and deploys it again, its installer stopped half way, as the
- * creation it still is (`slugState`). A creation whose installer never left
- * a final result within a day is dropped, nobody made Admin: whatever the
- * machine carries under that name by then may be someone else's. One
- * undone, nothing laid, gives its name back.
+ * with them, whoever made it. The token owns a project's name from its first
+ * deployment. A project a person's token creates makes that person its
+ * Admin under one rule (`settleCreations`): the creation's own installer has
+ * ended, succeeded, failed or stopped half way, the machine carries the
+ * project, the token still owns the name, and nobody has access to the
+ * project yet. Otherwise nobody is made Admin; a creation not settled within
+ * a day is dropped, and the project, if there is one, is the owner's to
+ * give. One undone, nothing laid, gives its name back.
  * The tokens from before every token belonged to someone are made someone's
  * once (`migrateTokens`), and the live tokens of anyone the registry gives no
  * rights are revoked every 30 seconds (`sweepTokens`), so that a person given
@@ -40,10 +39,8 @@
  * **Two queues here**, the tokens' and the creations', in the order
  * src/people/steward.ts sets for every queue of this steward: the tokens'
  * may wait on the creations', which may wait on the registry's, never the
- * other way. So a creation recorded hands back whoever it took out of the
- * dashboard, seen off (`leave`, then `revokeMember`) once the creations'
- * turn is over, and a creation undone gives its name back in the tokens'
- * queue, once the creations' turn is over too.
+ * other way. So a creation undone gives its name back in the tokens' queue,
+ * once the creations' turn is over.
  *
  * **team.json stays readable.** Revoked and expired tokens are kept 90 days,
  * then dropped, sooner when room is needed, the oldest first; a token that
@@ -82,6 +79,7 @@ import {
   type DeployResponse,
   type Identity,
   type InstallRequest,
+  type InstallerResult,
   type LogsResponse,
   type TeamResponse,
   type TokenView,
@@ -125,13 +123,11 @@ export type MemberAuthority = {
   /** Of these people, those the registry gives no rights now, read once; a Response: the registry does not read. */
   rightless: (emails: readonly string[]) => Promise<string[] | Response>;
   /**
-   * They become Admin of what their token created, the installer done,
-   * journaled; whoever that took out of the dashboard, to see off with
-   * `leave` once no queue is held; a Response when it cannot be recorded.
+   * They become Admin of what their token created, the installer done, on a
+   * project nobody has access to yet, journaled: null. A Response when it is
+   * not recorded, refused or the registry not reading.
    */
-  recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | { leaving: string[] }>;
-  /** Someone who no longer signs in: sessions closed, tokens revoked (`revokeMember`). Never called while a queue of this file is held. */
-  leave: (email: string, actor: string) => Promise<unknown>;
+  recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | null>;
   journal: (event: MemberEvent) => Promise<void>;
   /** A refusal, bounded per minute. */
   journalRefusal: (event: MemberEvent) => Promise<void>;
@@ -192,14 +188,6 @@ export type ControlHandler = Handler & {
 
 /** Who a bearer is, narrowed to their person's rights for a person's token. */
 type Holder = { identity: Identity; rights: MemberRights | null };
-
-/**
- * The machine as a deployment of a slug finds it: whether it carries the
- * project, the token that owns its name, and the creation this deployment
- * resumes, the token's own, its installer stopped before it finished
- * (`slugState`); null for any other deployment.
- */
-type SlugState = { exists: boolean; owner: string | null; resumes: PendingCreation | null };
 
 /** The biggest body: a deployment request, its manifest included. */
 export const MAX_CONTROL_BODY_BYTES = MAX_MANIFEST_BYTES + 4 * 1024;
@@ -362,22 +350,15 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * token, their role first, or the create right for a new project, then the
    * token's own rule, its refusals said in a person's words: the Tokens page
    * is where they mint another.
-   *
-   * A deployment that resumes the token's own creation (`SlugState`) is that
-   * creation again, judged as one: by the create right, not by the role its
-   * person holds only once it has finished, and handed to the installer as a
-   * creation.
    */
-  function judgeSlug(holder: Holder, slug: unknown, state: SlugState): SlugDecision {
+  function judgeSlug(holder: Holder, slug: unknown, state: { exists: boolean; owner: string | null }): SlugDecision {
     const { rights } = holder;
-    const resumes = state.resumes !== null;
     const shaped = typeof slug === "string" && isValidSlug(slug) && reservedReason(slug, options.zone) === null;
     if (rights !== null && shaped) {
-      const refusal = deployRefusal(rights, slug as string, state.exists && !resumes);
+      const refusal = deployRefusal(rights, slug as string, state.exists);
       if (refusal !== null) return { kind: "refused", error: "out-of-scope", message: refusal };
     }
-    const decision = decideSlug(holder.identity, slug, { exists: state.exists, owner: state.owner, zone: options.zone });
-    if (resumes && decision.kind === "allowed") return { kind: "allowed", creating: true };
+    const decision = decideSlug(holder.identity, slug, { ...state, zone: options.zone });
     if (rights === null || decision.kind !== "refused" || decision.error !== "out-of-scope") return decision;
     return {
       kind: "refused",
@@ -388,26 +369,10 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     };
   }
 
-  /**
-   * The machine as a deployment of this slug finds it. With the holder, for
-   * a deployment rather than a read of its logs: the creation it resumes,
-   * when its person holds no role on a project the machine carries, the
-   * token owns its name, and the token's creation of it, noted, has not
-   * finished, nor been abandoned (`progressOf`). That is a first deployment
-   * whose installer was stopped after laying the tree, by a reboot, a
-   * timeout or the OOM killer: without it, its person would be refused the
-   * project they are creating, for want of the role they get once it is
-   * done. Read in the creations' turn, which the tokens' queue may wait on.
-   */
-  async function slugState(slug: string, holder: Holder | null = null): Promise<SlugState | Response> {
+  async function slugState(slug: string): Promise<{ exists: boolean; owner: string | null } | Response> {
     const registry = await team();
     if (registry instanceof Response) return registry;
-    const state: SlugState = { exists: await system.projectExists(slug), owner: registry.owners[slug] ?? null, resumes: null };
-    const rights = holder?.rights ?? null;
-    if (holder === null || rights === null || !state.exists || state.owner !== holder.identity.id || Object.hasOwn(rights.roles, slug)) return state;
-    const resumes = await unfinishedCreation(slug, holder.identity.id);
-    if (resumes instanceof Response) return resumes;
-    return { ...state, resumes };
+    return { exists: await system.projectExists(slug), owner: registry.owners[slug] ?? null };
   }
 
   // --- the registry ------------------------------------------------------------
@@ -497,7 +462,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (body instanceof Response) return body;
     const holder = await identify(body.bearer);
     if (holder instanceof Response) return holder;
-    const state = await slugState(String(body.slug ?? ""), holder);
+    const state = await slugState(String(body.slug ?? ""));
     if (state instanceof Response) return state;
     const decision = judgeSlug(holder, body.slug, state);
     if (decision.kind === "refused") return failure(decision.error, decision.message);
@@ -508,6 +473,11 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     const answer = await system.systemctl(["is-active", unit], systemctlTimeoutMs);
     const state = answer.output.trim();
     return state === "active" || state === "activating" || state === "deactivating" || state === "reloading";
+  }
+
+  /** An installer stopped half way, by a reboot, a timeout or the OOM killer: its result still `running`, untouched past the grace, its unit no longer active. */
+  async function stopped(result: InstallerResult): Promise<boolean> {
+    return result.state === "running" && system.now() - result.updatedAt > graceMs && !(await isActive(installerUnit(result.slug)));
   }
 
   async function deploy(req: Request): Promise<Response> {
@@ -526,7 +496,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     }
 
     return serially(async () => {
-      const state = await slugState(String(slug ?? ""), holder);
+      const state = await slugState(String(slug ?? ""));
       if (state instanceof Response) return state;
       const decision = judgeSlug(holder, slug, state);
       if (decision.kind === "refused") return failure(decision.error, decision.message);
@@ -574,11 +544,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
             const { message } = (await bounded.json()) as { message: string };
             return failure(bounded.status === 429 ? "too-many-attempts" : "not-available", message);
           }
-          // A creation resumed is settled by this deployment's result.
-          const noted =
-            state.resumes !== null
-              ? await movePending(state.resumes, deployment)
-              : await notePending({ deployment, slug: target, email: identity.member, token: identity.id, at: system.now() });
+          const noted = await notePending({ deployment, slug: target, email: identity.member, token: identity.id, at: system.now() });
           if (noted !== null) return noted;
         }
         const registry = await team();
@@ -621,9 +587,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (judgement.kind === "absent") return failure("not-found", "no result for this deployment yet");
     if (judgement.kind === "unreadable") return failure("failure", judgement.reason);
     let { result } = judgement;
-    if (result.state === "running" && system.now() - result.updatedAt > graceMs && !(await isActive(installerUnit(result.slug)))) {
-      result = interrupted(result, system.now());
-    }
+    if (await stopped(result)) result = interrupted(result, system.now());
     // A creation that just finished is settled before its result is handed
     // over: whoever reads "succeeded" finds its creator Admin already.
     if (result.state !== "running") await settleCreations();
@@ -903,50 +867,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     });
   }
 
-  /**
-   * Where a creation's installer stands: finished, by a result of its own,
-   * started once it was noted, a final one; abandoned, never finished within
-   * `CREATION_MAX_AGE_MS`.
-   */
-  async function progressOf(creation: PendingCreation): Promise<{ finished: boolean; abandoned: boolean }> {
-    const judgement = judgeResult(await system.readResult(creation.deployment), creation.deployment, options.uidRoot);
-    const result = judgement.kind === "read" && judgement.result.slug === creation.slug && judgement.result.startedAt >= creation.at ? judgement.result : null;
-    return { finished: result !== null && result.state !== "running", abandoned: system.now() - creation.at >= CREATION_MAX_AGE_MS };
-  }
-
-  /** This token's creation of this slug, noted, neither finished nor abandoned; null when there is none, a refusal when the file does not read. */
-  function unfinishedCreation(slug: string, token: string): Promise<PendingCreation | null | Response> {
-    return inCreationsTurn(async () => {
-      const current = await pending();
-      if (current instanceof Response) return current;
-      const creation = current.find((one) => one.slug === slug && one.token === token);
-      if (creation === undefined) return null;
-      const { finished, abandoned } = await progressOf(creation);
-      return finished || abandoned ? null : creation;
-    });
-  }
-
-  /**
-   * A creation resumed by a new deployment of its token: its record moved to
-   * that deployment, started now, in the creations' turn, so that the new
-   * installer's final result settles it. A refusal, and nothing started,
-   * when it was settled, dropped or abandoned since it was read.
-   */
-  function movePending(creation: PendingCreation, deployment: string): Promise<Response | null> {
-    return inCreationsTurn(async () => {
-      const current = await pending();
-      if (current instanceof Response) return current;
-      const at = system.now();
-      const same = (one: PendingCreation) => one.deployment === creation.deployment && one.slug === creation.slug && one.token === creation.token;
-      if (!current.some(same) || at - creation.at >= CREATION_MAX_AGE_MS) {
-        return failure("busy", `the creation of ${creation.slug} was settled meanwhile: deploy again`);
-      }
-      await system.writeCreations(encodeCreations(current.map((one) => (same(one) ? { ...one, deployment, at } : one))));
-      console.log(`control: the creation of ${creation.slug} by ${creation.email} resumed by deployment ${deployment}, the installer of ${creation.deployment} having stopped before it finished`);
-      return null;
-    });
-  }
-
   /** The creations of this slug dropped, in the creations' turn: the project they were for is gone. How many; a refusal when the file does not read. */
   function dropPending(slug: string): Promise<number | Response> {
     return inCreationsTurn(async () => {
@@ -963,22 +883,34 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
-   * Every creation whose installer has finished, or never will. Finished,
-   * the machine carrying the project, succeeded or failed after serving it,
-   * and the token that started it owning its name still: its person made
-   * Admin, in the registry's queue, where their create right is read again.
-   * Finished with nothing on the machine: undone, dropped, and its name given
-   * back. Never finished within `CREATION_MAX_AGE_MS`, the installer killed
-   * or its result gone with a reboot: dropped, nobody made Admin, since
-   * whatever the machine carries under that name by then may be someone
-   * else's. Only a result started after the creation was noted counts: an
-   * earlier one, of a project of that name removed since, is another
-   * deployment's. A result not there yet waits for the next call. Whoever a
-   * creation took out of the dashboard leaves, and the names come back, once
-   * this turn is over: see the queues above.
+   * Has this creation's own installer ended: a result of its own deployment,
+   * started once the creation was noted, final, succeeded or failed, or left
+   * `running` by an installer stopped half way (`stopped`)? No result at all
+   * is no end, and an earlier result, of a project of that name removed
+   * since, is another deployment's.
+   */
+  async function ended(creation: PendingCreation): Promise<boolean> {
+    const judgement = judgeResult(await system.readResult(creation.deployment), creation.deployment, options.uidRoot);
+    if (judgement.kind !== "read") return false;
+    const { result } = judgement;
+    if (result.slug !== creation.slug || result.startedAt < creation.at) return false;
+    return result.state !== "running" || (await stopped(result));
+  }
+
+  /**
+   * The creations settled, under one rule. Its person is made Admin only
+   * when all of this holds at once: its own installer has ended (`ended`),
+   * the machine carries the project, the token that started it still owns
+   * its name, and nobody has access to the project yet, which the registry
+   * checks in its own queue with the create right (`recordCreation`). An
+   * ended creation is dropped either way: one of those failing, nobody is
+   * made anything. Ended with nothing on the machine, it is undone, and its
+   * name comes back once this turn is over (see the queues above). Not ended
+   * within `CREATION_MAX_AGE_MS`: dropped, nobody made Admin, the project, if
+   * there is one, the owner's to give by hand. A result not there yet waits
+   * for the next call.
    */
   async function settleCreations(): Promise<void> {
-    const leaving: { email: string; actor: string }[] = [];
     const undone: PendingCreation[] = [];
     await inCreationsTurn(async () => {
       const current = await pending();
@@ -987,15 +919,15 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       /** The token registry, read once, when a creation needs it. */
       let held: Team | Response | null = null;
       for (const creation of current) {
-        const { finished, abandoned } = await progressOf(creation);
-        if (!finished && !abandoned) {
+        const expired = system.now() - creation.at >= CREATION_MAX_AGE_MS;
+        if (!expired && !(await ended(creation))) {
           left.push(creation);
           continue;
         }
         const carried = await system.projectExists(creation.slug);
         if (!carried) undone.push(creation);
-        if (!finished || !carried || options.members === undefined) {
-          console.log(`control: the creation of ${creation.slug} by ${creation.email} ${finished ? "undone" : "never finished"}: dropped, nobody made Admin`);
+        if (expired || !carried || options.members === undefined) {
+          console.log(`control: the creation of ${creation.slug} by ${creation.email} ${expired ? "not settled within a day" : "undone"}: dropped, nobody made Admin`);
           continue;
         }
         held ??= await team();
@@ -1008,21 +940,16 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
           console.log(`control: the creation of ${creation.slug} by ${creation.email} dropped, nobody made Admin: its name is no longer token ${creation.token}'s`);
           continue;
         }
-        const recorded = await options.members.recordCreation(creation.slug, creation.email, creation.token);
+        const refused = await options.members.recordCreation(creation.slug, creation.email, creation.token);
         // The registry being made or unreadable: tried again at the next call.
-        if (recorded instanceof Response && recorded.status >= 500) {
+        if (refused !== null && refused.status >= 500) {
           left.push(creation);
           continue;
         }
-        if (recorded instanceof Response) {
-          console.log(`control: ${creation.email} not made Admin of ${creation.slug}, refused by the registry`);
-          continue;
-        }
-        for (const email of recorded.leaving) leaving.push({ email, actor: creation.email });
+        if (refused !== null) console.log(`control: the creation of ${creation.slug} by ${creation.email} dropped, nobody made Admin: refused by the registry`);
       }
       if (left.length !== current.length) await system.writeCreations(encodeCreations(left));
     });
-    for (const one of leaving) await options.members?.leave(one.email, one.actor);
     if (undone.length > 0) await giveNamesBack(undone);
   }
 

@@ -308,7 +308,9 @@ changed in `src/secrets/` only counts in production after that script**: a
 
 **The unit is hardened**: read-only system outside `/etc/sitesolide` and its own
 directories, no IP addresses at all, capabilities reduced to `CAP_CHOWN` and
-`CAP_DAC_READ_SEARCH`, `MemoryMax=128M`.
+`CAP_DAC_READ_SEARCH`, `MemoryMax=192M`: one argon2id verification and one
+read of the history at a time, with the margin measured in the unit's
+comment.
 
 ### Unlocking
 
@@ -334,8 +336,8 @@ directories, no IP addresses at all, capabilities reduced to `CAP_CHOWN` and
   sign-ins, in memory, under a cap of sixty unlock attempts a minute for the
   whole machine: neither slows the other.
 - **One argon2id verification at a time**, new hashes included. Each costs about
-  65 MiB, and two at once get the service killed at 128 MiB: measured on the
-  bench, where raising `MemoryMax` only moved the threshold.
+  65 MiB: on the bench two at once got the service killed at 128 MiB and three
+  at 192, raising `MemoryMax` only moving the threshold.
 
 ### The scope: every deployed project
 
@@ -857,24 +859,18 @@ steward.js         src/control/steward.ts: the session and the unlock asked of t
   `team.json`, as for any token; it refuses before anything starts while the
   access log is full (`not-available`, 503, with the log's message) or the
   person's hour of changes of access is used up (`too-many-attempts`, 429).
-  The person becomes its Admin once the installer has finished and the
-  machine carries the project, whether it succeeded or failed after serving
-  it, a secret missing for instance, so that they can deploy it again: in the
-  registry's queue, where their create right is read again, journaled as
-  `project.create` under their email, and only while that token still owns
-  the name. A creation undone, nothing left on the machine, makes nobody
-  Admin, is dropped, and gives its name back. One whose installer never left
-  a final result within 24 hours is dropped too, nobody made Admin, and
-  `sitesolide remove` drops the creation of the project it removes: what the
-  machine carries under that name by then may be the owner's own. Within
-  those 24 hours, the same token deploying the project again, its installer
-  stopped after laying the tree by a reboot, a timeout or the OOM killer,
-  resumes the creation rather than being refused for want of the role it
-  brings: judged by the create right, handed to the installer as a creation,
-  the creation moved to the new deployment, whose result settles it as
-  above. Someone given a role on it meanwhile is judged by that role. Only a
-  result started after the creation was noted counts, and a deployment id is
-  used once: a deployment naming an id that already has a result is refused.
+  The person becomes its Admin under one rule: the creation's own installer
+  has ended, succeeded, failed, or stopped half way (its result left
+  `running`, its unit no longer active); the machine carries the project;
+  the token still owns the name; and nobody has access to the project yet. That last check and the create right are read in the
+  registry's queue, and the Admin role is journaled as `project.create` under
+  their email. Otherwise nobody is made anything and nothing is taken from
+  anyone. A creation undone, nothing left on the machine, gives its name
+  back. One not settled within 24 hours is dropped, and the project, if
+  there is one, is the owner's to give by hand; `sitesolide remove` drops
+  the creation of the project it removes. Only a result started after the
+  creation was noted counts, and a deployment id is used once: a deployment
+  naming an id that already has a result is refused.
   A token holds 20 names of projects the machine does not carry at most,
   creations still running or undone, and creates nothing new past that
   (`too-many-attempts`, 429), so that `team.json` never grows by a name per
@@ -1252,11 +1248,12 @@ an older row out (see [Granting, changing,
 removing](#granting-changing-removing)). It is pruned by age, line by line
 whatever its size, at most once an hour on the append that follows, at the
 steward's start, and on the next append once it passes 12 MB. `GET /log` reads
-a window of it, never the whole: its newest megabyte, or for a page further
-back the megabyte that ends at that page's date, the rows the answer needs at
-least, parsed for that one request and let go, so that a full log and the 64
-MiB of an unlock fit the steward's 128 MB together; the start's top-up goes
-through it line by line. A file of its own because the journal rotates by line count
+a window of it, never the whole: the rows the answer holds and no more, the
+newest, or for a page further back those before that page's date, a site's
+found by the bytes of its name before any line is decoded; parsed for that
+one request, let go, and collected before the next, so that a full log and
+the 64 MiB of an unlock fit the steward's 192 MB together; the start's top-up
+goes through it line by line. A file of its own because the journal rotates by line count
 and every unlock, read and sign-in writes to it: a busy week would push a
 month-old change of access out. A refusal is no change and stays in the
 journal, bounded per minute, rotated with the rest. Both files hold lines of

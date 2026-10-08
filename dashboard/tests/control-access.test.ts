@@ -120,8 +120,7 @@ function bench(options: { access?: boolean; full?: () => boolean; changesPerHour
       const registry = await store.read();
       return registry instanceof Response ? registry : emails.filter((email) => rightsOf(registry, email) === null);
     },
-    recordCreation: async () => ({ leaving: [] }),
-    leave: async () => {},
+    recordCreation: async () => null,
     journal: async () => {},
     journalRefusal: async () => {},
   };

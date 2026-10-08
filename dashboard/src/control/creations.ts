@@ -2,22 +2,17 @@
  * The projects a person's token is creating, until the installer has said
  * how it went: `creations.json` in the steward's state folder, root 0600.
  *
- * **A person becomes Admin of what they created once it exists.** The steward
- * notes the creation when it starts the installer, and records the person as
- * the project's Admin once the installer has finished and the machine carries
- * the project (src/control/steward.ts, `settleCreations`): succeeded, or
- * failed after serving it, a secret missing for instance, which its creator
- * must be able to deploy again; and only while the token that started it
- * still owns the name. A creation refused or undone makes nobody Admin of a
- * name the machine does not carry, and gives the name back; the create right
- * is read again then, in the registry's queue. One whose installer never
- * left a final result within a day makes nobody Admin either, and a project
- * removed with `sitesolide remove` takes its creation with it: whatever the
- * machine carries under that name later may be someone else's. Within that
- * day, a new deployment by the same token, its installer stopped half way,
- * resumes the creation: the record moves to it, and its result settles it.
- * Kept on disk rather than in memory, so that a steward restarted while an
- * installer ran still settles it.
+ * **A person becomes Admin of what they created, and of nothing else.** The
+ * steward notes the creation when it starts the installer, and settles it
+ * under one rule (src/control/steward.ts, `settleCreations`): its person is
+ * made Admin only when the creation's own installer has ended, succeeded,
+ * failed or stopped half way, the machine carries the project, the token
+ * that started it still owns the name, and nobody has access to the project
+ * yet. Otherwise nobody is made anything. One undone, nothing laid, gives
+ * its name back. One not settled within a day is dropped, the project, if
+ * there is one, the owner's to give; `sitesolide remove` drops the creation
+ * of the project it removes. Kept on disk rather than in memory, so that a
+ * steward restarted while an installer ran still settles it.
  *
  * Pure: the file comes in as text, goes out as text.
  */
@@ -36,7 +31,7 @@ export type PendingCreation = {
 
 export const CREATIONS_NAME = "creations.json";
 
-/** Past this, an installer that never left a final result has long stopped: the creation is dropped, nobody made Admin. */
+/** Past this, a creation not settled is dropped, nobody made Admin: its installer has long stopped, or the steward was away. */
 export const CREATION_MAX_AGE_MS = 24 * 3600 * 1000;
 
 /** A handful run at once at most; a list longer than this is not this steward's. */

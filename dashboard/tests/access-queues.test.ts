@@ -98,7 +98,7 @@ async function wire(registry: Registry, sites: string[]) {
       zone: ZONE,
       isUnlocked: async (token) => token === "owner-unlock",
       uidRoot: null,
-      members: { authorize: members.authorize, unlockedUntil: members.unlockedUntil, rights: members.rights, rightless: members.rightless, recordCreation: members.recordCreation, leave: members.leave, journal: members.journal, journalRefusal: members.journalRefusal },
+      members: { authorize: members.authorize, unlockedUntil: members.unlockedUntil, rights: members.rights, rightless: members.rightless, recordCreation: members.recordCreation, journal: members.journal, journalRefusal: members.journalRefusal },
       access: access.forToken,
       forgetAccess: access.forgetProject,
     },
@@ -166,8 +166,8 @@ describe("the steward's queues, wired together", () => {
     expect(registry.projects.made).toEqual([expect.objectContaining({ who: DAVE, role: "admin" })]);
   });
 
-  test("a creation that drops someone's last role while a deployment waits on the creations: the leaver's tokens go once the turn is over", async () => {
-    // Erin's last role is on a project of that name removed by hand: the new project starts from nobody.
+  test("a creation refused on a project someone has access to, while a deployment waits on the creations: both answer, and nobody loses anything", async () => {
+    // Erin's role on a project of that name: the creation is nobody's to record.
     const bench = await wire(registryWith([["made", ERIN, "developer"], ["blog", DAVE, "admin"]], [DAVE]), ["blog", "made"]);
     const dave = await bench.mint(DAVE, true);
     const erin = await bench.mint(ERIN, false, ["made"]);
@@ -177,14 +177,15 @@ describe("the steward's queues, wired together", () => {
     // The tokens' queue first, held by is-active, then wanting the creations' turn.
     const deploy = status(bench.post("/control/deploy", { bearer: dave.secret, deployment: "dddddddddddddddddddddddd", slug: "other", manifest: JSON.stringify({ slug: "other" }) }));
     await Bun.sleep(20);
-    // The creations' turn records "made", which drops Erin: her tokens want the tokens' queue.
+    // The creations' turn asks the registry, which refuses.
     const settled = bench.control.settleCreations().then(() => "settled");
 
     expect(await within(deploy)).toBe(202);
     expect(await within(settled)).toBe("settled");
-    expect((await bench.post("/control/authenticate", { bearer: erin.secret })).status).toBe(401);
-    const tokens = (await (await bench.control(new Request("http://steward/tokens/list"))).json()) as { tokens: { id: string; revokedAt: number | null }[] };
-    expect(tokens.tokens.find((one) => one.id === erin.token.id)?.revokedAt).not.toBeNull();
+    expect((await bench.post("/control/authenticate", { bearer: erin.secret })).status).toBe(200);
+    const registry = await bench.store.read();
+    if (registry instanceof Response) throw new Error("the registry does not read");
+    expect(registry.projects.made).toEqual([expect.objectContaining({ who: ERIN, role: "developer" })]);
   });
 
   test("given a role back before the control routes revoke, they keep their tokens: judged again in the tokens' queue", async () => {

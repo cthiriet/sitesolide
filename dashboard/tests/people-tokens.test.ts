@@ -136,18 +136,17 @@ describe("the access registry's side", () => {
     expect(rightsOf(registryOf({}, ["dan@acme.test"]), "dan@acme.test")).toEqual({ email: "dan@acme.test", roles: {}, create: true });
   });
 
-  test("a project they create makes them its Admin, alone: what a project of that name left behind is dropped, the other projects kept", () => {
-    const left = registryOf({ "ada@acme.test": { alpha: "developer", omega: "viewer" }, "eve@acme.test": { omega: "admin" }, "@acme.test": { omega: "visitor" } }, ["ada@acme.test"], T);
-    const created = recordCreation(left, "ada@acme.test", "omega", T + 1);
-    if ("refusal" in created) throw new Error(created.refusal);
-    expect(created.change).toBe("add");
-    expect(created.entry).toMatchObject({ who: "ada@acme.test", role: "admin", by: "ada@acme.test", createdAt: T + 1 });
-    expect(created.registry.projects.omega!.map((entry) => entry.who)).toEqual(["ada@acme.test"]);
-    expect(created.dropped.map((entry) => entry.who)).toEqual(["@acme.test", "ada@acme.test", "eve@acme.test"]);
-    expect(rightsOf(created.registry, "ada@acme.test")).toEqual({ email: "ada@acme.test", roles: { alpha: "developer", omega: "admin" }, create: true });
-    expect(rightsOf(created.registry, "eve@acme.test")).toBeNull();
+  test("a project they create makes them its Admin where nobody has access yet; where someone has, nothing is recorded and nothing taken", () => {
     const fresh = recordCreation(registry, "ada@acme.test", "zeta", T + 1);
-    expect(fresh).toMatchObject({ change: "add", entry: { who: "ada@acme.test", role: "admin", by: "ada@acme.test" }, dropped: [] });
+    if ("refusal" in fresh) throw new Error(fresh.refusal);
+    expect(fresh).toMatchObject({ change: "add", entry: { who: "ada@acme.test", role: "admin", by: "ada@acme.test", createdAt: T + 1 } });
+    expect(fresh.registry.projects.zeta!.map((entry) => entry.who)).toEqual(["ada@acme.test"]);
+    expect(rightsOf(fresh.registry, "ada@acme.test")).toEqual({ email: "ada@acme.test", roles: { alpha: "developer", omega: "viewer", zeta: "admin" }, create: true });
+    // omega has people with access: the owner's, or a project of that name left behind.
+    const taken = recordCreation(registry, "ada@acme.test", "omega", T + 1);
+    expect(taken).toMatchObject({ code: "out-of-scope", refusal: expect.stringContaining("omega already has people with access") });
+    const left = registryOf({ "eve@acme.test": { omega: "admin" }, "@acme.test": { omega: "visitor" } }, ["ada@acme.test"], T);
+    expect(recordCreation(left, "ada@acme.test", "omega", T + 1)).toMatchObject({ code: "out-of-scope" });
   });
 
   test("the create right is read when the creation is recorded: taken back, or never held, nothing is recorded", () => {

@@ -89,7 +89,9 @@ roles: from *People*, or `sitesolide people <email> --may-create`, taken back
 with `--no-create`. It may be all they hold, someone asked to create their own
 projects, none yet; it takes an address that signs in with a company account.
 Whoever holds it mints a token that may create, and becomes Admin of each
-project that token creates.
+project that token creates, once its first deployment has ended, provided
+nobody has been given access to the project meanwhile; otherwise, and for a
+creation not settled within a day, the owner gives its roles by hand.
 
 **Giving someone access** is the project's Admin's, or the owner's: from the
 site's *Access* section, or `sitesolide share <email> --role <role>` in the

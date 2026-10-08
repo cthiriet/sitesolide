@@ -76,9 +76,8 @@ function bench(): Bench {
       if ("refusal" in result) return refuse("out-of-scope", result.refusal, 403);
       registry.value = result.registry;
       journal.push({ operation: "project.create", result: "ok", actor: email, member: email, detail: `admin, created with token ${tokenId}`, slug });
-      return { leaving: [] };
+      return null;
     },
-    leave: async () => {},
     journal: async (event) => void journal.push(event),
     journalRefusal: async (event) => void journal.push(event),
   };
