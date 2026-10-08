@@ -392,14 +392,15 @@ export const ACCESS_PRUNE_INTERVAL_MS = 3600 * 1000;
 export const ACCESS_PRUNE_BYTES = 12 * 1024 * 1024;
 
 /**
- * What `GET /log` reads of the access log at once: its newest megabyte, some
- * 4,000 rows of a usual length, many times the fifty it answers or the page
- * of 500 it hands out at most. A page further back reads the megabyte that
- * ends at its date (`AccessWindow`), so the whole history is still read, a
- * page at a time. Never more than that, and parsed for the one request alone:
- * the steward runs under MemoryMax=128M, an argon2id verification takes 64
- * MiB of it, and a parse of a full log kept between requests left the owner
- * unable to unlock.
+ * What `GET /log` reads of the access log at once, every site's rows: its
+ * newest megabyte, some 4,000 rows of a usual length, many times the fifty
+ * it answers or the page of 500 it hands out at most; of one site, the rows
+ * the answer needs (`windowBytes`). A page further back reads the megabyte
+ * that ends at its date (`AccessWindow`), so the whole history is still
+ * read, a page at a time. Never more than that, parsed for the one request
+ * alone, and collected before the next (`createHistory`): the steward runs
+ * under MemoryMax=128M, an argon2id verification takes 64 MiB of it, and a
+ * parse of a full log kept between requests left the owner unable to unlock.
  */
 export const ACCESS_READ_BYTES = 1024 * 1024;
 
@@ -410,9 +411,20 @@ export const MAX_ENTRY_BYTES = 8 * 1024;
  * What one `GET /log` reads of the access log: the newest rows dated before
  * `before` (all of them when null), of `slug` alone when it is named, `need`
  * of them at least when the file holds as many, then as many more as fit in
- * `ACCESS_READ_BYTES`.
+ * `windowBytes`.
  */
 export type AccessWindow = { before: number | null; slug: string | null; need: number };
+
+/**
+ * What a window holds past the `need` rows it asks for: as many more as fit
+ * in `ACCESS_READ_BYTES` when it reads every site, none when it reads one.
+ * A site's rows lie apart in the file, every line between two of them read
+ * and decoded on the way: a megabyte of them could lie at the far end of a
+ * log of any size, for an answer that holds `need` rows at most.
+ */
+export function windowBytes(window: Pick<AccessWindow, "slug">): number {
+  return window.slug === null ? ACCESS_READ_BYTES : 0;
+}
 
 /** Does this line belong in the access log rather than the journal: an accepted change of access. */
 export function isAccessChange(entry: LogEntry): boolean {
@@ -559,20 +571,40 @@ export type HistorySource = {
 /**
  * The journal and the access log as one history, read one request at a time
  * and kept by none: each request reads the journal, bounded by its rotation,
- * and the window of the access log it asks for, `ACCESS_READ_BYTES` or a
- * little more, parses both, and lets go of them once `use` has answered. A
- * burst of `GET /log`, a compromised dashboard's included, therefore never
- * holds more than one window at once, and nothing stays between two. `use`
- * runs on the history in turn and must not keep it.
+ * and the window of the access log it asks for (`windowBytes`), parses both,
+ * and lets go of them once `use` has answered. `use` runs on the history in
+ * turn and must not keep it.
+ *
+ * **Let go is not given back.** What a read lets go of stays in the heap
+ * until the collector runs, and left to itself it runs late. A burst of
+ * `GET /log`, a compromised dashboard's or the Activity page's own, piled up
+ * the garbage of read after read, a site's window decoding every line it
+ * walks past, until the owner's unlock, whose argon2id verification takes
+ * 64 MiB, had the steward killed by its MemoryMax=128M: one read at a time
+ * was not one read's memory at a time. So each read ends with a full
+ * collection, `collect`, inside its turn, once its answer is made: the next
+ * read starts from a heap that holds nothing of the one before. Some 6 ms a
+ * read; `collect` is a parameter for the tests alone.
  */
-export function createHistory(source: HistorySource): { read: <T>(window: AccessWindow, use: (entries: LogEntry[]) => T) => Promise<T> } {
+export function createHistory(
+  source: HistorySource,
+  collect: () => void = () => Bun.gc(true),
+): { read: <T>(window: AccessWindow, use: (entries: LogEntry[]) => T) => Promise<T> } {
+  /** One read, its files and their parse gone with its frame once it has returned. */
+  async function readOnce<T>(window: AccessWindow, use: (entries: LogEntry[]) => T): Promise<T> {
+    const accessText = await source.readAccessLog(window);
+    const accessLog = accessText === null ? null : reread(accessText);
+    return use(mergeLogs(reread(await source.readJournal()), accessLog));
+  }
   let turn: Promise<unknown> = Promise.resolve();
   return {
     read<T>(window: AccessWindow, use: (entries: LogEntry[]) => T): Promise<T> {
       const next = turn.then(async () => {
-        const accessText = await source.readAccessLog(window);
-        const accessLog = accessText === null ? null : reread(accessText);
-        return use(mergeLogs(reread(await source.readJournal()), accessLog));
+        try {
+          return await readOnce(window, use);
+        } finally {
+          collect();
+        }
       });
       turn = next.catch(() => undefined);
       return next;

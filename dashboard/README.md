@@ -578,6 +578,24 @@ and the portal's database, read as root from a checked copy. What is
 carried, what is set aside and why, and how to go back, are in
 [docs/migration.md](../docs/migration.md#access-the-registry-made-from-the-stores-before-it).
 
+**Deleting it starts it over, and costs tokens.** A registry deleted while
+the steward runs is made again at the next request, from those same stores,
+read-only since and so as they stood at the first migration: every change
+of access made after it is gone, everyone given a role since with it, and
+until it is made again the access routes answer `migrating` and every
+person is refused. The sweep of the next 30 seconds (see [A person's own
+tokens](#a-persons-own-tokens)) then revokes the live tokens of everyone the
+rebuilt registry gives no rights, journaled `token.revoke` under `system`.
+To undo a deletion made by mistake, put a copy of the file back, root
+`0600`:
+`sudo install -m 600 -o root -g root <copy> /var/lib/sitesolide-steward/access.json`.
+The steward reads it at the next decision and writes the portal's
+projection again from it; the changes made to the rebuilt registry
+meanwhile are lost, and the tokens the sweep revoked stay revoked, as every
+revoked token does: their holders mint new ones. The machine's backups do
+not hold the steward's state, so that copy is yours to make before you edit
+the file by hand.
+
 ### Who decides what
 
 ```
@@ -848,7 +866,13 @@ steward.js         src/control/steward.ts: the session and the unlock asked of t
   Admin, is dropped, and gives its name back. One whose installer never left
   a final result within 24 hours is dropped too, nobody made Admin, and
   `sitesolide remove` drops the creation of the project it removes: what the
-  machine carries under that name by then may be the owner's own. Only a
+  machine carries under that name by then may be the owner's own. Within
+  those 24 hours, the same token deploying the project again, its installer
+  stopped after laying the tree by a reboot, a timeout or the OOM killer,
+  resumes the creation rather than being refused for want of the role it
+  brings: judged by the create right, handed to the installer as a creation,
+  the creation moved to the new deployment, whose result settles it as
+  above. Someone given a role on it meanwhile is judged by that role. Only a
   result started after the creation was noted counts, and a deployment id is
   used once: a deployment naming an id that already has a result is refused.
   A token holds 20 names of projects the machine does not carry at most,
@@ -1128,7 +1152,9 @@ projection and the access log stay beside them, unread; `X-Sitesolide-Role`
 goes back to `member` and `guest`. Upgrading again keeps the registry as it stood; to
 make it afresh from the old stores, delete
 `/var/lib/sitesolide-steward/access.json` first, which loses the changes
-made after the first migration instead. The detail is in
+made after the first migration instead, and revokes the tokens of everyone
+the registry made afresh gives no rights (see [One registry, the
+steward's](#one-registry-the-stewards)). The detail is in
 [docs/migration.md](../docs/migration.md#going-back).
 
 ## The audit

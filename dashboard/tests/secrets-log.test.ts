@@ -468,6 +468,32 @@ describe("GET /log's history, read anew for each request", () => {
     expect(most).toBe(1);
   });
 
+  test("each read ends with a full collection, after its answer and before the next read starts, a refused one too", async () => {
+    const steps: string[] = [];
+    const bench = source("");
+    const counted = {
+      readJournal: bench.source.readJournal,
+      readAccessLog: async (window: AccessWindow) => {
+        steps.push(`read ${window.need}`);
+        return bench.source.readAccessLog(window);
+      },
+    };
+    const history = createHistory(counted, () => void steps.push("collect"));
+    const reads = [1, 2, 3].map((need) =>
+      history.read({ before: null, slug: null, need }, () => {
+        steps.push(`use ${need}`);
+        if (need === 2) throw new Error("refused");
+        return need;
+      }),
+    );
+    expect(await Promise.allSettled(reads)).toEqual([
+      { status: "fulfilled", value: 1 },
+      { status: "rejected", reason: new Error("refused") },
+      { status: "fulfilled", value: 3 },
+    ]);
+    expect(steps).toEqual(["read 1", "use 1", "collect", "read 2", "use 2", "collect", "read 3", "use 3", "collect"]);
+  });
+
   test("a line is dated where encodeEntry writes the date, without being parsed, and parsed when written otherwise", () => {
     expect(lineDate(encodeEntry(row(5)))).toBe(NOW - 3_600_000 + 5);
     expect(lineDate(JSON.stringify({ operation: "sharing", a: 42 }))).toBe(42);

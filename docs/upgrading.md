@@ -229,6 +229,19 @@ installer and the portal, which read the old stores as they stood at the
 migration: every change of access made since is lost for them. See
 [migration.md](migration.md#going-back).
 
+**Deleting `access.json` is no way to start over.** The steward makes it
+again at the next request from the old stores, as they stood at the
+migration, so every change of access made since is gone; within the next 30
+seconds its sweep revokes the live tokens of everyone the rebuilt registry
+gives no rights. A deletion made by mistake is undone by putting back a copy
+of the file, root `0600`:
+`ssh deploy@203.0.113.10 'sudo install -m 600 -o root -g root <copy> /var/lib/sitesolide-steward/access.json'`.
+Everyone's roles and access come back with it; the changes made to the
+rebuilt registry in between are lost, and the tokens the sweep revoked stay
+revoked, to be minted again. The machine's backups do not hold the steward's
+state: make that copy yourself, `sudo cp -p` of the file, before you edit it
+by hand.
+
 ## From 0.2 to 0.3
 
 0.3 changes how you install and drive sitesolide, not what runs on the

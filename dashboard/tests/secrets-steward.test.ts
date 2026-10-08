@@ -44,7 +44,7 @@ import {
   type StewardOptions,
 } from "../src/secrets/steward";
 import { createSystem, isTemporary, readAccount, readGroup, type Command, type SystemConfig, type System } from "../src/secrets/system";
-import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_READ_BYTES, ACCESS_RETENTION_MS, createHistory, encodeEntry, inWindow, MAX_ENTRY_BYTES, page, reread, type AccessWindow } from "../src/secrets/log";
+import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_READ_BYTES, ACCESS_RETENTION_MS, createHistory, encodeEntry, inWindow, MAX_ENTRY_BYTES, page, reread, windowBytes, type AccessWindow } from "../src/secrets/log";
 
 /**
  * The steward set up on a throwaway tree: real files, real atomic writes, but a
@@ -2919,7 +2919,7 @@ describe("the real system", () => {
       let bytes = 0;
       const lines = text.split("\n").filter((one) => one !== "" && one.length <= MAX_ENTRY_BYTES && inWindow(one, window));
       for (const one of lines.reverse()) {
-        if (kept.length >= window.need && bytes + one.length + 1 > ACCESS_READ_BYTES) break;
+        if (kept.length >= window.need && bytes + one.length + 1 > windowBytes(window)) break;
         kept.push(one);
         bytes += one.length + 1;
       }
@@ -2961,10 +2961,12 @@ describe("the real system", () => {
       expect(back.length).toBeGreaterThanOrEqual(500);
       expect(back.every((one) => one.a < NOW - 10 * DAY + 4_000_000)).toBe(true);
       expect(back.at(-1)?.a).toBe(NOW - 10 * DAY + 3_999_000);
-      // A rare site's fifty, however far back they lie.
+      // A rare site's fifty, however far back they lie, and no more: the
+      // walk stops there rather than reading on for a megabyte of them.
       const rare = reread((await system.readAccessLog({ before: null, slug: "rare", need: 50 }))!);
-      expect(rare.length).toBeGreaterThanOrEqual(50);
+      expect(rare.length).toBe(50);
       expect(rare.every((one) => one.slug === "rare")).toBe(true);
+      expect(reread((await system.readAccessLog({ before: null, slug: "shop", need: 500 }))!)).toHaveLength(500);
     });
 
     test("a burst of GET /log over a 12 MB access log holds one window at a time, and keeps none", async () => {

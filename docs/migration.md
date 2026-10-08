@@ -717,5 +717,9 @@ and the changes made under the old code in between are not carried over. To
 make it afresh from the old stores instead, delete it before upgrading:
 `ssh you@your-machine 'sudo rm /var/lib/sitesolide-steward/access.json'`. The
 changes made after the first migration are then lost instead: choose the
-side that holds what you want to keep.
+side that holds what you want to keep. Within thirty seconds of the rebuild,
+the steward revokes the tokens of anyone the rebuilt registry no longer
+names, and they stay revoked even if the file is put back: copy
+`access.json` first, since the machine's backups do not hold
+`/var/lib/sitesolide-steward`.
 

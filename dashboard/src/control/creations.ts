@@ -11,11 +11,13 @@
  * still owns the name. A creation refused or undone makes nobody Admin of a
  * name the machine does not carry, and gives the name back; the create right
  * is read again then, in the registry's queue. One whose installer never
- * left a final result makes nobody Admin either, and a project removed with
- * `sitesolide remove` takes its creation with it: whatever the machine
- * carries under that name later may be someone else's. Kept on disk rather
- * than in memory, so that a steward restarted while an installer ran still
- * settles it.
+ * left a final result within a day makes nobody Admin either, and a project
+ * removed with `sitesolide remove` takes its creation with it: whatever the
+ * machine carries under that name later may be someone else's. Within that
+ * day, a new deployment by the same token, its installer stopped half way,
+ * resumes the creation: the record moves to it, and its result settles it.
+ * Kept on disk rather than in memory, so that a steward restarted while an
+ * installer ran still settles it.
  *
  * Pure: the file comes in as text, goes out as text.
  */

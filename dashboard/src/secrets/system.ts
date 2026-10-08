@@ -52,7 +52,6 @@ import {
   ACCESS_LOG_NAME,
   ACCESS_PRUNE_BYTES,
   ACCESS_PRUNE_INTERVAL_MS,
-  ACCESS_READ_BYTES,
   ACCESS_RETENTION_MS,
   accessLogSeed,
   accessLogTopUp,
@@ -61,6 +60,7 @@ import {
   isRecentLine,
   MAX_ENTRY_BYTES,
   truncate,
+  windowBytes,
   type AccessWindow,
 } from "./log";
 import {
@@ -380,6 +380,8 @@ export function readWindow(path: string, max: number, need: number, keep: (line:
       }
       kept.push(text);
       bytes += line.length + 1;
+      // Nothing more fits: the walk stops here rather than at the next line kept.
+      if (kept.length >= need && bytes >= max) full = true;
     };
     let position = fstatSync(fd).size;
     while (position > 0 && !full) {
@@ -814,7 +816,7 @@ export function createSystem(config: SystemConfig): System {
 
     async readAccessLog(window = { before: null, slug: null, need: 0 }) {
       // A window of it, however big it has grown (log.ts).
-      const read = readWindow(accessLogFile, ACCESS_READ_BYTES, window.need, (line) => inWindow(line, window));
+      const read = readWindow(accessLogFile, windowBytes(window), window.need, (line) => inWindow(line, window));
       return read === "not-plain" ? "" : read;
     },
 

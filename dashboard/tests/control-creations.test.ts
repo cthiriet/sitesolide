@@ -20,8 +20,11 @@ import { INSTALLER_TEMPLATE, type InstallerResult } from "../src/control/protoco
  * the control routes. Two reviews' proofs, kept as tests: an abandoned
  * creation must never make its person Admin of a project of that name the
  * owner deployed since, and undone creations must never pile names up in
- * the token registry until nothing can be written to it. And the sweep that
- * keeps the tokens of someone with no role from coming back to life.
+ * the token registry until nothing can be written to it. A third's: a first
+ * deployment whose installer was stopped half way must not lock its creator
+ * out of the project they are creating, while a project removed under a
+ * running creation stays nobody's. And the sweep that keeps the tokens of
+ * someone with no role from coming back to life.
  */
 
 const ZONE = "test-zone.invalid";
@@ -153,6 +156,9 @@ async function wire(registry: Registry, sites: string[]) {
     return (await made.json()) as { token: { id: string }; secret: string };
   };
   const deploy = (secret: string, deployment: string, slug: string) => post("/control/deploy", { bearer: secret, deployment, slug, manifest: JSON.stringify({ slug }) });
+  const preflight = (secret: string, slug: string) => post("/control/preflight", { bearer: secret, slug });
+  /** What the installer was last asked for this slug. */
+  const request = (slug: string) => JSON.parse(readFileSync(join(root, "state", "installs", `${slug}.json`), "utf8")) as { deployment: string; creating: boolean };
   /** The installer's result as it leaves it; `laid`: the project's directory made, as it makes it once it gets that far. */
   const result = (deployment: string, slug: string, state: InstallerResult["state"], laid: boolean) => {
     if (laid) mkdirSync(join(root, "sites", slug), { recursive: true });
@@ -182,9 +188,9 @@ async function wire(registry: Registry, sites: string[]) {
   const team = () => JSON.parse(readFileSync(join(root, "state", "team.json"), "utf8")) as { owners: Record<string, string>; tokens: { id: string; revokedAt: number | null }[] };
   const creations = () => {
     const file = join(root, "state", "creations.json");
-    return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as { creations: { slug: string }[] }).creations : [];
+    return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as { creations: { deployment: string; slug: string; email: string; token: string; at: number }[] }).creations : [];
   };
-  return { root, clock, holdActive, journal, store, access, members, control: handler, post, mint, deploy, result, forget, ownerGrant, entries, team, creations };
+  return { root, clock, holdActive, journal, store, access, members, control: handler, post, mint, deploy, preflight, request, result, forget, ownerGrant, entries, team, creations };
 }
 
 const creates = (bench: Wired) => bench.journal.filter((event) => event.operation === "project.create" && event.result === "ok");
@@ -265,6 +271,118 @@ describe("an abandoned creation never takes a project of its name", () => {
     await bench.control.settleCreations();
     expect(await bench.entries("shop")).toEqual([`${DAVE}:admin`]);
     expect(creates(bench)).toHaveLength(1);
+  });
+});
+
+/** A refusal's status and message. */
+const refusal = async (response: Response) => ({ status: response.status, message: ((await response.json()) as { message: string }).message });
+
+describe("an interrupted first deployment resumes its creation", () => {
+  test("its installer killed after laying the tree, the same token deploys again as a creation, and its person is made Admin by that result", async () => {
+    const bench = await wire(registryWith([], [DAVE]), []);
+    const dave = await bench.mint(DAVE, true);
+    const D1 = "111111111111111111111111";
+    expect((await bench.deploy(dave.secret, D1, "shop")).status).toBe(202);
+    // Laid, then killed by a reboot, a timeout or the OOM killer: its result
+    // stays running, and the CLI shows it interrupted.
+    bench.result(D1, "shop", "running", true);
+    bench.clock.now += 60_000;
+    const shown = await bench.control(new Request(`http://steward/control/deployment?id=${D1}`));
+    expect(((await shown.json()) as { result: { state: string } }).result.state).toBe("failed");
+    expect(bench.creations()).toHaveLength(1);
+
+    // Dave deploys shop again: the machine carries it, he holds no role on
+    // it yet, and it is his token's creation still: the same creation.
+    expect(await (await bench.preflight(dave.secret, "shop")).json()).toEqual({ creating: true });
+    const D2 = "222222222222222222222222";
+    const again = await bench.deploy(dave.secret, D2, "shop");
+    expect(again.status).toBe(202);
+    expect(await again.json()).toEqual({ deployment: D2, slug: "shop", creating: true });
+    expect(bench.request("shop")).toMatchObject({ deployment: D2, creating: true });
+    expect(bench.creations()).toEqual([{ deployment: D2, slug: "shop", email: DAVE, token: dave.token.id, at: bench.clock.now }]);
+
+    // D1's result, still running, no longer counts; D2's settles it.
+    await bench.control.settleCreations();
+    expect(await bench.entries("shop")).toEqual([]);
+    bench.result(D2, "shop", "succeeded", true);
+    await bench.control.settleCreations();
+    expect(await bench.entries("shop")).toEqual([`${DAVE}:admin`]);
+    expect(creates(bench)).toHaveLength(1);
+    expect(bench.creations()).toEqual([]);
+    expect(bench.team().owners).toEqual({ shop: dave.token.id });
+    // From then on his role decides, and the project is no creation any more.
+    expect(await (await bench.preflight(dave.secret, "shop")).json()).toEqual({ creating: false });
+  });
+
+  test("past its 24 hours there is nothing to resume: refused for want of a role, before the timer drops it and after", async () => {
+    const bench = await wire(registryWith([], [DAVE]), []);
+    const dave = await bench.mint(DAVE, true);
+    const D1 = "333333333333333333333333";
+    expect((await bench.deploy(dave.secret, D1, "shop")).status).toBe(202);
+    bench.result(D1, "shop", "running", true);
+    bench.clock.now += CREATION_MAX_AGE_MS;
+    expect(await refusal(await bench.deploy(dave.secret, "444444444444444444444444", "shop"))).toEqual({ status: 403, message: `${DAVE} holds no role on shop` });
+    await bench.control.settleCreations();
+    expect(bench.creations()).toEqual([]);
+    expect(await refusal(await bench.deploy(dave.secret, "555555555555555555555555", "shop"))).toEqual({ status: 403, message: `${DAVE} holds no role on shop` });
+    expect(await bench.entries("shop")).toEqual([]);
+    expect(creates(bench)).toEqual([]);
+  });
+
+  test("a role given on it meanwhile decides, and the create right taken back refuses it as a creation", async () => {
+    const bench = await wire(registryWith([], [DAVE]), []);
+    const dave = await bench.mint(DAVE, true);
+    const D1 = "666666666666666666666666";
+    expect((await bench.deploy(dave.secret, D1, "shop")).status).toBe(202);
+    bench.result(D1, "shop", "running", true);
+    expect((await bench.ownerGrant("shop", DAVE, "viewer")).status).toBe(201);
+    expect(await refusal(await bench.preflight(dave.secret, "shop"))).toEqual({ status: 403, message: `${DAVE} is a Viewer on shop: deploying it takes a Developer or an Admin` });
+
+    // A Developer of blog besides, he still signs in once the right is gone.
+    const other = await wire(registryWith([["blog", DAVE, "developer"]], [DAVE]), ["blog"]);
+    const token = await other.mint(DAVE, true);
+    expect((await other.deploy(token.secret, D1, "shop")).status).toBe(202);
+    other.result(D1, "shop", "running", true);
+    const read = await other.store.read();
+    if (read instanceof Response) throw new Error("the registry does not read");
+    const taken = setCreate(read, DAVE, false, "owner", other.clock.now);
+    if ("refusal" in taken) throw new Error(taken.refusal);
+    writeFileSync(join(other.root, "state", "access.json"), encodeRegistry(taken.registry), { mode: 0o600 });
+    expect(await refusal(await other.preflight(token.secret, "shop"))).toEqual({ status: 403, message: expect.stringContaining(`${DAVE} may not create projects`) });
+    expect(other.creations()).toEqual([expect.objectContaining({ deployment: D1 })]);
+  });
+});
+
+describe("a creation stays its own token's to resume", () => {
+  test("the owner removes shop while Dave's installer still runs, which lays it again: nobody made Admin, and Dave is refused it", async () => {
+    const bench = await wire(registryWith([], [DAVE]), []);
+    const dave = await bench.mint(DAVE, true);
+    const D = "777777777777777777777777";
+    expect((await bench.deploy(dave.secret, D, "shop")).status).toBe(202);
+    expect((await bench.forget("shop")).status).toBe(200);
+    expect(bench.creations()).toEqual([]);
+    bench.result(D, "shop", "succeeded", true);
+    await bench.control.settleCreations();
+    expect(await bench.entries("shop")).toEqual([]);
+    expect(bench.team().owners).toEqual({});
+    // No creation to resume, and a name his token no longer owns.
+    expect(await refusal(await bench.preflight(dave.secret, "shop"))).toEqual({ status: 403, message: `${DAVE} holds no role on shop` });
+    expect(await refusal(await bench.deploy(dave.secret, "888888888888888888888888", "shop"))).toEqual({ status: 403, message: `${DAVE} holds no role on shop` });
+    expect(creates(bench)).toEqual([]);
+  });
+
+  test("neither someone else's token nor another of the same person's resumes it", async () => {
+    const bench = await wire(registryWith([], [DAVE, ERIN]), []);
+    const dave = await bench.mint(DAVE, true);
+    const D = "999999999999999999999999";
+    expect((await bench.deploy(dave.secret, D, "shop")).status).toBe(202);
+    bench.result(D, "shop", "running", true);
+    const erin = await bench.mint(ERIN, true);
+    expect(await refusal(await bench.deploy(erin.secret, "aaaaaaaaaaaaaaaaaaaaaaaa", "shop"))).toEqual({ status: 403, message: `${ERIN} holds no role on shop` });
+    const second = await bench.mint(DAVE, true);
+    expect(await refusal(await bench.deploy(second.secret, "bbbbbbbbbbbbbbbbbbbbbbbb", "shop"))).toEqual({ status: 403, message: `${DAVE} holds no role on shop` });
+    expect(bench.creations()).toEqual([expect.objectContaining({ deployment: D, token: dave.token.id })]);
+    expect(bench.team().owners).toEqual({ shop: dave.token.id });
   });
 });
 
