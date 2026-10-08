@@ -213,9 +213,9 @@ The free tier is enough: one check, pinged every minute.
    there and never creates it ([docs/secrets.md](../docs/secrets.md)).
 5. In the dashboard, the **dashboard** site, *Secrets*, *Unlock*, then in
    `dashboard-monitor.env` set `HEARTBEAT_URL` to the ping URL. The monitor
-   reads the file at its next pass, within the minute: nothing to restart. The
-   page may show *Restart pending* on the dashboard site; it is about
-   `dashboard.service`, which does not read this file, and can be ignored.
+   reads the file at its next pass, within the minute: nothing to restart, and
+   the page marks no restart pending, since `dashboard.service` does not read
+   this file.
 6. Within two minutes the check turns green on healthchecks.io, and
    `sudo journalctl -u sitesolide-monitor -n 1` ends with `heartbeat ok`.
 

@@ -745,6 +745,22 @@ describe("GET /projects: every site", () => {
     await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN", value: "other" });
     expect((await fileSeen(bench, "cms", "cms.env")).restartPending).toBe(true);
   });
+
+  test("a variables file its unit does not read waits for no restart, as the monitor's and the backups' do", async () => {
+    const bench = await mount();
+    const token = await unlock(bench);
+    // library.service reads no secret file: a restart would apply nothing.
+    expect((await bench.call("PUT", "/variable", { token, slug: "library", file: "library.env", variable: "KEY", value: "2" })).status).toBe(200);
+    expect((await fileSeen(bench, "library", "library.env")).restartPending).toBe(false);
+  });
+
+  test("a file a unit reads with no manifest to declare it still waits for its restart", async () => {
+    const bench = await mount();
+    const token = await unlock(bench);
+    // The landing has no manifest; its unit reads landing-mail.env all the same.
+    expect((await bench.call("PUT", "/variable", { token, slug: "test-zone.invalid", file: "landing-mail.env", variable: "AWS_REGION", value: "eu-west-1" })).status).toBe(200);
+    expect((await fileSeen(bench, "test-zone.invalid", "landing-mail.env")).restartPending).toBe(true);
+  });
 });
 
 describe("a file whose site is gone", () => {

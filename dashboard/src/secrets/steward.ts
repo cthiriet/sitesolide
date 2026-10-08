@@ -392,6 +392,12 @@ const SLUG_SHAPE = /^[a-z0-9.-]+$/;
 
 type Target = { site: Site; declaration: Declaration; path: string };
 
+/**
+ * A service as the page needs it: its view, its startup to the microsecond,
+ * and which managed files its unit reads, null when the unit cannot be read.
+ */
+type ServiceState = { view: ServiceView | null; startedUs: number | null; reads: ((name: string) => boolean) | null };
+
 /** A file that is present and managed, with what its kind read from it. */
 type Managed = {
   bytes: Uint8Array;
@@ -624,14 +630,33 @@ export function createSteward(system: System, options: StewardOptions): StewardH
    * settle a set made just afterwards. A static site has no unit, and costs no
    * `systemctl` at all.
    */
-  async function readService(site: Site): Promise<{ view: ServiceView | null; startedUs: number | null }> {
-    if (site.isStatic) return { view: null, startedUs: null };
+  async function readService(site: Site): Promise<ServiceState> {
+    if (site.isStatic) return { view: null, startedUs: null, reads: null };
     const unit = unitOf(site.folder);
+    const text = await system.readUnit(unit);
+    const reads = text === null ? null : unitReads(text);
     const response = await show(unit);
-    if (response === null || response.code !== 0) return { view: null, startedUs: null };
+    if (response === null || response.code !== 0) return { view: null, startedUs: null, reads };
     const parsed = readShow(response.output);
     const view = serviceView(unit, parsed);
-    return { view, startedUs: view === null ? null : parsed.startedUs };
+    return { view, startedUs: view === null ? null : parsed.startedUs, reads };
+  }
+
+  /**
+   * Which managed files a unit reads: through `EnvironmentFile=`, or by the
+   * service itself when `Environment=` gives it the file's path, or that of its
+   * subdirectory. A restart applies those, and only those.
+   */
+  function unitReads(text: string): (name: string) => boolean {
+    const unitEnv = unitEnvironment(text);
+    const readFiles = new Set(unitEnv.files.map((file) => file.path));
+    const values = new Set(unitEnv.values.map((value) => value.replace(/\/+$/, "")));
+    return (name) => {
+      const path = pathUnder(secretsFolder, name);
+      const subFolder = subFolderOf(name);
+      const folder = subFolder === null ? null : pathUnder(secretsFolder, subFolder);
+      return path !== null && (readFiles.has(path) || values.has(path) || (folder !== null && values.has(folder)));
+    };
   }
 
   // --- Scope and state of a file ---------------------------------------------
@@ -739,7 +764,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return { owner: checked ? real : null, mode: declaration.expected.mode };
   }
 
-  async function fileView(c: Target, startedUs: number | null): Promise<FileView> {
+  async function fileView(c: Target, service: ServiceState): Promise<FileView> {
     const { declaration } = c;
     const parsed = await examineTarget(c);
     const variables = parsed.kind === "managed" && parsed.managed.document !== null ? keys(parsed.managed.document) : [];
@@ -771,7 +796,12 @@ export function createSteward(system: System, options: StewardOptions): StewardH
         : {
             // The page receives whole milliseconds; the comparison keeps the fraction.
             modifiedAt: Math.floor(info.modifiedAt),
-            restartPending: restartPending(info.modifiedAt, startedUs),
+            // A variables file the unit does not read waits for no restart:
+            // the monitor's and the backups' files are the dashboard site's,
+            // and other units read them, each at its own next pass.
+            restartPending:
+              (declaration.kind !== "variables" || service.reads === null || service.reads(declaration.name)) &&
+              restartPending(info.modifiedAt, service.startedUs),
           };
     if (parsed.kind === "unmanaged") return { ...base, ...dates, state: "unmanaged", reason: parsed.reason };
 
@@ -820,7 +850,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
    */
   async function fileResponse(c: Target, who: Who = OWNER): Promise<Response> {
     const service = await readService(c.site);
-    let file = await fileView(c, service.startedUs);
+    let file = await fileView(c, service);
     if (who.member !== null && who.readsBack !== true) file = { ...file, readable: false, previous: false, bytes: null };
     const body: FileResponse = { file };
     return Response.json(body);
@@ -973,7 +1003,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     for (const declaration of declarations) {
       const path = pathUnder(secretsFolder, declaration.name) ?? declaration.name;
       try {
-        files.push(await fileView({ site, declaration, path }, service.startedUs));
+        files.push(await fileView({ site, declaration, path }, service));
       } catch (e) {
         // An unreadable file does not bring the whole list down.
         console.error(`projects: ${declaration.name} unreadable (${errorName(e)})`);
@@ -1459,7 +1489,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       await writeLog("password", "ok", body, null, variable);
       const service = await readService(found.site);
       const response: PasswordResponse = {
-        file: await fileView(found, service.startedUs),
+        file: await fileView(found, service),
         password: newPassword === null ? fresh.password : null,
       };
       return Response.json(response);
@@ -1677,15 +1707,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       // nothing, and would cut the service for nothing. A file is read through
       // `EnvironmentFile=`, or by the service itself when the unit gives it its
       // path, or that of its subdirectory, through `Environment=`.
-      const unitEnv = unitEnvironment(text);
-      const readFiles = new Set(unitEnv.files.map((file) => file.path));
-      const values = new Set(unitEnv.values.map((value) => value.replace(/\/+$/, "")));
-      const reads = site.files.some(({ name }) => {
-        const path = pathUnder(secretsFolder, name);
-        const subFolder = subFolderOf(name);
-        const folder = subFolder === null ? null : pathUnder(secretsFolder, subFolder);
-        return path !== null && (readFiles.has(path) || values.has(path) || (folder !== null && values.has(folder)));
-      });
+      const readsFile = unitReads(text);
+      const reads = site.files.some(({ name }) => readsFile(name));
       if (!reads) {
         const message = `${unit}.service reads none of the managed files, by EnvironmentFile= or Environment=, a restart would apply nothing`;
         return refuse("restart", body, { error: "out-of-scope", message });

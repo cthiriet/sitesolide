@@ -559,8 +559,8 @@ is stronger still, where the provider has it.
    | `BACKUP_S3_PREFIX` | `sitesolide` if absent; one per machine sharing a bucket |
    | `BACKUP_ENCRYPTION_PASSPHRASE` | *Generate*, then into your password manager |
 
-   No restart: the next run reads the file. The *Restart pending* mark the page
-   puts on it can be ignored, the dashboard's service does not read that file.
+   No restart: the next run reads the file, and the page marks no restart
+   pending, since the dashboard's service does not read it.
    Half a configuration is an error the *Backups* section shows, never a silent
    fallback to local copies.
 
