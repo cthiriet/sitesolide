@@ -324,6 +324,52 @@ describe("a project with several services", () => {
     }
   });
 
+  test("one service with a backup command reaches its own port: the set is rebuilt, and an old rule stops it", async () => {
+    const r = await run("projects/single-with-backup", ["deploy", "--dry-run"]);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("rebuild /etc/sitesolide-loopback-projects.nft");
+    const vm = createFakeVm();
+    try {
+      writeFileSync(join(vm.root, SWITCHES.loopbackState), "table\n");
+      const refused = await run("projects/single-with-backup", ["deploy", "--dry-run"], { vm });
+      expect(refused.code).toBe(1);
+      expect(refused.error).toContain("the loopback rule in service predates the project set");
+    } finally {
+      vm.cleanup();
+    }
+    // Without its backup command, the same service needs no set.
+    const plain = await run("projects/api-with-secret", ["deploy", "--dry-run"]);
+    expect(plain.output).not.toContain("rebuild /etc/sitesolide-loopback-projects.nft");
+  });
+
+  test("a backup command on a server whose backup component predates it: said, and nothing refused", async () => {
+    const current = await run("projects/single-with-backup", ["deploy", "--dry-run"]);
+    expect(current.all).not.toContain("backup component");
+    for (const [state, said] of [
+      ["outdated", "the backup component on the server predates backup commands"],
+      ["absent", "the backup component is not installed on the server"],
+    ] as const) {
+      const vm = createFakeVm();
+      try {
+        writeFileSync(join(vm.root, SWITCHES.backupComponent), `${state}\n`);
+        const r = await run("projects/single-with-backup", ["deploy", "--dry-run"], { vm });
+        expect(r.code).toBe(0);
+        expect(r.all).toContain(said);
+      } finally {
+        vm.cleanup();
+      }
+    }
+    // A project with no backup command does not ask.
+    const vm = createFakeVm();
+    try {
+      writeFileSync(join(vm.root, SWITCHES.backupComponent), "outdated\n");
+      const plain = await run("projects/api-with-secret", ["deploy", "--dry-run"], { vm });
+      expect(plain.all).not.toContain("backup component");
+    } finally {
+      vm.cleanup();
+    }
+  });
+
   test("a port another project declares on the machine stops everything before the build", async () => {
     const vm = createFakeVm();
     try {

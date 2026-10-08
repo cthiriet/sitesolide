@@ -40,7 +40,7 @@ import {
 import { join } from "node:path";
 import { DATA_ROOT, DESCRIPTION_NAME } from "./copy";
 import { syncFolder } from "./status";
-import { ArchiveError, gunzip, quoted, readTar, type Limits } from "./tar";
+import { ArchiveError, gunzip, quoted, readTar, type EntryType, type Limits } from "./tar";
 
 export type ExtractSummary = {
   files: number;
@@ -50,8 +50,8 @@ export type ExtractSummary = {
   description: Record<string, unknown> | null;
 };
 
-/** A description bigger than this is not one of ours. */
-const MAX_DESCRIPTION_BYTES = 1024 * 1024;
+/** A description bigger than this is not one of ours: the copy keeps its own far below (copy.ts, LISTED_BYTES). */
+export const MAX_DESCRIPTION_BYTES = 1024 * 1024;
 
 /** The snapshot an extraction was asked for: its project's folder and its time, to the second. */
 export type Expected = { folder: string; takenAt: number };
@@ -69,6 +69,22 @@ export function descriptionMismatch(description: Record<string, unknown>, expect
     return "the archive was taken at another time than its name says";
   }
   return null;
+}
+
+/**
+ * Where an entry goes, by the rules this extraction holds every archive to,
+ * each judged on the entry alone: the description, of a bounded size; `data/`
+ * itself; or a path under it, nothing beside them. The snapshot's read-back
+ * holds every archive it names to the same rules (snapshot.ts, verifyArchive).
+ */
+export function entryPlace(entry: { path: string; type: EntryType; size: number }): { kind: "description" } | { kind: "root" } | { kind: "data"; relative: string } {
+  if (entry.path === DESCRIPTION_NAME && entry.type === "file") {
+    if (entry.size > MAX_DESCRIPTION_BYTES) throw new ArchiveError("the archive's description is too large");
+    return { kind: "description" };
+  }
+  if (entry.path === DATA_ROOT && entry.type === "directory") return { kind: "root" };
+  if (!entry.path.startsWith(`${DATA_ROOT}/`)) throw new ArchiveError(`entry outside ${DATA_ROOT}/ in the archive: ${quoted(entry.path)}`);
+  return { kind: "data", relative: entry.path.slice(DATA_ROOT.length + 1) };
 }
 
 export async function extractData(source: ReadableStream<Uint8Array>, destination: string, limits: Limits, expected: Expected | null = null): Promise<ExtractSummary> {
@@ -99,8 +115,8 @@ export async function extractData(source: ReadableStream<Uint8Array>, destinatio
   }
 
   await readTar(gunzip(source), limits, async (entry, data) => {
-    if (entry.path === DESCRIPTION_NAME && entry.type === "file") {
-      if (entry.size > MAX_DESCRIPTION_BYTES) throw new ArchiveError("the archive's description is too large");
+    const place = entryPlace(entry);
+    if (place.kind === "description") {
       const chunks: Uint8Array[] = [];
       for await (const chunk of data) chunks.push(chunk);
       try {
@@ -113,9 +129,8 @@ export async function extractData(source: ReadableStream<Uint8Array>, destinatio
       if (mismatch !== null) throw new ArchiveError(mismatch);
       return;
     }
-    if (entry.path === DATA_ROOT && entry.type === "directory") return;
-    if (!entry.path.startsWith(`${DATA_ROOT}/`)) throw new ArchiveError(`entry outside ${DATA_ROOT}/ in the archive: ${quoted(entry.path)}`);
-    const relative = entry.path.slice(DATA_ROOT.length + 1);
+    if (place.kind === "root") return;
+    const relative = place.relative;
 
     if (entry.type === "directory") {
       makeFolder(relative);

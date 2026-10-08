@@ -28,6 +28,9 @@ Use the MCP tools when they are available (`detect`, `deploy`, `status`,
    - `"network": "outbound"` when the code calls another server: without it the
      service reaches only the loopback, DNS included;
    - `"secrets": ["<slug>.env"]` when the code reads a secret;
+   - a `backup` command for a service that runs a server database in the
+     data folder, PostgreSQL or MongoDB: without one, the hourly snapshot
+     refuses the project (`docs/manifest.md`, "A service's backup command");
    - the slug, which is the address: `<slug>.<their zone>`.
    Write `sitesolide.json` (`detect --write`, or by hand) and edit it there.
 3. **Dry run.** `deploy` with `dry_run: true` (`sitesolide deploy --dry-run

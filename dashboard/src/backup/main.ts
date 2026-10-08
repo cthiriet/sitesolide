@@ -9,8 +9,11 @@
  *   backup.js extract <folder> ...    as a project, the archive on stdin
  *   backup.js measure <data>          as a project, what its data weighs
  *   backup.js download <folder> <s>   as a dynamic user, a bucket's copy on stdout
+ *   backup.js hook <dir> <ms> <cmd>   as a project, a service's backup command
+ *   backup.js discard <dir>           as a project, what the backup commands left, removed
  *   backup.js list <folder>           what `sitesolide backups` prints, read-only
  *   backup.js decrypt <in> <out>      a bucket's copy back to a tar.gz, anywhere
+ *   backup.js features                what this build does that an older one did not
  *
  * `dashboard/backup.ts` does nothing but call `main`: the body lives here, so
  * that typing and the tests cover it.
@@ -20,8 +23,8 @@
  */
 import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { isBackupFolder, readSnapshotName, type Listing, type ListedSnapshot } from "../../borrowed/backups";
-import { copyMain, downloadMain, extractMain, measureMain } from "./child";
+import { isBackupFolder, readSnapshotName, SERVICE_COMMANDS_FEATURE, type Listing, type ListedSnapshot } from "../../borrowed/backups";
+import { copyMain, discardMain, downloadMain, extractMain, hookMain, measureMain } from "./child";
 import { configFrom, type Environment } from "./config";
 import { decryptStream } from "./crypto";
 import { DATABASE_NAME, openForReading, readOffsite } from "./database";
@@ -171,8 +174,16 @@ export async function main(argv: string[], env: Environment): Promise<number> {
       return measureMain(args, env);
     case "download":
       return downloadMain(args, env);
+    case "hook":
+      return hookMain(args, env);
+    case "discard":
+      return discardMain(args, env);
     case "decrypt":
       return decryptMain(args, env);
+    case "features":
+      // What `sitesolide deploy` looks for in this build (bin/cli/backups.ts).
+      console.log(SERVICE_COMMANDS_FEATURE);
+      return 0;
     case "list": {
       const folder = args[0];
       if (args.length !== 1 || !isBackupFolder(folder)) {
@@ -224,7 +235,7 @@ export async function main(argv: string[], env: Environment): Promise<number> {
       return 0;
     }
     default:
-      console.error("usage: backup.js run | restore <unit> | after-restore <unit> | list <folder> | decrypt <in> <out> | copy | extract | measure | download");
+      console.error("usage: backup.js run | restore <unit> | after-restore <unit> | list <folder> | decrypt <in> <out> | features | copy | extract | measure | download | hook | discard");
       return 2;
   }
 }

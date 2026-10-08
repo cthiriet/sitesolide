@@ -55,8 +55,8 @@
  * owner settles it with `sitesolide deploy --force`. A token has no `--force`.
  */
 import { generateFragment, decideBlock } from "../../borrowed/fragment";
-import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, type ProjectAccount } from "../../borrowed/loopback";
-import { hasServices, isApp, readManifest, servicesOf, setLock, setPortal, type Manifest } from "../../borrowed/manifest";
+import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts, type ProjectAccount } from "../../borrowed/loopback";
+import { isApp, readManifest, servicesOf, setLock, setPortal, type Manifest } from "../../borrowed/manifest";
 import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "../../borrowed/portal-vm";
 import { foreignUnit, portConflicts, staleUnits } from "../../borrowed/services";
 import { decideUnit, generateUnits, unitArgument } from "../../borrowed/unit";
@@ -247,7 +247,8 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
         if (foreign !== null) throw new Stop("system-unit", `${foreign}: ${slug} is the name of a service of the machine, which a deployment never replaces; nothing was changed, pick another slug`);
       }
     }
-    if (hasServices(manifest)) {
+    // A backup command reaches its service on its port, through the same set.
+    if (reachesOwnPorts(manifest)) {
       const state = await host.loopback.state();
       if (state === "unreadable") throw new Stop("machine-unreadable", "cannot tell whether the loopback rule is in place: nothing was changed");
       if (state === "table") {
@@ -389,7 +390,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     // --- 8. the manifest, the loopback's set ----------------------------------------
     host.log("-> manifest");
     await host.depositManifest(slug, text);
-    if (application) await rebuildProjectPorts(host, hasServices(manifest));
+    if (application) await rebuildProjectPorts(host, reachesOwnPorts(manifest));
     if (!application || behindPortal) unlock();
 
     // --- 9. secrets, restart ----------------------------------------------------------
@@ -505,13 +506,13 @@ async function undoCreation(host: Host, slug: string, created: Created): Promise
 
 /**
  * The loopback's project set, rebuilt from the manifests on the machine, as
- * `rebuildProjectPorts` of bin/sitesolide.ts does: strict for a project with
- * several services, which depends on it; following otherwise, so that a
- * project that no longer declares several drops out of it.
+ * `rebuildProjectPorts` of bin/sitesolide.ts does: strict for a project that
+ * reaches its own ports, which depends on it (reachesOwnPorts); following
+ * otherwise, so that a project that no longer does drops out of it.
  */
 async function rebuildProjectPorts(host: Host, strict: boolean): Promise<void> {
   const fail = (message: string): void => {
-    if (strict) throw new Stop("loopback-failed", `${message}: the project's services could not reach each other`);
+    if (strict) throw new Stop("loopback-failed", `${message}: the project could not reach its own ports`);
     host.log(`   !! ${message}: the loopback's project set was left as it is`);
   };
   const state = await host.loopback.state();
@@ -527,7 +528,7 @@ async function rebuildProjectPorts(host: Host, strict: boolean): Promise<void> {
   const projects: Manifest[] = [];
   for (const [folder, raw] of manifests) {
     const { manifest } = readManifest(raw);
-    if (manifest === undefined || !hasServices(manifest)) continue;
+    if (manifest === undefined || !reachesOwnPorts(manifest)) continue;
     const ports = servicesOf(manifest).map((service) => service.port);
     if (manifest.slug !== folder || !ports.every((port) => Number.isInteger(port) && port >= 3000 && port <= 3099)) continue;
     projects.push(manifest);
@@ -536,7 +537,7 @@ async function rebuildProjectPorts(host: Host, strict: boolean): Promise<void> {
   let uids = new Map<string, number>();
   if (slugs.length > 0) {
     const read = await host.loopback.uids(slugs);
-    if (read === null) return fail("cannot read the system users of the projects with several services");
+    if (read === null) return fail("cannot read the system users of the projects that reach their own ports");
     uids = read;
   }
   const accounts: ProjectAccount[] = projects.map((manifest) => ({ manifest, uid: uids.get(manifest.slug)! }));
@@ -551,5 +552,5 @@ async function rebuildProjectPorts(host: Host, strict: boolean): Promise<void> {
   host.log("-> loopback: each project's own ports");
   const written = await host.loopback.write(projectPortsFile(accounts), state === "set");
   if (written.code !== 0) return fail(`${PROJECT_PORTS_FILE} refused (${written.output.trim() || "no message"})`);
-  host.log(`   ${slugs.length === 0 ? "no project" : slugs.join(", ")} with several services`);
+  host.log(`   ${slugs.length === 0 ? "no project" : slugs.join(", ")} reaching ${slugs.length === 1 ? "its" : "their"} own ports`);
 }

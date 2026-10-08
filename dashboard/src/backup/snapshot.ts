@@ -23,12 +23,23 @@
  * killed and root moves on, and the read-back shares that same time. The
  * outcome says `timeout`, which the run uses to try the project again once
  * the others have had their turn (run.ts).
+ *
+ * **A service that keeps a live database runs its backup command first**
+ * (hooks.ts), within the same time, and the copy archives what the command
+ * left in place of the live folder. The room is measured once the commands
+ * are done, their copies on the disk, and what they left is removed once the
+ * snapshot is over, taken or not, at best and briefly (hooks.ts). A restore's
+ * own snapshot runs none: the services are stopped, and their folders are
+ * archived as files.
  */
-import { closeSync, constants, fchmodSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { snapshotName, type SnapshotKind } from "../../borrowed/backups";
 import type { BackupConfig } from "./config";
+import { liveArgument } from "./child";
 import { MAX_ENTRIES, type CopySummary } from "./copy";
+import { entryPlace } from "./extract";
+import { discardHooks, hooksFolder, liveFolders, projectHooks, runHooks, type Hook } from "./hooks";
 import { freeBytes, type Project } from "./projects";
 import { startChild, within, type Job } from "./runner";
 import { shortError, syncFolder } from "./status";
@@ -48,6 +59,12 @@ export type SnapshotOptions = {
   timeoutMs?: number;
   /** The databases copied as files: only for a restore's own snapshot, its services stopped. */
   raw?: boolean;
+  /**
+   * The services are stopped: a restore's own snapshot. No backup command
+   * runs, there is no server to ask; the live folders, declared or found,
+   * are archived as files, nothing writing them, and named in the description.
+   */
+  stopped?: boolean;
 };
 
 /** How often, in bytes written, the free space is measured again. */
@@ -69,7 +86,16 @@ export function staging(config: BackupConfig, folder: string): { path: string; c
  * that does not add up, a missing end, and it throws. So does an archive with
  * more entries than an extraction accepts, more bytes than `limits` allow, or
  * one still being read at `deadline` (a time of `Date.now()`): a gigabyte of
- * compressed zeros is a terabyte to read.
+ * compressed zeros is a terabyte to read. And an entry the extraction would
+ * refuse on its own (entryPlace): one outside `data/`, a description too big
+ * to be read back.
+ *
+ * Not a path given twice, nor a file where a folder is needed, which the
+ * extraction also refuses: telling them takes every path of the archive in
+ * memory, and this runs in root's process, whose memory a project's tree must
+ * never set (projects.ts). The copy never writes either, walking a real
+ * folder whose names are unique; only a copy forged by its own project could,
+ * against its own snapshots.
  */
 export async function verifyArchive(
   path: string,
@@ -85,8 +111,9 @@ export async function verifyArchive(
       },
     }),
   );
-  return readTar(clocked, limits, async () => {
+  return readTar(clocked, limits, async (entry) => {
     // Nothing kept: the contents are skipped by the reader.
+    entryPlace(entry);
   });
 }
 
@@ -120,17 +147,78 @@ export async function takeSnapshot(
     // free: the expected case
   }
 
-  // The room above the reserve. The copy needs it for a copy of the
-  // databases and an archive at most as big as the data, and checks that.
-  const free = freeBytes(config.backupFolder);
-  const room = free - config.reserveBytes;
-  if (room <= 0) {
+  const atReserve = (free: number): SnapshotOutcome => {
     log(`backup ${project.folder}: ${free} bytes free, under the reserve of ${config.reserveBytes}`);
     return { ok: false, error: "not enough disk space: the disk of the archives is at its reserve", cause: null };
-  }
+  };
+  const before = freeBytes(config.backupFolder);
+  if (before - config.reserveBytes <= 0) return atReserve(before);
 
   const place = staging(config, project.folder);
   if (config.isolation === "none") mkdirSync(place.path, { recursive: true, mode: 0o700 });
+
+  const stopped = options.stopped === true;
+  let hooks: Hook[] = [];
+  const declared = projectHooks(project, place.path);
+  if ("error" in declared) {
+    // A restore saves the data it replaces whatever its manifest says: as
+    // files, which the copy does for a live folder with the services stopped.
+    if (!stopped) {
+      log(`backup ${project.folder}: ${declared.error}`);
+      return { ok: false, error: declared.error, cause: null };
+    }
+    log(`backup ${project.folder}: ${declared.error}; the stopped data is saved as files`);
+  } else {
+    hooks = declared.hooks;
+  }
+  const commands = !stopped && hooks.length > 0;
+  // What an earlier removal left, for a project that has since dropped its
+  // command or not, goes too: looked at by its name alone, never opened.
+  const leftover = lstatOrNull(hooksFolder(place.path)) !== null;
+  try {
+    if (commands) {
+      const ran = await runHooks(config, project, hooks, deadline, place.cacheDirectory, log);
+      if (!ran.ok) return ran;
+    }
+    // The room above the reserve, measured once the commands' copies are on
+    // the disk. The copy needs it for a copy of the databases and an archive
+    // at most as big as what it archives, and checks that.
+    const free = commands ? freeBytes(config.backupFolder) : before;
+    const room = free - config.reserveBytes;
+    if (room <= 0) return atReserve(free);
+    return await copySnapshot(config, project, { now, log, raw, stopped, deadline, room, folder, name, final, place, live: liveFolders(hooks, stopped) });
+  } finally {
+    if (commands || leftover) await discardHooks(config, project, place.path, place.cacheDirectory, log);
+  }
+}
+
+function lstatOrNull(path: string) {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+type CopyPlan = {
+  now: number;
+  log: (line: string) => void;
+  raw: boolean;
+  stopped: boolean;
+  deadline: number;
+  room: number;
+  /** The project's folder of archives, the snapshot's name and its final path. */
+  folder: string;
+  name: string;
+  final: string;
+  place: { path: string; cacheDirectory: string | null };
+  live: ReturnType<typeof liveFolders>;
+};
+
+/** The copy itself, streamed into a temporary file, read back, then named. */
+async function copySnapshot(config: BackupConfig, project: Project, plan: CopyPlan): Promise<SnapshotOutcome> {
+  const { now, log, raw, stopped, deadline, room, folder, name, final, place } = plan;
+  const timeoutMs = Math.max(1000, deadline - Date.now());
 
   const job: Job = {
     mode: "copy",
@@ -138,7 +226,16 @@ export async function takeSnapshot(
     account: project.account,
     uid: project.owner?.uid ?? null,
     // The time to the second, as the name carries it: the description says the same.
-    args: [project.dataDir, place.path, project.folder, String(Math.floor(now / 1000) * 1000), String(room), ...(raw ? ["raw"] : [])],
+    args: [
+      project.dataDir,
+      place.path,
+      project.folder,
+      String(Math.floor(now / 1000) * 1000),
+      String(room),
+      ...(raw ? ["raw"] : []),
+      ...(stopped ? ["stopped"] : []),
+      ...plan.live.map(liveArgument),
+    ],
     readWrite: [project.dataDir],
     bind: [project.dataDir],
     cacheDirectory: place.cacheDirectory,
@@ -156,7 +253,7 @@ export async function takeSnapshot(
     const reader = child.stdout!.getReader();
     let written = 0;
     let nextCheck = CHECK_EVERY;
-    let stopped: string | null = null;
+    let halted: string | null = null;
     let timedOut = false;
     for (;;) {
       const next = await within(reader.read(), deadline - Date.now());
@@ -172,12 +269,12 @@ export async function takeSnapshot(
       if (written >= nextCheck) {
         nextCheck += CHECK_EVERY;
         if (freeBytes(config.backupFolder) < config.reserveBytes) {
-          stopped = "stopped: the disk was about to fill";
+          halted = "stopped: the disk was about to fill";
           break;
         }
       }
     }
-    if (timedOut || stopped !== null) {
+    if (timedOut || halted !== null) {
       // Closing our end makes the copy's next write fail; a stopped copy is killed.
       void reader.cancel().catch(() => undefined);
       if (timedOut) child.stop();
@@ -188,7 +285,7 @@ export async function takeSnapshot(
       log(`backup ${project.folder}: the copy did not finish within ${Math.round(timeoutMs / 1000)} s, it was stopped`);
       return { ok: false, error: TIMEOUT_ERROR, cause: "timeout" };
     }
-    if (stopped !== null) return { ok: false, error: stopped, cause: null };
+    if (halted !== null) return { ok: false, error: halted, cause: null };
     const { code, report } = finished.value;
     if (code !== 0 || report.summary === null) {
       log(

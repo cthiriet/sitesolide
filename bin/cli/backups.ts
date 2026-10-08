@@ -23,6 +23,39 @@ export const BACKUP_SCRIPT = "/usr/local/lib/sitesolide/backup.js";
 export const MARKER_NOT_INSTALLED = "NOT-INSTALLED";
 
 /**
+ * What a component that runs the services' backup commands carries in its
+ * build, and an older one does not: its `features` mode prints it, which is
+ * what keeps it in the bundle. An older component reads a manifest's backup
+ * command without a word, and copies the live folder as files.
+ */
+export const SERVICE_COMMANDS_FEATURE = "sitesolide-backup-feature:service-commands";
+
+/** The last line of the reading, so that an empty output is never taken for an answer. */
+export const BACKUP_COMPONENT_MARKER = "DONE";
+
+/**
+ * Whether the machine's component runs backup commands, read before a
+ * project that declares one is deployed: a search of its build for the
+ * feature, the file being 0644, no sudo and nothing run.
+ */
+export function backupComponentCommand(): string {
+  return (
+    `sh -c 'if [ ! -f ${BACKUP_SCRIPT} ]; then echo absent; ` +
+    `elif grep -qF ${SERVICE_COMMANDS_FEATURE} ${BACKUP_SCRIPT}; then echo current; else echo outdated; fi; ` +
+    `echo ${BACKUP_COMPONENT_MARKER}'`
+  );
+}
+
+export type BackupComponent = "current" | "outdated" | "absent" | "unreadable";
+
+export function readBackupComponent(output: string): BackupComponent {
+  const lines = output.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+  if (lines.length !== 2 || lines[1] !== BACKUP_COMPONENT_MARKER) return "unreadable";
+  const state = lines[0];
+  return state === "current" || state === "outdated" || state === "absent" ? state : "unreadable";
+}
+
+/**
  * `scheduled`: taken by the timer. `pre-restore`: the data as it was just
  * before a restore replaced it, which is what makes a restore undoable.
  */

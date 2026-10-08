@@ -194,7 +194,8 @@ the deployment, see [`start`](#start).
 
 Several processes instead of one `start`: a web front, the API it calls, a
 worker behind it. Each entry names a service and takes `start` and `port`, like
-a single service, and optionally `routes`, `internal`, `memory` and `env`.
+a single service, and optionally `routes`, `internal`, `memory`, `env` and
+`backup`.
 
 ```json
 "services": {
@@ -222,6 +223,9 @@ a single service, and optionally `routes`, `internal`, `memory` and `env`.
   and says to lay the current one with `bin/deploy-loopback.sh close`.
 - **`memory` and `env`.** A service's own, added to the project's; its `env`
   wins over the project's on a shared name. `PORT` is each service's own.
+- **`backup`.** A service that keeps a server database in the data folder,
+  PostgreSQL or MongoDB, declares the folder it keeps live and the command
+  that saves it consistently: see [A service's backup command](#a-services-backup-command).
 
 `start`, `port` and `routes` are then refused at the top level. `install`,
 `secrets`, `network`, `egress`, `connectors`, `exclude` and the directories
@@ -466,6 +470,190 @@ restored from the dashboard's *Backups* section. `false` keeps it out: a folder
 that only holds a cache, or a copy of something kept elsewhere, need not take
 room on the backups disk every hour.
 
-`false` is the only value: absent already means backed up, and `true` would be
-a second way of writing it. A static site has no data folder, so the key is
-refused there.
+`false` is the only value that keeps the data out: absent already means backed
+up, and `true` would be a second way of writing it. A static site has no data
+folder, so the key is refused there. The other value is an object, a
+service's backup command, below.
+
+### A service's backup command
+
+The hourly snapshot copies every file of `data/` as it is, and every SQLite
+database consistently. A server database is neither: PostgreSQL, MongoDB and
+their kin write their files continuously, and a copy taken file by file while
+they run reports success and restores a cluster that does not start, or starts
+corrupt. A service that keeps one in the data declares how it is saved:
+
+```json
+"postgres": {
+  "start": "/bin/sh /srv/sites/shop/app/postgres.sh",
+  "port": 3081,
+  "internal": true,
+  "backup": { "folder": "postgres", "command": "/bin/sh /srv/sites/shop/app/postgres-backup.sh" }
+}
+```
+
+- **`folder`**, relative to `data/`: the folder this service keeps live. The
+  snapshot never archives its files. A name or a path of names, `postgres` or
+  `db/main`, with no `..`, no `.` and no empty part; never the data folder
+  itself, so a cluster lives in a folder of its own, not straight in
+  `DATA_DIR`. Two services cannot declare the same folder, nor one inside the
+  other.
+- **`command`**, run just before the copy. **Its contract: leave in
+  `$BACKUP_DIR`, an empty folder, a consistent copy that the service can start
+  from as `folder`.** Exit 0 and a non-empty `$BACKUP_DIR` are required.
+  The archive then holds that copy under `data/<folder>`, and a restore puts
+  it back in place of the live folder, 0700 and the project's, as it was made.
+
+The command follows the rules of `start`: it starts with the program, an
+absolute path, never a prefix systemd reads as root, and `$NAME` is expanded
+from its environment, by systemd, into the command line. A secret is
+therefore read by the program from its environment, as the script below
+does, never written as `$NAME` in the command, where its value would show in
+the list of processes. It is one program and its arguments, quotes keeping
+spaces in a word: no lone `;`, no escape but `\\`, `\"`, `\'`, `\s`, `\n` and
+`\t`. Anything more belongs in a script, as in the recipe below.
+
+It runs as the project's account, `site-<slug>`, in the walls of its service:
+the same `app/` and `public/` read-only and `data/` writable, the same working
+directory, `app/`, and its service's environment, `PORT`, `DATA_DIR`,
+`PUBLIC_DIR` and `env` with its placeholders replaced, plus `BACKUP_DIR`,
+which `env` may not set beside a backup command. Its secrets arrive as its
+service's do, read by systemd from `/etc/sitesolide`, the folder itself hidden
+from it. It reaches the loopback alone, whatever `network` says: enough to
+talk to its service on its port, which the machine's loopback rule lets a
+project's account do for its own ports and nobody else's; never the egress
+proxy's variables. It shares the project's time in the run with the copy,
+its share of a 25-minute window, 20 minutes at most, has its service's
+`memory` and 128 MiB more for the program that runs it, and is stopped when
+the disk comes down to the backup component's reserve. `$BACKUP_DIR` is on
+disk, never in memory, under `/var/cache/sitesolide-backup/`. Its removal is
+tried once the snapshot is over, for a few seconds; what it leaves, the next
+run removes before the command runs again, whatever modes the command left.
+
+The command may print what it likes: its last lines go to the journal, and
+only how it exits decides. A server whose snapshot is written by the server
+itself, through its own API, cannot write into `$BACKUP_DIR`, which the
+service, read-only outside its data, does not reach: it writes into its data
+folder, and the command copies the result into `$BACKUP_DIR`, then removes
+it. A copy, not a rename, the two folders being different mounts.
+
+A command that fails, runs past its time or leaves nothing fails that
+project's snapshot, and says so in the dashboard and in the status file the
+monitor reads; what it printed goes to the backup component's journal,
+`journalctl -u sitesolide-backup`, never to the status file. The snapshot a
+restore takes of the data it replaces runs no command: the services are
+stopped, and the live folder is saved as its files.
+
+A running PostgreSQL or MongoDB found in the data that no service declares
+fails the snapshot, rather than archiving files that may not restore, and the
+status says to declare this key. Any other server needs it just the same; the
+backup component only knows how to recognise those two.
+
+**In the form with one `start`**, the project's own `backup` takes the object,
+as `start` and `port` are its single service's own:
+`"backup": { "folder": "index", "command": "/srv/sites/search/app/snapshot" }`.
+Under `services`, the top level keeps `false` alone, which refuses every
+service's command.
+
+A project that declares a backup command reaches its own ports through the
+machine's loopback rule, like a project of several services: `deploy`
+refuses it on a machine whose rule predates the project set, and says to lay
+it again with `bin/deploy-loopback.sh close`. It also warns when the
+machine's backup component predates backup commands, which it would then
+ignore, the live folder still copied as files: `sitesolide upgrade` brings
+it up to date.
+
+#### PostgreSQL
+
+Tested end to end by `dashboard/scripts/postgres-backup-proof.sh`, on Debian 13
+and PostgreSQL 17: a snapshot taken while rows are written, restored by the
+backup component, and PostgreSQL started on it with every row committed
+before the backup, `pg_amcheck` finding no corruption. Its own cluster,
+reached on the loopback, saved by `pg_basebackup`, whose plain copy with its
+WAL PostgreSQL starts on as it is.
+
+On the machine, once, as root: PostgreSQL's binaries without the shared
+cluster Debian would create and start on port 5432 for everyone.
+
+```bash
+sudo apt install postgresql-common
+sudo sed -i 's/^#\? *create_main_cluster.*/create_main_cluster = false/' /etc/postgresql-common/createcluster.conf
+sudo apt install postgresql-17
+pg_lsclusters    # lists none
+```
+
+The manifest:
+
+```json
+"services": {
+  "web": { "start": "/usr/local/bin/bun run server.ts", "port": 3080 },
+  "postgres": {
+    "start": "/bin/sh /srv/sites/shop/app/postgres.sh",
+    "port": 3081,
+    "internal": true,
+    "memory": "512M",
+    "backup": { "folder": "postgres", "command": "/bin/sh /srv/sites/shop/app/postgres-backup.sh" }
+  }
+},
+"secrets": ["shop.env"]
+```
+
+`shop.env`, from the dashboard's *Secrets*, holds `POSTGRES_PASSWORD`. The
+web service reaches the database at `127.0.0.1:3081`.
+
+`postgres.sh`, the service: the cluster in `data/postgres`, made at the first
+start, TCP on the loopback only, no unix socket and no shared memory segment,
+which the service's private `/dev` does not have.
+
+```sh
+#!/bin/sh
+set -eu
+PG_MAJOR=17
+BIN="/usr/lib/postgresql/$PG_MAJOR/bin"
+if [ ! -x "$BIN/postgres" ]; then
+  echo "PostgreSQL $PG_MAJOR is not installed on this machine (apt install postgresql-$PG_MAJOR)" >&2
+  exit 1
+fi
+PGDATA="$DATA_DIR/postgres"
+if [ ! -s "$PGDATA/PG_VERSION" ]; then
+  umask 077
+  pwfile="$DATA_DIR/.initdb-pw"
+  printf '%s' "$POSTGRES_PASSWORD" > "$pwfile"
+  "$BIN/initdb" -D "$PGDATA" -U app --pwfile="$pwfile" -A scram-sha-256 -E UTF8 --no-locale
+  rm -f "$pwfile"
+  echo "CREATE DATABASE app;" | "$BIN/postgres" --single -D "$PGDATA" -c dynamic_shared_memory_type=mmap postgres > /dev/null
+fi
+if [ "$(cat "$PGDATA/PG_VERSION")" != "$PG_MAJOR" ]; then
+  echo "The cluster in $PGDATA is PostgreSQL $(cat "$PGDATA/PG_VERSION"), not $PG_MAJOR: upgrade it with pg_upgrade first" >&2
+  exit 1
+fi
+exec "$BIN/postgres" -D "$PGDATA" \
+  -c listen_addresses=127.0.0.1 -c port="$PORT" -c unix_socket_directories='' \
+  -c dynamic_shared_memory_type=mmap -c shared_buffers=128MB -c max_connections=40
+```
+
+`postgres-backup.sh`, its backup command: the superuser that `initdb` made has
+the replication right, and the `pg_hba.conf` it wrote lets it in from
+`127.0.0.1` with its password.
+
+```sh
+#!/bin/sh
+set -eu
+export PGPASSWORD="$POSTGRES_PASSWORD"
+exec /usr/lib/postgresql/17/bin/pg_basebackup -h 127.0.0.1 -p "$PORT" -U app --no-password \
+  -D "$BACKUP_DIR" -X stream -c fast
+```
+
+`-X stream` puts the WAL written during the copy into it, which is what makes
+it start; `-c fast` asks for the checkpoint at once rather than waiting for
+the next. The cluster keeps no tablespace outside its folder: the copy leaves
+links out. Restored, PostgreSQL replays the copy's WAL at its first start and
+says `consistent recovery state reached` in its journal.
+
+#### Other databases
+
+The contract above is generic: any server whose own tool leaves a copy it can
+start from fits it, MongoDB with its own dump or snapshot tool, a search
+engine with its snapshot command. Only the PostgreSQL recipe has been tested
+here; write and test a command for any other, a restore included, before
+trusting it.

@@ -51,11 +51,19 @@
  * CAP_DAC_OVERRIDE, keeps no network at all (sitesolide-restore@.service).
  * The settings reach it by `EnvironmentFile=`, read by PID 1, never on a
  * command line, which `systemctl show` would print to anyone.
+ *
+ * **A backup command is the one child that runs the project's own code**
+ * (hooks.ts). It is given its service's walls rather than a copy's: `app/`
+ * and `public/` read-only beside the data, its working directory, its
+ * environment and its secrets, and the loopback, to reach its service on its
+ * port. Its secrets reach it the way the bucket's reach a download, by
+ * `EnvironmentFile=` read by PID 1; `/etc/sitesolide` stays hidden from it.
  */
+import { existsSync } from "node:fs";
 import type { BackupConfig } from "./config";
 import { offsiteEnvironment, type Offsite } from "./offsite";
 
-export type ChildMode = "copy" | "extract" | "measure" | "download";
+export type ChildMode = "copy" | "extract" | "measure" | "download" | "hook" | "discard";
 
 export type Job = {
   mode: ChildMode;
@@ -80,6 +88,17 @@ export type Job = {
   timeoutMs: number;
   /** For a download alone: the bucket's settings, which the child reads from its environment. */
   offsite?: Offsite | null;
+  /** What is mounted back into the empty /srv read-only: a backup command's `app/` and `public/`. */
+  bindReadOnly?: string[];
+  /** The loopback, for a backup command alone: every other project's child has no network at all. */
+  loopback?: boolean;
+  /** Variables set on the unit, never a secret: `systemctl show` prints them. */
+  environment?: [string, string][];
+  /** Files PID 1 reads into the environment before the walls go up, a dash first for an optional one. */
+  environmentFiles?: string[];
+  workingDirectory?: string | null;
+  /** Its memory ceiling, CHILD_MEMORY unless said: a backup command is given its service's. */
+  memory?: string;
 };
 
 /** What PID 1 allows a stopped unit before SIGKILL: a copy has nothing to save on its way out. */
@@ -105,7 +124,9 @@ export function unitName(job: Pick<Job, "mode" | "folder">, suffix: string = hex
  * project's own unit that applies to a process with no network and no secret
  * is here (bin/cli/unit.ts), and the test holds them side by side. A download
  * differs in two lines: a dynamic user rather than a project's, and the
- * network rather than none.
+ * network rather than none. A backup command keeps the loopback, and its
+ * service's read-only folders and memory ceiling: the test holds it beside
+ * the unit of its service, line for line.
  */
 export function confinement(job: Job): string[] {
   const download = job.mode === "download";
@@ -118,6 +139,7 @@ export function confinement(job: Job): string[] {
     "ProtectHome=yes",
     ...job.readWrite.map((path) => `ReadWritePaths=${path}`),
     "TemporaryFileSystem=/srv:ro",
+    ...(job.bindReadOnly ?? []).map((path) => `BindReadOnlyPaths=${path}`),
     ...job.bind.map((path) => `BindPaths=${path}`),
     // Neither the secrets nor the steward's state: nothing here needs them.
     "InaccessiblePaths=-/etc/sitesolide",
@@ -130,11 +152,17 @@ export function confinement(job: Job): string[] {
     "RestrictSUIDSGID=yes",
     "RestrictRealtime=yes",
     "LockPersonality=yes",
-    `MemoryMax=${CHILD_MEMORY}`,
+    `MemoryMax=${job.memory ?? CHILD_MEMORY}`,
     // Reading and writing data, never the network, not even the loopback: a
     // forged database has nowhere to send what it would read. A download
-    // reads the bucket, and nothing else of the machine.
-    ...(download ? ["DynamicUser=yes", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"] : ["IPAddressDeny=any"]),
+    // reads the bucket, and nothing else of the machine. A backup command
+    // reaches its service on the loopback, as its service may, and the
+    // machine's loopback rule keeps it to the project's own ports.
+    ...(download
+      ? ["DynamicUser=yes", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"]
+      : job.loopback === true
+        ? ["IPAddressDeny=any", "IPAddressAllow=localhost"]
+        : ["IPAddressDeny=any"]),
     "IOSchedulingClass=idle",
     `RuntimeMaxSec=${Math.max(1, Math.ceil(job.timeoutMs / 1000))}`,
     `TimeoutStopSec=${STOP_GRACE}`,
@@ -158,9 +186,14 @@ export function childCommand(job: Job, config: Pick<BackupConfig, "isolation" | 
     `--description=Backup ${job.mode} of ${job.folder}`,
     ...(job.account === null ? [] : [`--uid=${job.account}`, `--gid=${job.account}`]),
     "--nice=10",
-    ...(job.uid === null ? [] : [`--setenv=BACKUP_EXPECTED_UID=${job.uid}`]),
+    // A backup command's unit takes the project's env and secret files, which
+    // could set this variable too: the hook mode gets the uid as an argument.
+    ...(job.uid === null || job.mode === "hook" ? [] : [`--setenv=BACKUP_EXPECTED_UID=${job.uid}`]),
+    ...(job.environment ?? []).map(([name, value]) => `--setenv=${name}=${value}`),
     // Read by PID 1 before the walls go up, which hide /etc/sitesolide from the child itself.
     ...(job.offsite === undefined || job.offsite === null ? [] : ["-p", `EnvironmentFile=${config.offsiteFile}`]),
+    ...(job.environmentFiles ?? []).flatMap((file) => ["-p", `EnvironmentFile=${file}`]),
+    ...(job.workingDirectory === undefined || job.workingDirectory === null ? [] : ["-p", `WorkingDirectory=${job.workingDirectory}`]),
     ...confinement(job).flatMap((property) => ["-p", property]),
     "--",
     ...own,
@@ -187,7 +220,11 @@ export type ChildReport = {
   tail: string;
 };
 
-/** Beyond this, the standard error of a child is not read further. */
+/**
+ * What is kept of a child's standard error: its last bytes, which hold its
+ * report, the last line it writes, and what explains a failure. A child that
+ * writes more is read to its end all the same, so that it never blocks.
+ */
 export const MAX_REPORT_BYTES = 256 * 1024;
 
 export function readReport(text: string): ChildReport {
@@ -240,31 +277,38 @@ export type Child = {
   stop: () => void;
 };
 
-async function boundedText(stream: ReadableStream<Uint8Array>): Promise<string> {
+/** A stream's last MAX_REPORT_BYTES, read to its end: a first line cut in two reads as noise, never as a report. */
+export async function boundedText(stream: ReadableStream<Uint8Array>): Promise<string> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    if (total < MAX_REPORT_BYTES) {
-      chunks.push(value.subarray(0, MAX_REPORT_BYTES - total));
-      total += Math.min(value.byteLength, MAX_REPORT_BYTES - total);
-    }
+    chunks.push(value);
+    total += value.byteLength;
+    while (total - chunks[0]!.byteLength >= MAX_REPORT_BYTES) total -= chunks.shift()!.byteLength;
   }
-  return new TextDecoder().decode(Bun.concatArrayBuffers(chunks));
+  const kept = Bun.concatArrayBuffers(chunks, Infinity, true);
+  return new TextDecoder().decode(kept.byteLength > MAX_REPORT_BYTES ? kept.subarray(kept.byteLength - MAX_REPORT_BYTES) : kept);
 }
 
 export function startChild(job: Job, config: BackupConfig): Child {
   const offsite = job.offsite ?? null;
   const suffix = hex(4);
+  // With no isolation, the workstation's tests hand the bucket's settings and
+  // a backup command's variables over the environment, and give it its
+  // working directory when the tree has one; under systemd, the unit does.
+  // The secret files are never read here: no isolation, no secrets.
+  const plain = config.isolation === "none";
+  const environment = { ...(offsite === null ? {} : offsiteEnvironment(offsite)), ...Object.fromEntries(job.environment ?? []) };
+  const cwd = plain && job.workingDirectory !== undefined && job.workingDirectory !== null && existsSync(job.workingDirectory) ? job.workingDirectory : undefined;
   const process = Bun.spawn(childCommand(job, config, suffix), {
     stdin: job.stdin === null ? "ignore" : Bun.file(job.stdin),
     stdout: job.stdout,
     stderr: "pipe",
-    // With no isolation, the workstation's tests hand the bucket's settings
-    // over the environment; under systemd, the unit's EnvironmentFile does.
-    ...(config.isolation === "none" && offsite !== null ? { env: { ...Bun.env, ...offsiteEnvironment(offsite) } } : {}),
+    ...(plain && Object.keys(environment).length > 0 ? { env: { ...Bun.env, ...environment } } : {}),
+    ...(cwd === undefined ? {} : { cwd }),
     // The unit's RuntimeMaxSec stops the child itself; this stops the waiting.
     timeout: job.timeoutMs + 30_000,
     killSignal: "SIGKILL",

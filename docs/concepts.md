@@ -80,6 +80,7 @@ more.
 | The egress proxy | `sitesolide-egress` | let each project reach the hosts its manifest lists, lend it the connectors granted to it |
 | The backup run | root, on a timer | list the projects, store the archives their own accounts hand it, prune, upload |
 | A backup copy or extraction | `site-<slug>`, one-shot | read or write that project's data, nothing else, no network |
+| A service's backup command | `site-<slug>`, one-shot | in its service's walls, with its secrets and the loopback alone, leave a consistent copy of the folder its server keeps live |
 | A restore | root, one-shot | swap one project's data folder, restart its services, put the data back if they fail |
 
 **The dashboard reads nothing itself.** Its unit replaces `/srv` with an empty
@@ -276,8 +277,12 @@ nor walks its folder. The copy, which measures the data too, and the
 extraction run as the project's own account, in a transient unit with its
 service's walls and no network, each within its own time; root only stores
 what they hand it, as archives no project can read. A manifest opts out with
-`"backup": false`. See
-[dashboard/src/backup/README.md](../dashboard/src/backup/README.md).
+`"backup": false`. A service that keeps a server database in the data,
+PostgreSQL for one, declares a backup command that leaves a consistent copy
+of it before the copy, which archives that copy instead of the live files; a
+running server no service declares fails the snapshot rather than being
+copied file by file. See [docs/manifest.md](manifest.md#a-services-backup-command)
+and [dashboard/src/backup/README.md](../dashboard/src/backup/README.md).
 
 ## Previews and the portal
 

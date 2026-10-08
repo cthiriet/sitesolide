@@ -32,6 +32,26 @@ export type Service = {
   memory?: string;
   /** Added to the project's `env`, and winning over it on a shared name. */
   env?: Record<string, string>;
+  /** The folder of the data this service keeps live, and how a consistent copy of it is made, see ServiceBackup. */
+  backup?: ServiceBackup;
+};
+
+/**
+ * How the hourly snapshot saves a folder of the data that a service keeps
+ * live, a PostgreSQL or MongoDB cluster for one: copied file by file while
+ * the server writes, it would be archived as no server can start from it.
+ *
+ * `command` runs just before the copy, as the project, with the service's
+ * environment and `BACKUP_DIR`, an empty folder outside the data. It leaves
+ * there a consistent copy the service can start from as `folder`, and the
+ * archive holds that copy under `data/<folder>`, never the live files. See
+ * dashboard/src/backup/README.md and docs/manifest.md.
+ */
+export type ServiceBackup = {
+  /** Relative to the data folder: the folder the service keeps live. */
+  folder: string;
+  /** Run like `start`, whose rules it follows: see commandErrors and commandWords. */
+  command: string;
 };
 
 /** What a repository declares in order to be deployable. */
@@ -64,8 +84,12 @@ export type Manifest = {
   egress?: string[];
   /** The connectors asked for; a grant on the machine allows them, see bin/cli/egress.ts. */
   connectors?: string[];
-  /** `false` keeps the data folder out of the machine's snapshots, see isBackedUp. */
-  backup?: boolean;
+  /**
+   * `false` keeps the data folder out of the machine's snapshots, see
+   * isBackedUp. An object is the single service's own backup command, in the
+   * form with one `start`, as `start` and `port` are its own: see ServiceBackup.
+   */
+  backup?: false | ServiceBackup;
 };
 
 /**
@@ -100,7 +124,10 @@ export const KNOWN_KEYS = [
 ];
 
 /** The keys of one entry of `services`, refused beyond these for the same reason. */
-export const SERVICE_KEYS = ["start", "port", "routes", "internal", "memory", "env"];
+export const SERVICE_KEYS = ["start", "port", "routes", "internal", "memory", "env", "backup"];
+
+/** The keys of a service's `backup`, refused beyond these for the same reason. */
+export const BACKUP_KEYS = ["folder", "command"];
 
 /**
  * The services' ports: 3000 the landing, 3001 the shared service, then the
@@ -284,7 +311,14 @@ export type ServiceView = {
   internal: boolean;
   memory: string;
   env: Record<string, string>;
+  /** Its backup command and the live folder it saves, or null. Read as written: validate() judges it. */
+  backup: ServiceBackup | null;
 };
+
+/** A `backup` that has the shape of a command's, as servicesOf reads one: the judging is validate()'s. */
+function asServiceBackup(value: unknown): ServiceBackup | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as ServiceBackup) : null;
+}
 
 /**
  * Every process of the project, the main one first. Empty for a static site.
@@ -310,6 +344,7 @@ export function servicesOf(manifest: Manifest): ServiceView[] {
       internal: service.internal === true,
       memory: service.memory ?? manifest.memory ?? DEFAULT_MEMORY,
       env: { ...manifest.env, ...service.env },
+      backup: asServiceBackup(service.backup),
     }));
   }
   if (!isApp(manifest)) return [];
@@ -323,6 +358,7 @@ export function servicesOf(manifest: Manifest): ServiceView[] {
       internal: false,
       memory: manifest.memory ?? DEFAULT_MEMORY,
       env: manifest.env ?? {},
+      backup: asServiceBackup(manifest.backup),
     },
   ];
 }
@@ -465,6 +501,77 @@ export function commandErrors(command: string, label: string): string[] {
     errors.push(`${label}: must not end with a backslash, which systemd reads as a line continuation`);
   }
   return errors;
+}
+
+/** The C escapes systemd reads in a command line, those this reading accepts: anything rarer is refused. */
+const COMMAND_ESCAPES: Record<string, string> = { "\\": "\\", '"': '"', "'": "'", s: " ", n: "\n", t: "\t" };
+
+/**
+ * The words of a command, as systemd reads an `ExecStart=` line: separated by
+ * spaces, `"..."` and `'...'` keeping spaces in one word, wherever
+ * they open in it, and a backslash escaping the next character. Null for a
+ * line it would not read the same way, or that is not one program: a quote
+ * left open, a trailing backslash, an escape outside COMMAND_ESCAPES, no word
+ * at all, or a lone `;`, which systemd reads as a second command.
+ *
+ * A service's backup command is not written into a unit: the backup
+ * component hands these words to the program that runs it, through
+ * systemd-run (dashboard/src/backup/runner.ts). Reading them as systemd reads
+ * `start` keeps the two alike; `$NAME` is left in place, for PID 1 to expand
+ * from the unit's environment, exactly as it does in `ExecStart=`.
+ */
+export function commandWords(command: string): string[] | null {
+  // Tabs and line breaks are refused with every control character, as commandErrors does.
+  if (CONTROL_CHARACTERS.test(command)) return null;
+  const words: string[] = [];
+  let word: string | null = null;
+  let quote: string | null = null;
+  for (let index = 0; index < command.length; index++) {
+    const character = command[index]!;
+    if (character === "\\") {
+      const escaped = COMMAND_ESCAPES[command[index + 1] ?? ""];
+      if (escaped === undefined) return null;
+      word = (word ?? "") + escaped;
+      index++;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      else word += character;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      word ??= "";
+      continue;
+    }
+    if (character === " ") {
+      if (word !== null) words.push(word);
+      word = null;
+      continue;
+    }
+    word = (word ?? "") + character;
+  }
+  if (quote !== null) return null;
+  if (word !== null) words.push(word);
+  if (words.length === 0 || words.includes(";")) return null;
+  return words;
+}
+
+/**
+ * A folder of the data, as a service's `backup` names it: relative, already
+ * normalized, made of plain names. No `..`, no `.`, no empty part, so no
+ * leading, trailing or doubled slash, and nothing a shell or systemd would
+ * read: the backup component builds paths and arguments from it.
+ */
+export function isDataFolder(path: unknown): path is string {
+  if (typeof path !== "string" || path.length === 0 || path.length > 1024) return false;
+  return path.split("/").every((part) => part.length <= 255 && part !== "." && part !== ".." && /^[A-Za-z0-9._-]+$/.test(part));
+}
+
+/** Is one folder of the data the other, or inside it? Two services cannot keep the same one live. */
+export function foldersOverlap(a: string, b: string): boolean {
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }
 
 /** A one-line text for the unit's Description=, see validate(). */
@@ -765,15 +872,77 @@ export function isBackedUp(manifest: Manifest): boolean {
 }
 
 /**
- * `backup` opts out, and that is all it can say. Like `portal`, its absence
+ * The project's `backup`. `false` opts out. Like `portal`, its absence
  * already has a meaning, the default, and `true` would be a second way of
  * writing it, which ends up diverging. A static site has no data folder.
+ *
+ * An object is the backup command of the project's single service, in the
+ * form with one `start`: the project and its service are then one, as they
+ * are for `start` and `port`. Under `services`, each service declares its
+ * own, and the top level keeps `false` alone, as it keeps no `start`.
  */
 function backupErrors(manifest: Manifest, isApplication: boolean): string[] {
-  if (manifest.backup === undefined) return [];
-  if (manifest.backup !== false) return ["backup: false to keep the data folder out of the snapshots, or absent"];
+  const backup = manifest.backup as unknown;
+  if (backup === undefined) return [];
+  if (backup !== false && (typeof backup !== "object" || backup === null || Array.isArray(backup))) {
+    return [
+      'backup: false to keep the data folder out of the snapshots, an object such as { "folder": "postgres", "command": "..." } for a service that keeps a live database there, or absent',
+    ];
+  }
   if (!isApplication) return ["backup: without `start`, there is no data folder to back up"];
-  return [];
+  if (backup === false) return [];
+  if (manifest.services !== undefined) {
+    return ["backup: a backup command is declared per service once `services` is present; at the top level, only false, which keeps the whole project out"];
+  }
+  return [...serviceBackupErrors(backup, "backup"), ...backupDirErrors(manifest.env, "env")];
+}
+
+/**
+ * `BACKUP_DIR` is the folder the backup component hands a backup command, and
+ * the component's other variables are `BACKUP_` too: an `env` of such a name,
+ * beside a backup command, would never reach it, the component's winning,
+ * and would only mislead whoever reads the manifest. Beside none, they are
+ * names like any other.
+ */
+function backupDirErrors(env: Record<string, string> | undefined, label: string): string[] {
+  if (env === undefined || typeof env !== "object" || env === null) return [];
+  return Object.keys(env)
+    .filter((name) => name.startsWith("BACKUP_"))
+    .map((name) => `${label}: ${name} is a name of the backup component, which sets BACKUP_DIR for the backup command: no BACKUP_ variable beside one`);
+}
+
+/**
+ * The refusals of a service's `backup`, `label` naming where it was written.
+ *
+ * The command is judged like `start`, and read as systemd reads it
+ * (commandWords): one program, which the backup component starts with the
+ * service's identity and walls. The folder is one the data holds, never
+ * the data itself: a cluster kept straight in `DATA_DIR` would have the
+ * snapshot hold nothing else, and the restore would lose what is beside it.
+ */
+function serviceBackupErrors(raw: unknown, label: string): string[] {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return [`${label}: an object such as { "folder": "postgres", "command": "/bin/sh /srv/sites/<slug>/app/backup.sh" }`];
+  }
+  const errors: string[] = [];
+  const backup = raw as Record<string, unknown>;
+  for (const key of Object.keys(backup)) {
+    if (!BACKUP_KEYS.includes(key)) errors.push(`${label}.${key}: unknown key, a backup takes \`folder\` and \`command\``);
+  }
+  if (!isDataFolder(backup.folder)) {
+    errors.push(`${label}.folder: a folder inside the data, relative, such as postgres or db/main, with no \`..\`, \`.\` or empty part`);
+  }
+  const command = backup.command;
+  if (typeof command !== "string" || command.length === 0) {
+    errors.push(`${label}.command: required, the command that leaves a consistent copy of the folder in $BACKUP_DIR`);
+  } else {
+    const refused = commandErrors(command, `${label}.command`);
+    errors.push(...refused);
+    if (refused.length === 0 && commandWords(command) === null) {
+      errors.push(`${label}.command: one program and its arguments, read as systemd reads them: no quote left open, no lone ;, and no escape but \\\\ \\" \\' \\s \\n \\t; a script does the rest`);
+    }
+  }
+  return errors;
 }
 
 /** The refusals of an `env`, the project's or a service's, `label` naming which. */
@@ -826,6 +995,7 @@ function serviceErrors(manifest: Manifest): string[] {
   const ports = new Map<number, string>();
   const defaults: string[] = [];
   const claimed: { name: string; route: string }[] = [];
+  const backedUp: { name: string; folder: string }[] = [];
   for (const [name, raw] of Object.entries(services as Record<string, unknown>)) {
     const label = `services.${name}`;
     if (!isValidServiceName(name)) {
@@ -889,6 +1059,27 @@ function serviceErrors(manifest: Manifest): string[] {
       errors.push(`${label}.memory: a number followed by K, M or G, such as 256M`);
     }
     errors.push(...envErrors(service.env, `${label}.env`));
+
+    if (service.backup !== undefined) {
+      errors.push(...serviceBackupErrors(service.backup, `${label}.backup`));
+      errors.push(...backupDirErrors({ ...manifest.env, ...service.env }, `${label}.env`));
+      if (manifest.backup === false) {
+        errors.push(`${label}.backup: the project's "backup": false keeps its data out of the snapshots, so this command would never run`);
+      }
+      const folder = (service.backup as Partial<ServiceBackup> | null)?.folder;
+      if (isDataFolder(folder)) backedUp.push({ name, folder });
+    }
+  }
+
+  // One live folder, one service: two backup commands writing the same
+  // folder, or one inside the other, would have the archive hold one of them
+  // and lose the other.
+  for (const [i, a] of backedUp.entries()) {
+    for (const b of backedUp.slice(i + 1)) {
+      if (foldersOverlap(a.folder, b.folder)) {
+        errors.push(`services: ${a.name} (${a.folder}) and ${b.name} (${b.folder}) back up the same folder, or one inside the other: one service per live folder`);
+      }
+    }
   }
 
   if (defaults.length > 1) {

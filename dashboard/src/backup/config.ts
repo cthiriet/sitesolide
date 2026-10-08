@@ -60,6 +60,8 @@ export type BackupConfig = {
    */
   offsiteFile: string;
   zone: string;
+  /** The contact address, for a `{contact}` in the env a backup command is handed: /etc/caddy/sitesolide.env sets it. */
+  contact: string;
 };
 
 export const DEFAULT_RESERVE_BYTES = 1024 * 1024 * 1024;
@@ -108,5 +110,6 @@ export function configFrom(env: Environment, entry: { bun: string; script: strin
     // No default: the landing's folder bears the zone's name, and an invented
     // zone would leave the landing's data out of every snapshot.
     zone: env.SITESOLIDE_ZONE ?? "",
+    contact: env.SITESOLIDE_CONTACT ?? "",
   };
 }

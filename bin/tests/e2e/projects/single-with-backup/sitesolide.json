@@ -1,0 +1,7 @@
+{
+  "slug": "sample-search",
+  "description": "One service that keeps a live index, saved by its own backup command",
+  "port": 3035,
+  "start": "/usr/local/bin/bun run server.ts",
+  "backup": { "folder": "index", "command": "/usr/local/bin/bun run snapshot.ts" }
+}

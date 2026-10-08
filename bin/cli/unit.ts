@@ -119,6 +119,31 @@ function assertWritable(manifest: Manifest, service: ServiceView): void {
   }
 }
 
+/**
+ * What a service is told of its tree: its port, its data folder and its
+ * public folder, as its unit sets them, `PORT`, `DATA_DIR` and `PUBLIC_DIR`.
+ * The backup component hands the same to a service's backup command
+ * (dashboard/src/backup/hooks.ts): one writing of them for both.
+ */
+export function treeVariables(manifest: Manifest, service: ServiceView, sitesRoot = "/srv/sites"): [string, string][] {
+  const paths = projectPaths(manifest.slug, sitesRoot);
+  return [
+    ["PORT", String(service.port)],
+    ["DATA_DIR", paths.dataDir],
+    ["PUBLIC_DIR", paths.publicDir],
+  ];
+}
+
+/**
+ * A service's own `env`, the project's merged in, its placeholders replaced:
+ * each value as the process receives it. The unit escapes the `%` on top,
+ * for systemd's specifiers; a backup command, handed them through
+ * systemd-run's `--setenv`, which expands none, takes them as they are.
+ */
+export function declaredVariables(service: ServiceView, placeholders: Record<string, string>): [string, string][] {
+  return Object.entries(service.env).map(([key, value]) => [key, substitute(value, placeholders)]);
+}
+
 /** A generated unit: its name without `.service`, and its text. */
 export type GeneratedUnit = { unit: string; text: string };
 
@@ -210,9 +235,7 @@ function renderUnit(
     `Group=${account}`,
     `WorkingDirectory=${paths.app}`,
     "",
-    `Environment=PORT=${service.port}`,
-    `Environment=DATA_DIR=${paths.dataDir}`,
-    `Environment=PUBLIC_DIR=${paths.publicDir}`,
+    ...treeVariables(manifest, service).map(([key, value]) => `Environment=${key}=${value}`),
   );
 
   // The proxy and the connectors, only for a project that asks for them: the
@@ -230,8 +253,8 @@ function renderUnit(
   //
   // The `%` escaped after the replacement, so that a zone or a contact holding
   // one is written as it is too.
-  for (const [key, value] of Object.entries(service.env)) {
-    lines.push(`Environment=${key}=${escapeSpecifiers(substitute(value, placeholders))}`);
+  for (const [key, value] of declaredVariables(service, placeholders)) {
+    lines.push(`Environment=${key}=${escapeSpecifiers(value)}`);
   }
 
   // The secrets arrive through the environment, never through a file the

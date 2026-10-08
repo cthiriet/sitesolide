@@ -32,7 +32,20 @@ repositories, and the next deploy puts them back.
   description names it.
 - **Folders** are kept, empty ones included.
 - **Symbolic links, sockets, pipes and devices** are left out, and named in the
-  archive's description: a link restored as root could point anywhere.
+  archive's description: a link restored as root could point anywhere. Each
+  list of the description names the first of its kind, 16 KiB of names at
+  most, and counts them all (`counts`): a description too big would be
+  refused by the extraction, and a snapshot never reported taken that a
+  restore refuses.
+- **A folder a service keeps live**, a PostgreSQL cluster for one, is never
+  archived as its files: the service's manifest declares it with a backup
+  command (see
+  [docs/manifest.md](../../../docs/manifest.md#a-services-backup-command)),
+  run just before the copy, which leaves a consistent copy in an empty
+  folder, `BACKUP_DIR`. The archive holds that copy under `data/<folder>`,
+  and its description names the folder (`fromBackupCommand`). In the
+  snapshot a restore takes, its services stopped, no command runs and the
+  folder is saved as its files, named too (`liveAsFiles`).
 
 **Left out on purpose**, and said so on the page and in the status file: a
 static site (no data folder), an app whose data folder is missing or empty, and
@@ -43,7 +56,16 @@ an app whose manifest says `"backup": false` (see
 2,000,000 files and folders (an extraction would refuse its archive, so none
 is taken), one that does not fit twice in the disk above its reserve, and one
 that grows during its copy past what was measured at its start, by a quarter
-and 64 MiB at least (see [Limits](#limits)).
+and 64 MiB at least (see [Limits](#limits)). A backup command that exits
+non-zero, runs past its time or leaves `BACKUP_DIR` empty fails its project's
+snapshot. So does a server database running on files of the data that no
+service declares, a PostgreSQL cluster (`postmaster.pid` beside `PG_VERSION`)
+or a MongoDB (`mongod.lock` holding a pid beside `WiredTiger`): copied file by
+file while it writes, it would be archived in a state no server starts from.
+The status file then says to declare a backup command, and names no folder;
+in the snapshot a restore takes, the services stopped, such a folder is saved
+as files and named in the description. Those two are the servers the copy
+knows how to recognise; any other needs its backup command just the same.
 
 ## Where, and how often
 
@@ -58,7 +80,10 @@ and 64 MiB at least (see [Limits](#limits)).
 
 A snapshot is a plain `tar.gz`: `data/`, then `sitesolide-backup.json`, which
 says of which project and when it was taken, how (`"raw": true` for the raw
-files of a restore's own snapshot), what was copied and what was left out.
+files of a restore's own snapshot, `"stopped": true` for that snapshot
+altogether), what was copied, which folders came from a backup command
+(`fromBackupCommand`) or were saved as files with their server stopped
+(`liveAsFiles`), and what was left out.
 `tar -xzf` reads it on any machine. It is written beside its final name, read
 back entirely, and only then named: an archive that exists under its name is
 complete. A restore checks the project and the time it names against the
@@ -124,10 +149,18 @@ backup.js run                        root, CAP_DAC_READ_SEARCH only, no write ou
    |-- lists  /srv/sites/*           the projects, their manifests; whether a data folder is
    |                                 empty, asked of `find`, which stops at the first name
    |-- starts, for each project, within its share of the time:
+   |     systemd-run --pipe --uid=site-<slug> ... backup.js hook          a service's backup command, if declared
+   |        as the project, in its service's walls, its environment, its
+   |        secrets read by PID 1, the loopback alone: fills BACKUP_DIR,
+   |        /var/cache/sitesolide-backup/<folder>/hooks/<unit>
    |     systemd-run --pipe --uid=site-<slug> ... backup.js copy
    |        as the project, /srv an empty mount with its data alone bound back,
    |        no network at all: measures the data, refuses what does not fit,
-   |        and the archive comes back on standard output
+   |        archives BACKUP_DIR in place of the live folder, and the archive
+   |        comes back on standard output
+   |     systemd-run --pipe --uid=site-<slug> ... backup.js discard       whatever happened, 15 s at most
+   |        as the project, no network: removes what the commands left, and
+   |        what an earlier run left; what it does not finish, the next does
    |-- writes /var/backups/sitesolide/<folder>/   the archive, read back before it is named
    |-- prunes by the retention policy
    |-- uploads to the bucket, encrypted on the machine, each object sealed for its key
@@ -193,6 +226,9 @@ The dialog lists what the server does, then follows it phase by phase.
   that one undoes the restore. The last three are kept whatever their age.
 - **Nothing changes until the snapshot has been extracted**: an archive that
   does not read stops the restore before the service is stopped.
+- **A folder a service keeps live is saved as its files**: its services are
+  stopped, nothing writes it, and its backup command, which would need its
+  server, does not run. The description says so (`liveAsFiles`).
 - **The current data is saved even when a database of it is damaged**, which
   is often why one restores: the services being stopped, a database the copy
   cannot read consistently is saved as raw files, its `-wal` and `-journal`
@@ -392,11 +428,14 @@ What one project can cost the others, at most, and what a snapshot can be.
 | Bytes a copy archives | the data measured at its start, plus a quarter and 64 MiB at least, within the room above the reserve | `copyBudget`, copy.ts |
 | Room a snapshot needs | twice the data's apparent size (a sparse file counts whole), above `BACKUP_DISK_RESERVE` | child.ts |
 | A project's time in a run | its share of what is left of the 25-minute window among the projects still to come, one minute at least, `BACKUP_CHILD_TIMEOUT_MS` (20 minutes) at most; cut short, it is tried again once every other project has had its turn | `projectTime`, run.ts |
+| A backup command | the project's time, shared with the copy that follows it; its service's `MemoryMax` and 128 MiB for the Bun that runs it; stopped when the disk of the archives or of its `BACKUP_DIR` comes down to the reserve, measured every second; its verdict its exit code alone, what it prints going to the journal, its last 8 KiB | hooks.ts, child.ts |
+| Removing what a backup command left | after the snapshot, outside the project's time: 15 seconds, then left to the next run, whose command empties its folder first; a folder a project left read-only is made writable again by its owner, never left to root | `DISCARD_TIMEOUT_MS`, hooks.ts |
+| Room a snapshot with a backup command needs | measured once the command is done, its copy already on the disk: twice what the archive holds, the command's copy counted and the live folder not | `measureCopy`, copy.ts |
 | Reading an archive back | the same time, the same entries, no more bytes than the room | `verifyArchive`, snapshot.ts |
 | A child past its time | killed (`systemctl kill --signal=SIGKILL`), its unit's `RuntimeMaxSec` and `TimeoutStopSec=15s` as the backstop: a copy stopped by its own service does not hold the run | runner.ts |
 | Uploads | none started after 40 minutes, none waited for past 45; the status is written before the unit's 50 | run.ts |
 | A restore | 90 minutes in all; a download 20, a measure 10, an extraction and a snapshot 20 each, the swap and the watch 10 | restore.ts, the unit |
-| Memory | a run 256M, a child 512M; a data folder too big for its copy's 512M costs that project its snapshot | the units, runner.ts |
+| Memory | a run 256M, a child 512M, a backup command its service's; a data folder too big for its copy's 512M costs that project its snapshot | the units, runner.ts |
 
 **Why not a fresh PID namespace for the copy.** The copy runs under the
 project's uid, so the project's service may `SIGSTOP` it. `PrivatePIDs=`
@@ -447,6 +486,47 @@ Then, if you want it, [the offsite copy](#setting-it-up).
 
 `install` refuses while a run or a restore is in progress, and keeps the timer
 as it was.
+
+**For the services' backup commands** (`backup` under a service, or the
+object form of the top-level key), every component that embeds the
+manifest's validation must know the key before a project declares one, and
+the run must know what to do with it. In this order, from a checkout or with
+`sitesolide upgrade`, whose order is the same and which finds each of them out
+of date by its fingerprint:
+
+1. `bin/deploy-backup.sh install`. Before it, an older `backup.js` reads the
+   key without a word and copies the live folder as files, the very snapshot
+   this exists to prevent. From its first run, a project that already runs
+   PostgreSQL or MongoDB in its data without declaring it fails its snapshot,
+   where it used to be saved in a state that may not restore: the monitor
+   says so, and the project is deployed again with its backup command once
+   the steps below are done.
+2. `sitesolide deploy` from `dashboard/`: its control API judges a token's
+   manifest, and an older one refuses the key as unknown. The steward embeds
+   the same module but refuses nothing on it, reading the manifests as they
+   are; `bin/deploy-steward.sh` brings its copy up to date, which
+   `sitesolide upgrade` does before the dashboard.
+3. `bin/deploy-gatekeeper.sh`: an older one refuses to change the general
+   access of a site whose manifest carries the key, as unknown.
+4. `bin/deploy-installer.sh`: an older one refuses the key in a token's
+   deployment, and, rebuilding the loopback's project set for any project,
+   would drop a project with one `start` and a backup command from it, its
+   command then refused its own service's port.
+5. The CLI of every workstation that deploys such a project, which validates
+   the manifest before anything leaves.
+
+`sitesolide deploy` of a project that declares a backup command searches the
+server's `backup.js` for the feature (bin/cli/backups.ts,
+`SERVICE_COMMANDS_FEATURE`, which `backup.js features` prints), and warns
+when the component predates it or is missing; it refuses nothing, deploying
+changing nothing of what the backups do. The installer, which deploys for a
+token, does not ask: in the order above it is updated after the component.
+
+The machine's loopback rule must carry the project set
+(`bin/deploy-loopback.sh close`): `deploy` refuses a project with a backup
+command without it, as it refuses one of several services. Then deploy the
+project; its next hourly run takes its first snapshot from the command, and
+`bin/deploy-backup.sh state` or the site's *Backups* section says how it went.
 
 **From a version before format 2** (the bounds above, the portal left out of
 the dashboard's restores, the objects sealed for their key, the restore
@@ -513,6 +593,23 @@ sudo cat /run/sitesolide-backup/restore/<slug>.json; journalctl -u 'sitesolide-r
 sudo -u nobody cat /var/lib/sitesolide-backup/last-run.json
 ```
 
+A service's backup command, on a test site that declares one, during a run:
+
+```bash
+systemctl list-units 'sitesolide-backup-hook-*'
+systemctl show 'sitesolide-backup-hook-test-*' -p User -p IPAddressDeny -p IPAddressAllow -p MemoryMax \
+  -p BindReadOnlyPaths -p InaccessiblePaths -p EnvironmentFiles -p WorkingDirectory
+# Its secrets reach it, /etc/sitesolide hidden from it, and its service's port answers it
+# (--expand-environment=no: the shell reads the variable, PID 1 never writes its value
+# into the command line):
+sudo systemd-run --wait --pipe --expand-environment=no --uid=site-test -p InaccessiblePaths=-/etc/sitesolide \
+  -p EnvironmentFile=-/etc/sitesolide/test.env -p IPAddressDeny=any -p IPAddressAllow=localhost \
+  sh -c 'test -n "$POSTGRES_PASSWORD" && ! ls /etc/sitesolide && /usr/lib/postgresql/17/bin/pg_isready -h 127.0.0.1 -p 3081'
+# Afterwards: nothing left in its staging, the archive holds the command's copy.
+sudo ls -la /var/cache/sitesolide-backup/test/
+sudo tar -xzOf /var/backups/sitesolide/test/test-*.tar.gz sitesolide-backup.json | grep -A2 fromBackupCommand
+```
+
 Also to measure there: the memory of a run and of a copy on the largest site
 (`MemoryMax` 256M and 512M), the time a copy takes on it, and that a restore's
 `systemctl stop` and `start` act on every unit of a project with several
@@ -557,6 +654,7 @@ systemctl is-active test; sudo cat /run/sitesolide-backup/restore/test.json   # 
 ```bash
 cd dashboard && bun test tests/backup-
 cd bin && bun test tests/cli-backups.test.ts tests/e2e/backups.test.ts
+dashboard/scripts/postgres-backup-proof.sh   # Docker and the network: a real PostgreSQL, saved and restored
 ```
 
 Retention, archive names and paths, the tar reader against forged archives and
@@ -570,4 +668,14 @@ names, measured on a child's peak, a copy stopped by `SIGSTOP`, a terabyte of
 holes grown after the measure, a data folder swapped for a link, the entries
 counted alike by the copy and the extraction; a restore cut short and its
 cleanup, a stalled download, a damaged database saved raw, an object or an
-archive copied under another name.
+archive copied under another name. The services' backup commands
+(tests/backup-hooks.test.ts): run before the copy with their service's
+environment, their copy archived in place of the live folder and restored
+0700, a command that fails, runs past its time, leaves nothing, or fills the
+disk, its words kept out of the status file, the room it needs, the running
+PostgreSQL and MongoDB no service declares, a restore's own snapshot, and
+their unit beside their service's. `postgres-backup-proof.sh` runs the
+recipe of docs/manifest.md in a Debian 13 container with PostgreSQL 17, the
+real `backup.js` built as `bin/deploy-backup.sh` builds it: a snapshot taken
+while rows are written, the cluster refused without its command, restored,
+started, every row committed before the backup there, `pg_amcheck` clean.

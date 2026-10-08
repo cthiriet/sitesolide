@@ -60,6 +60,7 @@ import {
 import { MARKER_ABSENT, MARKER_PRESENT } from "../../cli/unit";
 import { GENERATOR_MARK, loopbackStateCommand, MARKER_DONE, unitOriginsCommand } from "../../cli/services";
 import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
+import { backupComponentCommand, BACKUP_COMPONENT_MARKER } from "../../cli/backups";
 import { ownerGeneralCommand, ownerReadCommand, ownerWriteCommand, type EntryView, type PersonView, type Role } from "../../cli/access";
 import { ownershipReleaseCommand } from "../../cli/removal";
 
@@ -76,6 +77,7 @@ export const SWITCHES = {
   unitWithoutZone: "unit-without-zone",
   loopbackState: "loopback-state",
   egressState: "egress-state",
+  backupComponent: "backup-component",
   firstInstall: "first-install",
   systemUnits: "system-units.json",
   access: "access.json",
@@ -338,6 +340,16 @@ if (import.meta.main) {
     const laid = join(vm, SWITCHES.egressState);
     const state = existsSync(laid) ? readFileSync(laid, "utf8").trim() : "active";
     process.stdout.write(`${state}\n${EGRESS_MARKER}\n`);
+    process.exit(0);
+  }
+  // Whether the backup component runs backup commands, read before a project
+  // that declares one pushes anything. Current, unless the test lays the
+  // state it wants.
+  if (command === backupComponentCommand()) {
+    record("BACKUP-COMPONENT");
+    const laid = join(vm, SWITCHES.backupComponent);
+    const state = existsSync(laid) ? readFileSync(laid, "utf8").trim() : "current";
+    process.stdout.write(`${state}\n${BACKUP_COMPONENT_MARKER}\n`);
     process.exit(0);
   }
   // What systemd knows of the units a deployment is about to lay, read before

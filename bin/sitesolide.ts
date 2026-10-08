@@ -113,13 +113,12 @@ import {
   readConfigFile,
   type Config,
 } from "./cli/config";
-import { backupsReport } from "./cli/backups";
+import { backupComponentCommand, backupsReport, readBackupComponent } from "./cli/backups";
 import { sourceRefusal } from "./cli/source";
 import { decideBlock, generateFragment } from "./cli/fragment";
 import { hintFor } from "./cli/hints";
 import { inferManifest, renderManifest, slugFromFolder, type Inference } from "./cli/infer";
 import {
-  hasServices,
   isApp,
   isProtected,
   isSystemName,
@@ -195,7 +194,7 @@ import {
   HELD_VARIABLE,
   type Execution,
 } from "./cli/caddy-lock";
-import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, type ProjectAccount } from "./cli/loopback";
+import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts, type ProjectAccount } from "./cli/loopback";
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { machine } from "./cli/machine";
 import { eventOutput, humanOutput, login, remoteMode, REMOTE_USAGE, runRemote } from "./cli/remote";
@@ -980,8 +979,10 @@ async function deploy(
   if (isApplication) await checkRemoteBlock(manifest, config, executor, replace, doorConfirmed);
   if (isApplication) await checkUnitNames(manifest, config, executor);
   if (isApplication) await checkPorts(manifest, config, executor);
-  if (hasServices(manifest)) await requireProjectSet(config, executor);
+  // A backup command reaches its service on its port, through the same set.
+  if (reachesOwnPorts(manifest)) await requireProjectSet(config, executor);
   if (declaresEgress(manifest) || declaresConnectors(manifest)) await requireEgress(config, executor);
+  if (servicesOf(manifest).some((service) => service.backup !== null)) await checkBackupComponent(config, executor);
   const behindPortal = isProtected(manifest);
   if (behindPortal) await requirePortal(config, executor);
 
@@ -1050,7 +1051,7 @@ async function deploy(
   // each other. A single service follows along too: a project that no longer
   // declares several must drop out of the set, before another project takes
   // its former ports.
-  if (isApplication) await rebuildProjectPorts(config, executor, hasServices(manifest) ? "services" : "follow");
+  if (isApplication) await rebuildProjectPorts(config, executor, reachesOwnPorts(manifest) ? "services" : "follow");
   // With no Caddy step to follow, the lock has nothing left to protect: a
   // static site has none, a protected site has already put its door in place.
   if (!isApplication || behindPortal) releaseCaddyLock();
@@ -1806,14 +1807,42 @@ async function requireProjectSet(config: Config, executor: Executor): Promise<vo
   switch (readLoopbackState(await executor.read(config, loopbackStateCommand()))) {
     case "unreadable":
       die("cannot tell whether the loopback rule is in place", [
-        "nothing was pushed: this project's services could fail to reach each other",
+        "nothing was pushed: this project could fail to reach its own ports",
       ]);
     case "table":
       die("the loopback rule in service predates the project set", [
-        "this project's services could not reach each other; lay the current rule first:",
+        "this project could not reach its own ports, its services each other or its backup command its service; lay the current rule first:",
         `  ${script("deploy-loopback.sh")} close`,
         "then run sitesolide deploy again. Nothing was pushed.",
       ]);
+  }
+}
+
+/**
+ * Says, before anything is pushed, when the server's backup component
+ * predates the services' backup commands: it would read this project's
+ * without a word, and go on copying the live folder as files, the very
+ * snapshot the command exists to replace. A warning and not a refusal:
+ * deploying changes nothing of what the backups do, and upgrading the
+ * component is the owner's `sitesolide upgrade`. A read, hence done in a dry
+ * run too.
+ */
+async function checkBackupComponent(config: Config, executor: Executor): Promise<void> {
+  switch (readBackupComponent(await executor.read(config, backupComponentCommand()))) {
+    case "current":
+      return;
+    case "outdated":
+      warn("the backup component on the server predates backup commands: until it is upgraded, it copies this project's live folder as files", [
+        "sitesolide upgrade brings it up to date (bin/deploy-backup.sh install from a checkout), see dashboard/src/backup/README.md",
+      ]);
+      return;
+    case "absent":
+      warn("the backup component is not installed on the server: nothing saves this project's data, its backup command included", [
+        "sitesolide setup installs it on the server",
+      ]);
+      return;
+    case "unreadable":
+      warn("cannot tell whether the server's backup component runs backup commands");
   }
 }
 
@@ -1854,15 +1883,16 @@ async function requireEgress(config: Config, executor: Executor): Promise<void> 
 
 /**
  * Rebuilds the loopback's project set from the manifests on the machine, so
- * that each project with several services reaches its own ports, and only
- * those. See PROJECT_PORTS_SET in bin/cli/loopback.ts.
+ * that each project with several services, or with a backup command,
+ * reaches its own ports, and only those. See PROJECT_PORTS_SET and
+ * reachesOwnPorts in bin/cli/loopback.ts.
  *
- * `services` is the deployment of a project with several: a failure stops it,
- * its services depending on the set. `follow` is every other deployment and
- * every removal: the set is rewritten only when it differs from what the
- * manifests say, so that a project that dropped its services or left the
- * machine drops out of it, and a failure is reported without stopping
- * anything.
+ * `services` is the deployment of a project that reaches its own ports: a
+ * failure stops it, its services, or its backup command, depending on the
+ * set. `follow` is every other deployment and every removal: the set is
+ * rewritten only when it differs from what the manifests say, so that a
+ * project that dropped its services or left the machine drops out of it, and
+ * a failure is reported without stopping anything.
  *
  * The file is checked by `nft -c`, applied, and only then replaces the one in
  * service: a refused file leaves both the set and the file as they were. On a
@@ -1896,7 +1926,7 @@ async function rebuildProjectPorts(config: Config, executor: Executor, mode: "se
   const projects: Manifest[] = [];
   for (const [folder, raw] of reading.manifests) {
     const { manifest } = readManifest(raw);
-    if (manifest === undefined || !hasServices(manifest)) continue;
+    if (manifest === undefined || !reachesOwnPorts(manifest)) continue;
     // The shape the set needs, and nothing more: a manifest deposited by an
     // older or newer checkout may fail today's validation on a key that has
     // nothing to do with its ports, and dropping it would cut its services
@@ -1913,7 +1943,7 @@ async function rebuildProjectPorts(config: Config, executor: Executor, mode: "se
   let uids = new Map<string, number>();
   if (slugs.length > 0) {
     const read = readUidsAnswer(await executor.read(config, uidsCommand(slugs)), slugs);
-    if (read.kind === "unreadable") return fail("cannot read the system users of the projects with several services");
+    if (read.kind === "unreadable") return fail("cannot read the system users of the projects that reach their own ports");
     uids = read.uids;
   }
   const accounts: ProjectAccount[] = projects.map((manifest) => ({ manifest, uid: uids.get(manifest.slug)! }));
@@ -1927,7 +1957,7 @@ async function rebuildProjectPorts(config: Config, executor: Executor, mode: "se
   }
   if (state !== "set" && !strict) {
     // Without the set, only a file already there is kept in step: a machine
-    // that never had a project with several services gets nothing written.
+    // that never had a project reaching its own ports gets nothing written.
     const presence = await remotePresence(config, executor, PROJECT_PORTS_FILE);
     if (presence.kind !== "present") return;
   }
@@ -1937,7 +1967,7 @@ async function rebuildProjectPorts(config: Config, executor: Executor, mode: "se
   if (result.code !== 0) {
     return fail(`${PROJECT_PORTS_FILE} refused`, [result.error.trim() || "no message"]);
   }
-  say(`   ${slugs.length === 0 ? "no project" : slugs.join(", ")} with several services`);
+  say(`   ${slugs.length === 0 ? "no project" : slugs.join(", ")} reaching ${slugs.length === 1 ? "its" : "their"} own ports`);
   if (state !== "set") say("   written, to be applied by the next bin/deploy-loopback.sh");
 }
 

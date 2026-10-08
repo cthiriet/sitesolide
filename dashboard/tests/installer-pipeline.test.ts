@@ -111,6 +111,21 @@ describe("a new project, private by default", () => {
     expect(existsSync(join(bench.blocks, "shop.caddy"))).toBe(false);
   });
 
+  test("one service with a backup command reaches its own port: the loopback's set names it", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, backup: { folder: "index", command: "/usr/local/bin/bun run snapshot.ts" } }));
+    expect(outcome.ok).toBe(true);
+    const uid = /^site-shop:x:(\d+):/m.exec(readFileSync(join(bench.root, "passwd"), "utf8"))![1];
+    expect(readFileSync(join(bench.root, "projects.nft"), "utf8")).toContain(`{ 3002 . ${uid} }`);
+    expect(bench.events).toContain("log    shop reaching its own ports");
+    // Without one, the set is none of its business.
+    const plain = createBench();
+    stageBundle(plain, APP_FILES);
+    expect((await run(plain, request(APP))).ok).toBe(true);
+    expect(existsSync(join(plain.root, "projects.nft"))).toBe(false);
+  });
+
   test("install runs as the project's account, in the staging directory, before anything served changes", async () => {
     const bench = createBench();
     stageBundle(bench, APP_FILES);

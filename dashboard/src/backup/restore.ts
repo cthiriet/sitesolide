@@ -311,7 +311,9 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     }
 
     publish("running", "Saving the current data first.");
-    let saved = await takeSnapshot(config, project, "pre-restore", now(), log, { timeoutMs: config.childTimeoutMs });
+    // The services are stopped: no backup command runs, there is no server to
+    // ask, and a live database folder is saved as the files its server left.
+    let saved = await takeSnapshot(config, project, "pre-restore", now(), log, { timeoutMs: config.childTimeoutMs, stopped: true });
     // A database the copy cannot read consistently is often the very reason
     // for the restore. The services are stopped: nothing writes, and the files
     // as they are, side files included, are what SQLite itself would recover
@@ -320,7 +322,7 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     if (!saved.ok && saved.cause === "database" && leftForRaw >= MIN_RAW_MS) {
       publish("running", "A database of the current data cannot be read consistently: saving it as raw files.");
       log(`restore ${folder}: ${saved.error}; the current data is saved as raw files`);
-      saved = await takeSnapshot(config, project, "pre-restore", now(), log, { timeoutMs: Math.min(config.childTimeoutMs, leftForRaw), raw: true });
+      saved = await takeSnapshot(config, project, "pre-restore", now(), log, { timeoutMs: Math.min(config.childTimeoutMs, leftForRaw), raw: true, stopped: true });
     }
     if (!saved.ok) {
       rmSync(incoming, { recursive: true, force: true });

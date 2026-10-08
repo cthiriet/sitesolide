@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_CHILD_TIMEOUT_MS } from "../src/backup/config";
+import { DISCARD_TIMEOUT_MS } from "../src/backup/hooks";
 import { readRestoreLaunch, restoreUnit } from "../src/backup/request";
 import { AFTER_STOP_MS, DOWNLOAD_TIMEOUT_MS, MEASURE_TIMEOUT_MS, RESTORE_LOCK_WAIT_MS, RESTORE_TIMEOUT_MS } from "../src/backup/restore";
 import { LOCK_WAIT_MS, OFFSITE_DEADLINE_MS, OFFSITE_STOP_MS, SNAPSHOT_DEADLINE_MS } from "../src/backup/run";
@@ -73,9 +74,10 @@ describe("sitesolide-backup.service", () => {
 
   test("ends before the next hour, and never disputes the disk with a site", () => {
     expect(values(text, "TimeoutStartSec")).toEqual(["50min"]);
-    // The last copy starts by 25 minutes and lasts 20 at most, which leaves the
+    // The last copy starts by 25 minutes and lasts 20 at most, the removal of
+    // a backup command's copy after it a few seconds more, which leaves the
     // pruning and the status file time; the uploads stop at 40.
-    expect(SNAPSHOT_DEADLINE_MS + DEFAULT_CHILD_TIMEOUT_MS).toBeLessThan(50 * 60_000);
+    expect(SNAPSHOT_DEADLINE_MS + DEFAULT_CHILD_TIMEOUT_MS + DISCARD_TIMEOUT_MS + 2000).toBeLessThan(50 * 60_000);
     expect(OFFSITE_DEADLINE_MS).toBeLessThan(OFFSITE_STOP_MS);
     expect(OFFSITE_STOP_MS).toBeLessThan(50 * 60_000);
     expect(LOCK_WAIT_MS).toBeLessThan(SNAPSHOT_DEADLINE_MS);
