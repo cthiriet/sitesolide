@@ -12,8 +12,10 @@ import {
   listingLines,
   readCompactTime,
   readListAnswer,
+  legacySnapshotName,
   readSnapshotName,
   snapshotName,
+  twinName,
   type Listing,
 } from "../cli/backups";
 import { reachesOwnPorts, projectPortPairs } from "../cli/loopback";
@@ -28,20 +30,29 @@ const AT = Date.UTC(2026, 9, 4, 13, 0, 0);
 
 describe("a snapshot's name", () => {
   test("carries the folder, the UTC second and the kind", () => {
-    expect(snapshotName("cms", AT, "scheduled")).toBe("cms-20261004T130000Z.tar.gz");
-    expect(snapshotName("cms", AT + 59_999, "pre-restore")).toBe("cms-20261004T130059Z-pre-restore.tar.gz");
+    expect(snapshotName("cms", AT, "scheduled")).toBe("cms-20261004T130000Z.tar");
+    expect(snapshotName("cms", AT + 59_999, "pre-restore")).toBe("cms-20261004T130059Z-pre-restore.tar");
   });
 
   test("reads back what it wrote, kind and time", () => {
     for (const kind of ["scheduled", "pre-restore"] as const) {
       const name = snapshotName("shop-api", AT, kind);
-      expect(readSnapshotName("shop-api", name)).toEqual({ name, folder: "shop-api", takenAt: AT, kind });
+      expect(readSnapshotName("shop-api", name)).toEqual({ name, folder: "shop-api", takenAt: AT, kind, legacy: false });
     }
+  });
+
+  test("an archive of the format before restic is read too, said so, and its imported copy named alike", () => {
+    const legacy = legacySnapshotName("cms", AT, "pre-restore");
+    expect(legacy).toBe("cms-20261004T130000Z-pre-restore.tar.gz");
+    expect(readSnapshotName("cms", legacy)).toEqual({ name: legacy, folder: "cms", takenAt: AT, kind: "pre-restore", legacy: true });
+    expect(twinName("cms", legacy)).toBe(snapshotName("cms", AT, "pre-restore"));
+    expect(twinName("cms", snapshotName("cms", AT, "scheduled"))).toBe(snapshotName("cms", AT, "scheduled"));
+    expect(twinName("cms", "notes.txt")).toBeNull();
   });
 
   test("the landing's folder, with its dots, is a folder like another", () => {
     const name = snapshotName(ZONE, AT, "scheduled");
-    expect(name).toBe("test-zone.invalid-20261004T130000Z.tar.gz");
+    expect(name).toBe("test-zone.invalid-20261004T130000Z.tar");
     expect(readSnapshotName(ZONE, name)?.takenAt).toBe(AT);
   });
 
@@ -55,7 +66,8 @@ describe("a snapshot's name", () => {
 
   test("anything else is not a snapshot, and retention never touches it", () => {
     for (const name of [
-      "cms-20261004T130000Z.tar",
+      "cms-20261004T130000Z",
+      "cms-20261004T130000Z.tgz",
       "cms-20261004T130000Z.tar.gz.tmp",
       ".cms-20261004T130000Z.tar.gz.0123456789abcdef.tmp",
       "cms-20261004T1300Z.tar.gz",
@@ -269,26 +281,29 @@ describe("sitesolide backups", () => {
     });
     const listing: Listing = {
       folder: "cms",
-      snapshots: [{ name: snapshotName("cms", AT, "scheduled"), takenAt: AT, kind: "scheduled", bytes: 2048, local: true, offsite: false }],
+      snapshots: [{ name: snapshotName("cms", AT, "scheduled"), takenAt: AT, kind: "scheduled", bytes: 2048, added: 512, local: true, offsite: false }],
       lastRun: null,
     };
     expect(readListAnswer(JSON.stringify(listing))).toEqual({ kind: "listing", listing });
+    // A component before restic says nothing of what a snapshot added.
+    const older = { ...listing, snapshots: [{ name: snapshotName("cms", AT, "scheduled"), takenAt: AT, kind: "scheduled", bytes: 2048, local: true, offsite: false }] };
+    expect(readListAnswer(JSON.stringify(older))).toMatchObject({ kind: "listing" });
   });
 
   test("prints the newest first, with where each one lives", () => {
     const listing: Listing = {
       folder: "cms",
       snapshots: [
-        { name: snapshotName("cms", AT - 3_600_000, "scheduled"), takenAt: AT - 3_600_000, kind: "scheduled", bytes: 1536, local: false, offsite: true },
-        { name: snapshotName("cms", AT, "pre-restore"), takenAt: AT, kind: "pre-restore", bytes: 12_900_000, local: true, offsite: true },
+        { name: snapshotName("cms", AT - 3_600_000, "scheduled"), takenAt: AT - 3_600_000, kind: "scheduled", bytes: 1536, added: null, local: false, offsite: true },
+        { name: snapshotName("cms", AT, "pre-restore"), takenAt: AT, kind: "pre-restore", bytes: 12_900_000, added: 340_000, local: true, offsite: true },
       ],
       lastRun: { startedAt: "2026-10-04T13:00:02.000Z", finishedAt: "2026-10-04T13:00:09.000Z", ok: false, snapshot: null, error: "not enough disk space" },
     };
     expect(listingLines(listing, "https://dashboard.test-zone.invalid")).toEqual([
       "=== backups of cms ===",
-      "TAKEN                 KIND          SIZE      WHERE",
-      "2026-10-04 13:00 UTC  pre-restore   12 MB     server, offsite",
-      "2026-10-04 12:00 UTC  scheduled     1.5 KB    offsite only",
+      "TAKEN                 KIND          SIZE      ADDED     WHERE",
+      "2026-10-04 13:00 UTC  pre-restore   12 MB     332 KB    server, offsite",
+      "2026-10-04 12:00 UTC  scheduled     1.5 KB    -         offsite only",
       "",
       "last run: 2026-10-04 13:00 UTC, failed: not enough disk space",
       "",

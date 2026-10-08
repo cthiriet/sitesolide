@@ -50,7 +50,7 @@ component (active, enabled, its files present), plus:
 | Component | Out of date when | Redeployed by |
 |---|---|---|
 | Caddy's drop-in | `override.conf` differs from the release's | setup's own step: the drop-in installed, `daemon-reload`, `systemctl restart caddy` |
-| backups | `backup.js` or one of its three units differs | `bin/deploy-backup.sh install`; the timer stays as it is |
+| backups | `backup.js` or one of its three units differs, or restic, the repository or its key is missing | `bin/deploy-backup.sh install`; the timer stays as it is |
 | egress proxy | `egress.js` or its unit differs | `bin/deploy-egress.sh` |
 | steward | `steward.js`, its unit or the portal relay's two units differ, or it started before the egress proxy's unit was last laid, or before the backups' folder existed | `bin/deploy-steward.sh` |
 | dashboard | `sitesolide deploy --dry-run --compare` finds a difference: a file to send or delete, its manifest, a missing unit, its Caddy block | `sitesolide deploy` in `dashboard/` |
@@ -289,6 +289,60 @@ workstation still on it keeps working, without the dashboard knowing what it
 did until the next snapshot. Going back to the previous gatekeeper leaves the
 two new templates installed, which nothing launches once the previous steward
 is back.
+
+## Backups stored by restic
+
+The backup component stores its snapshots with restic: one repository on the
+server, `/var/backups/sitesolide-restic`, and, with a bucket, a second one in
+it, `<prefix>-restic`, filled by `restic copy`. An hour now stores what
+changed since the hour before, compressed, rather than a whole archive; the
+bucket is read back with stock restic on any machine, the passphrase alone.
+What runs around it does not change: the copy as the project, the backup
+commands, the bounds, the status file, the restore and its rollback. See
+[dashboard/src/backup/README.md](../dashboard/src/backup/README.md).
+
+**What `sitesolide upgrade` brings**, in its usual order: the backup install
+first, which now installs Debian's `restic` package if it is missing (and
+refuses one older than 0.18.0), draws the repository's key and initialises
+the repository; then the steward, which reads the snapshots from the index
+the run writes instead of the archives' folder, and the dashboard, whose
+*Backups* section shows what each snapshot added and the last daily check;
+the monitor last, which learns to warn on a failed check. The run's and the
+restore's units go from 256M to 512M of memory, restic running beside Bun.
+
+**Then a run by hand**, which upgrade does not start:
+
+```bash
+ssh you@your-machine 'sudo systemctl start sitesolide-backup.service; sudo cat /var/lib/sitesolide-backup/last-run.json'
+```
+
+It imports the archives of the version before into the repository, each
+proved byte for byte, and writes the index the new steward reads; until it
+runs, within the hour otherwise, the *Backups* section lists no snapshot, the
+archives still on the disk. With a bucket, it also creates the bucket's
+repository with the server's chunker parameters, copies every snapshot there,
+and imports the objects the server no longer has. The archives and the
+objects are deleted seven days after their copy was verified.
+
+**What changes for you.**
+
+- Snapshots are named `<folder>-<time>.tar`, `.tar.gz` being the archives of
+  the version before; `sitesolide backups` gains an ADDED column.
+- The bucket's passphrase, `BACKUP_ENCRYPTION_PASSPHRASE`, is now the bucket
+  repository's password: changing it in the dashboard alone cuts the bucket
+  off. Change it with `restic key add` first, as the README says.
+- On Backblaze B2, a lifecycle rule keeping prior versions 30 days, and the
+  multipart one, as the README's *The offsite copy* says.
+- A recovery drill from your workstation with stock restic, once: a
+  passphrase never tried is a passphrase you do not have.
+
+**Going back.** Within seven days of the import, the previous release's
+`bin/deploy-backup.sh install`, steward and dashboard find their archives and
+objects where they left them, and never see the repository. The snapshots
+taken since exist only in restic, restored by hand. Past seven days, the
+previous release starts from an empty history. The next release removes the
+import, and its install refuses a machine that has not imported everything:
+upgrade through this one.
 
 ## From 0.2 to 0.3
 

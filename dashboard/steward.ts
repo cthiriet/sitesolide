@@ -21,7 +21,7 @@
  *   SITES_DIR=$E/sites SECRETS_FOLDER=$E/secrets UNITS_FOLDER=$E/units \
  *     STATE_FOLDER=$E/state CADDY_FOLDER=$E/caddy GATEKEEPER_FOLDER=$E/gatekeeper \
  *     CODES_FILE=$E/locks-codes.json LOCKS_FRAGMENT=$E/verrous.caddy \
- *     BACKUP_FOLDER=$E/backups BACKUP_STATE_FOLDER=$E/backup-state BACKUP_RUN_FOLDER=$E/backup-run \
+ *     BACKUP_STATE_FOLDER=$E/backup-state BACKUP_RUN_FOLDER=$E/backup-run \
  *     SOCKET=$E/run/steward.sock OWNER_SOCKET=$E/owner/owner.sock PORTAL_KEY_FOLDER=$E/portal-key \
  *     PORTAL_RELAY_SOCKET= SOCKET_GROUP= OWNERS= SYSTEMCTL=false \
  *     bun steward.ts
@@ -42,7 +42,6 @@ import { EGRESS_ACCOUNT, EGRESS_CONFIG_DIR } from "./borrowed/connectors";
 import { createControlSteward, isControlPath } from "./src/control/steward";
 import { createControlSystem } from "./src/control/system";
 import { INSTALLER_RUN_FOLDER } from "./src/control/protocol";
-import { BACKUP_FOLDER } from "./borrowed/backups";
 import { CODES_FILE as LOCK_CODES_FILE, FRAGMENT_NAME, LOCKS_DIR } from "./borrowed/locks";
 import { createBackupReader } from "./src/backup/reader";
 import { createMembersSystem } from "./src/people/system";
@@ -177,12 +176,13 @@ const connectors = createConnectorStore({
 });
 const leftovers = connectors.clean();
 if (leftovers > 0) console.log(`steward: ${leftovers} temporary connectors file(s) left by an abrupt stop removed`);
-// The backup component's folders, read for the Backups section; the restore
-// requests are written into its state folder, which the unit makes writable.
-// Missing, the section says backups are not set up, and nothing else changes.
+// The backup component's state, read for the Backups section: the index of
+// the snapshots the run writes there, the steward having neither restic nor
+// the repositories' keys. The restore requests are written into the same
+// folder, which the unit makes writable. Missing, the section says backups
+// are not set up, and nothing else changes.
 const backups = createBackupReader({
   sitesDir: SITES_DIR,
-  backupFolder: process.env.BACKUP_FOLDER ?? BACKUP_FOLDER,
   stateFolder: process.env.BACKUP_STATE_FOLDER ?? "/var/lib/sitesolide-backup",
   runFolder: process.env.BACKUP_RUN_FOLDER ?? "/run/sitesolide-backup",
   unitsFolder: UNITS_FOLDER,

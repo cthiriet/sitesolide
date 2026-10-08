@@ -131,6 +131,7 @@ export type {
   BackupAuditResponse,
   BackupsResponse,
   BackupsView,
+  CheckView,
   LastRunView,
   RestoreResponse,
   RestoreState,

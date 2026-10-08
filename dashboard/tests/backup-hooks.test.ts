@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,8 +16,10 @@ import { restore, type Command } from "../src/backup/restore";
 import { runBackups } from "../src/backup/run";
 import { childCommand, confinement, startChild, type Job } from "../src/backup/runner";
 import { staging, takeSnapshot, verifyArchive } from "../src/backup/snapshot";
-import { gzipSink, TarWriter, type Sink } from "../src/backup/tar";
-import { project, SCRIPT, tree } from "./backup-fixtures";
+import { TarWriter, type Sink } from "../src/backup/tar";
+import { dumped, names as storedNames, NO_RESTIC, project, SCRIPT, tree } from "./backup-fixtures";
+
+setDefaultTimeout(120_000);
 
 /**
  * A service that keeps a server database in the data declares its backup
@@ -80,8 +82,9 @@ function vault(script: string, options: { single?: boolean; folder?: string; ext
   return { ...made, data, app, project: vaultProject };
 }
 
-const listing = (archive: string) => Bun.spawnSync(["tar", "-tzf", archive]).stdout.toString().trim().split("\n");
-const description = (archive: string) => JSON.parse(Bun.spawnSync(["tar", "-xzOf", archive, "sitesolide-backup.json"]).stdout.toString());
+/** A snapshot's tar, dumped from the repository, listed and its description read with tar itself. */
+const listing = (archive: string) => Bun.spawnSync(["tar", "-tf", archive]).stdout.toString().trim().split("\n");
+const description = (archive: string) => JSON.parse(Bun.spawnSync(["tar", "-xOf", archive, "sitesolide-backup.json"]).stdout.toString());
 
 /** What the staging folder of `vault` holds: nothing once a snapshot is over, whatever its outcome. */
 const leftInStaging = (config: { stagingFolder: string }) => readdirSync(join(config.stagingFolder, "vault"));
@@ -92,7 +95,7 @@ printf '%s|%s|%s|%s' "$PORT" "$DATA_DIR" "$PUBLIC_URL" "$(pwd)" > "$BACKUP_DIR/e
 mkdir "$BACKUP_DIR/base"
 printf page > "$BACKUP_DIR/base/1"`;
 
-describe("a service's backup command, in a scheduled run", () => {
+describe.skipIf(NO_RESTIC)("a service's backup command, in a scheduled run", () => {
   const made = vault(WRITES_A_COPY);
   const journal: string[] = [];
   let archive = "";
@@ -100,7 +103,7 @@ describe("a service's backup command, in a scheduled run", () => {
   test("runs before the copy, and the snapshot holds its copy in place of the live folder", async () => {
     const status = await runBackups({ config: made.config, now: () => T, log: (line) => journal.push(line) });
     expect(status.projects.vault).toEqual({ ok: true, snapshot: snapshotName("vault", T, "scheduled"), error: null });
-    archive = join(made.config.backupFolder, "vault", snapshotName("vault", T, "scheduled"));
+    archive = dumped(made.config, "vault", snapshotName("vault", T, "scheduled"));
     const names = listing(archive);
     expect(names).toEqual(expect.arrayContaining(["data/", "data/db/", "data/db/state", "data/db/environment", "data/db/base/", "data/db/base/1", "data/notes.txt", "sitesolide-backup.json"]));
     // Nothing of the live cluster: neither its pid file, nor its torn page.
@@ -109,7 +112,7 @@ describe("a service's backup command, in a scheduled run", () => {
   });
 
   test("is handed its service's environment, placeholders replaced, its working directory, and BACKUP_DIR", () => {
-    const told = Bun.spawnSync(["tar", "-xzOf", archive, "data/db/environment"]).stdout.toString();
+    const told = Bun.spawnSync(["tar", "-xOf", archive, "data/db/environment"]).stdout.toString();
     // `pwd` resolves the links of the temporary folder: macOS's /var is one.
     expect(told).toBe(`3041|${join(made.sites, "vault", "data")}|https://vault.test-zone.invalid|${realpathSync(made.app)}`);
   });
@@ -125,7 +128,7 @@ describe("a service's backup command, in a scheduled run", () => {
   test("the folder comes back 0700 and the project's, the files as they were made", async () => {
     // The staging folder is made 0700, and archived with its mode: PostgreSQL
     // refuses a data directory others can read.
-    const entry = Bun.spawnSync(["tar", "-tvzf", archive]).stdout.toString().split("\n").find((line) => line.endsWith(" data/db/"));
+    const entry = Bun.spawnSync(["tar", "-tvf", archive]).stdout.toString().split("\n").find((line) => line.endsWith(" data/db/"));
     expect(entry).toStartWith("drwx------");
     const destination = join(made.root, "restored");
     mkdirSync(destination);
@@ -154,7 +157,7 @@ describe("a service's backup command, in a scheduled run", () => {
   });
 });
 
-describe("a backup command that does not do its job fails the snapshot, loudly", () => {
+describe.skipIf(NO_RESTIC)("a backup command that does not do its job fails the snapshot, loudly", () => {
   test("a non-zero exit: our message in the status file, never the command's words", async () => {
     const made = vault(`
 printf '%s\\n' '{"event":"error","message":"the invoices of alice-martin"}' >&2
@@ -168,7 +171,7 @@ exit 3`);
     expect(file).not.toContain("alice-martin");
     expect(file).not.toContain("hunter2");
     expect(journal.join("\n")).toContain("exit code 3");
-    expect(readdirSync(join(made.config.backupFolder, "vault"))).toEqual([]);
+    expect(storedNames(made.config, "vault")).toEqual([]);
     expect(leftInStaging(made.config)).toEqual([]);
   });
 
@@ -199,7 +202,7 @@ exit 3`);
   test("a command that brings the disk down to its reserve is stopped", async () => {
     // A reserve 48 MiB under what is free, and a command that writes 96 MiB, then waits.
     const made = vault(`dd if=/dev/zero of="$BACKUP_DIR/fill" bs=1048576 count=96 2>/dev/null\nexec /bin/sleep 20`);
-    const config = { ...made.config, reserveBytes: freeBytes(made.config.backupFolder) - 48 * 1024 * 1024 };
+    const config = { ...made.config, reserveBytes: freeBytes(made.config.repository) - 48 * 1024 * 1024 };
     const journal: string[] = [];
     const started = Date.now();
     const outcome = await takeSnapshot(config, made.project, "scheduled", T, (line) => journal.push(line));
@@ -217,7 +220,7 @@ exit 3`);
   });
 });
 
-describe("what a command leaves behind never blocks the next run", () => {
+describe.skipIf(NO_RESTIC)("what a command leaves behind never blocks the next run", () => {
   test("a read-only folder in BACKUP_DIR: archived, removed, and the next run runs", async () => {
     const made = vault(`${WRITES_A_COPY}\nmkdir "$BACKUP_DIR/sealed"\nprintf kept > "$BACKUP_DIR/sealed/f"\nchmod 555 "$BACKUP_DIR/sealed" "$BACKUP_DIR/base"`);
     const first = await takeSnapshot(made.config, made.project, "scheduled", T, silent);
@@ -238,7 +241,7 @@ describe("what a command leaves behind never blocks the next run", () => {
     const outcome = await takeSnapshot(made.config, made.project, "scheduled", T, silent);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(listing(join(made.config.backupFolder, "vault", outcome.name)).filter((name) => name.includes("sealed"))).toEqual([]);
+    expect(listing(dumped(made.config, "vault", outcome.name)).filter((name) => name.includes("sealed"))).toEqual([]);
     expect(leftInStaging(made.config)).toEqual([]);
   });
 
@@ -283,7 +286,7 @@ describe("what a command leaves behind never blocks the next run", () => {
   });
 });
 
-describe("the verdict is the hook mode's exit code, never what the command prints", () => {
+describe.skipIf(NO_RESTIC)("the verdict is the hook mode's exit code, never what the command prints", () => {
   test("a command that prints more than the report keeps, then runs out of time: a timeout, tried again", async () => {
     const made = vault(`i=0\nwhile [ $i -lt 6000 ]; do printf '%0100d\\n' $i >&2; i=$((i+1)); done\nexec /bin/sleep 30`);
     const journal: string[] = [];
@@ -373,9 +376,9 @@ describe("no snapshot is reported taken that the restore refuses", () => {
     expect(summary.skipped.length).toBeGreaterThan(100);
     expect(summary.skipped.length).toBeLessThan(16_000);
     expect(Buffer.byteLength(JSON.stringify(summary.skipped))).toBeLessThanOrEqual(LISTED_BYTES);
-    const archive = join(root, "links.tar.gz");
+    const archive = join(root, "links.tar");
     writeFileSync(archive, Bun.concatArrayBuffers(chunks, Infinity, true));
-    await verifyArchive(archive);
+    await verifyArchive(Bun.file(archive).stream() as ReadableStream<Uint8Array>);
     const destination = join(root, "restored");
     mkdirSync(destination);
     const extracted = await extractData(Bun.file(archive).stream() as ReadableStream<Uint8Array>, destination, { maxEntries: 2_000_000, maxBytes: 1 << 30 });
@@ -384,16 +387,14 @@ describe("no snapshot is reported taken that the restore refuses", () => {
 
   /** An archive written by hand, as a forged copy would be. */
   async function forged(root: string, write: (tar: TarWriter) => Promise<void>): Promise<string> {
-    const path = join(root, `forged-${crypto.randomUUID()}.tar.gz`);
+    const path = join(root, `forged-${crypto.randomUUID()}.tar`);
     const chunks: Uint8Array[] = [];
-    const tar = new TarWriter(
-      gzipSink({
-        async write(bytes) {
-          chunks.push(bytes.slice());
-        },
-        async close() {},
-      }),
-    );
+    const tar = new TarWriter({
+      async write(bytes) {
+        chunks.push(bytes.slice());
+      },
+      async close() {},
+    });
     await write(tar);
     await tar.end();
     writeFileSync(path, Bun.concatArrayBuffers(chunks, Infinity, true));
@@ -408,17 +409,18 @@ describe("no snapshot is reported taken that the restore refuses", () => {
       await tar.directory("data", { ...meta, mode: 0o700 });
       await tar.file("etc/evil", meta, 1, new Uint8Array([1]));
     });
-    await expect(verifyArchive(outside)).rejects.toThrow("entry outside data/ in the archive");
+    const read = (path: string) => Bun.file(path).stream() as ReadableStream<Uint8Array>;
+    await expect(verifyArchive(read(outside))).rejects.toThrow("entry outside data/ in the archive");
     const big = new TextEncoder().encode(`${JSON.stringify({ format: 2, padding: "x".repeat(1024 * 1024) })}\n`);
     const described = await forged(root, async (tar) => {
       await tar.directory("data", { ...meta, mode: 0o700 });
       await tar.file("sitesolide-backup.json", meta, big.byteLength, big);
     });
-    await expect(verifyArchive(described)).rejects.toThrow("the archive's description is too large");
+    await expect(verifyArchive(read(described))).rejects.toThrow("the archive's description is too large");
   });
 });
 
-describe("in the form with one start", () => {
+describe.skipIf(NO_RESTIC)("in the form with one start", () => {
   test("the project's own backup command runs, its folder saved from it", async () => {
     const made = vault(WRITES_A_COPY, { single: true });
     const journal: string[] = [];
@@ -427,11 +429,14 @@ describe("in the form with one start", () => {
     if (!outcome.ok) return;
     expect(outcome.summary.fromBackupCommand).toEqual(["db"]);
     expect(journal).toContain("backup vault: the backup command left its copy of db");
-    expect(listing(join(made.config.backupFolder, "vault", outcome.name))).not.toContain("data/db/postmaster.pid");
+    expect(listing(dumped(made.config, "vault", outcome.name))).not.toContain("data/db/postmaster.pid");
   });
 });
 
-describe("the room a snapshot needs counts the command's copy, not the live folder", () => {
+// This describe and the next two time nothing, and each test lays its own
+// tree: their tests run side by side. Those that time a command, or watch the
+// disk, run one by one.
+describe.concurrent.skipIf(NO_RESTIC)("the room a snapshot needs counts the command's copy, not the live folder", () => {
   /** A file of `bytes` apparent size, holes only: the measure counts it whole. */
   function sparse(path: string, bytes: number): void {
     const fd = openSync(path, "w");
@@ -443,16 +448,16 @@ describe("the room a snapshot needs counts the command's copy, not the live fold
   test("a live folder bigger than the room, a small copy: the snapshot is taken", async () => {
     const made = vault(WRITES_A_COPY);
     sparse(join(made.data, "db", "base-relation"), 64 * GIB);
-    const config = { ...made.config, reserveBytes: freeBytes(made.config.backupFolder) - 8 * GIB };
+    const config = { ...made.config, reserveBytes: freeBytes(made.config.repository) - 8 * GIB };
     const outcome = await takeSnapshot(config, made.project, "scheduled", T, silent);
     expect(outcome.ok).toBe(true);
   });
 
   test("a copy bigger than the room allows: refused, and no figure in the message", async () => {
     const made = vault(`${WRITES_A_COPY}\ntruncate -s 16G "$BACKUP_DIR/base/2"`);
-    const config = { ...made.config, reserveBytes: freeBytes(made.config.backupFolder) - 8 * GIB };
+    const config = { ...made.config, reserveBytes: freeBytes(made.config.repository) - 8 * GIB };
     const outcome = await takeSnapshot(config, made.project, "scheduled", T, silent);
-    expect(outcome).toEqual({ ok: false, error: "not enough disk space for this snapshot above the reserve, see the journal of sitesolide-backup", cause: null });
+    expect(outcome).toEqual({ ok: false, error: "not enough disk space for this snapshot above the reserve, see the journal of sitesolide-backup", cause: null, dirty: true });
     expect(leftInStaging(made.config)).toEqual([]);
   });
 
@@ -471,7 +476,7 @@ describe("the room a snapshot needs counts the command's copy, not the live fold
   });
 });
 
-describe("a running server no service declares", () => {
+describe.concurrent.skipIf(NO_RESTIC)("a running server no service declares", () => {
   async function refused(lay: (data: string) => void): Promise<{ error: string | null; journal: string; file: string }> {
     const made = tree();
     roots.push(made.root);
@@ -517,7 +522,7 @@ describe("a running server no service declares", () => {
   });
 });
 
-describe("a restore's own snapshot, the services stopped", () => {
+describe.concurrent.skipIf(NO_RESTIC)("a restore's own snapshot, the services stopped", () => {
   test("runs no backup command, and saves every live folder as files, said so", async () => {
     const made = vault(`touch "$DATA_DIR/ran"\n${WRITES_A_COPY}`);
     liveCluster(join(made.data, "undeclared"));
@@ -525,7 +530,7 @@ describe("a restore's own snapshot, the services stopped", () => {
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(existsSync(join(made.data, "ran"))).toBe(false);
-    const archive = join(made.config.backupFolder, "vault", outcome.name);
+    const archive = dumped(made.config, "vault", outcome.name);
     expect(description(archive)).toMatchObject({ stopped: true, raw: false, fromBackupCommand: [], liveAsFiles: ["db", "undeclared"] });
     expect(listing(archive)).toEqual(expect.arrayContaining(["data/db/postmaster.pid", "data/db/torn-page", "data/undeclared/postmaster.pid"]));
   });
@@ -552,9 +557,9 @@ describe("a restore's own snapshot, the services stopped", () => {
     expect(readdirSync(join(made.data, "db")).sort()).toEqual(["base", "environment", "state"]);
     expect(statSync(join(made.data, "db")).mode & 0o777).toBe(0o700);
     expect(existsSync(join(made.data, "refuse"))).toBe(false);
-    const saved = join(made.config.backupFolder, "vault", result.preRestore!);
+    const saved = dumped(made.config, "vault", result.preRestore!);
     expect(description(saved)).toMatchObject({ stopped: true, liveAsFiles: ["db"] });
-    expect(Bun.spawnSync(["tar", "-xzOf", saved, "data/db/torn-page"]).stdout.toString()).toBe("written after the snapshot");
+    expect(Bun.spawnSync(["tar", "-xOf", saved, "data/db/torn-page"]).stdout.toString()).toBe("written after the snapshot");
   });
 });
 

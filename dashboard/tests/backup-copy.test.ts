@@ -1,15 +1,18 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readSnapshotName } from "../borrowed/backups";
 import { startChild, type Job } from "../src/backup/runner";
 import { takeSnapshot, verifyArchive } from "../src/backup/snapshot";
-import { ACCOUNTS, BALANCE, audit, createAccounts, createLegacy, project, startWriter, tree } from "./backup-fixtures";
+import { ACCOUNTS, BALANCE, audit, createAccounts, createLegacy, dumped, names, NO_RESTIC, project, startWriter, tree } from "./backup-fixtures";
+
+setDefaultTimeout(120_000);
 
 /**
  * The copy and the extraction, run for real: the component's own entry point
- * in a child process, as the unit runs it, on SQLite databases in WAL mode
- * that another process keeps writing while the snapshot is taken.
+ * in a child process, as the unit runs it, restic storing what the copy
+ * streams, on SQLite databases in WAL mode that another process keeps writing
+ * while the snapshot is taken.
  */
 const { root, sites, config } = tree();
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -44,8 +47,10 @@ function extraction(destination: string, archive: string, folder: string, takenA
   };
 }
 
-describe("a snapshot taken while the database is written", () => {
+describe.skipIf(NO_RESTIC)("a snapshot taken while the database is written", () => {
   let name = "";
+  /** The stored snapshot, dumped once: what a restore extracts. */
+  let archive = "";
 
   test("is consistent: no transfer caught in the middle", async () => {
     const writer = await startWriter(root, join(data, "app.db"), 2500);
@@ -65,19 +70,19 @@ describe("a snapshot taken while the database is written", () => {
     expect(audit(join(data, "app.db"))).toEqual({ total: ACCOUNTS * BALANCE, rows: ACCOUNTS, integrity: "ok" });
   });
 
-  test("is root's alone, complete, and named for its second", async () => {
-    const path = join(config.backupFolder, "ledger", name);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(statSync(join(config.backupFolder, "ledger")).mode & 0o777).toBe(0o700);
-    expect(name).toMatch(/^ledger-\d{8}T\d{6}Z\.tar\.gz$/);
-    expect((await verifyArchive(path)).entries).toBeGreaterThan(5);
-    // No temporary file left beside it, no database copy left in staging.
-    expect(readdirSync(join(config.backupFolder, "ledger"))).toEqual([name]);
+  test("is in the repository alone, root's, complete, and named for its second", async () => {
+    expect(name).toMatch(/^ledger-\d{8}T\d{6}Z\.tar$/);
+    expect(names(config, "ledger")).toEqual([name]);
+    // restic keeps its repository's files read-only, in folders only their owner enters.
+    expect(statSync(config.repository).mode & 0o077).toBe(0);
+    archive = dumped(config, "ledger", name);
+    expect((await verifyArchive(Bun.file(archive).stream() as ReadableStream<Uint8Array>)).entries).toBeGreaterThan(5);
+    // No database copy left in staging, nothing in restic's temporary folder.
     expect(readdirSync(join(config.stagingFolder, "ledger"))).toEqual([]);
   });
 
   test("lists with tar itself: data/ and the description", () => {
-    const listed = Bun.spawnSync(["tar", "-tzf", join(config.backupFolder, "ledger", name)]).stdout.toString();
+    const listed = Bun.spawnSync(["tar", "-tf", archive]).stdout.toString();
     expect(listed).toContain("data/app.db");
     expect(listed).toContain("data/uploads/2026/photo.bin");
     expect(listed).toContain("sitesolide-backup.json");
@@ -90,7 +95,7 @@ describe("a snapshot taken while the database is written", () => {
   test("extracts, as the project would, into a sound copy of everything", async () => {
     const destination = join(root, "restored");
     mkdirSync(destination);
-    const child = startChild(extraction(destination, join(config.backupFolder, "ledger", name), "ledger", readSnapshotName("ledger", name)!.takenAt), config);
+    const child = startChild(extraction(destination, archive, "ledger", readSnapshotName("ledger", name)!.takenAt), config);
     const { code, report } = await child.result;
     expect(report.error).toBeNull();
     expect(code).toBe(0);
@@ -106,8 +111,7 @@ describe("a snapshot taken while the database is written", () => {
   });
 
   test("names its project and its time, and an extraction asked for another refuses it", async () => {
-    const archive = join(config.backupFolder, "ledger", name);
-    const listed = Bun.spawnSync(["tar", "-xzOf", archive, "sitesolide-backup.json"]).stdout.toString();
+    const listed = Bun.spawnSync(["tar", "-xOf", archive, "sitesolide-backup.json"]).stdout.toString();
     const takenAt = readSnapshotName("ledger", name)!.takenAt;
     expect(JSON.parse(listed)).toMatchObject({ format: 2, folder: "ledger", takenAt: new Date(takenAt).toISOString(), raw: false });
     for (const [folder, at, reason] of [
@@ -123,7 +127,7 @@ describe("a snapshot taken while the database is written", () => {
   });
 
   test("a refused archive extracts nothing and says why", async () => {
-    const forged = join(root, "forged.tar.gz");
+    const forged = join(root, "forged.tar");
     // A tar that names a file outside data/: the reader refuses it before writing.
     const block = new Uint8Array(512);
     block.set(new TextEncoder().encode("etc/evil"), 0);
@@ -134,7 +138,7 @@ describe("a snapshot taken while the database is written", () => {
     let sum = 0;
     for (let i = 0; i < 512; i++) sum += i >= 148 && i < 156 ? 32 : block[i]!;
     block.set(new TextEncoder().encode(`${sum.toString(8).padStart(6, "0")}\0 `), 148);
-    writeFileSync(forged, Bun.gzipSync(Bun.concatArrayBuffers([block, new Uint8Array(1024)], Infinity, true)));
+    writeFileSync(forged, Bun.concatArrayBuffers([block, new Uint8Array(1024)], Infinity, true));
     const destination = join(root, "refused");
     mkdirSync(destination);
     const { code, report } = await startChild(extraction(destination, forged, "ledger", 0, 1_000_000), config).result;

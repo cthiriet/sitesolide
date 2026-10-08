@@ -59,8 +59,9 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
   only the owner holds SSH.
 - **Secrets on the server**, never in git, set from the dashboard, which restarts
   the service in one click.
-- **Backups.** Every project's data snapshotted hourly, SQLite copied
-  consistently, optionally to an encrypted bucket, restored from the dashboard.
+- **Backups.** Every project's data snapshotted hourly into restic, SQLite
+  copied consistently, optionally to an encrypted bucket, restored from the
+  dashboard.
 - **A monitor** that checks every site each minute; give it a heartbeat and it
   notices the machine itself dying. See [monitor/README.md](monitor/README.md).
 - **Agents first-class.** The CLI speaks `--json`, every error carrying a hint,

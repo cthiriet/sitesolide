@@ -262,9 +262,11 @@ the hash that unlocks the secrets.
 
 ## Backups
 
-Once installed, the machine snapshots every app's data folder every hour, keeps
-a day of hourly snapshots, a week of daily ones and a month of weekly ones, and
-can copy them, encrypted on the machine, to a bucket elsewhere. A snapshot is
+Once installed, the machine snapshots every app's data folder every hour into
+a restic repository, keeps a day of hourly snapshots, a week of daily ones and
+a month of weekly ones, and can copy them, encrypted on the machine, to a
+second repository in a bucket elsewhere, which stock restic reads back on any
+machine. A snapshot is
 restored one project at a time from the dashboard's *Backups* section, which
 saves the current data first so that a restore can itself be undone, and puts
 it back if the service does not come back on the restored data. Two sites are
@@ -275,8 +277,8 @@ it kept before the access registry.
 The boundary is the same as everywhere: **root never opens a project's file**,
 nor walks its folder. The copy, which measures the data too, and the
 extraction run as the project's own account, in a transient unit with its
-service's walls and no network, each within its own time; root only stores
-what they hand it, as archives no project can read. A manifest opts out with
+service's walls and no network, each within its own time; restic, run by
+root, stores what the copy streams, in a repository no project can read. A manifest opts out with
 `"backup": false`. A service that keeps a server database in the data,
 PostgreSQL for one, declares a backup command that leaves a consistent copy
 of it before the copy, which archives that copy instead of the live files; a

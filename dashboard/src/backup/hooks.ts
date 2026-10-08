@@ -221,7 +221,7 @@ function freeOn(path: string): number {
 /**
  * Runs the commands one after the other, each within what is left of the
  * project's time, until `deadline`, a time of `Date.now()`. The disk of the
- * archives and the disk of the staging are measured every second: a command
+ * repository and the disk of the staging are measured every second: a command
  * that brings either down to the reserve is stopped.
  */
 export async function runHooks(
@@ -244,7 +244,7 @@ export async function runHooks(
       if (remaining <= 0) break;
       finished = await within(child.result, Math.min(DISK_EVERY_MS, remaining));
       if (finished !== null) break;
-      if (freeOn(config.backupFolder) < config.reserveBytes || freeOn(hook.backupDir) < config.reserveBytes) {
+      if (freeOn(config.repository) < config.reserveBytes || freeOn(hook.backupDir) < config.reserveBytes) {
         stopped = "stopped: the disk was about to fill";
         break;
       }

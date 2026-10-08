@@ -117,8 +117,9 @@ ReadWritePaths=-/etc/sitesolide-egress
 ReadWritePaths=-/etc/sitesolide-portal
 # The backup component's state (dashboard/src/backup/README.md): the steward
 # writes a restore request there, the one-shot that restores consumes it, and
-# it reads the component's database, whose WAL connection must write its -shm.
-# The archives in /var/backups/sitesolide and the restores' results in
+# it reads the component's database, whose WAL connection must write its -shm,
+# and which holds the index of the snapshots: the steward never runs restic
+# and never reads the repository. The restores' results in
 # /run/sitesolide-backup are only read, which strict allows. The dash: a
 # machine without backups starts the steward as before. A folder created after
 # the steward started is not writable for it until its next restart, hence

@@ -8,11 +8,11 @@
  *   backup.js copy <data> ...         as a project, the archive on stdout
  *   backup.js extract <folder> ...    as a project, the archive on stdin
  *   backup.js measure <data>          as a project, what its data weighs
- *   backup.js download <folder> <s>   as a dynamic user, a bucket's copy on stdout
+ *   backup.js download <folder> <s>   as a dynamic user, a snapshot of the bucket's repository on stdout
  *   backup.js hook <dir> <ms> <cmd>   as a project, a service's backup command
  *   backup.js discard <dir>           as a project, what the backup commands left, removed
  *   backup.js list <folder>           what `sitesolide backups` prints, read-only
- *   backup.js decrypt <in> <out>      a bucket's copy back to a tar.gz, anywhere
+ *   backup.js decrypt <in> <out>      an object of the format before restic back to a tar.gz, anywhere
  *   backup.js features                what this build does that an older one did not
  *
  * `dashboard/backup.ts` does nothing but call `main`: the body lives here, so
@@ -23,14 +23,13 @@
  */
 import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { isBackupFolder, readSnapshotName, SERVICE_COMMANDS_FEATURE, type Listing, type ListedSnapshot } from "../../borrowed/backups";
+import { isBackupFolder, SERVICE_COMMANDS_FEATURE, type Listing, type ListedSnapshot } from "../../borrowed/backups";
 import { copyMain, discardMain, downloadMain, extractMain, hookMain, measureMain } from "./child";
 import { configFrom, type Environment } from "./config";
 import { decryptStream } from "./crypto";
-import { DATABASE_NAME, openForReading, readOffsite } from "./database";
+import { DATABASE_NAME, openForReading, readSnapshots } from "./database";
 import { readRestoreLaunch } from "./request";
 import { afterRestore, restore, type Command } from "./restore";
-import { localSnapshots } from "./listing";
 import { runBackups } from "./run";
 import { STATUS_NAME, readStatus, writeStatus } from "./status";
 
@@ -52,26 +51,34 @@ function readOptional(path: string): string | null {
 }
 
 /**
- * A folder's snapshots, on the server and in the bucket as the last run listed
- * it, newest first, and its line of the last run. Reads only: the database is
- * opened read-only, and not created if it is missing.
+ * A folder's snapshots, in the server's repository and the bucket's as the
+ * last run listed them, newest first, and its line of the last run. Reads
+ * only: the database is opened read-only, and not created if it is missing;
+ * restic is not run, its listing is the index the run wrote.
  */
 export function listing(env: Environment, folder: string): Listing {
   const config = configFrom(env, { bun: process.execPath, script: Bun.main });
   const byName = new Map<string, ListedSnapshot>();
-  for (const snapshot of localSnapshots(config.backupFolder, folder)) {
-    byName.set(snapshot.name, { name: snapshot.name, takenAt: snapshot.takenAt, kind: snapshot.kind, bytes: snapshot.bytes, local: true, offsite: false });
-  }
   const db = openForReading(join(config.stateFolder, DATABASE_NAME));
+  // A database the version before wrote, between this version's install and its first run, has no index yet.
+  const read = (store: "local" | "offsite") => {
+    try {
+      return db === null ? [] : readSnapshots(db, store, folder);
+    } catch {
+      return [];
+    }
+  };
   try {
-    for (const row of db === null ? [] : readOffsite(db, folder)) {
+    for (const row of read("local")) {
+      byName.set(row.name, { name: row.name, takenAt: row.takenAt, kind: row.kind, bytes: row.bytes, added: row.added, local: true, offsite: false });
+    }
+    for (const row of read("offsite")) {
       const known = byName.get(row.name);
       if (known !== undefined) {
         known.offsite = true;
         continue;
       }
-      const snapshot = readSnapshotName(folder, row.name);
-      if (snapshot !== null) byName.set(row.name, { name: row.name, takenAt: snapshot.takenAt, kind: snapshot.kind, bytes: row.bytes, local: false, offsite: true });
+      byName.set(row.name, { name: row.name, takenAt: row.takenAt, kind: row.kind, bytes: row.bytes, added: row.added, local: false, offsite: true });
     }
   } finally {
     db?.close();
@@ -120,9 +127,11 @@ async function readSecret(prompt: string): Promise<string> {
 }
 
 /**
- * A bucket's copy decrypted into a `.tar.gz`, on any machine with Bun and this
- * repository: the passphrase from `BACKUP_ENCRYPTION_PASSPHRASE`, or typed
- * without echo. Never as an argument, which would land in the shell's history.
+ * An object of the format before restic decrypted into a `.tar.gz`, on any
+ * machine with Bun and this repository: the passphrase from
+ * `BACKUP_ENCRYPTION_PASSPHRASE`, or typed without echo. Never as an
+ * argument, which would land in the shell's history. The snapshots of the
+ * bucket's restic repository need restic alone (README).
  */
 async function decryptMain(args: string[], env: Environment): Promise<number> {
   const [input, output] = args;

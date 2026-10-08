@@ -20,16 +20,18 @@ import {
   auditLine,
   freshness,
   kindLabel,
+  checkReading,
   offsiteReading,
   restoreOutcome,
   restoreOver,
   restoreProgress,
   restoreSteps,
   retentionText,
+  snapshotSize,
   snapshotTime,
   whereLabel,
 } from "@/lib/backups"
-import { ago, dateTime, size } from "@/lib/format"
+import { ago, dateTime } from "@/lib/format"
 import { UNREACHABLE, refusalOf, succeeded } from "@/lib/secrets"
 import { TONE_TEXT } from "@/lib/tones"
 import type { BackupAuditEntry, BackupsView, RestoreView, SnapshotView } from "@/lib/types"
@@ -133,6 +135,9 @@ function SchedulePanel({ view, serverNow }: { view: BackupsView; serverNow: numb
           <Row label="Every hour, keeps">{retentionText(view.retention)}</Row>
           <Row label="Offsite copy">
             <Reading reading={offsiteReading(view.offsite)} />
+          </Row>
+          <Row label="Last check">
+            <Reading reading={checkReading(view.checks, view.repository, serverNow)} />
           </Row>
           {restore !== null && restore.state !== "running" && restore.at !== null && (
             <Row label="Last restore">
@@ -247,7 +252,7 @@ function SnapshotsPanel({
                     <When at={snapshot.takenAt} serverNow={serverNow} />
                   </td>
                   <td className="px-3 py-3">{kindLabel(snapshot.kind)}</td>
-                  <td className="px-3 py-3 text-right tabular-nums">{size(snapshot.bytes)}</td>
+                  <td className="px-3 py-3 text-right tabular-nums">{snapshotSize(snapshot)}</td>
                   <td className="px-3 py-3">{whereLabel(snapshot)}</td>
                   <td className="px-3 py-3 pr-4 text-right">{restoreButton(snapshot)}</td>
                 </tr>
@@ -261,7 +266,7 @@ function SnapshotsPanel({
                 <div className="grid min-w-0 flex-1 gap-0.5">
                   <When at={snapshot.takenAt} serverNow={serverNow} />
                   <span className="text-xs text-muted-foreground">
-                    {kindLabel(snapshot.kind)}, {size(snapshot.bytes)}, {whereLabel(snapshot).toLowerCase()}
+                    {kindLabel(snapshot.kind)}, {snapshotSize(snapshot)}, {whereLabel(snapshot).toLowerCase()}
                   </span>
                 </div>
                 {restoreButton(snapshot)}

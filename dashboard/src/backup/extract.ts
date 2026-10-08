@@ -4,9 +4,9 @@
  * `site-<slug>` with nothing to `chown`, and a flaw in the reading of a forged
  * archive yields the project's own rights, not root's.
  *
- * The archive arrives on standard input, compressed. Everything it holds is
- * checked by the reader (tar.ts) before a byte is written; on top of that,
- * here:
+ * The archive arrives on standard input, a plain tar from restic or from a
+ * download. Everything it holds is checked by the reader (tar.ts) before a
+ * byte is written; on top of that, here:
  *
  * - only `data/` and the description are accepted, nothing beside them;
  * - every file is created with `O_EXCL | O_NOFOLLOW`: nothing is overwritten,
@@ -40,7 +40,7 @@ import {
 import { join } from "node:path";
 import { DATA_ROOT, DESCRIPTION_NAME } from "./copy";
 import { syncFolder } from "./status";
-import { ArchiveError, gunzip, quoted, readTar, type EntryType, type Limits } from "./tar";
+import { ArchiveError, quoted, readTar, type EntryType, type Limits } from "./tar";
 
 export type ExtractSummary = {
   files: number;
@@ -114,7 +114,7 @@ export async function extractData(source: ReadableStream<Uint8Array>, destinatio
     made.set(relative, "directory");
   }
 
-  await readTar(gunzip(source), limits, async (entry, data) => {
+  await readTar(source, limits, async (entry, data) => {
     const place = entryPlace(entry);
     if (place.kind === "description") {
       const chunks: Uint8Array[] = [];

@@ -432,6 +432,13 @@ export function judgeMemory(text: string | null, wasBad: boolean): Result {
  */
 export const BACKUP_MAX_AGE_MS = 26 * HOUR;
 
+/**
+ * Beyond this, a repository's last check is too old: the backup job checks
+ * each repository once a day, and three days without one means its daily
+ * maintenance keeps failing to start.
+ */
+export const BACKUP_CHECK_MAX_AGE_MS = 72 * HOUR;
+
 export type BackupReading = { missing: true } | { text: string } | { error: string };
 
 /** How long ago, in the largest unit that fits. */
@@ -449,13 +456,21 @@ const MAX_NAMED = 5;
  * The status the backup job leaves in /var/lib/sitesolide-backup/last-run.json:
  *
  *   { "startedAt": ISO, "finishedAt": ISO, "ok": boolean,
- *     "projects": { "<slug>": { "ok": boolean, "snapshot": string | null, "error": string | null } } }
+ *     "projects": { "<slug>": { "ok": boolean, "snapshot": string | null, "error": string | null } },
+ *     "checks": { "local": Check | null, "offsite": Check | null } }
+ *
+ * `checks`, absent from a job before restic, the last daily check of the
+ * server's repository and of the bucket's, `{ "at": ISO, "ok": boolean,
+ * "error": string | null }`, null before the first or without a bucket, and
+ * `since` and `offsiteSince`, when checks of each were first due.
  *
  * A missing file is no check at all, backups being installed separately; a
  * file that is there but unreadable or malformed is a failure, since it is
  * exactly what a broken backup job would leave. A run that failed, or one that
  * finished more than 26 hours ago, is a warning: nothing is down, but the next
- * accident would have nothing recent to restore from.
+ * accident would have nothing recent to restore from. So is a repository
+ * whose check failed, or was not checked for three days: its snapshots may
+ * not restore.
  */
 export function judgeBackup(reading: BackupReading, now: number): Result | null {
   if ("missing" in reading) return null;
@@ -492,6 +507,32 @@ export function judgeBackup(reading: BackupReading, now: number): Result | null 
   }
   if (now - finished > BACKUP_MAX_AGE_MS) {
     return { ...base, verdict: "fail", summary: `The last backup run finished ${age} ago, more than 26 h` };
+  }
+  const checks = (record as { checks?: unknown }).checks;
+  const problems: string[] = [];
+  if (typeof checks === "object" && checks !== null) {
+    for (const [key, sinceKey, which] of [
+      ["local", "since", "server's"],
+      ["offsite", "offsiteSince", "bucket's"],
+    ] as const) {
+      const check = (checks as Record<string, unknown>)[key] as { at?: unknown; ok?: unknown; error?: unknown } | null | undefined;
+      if (typeof check !== "object" || check === null) {
+        // None yet: fine on a first day, a maintenance that never runs past three.
+        const due = (checks as Record<string, unknown>)[sinceKey];
+        const since = typeof due === "string" ? Date.parse(due) : Number.NaN;
+        if (Number.isFinite(since) && now - since > BACKUP_CHECK_MAX_AGE_MS) problems.push(`the ${which} repository was never checked, its checks due for ${ago(now - since)}`);
+        continue;
+      }
+      const at = typeof check.at === "string" ? Date.parse(check.at) : Number.NaN;
+      if (!Number.isFinite(at) || typeof check.ok !== "boolean") continue;
+      const when = ago(Math.max(0, now - at));
+      if (!check.ok) problems.push(`the ${which} repository check failed ${when} ago${typeof check.error === "string" ? ` (${check.error.slice(0, 200)})` : ""}`);
+      else if (now - at > BACKUP_CHECK_MAX_AGE_MS) problems.push(`the ${which} repository was last checked ${when} ago, more than 72 h`);
+    }
+  }
+  if (problems.length > 0) {
+    const text = problems.join("; ");
+    return { ...base, verdict: "fail", summary: `Backups: ${text}` };
   }
   const count = `${projects.length} project${projects.length === 1 ? "" : "s"}`;
   return { ...base, verdict: "ok", summary: `The last backup run finished ${age} ago, ${count}` };

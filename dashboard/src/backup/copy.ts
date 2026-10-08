@@ -53,7 +53,10 @@
  * The archive holds `data/` and, last, `sitesolide-backup.json`, which says
  * what was copied and what was left out, of which project and when: the
  * extraction checks those two against the snapshot it was asked for.
- * `tar -xzf` gives back `data/`.
+ * `tar -xf` gives back `data/`. The stream is a plain tar, never compressed:
+ * restic, which stores it, cuts it into chunks by their content and finds
+ * again the chunks of an earlier hour, which a compressed stream would hide
+ * from it; restic compresses what it stores itself.
  *
  * **Bounded, before and during.** The folder is measured first, here, as the
  * project, never by root (measureData): a project can put millions of names
@@ -70,7 +73,7 @@ import { Database } from "bun:sqlite";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, rmSync, type Stats } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
-import { TarWriter, gzipSink, type EntryMeta, type Sink } from "./tar";
+import { TarWriter, type EntryMeta, type Sink } from "./tar";
 
 /** The first 16 bytes of every SQLite 3 database. */
 export const SQLITE_HEADER = "SQLite format 3\u0000";
@@ -400,7 +403,7 @@ export type CopyOptions = {
 };
 
 /**
- * Writes the archive of `dataDir` into `sink`, compressed. `stagingDir` takes
+ * Writes the archive of `dataDir` into `sink`, a plain tar. `stagingDir` takes
  * the database copies, one at a time, removed as soon as archived.
  */
 export async function copyData(dataDir: string, stagingDir: string, sink: Sink, options: CopyOptions): Promise<CopySummary> {
@@ -433,7 +436,7 @@ export async function copyData(dataDir: string, stagingDir: string, sink: Sink, 
     listedBytes[name] += size;
     (summary[name] as unknown[]).push(item);
   };
-  const tar = new TarWriter(gzipSink(sink));
+  const tar = new TarWriter(sink);
   let copies = 0;
   // `data/` and the description, counted from the start.
   let entries = 2;

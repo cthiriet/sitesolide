@@ -16,13 +16,14 @@
  */
 import { isBackedUp } from "../../borrowed/manifest";
 import { readSnapshotName } from "../../borrowed/backups";
+import type { Check } from "./status";
 import type { ErrorCode } from "../secrets/protocol";
 import { readPageQuery } from "../secrets/log";
 import { checkSite, isSiteFolder, type Site } from "../secrets/scope";
 import type { BackupReader } from "./reader";
 import { recoveryPlan } from "./recovery";
 import { DASHBOARD_REFUSAL, PORTAL_REFUSAL, excludedFromRestore, isActor, judgeResult, restoreUnit } from "./request";
-import type { BackupAuditResponse, BackupsResponse, BackupsView, RestoreResponse, RestoreView, SnapshotView } from "./protocol";
+import type { BackupAuditResponse, BackupsResponse, BackupsView, CheckView, RestoreResponse, RestoreView, SnapshotView } from "./protocol";
 
 export type Command = { code: number; output: string };
 type Body = Record<string, unknown>;
@@ -68,15 +69,21 @@ function iso(text: string): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+function checkView(check: Check | null): CheckView | null {
+  if (check === null) return null;
+  const at = iso(check.at);
+  return at === null ? null : { at, ok: check.ok, error: check.error };
+}
+
 export function createBackupRoutes(dependencies: BackupRouteDependencies): BackupRoutes {
   const { reader, sites, fail, now } = dependencies;
 
-  /** The site's snapshots, on the server and in the bucket, newest first. */
+  /** The site's snapshots, on the server and in the bucket, newest first: one line per name, which both repositories share. */
   function snapshotsOf(folder: string): SnapshotView[] {
     if (reader === null) return [];
     const byName = new Map<string, SnapshotView>();
     for (const snapshot of reader.local(folder)) {
-      byName.set(snapshot.name, { name: snapshot.name, takenAt: snapshot.takenAt, kind: snapshot.kind, bytes: snapshot.bytes, local: true, offsite: false });
+      byName.set(snapshot.name, { name: snapshot.name, takenAt: snapshot.takenAt, kind: snapshot.kind, bytes: snapshot.bytes, added: snapshot.added, local: true, offsite: false });
     }
     for (const row of reader.offsite(folder)) {
       const known = byName.get(row.name);
@@ -84,8 +91,7 @@ export function createBackupRoutes(dependencies: BackupRouteDependencies): Backu
         known.offsite = true;
         continue;
       }
-      const snapshot = readSnapshotName(folder, row.name);
-      if (snapshot !== null) byName.set(row.name, { name: row.name, takenAt: snapshot.takenAt, kind: snapshot.kind, bytes: row.bytes, local: false, offsite: true });
+      if (readSnapshotName(folder, row.name) !== null) byName.set(row.name, { name: row.name, takenAt: row.takenAt, kind: row.kind, bytes: row.bytes, added: row.added, local: false, offsite: true });
     }
     return [...byName.values()].sort((a, b) => b.takenAt - a.takenAt || (a.name < b.name ? 1 : -1));
   }
@@ -150,7 +156,7 @@ export function createBackupRoutes(dependencies: BackupRouteDependencies): Backu
     const snapshots = snapshotsOf(folder);
     const status = reader?.status() ?? null;
     const mine = status?.projects[folder];
-    const settings = reader?.settings() ?? { retention: null, offsite: { target: null, error: null } };
+    const settings = reader?.settings() ?? { retention: null, offsite: { target: null, error: null }, checks: { local: null, offsite: null }, repository: null };
     const restore = await restoreView(folder);
     const reason = refusalReason(site, restore, snapshots);
     return {
@@ -164,6 +170,8 @@ export function createBackupRoutes(dependencies: BackupRouteDependencies): Backu
       machineRunAt: status === null ? null : iso(status.finishedAt),
       retention: settings.retention,
       offsite: settings.offsite,
+      checks: { local: checkView(settings.checks.local), offsite: checkView(settings.checks.offsite) },
+      repository: settings.repository === null ? null : { bytes: settings.repository.bytes, at: iso(settings.repository.at) ?? 0 },
       snapshots,
       restore,
       restorable: reason === null,

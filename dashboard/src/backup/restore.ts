@@ -5,9 +5,10 @@
  *   1. read and consume the request; refuse the dashboard and the portal
  *   2. take the backup lock: never beside a run, which could prune the snapshot
  *   3. repair what an interrupted restore left, or refuse
- *   4. fetch the snapshot, from the server or from the bucket
+ *   4. find the snapshot, in the server's repository or the bucket's
  *   5. extract it beside the data, as the project, while the service still
- *      runs: a snapshot that does not extract changes nothing
+ *      runs, streamed from `restic dump` or from a download: a snapshot that
+ *      does not extract changes nothing
  *   6. check that the unit has the time left for what follows, or refuse
  *   7. stop the project's services, leaving a mark that says so
  *   8. snapshot the current data, `pre-restore`: the restore can be undone
@@ -27,17 +28,18 @@
  * afterRestore below) repairs what is certain and starts the services. Step 6
  * makes that the exception: nothing is stopped without the time to finish.
  *
- * **No network here.** The unit denies it: a snapshot only the bucket holds is
- * fetched by a child of its own, a dynamic user with the network and no right
- * on any project (runner.ts), whose output is written here within a time and
- * above the disk's reserve.
+ * **No network here.** The unit denies it: the server's repository is read by
+ * restic here, a snapshot only the bucket holds is fetched by a child of its
+ * own, a dynamic user with the network and no right on any project
+ * (runner.ts), which runs restic against the bucket; either streams into the
+ * extraction, within a time, and nothing is written to disk on the way.
  *
  * NEVER `caddy stop` or `caddy start`, and nothing here touches Caddy at all:
  * a restore changes a data folder and restarts that project's services.
  */
-import { chownSync, chmodSync, closeSync, constants, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, unlinkSync, writeSync } from "node:fs";
+import { chownSync, chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { readSnapshotName } from "../../borrowed/backups";
+import { readSnapshotName, twinName } from "../../borrowed/backups";
 import { servicesOf } from "../../borrowed/manifest";
 import { unitArgument } from "../../borrowed/unit";
 import { readShow, showArguments, verdict, type ServiceReading } from "../secrets/restart";
@@ -45,7 +47,7 @@ import type { Verdict } from "../secrets/protocol";
 import { label } from "../secrets/scope";
 import { unitOf } from "../state";
 import type { BackupConfig } from "./config";
-import { DATABASE_NAME, openDatabase, recordAudit } from "./database";
+import { addSnapshot, DATABASE_NAME, openDatabase, openForReading, PRUNE_WANTED, readDoomed, recordAudit, recordDoomed, writeSetting } from "./database";
 import { takeLock, waitForLock } from "./lock";
 import { freeBytes, readProject, type Project } from "./projects";
 import { DATA, FAILED, INCOMING, PREVIOUS, recoveryPlan, type Present } from "./recovery";
@@ -60,8 +62,9 @@ import {
   type RestoreRequest,
   type RestoreResult,
 } from "./request";
+import { clearStaleLocks, listSnapshots, localRepository, resticFailure, resticJournal, snapshotPath, startRestic, type Stored } from "./restic";
 import { startChild, within, type Job } from "./runner";
-import { takeSnapshot } from "./snapshot";
+import { takeSnapshot, type SnapshotOutcome } from "./snapshot";
 import { syncFolder, writeFileAtomically } from "./status";
 
 export type Command = { code: number; output: string };
@@ -98,10 +101,10 @@ export const DOWNLOAD_TIMEOUT_MS = 20 * 60 * 1000;
 export const MEASURE_TIMEOUT_MS = 10 * 60 * 1000;
 /** The least a raw copy of the current data is given, should the consistent one fail. */
 const MIN_RAW_MS = 60_000;
-/** How often, in bytes written, the free space is measured again during a download. */
-const CHECK_EVERY = 64 * 1024 * 1024;
 /** How long a child that ran out of time is still listened to. */
 const REPORT_GRACE_MS = 2000;
+/** How long the side of a stream that did not end first is given to end too, once the other has. */
+const STREAM_GRACE_MS = 5000;
 
 /** The mark a restore leaves while the project's services are stopped. */
 export const STOPPED_SUFFIX = ".stopped";
@@ -198,8 +201,15 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
   result.actor = request.actor;
 
   let releaseLock: (() => void) | null = null;
-  let held: string | null = null;
   let raw = false;
+  /** What a failed snapshot of the current data left: packs for the next run to prune, snapshots for it to forget. */
+  const leftovers = { dirty: false, orphans: [] as string[] };
+  const keep = (outcome: SnapshotOutcome) => {
+    if (outcome.ok) return;
+    if (outcome.dirty === true) leftovers.dirty = true;
+    leftovers.orphans.push(...(outcome.orphans ?? []));
+  };
+  let preRestore: Extract<SnapshotOutcome, { ok: true }> | null = null;
   // The services stopped, and not started again yet by this restore: see afterRestore.
   const stoppedMark = join(resultsFolder, `${folder}${STOPPED_SUFFIX}`);
   const markStopped = (units: string[]) => writeFileAtomically(resultsFolder, `${folder}${STOPPED_SUFFIX}`, `${JSON.stringify({ units })}\n`, 0o600);
@@ -231,9 +241,25 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     const dataStat = lstatOrNull(join(root, DATA));
     if (dataStat === null || !dataStat.isDirectory() || dataStat.isSymbolicLink()) throw new Refused(`${folder} has no data folder to restore into`);
 
-    // --- The snapshot
+    // --- The snapshot, in the server's repository or the bucket's
     publish("running", "Fetching the snapshot.");
-    const archive = await fetchSnapshot(dependencies, project, request.snapshot, (path) => (held = path));
+    const local = localRepository(config);
+    await clearStaleLocks(config, local, Date.now() + SYSTEMCTL_TIMEOUT_MS, log);
+    const listed = await listSnapshots(config, local, Date.now() + MEASURE_TIMEOUT_MS);
+    if ("failure" in listed) {
+      log(resticJournal(`restore ${folder}: restic snapshots`, listed.failure));
+      throw new Refused(`the server's repository could not be read, nothing was changed: ${resticFailure(listed.failure, local)}`);
+    }
+    const asked = readSnapshotName(folder, request.snapshot)!;
+    // An archive of the format before restic, named by a steward that predates it: its imported copy.
+    const wanted = twinName(folder, request.snapshot)!;
+    // A snapshot an earlier run wanted forgotten and restic would not forget is no snapshot.
+    const doomed = new Set(withDoomed(config));
+    const stored = listed.snapshots.find((snapshot) => snapshot.folder === folder && snapshot.name === wanted && !doomed.has(snapshot.id)) ?? null;
+    const setting = config.offsite;
+    if (stored === null && asked.legacy) throw new Refused("this snapshot has not been imported into the repository yet: try again after the next backup run");
+    if (stored === null && (setting === null || "error" in setting)) throw new Refused("this snapshot is no longer on the server, and no bucket is configured");
+    const existing = new Set(listed.snapshots.filter((snapshot) => snapshot.folder === folder).map((snapshot) => snapshot.name));
 
     // --- Extraction beside the data, as the project. The room keeps what the
     // snapshot of the current data will need, measured by the project too:
@@ -255,33 +281,12 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     // The mode first, while root still owns it: afterwards it would take CAP_FOWNER.
     chmodSync(incoming, dataStat.mode & 0o777);
     if (project.owner !== null) chownSync(incoming, project.owner.uid, project.owner.gid);
-    const takenAt = readSnapshotName(folder, request.snapshot)!.takenAt;
-    let extracted;
+    const takenAt = asked.takenAt;
     try {
-      extracted = await runChild(
-        {
-          mode: "extract",
-          folder,
-          account: project.account,
-          uid: project.owner?.uid ?? null,
-          args: [incoming, String(room), folder, String(takenAt)],
-          readWrite: [incoming],
-          bind: [incoming],
-          cacheDirectory: null,
-          stdin: archive,
-          stdout: "ignore",
-          timeoutMs: config.childTimeoutMs,
-        },
-        config,
-        "the extraction",
-      );
+      await extract(dependencies, project, { incoming, room, takenAt, name: wanted, stored });
     } catch (error) {
       rmSync(incoming, { recursive: true, force: true });
       throw error;
-    }
-    if (extracted.code !== 0 || extracted.report.summary === null) {
-      rmSync(incoming, { recursive: true, force: true });
-      throw new Refused(`the snapshot could not be extracted, nothing was changed: ${extracted.report.error ?? (extracted.report.tail || `exit code ${extracted.code}`)}`);
     }
 
     // --- The time for what follows, or nothing is stopped
@@ -313,7 +318,8 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     publish("running", "Saving the current data first.");
     // The services are stopped: no backup command runs, there is no server to
     // ask, and a live database folder is saved as the files its server left.
-    let saved = await takeSnapshot(config, project, "pre-restore", now(), log, { timeoutMs: config.childTimeoutMs, stopped: true });
+    let saved = await takeSnapshot(config, project, "pre-restore", now(), log, { timeoutMs: config.childTimeoutMs, stopped: true, existing });
+    keep(saved);
     // A database the copy cannot read consistently is often the very reason
     // for the restore. The services are stopped: nothing writes, and the files
     // as they are, side files included, are what SQLite itself would recover
@@ -322,7 +328,8 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     if (!saved.ok && saved.cause === "database" && leftForRaw >= MIN_RAW_MS) {
       publish("running", "A database of the current data cannot be read consistently: saving it as raw files.");
       log(`restore ${folder}: ${saved.error}; the current data is saved as raw files`);
-      saved = await takeSnapshot(config, project, "pre-restore", now(), log, { timeoutMs: Math.min(config.childTimeoutMs, leftForRaw), raw: true, stopped: true });
+      saved = await takeSnapshot(config, project, "pre-restore", now(), log, { timeoutMs: Math.min(config.childTimeoutMs, leftForRaw), raw: true, stopped: true, existing });
+      keep(saved);
     }
     if (!saved.ok) {
       rmSync(incoming, { recursive: true, force: true });
@@ -332,6 +339,7 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     }
     result.preRestore = saved.name;
     raw = saved.raw;
+    preRestore = saved;
 
     publish("running", "Putting the snapshot in place.");
     renameSync(join(root, DATA), join(root, PREVIOUS));
@@ -367,17 +375,34 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     else publish("failure", `the restore failed: ${errorText(error)}. Check the site and the journal: journalctl -u sitesolide-restore@${folder}`);
     return result;
   } finally {
-    if (held !== null) rmSync(held, { force: true });
     releaseLock?.();
-    auditRestore(dependencies, folder, result, raw ? { preRestoreRaw: true } : {});
+    auditRestore(dependencies, folder, result, raw ? { preRestoreRaw: true } : {}, preRestore === null ? null : { folder, snapshot: preRestore }, leftovers);
   }
 }
 
-function auditRestore(dependencies: Pick<RestoreDependencies, "config" | "now" | "log">, folder: string, result: RestoreResult, extra: Record<string, unknown>): void {
+/**
+ * The audit of a restore, and the index's new line for the snapshot it took:
+ * the page lists the before-restore snapshot at once, without waiting for the
+ * next run to list the repository.
+ */
+function auditRestore(
+  dependencies: Pick<RestoreDependencies, "config" | "now" | "log">,
+  folder: string,
+  result: RestoreResult,
+  extra: Record<string, unknown>,
+  taken: { folder: string; snapshot: Extract<SnapshotOutcome, { ok: true }> } | null = null,
+  leftovers: { dirty: boolean; orphans: string[] } = { dirty: false, orphans: [] },
+): void {
   const { config, now, log } = dependencies;
   try {
     const db = openDatabase(join(config.stateFolder, DATABASE_NAME));
     try {
+      for (const id of leftovers.orphans) recordDoomed(db, "local", id, now());
+      if (leftovers.dirty) writeSetting(db, PRUNE_WANTED, true);
+      if (taken !== null) {
+        const read = readSnapshotName(taken.folder, taken.snapshot.name)!;
+        addSnapshot(db, "local", { folder: taken.folder, name: taken.snapshot.name, id: taken.snapshot.id, takenAt: read.takenAt, kind: read.kind, bytes: taken.snapshot.bytes, added: taken.snapshot.added });
+      }
       recordAudit(
         db,
         {
@@ -393,6 +418,21 @@ function auditRestore(dependencies: Pick<RestoreDependencies, "config" | "now" |
     }
   } catch (error) {
     log(`restore ${folder}: audit not written (${errorText(error)})`);
+  }
+}
+
+/** The snapshots an earlier run could not forget, from the component's database; none if it does not open. */
+function withDoomed(config: BackupConfig): string[] {
+  try {
+    const db = openForReading(join(config.stateFolder, DATABASE_NAME));
+    if (db === null) return [];
+    try {
+      return readDoomed(db, "local");
+    } finally {
+      db.close();
+    }
+  } catch {
+    return [];
   }
 }
 
@@ -417,77 +457,132 @@ function lstatOrNull(path: string) {
   }
 }
 
-/**
- * The archive to extract: the server's own file, or the bucket's copy,
- * decrypted by a download child into a root-only folder, removed once the
- * restore is over. The download is stopped past its time, or when the disk
- * comes down to its reserve.
- */
-async function fetchSnapshot(dependencies: RestoreDependencies, project: Project, name: string, hold: (path: string) => void): Promise<string> {
-  const { config } = dependencies;
-  const local = join(config.backupFolder, project.folder, name);
-  const stat = lstatOrNull(local);
-  if (stat !== null && stat.isFile()) return local;
+/** Where the snapshot comes from, as a stream, and how it ended. */
+type Source = {
+  stream: ReadableStream<Uint8Array>;
+  /** Null once it ended well; otherwise why not, for the page. */
+  done: Promise<string | null>;
+  stop: () => void;
+  /** Past this, a time of `Date.now()`, it is stopped, and `late` said. */
+  deadline: number;
+  late: string;
+};
 
-  const setting = config.offsite;
-  if (setting === null || "error" in setting) throw new Refused("this snapshot is no longer on the server, and no bucket is configured");
-  const downloads = join(config.stateFolder, "downloads");
-  mkdirSync(downloads, { recursive: true, mode: 0o700 });
-  if (freeBytes(downloads) < config.reserveBytes) throw new Refused("not enough disk space to fetch the snapshot from the bucket");
-  const target = join(downloads, name);
-  hold(target);
-  rmSync(target, { force: true });
-  const timeoutMs = dependencies.downloadTimeoutMs ?? DOWNLOAD_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
-  const fd = openSync(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  try {
-    fchmodSync(fd, 0o600);
+/**
+ * The snapshot, streamed into the extraction child, as the project: from
+ * `restic dump` on the server's repository, or from a download child for a
+ * snapshot only the bucket holds. Nothing is written on the way, so nothing
+ * needs room but the extraction itself. Either side ending first gives the
+ * other a moment: an extraction that refuses an entry stops reading, and the
+ * source then fails for want of a reader, which is not the reason to show.
+ */
+async function extract(
+  dependencies: RestoreDependencies,
+  project: Project,
+  plan: { incoming: string; room: number; takenAt: number; name: string; stored: Stored | null },
+): Promise<void> {
+  const { config, log } = dependencies;
+  const folder = project.folder;
+  let source: Source;
+  if (plan.stored !== null) {
+    const local = localRepository(config);
+    const dump = startRestic(config, local, ["dump", plan.stored.id, snapshotPath(folder)], { stdout: "stream" });
+    source = {
+      stream: dump.stdout!,
+      done: dump.result.then((ended) => {
+        if (ended.code === 0) return null;
+        log(resticJournal(`restore ${folder}: restic dump`, ended));
+        return `the snapshot could not be read from the server's repository, nothing was changed: ${resticFailure(ended, local)}`;
+      }),
+      stop: dump.stop,
+      deadline: Date.now() + config.childTimeoutMs,
+      late: "the snapshot could not be read from the server's repository in time, nothing was changed",
+    };
+  } else {
+    const setting = config.offsite as Exclude<BackupConfig["offsite"], null | { error: string }>;
+    const timeoutMs = dependencies.downloadTimeoutMs ?? DOWNLOAD_TIMEOUT_MS;
     const child = startChild(
-      { mode: "download", folder: project.folder, account: null, uid: null, args: [project.folder, name], readWrite: [], bind: [], cacheDirectory: null, stdin: null, stdout: "pipe", timeoutMs, offsite: setting },
+      {
+        mode: "download",
+        folder,
+        account: null,
+        uid: null,
+        args: [folder, plan.name],
+        readWrite: [],
+        bind: [],
+        cacheDirectory: null,
+        stdin: null,
+        stdout: "pipe",
+        timeoutMs,
+        offsite: setting,
+        environment: [["BACKUP_RESTIC", config.restic]],
+      },
       config,
     );
-    const reader = child.stdout!.getReader();
-    let written = 0;
-    let nextCheck = CHECK_EVERY;
-    let stopped: string | null = null;
-    for (;;) {
-      const next = await within(reader.read(), deadline - Date.now());
-      if (next === null) {
-        stopped = "the snapshot could not be fetched from the bucket in time";
-        break;
-      }
-      const { done, value } = next.value;
-      if (done) break;
-      let offset = 0;
-      while (offset < value.byteLength) offset += writeSync(fd, value, offset, value.byteLength - offset);
-      written += value.byteLength;
-      if (written >= nextCheck) {
-        nextCheck += CHECK_EVERY;
-        if (freeBytes(downloads) < config.reserveBytes) {
-          stopped = "not enough disk space to fetch the snapshot from the bucket";
-          break;
-        }
-      }
-    }
-    if (stopped !== null) {
-      void reader.cancel().catch(() => undefined);
-      child.stop();
-      throw new Refused(stopped);
-    }
-    const finished = await within(child.result, Math.max(deadline - Date.now(), REPORT_GRACE_MS));
-    if (finished === null) {
-      child.stop();
-      throw new Refused("the snapshot could not be fetched from the bucket in time");
-    }
-    if (finished.value.code !== 0 || finished.value.report.summary === null) {
-      throw new Refused(`the snapshot could not be fetched from the bucket: ${finished.value.report.error ?? (finished.value.report.tail || `exit code ${finished.value.code}`)}`);
-    }
-    if (written === 0) throw new Refused("the snapshot fetched from the bucket is empty");
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+    source = {
+      stream: child.stdout!,
+      done: child.result.then(({ code, report }) => {
+        if (code === 0 && report.summary !== null) return null;
+        log(`restore ${folder}: the download failed, exit code ${code}${report.detail === null ? "" : `, ${report.detail}`}${report.tail === "" ? "" : `: ${report.tail}`}`);
+        return `the snapshot could not be fetched from the bucket: ${report.error ?? (report.tail || `exit code ${code}`)}`;
+      }),
+      stop: child.stop,
+      deadline: Date.now() + timeoutMs,
+      late: "the snapshot could not be fetched from the bucket in time",
+    };
   }
-  return target;
+
+  const extractionMs = config.childTimeoutMs + (plan.stored === null ? source.deadline - Date.now() : 0);
+  const extraction = startChild(
+    {
+      mode: "extract",
+      folder,
+      account: project.account,
+      uid: project.owner?.uid ?? null,
+      args: [plan.incoming, String(plan.room), folder, String(plan.takenAt)],
+      readWrite: [plan.incoming],
+      bind: [plan.incoming],
+      cacheDirectory: null,
+      stdin: source.stream,
+      stdout: "ignore",
+      timeoutMs: extractionMs,
+    },
+    config,
+  );
+  const extractionWait = within(extraction.result, extractionMs + REPORT_GRACE_MS);
+  const sourceWait = within(source.done, source.deadline - Date.now());
+  const first = await Promise.race([sourceWait.then((value) => ({ side: "source" as const, value })), extractionWait.then((value) => ({ side: "extraction" as const, value }))]);
+
+  let sourceEnded: { value: string | null } | null;
+  let extracted: Awaited<typeof extraction.result> | null;
+  if (first.side === "source") {
+    if (first.value === null) {
+      source.stop();
+      extraction.stop();
+      throw new Refused(source.late);
+    }
+    sourceEnded = first.value;
+    const after = first.value.value === null ? await extractionWait : await within(extraction.result, STREAM_GRACE_MS);
+    if (after === null) extraction.stop();
+    extracted = after?.value ?? null;
+    if (after === null && first.value.value === null) throw new Refused("the extraction did not finish in time, nothing was changed");
+  } else {
+    if (first.value === null) {
+      extraction.stop();
+      source.stop();
+      throw new Refused("the extraction did not finish in time, nothing was changed");
+    }
+    extracted = first.value.value;
+    sourceEnded = await within(source.done, STREAM_GRACE_MS);
+    if (sourceEnded === null) source.stop();
+  }
+
+  const refusal = extracted !== null && extracted.code !== 0 && extracted.report.error !== null ? extracted.report.error : null;
+  if (refusal !== null) throw new Refused(`the snapshot could not be extracted, nothing was changed: ${refusal}`);
+  if (sourceEnded !== null && sourceEnded.value !== null) throw new Refused(sourceEnded.value);
+  if (extracted === null || extracted.code !== 0 || extracted.report.summary === null) {
+    throw new Refused(`the snapshot could not be extracted, nothing was changed: ${extracted === null ? "no answer in time" : extracted.report.tail || `exit code ${extracted.code}`}`);
+  }
 }
 
 /** The project's units systemd knows: a project without one has nothing to stop. */

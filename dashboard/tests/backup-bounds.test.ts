@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { closeSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +12,9 @@ import { childCommand, confinement, type Job } from "../src/backup/runner";
 import { TIMEOUT_ERROR, takeSnapshot, verifyArchive } from "../src/backup/snapshot";
 import { readStatus } from "../src/backup/status";
 import type { Sink } from "../src/backup/tar";
-import { createAccounts, project, tree } from "./backup-fixtures";
+import { createAccounts, dumped, names, NO_RESTIC, project, repositoryTemplate, tree } from "./backup-fixtures";
+
+setDefaultTimeout(120_000);
 
 /**
  * What one project can do to the others, and to root: a folder of too many
@@ -109,13 +111,13 @@ describe("root and a folder of too many names", () => {
   });
 });
 
-describe("one project's failure is a failed project, never a dead run", () => {
+describe.skipIf(NO_RESTIC)("one project's failure is a failed project, never a dead run", () => {
   test("a project whose snapshot throws fails alone, and the next ones are saved", async () => {
     const { root, sites, config } = tree();
     roots.push(root);
-    // First in the order: a file where its folder of archives should be.
+    // First in the order: a file where its staging folder should be.
     writeFileSync(join(project(sites, "aaa"), "x"), "x");
-    writeFileSync(join(root, "backups", "aaa"), "not a folder");
+    writeFileSync(join(root, "staging", "aaa"), "not a folder");
     createAccounts(join(project(sites, "ledger"), "app.db"), 50);
     const status = await runBackups({ config, now: () => T, log: silent });
     expect(status.ok).toBe(false);
@@ -143,7 +145,7 @@ describe("one project's failure is a failed project, never a dead run", () => {
   });
 });
 
-describe("a project's time is its own", () => {
+describe.skipIf(NO_RESTIC)("a project's time is its own", () => {
   test("each gets a share of what is left, within the child timeout, never less than a minute", () => {
     expect(projectTime(25 * 60_000, 5, 20 * 60_000)).toBe(5 * 60_000);
     expect(projectTime(25 * 60_000, 1, 20 * 60_000)).toBe(20 * 60_000);
@@ -155,7 +157,9 @@ describe("a project's time is its own", () => {
   test(
     "a copy stopped by its own service is cut at its time, tried again last, and the next project is saved",
     async () => {
-      const { root, sites, config } = tree({ BACKUP_CHILD_TIMEOUT_MS: "1500" });
+      // Time for a snapshot of a small folder, restic's key derivation twice
+      // included: half a second each with the key restic calibrates.
+      const { root, sites, config } = tree({ BACKUP_CHILD_TIMEOUT_MS: repositoryTemplate().cheap ? "3000" : "6000" });
       roots.push(root);
       // The service of `aaa` stops its copy, as SIGSTOP from the same uid would.
       const wrapper = join(root, "stopping-copy.ts");
@@ -176,12 +180,13 @@ describe("a project's time is its own", () => {
       const elapsed = Date.now() - started;
       expect(status.projects.aaa).toEqual({ ok: false, snapshot: null, error: TIMEOUT_ERROR });
       expect(status.projects.ledger).toMatchObject({ ok: true });
-      // Twice its time and the others' copies, not the child's 30 seconds of grace.
-      expect(elapsed).toBeLessThan(15_000);
+      // Twice its time and the others' snapshots, not the child's 30 seconds of grace.
+      expect(elapsed).toBeLessThan(45_000);
       expect(journal.join("\n")).toContain("backup aaa: out of its time, tried again after the others");
-      expect(readdirSync(join(root, "backups", "aaa"))).toEqual([]);
+      // restic, stopped, kept nothing of the stopped copy.
+      expect(names(config, "aaa")).toEqual([]);
     },
-    30_000,
+    90_000,
   );
 
   test("a child carries its own time, and PID 1 kills it shortly after, stopped or not", () => {
@@ -202,7 +207,7 @@ describe("a project's time is its own", () => {
     expect(confinement(job)).toContain("TimeoutStopSec=15s");
   });
 
-  test("reading an archive back stops at its deadline, and at the entries an extraction accepts", async () => {
+  test("reading a snapshot back stops at its deadline, and at the entries an extraction accepts", async () => {
     const { root, sites, config } = tree();
     roots.push(root);
     const data = project(sites, "ledger");
@@ -210,10 +215,11 @@ describe("a project's time is its own", () => {
     const outcome = await takeSnapshot(config, { folder: "ledger", account: "site-ledger", owner: null, dataDir: data, manifest: null }, "scheduled", T);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    const path = join(config.backupFolder, "ledger", outcome.name);
-    expect((await verifyArchive(path)).entries).toBe(7);
-    await expect(verifyArchive(path, { maxEntries: 6, maxBytes: 1 << 30 })).rejects.toThrow("more than 6 entries");
-    await expect(verifyArchive(path, undefined, Date.now() - 1)).rejects.toThrow("could not be read back in time");
+    const path = dumped(config, "ledger", outcome.name);
+    const read = () => Bun.file(path).stream() as ReadableStream<Uint8Array>;
+    expect((await verifyArchive(read())).entries).toBe(7);
+    await expect(verifyArchive(read(), { maxEntries: 6, maxBytes: 1 << 30 })).rejects.toThrow("more than 6 entries");
+    await expect(verifyArchive(read(), undefined, Date.now() - 1)).rejects.toThrow("could not be read back in time");
   });
 });
 
@@ -258,9 +264,9 @@ describe("a file a service replaces whole while the copy runs", () => {
     const data = join(root, "data");
     mkdirSync(data);
     mkdirSync(join(root, "staging"));
-    // Listed before state.json, and incompressible: the compressor hands its
-    // bytes to the sink while it is archived, that is after state.json was
-    // listed and before it is opened.
+    // Listed before state.json, and large: the writer hands its bytes to the
+    // sink while it is archived, that is after state.json was listed and
+    // before it is opened.
     writeFileSync(join(data, "a.bin"), randomBytes(4 * 1024 * 1024));
     writeFileSync(join(data, "state.json"), '{"version":1}');
     const archive = memory();
@@ -291,14 +297,14 @@ describe("a file a service replaces whole while the copy runs", () => {
   });
 });
 
-describe("what the status file says of a project's tree", () => {
+describe.skipIf(NO_RESTIC)("what the status file says of a project's tree", () => {
   test("too little room: the copy refuses, and no figure reaches the status file", async () => {
     const { root, sites, config } = tree();
     roots.push(root);
     const data = project(sites, "ledger");
     writeFileSync(join(data, "big.bin"), new Uint8Array(4 * 1024 * 1024));
     // One mebibyte of room above the reserve: the data needs eight.
-    const status = await runBackups({ config: { ...config, reserveBytes: freeBytes(config.backupFolder) - 1024 * 1024 }, now: () => T, log: silent });
+    const status = await runBackups({ config: { ...config, reserveBytes: freeBytes(config.repository) - 1024 * 1024 }, now: () => T, log: silent });
     expect(status.projects.ledger).toEqual({ ok: false, snapshot: null, error: "not enough disk space for this snapshot above the reserve, see the journal of sitesolide-backup" });
     expect(readFileSync(join(root, "state", "last-run.json"), "utf8")).not.toMatch(/[0-9]+ ?(MB|bytes)/);
   });
@@ -316,8 +322,8 @@ describe("what the status file says of a project's tree", () => {
     rmSync(data, { recursive: true });
     symlinkSync(elsewhere, data);
     const outcome = await takeSnapshot(config, (found as { project: Parameters<typeof takeSnapshot>[1] }).project, "scheduled", T);
-    expect(outcome).toEqual({ ok: false, error: "the data folder is not a folder", cause: null });
-    expect(readdirSync(join(config.backupFolder, "ledger"))).toEqual([]);
+    expect(outcome).toEqual({ ok: false, error: "the data folder is not a folder", cause: null, dirty: true });
+    expect(names(config, "ledger")).toEqual([]);
   });
 });
 
@@ -353,13 +359,13 @@ describe("no snapshot is taken that a restore would refuse", () => {
 
 describe("a download, the one child that is not a project", () => {
   const config = { isolation: "systemd" as const, systemdRun: "/usr/bin/systemd-run", bun: "/usr/local/bin/bun", script: "/usr/local/lib/sitesolide/backup.js", offsiteFile: "/etc/sitesolide/dashboard-backup.env" };
-  const offsite = { endpoint: "https://e.invalid", bucket: "b", region: null, accessKeyId: "AKIDNEVERSHOWN", secretAccessKey: "SECRETNEVERSHOWN", prefix: "p", passphrase: "PASSPHRASE-NEVER-SHOWN" };
+  const offsite = { endpoint: "https://e.invalid", bucket: "b", region: null, accessKeyId: "AKIDNEVERSHOWN", secretAccessKey: "SECRETNEVERSHOWN", prefix: "p", passphrase: "PASSPHRASE-NEVER-SHOWN", repository: "s3:https://e.invalid/b/p-restic" };
   const job: Job = {
     mode: "download",
     folder: "cms",
     account: null,
     uid: null,
-    args: ["cms", "cms-20261004T130000Z.tar.gz"],
+    args: ["cms", "cms-20261004T130000Z.tar"],
     readWrite: [],
     bind: [],
     cacheDirectory: null,

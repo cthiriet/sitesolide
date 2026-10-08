@@ -51,18 +51,18 @@ export function benchBackupRoutes(options: { start: number; folders: Folder[]; i
     const base = 2 * 1024 * 1024 + folder.slug.length * 377_000;
     for (let i = 0; i < 30; i++) {
       const takenAt = lastHour - i * HOUR + 2 * 60_000;
-      list.push({ name: snapshotName(folder.slug, takenAt, "scheduled"), takenAt, kind: "scheduled", bytes: base - i * 4096, local: true, offsite: i < 24 });
+      list.push({ name: snapshotName(folder.slug, takenAt, "scheduled"), takenAt, kind: "scheduled", bytes: base - i * 4096, added: i % 3 === 0 ? 24_000 : 180_000 + i * 1024, local: true, offsite: i < 24 });
     }
     for (let d = 2; d < 8; d++) {
       const takenAt = lastHour - d * DAY + 2 * 60_000;
-      list.push({ name: snapshotName(folder.slug, takenAt, "scheduled"), takenAt, kind: "scheduled", bytes: base - d * 50_000, local: d < 5, offsite: true });
+      list.push({ name: snapshotName(folder.slug, takenAt, "scheduled"), takenAt, kind: "scheduled", bytes: base - d * 50_000, added: 600_000, local: d < 5, offsite: true });
     }
     snapshots.set(folder.slug, list);
   }
   const cms = snapshots.get("cms");
   if (cms !== undefined) {
     const takenAt = start - 3 * DAY - 4 * HOUR;
-    cms.push({ name: snapshotName("cms", takenAt, "pre-restore"), takenAt, kind: "pre-restore", bytes: 2_700_000, local: true, offsite: true });
+    cms.push({ name: snapshotName("cms", takenAt, "pre-restore"), takenAt, kind: "pre-restore", bytes: 2_700_000, added: 310_000, local: true, offsite: true });
     cms.sort((a, b) => b.takenAt - a.takenAt);
     restores.set("cms", {
       state: "ok",
@@ -77,7 +77,7 @@ export function benchBackupRoutes(options: { start: number; folders: Folder[]; i
   }
   for (let i = 5; i >= 0; i--) {
     const failed = i === 0 ? ["builder"] : [];
-    record({ at: new Date(lastHour - i * HOUR + 3 * 60_000).toISOString(), actor: "system", action: "backup.run", target: null, detail: { ok: failed.length === 0, snapshots: 9, pruned: 1, failed } });
+    record({ at: new Date(lastHour - i * HOUR + 3 * 60_000).toISOString(), actor: "system", action: "backup.run", target: null, detail: { ok: failed.length === 0, snapshots: 9, forgotten: 1, failed } });
   }
 
   function view(folder: Folder): BackupsView {
@@ -109,6 +109,8 @@ export function benchBackupRoutes(options: { start: number; folders: Folder[]; i
       machineRunAt: lastHour + 3 * 60_000,
       retention: installed ? RETENTION : null,
       offsite: { target: "sitesolide-backups at fsn1.your-objectstorage.com", error: null },
+      checks: installed ? { local: { at: lastHour - 9 * HOUR, ok: true, error: null }, offsite: { at: lastHour - 9 * HOUR, ok: true, error: null } } : { local: null, offsite: null },
+      repository: installed ? { bytes: 148 * 1024 * 1024, at: lastHour - 9 * HOUR } : null,
       snapshots: installed ? list : [],
       restore,
       restorable: reason === null,
@@ -130,7 +132,7 @@ export function benchBackupRoutes(options: { start: number; folders: Folder[]; i
     const preTakenAt = startedAt + 4000;
     const preRestore = snapshotName(slug, preTakenAt, "pre-restore");
     const list = snapshots.get(slug) ?? [];
-    list.unshift({ name: preRestore, takenAt: preTakenAt, kind: "pre-restore", bytes: list[0]?.bytes ?? 1_000_000, local: true, offsite: false });
+    list.unshift({ name: preRestore, takenAt: preTakenAt, kind: "pre-restore", bytes: list[0]?.bytes ?? 1_000_000, added: 52_000, local: true, offsite: false });
     const failed = slug === "roster";
     const when = new Date(snapshot.takenAt).toISOString().slice(0, 16).replace("T", " ");
     const done: RestoreView = failed

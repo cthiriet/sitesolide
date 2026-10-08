@@ -1,24 +1,30 @@
 /**
  * The optional copy of every snapshot in an S3-compatible bucket: Hetzner
- * Object Storage, Cloudflare R2, Backblaze B2, AWS S3, a MinIO of one's own.
+ * Object Storage, Cloudflare R2, Backblaze B2 through its S3 API, AWS S3, a
+ * MinIO of one's own.
  *
  * The machine's disk is the first copy, and it dies with the machine. The
- * bucket is the second, elsewhere, encrypted on the machine before it leaves
- * (crypto.ts): what is uploaded is unreadable without the passphrase, which
- * lives in /etc/sitesolide/dashboard-backup.env and, above all, in its
- * owner's password manager. Without it, the copies are noise.
+ * bucket is the second, elsewhere: a restic repository of its own,
+ * `<prefix>-restic` in the bucket, encrypted by restic on the machine with the
+ * passphrase, which lives in /etc/sitesolide/dashboard-backup.env and, above
+ * all, in its owner's password manager. Without it, the copies are noise. It
+ * is filled by `restic copy` from the server's repository (run.ts), and read
+ * back anywhere with stock restic (README).
  *
  * Absent configuration, nothing here runs and nothing leaves the machine:
  * local snapshots only, exactly as before. Half a configuration is an error the
  * dashboard shows, not a silent fallback: someone who set three variables out
  * of five believes they have offsite copies.
  *
- * The objects are `<prefix>/<folder>/<snapshot>.enc`: one folder per project,
- * the snapshot's own name, so that the bucket can be read by hand. Each object
- * is sealed for that key (crypto.ts): copied under another, it is refused.
+ * **The objects of the format before restic** are `<prefix>/<folder>/<archive>.enc`,
+ * each sealed for its key (crypto.ts). This version writes none; it reads
+ * those the server no longer has into its repository and deletes them once
+ * their copy has been verified seven days (legacy.ts). The S3 client below
+ * serves that and nothing else, and leaves with it.
  */
 import { readSnapshotName, type Snapshot } from "../../borrowed/backups";
-import { decryptStream, encryptFile, MIN_PASSPHRASE, type Decrypted, type Master } from "./crypto";
+import { decryptStream, MIN_PASSPHRASE, type Decrypted } from "./crypto";
+import type { Repository } from "./restic";
 
 export type Offsite = {
   endpoint: string;
@@ -28,12 +34,17 @@ export type Offsite = {
   secretAccessKey: string;
   prefix: string;
   passphrase: string;
+  /** The bucket's restic repository: `s3:<endpoint>/<bucket>/<prefix>-restic`, or a folder for the tests. */
+  repository: string;
 };
 
 /** `null`: no bucket, local only. `{ error }`: a configuration started and not finished. */
 export type OffsiteSetting = Offsite | null | { error: string };
 
 export const DEFAULT_PREFIX = "sitesolide";
+
+/** What follows the prefix in the repository's path: beside the objects of the format before restic, never among them. */
+export const REPOSITORY_SUFFIX = "-restic";
 
 export const OFFSITE_VARIABLES = [
   "BACKUP_S3_ENDPOINT",
@@ -43,7 +54,7 @@ export const OFFSITE_VARIABLES = [
   "BACKUP_ENCRYPTION_PASSPHRASE",
 ] as const;
 
-/** The suffix of an encrypted object. */
+/** The suffix of an object of the format before restic. */
 export const OBJECT_SUFFIX = ".enc";
 
 function isLoopback(host: string): boolean {
@@ -52,7 +63,11 @@ function isLoopback(host: string): boolean {
 
 /**
  * The bucket's settings, judged. No value of them ever enters a message: the
- * variables are named, never quoted.
+ * variables are named, never quoted. `BACKUP_OFFSITE_REPOSITORY` replaces the
+ * repository drawn from them by a folder, the tests' bucket, and only with
+ * `BACKUP_ISOLATION=none`, the workstation's: the file the dashboard's Secrets
+ * page writes cannot point root's restic at a backend that runs programs,
+ * `sftp:` or `rclone:` (config.ts refuses `none` to root under systemd).
  */
 export function offsiteFrom(env: Record<string, string | undefined>): OffsiteSetting {
   const given = OFFSITE_VARIABLES.filter((name) => (env[name] ?? "") !== "");
@@ -78,21 +93,45 @@ export function offsiteFrom(env: Record<string, string | undefined>): OffsiteSet
   if (!/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(prefix) || prefix.split("/").includes("..")) {
     return { error: "BACKUP_S3_PREFIX may only hold letters, digits, dots, dashes, underscores and slashes" };
   }
+  const endpoint = url.toString().replace(/\/+$/, "");
+  const bucket = env.BACKUP_S3_BUCKET!;
   return {
-    endpoint: url.toString().replace(/\/+$/, ""),
-    bucket: env.BACKUP_S3_BUCKET!,
+    endpoint,
+    bucket,
     region: (env.BACKUP_S3_REGION ?? "") === "" ? null : env.BACKUP_S3_REGION!,
     accessKeyId: env.BACKUP_S3_ACCESS_KEY_ID!,
     secretAccessKey: env.BACKUP_S3_SECRET_ACCESS_KEY!,
     prefix,
     passphrase: env.BACKUP_ENCRYPTION_PASSPHRASE!,
+    repository:
+      env.BACKUP_ISOLATION === "none" && (env.BACKUP_OFFSITE_REPOSITORY ?? "") !== ""
+        ? env.BACKUP_OFFSITE_REPOSITORY!
+        : `s3:${endpoint}/${bucket}/${prefix}${REPOSITORY_SUFFIX}`,
   };
 }
 
 /**
- * A bucket's error, fit for the status file: the provider's own words, with
- * any of the credentials in them replaced, should a provider ever quote them,
- * and no query string, where a presigned URL would carry a signature.
+ * The bucket's repository as restic is handed it: the passphrase in the
+ * environment of that call alone, the credentials as its S3 backend reads
+ * them, the region when one is set (restic's default is us-east-1).
+ */
+export function bucketRepository(offsite: Offsite): Repository {
+  return {
+    url: offsite.repository,
+    password: { value: offsite.passphrase },
+    backend: {
+      AWS_ACCESS_KEY_ID: offsite.accessKeyId,
+      AWS_SECRET_ACCESS_KEY: offsite.secretAccessKey,
+      ...(offsite.region === null ? {} : { AWS_DEFAULT_REGION: offsite.region }),
+    },
+    store: "offsite",
+  };
+}
+
+/**
+ * A bucket's error, fit for the journal: the provider's own words, with any
+ * of the credentials in them replaced, should a provider ever quote them, and
+ * no query string, where a presigned URL would carry a signature.
  */
 export function redact(message: string, offsite: Offsite): string {
   let clean = message;
@@ -116,6 +155,8 @@ export function offsiteEnvironment(offsite: Offsite): Record<string, string> {
     BACKUP_S3_SECRET_ACCESS_KEY: offsite.secretAccessKey,
     BACKUP_S3_PREFIX: offsite.prefix,
     BACKUP_ENCRYPTION_PASSPHRASE: offsite.passphrase,
+    BACKUP_OFFSITE_REPOSITORY: offsite.repository,
+    BACKUP_ISOLATION: "none",
   };
 }
 
@@ -124,6 +165,8 @@ export function offsiteTarget(offsite: Offsite): string {
   return `${offsite.bucket} at ${new URL(offsite.endpoint).host}`;
 }
 
+// --- The objects of the format before restic, for their import ------------------
+
 export function objectKey(offsite: Offsite, folder: string, name: string): string {
   return `${offsite.prefix}/${folder}/${name}${OBJECT_SUFFIX}`;
 }
@@ -131,8 +174,8 @@ export function objectKey(offsite: Offsite, folder: string, name: string): strin
 export type RemoteObject = { folder: string; snapshot: Snapshot; key: string; bytes: number };
 
 /**
- * A listed key read back: one of our snapshots, of a known folder, or null. An
- * object that is not one is never deleted, whatever retention decides.
+ * A listed key read back: an archive of the format before restic, of a known
+ * folder, or null. An object that is not one is never deleted.
  */
 export function readObjectKey(offsite: Offsite, key: string, bytes: number): RemoteObject | null {
   const start = `${offsite.prefix}/`;
@@ -142,23 +185,19 @@ export function readObjectKey(offsite: Offsite, key: string, bytes: number): Rem
   if (slash === -1) return null;
   const folder = rest.slice(0, slash);
   const snapshot = readSnapshotName(folder, rest.slice(slash + 1));
-  return snapshot === null ? null : { folder, snapshot, key, bytes };
+  return snapshot === null || !snapshot.legacy ? null : { folder, snapshot, key, bytes };
 }
 
-/** The bucket as this component uses it: four verbs, nothing else. */
-export type Bucket = {
+/** The objects of the format before restic, as their import uses them: three verbs, nothing else. */
+export type LegacyBucket = {
   /** Every object under the prefix, all pages read. Throws rather than return a partial list. */
   list: () => Promise<RemoteObject[]>;
-  upload: (key: string, path: string, master: Master) => Promise<number>;
   /** Refuses an object sealed for another key than `key`. */
   download: (key: string, write: (bytes: Uint8Array) => Promise<void>) => Promise<Decrypted>;
   remove: (key: string) => Promise<void>;
 };
 
-/** Upload parts of 8 MiB, two in flight at most: 16 MiB of memory whatever the archive. */
-const PART_BYTES = 8 * 1024 * 1024;
-
-export function openBucket(offsite: Offsite): Bucket {
+export function openLegacyBucket(offsite: Offsite): LegacyBucket {
   const client = new Bun.S3Client({
     endpoint: offsite.endpoint,
     bucket: offsite.bucket,
@@ -183,21 +222,6 @@ export function openBucket(offsite: Offsite): Bucket {
         startAfter = contents[contents.length - 1]!.key;
       }
       throw new Error("the bucket listing never ended");
-    },
-
-    async upload(key, path, master) {
-      const writer = client.file(key).writer({ partSize: PART_BYTES, queueSize: 2, retry: 3, type: "application/octet-stream" });
-      let buffered = 0;
-      const total = await encryptFile(path, key, master, async (bytes) => {
-        writer.write(bytes);
-        buffered += bytes.byteLength;
-        if (buffered >= PART_BYTES) {
-          await writer.flush();
-          buffered = 0;
-        }
-      });
-      await writer.end();
-      return total;
     },
 
     async download(key, write) {

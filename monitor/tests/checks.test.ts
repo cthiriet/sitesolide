@@ -6,6 +6,7 @@ import {
   ago,
   bytes,
   judgeBackup,
+  BACKUP_CHECK_MAX_AGE_MS,
   judgeCaddy,
   judgeCertificate,
   judgeDisk,
@@ -24,7 +25,8 @@ import {
 
 const NOW = Date.UTC(2026, 9, 4, 12, 0, 0);
 const MINUTE = 60_000;
-const DAY = 24 * 60 * MINUTE;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 
 describe("systemctl's output", () => {
   test("show: one property per line, values kept whole", () => {
@@ -311,6 +313,31 @@ describe("backups", () => {
     const stale = judgeBackup({ text: status(BACKUP_MAX_AGE_MS + MINUTE, true, {}) }, NOW);
     expect(stale!.verdict).toBe("fail");
     expect(stale!.summary).toBe("The last backup run finished 26 h ago, more than 26 h");
+  });
+
+  test("a repository whose check failed, or was not checked for three days, is a warning", () => {
+    const withChecks = (checks: unknown) => JSON.stringify({ ...JSON.parse(status(MINUTE, true, { cms: true })), checks });
+    const at = (agoMs: number) => new Date(NOW - agoMs).toISOString();
+    expect(judgeBackup({ text: withChecks({ local: { at: at(HOUR), ok: true, error: null }, offsite: null }) }, NOW)!.verdict).toBe("ok");
+    expect(judgeBackup({ text: withChecks({ local: null, offsite: null }) }, NOW)!.verdict).toBe("ok");
+    const failed = judgeBackup({ text: withChecks({ local: { at: at(HOUR), ok: false, error: "the check of the server's repository found errors" }, offsite: null }) }, NOW);
+    expect(failed!.verdict).toBe("fail");
+    expect(failed!.summary).toBe("Backups: the server's repository check failed 1 h ago (the check of the server's repository found errors)");
+    const old = judgeBackup({ text: withChecks({ local: { at: at(HOUR), ok: true, error: null }, offsite: { at: at(BACKUP_CHECK_MAX_AGE_MS + HOUR), ok: true, error: null } }) }, NOW);
+    expect(old!.summary).toBe("Backups: the bucket's repository was last checked 3 days ago, more than 72 h");
+  });
+
+  test("no check yet: fine on a first day, a warning three days after checks were first due", () => {
+    const withChecks = (checks: unknown) => JSON.stringify({ ...JSON.parse(status(MINUTE, true, { cms: true })), checks });
+    const at = (agoMs: number) => new Date(NOW - agoMs).toISOString();
+    expect(judgeBackup({ text: withChecks({ local: null, offsite: null, since: at(20 * HOUR), offsiteSince: null }) }, NOW)!.verdict).toBe("ok");
+    const never = judgeBackup({ text: withChecks({ local: null, offsite: null, since: at(4 * DAY), offsiteSince: null }) }, NOW);
+    expect(never!.verdict).toBe("fail");
+    expect(never!.summary).toBe("Backups: the server's repository was never checked, its checks due for 4 days");
+    // A bucket configured yesterday on a machine checked for a month: not yet.
+    const bucket = { local: { at: at(HOUR), ok: true, error: null }, offsite: null, since: at(30 * DAY), offsiteSince: at(DAY) };
+    expect(judgeBackup({ text: withChecks(bucket) }, NOW)!.verdict).toBe("ok");
+    expect(judgeBackup({ text: withChecks({ ...bucket, offsiteSince: at(5 * DAY) }) }, NOW)!.summary).toBe("Backups: the bucket's repository was never checked, its checks due for 5 days");
   });
 
   test("a file there but unreadable or malformed is a failure", () => {

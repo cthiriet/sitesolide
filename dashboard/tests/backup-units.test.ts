@@ -58,9 +58,12 @@ describe("sitesolide-backup.service", () => {
     expect(values(text, "InaccessiblePaths")).toEqual(["-/etc/sitesolide -/var/lib/sitesolide-steward"]);
   });
 
-  test("writes only its archives and its own folders, with one capability, to read", () => {
+  test("writes only its repository, the archives it imports and removes, and its own folders, with one capability, to read", () => {
     expect(values(text, "ProtectSystem")).toEqual(["strict"]);
-    expect(values(text, "ReadWritePaths")).toEqual(["/var/backups/sitesolide"]);
+    expect(values(text, "ReadWritePaths")).toEqual(["/var/backups/sitesolide-restic /var/backups/sitesolide"]);
+    // restic's cache and temporary packs, on disk, root's alone.
+    expect(values(text, "CacheDirectory")).toEqual(["sitesolide-restic"]);
+    expect(values(text, "CacheDirectoryMode")).toEqual(["0700"]);
     expect(values(text, "CapabilityBoundingSet")).toEqual(["CAP_DAC_READ_SEARCH"]);
     expect(values(text, "NoNewPrivileges")).toEqual(["true"]);
     expect(values(text, "UMask")).toEqual(["0077"]);
@@ -83,6 +86,11 @@ describe("sitesolide-backup.service", () => {
     expect(LOCK_WAIT_MS).toBeLessThan(SNAPSHOT_DEADLINE_MS);
     expect(values(text, "Nice")).toEqual(["10"]);
     expect(values(text, "IOSchedulingClass")).toEqual(["idle"]);
+  });
+
+  test("room for Bun and one restic, and restic, not the run, killed if that is not enough", () => {
+    expect(values(text, "MemoryMax")).toEqual(["512M"]);
+    expect(values(text, "OOMPolicy")).toEqual(["continue"]);
   });
 
   test("no [Install]: the timer starts it", () => {
@@ -110,8 +118,11 @@ describe("sitesolide-restore@.service", () => {
     expect(readRestoreLaunch([name])).toEqual({ ok: true, folder: "cms" });
   });
 
-  test("writes only into the folder of the project it is named for, and the archives", () => {
-    expect(values(text, "ReadWritePaths")).toEqual(["/srv/sites/%i /var/backups/sitesolide"]);
+  test("writes only into the folder of the project it is named for, and the repository", () => {
+    expect(values(text, "ReadWritePaths")).toEqual(["/srv/sites/%i /var/backups/sitesolide-restic"]);
+    expect(values(text, "CacheDirectory")).toEqual(values(read("sitesolide-backup.service"), "CacheDirectory"));
+    expect(values(text, "MemoryMax")).toEqual(["512M"]);
+    expect(values(text, "OOMPolicy")).toEqual(["continue"]);
     expect(values(text, "ReadOnlyPaths")).toEqual(["-/srv/sites/%i/app -/srv/sites/%i/public"]);
     expect(values(text, "InaccessiblePaths")).toEqual(["-/var/lib/sitesolide-steward -/etc/sitesolide"]);
     // `%I` would turn a slug's dashes into slashes: in no directive.

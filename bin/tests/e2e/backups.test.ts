@@ -33,7 +33,7 @@ describe("sitesolide backups", () => {
     const result = await run("projects/bun-mixed", ["backups"], { vm });
     expect(result.code).toBe(0);
     expect(result.output).toContain("=== backups of sample-bun ===");
-    expect(result.output).toContain("2026-10-04 13:00 UTC  scheduled     4.0 KB    server, offsite");
+    expect(result.output).toContain("2026-10-04 13:00 UTC  scheduled     4.0 KB    -         server, offsite");
     expect(result.output).toContain("last run: 2026-10-04 13:00 UTC, ok");
     expect(result.output).toContain("restore from the Backups section of https://dashboard.test-zone.invalid");
     // One command, the listing, and nothing else: no write, no rsync.

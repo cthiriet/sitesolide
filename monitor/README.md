@@ -30,7 +30,7 @@ did before, and no worse.
 | the platform's units | every other `sitesolide-*.service` | warning | failed or crashing in a loop |
 | disk | `statfs` on `/`, `/srv` and `/var`, merged by device | critical | 90 % used, cleared below 85 % |
 | memory | `MemAvailable` in `/proc/meminfo` | warning | less than 10 % available, cleared at 15 % |
-| backups | `/var/lib/sitesolide-backup/last-run.json`, when it exists | warning | the last run failed, a project failed, or it finished more than 26 hours ago |
+| backups | `/var/lib/sitesolide-backup/last-run.json`, when it exists | warning | the last run failed, a project failed, or it finished more than 26 hours ago; a repository's daily check failed, or none came for 72 hours, counted from the last check or, before the first, from when checks were first due |
 | the monitor itself | what it could not read, an alerting address that is not one | warning | any of those |
 
 **The served sites come from what the machine declares**, never from inside a

@@ -1,6 +1,9 @@
 /**
  * The archive format of the snapshots: a POSIX tar (ustar, with pax headers for
- * long names), compressed with gzip. Written and read here, as streams.
+ * long names), written and read here, as streams. The copy hands it to restic
+ * uncompressed (copy.ts); the archives written before restic were the same
+ * tar compressed with gzip, which `gzipSink` and `gunzip` still write and
+ * read for their import (legacy.ts) and its tests.
  *
  * **Why not `Bun.Archive`.** It was the first candidate, and it was measured on
  * 4 October 2026 with Bun 1.3.11, the version this repository tests with:
@@ -15,7 +18,7 @@
  *   rather than refusing the archive that carries it.
  *
  * A tar is 512-byte headers and padded contents: written by hand, it streams,
- * file by file, in a few hundred kilobytes, and stays readable by `tar -xzf`
+ * file by file, in a few hundred kilobytes, and stays readable by `tar -xf`
  * on any machine, which is what a restore by hand needs on the day the
  * dashboard does not answer.
  *

@@ -4,13 +4,14 @@
 # `backup` command, the real backup component takes a scheduled snapshot
 # while rows are being written, the real restore puts it back, and PostgreSQL
 # must start on the restored folder with every row committed before the
-# backup, no transaction caught in the middle, and pg_amcheck satisfied.
+# backup, no transaction caught in the middle, and pg_amcheck satisfied. The
+# snapshots are stored by Debian's restic, in a repository of the container's.
 #
 #   dashboard/scripts/postgres-backup-proof.sh
 #
 # Needs Docker and the network: the image installs Debian's PostgreSQL 17,
 # the way the recipe says (postgresql-common first, no shared cluster), and
-# downloads the Bun release this workstation runs. Nothing touches a machine
+# Debian's restic, and downloads the Bun release this workstation runs. Nothing touches a machine
 # of the installation: the container is the only server, and it is removed.
 #
 # What runs is what a machine runs: backup.js built from dashboard/backup.ts
@@ -47,14 +48,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "-> the image: Debian 13, PostgreSQL 17 with no shared cluster, Bun $BUN_VERSION"
+echo "-> the image: Debian 13, PostgreSQL 17 with no shared cluster, Debian's restic, Bun $BUN_VERSION"
 "$DOCKER" build -q -t "$IMAGE" - > /dev/null <<DOCKERFILE
 FROM debian:trixie
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \\
  && apt-get install -y --no-install-recommends postgresql-common ca-certificates curl unzip \\
  && sed -i 's/^#\\? *create_main_cluster.*/create_main_cluster = false/' /etc/postgresql-common/createcluster.conf \\
- && apt-get install -y --no-install-recommends postgresql-17 \\
+ && apt-get install -y --no-install-recommends postgresql-17 restic \\
  && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL -o /tmp/bun.zip https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-$BUN_ARCH.zip \\
  && unzip -q /tmp/bun.zip -d /tmp && install -m 755 /tmp/bun-linux-$BUN_ARCH/bun /usr/local/bin/bun && rm -rf /tmp/bun*
@@ -139,15 +140,20 @@ PW="$(head -c 18 /dev/urandom | base64 | tr -d '/+=')"
 as() { setpriv --reuid="$U" --regid="$U" --init-groups -- "$@"; }
 sql() { PGPASSWORD="$PW" "$PG/psql" -h 127.0.0.1 -p 3081 -U app -d app -v ON_ERROR_STOP=1 -tAq -c "$1"; }
 step() { echo; echo "== $*"; }
-COMMON="SITES_DIR=/srv/sites BACKUP_FOLDER=$WORK/backups BACKUP_STATE_FOLDER=$WORK/state BACKUP_RUN_FOLDER=$WORK/run BACKUP_STAGING_FOLDER=$WORK/staging ACCOUNTS_FILE=/etc/passwd BACKUP_ISOLATION=none BACKUP_DISK_RESERVE=0 SITESOLIDE_ZONE=test-zone.invalid"
+COMMON="SITES_DIR=/srv/sites BACKUP_FOLDER=$WORK/backups BACKUP_STATE_FOLDER=$WORK/state BACKUP_RUN_FOLDER=$WORK/run BACKUP_STAGING_FOLDER=$WORK/staging BACKUP_REPOSITORY=$WORK/repository BACKUP_REPOSITORY_KEY=$WORK/key BACKUP_RESTIC=/usr/bin/restic BACKUP_RESTIC_CACHE=$WORK/cache ACCOUNTS_FILE=/etc/passwd BACKUP_ISOLATION=none BACKUP_DISK_RESERVE=0 SITESOLIDE_ZONE=test-zone.invalid"
+# restic on the repository, as the project's account here, which holds it in this container.
+restic_as() { as env RESTIC_REPOSITORY="$WORK/repository" RESTIC_PASSWORD_FILE="$WORK/key" RESTIC_CACHE_DIR="$WORK/cache" TZ=UTC /usr/bin/restic "$@"; }
 
 step "the tree, as deploy lays it"
-mkdir -p "$SITE/app" "$SITE/public" "$SITE/data" "$WORK/backups" "$WORK/state" "$WORK/run" "$WORK/staging"
+mkdir -p "$SITE/app" "$SITE/public" "$SITE/data" "$WORK/backups" "$WORK/state" "$WORK/run" "$WORK/staging" "$WORK/cache"
 cp "$PROOF/app/postgres.sh" "$PROOF/app/postgres-backup.sh" "$SITE/app/"
 cp "$PROOF/sitesolide.json" "$SITE/sitesolide.json"
+head -c 48 /dev/urandom | base64 -w0 > "$WORK/key"
 chown -R "$U:$U" "$SITE" "$WORK"
 chmod 750 "$SITE/data"
-echo "Bun $("$BUN" --version), $("$PG/postgres" --version)"
+chmod 600 "$WORK/key"
+restic_as init -q > /dev/null
+echo "Bun $("$BUN" --version), $("$PG/postgres" --version), $(/usr/bin/restic version)"
 grep -E '^create_main_cluster' /etc/postgresql-common/createcluster.conf
 if [ -n "$(pg_lsclusters -h)" ]; then pg_lsclusters; echo "FAIL: Debian created a shared cluster"; exit 1; fi
 echo "pg_lsclusters lists none: no shared cluster"
@@ -193,7 +199,7 @@ as env $COMMON POSTGRES_PASSWORD="$PW" "$BUN" "$PROOF/backup.js" run > /dev/null
 cat "$WORK/state/last-run.json"; echo
 grep -q 'a running PostgreSQL keeps its files in the data' "$WORK/state/last-run.json" || { echo "FAIL: the undeclared cluster was not refused"; exit 1; }
 if grep -q 'postgres"' "$WORK/state/last-run.json"; then echo "FAIL: the status file names the folder"; exit 1; fi
-[ -z "$(ls -A "$WORK/backups/proof" 2>/dev/null)" ] || { echo "FAIL: a snapshot was taken"; exit 1; }
+if restic_as snapshots --json -q | grep -q '"/proof.tar"'; then echo "FAIL: a snapshot was taken"; exit 1; fi
 echo "refused, no snapshot taken, no folder named"
 cp "$PROOF/sitesolide.json" "$SITE/sitesolide.json"
 
@@ -202,13 +208,15 @@ as env $COMMON POSTGRES_PASSWORD="$PW" "$BUN" "$PROOF/backup.js" run || true
 B="$(sql "SELECT max(n) FROM ticks")"
 echo "committed by the end of the run: ticks 1..$B, $((B - A)) written meanwhile"
 cat "$WORK/state/last-run.json"; echo
-SNAP="$(ls "$WORK/backups/proof" | grep -v pre-restore | head -1)"
+SNAP="$(grep -o '"snapshot": "proof-[^"]*"' "$WORK/state/last-run.json" | sed 's/.*: "//; s/"$//')"
 [ -n "$SNAP" ] || { echo "FAIL: no snapshot"; exit 1; }
-DESCRIPTION="$(tar -xzOf "$WORK/backups/proof/$SNAP" sitesolide-backup.json)"
+restic_as snapshots --path /proof.tar
+restic_as dump --tag scheduled --path /proof.tar latest /proof.tar > "$WORK/snapshot.tar"
+DESCRIPTION="$(tar -xOf "$WORK/snapshot.tar" sitesolide-backup.json)"
 echo "$DESCRIPTION" | grep -A2 fromBackupCommand | tr -s ' '
 echo "$DESCRIPTION" | tr -d ' \n' | grep -q '"fromBackupCommand":\["postgres"\]' || { echo "FAIL: the description does not name the command's folder"; exit 1; }
-tar -tvzf "$WORK/backups/proof/$SNAP" | grep -E ' data/postgres/?$| data/postgres/(backup_label|backup_manifest)$'
-if tar -tzf "$WORK/backups/proof/$SNAP" | grep -q 'data/postgres/postmaster.pid'; then echo "FAIL: the live postmaster.pid is in the archive"; exit 1; fi
+tar -tvf "$WORK/snapshot.tar" | grep -E ' data/postgres/?$| data/postgres/(backup_label|backup_manifest)$'
+if tar -tf "$WORK/snapshot.tar" | grep -q 'data/postgres/postmaster.pid'; then echo "FAIL: the live postmaster.pid is in the archive"; exit 1; fi
 echo "no postmaster.pid: the archive holds the command's copy, not the live files"
 [ -z "$(ls -A "$WORK/staging/proof" 2>/dev/null)" ] || { echo "FAIL: the command's copy was left in the staging folder"; exit 1; }
 echo "the staging folder is empty: the command's copy was discarded"
@@ -228,8 +236,8 @@ printf '{"nonce":"0123456789abcdef","snapshot":"%s","actor":"owner","requestedAt
 chown -R "$U:$U" "$WORK/state/requests"
 as env $COMMON SYSTEMCTL=/usr/local/bin/fake-systemctl "$BUN" "$PROOF/backup.js" restore sitesolide-restore@proof.service
 grep -q '"state":"ok"' "$WORK/run/restore/proof.json" || { cat "$WORK/run/restore/proof.json"; echo "FAIL: the restore did not succeed"; exit 1; }
-PRE="$(ls "$WORK/backups/proof" | grep pre-restore | head -1)"
-tar -xzOf "$WORK/backups/proof/$PRE" sitesolide-backup.json | tr -d ' \n' | grep -q '"stopped":true.*"liveAsFiles":\["postgres"\]' || { echo "FAIL: the before-restore snapshot does not say it saved the stopped cluster as files"; exit 1; }
+PRE="$(grep -o '"preRestore":"[^"]*"' "$WORK/run/restore/proof.json" | sed 's/.*:"//; s/"$//')"
+restic_as dump --tag pre-restore --path /proof.tar latest /proof.tar | tar -xOf - sitesolide-backup.json | tr -d ' \n' | grep -q '"stopped":true.*"liveAsFiles":\["postgres"\]' || { echo "FAIL: the before-restore snapshot does not say it saved the stopped cluster as files"; exit 1; }
 echo "before-restore snapshot $PRE: stopped, the cluster saved as files, and said so"
 
 step "the restored folder: the mode and owner PostgreSQL requires"

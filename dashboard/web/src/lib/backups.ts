@@ -7,9 +7,9 @@
  * not in `reason`, and the page shows it as it stands. A rule copied into the
  * browser would protect nothing.
  */
-import { ago, dateTime, duration } from "./format"
+import { ago, dateTime, duration, size } from "./format"
 import type { Tone } from "./tones"
-import type { BackupAuditEntry, BackupsView, RestoreView, RetentionPolicy, SnapshotKind, SnapshotView } from "./types"
+import type { BackupAuditEntry, BackupsView, CheckView, RestoreView, RetentionPolicy, SnapshotKind, SnapshotView } from "./types"
 
 /** The page reads the backups again this often, and every two seconds while a restore runs. */
 export const BACKUPS_REFRESH_MS = 30_000
@@ -73,6 +73,28 @@ export function offsiteReading(offsite: BackupsView["offsite"]): Reading {
   if (offsite.error !== null) return { tone: "error", label: "Offsite copy misconfigured", detail: offsite.error }
   if (offsite.target === null) return { tone: "neutral", label: "Off", detail: "Snapshots stay on this server only." }
   return { tone: "ok", label: "Encrypted, every run", detail: offsite.target }
+}
+
+/**
+ * The last daily check of the server's copy and of the bucket's, in one
+ * line: a failure first, then how long ago. A steward before restic sends no
+ * checks, and the row says nothing worth alarm.
+ */
+export function checkReading(checks: BackupsView["checks"], repository: BackupsView["repository"], serverNow: number): Reading {
+  const local: CheckView | null = checks?.local ?? null
+  const offsite: CheckView | null = checks?.offsite ?? null
+  const failed = [local, offsite].find((check) => check !== null && !check.ok)
+  if (failed !== undefined && failed !== null) {
+    return { tone: "error", label: failed === local ? "Server's copy failed its check" : "Offsite copy failed its check", detail: failed.error }
+  }
+  if (local === null) return { tone: "neutral", label: "Not checked yet", detail: "A part of every copy is read back once a day, starting a day after the first snapshot." }
+  const stored = repository === null || repository === undefined ? null : `All sites' snapshots take ${size(repository.bytes)} on this server.`
+  return { tone: "ok", label: `Verified ${ago(serverNow - local.at)}`, detail: stored }
+}
+
+/** A snapshot's size, and what it added when it was taken, when known: "12 MB, 340 KB new". */
+export function snapshotSize(snapshot: Pick<SnapshotView, "bytes" | "added">): string {
+  return snapshot.added === undefined || snapshot.added === null ? size(snapshot.bytes) : `${size(snapshot.bytes)}, ${size(snapshot.added)} new`
 }
 
 function capitalise(text: string): string {

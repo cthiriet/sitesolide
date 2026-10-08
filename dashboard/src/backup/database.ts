@@ -6,14 +6,22 @@
  *   (`backup.run`, actor `system`) and each restore (`backup.restore`, actor
  *   the dashboard's session). Never a value, never a key: names, counts and
  *   verdicts.
- * - `offsite`, the bucket's contents as the last run listed them. The steward
- *   has no network at all: this table is how the dashboard learns which
- *   snapshots also live elsewhere.
+ * - `snapshots`, what each repository held when it was last listed, the
+ *   server's and the bucket's: the steward has neither restic nor the keys,
+ *   and no network at all, so this table is how the dashboard learns what
+ *   may be restored and from where. It is rewritten whole from restic's own
+ *   listing at every run, and after a restore's snapshot; the repository
+ *   stays the truth, and a restore resolves its snapshot there, refusing one
+ *   the index still listed but restic no longer has.
+ * - `imported`, the archives of the format before restic whose copy in the
+ *   repository was verified, and when, and when retention forgot that copy:
+ *   they are removed seven days later, or once forgotten (legacy.ts).
+ * - `doomed`, the snapshots the run wanted forgotten and restic would not
+ *   forget then (a person's live lock, for one): left out of every listing,
+ *   index and copy, and forgotten at the next run's start.
  * - `settings`, the retention and the bucket's address as the last run read
- *   them from its unit, for the page to say what is kept and where.
- *
- * The snapshots themselves are not indexed: the folder of archives is the
- * truth, listed every time, and an index would one day say otherwise.
+ *   them from its unit, and the last checks of the repositories, for the
+ *   page to say what is kept, where, and whether it was verified.
  *
  * Opened by the run and the restore, which write, and by the steward, which
  * reads: its unit makes this folder writable for it, a WAL reader having to
@@ -21,6 +29,7 @@
  */
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
+import type { SnapshotKind } from "../../borrowed/backups";
 
 /** The same settings as every database of this repository, in the same order: see CONTRIBUTING.md. */
 export const PRAGMAS = [
@@ -43,11 +52,34 @@ export const SCHEMA = [
      detail TEXT
    )`,
   `CREATE INDEX IF NOT EXISTS audit_target ON audit (target, id)`,
-  `CREATE TABLE IF NOT EXISTS offsite (
+  // The bucket's objects of the format before restic, which the run listed;
+  // the snapshots table replaces it.
+  `DROP TABLE IF EXISTS offsite`,
+  `CREATE TABLE IF NOT EXISTS snapshots (
+     store TEXT NOT NULL,
      folder TEXT NOT NULL,
      name TEXT NOT NULL,
-     bytes INTEGER NOT NULL,
+     id TEXT NOT NULL,
+     taken_at INTEGER NOT NULL,
+     kind TEXT NOT NULL,
+     bytes INTEGER,
+     added INTEGER,
+     PRIMARY KEY (store, folder, name)
+   )`,
+  `CREATE TABLE IF NOT EXISTS imported (
+     folder TEXT NOT NULL,
+     name TEXT NOT NULL,
+     source TEXT NOT NULL,
+     digest TEXT,
+     at INTEGER NOT NULL,
+     forgotten INTEGER,
      PRIMARY KEY (folder, name)
+   )`,
+  `CREATE TABLE IF NOT EXISTS doomed (
+     store TEXT NOT NULL,
+     id TEXT NOT NULL,
+     at INTEGER NOT NULL,
+     PRIMARY KEY (store, id)
    )`,
   `CREATE TABLE IF NOT EXISTS settings (
      key TEXT PRIMARY KEY,
@@ -72,7 +104,12 @@ export function openDatabase(path: string, options: { reader?: boolean } = {}): 
   const base = new Database(path, reader ? { readwrite: true, create: false, strict: true } : { create: true, strict: true });
   for (const pragma of PRAGMAS) base.run(`PRAGMA ${pragma}`);
   if (reader) base.run("PRAGMA query_only = ON");
-  else for (const statement of SCHEMA) base.run(statement);
+  else {
+    for (const statement of SCHEMA) base.run(statement);
+    // The first release with restic made `imported` without the column.
+    const columns = base.query<{ name: string }, []>("PRAGMA table_info(imported)").all();
+    if (!columns.some((column) => column.name === "forgotten")) base.run("ALTER TABLE imported ADD COLUMN forgotten INTEGER");
+  }
   return base;
 }
 
@@ -132,19 +169,89 @@ export function readAudit(db: Database, folder: string | null, limit: number, be
   return rows.map((row) => ({ ...row, detail: readDetail(row.detail) }));
 }
 
-export type OffsiteRow = { name: string; bytes: number };
+/** `local`: the server's repository. `offsite`: the bucket's. */
+export type Store = "local" | "offsite";
 
-/** The bucket's contents for every folder at once, as one listing saw them. */
-export function replaceOffsite(db: Database, rows: { folder: string; name: string; bytes: number }[]): void {
+/** One snapshot as the index keeps it: restic's id, and its figures as restic counted them. */
+export type IndexedSnapshot = { folder: string; name: string; id: string; takenAt: number; kind: SnapshotKind; bytes: number | null; added: number | null };
+
+type SnapshotRow = { folder: string; name: string; id: string; taken_at: number; kind: string; bytes: number | null; added: number | null };
+
+function fromRow(row: SnapshotRow): IndexedSnapshot | null {
+  if (row.kind !== "scheduled" && row.kind !== "pre-restore") return null;
+  return { folder: row.folder, name: row.name, id: row.id, takenAt: row.taken_at, kind: row.kind, bytes: row.bytes, added: row.added };
+}
+
+/** A repository's contents, every folder at once, as one listing saw them. */
+export function replaceSnapshots(db: Database, store: Store, rows: readonly IndexedSnapshot[]): void {
   db.transaction(() => {
-    db.run("DELETE FROM offsite");
-    const insert = db.query("INSERT OR REPLACE INTO offsite (folder, name, bytes) VALUES ($folder, $name, $bytes)");
-    for (const row of rows) insert.run(row);
+    db.query("DELETE FROM snapshots WHERE store = $store").run({ store });
+    const insert = db.query(
+      "INSERT OR REPLACE INTO snapshots (store, folder, name, id, taken_at, kind, bytes, added) VALUES ($store, $folder, $name, $id, $takenAt, $kind, $bytes, $added)",
+    );
+    for (const row of rows) insert.run({ store, folder: row.folder, name: row.name, id: row.id, takenAt: row.takenAt, kind: row.kind, bytes: row.bytes, added: row.added });
   })();
 }
 
-export function readOffsite(db: Database, folder: string): OffsiteRow[] {
-  return db.query<OffsiteRow, { folder: string }>("SELECT name, bytes FROM offsite WHERE folder = $folder ORDER BY name DESC").all({ folder });
+/** One snapshot added, a restore's own, without listing the repository again. */
+export function addSnapshot(db: Database, store: Store, row: IndexedSnapshot): void {
+  db.query(
+    "INSERT OR REPLACE INTO snapshots (store, folder, name, id, taken_at, kind, bytes, added) VALUES ($store, $folder, $name, $id, $takenAt, $kind, $bytes, $added)",
+  ).run({ store, folder: row.folder, name: row.name, id: row.id, takenAt: row.takenAt, kind: row.kind, bytes: row.bytes, added: row.added });
+}
+
+/** A folder's snapshots in one repository, newest first. */
+export function readSnapshots(db: Database, store: Store, folder: string): IndexedSnapshot[] {
+  return db
+    .query<SnapshotRow, { store: string; folder: string }>("SELECT folder, name, id, taken_at, kind, bytes, added FROM snapshots WHERE store = $store AND folder = $folder ORDER BY taken_at DESC, name DESC")
+    .all({ store, folder })
+    .map(fromRow)
+    .filter((row): row is IndexedSnapshot => row !== null);
+}
+
+/**
+ * An archive of the format before restic whose copy was verified: `archive`
+ * on the server, `object` in the bucket. `forgotten`, when retention forgot
+ * that copy, which lets the archive go at once.
+ */
+export type Imported = { folder: string; name: string; source: "archive" | "object"; digest: string | null; at: number; forgotten: number | null };
+
+export function recordImport(db: Database, row: Imported): void {
+  db.query("INSERT OR REPLACE INTO imported (folder, name, source, digest, at, forgotten) VALUES ($folder, $name, $source, $digest, $at, $forgotten)").run(row);
+}
+
+export function readImports(db: Database): Imported[] {
+  return db
+    .query<Imported, []>("SELECT folder, name, source, digest, at, forgotten FROM imported ORDER BY at, folder, name")
+    .all()
+    .filter((row) => row.source === "archive" || row.source === "object");
+}
+
+/** Retention forgot the copy of this archive: it may go now. */
+export function markForgotten(db: Database, folder: string, name: string, at: number): void {
+  db.query("UPDATE imported SET forgotten = $at WHERE folder = $folder AND name = $name AND forgotten IS NULL").run({ folder, name, at });
+}
+
+/** A setting: a restore whose own snapshot failed once restic had started asks the next run to prune what it left. */
+export const PRUNE_WANTED = "prune-wanted";
+
+/** A snapshot restic would not forget when asked: kept out of every listing, forgotten at the next run. */
+export function recordDoomed(db: Database, store: Store, id: string, at: number): void {
+  db.query("INSERT OR IGNORE INTO doomed (store, id, at) VALUES ($store, $id, $at)").run({ store, id, at });
+}
+
+export function readDoomed(db: Database, store: Store): string[] {
+  return db
+    .query<{ id: string }, { store: string }>("SELECT id FROM doomed WHERE store = $store ORDER BY at")
+    .all({ store })
+    .map((row) => row.id);
+}
+
+export function clearDoomed(db: Database, store: Store, ids: readonly string[]): void {
+  const remove = db.query("DELETE FROM doomed WHERE store = $store AND id = $id");
+  db.transaction(() => {
+    for (const id of ids) remove.run({ store, id });
+  })();
 }
 
 export function writeSetting(db: Database, key: string, value: unknown): void {

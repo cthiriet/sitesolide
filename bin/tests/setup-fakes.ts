@@ -165,7 +165,7 @@ const EFFECTS: Record<string, string[]> = {
   "deploy portal": ["portal-active"],
   "deploy-loopback.sh close": ["loopback-table", "loopback-unit"],
   "deploy-monitor.sh": ["monitor-enabled", "monitor-active"],
-  "deploy-backup.sh install": ["backup-code", "backup-timer"],
+  "deploy-backup.sh install": ["backup-code", "backup-timer", "backup-restic", "backup-key", "backup-repository"],
   "deploy-backup.sh enable": ["backup-enabled", "backup-active"],
   "deploy-installer.sh": ["installer-code", "installer-unit"],
   "deploy-egress.sh": ["egress-active"],

@@ -1,16 +1,19 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { snapshotName } from "../borrowed/backups";
-import { openDatabase, readAudit } from "../src/backup/database";
+import { legacySnapshotName, snapshotName } from "../borrowed/backups";
+import type { BackupConfig } from "../src/backup/config";
+import { openDatabase, readAudit, readSnapshots } from "../src/backup/database";
 import { takeLock } from "../src/backup/lock";
 import { INCOMING, INTERRUPTED_REASON, PREVIOUS } from "../src/backup/recovery";
 import { PORTAL_REFUSAL, encodeRequest } from "../src/backup/request";
 import { STOPPED_SUFFIX, afterRestore, restore, type Command } from "../src/backup/restore";
 import { runBackups } from "../src/backup/run";
-import { ACCOUNTS, BALANCE, audit, createAccounts, project, tree } from "./backup-fixtures";
-import { startFakeS3 } from "./fake-s3";
+import { ACCOUNTS, BALANCE, audit, cloneTree, createAccounts, dumped, NO_RESTIC, project, repositoryTemplate, restic, stored, tree } from "./backup-fixtures";
+
+setDefaultTimeout(120_000);
 
 const HOUR = 3_600_000;
 const T = Date.UTC(2026, 9, 4, 13, 0, 0);
@@ -67,8 +70,55 @@ function clock(start: number) {
   return { now: () => current, wait: async (ms: number) => void (current += ms) };
 }
 
-/** A machine with `cms`, two services, a database and an upload, snapshotted at T - 2h. */
-async function prepared(extra: Record<string, string> = {}) {
+/** The bucket's settings, its repository a copy of the template, whose key is the passphrase. */
+function bucket(): Record<string, string> {
+  const holder = mkdtempSync(join(tmpdir(), "backup-bucket-"));
+  roots.push(holder);
+  const repository = join(holder, "repository");
+  cpSync(repositoryTemplate().repository, repository, { recursive: true });
+  return {
+    BACKUP_S3_ENDPOINT: "https://bucket.test-zone.invalid",
+    BACKUP_S3_BUCKET: "backups",
+    BACKUP_S3_ACCESS_KEY_ID: "AKIDRESTORE",
+    BACKUP_S3_SECRET_ACCESS_KEY: "secret",
+    BACKUP_ENCRYPTION_PASSPHRASE: readFileSync(repositoryTemplate().key, "utf8"),
+    BACKUP_OFFSITE_REPOSITORY: repository,
+  };
+}
+
+/** Bytes stored straight with restic as a snapshot of `folder` at `takenAt`: what a forged or mislabelled snapshot looks like. */
+function storeAs(config: BackupConfig, folder: string, takenAt: number, file: string): void {
+  const time = new Date(takenAt).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "");
+  const made = restic(config, ["backup", "-q", "--host", "sitesolide", "--tag", "scheduled", "--time", time, "--stdin-filename", `${folder}.tar`, "--stdin-from-command", "--", "cat", file]);
+  if (made.code !== 0) throw new Error(made.stderr);
+}
+
+/** Forgets a snapshot from the server's repository, as retention would. */
+function forget(config: BackupConfig, folder: string, name: string): void {
+  const found = stored(config).find((snapshot) => snapshot.folder === folder && snapshot.name === name)!;
+  expect(restic(config, ["forget", "-q", found.id]).code).toBe(0);
+}
+
+type Prepared = Awaited<ReturnType<typeof prepareFresh>>;
+
+/** The machine every test without a bucket starts from, made once and copied: a run is its costliest part. */
+let seeded: Promise<Prepared> | null = null;
+
+/**
+ * A machine with `cms`, two services, a database and an upload, snapshotted at
+ * T - 2h, then changed: a copy of one made once per file, or, with settings of
+ * its own (a bucket's), one made for the test.
+ */
+async function prepared(extra: Record<string, string> = {}): Promise<Prepared> {
+  if (Object.keys(extra).length > 0) return prepareFresh(extra);
+  seeded ??= prepareFresh({});
+  const base = await seeded;
+  const made = cloneTree(base);
+  roots.push(made.root);
+  return { ...made, data: join(made.sites, "cms", "data"), snapshot: base.snapshot };
+}
+
+async function prepareFresh(extra: Record<string, string>) {
   const made = tree(extra);
   roots.push(made.root);
   const data = project(made.sites, "cms", { services: { web: { start: "bun web.ts", port: 3040 }, worker: { start: "bun worker.ts", port: 3041, internal: true } }, publicDir: "public" });
@@ -93,7 +143,7 @@ function request(stateFolder: string, folder: string, snapshot: string, requeste
 
 const UNITS = ["cms", "cms.worker.service"];
 
-describe("a restore", () => {
+describe.concurrent.skipIf(NO_RESTIC)("a restore", () => {
   test("puts the snapshot in place, keeps the data it replaced, and records who asked", async () => {
     const { root, config, data, snapshot } = await prepared();
     const systemd = fakeSystemd(data, UNITS);
@@ -113,11 +163,14 @@ describe("a restore", () => {
     expect(systemd.calls).toContain("is-active cms.worker.service");
     // Nothing left beside the data, the request consumed, the lock released.
     expect(readdirSync(join(root, "sites", "cms")).sort()).toEqual(["data", "sitesolide.json"]);
+    // The before-restore snapshot is in the repository, and in the index the page reads.
+    expect(stored(config).map((snapshot) => snapshot.name)).toContain(snapshotName("cms", T, "pre-restore"));
     expect(existsSync(join(config.stateFolder, "requests", "cms.json"))).toBe(false);
     expect(existsSync(join(config.runFolder, "lock"))).toBe(false);
     // The result the steward reads, root's and readable.
     expect(JSON.parse(readFileSync(join(config.runFolder, "restore", "cms.json"), "utf8"))).toMatchObject({ state: "ok" });
     const db = openDatabase(join(config.stateFolder, "backup.db"));
+    expect(readSnapshots(db, "local", "cms").map((row) => row.name)).toContain(snapshotName("cms", T, "pre-restore"));
     expect(readAudit(db, "cms", 1)[0]).toMatchObject({
       actor: "alice@test-zone.invalid",
       action: "backup.restore",
@@ -168,9 +221,10 @@ describe("a restore", () => {
   });
 
   test("a snapshot that does not extract changes nothing, and stops nothing", async () => {
-    const { config, data } = await prepared();
+    const { config, data, root } = await prepared();
     const forged = snapshotName("cms", T - 30 * 60_000, "scheduled");
-    writeFileSync(join(config.backupFolder, "cms", forged), "not a gzip at all");
+    writeFileSync(join(root, "garbage"), "not a tar at all");
+    storeAs(config, "cms", T - 30 * 60_000, join(root, "garbage"));
     const systemd = fakeSystemd(data, UNITS);
     const time = clock(T);
     request(config.stateFolder, "cms", forged, T);
@@ -182,35 +236,33 @@ describe("a restore", () => {
     expect(existsSync(join(config.sitesDir, "cms", INCOMING))).toBe(false);
   });
 
-  test("fetches from the bucket a snapshot the server no longer has", async () => {
-    const s3 = startFakeS3("AKIDRESTORE");
-    try {
-      const { config, data, snapshot } = await prepared({
-        BACKUP_S3_ENDPOINT: s3.url,
-        BACKUP_S3_BUCKET: s3.bucket,
-        BACKUP_S3_ACCESS_KEY_ID: "AKIDRESTORE",
-        BACKUP_S3_SECRET_ACCESS_KEY: "secret",
-        BACKUP_ENCRYPTION_PASSPHRASE: "a long enough offsite passphrase",
-      });
-      expect(s3.objects.has(`sitesolide/cms/${snapshot}.enc`)).toBe(true);
-      unlinkSync(join(config.backupFolder, "cms", snapshot));
-      const systemd = fakeSystemd(data, UNITS);
-      const time = clock(T);
-      request(config.stateFolder, "cms", snapshot, T);
-      const result = await restore({ config, now: time.now, wait: time.wait, log: silent, systemctl: systemd.systemctl }, "cms");
-      expect(result.state).toBe("ok");
-      expect(readFileSync(join(data, "upload.txt"), "utf8")).toBe("the version of two hours ago");
-      // The decrypted copy does not outlive the restore.
-      expect(readdirSync(join(config.stateFolder, "downloads"))).toEqual([]);
-      // What the Activity page reads of the audit names the snapshot, never a credential.
-      const db = openDatabase(join(config.stateFolder, "backup.db"), { reader: true });
-      const handed = JSON.stringify(readAudit(db, null, 50));
-      db.close();
-      expect(handed).toContain("backup.restore");
-      for (const value of ["AKIDRESTORE", "a long enough offsite passphrase"]) expect(handed).not.toContain(value);
-    } finally {
-      s3.stop();
-    }
+  test("fetches from the bucket's repository a snapshot the server no longer has, through a download child", async () => {
+    const settings = bucket();
+    const { config, data, snapshot } = await prepared(settings);
+    expect(stored(config, settings.BACKUP_OFFSITE_REPOSITORY).map((s) => s.name)).toContain(snapshot);
+    forget(config, "cms", snapshot);
+    const systemd = fakeSystemd(data, UNITS);
+    const time = clock(T);
+    request(config.stateFolder, "cms", snapshot, T);
+    const result = await restore({ config, now: time.now, wait: time.wait, log: silent, systemctl: systemd.systemctl }, "cms");
+    expect(result.state).toBe("ok");
+    expect(readFileSync(join(data, "upload.txt"), "utf8")).toBe("the version of two hours ago");
+    // What the Activity page reads of the audit names the snapshot, never a credential.
+    const db = openDatabase(join(config.stateFolder, "backup.db"), { reader: true });
+    const handed = JSON.stringify(readAudit(db, null, 50));
+    db.close();
+    expect(handed).toContain("backup.restore");
+    for (const value of ["AKIDRESTORE", settings.BACKUP_ENCRYPTION_PASSPHRASE!]) expect(handed).not.toContain(value);
+  });
+
+  test("an archive of the format before restic, named by an older steward, is restored from its imported copy", async () => {
+    const { config, data } = await prepared();
+    const systemd = fakeSystemd(data, UNITS);
+    const time = clock(T);
+    request(config.stateFolder, "cms", legacySnapshotName("cms", T - 2 * HOUR, "scheduled"), T);
+    const result = await restore({ config, now: time.now, wait: time.wait, log: silent, systemctl: systemd.systemctl }, "cms");
+    expect(result.state).toBe("ok");
+    expect(readFileSync(join(data, "upload.txt"), "utf8")).toBe("the version of two hours ago");
   });
 
   test("a project with no unit, its data swapped all the same", async () => {
@@ -225,7 +277,7 @@ describe("a restore", () => {
   });
 });
 
-describe("what a restore refuses", () => {
+describe.concurrent.skipIf(NO_RESTIC)("what a restore refuses", () => {
   async function refused(setup: (made: Awaited<ReturnType<typeof prepared>>) => void, folder = "cms") {
     const made = await prepared();
     setup(made);
@@ -255,6 +307,11 @@ describe("what a restore refuses", () => {
   test("a snapshot that exists nowhere", async () => {
     const result = await refused(({ config }) => request(config.stateFolder, "cms", snapshotName("cms", T - 50 * HOUR, "scheduled"), T));
     expect(result.message).toBe("this snapshot is no longer on the server, and no bucket is configured");
+  });
+
+  test("an archive of the format before restic not imported yet", async () => {
+    const result = await refused(({ config }) => request(config.stateFolder, "cms", legacySnapshotName("cms", T - 50 * HOUR, "scheduled"), T));
+    expect(result.message).toBe("this snapshot has not been imported into the repository yet: try again after the next backup run");
   });
 
   test("the dashboard itself, which would cut the page asking", async () => {
@@ -304,7 +361,7 @@ describe("what a restore refuses", () => {
   });
 });
 
-describe("what a restore repairs before starting", () => {
+describe.concurrent.skipIf(NO_RESTIC)("what a restore repairs before starting", () => {
   test("an extraction left behind is removed, and the restore goes on", async () => {
     const { config, sites, data, snapshot } = await prepared();
     mkdirSync(join(sites, "cms", INCOMING));
@@ -332,13 +389,6 @@ describe("what a restore repairs before starting", () => {
   });
 });
 
-const BUCKET = {
-  BACKUP_S3_BUCKET: "backups",
-  BACKUP_S3_ACCESS_KEY_ID: "AKIDRESTORE",
-  BACKUP_S3_SECRET_ACCESS_KEY: "secret",
-  BACKUP_ENCRYPTION_PASSPHRASE: "a long enough offsite passphrase",
-};
-
 /** A restore that must be refused before anything is stopped, the data in service untouched. */
 async function untouched(made: Awaited<ReturnType<typeof prepared>>, snapshot: string, extra: Partial<Parameters<typeof restore>[0]> = {}) {
   const systemd = fakeSystemd(made.data, UNITS);
@@ -351,32 +401,28 @@ async function untouched(made: Awaited<ReturnType<typeof prepared>>, snapshot: s
   return result;
 }
 
-describe("a snapshot is bound to its project and its time", () => {
-  test("an archive copied under another snapshot's name is refused once extracted, before anything stops", async () => {
+describe.concurrent.skipIf(NO_RESTIC)("a snapshot is bound to its project and its time", () => {
+  test("a snapshot's tar stored again under another time is refused once extracted, before anything stops", async () => {
     const made = await prepared();
     const elsewhere = snapshotName("cms", T - 30 * 60_000, "scheduled");
-    writeFileSync(join(made.config.backupFolder, "cms", elsewhere), readFileSync(join(made.config.backupFolder, "cms", made.snapshot)));
+    storeAs(made.config, "cms", T - 30 * 60_000, dumped(made.config, "cms", made.snapshot));
     const result = await untouched(made, elsewhere);
     expect(result).toMatchObject({ state: "rejects", message: "the snapshot could not be extracted, nothing was changed: the archive was taken at another time than its name says" });
   });
 
-  test("a bucket's object copied under another key is refused, before anything stops", async () => {
-    const s3 = startFakeS3("AKIDRESTORE");
-    try {
-      const made = await prepared({ ...BUCKET, BACKUP_S3_ENDPOINT: s3.url });
-      const elsewhere = snapshotName("cms", T - 30 * 60_000, "scheduled");
-      s3.objects.set(`sitesolide/cms/${elsewhere}.enc`, s3.objects.get(`sitesolide/cms/${made.snapshot}.enc`)!);
-      const result = await untouched(made, elsewhere);
-      expect(result.state).toBe("rejects");
-      expect(result.message).toContain(`the snapshot could not be fetched from the bucket: this copy was sealed as "sitesolide/cms/${made.snapshot}.enc"`);
-      expect(readdirSync(join(made.config.stateFolder, "downloads"))).toEqual([]);
-    } finally {
-      s3.stop();
-    }
+  test("another project's tar stored under this one's name is refused, before anything stops", async () => {
+    const made = await prepared();
+    const shop = project(made.sites, "shop");
+    writeFileSync(join(shop, "orders.txt"), "shop's orders");
+    expect((await runBackups({ config: made.config, now: () => T - 3 * HOUR, log: silent })).projects.shop?.ok).toBe(true);
+    // Under a time of its own: the run of T - 3h also took one of cms.
+    storeAs(made.config, "cms", T - 4 * HOUR, dumped(made.config, "shop", snapshotName("shop", T - 3 * HOUR, "scheduled")));
+    const result = await untouched(made, snapshotName("cms", T - 4 * HOUR, "scheduled"));
+    expect(result).toMatchObject({ state: "rejects", message: "the snapshot could not be extracted, nothing was changed: the archive is a snapshot of another site than the one being restored" });
   });
 });
 
-describe("a restore never leaves a site stopped", () => {
+describe.concurrent.skipIf(NO_RESTIC)("a restore never leaves a site stopped", () => {
   test("without the time to save and swap, nothing is stopped", async () => {
     const made = await prepared();
     const result = await untouched(made, made.snapshot, { unitTimeoutMs: 60_000 });
@@ -472,37 +518,24 @@ describe("a restore never leaves a site stopped", () => {
   });
 });
 
-describe("a download from the bucket is bounded", () => {
-  test("in time: a line that stalls stops the restore before anything is stopped", async () => {
-    const s3 = startFakeS3("AKIDRESTORE");
-    try {
-      const made = await prepared({ ...BUCKET, BACKUP_S3_ENDPOINT: s3.url });
-      unlinkSync(join(made.config.backupFolder, "cms", made.snapshot));
-      s3.stall.value = true;
-      const started = Date.now();
-      const result = await untouched(made, made.snapshot, { downloadTimeoutMs: 800 });
-      expect(result).toMatchObject({ state: "rejects", message: "the snapshot could not be fetched from the bucket in time" });
-      expect(Date.now() - started).toBeLessThan(10_000);
-      expect(readdirSync(join(made.config.stateFolder, "downloads"))).toEqual([]);
-    } finally {
-      s3.stop();
-    }
+describe.concurrent.skipIf(NO_RESTIC)("a snapshot streamed into the extraction is bounded", () => {
+  test("in time: a download past its time stops the restore before anything is stopped", async () => {
+    const made = await prepared(bucket());
+    forget(made.config, "cms", made.snapshot);
+    const started = Date.now();
+    const result = await untouched(made, made.snapshot, { downloadTimeoutMs: 1 });
+    expect(result).toMatchObject({ state: "rejects", message: "the snapshot could not be fetched from the bucket in time" });
+    expect(Date.now() - started).toBeLessThan(30_000);
   });
 
-  test("in room: a disk at its reserve fetches nothing", async () => {
-    const s3 = startFakeS3("AKIDRESTORE");
-    try {
-      const made = await prepared({ ...BUCKET, BACKUP_S3_ENDPOINT: s3.url });
-      unlinkSync(join(made.config.backupFolder, "cms", made.snapshot));
-      const result = await untouched({ ...made, config: { ...made.config, reserveBytes: 10 ** 18 } }, made.snapshot);
-      expect(result).toMatchObject({ state: "rejects", message: "not enough disk space to fetch the snapshot from the bucket" });
-    } finally {
-      s3.stop();
-    }
+  test("in room: a disk at its reserve extracts nothing", async () => {
+    const made = await prepared();
+    const result = await untouched({ ...made, config: { ...made.config, reserveBytes: 10 ** 18 } }, made.snapshot);
+    expect(result).toMatchObject({ state: "rejects", message: "not enough disk space to extract the snapshot and save the current data first" });
   });
 });
 
-describe("a current database that cannot be read consistently", () => {
+describe.concurrent.skipIf(NO_RESTIC)("a current database that cannot be read consistently", () => {
   test("is saved as raw files, said so, and the restore goes on", async () => {
     const { config, data, snapshot } = await prepared();
     // The very reason for a restore: the database in service is damaged.
@@ -517,9 +550,9 @@ describe("a current database that cannot be read consistently", () => {
     expect(result.message).toContain("The data it replaced is saved as a before-restore snapshot, as raw files: one of its databases could not be read consistently.");
     expect(audit(join(data, "app.db"))).toEqual({ total: ACCOUNTS * BALANCE, rows: ACCOUNTS, integrity: "ok" });
     // The before-restore snapshot holds the damaged file as it was, and says how it was taken.
-    const saved = join(config.backupFolder, "cms", result.preRestore!);
-    expect(JSON.parse(Bun.spawnSync(["tar", "-xzOf", saved, "sitesolide-backup.json"]).stdout.toString())).toMatchObject({ format: 2, folder: "cms", raw: true, databases: [] });
-    expect(new Uint8Array(Bun.spawnSync(["tar", "-xzOf", saved, "data/app.db"]).stdout)).toEqual(damaged);
+    const saved = dumped(config, "cms", result.preRestore!);
+    expect(JSON.parse(Bun.spawnSync(["tar", "-xOf", saved, "sitesolide-backup.json"]).stdout.toString())).toMatchObject({ format: 2, folder: "cms", raw: true, databases: [] });
+    expect(new Uint8Array(Bun.spawnSync(["tar", "-xOf", saved, "data/app.db"]).stdout)).toEqual(damaged);
     const db = openDatabase(join(config.stateFolder, "backup.db"));
     expect(readAudit(db, "cms", 1)[0]).toMatchObject({ detail: { result: "ok", preRestoreRaw: true } });
     db.close();

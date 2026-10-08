@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { snapshotName } from "../borrowed/backups";
 import type { BackupSteward } from "../src/backup/client";
-import { openDatabase, recordAudit, replaceOffsite, writeSetting } from "../src/backup/database";
+import { openDatabase, recordAudit, replaceSnapshots, writeSetting } from "../src/backup/database";
 import type { BackupsResponse, RestoreResponse } from "../src/backup/protocol";
 import { createBackupReader } from "../src/backup/reader";
 import { INTERRUPTED_REASON, PREVIOUS } from "../src/backup/recovery";
@@ -36,7 +36,6 @@ const paths = {
   secrets: join(ROOT, "secrets"),
   units: join(ROOT, "units"),
   state: join(ROOT, "steward-state"),
-  backups: join(ROOT, "backups"),
   backupState: join(ROOT, "backup-state"),
   backupRun: join(ROOT, "backup-run"),
 };
@@ -53,17 +52,23 @@ site("portal", { start: "bun run server.ts", port: 3026 });
 site("scratch", { start: "bun run server.ts", port: 3050, backup: false });
 writeFileSync(join(paths.secrets, "dashboard.env"), "PASSWORD_HASH=not-checked-here\n", { mode: 0o600 });
 writeFileSync(join(paths.units, "sitesolide-restore@.service"), "[Service]\n");
-mkdirSync(join(paths.backups, "cms"));
-writeFileSync(join(paths.backups, "cms", SNAPSHOT), "an archive");
-writeFileSync(join(paths.backups, "cms", "notes.txt"), "not a snapshot");
-
+// The index the run writes: the steward reads the snapshots there, never the repository.
 const db = openDatabase(join(paths.backupState, "backup.db"));
 writeSetting(db, "retention", { hourly: 24, daily: 7, weekly: 4, preRestore: 3 });
 writeSetting(db, "offsite", { target: "backups at fsn1.example.invalid", error: null });
-replaceOffsite(db, [
-  { folder: "cms", name: SNAPSHOT, bytes: 120 },
-  { folder: "cms", name: OFFSITE_ONLY, bytes: 99 },
-]);
+writeSetting(db, "maintenance", { at: T, local: { at: new Date(T).toISOString(), ok: true, error: null }, offsite: null });
+writeSetting(db, "repository", { bytes: 4096, at: new Date(T).toISOString() });
+const row = (name: string, hours: number, bytes: number, added: number | null) => ({
+  folder: "cms",
+  name,
+  id: String(hours).padStart(64, "0"),
+  takenAt: T - (T % 1000) - hours * 3_600_000,
+  kind: "scheduled" as const,
+  bytes,
+  added,
+});
+replaceSnapshots(db, "local", [row(SNAPSHOT, 1, 10, 7)]);
+replaceSnapshots(db, "offsite", [row(SNAPSHOT, 1, 10, 7), row(OFFSITE_ONLY, 50, 99, null)]);
 recordAudit(db, { actor: "system", action: "backup.run", target: null, detail: { ok: true } });
 recordAudit(db, { actor: "owner", action: "backup.restore", target: "cms", detail: { result: "ok" } });
 db.close();
@@ -99,7 +104,7 @@ const system = {
 };
 writeFileSync(join(ROOT, "passwd"), "root:x:0:0::/root:/bin/sh\n");
 
-const reader = createBackupReader({ sitesDir: paths.sites, backupFolder: paths.backups, stateFolder: paths.backupState, runFolder: paths.backupRun, unitsFolder: paths.units });
+const reader = createBackupReader({ sitesDir: paths.sites, stateFolder: paths.backupState, runFolder: paths.backupRun, unitsFolder: paths.units });
 const handler = createSteward(system, { secretsFolder: paths.secrets, checkAccounts: false, check: async (submitted) => submitted === PASSWORD, backups: reader });
 const bare = createSteward(system, { secretsFolder: paths.secrets, checkAccounts: false, check: async (submitted) => submitted === PASSWORD });
 
@@ -138,13 +143,15 @@ describe("what the steward says of a site's backups", () => {
       lastRun: { ok: true, snapshot: SNAPSHOT, error: null },
       retention: { hourly: 24, daily: 7, weekly: 4, preRestore: 3 },
       offsite: { target: "backups at fsn1.example.invalid", error: null },
+      checks: { local: { at: T, ok: true, error: null }, offsite: null },
+      repository: { bytes: 4096, at: T },
       restore: null,
       restorable: true,
       reason: null,
     });
     expect(view.snapshots).toEqual([
-      { name: SNAPSHOT, takenAt: T - (T % 1000) - 3_600_000, kind: "scheduled", bytes: 10, local: true, offsite: true },
-      { name: OFFSITE_ONLY, takenAt: T - (T % 1000) - 50 * 3_600_000, kind: "scheduled", bytes: 99, local: false, offsite: true },
+      { name: SNAPSHOT, takenAt: T - (T % 1000) - 3_600_000, kind: "scheduled", bytes: 10, added: 7, local: true, offsite: true },
+      { name: OFFSITE_ONLY, takenAt: T - (T % 1000) - 50 * 3_600_000, kind: "scheduled", bytes: 99, added: null, local: false, offsite: true },
     ]);
   });
 

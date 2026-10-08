@@ -35,14 +35,16 @@ ExecStopPost=/usr/local/bin/bun /usr/local/lib/sitesolide/backup.js after-restor
 EnvironmentFile=/etc/caddy/sitesolide.env
 # The bucket's settings, and the disk reserve: a snapshot only the bucket
 # still holds is fetched by a download child, which PID 1 hands this same
-# file by name (dashboard/src/backup/runner.ts).
+# file by name (dashboard/src/backup/runner.ts), and which runs restic against
+# the bucket.
 EnvironmentFile=-/etc/sitesolide/dashboard-backup.env
 
 # The steward does not wait: it starts this unit with --no-block and the page
 # follows the result file. The longest restore waits ten minutes for a run to
-# finish, measures the data (ten at most), downloads from the bucket (twenty),
-# extracts (twenty), saves the current data (twenty) and watches the service
-# (ten with a rollback): ninety minutes, RESTORE_TIMEOUT_MS in restore.ts. It
+# finish, measures the data (ten at most), downloads from the bucket and
+# extracts what streams from it (twenty and twenty), saves the current data
+# (twenty) and watches the service (ten with a rollback): ninety minutes,
+# RESTORE_TIMEOUT_MS in restore.ts. It
 # stops nothing without the time for what follows; killed all the same, the
 # ExecStopPost above starts the services again, and the next restore repairs
 # or refuses the folders left (recovery.ts).
@@ -69,11 +71,13 @@ RuntimeDirectoryPreserve=yes
 NoNewPrivileges=true
 CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_CHOWN
 
-# Writing: the folder of the project named, and the archives (the snapshot of
-# the current data taken before replacing it). Its code and its public files
-# stay out of reach, like for the gatekeeper.
+# Writing: the folder of the project named, and the repository (the snapshot
+# of the current data taken before replacing it, and restic's locks). Its
+# code and its public files stay out of reach, like for the gatekeeper.
 ProtectSystem=strict
-ReadWritePaths=/srv/sites/%i /var/backups/sitesolide
+ReadWritePaths=/srv/sites/%i /var/backups/sitesolide-restic
+CacheDirectory=sitesolide-restic
+CacheDirectoryMode=0700
 ReadOnlyPaths=-/srv/sites/%i/app -/srv/sites/%i/public
 # The steward's state and every project's secrets: nothing here needs them,
 # and CAP_DAC_OVERRIDE would make them readable. The bucket's settings still
@@ -85,9 +89,9 @@ PrivateDevices=true
 PrivateIPC=true
 
 # No network at all: root with CAP_DAC_OVERRIDE talks to systemd alone, over
-# AF_UNIX. A snapshot only the bucket holds is fetched by a download child,
-# a dynamic user with the network and no right on any project
-# (dashboard/src/backup/runner.ts).
+# AF_UNIX, and restic reads the server's repository, a folder. A snapshot
+# only the bucket holds is fetched by a download child, a dynamic user with
+# the network and no right on any project (dashboard/src/backup/runner.ts).
 RestrictAddressFamilies=AF_UNIX
 IPAddressDeny=any
 
@@ -104,4 +108,7 @@ LockPersonality=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 
-MemoryMax=256M
+# Bun, and `restic dump` (145 MiB measured) or a pre-restore `restic backup`
+# beside it, restic first in line for the OOM killer (see the run's unit).
+MemoryMax=512M
+OOMPolicy=continue

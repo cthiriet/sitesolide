@@ -30,15 +30,20 @@ export type { RetentionPolicy } from "./retention";
 export type { SnapshotKind } from "../../borrowed/backups";
 
 export type SnapshotView = {
-  /** The file name, and what a restore names. */
+  /** What a restore names. */
   name: string;
   takenAt: number;
   kind: SnapshotKind;
-  /** The archive's size on the server, or the encrypted object's when only the bucket has it. */
+  /** The size of the data it holds, as a tar. */
   bytes: number | null;
+  /** What it added to the repository when it was taken, deduplicated and compressed; null when unknown. A steward before restic leaves it out. */
+  added?: number | null;
   local: boolean;
   offsite: boolean;
 };
+
+/** A repository's last check, the time in milliseconds; `error`, a fixed sentence when it failed. */
+export type CheckView = { at: number; ok: boolean; error: string | null };
 
 /** This project's line of the last run, the times in milliseconds. */
 export type LastRunView = { startedAt: number; finishedAt: number; ok: boolean; snapshot: string | null; error: string | null };
@@ -73,6 +78,10 @@ export type BackupsView = {
   machineRunAt: number | null;
   retention: RetentionPolicy | null;
   offsite: { target: string | null; error: string | null };
+  /** The last daily check of each repository; absent from a steward before restic. */
+  checks?: { local: CheckView | null; offsite: CheckView | null };
+  /** What the server's repository takes on the disk, every site together: deduplication shares it. */
+  repository?: { bytes: number; at: number } | null;
   /** Newest first. */
   snapshots: SnapshotView[];
   restore: RestoreView | null;

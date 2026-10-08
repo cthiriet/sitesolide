@@ -393,7 +393,8 @@ configuration has a `server`, keeps SSH for every command; `--api` makes one
 go through the dashboard instead, to see what a token's holder sees.
 
 `sitesolide backups` lists the snapshots the machine keeps of the project's
-data folder, on the server and in the bucket, and its last run. It reads and
+data folder, on the server and in the bucket, with the size of each and what
+it added to the repository when it was taken, and its last run. It reads and
 changes nothing: a restore is made from the dashboard's *Backups* section, which
 saves the current data first. See
 [dashboard/src/backup/README.md](../dashboard/src/backup/README.md).

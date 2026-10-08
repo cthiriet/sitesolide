@@ -676,7 +676,14 @@ export const COMPONENT_CONDITIONS = {
   collector: [enabled("collector-enabled", "sitesolide-collector.timer"), active("collector-active", "sitesolide-collector.timer")],
   portal: [active("portal-active", "portal")],
   monitor: [enabled("monitor-enabled", "sitesolide-monitor.timer"), active("monitor-active", "sitesolide-monitor.timer")],
-  "backups-installed": [present("backup-code", `${LIB}/backup.js`), present("backup-timer", `${UNITS}/sitesolide-backup.timer`)],
+  // restic, which stores the snapshots, the server's repository and its key, which install lays.
+  "backups-installed": [
+    present("backup-code", `${LIB}/backup.js`),
+    present("backup-timer", `${UNITS}/sitesolide-backup.timer`),
+    present("backup-restic", "/usr/bin/restic"),
+    present("backup-key", "/var/backups/sitesolide-restic.key"),
+    present("backup-repository", "/var/backups/sitesolide-restic/config"),
+  ],
   backups: [enabled("backup-enabled", "sitesolide-backup.timer"), active("backup-active", "sitesolide-backup.timer")],
   installer: [present("installer-code", `${LIB}/installer.js`), present("installer-unit", `${UNITS}/sitesolide-installer@.service`)],
   "egress-proxy": [active("egress-active", "sitesolide-egress")],

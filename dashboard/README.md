@@ -262,8 +262,7 @@ steward.js         root, hardened sitesolide-steward.service
    |-- writes /var/lib/sitesolide-steward/access-log.jsonl  the changes of access, kept 180 days
    |-- reads  /etc/caddy/sites/<slug>.caddy              whether the portal is in front of it
    |-- writes /etc/sitesolide-egress/*.json              the connectors, see Connectors
-   |-- reads  /var/backups/sitesolide/<slug>/            the snapshots, by name
-   |-- reads  /var/lib/sitesolide-backup/backup.db       the bucket's index, the audit
+   |-- reads  /var/lib/sitesolide-backup/backup.db       the index of the snapshots, the audit: never restic
    |-- writes /var/lib/sitesolide-backup/requests/       a restore request, consumed by the one-shot
    |-- keeps  /var/lib/sitesolide-steward/access.json    who may do what on each project, see Access
    |-- keeps  /var/lib/sitesolide-steward/member-sessions.json  the sessions of people who sign in

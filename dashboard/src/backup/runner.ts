@@ -5,10 +5,11 @@
  *
  *   systemd-run --wait --pipe --uid=site-cms ... -- bun backup.js copy /srv/sites/cms/data ...
  *
- * `--pipe` hands the unit this process's pipes as they are: the archive flows
- * from the copy's standard output straight into root's, and into the
- * extraction's standard input from root's file, with no copy through
- * systemd-run. `--wait` returns the unit's exit code.
+ * `--pipe` hands the unit the pipes it is given as they are: the archive flows
+ * from the copy's standard output straight into restic, which runs that very
+ * command line (snapshot.ts), and into the extraction's standard input from
+ * restic or from a download, with no copy through systemd-run. `--wait`
+ * returns the unit's exit code.
  *
  * Why a transient unit rather than dropping privileges in place (`setpriv`,
  * `Bun.spawn({ uid })`):
@@ -47,8 +48,9 @@
  *
  * **A download is the one child that is not a project.** It runs under a
  * dynamic user of its own, with the network and the bucket's settings, and
- * with no right on any project: the restore that starts it, root with
- * CAP_DAC_OVERRIDE, keeps no network at all (sitesolide-restore@.service).
+ * with no right on any project, and runs restic against the bucket: the
+ * restore that starts it, root with CAP_DAC_OVERRIDE, keeps no network at all
+ * (sitesolide-restore@.service).
  * The settings reach it by `EnvironmentFile=`, read by PID 1, never on a
  * command line, which `systemctl show` would print to anyone.
  *
@@ -80,8 +82,8 @@ export type Job = {
   bind: string[];
   /** Under /var/cache, created by PID 1 for the account, where the copy stages its databases. */
   cacheDirectory: string | null;
-  /** A file whose bytes go on standard input, or nothing. */
-  stdin: string | null;
+  /** What goes on standard input: a file's bytes, another process's output, or nothing. */
+  stdin: string | ReadableStream<Uint8Array> | null;
   /** The child's standard output: the archive, or nothing worth reading. */
   stdout: "pipe" | "ignore";
   /** The longest it may take: its unit's RuntimeMaxSec, and how long the parent waits for it. */
@@ -293,6 +295,26 @@ export async function boundedText(stream: ReadableStream<Uint8Array>): Promise<s
   return new TextDecoder().decode(kept.byteLength > MAX_REPORT_BYTES ? kept.subarray(kept.byteLength - MAX_REPORT_BYTES) : kept);
 }
 
+/**
+ * A child that another program starts: restic runs the copy's command line
+ * itself (`--stdin-from-command`, snapshot.ts). The command, and how to stop
+ * its unit by name should the parent stop waiting.
+ */
+export function preparedChild(job: Job, config: BackupConfig): { command: string[]; stop: () => void } {
+  const suffix = hex(4);
+  return {
+    command: childCommand(job, config, suffix),
+    stop: () => {
+      if (config.isolation !== "systemd") return;
+      try {
+        Bun.spawn([config.systemctl, "kill", "--signal=SIGKILL", unitName(job, suffix)], { stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 10_000 });
+      } catch {
+        // RuntimeMaxSec will do it
+      }
+    },
+  };
+}
+
 export function startChild(job: Job, config: BackupConfig): Child {
   const offsite = job.offsite ?? null;
   const suffix = hex(4);
@@ -304,7 +326,7 @@ export function startChild(job: Job, config: BackupConfig): Child {
   const environment = { ...(offsite === null ? {} : offsiteEnvironment(offsite)), ...Object.fromEntries(job.environment ?? []) };
   const cwd = plain && job.workingDirectory !== undefined && job.workingDirectory !== null && existsSync(job.workingDirectory) ? job.workingDirectory : undefined;
   const process = Bun.spawn(childCommand(job, config, suffix), {
-    stdin: job.stdin === null ? "ignore" : Bun.file(job.stdin),
+    stdin: job.stdin === null ? "ignore" : typeof job.stdin === "string" ? Bun.file(job.stdin) : job.stdin,
     stdout: job.stdout,
     stderr: "pipe",
     ...(plain && Object.keys(environment).length > 0 ? { env: { ...Bun.env, ...environment } } : {}),

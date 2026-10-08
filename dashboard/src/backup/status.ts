@@ -6,7 +6,14 @@
  * when a run fails or stops happening:
  *
  *   { "startedAt": ISO, "finishedAt": ISO, "ok": boolean,
- *     "projects": { "<folder>": { "ok": boolean, "snapshot": string | null, "error": string | null } } }
+ *     "projects": { "<folder>": { "ok": boolean, "snapshot": string | null, "error": string | null } },
+ *     "checks": { "local": Check | null, "offsite": Check | null, "since": ISO | null, "offsiteSince": ISO | null } }
+ *
+ * `checks`, the last daily check of each repository (maintenance.ts), each
+ * `{ "at": ISO, "ok": boolean, "error": string | null }`: null before the
+ * first, and `offsite` null without a bucket; `since` and `offsiteSince`,
+ * when checks of each were first due. A monitor that predates the key
+ * ignores it.
  *
  * A project left out on purpose, opted out by its manifest or with an empty or
  * missing data folder, is listed with `ok: true` and `snapshot: null`: nothing
@@ -20,9 +27,9 @@
  * public on the machine: times, booleans, project folders (their subdomains),
  * snapshot names and short reasons. A reason never names a file inside a
  * project's data (copy.ts sends the path apart, to the journal), never quotes
- * a system error's message (which carries paths), and an offsite error has
- * the bucket's credentials redacted (offsite.ts). tests/backup-run.test.ts
- * holds the failures to that.
+ * a system error's message (which carries paths), and never restic's words,
+ * which may quote a repository's paths: restic.ts gives fixed sentences.
+ * tests/backup-run.test.ts holds the failures to that.
  */
 import { closeSync, fchmodSync, fsyncSync, openSync, renameSync, unlinkSync, writeSync, constants } from "node:fs";
 import { join } from "node:path";
@@ -31,12 +38,31 @@ export const STATUS_NAME = "last-run.json";
 
 export type ProjectStatus = { ok: boolean; snapshot: string | null; error: string | null };
 
+/** A repository's last check: when, its verdict, and a fixed sentence when it failed. */
+export type Check = { at: string; ok: boolean; error: string | null };
+
+/**
+ * `since`, when checks of the server's repository were first due, the first
+ * run; `offsiteSince`, of the bucket's, null without a bucket. The monitor
+ * warns when none came three days after either.
+ */
+export type Checks = { local: Check | null; offsite: Check | null; since?: string | null; offsiteSince?: string | null };
+
 export type RunStatus = {
   startedAt: string;
   finishedAt: string;
   ok: boolean;
   projects: Record<string, ProjectStatus>;
+  checks?: Checks;
 };
+
+function readCheck(value: unknown): Check | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "object") return undefined;
+  const v = value as Record<string, unknown>;
+  if (typeof v.at !== "string" || typeof v.ok !== "boolean" || (v.error !== null && typeof v.error !== "string")) return undefined;
+  return { at: v.at, ok: v.ok, error: v.error as string | null };
+}
 
 /** An error message fit for the status file and the page: one line, bounded, never a path to a secret. */
 export function shortError(message: string): string {
@@ -58,7 +84,7 @@ export function readStatus(text: string | null): RunStatus | null {
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
-  const { startedAt, finishedAt, ok, projects } = parsed as Record<string, unknown>;
+  const { startedAt, finishedAt, ok, projects, checks } = parsed as Record<string, unknown>;
   if (typeof startedAt !== "string" || typeof finishedAt !== "string" || typeof ok !== "boolean") return null;
   if (typeof projects !== "object" || projects === null || Array.isArray(projects)) return null;
   const read: Record<string, ProjectStatus> = {};
@@ -70,7 +96,14 @@ export function readStatus(text: string | null): RunStatus | null {
     if (entry.error !== null && typeof entry.error !== "string") return null;
     read[folder] = { ok: entry.ok, snapshot: entry.snapshot as string | null, error: entry.error as string | null };
   }
-  return { startedAt, finishedAt, ok, projects: read };
+  if (checks === undefined) return { startedAt, finishedAt, ok, projects: read };
+  if (typeof checks !== "object" || checks === null) return null;
+  const local = readCheck((checks as Record<string, unknown>).local);
+  const offsite = readCheck((checks as Record<string, unknown>).offsite);
+  if (local === undefined || offsite === undefined) return null;
+  const moment = (value: unknown) => (typeof value === "string" ? value : null);
+  const { since, offsiteSince } = checks as Record<string, unknown>;
+  return { startedAt, finishedAt, ok, projects: read, checks: { local, offsite, since: moment(since), offsiteSince: moment(offsiteSince) } };
 }
 
 /**

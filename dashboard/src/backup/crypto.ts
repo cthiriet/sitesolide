@@ -1,8 +1,10 @@
 /**
- * The encryption of the copies sent to the bucket: AES-256-GCM through
- * WebCrypto, on the machine, before anything leaves it. The bucket's provider
- * stores bytes it cannot read, and a stolen access key yields nothing without
- * the passphrase.
+ * The encryption of the copies sent to the bucket before restic: AES-256-GCM
+ * through WebCrypto, on the machine, before anything left it. This version
+ * writes none: restic encrypts the bucket's repository itself. It reads them,
+ * for their import into the repository (legacy.ts), and `decrypt` reads one
+ * by hand; `encryptFile` stays for the tests that make such objects. The next
+ * version removes this module.
  *
  * GCM seals a message whole, and an archive can weigh gigabytes: it is cut into
  * chunks of 1 MiB, each sealed on its own, with a nonce made of its rank and a

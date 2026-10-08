@@ -148,8 +148,8 @@ describe("writing and reading back", () => {
   });
 });
 
-describe("compressed, and readable by tar itself", () => {
-  test("gzip on the way out, and back", async () => {
+describe("readable by tar itself, and compressed for the archives of the format before restic", () => {
+  test("gzip on the way out, and back: the archives the import reads", async () => {
     const sink = memorySink();
     const tar = new TarWriter(gzipSink(sink));
     await tar.directory("data", FOLDER_META);
@@ -168,18 +168,18 @@ describe("compressed, and readable by tar itself", () => {
     ]);
   });
 
-  test("tar -xzf reads what this writer writes", async () => {
+  test("tar -xf reads what this writer writes, as restic stores it", async () => {
     const sink = memorySink();
-    const tar = new TarWriter(gzipSink(sink));
+    const tar = new TarWriter(sink);
     await tar.directory("data", FOLDER_META);
     await tar.file("data/a.txt", META, 3, new TextEncoder().encode("one"));
     await tar.file(`data/${"x".repeat(150)}.txt`, META, 3, new TextEncoder().encode("two"));
     await tar.end();
-    const path = join(FOLDER, "ours.tar.gz");
+    const path = join(FOLDER, "ours.tar");
     writeFileSync(path, sink.bytes());
     const out = join(FOLDER, "out-system");
     mkdirSync(out);
-    const extraction = Bun.spawnSync(["tar", "-xzf", path, "-C", out]);
+    const extraction = Bun.spawnSync(["tar", "-xf", path, "-C", out]);
     expect(extraction.exitCode).toBe(0);
     expect(readFileSync(join(out, "data", "a.txt"), "utf8")).toBe("one");
     expect(readFileSync(join(out, "data", `${"x".repeat(150)}.txt`), "utf8")).toBe("two");
@@ -267,7 +267,7 @@ describe("the reader refuses what could leave the destination", () => {
 describe("the extraction", () => {
   async function extract(bytes: Uint8Array, destination: string) {
     mkdirSync(destination, { recursive: true });
-    return extractData(streamOf(Bun.gzipSync(bytes as Uint8Array<ArrayBuffer>)), destination, LIMITS);
+    return extractData(streamOf(bytes), destination, LIMITS);
   }
 
   test("writes data/ and only data/, with modes and times", async () => {

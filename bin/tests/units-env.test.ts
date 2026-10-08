@@ -97,6 +97,9 @@ function installerEnvFileVariables(): Set<string> {
   return new Set([...script.matchAll(/printf '([A-Z][A-Z0-9_]*)=%s/g)].map((match) => match[1]!));
 }
 
+/** What systemd puts in every service's environment itself: no unit hands it over. */
+const SET_BY_SYSTEMD = new Set(["INVOCATION_ID"]);
+
 describe("a unit hands over what its service demands", () => {
   const zoneEnvFile = zoneEnvFileVariables();
   const installerEnvFile = installerEnvFileVariables();
@@ -112,7 +115,7 @@ describe("a unit hands over what its service demands", () => {
       const { names, files } = providedVariables(readFileSync(unitFile, "utf8"));
 
       const missing = [...required].filter((name) => {
-        if (names.has(name)) return false;
+        if (names.has(name) || SET_BY_SYSTEMD.has(name)) return false;
         // A variable of the zone file counts as handed over as soon as the
         // unit loads that file.
         if (files.includes("/etc/caddy/sitesolide.env") && zoneEnvFile.has(name)) return false;

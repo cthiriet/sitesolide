@@ -3,17 +3,29 @@
  * backups` asks the machine and prints of its answer.
  *
  * The snapshots are taken on the machine by the backup component
- * (dashboard/backup.ts, dashboard/src/backup/), one archive per project and per
- * run under `/var/backups/sitesolide/<folder>/`. Their name is the only index
- * they have: the time it carries is what retention sorts on, what the dashboard
- * lists and what a restore names. It lives here, in the CLI, because the
- * dashboard borrows this file (dashboard/scripts/borrow.ts): a second writing
- * of the rule would one day list a snapshot the other side cannot find.
+ * (dashboard/backup.ts, dashboard/src/backup/), one per project and per run,
+ * in a restic repository, `/var/backups/sitesolide-restic`. A snapshot's name
+ * is drawn from what restic records of it, its path, its time and its tag,
+ * and is the same in the bucket's copy: the time it carries is what retention
+ * sorts on, what the dashboard lists and what a restore names. It lives here,
+ * in the CLI, because the dashboard borrows this file
+ * (dashboard/scripts/borrow.ts): a second writing of the rule would one day
+ * list a snapshot the other side cannot find.
  *
  * Pure: nothing here touches the disk or the network.
  */
 
-/** Where the snapshots live on the machine, one folder per project, root's alone. */
+/** The restic repository of the machine, every project's snapshots, root's alone. */
+export const RESTIC_REPOSITORY = "/var/backups/sitesolide-restic";
+
+/** Its password, drawn at install and never shown: root's, 0600, beside it. */
+export const RESTIC_KEY = "/var/backups/sitesolide-restic.key";
+
+/**
+ * Where the archives written before restic live, one folder per project: they
+ * are imported into the repository by the first runs of this version, then
+ * removed seven days after their copy was verified.
+ */
 export const BACKUP_FOLDER = "/var/backups/sitesolide";
 
 /** The component, built into one file by bin/deploy-backup.sh. */
@@ -62,17 +74,22 @@ export function readBackupComponent(output: string): BackupComponent {
 export type SnapshotKind = "scheduled" | "pre-restore";
 
 export type Snapshot = {
-  /** The file name, also the name a restore asks for. */
+  /** The name a restore asks for. */
   name: string;
   /** The project's folder under /srv/sites. */
   folder: string;
   /** When it was taken, in milliseconds, to the second. */
   takenAt: number;
   kind: SnapshotKind;
+  /** An archive of the format before restic: a `.tar.gz` file waiting for its import. */
+  legacy: boolean;
 };
 
-/** The suffix of every snapshot: a tar archive compressed with gzip, readable by `tar -xzf`. */
-export const ARCHIVE_SUFFIX = ".tar.gz";
+/** The suffix of a snapshot: what `restic dump` gives back of it, a plain tar. */
+export const SNAPSHOT_SUFFIX = ".tar";
+
+/** The suffix of an archive written before restic: a tar compressed with gzip. */
+export const LEGACY_SUFFIX = ".tar.gz";
 
 const PRE_RESTORE_SUFFIX = "-pre-restore";
 
@@ -109,43 +126,68 @@ export function readCompactTime(text: string): number | null {
   return compactTime(ms) === text ? ms : null;
 }
 
-/** The file name of a snapshot. Throws on a folder outside the rule: it would become a path. */
-export function snapshotName(folder: string, takenAt: number, kind: SnapshotKind): string {
+function nameOf(folder: string, takenAt: number, kind: SnapshotKind, suffix: string): string {
   if (!isBackupFolder(folder)) throw new Error("not a project folder");
-  return `${folder}-${compactTime(takenAt)}${kind === "pre-restore" ? PRE_RESTORE_SUFFIX : ""}${ARCHIVE_SUFFIX}`;
+  return `${folder}-${compactTime(takenAt)}${kind === "pre-restore" ? PRE_RESTORE_SUFFIX : ""}${suffix}`;
+}
+
+/** The name of a snapshot. Throws on a folder outside the rule: it would become a path. */
+export function snapshotName(folder: string, takenAt: number, kind: SnapshotKind): string {
+  return nameOf(folder, takenAt, kind, SNAPSHOT_SUFFIX);
+}
+
+/** The file name an archive of the format before restic had. */
+export function legacySnapshotName(folder: string, takenAt: number, kind: SnapshotKind): string {
+  return nameOf(folder, takenAt, kind, LEGACY_SUFFIX);
 }
 
 /**
- * A file name read back, or null if it is not a snapshot of this folder.
+ * A name read back, or null if it is not a snapshot of this folder: a
+ * snapshot's, or an archive's of the format before restic, which says so.
  *
- * The folder is given rather than guessed: `shop-api-20261004T130000Z.tar.gz`
+ * The folder is given rather than guessed: `shop-api-20261004T130000Z.tar`
  * would otherwise be readable as a snapshot of `shop` and of `shop-api`. A
  * name that does not parse is never a snapshot, and retention never deletes it.
  */
 export function readSnapshotName(folder: string, name: string): Snapshot | null {
-  if (!isBackupFolder(folder) || !name.startsWith(`${folder}-`) || !name.endsWith(ARCHIVE_SUFFIX)) return null;
-  let middle = name.slice(folder.length + 1, -ARCHIVE_SUFFIX.length);
+  if (!isBackupFolder(folder) || !name.startsWith(`${folder}-`)) return null;
+  const legacy = name.endsWith(LEGACY_SUFFIX);
+  const suffix = legacy ? LEGACY_SUFFIX : SNAPSHOT_SUFFIX;
+  if (!name.endsWith(suffix)) return null;
+  let middle = name.slice(folder.length + 1, -suffix.length);
   let kind: SnapshotKind = "scheduled";
   if (middle.endsWith(PRE_RESTORE_SUFFIX)) {
     kind = "pre-restore";
     middle = middle.slice(0, -PRE_RESTORE_SUFFIX.length);
   }
   const takenAt = readCompactTime(middle);
-  return takenAt === null ? null : { name, folder, takenAt, kind };
+  return takenAt === null ? null : { name, folder, takenAt, kind, legacy };
+}
+
+/**
+ * The snapshot's name for an archive of the format before restic, the one
+ * its import gives it: the same folder, time and kind. A snapshot's name is
+ * its own twin; anything else, null.
+ */
+export function twinName(folder: string, name: string): string | null {
+  const read = readSnapshotName(folder, name);
+  return read === null ? null : snapshotName(folder, read.takenAt, read.kind);
 }
 
 // --- sitesolide backups ------------------------------------------------------
 
 /**
  * One snapshot as `backup.js list` prints it: on the server, in the bucket, or
- * both. `bytes` is the archive's size on the server, or the encrypted object's
- * when only the bucket has it.
+ * both. `bytes` is the size of the data it holds, as a tar; `added`, what it
+ * added to the repository when it was taken, once deduplicated and compressed.
+ * `added` is absent from the answer of a component before restic.
  */
 export type ListedSnapshot = {
   name: string;
   takenAt: number;
   kind: SnapshotKind;
   bytes: number | null;
+  added?: number | null;
   local: boolean;
   offsite: boolean;
 };
@@ -175,6 +217,7 @@ function isListedSnapshot(value: unknown): value is ListedSnapshot {
     typeof v.takenAt === "number" &&
     (v.kind === "scheduled" || v.kind === "pre-restore") &&
     (v.bytes === null || typeof v.bytes === "number") &&
+    (v.added === undefined || v.added === null || typeof v.added === "number") &&
     typeof v.local === "boolean" &&
     typeof v.offsite === "boolean"
   );
@@ -241,11 +284,11 @@ export function listingLines(listing: Listing, dashboardUrl: string): string[] {
   if (listing.snapshots.length === 0) {
     lines.push("no snapshot yet");
   } else {
-    lines.push(`${"TAKEN".padEnd(22)}${"KIND".padEnd(14)}${"SIZE".padEnd(10)}WHERE`);
+    lines.push(`${"TAKEN".padEnd(22)}${"KIND".padEnd(14)}${"SIZE".padEnd(10)}${"ADDED".padEnd(10)}WHERE`);
     const ordered = [...listing.snapshots].sort((a, b) => b.takenAt - a.takenAt || b.name.localeCompare(a.name));
     for (const snapshot of ordered) {
       lines.push(
-        `${utcMinute(snapshot.takenAt).padEnd(22)}${snapshot.kind.padEnd(14)}${humanSize(snapshot.bytes).padEnd(10)}${where(snapshot)}`,
+        `${utcMinute(snapshot.takenAt).padEnd(22)}${snapshot.kind.padEnd(14)}${humanSize(snapshot.bytes).padEnd(10)}${humanSize(snapshot.added ?? null).padEnd(10)}${where(snapshot)}`,
       );
     }
   }

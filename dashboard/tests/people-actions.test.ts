@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { readPrivateKey, signAssertion, type PrivateKey } from "../borrowed/assertion";
 import { snapshotName } from "../borrowed/backups";
 import { createAccessSystem } from "../src/access/system";
+import { openDatabase, replaceSnapshots } from "../src/backup/database";
 import { createBackupReader } from "../src/backup/reader";
 import { REAUTH_MAX_AGE_S } from "../src/people/protocol";
 import { createMembersSystem, type MembersSystem } from "../src/people/system";
@@ -72,7 +73,6 @@ async function mount(): Promise<Bench> {
   const portalKey = folder("portal-key");
   const caddy = folder("caddy");
   const gatekeeper = folder("gatekeeper");
-  const backups = folder("backups");
   const backupState = folder("backup-state");
   const backupRun = folder("backup-run");
 
@@ -98,11 +98,13 @@ async function mount(): Promise<Bench> {
   // beta's block carries the portal: its general access is restricted, and may be turned public.
   writeFileSync(join(caddy, "beta.caddy"), "beta.{$SITESOLIDE_ZONE} {\n\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\turi /verifier\n\t}\n}\n");
 
-  // A snapshot of beta, and the restore's template: a restore can start.
+  // A snapshot of beta in the index the run writes, and the restore's template: a restore can start.
   writeFileSync(join(units, "sitesolide-restore@.service"), "[Service]\n");
-  mkdirSync(join(backups, "beta"));
   const clock = { t: Date.now() };
-  writeFileSync(join(backups, "beta", snapshotName("beta", clock.t - SNAPSHOT_AGE_MS, "scheduled")), "an archive");
+  const takenAt = Math.floor((clock.t - SNAPSHOT_AGE_MS) / 1000) * 1000;
+  const index = openDatabase(join(backupState, "backup.db"));
+  replaceSnapshots(index, "local", [{ folder: "beta", name: snapshotName("beta", takenAt, "scheduled"), id: "b".repeat(64), takenAt, kind: "scheduled", bytes: 10, added: 10 }]);
+  index.close();
 
   const calls: string[][] = [];
   const barrier: Bench["barrier"] = { promise: null };
@@ -167,7 +169,7 @@ async function mount(): Promise<Bench> {
     secretsFolder: secrets,
     checkAccounts: false,
     members: { system: members, access, zone: ZONE },
-    backups: createBackupReader({ sitesDir: sites, backupFolder: backups, stateFolder: backupState, runFolder: backupRun, unitsFolder: units }),
+    backups: createBackupReader({ sitesDir: sites, stateFolder: backupState, runFolder: backupRun, unitsFolder: units }),
   });
   await dashboard.ensureMemberKeys();
 

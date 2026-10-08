@@ -45,6 +45,10 @@ deprecated APIs. `tsc --noEmit` says nothing about those, a deprecation is a
 suggestion diagnostic that only the language service produces, the one your
 editor consults.
 
+The dashboard's backup tests run restic itself, on its local backend: install
+it once (`brew install restic`, `apt-get install restic`); without it, those
+tests are skipped and say so.
+
 The tests need no machine. Everything that would talk to a server is faked: a
 directory that stands in for `/srv/sites`, an `ssh` that only answers commands
 it recognises and refuses everything else, and a hostname that resolves nowhere.

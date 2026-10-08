@@ -5,8 +5,8 @@
  *             archive on standard output, within the room root says the disk has
  *   extract   as the project: reads an archive on standard input into a fresh folder
  *   measure   as the project: what its data folder weighs, for a restore
- *   download  as a dynamic user, with the network: a bucket's copy, decrypted,
- *             on standard output
+ *   download  as a dynamic user, with the network: a snapshot of the bucket's
+ *             repository, through restic, a plain tar on standard output
  *   hook      as the project, in its service's walls: the service's backup
  *             command, which fills an empty folder with a consistent copy
  *   discard   as the project: removes what the backup commands left
@@ -19,13 +19,15 @@
  * create root-owned files in a project's folder and break its service.
  */
 import { chmodSync, lstatSync, mkdirSync, readdirSync, rmSync, type Stats } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import type { Subprocess } from "bun";
 import { isBackupFolder, readSnapshotName } from "../../borrowed/backups";
 import { isDataFolder } from "../../borrowed/manifest";
 import { CopyError, MAX_ENTRIES, copyBudget, copyData, measureCopy, measureData, type LiveFolder } from "./copy";
 import { extractData } from "./extract";
-import { objectKey, offsiteFrom, openBucket, redact } from "./offsite";
+import { bucketRepository, objectKey, offsiteFrom, openLegacyBucket, redact } from "./offsite";
+import { listSnapshots, resticCommand, resticEnvironment, resticFailure, resticJournal, snapshotPath, type ResticSettings } from "./restic";
 import type { Sink } from "./tar";
 
 export type ChildEnvironment = Record<string, string | undefined>;
@@ -82,7 +84,7 @@ export function liveArgument(live: LiveFolder): string {
 /**
  * `copy <data> <staging> <folder> <taken at, ms> <room, bytes> [raw] [stopped] [live:<folder>[=<source>]]...`.
  *
- * `room` is what the disk of the archives has above its reserve, measured by
+ * `room` is what the disk of the repository has above its reserve, measured by
  * root, which cannot see the data; the data, measured here, which cannot see
  * that disk, must fit twice in it (its database copies, then its archive).
  * The data measured is what the archive will hold: a live folder saved by a
@@ -92,6 +94,12 @@ export function liveArgument(live: LiveFolder): string {
  *
  * `raw` and `stopped`: a restore's own snapshot, see copyData. `live:`, a
  * folder a service keeps live, with the folder its backup command filled.
+ *
+ * Its standard output goes to restic, which runs this command line and keeps
+ * a snapshot only if it exits 0; its standard error reaches the parent
+ * through restic, line by line, each line of 64 KiB at most (restic.ts). The
+ * summary here is therefore counts alone; its lists, bounded, are in the
+ * archive's description, which the parent reads back.
  */
 export async function copyMain(args: string[], env: ChildEnvironment): Promise<number> {
   const refusal = identityRefusal(env);
@@ -136,7 +144,7 @@ export async function copyMain(args: string[], env: ChildEnvironment): Promise<n
       stopped,
       live: declared,
     });
-    emit({ event: "summary", ...summary, measured: measured.bytes, raw, stopped });
+    emit({ event: "summary", files: summary.files, directories: summary.directories, bytes: summary.bytes, counts: summary.counts, measured: measured.bytes, raw, stopped });
     return 0;
   } catch (error) {
     emitFailure(error, "the copy");
@@ -165,15 +173,29 @@ export function measureMain(args: string[], env: ChildEnvironment): number {
   }
 }
 
+/** How long a download's restic may take: the restore's unit stops the child before, at its own time. */
+const DOWNLOAD_RESTIC_MS = 24 * 60 * 60 * 1000;
+
 /**
- * `download <folder> <snapshot>`: the bucket's copy of a snapshot, decrypted
- * onto standard output, refused if it was sealed for another name. The
- * settings come from the environment, which PID 1 fills from the unit's file.
+ * `download <folder> <snapshot>`: a snapshot of the bucket's repository, a
+ * plain tar on standard output. restic lists the repository, the snapshot is
+ * found by its name, which its path, its time and its tag make (restic.ts),
+ * and dumped straight onto this process's standard output, the restore's
+ * pipe. No cache: nothing is kept under a dynamic user.
+ *
+ * `download <folder> <archive> legacy`: an object of the format before
+ * restic, decrypted and decompressed, refused if it was sealed for another
+ * name; for its import (legacy.ts).
+ *
+ * The settings come from the environment, which PID 1 fills from the unit's
+ * file; restic is handed the bucket's in its own environment alone.
  */
 export async function downloadMain(args: string[], env: ChildEnvironment): Promise<number> {
-  const [folder, name] = args;
-  if (!isBackupFolder(folder) || name === undefined || readSnapshotName(folder, name) === null || args.length !== 2) {
-    emit({ event: "error", message: "usage: backup.js download <folder> <snapshot>" });
+  const [folder, name, mode] = args;
+  const legacy = mode === "legacy";
+  const read = isBackupFolder(folder) && name !== undefined ? readSnapshotName(folder, name) : null;
+  if (read === null || read.legacy !== legacy || args.length > 3 || (mode !== undefined && !legacy)) {
+    emit({ event: "error", message: "usage: backup.js download <folder> <snapshot> | download <folder> <archive> legacy" });
     return 2;
   }
   const setting = offsiteFrom(env);
@@ -181,13 +203,62 @@ export async function downloadMain(args: string[], env: ChildEnvironment): Promi
     emit({ event: "error", message: setting === null ? "no bucket is configured" : setting.error });
     return 1;
   }
+  if (legacy) return downloadLegacy(folder!, name!, setting);
+
+  const settings: ResticSettings = { restic: env.BACKUP_RESTIC ?? "/usr/bin/restic", choom: "/usr/bin/choom", isolation: "none", resticCache: tmpdir(), temporary: tmpdir() };
+  const repository = bucketRepository(setting);
+  const deadline = Date.now() + DOWNLOAD_RESTIC_MS;
+  const listed = await listSnapshots(settings, repository, deadline, ["--no-cache"]);
+  if ("failure" in listed) {
+    emit({ event: "error", message: resticFailure(listed.failure, repository), detail: redact(resticJournal("restic snapshots", listed.failure), setting) });
+    return 1;
+  }
+  const found = listed.snapshots.find((stored) => stored.name === name);
+  if (found === undefined) {
+    emit({ event: "error", message: "the bucket's repository holds no such snapshot" });
+    return 1;
+  }
+  // restic writes the tar straight onto this process's standard output.
+  const dump = Bun.spawn(resticCommand(settings, ["--no-cache", "dump", found.id, snapshotPath(folder!)]), {
+    stdin: "ignore",
+    stdout: "inherit",
+    stderr: "pipe",
+    env: resticEnvironment(settings, repository),
+  });
+  const [said, code] = await Promise.all([new Response(dump.stderr).text(), dump.exited]);
+  if (code !== 0) {
+    emit({ event: "error", message: resticFailure({ code }, repository), detail: redact(resticJournal("restic dump", { code, stdout: "", stderr: said }), setting) });
+    return 1;
+  }
+  emit({ event: "summary", id: found.id });
+  return 0;
+}
+
+/** An object of the format before restic, decrypted, then decompressed onto standard output. */
+async function downloadLegacy(folder: string, name: string, setting: Exclude<ReturnType<typeof offsiteFrom>, null | { error: string }>): Promise<number> {
   const sink = stdoutSink();
+  const decompressor = new DecompressionStream("gzip");
+  const writer = decompressor.writable.getWriter();
+  const pump = (async () => {
+    const reader = (decompressor.readable as ReadableStream<Uint8Array>).getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      await sink.write(value);
+    }
+  })();
   try {
-    const read = await openBucket(setting).download(objectKey(setting, folder, name), (bytes) => sink.write(bytes));
+    const read = await openLegacyBucket(setting).download(objectKey(setting, folder, name), async (bytes) => {
+      await writer.ready;
+      await writer.write(bytes as Uint8Array<ArrayBuffer>);
+    });
+    await writer.close();
+    await pump;
     await sink.close();
     emit({ event: "summary", bytes: read.bytes, version: read.version, sealed: read.sealedFor !== null });
     return 0;
   } catch (error) {
+    void writer.abort(error).catch(() => undefined);
     emit({ event: "error", message: redact((error as Error).message, setting) });
     return 1;
   }

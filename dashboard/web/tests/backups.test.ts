@@ -3,6 +3,7 @@ import {
   RESTORE_SCALE_MS,
   STALE_SNAPSHOT_MS,
   auditLine,
+  checkReading,
   freshness,
   kindLabel,
   offsiteReading,
@@ -11,6 +12,7 @@ import {
   restoreProgress,
   restoreSteps,
   retentionText,
+  snapshotSize,
   whereLabel,
 } from "../src/lib/backups"
 import { SECTIONS, pageFromUrl, siteUrl } from "../src/lib/pages"
@@ -19,7 +21,7 @@ import type { AuditEntry, BackupsView, RestoreView, SnapshotView } from "../src/
 const NOW = Date.UTC(2026, 9, 4, 13, 0, 0)
 
 function snapshot(partial: Partial<SnapshotView> = {}): SnapshotView {
-  return { name: "cms-20261004T120000Z.tar.gz", takenAt: NOW - 3_600_000, kind: "scheduled", bytes: 2048, local: true, offsite: false, ...partial }
+  return { name: "cms-20261004T120000Z.tar", takenAt: NOW - 3_600_000, kind: "scheduled", bytes: 2048, added: 512, local: true, offsite: false, ...partial }
 }
 
 function view(partial: Partial<BackupsView> = {}): Pick<BackupsView, "lastRun" | "snapshots" | "excluded"> {
@@ -27,7 +29,7 @@ function view(partial: Partial<BackupsView> = {}): Pick<BackupsView, "lastRun" |
 }
 
 function restore(partial: Partial<RestoreView> = {}): RestoreView {
-  return { state: "ok", message: "Restored cms.", snapshot: "cms-20261004T120000Z.tar.gz", preRestore: null, actor: "owner", startedAt: NOW, at: NOW, ...partial }
+  return { state: "ok", message: "Restored cms.", snapshot: "cms-20261004T120000Z.tar", preRestore: null, actor: "owner", startedAt: NOW, at: NOW, ...partial }
 }
 
 describe("the Backups section's place", () => {
@@ -39,12 +41,45 @@ describe("the Backups section's place", () => {
 })
 
 describe("a snapshot's words", () => {
+  test("its size, and what it added when it was taken", () => {
+    expect(snapshotSize(snapshot())).toBe("2.0 KB, 512 B new")
+    // A steward before restic sends no such figure.
+    expect(snapshotSize({ bytes: 2048 })).toBe("2.0 KB")
+    expect(snapshotSize({ bytes: 2048, added: null })).toBe("2.0 KB")
+  })
+
   test("its kind and where it lives", () => {
     expect(kindLabel("scheduled")).toBe("Scheduled")
     expect(kindLabel("pre-restore")).toBe("Before restore")
     expect(whereLabel({ local: true, offsite: true })).toBe("Server and offsite")
     expect(whereLabel({ local: true, offsite: false })).toBe("Server")
     expect(whereLabel({ local: false, offsite: true })).toBe("Offsite only")
+  })
+})
+
+describe("the repositories' checks", () => {
+  const at = NOW - 5 * 3_600_000
+
+  test("verified, with what the server's copy takes", () => {
+    expect(checkReading({ local: { at, ok: true, error: null }, offsite: null }, { bytes: 3 * 1024 * 1024, at }, NOW)).toEqual({
+      tone: "ok",
+      label: "Verified 5h ago",
+      detail: "All sites' snapshots take 3.0 MB on this server.",
+    })
+  })
+
+  test("a failed check first, the server's or the bucket's, in its own words", () => {
+    expect(checkReading({ local: { at, ok: true, error: null }, offsite: { at, ok: false, error: "the check of the bucket's repository found errors" } }, null, NOW)).toEqual({
+      tone: "error",
+      label: "Offsite copy failed its check",
+      detail: "the check of the bucket's repository found errors",
+    })
+    expect(checkReading({ local: { at, ok: false, error: "x" }, offsite: null }, null, NOW).label).toBe("Server's copy failed its check")
+  })
+
+  test("not checked yet, or a steward before restic", () => {
+    expect(checkReading({ local: null, offsite: null }, null, NOW)).toMatchObject({ tone: "neutral", label: "Not checked yet" })
+    expect(checkReading(undefined, undefined, NOW)).toMatchObject({ tone: "neutral", label: "Not checked yet" })
   })
 })
 
