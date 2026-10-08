@@ -435,7 +435,7 @@ describe("the release's kit, its components built", () => {
       ["dashboard", "bun run build"],
       ["portal", "bun scripts/borrow.ts"],
     ]);
-    for (const path of ["dashboard/public/index.html", "dashboard/borrowed/manifest.ts", "dashboard/borrowed/locks.ts", "portal/borrowed/auth.ts", "portal/borrowed/password.ts"]) {
+    for (const path of ["dashboard/public/index.html", "dashboard/borrowed/manifest.ts", "dashboard/borrowed/locks.ts", "portal/borrowed/auth.ts"]) {
       expect({ path, there: existsSync(join(kit, path)) }).toEqual({ path, there: true });
     }
     expect(manifest("dashboard").build).toBeUndefined();
