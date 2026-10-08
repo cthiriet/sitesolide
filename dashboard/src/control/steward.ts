@@ -885,12 +885,14 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   /**
    * Has this creation's own installer ended: a result of its own deployment,
    * started once the creation was noted, final, succeeded or failed, or left
-   * `running` by an installer stopped half way (`stopped`)? No result at all
-   * is no end, and an earlier result, of a project of that name removed
-   * since, is another deployment's.
+   * `running` by an installer stopped half way (`stopped`)? No result at all,
+   * the creation noted past the grace and its installer not active, is an
+   * end too: results live on tmpfs, and a reboot takes them. An earlier
+   * result, of a project of that name removed since, is another deployment's.
    */
   async function ended(creation: PendingCreation): Promise<boolean> {
     const judgement = judgeResult(await system.readResult(creation.deployment), creation.deployment, options.uidRoot);
+    if (judgement.kind === "absent") return system.now() - creation.at > graceMs && !(await isActive(installerUnit(creation.slug)));
     if (judgement.kind !== "read") return false;
     const { result } = judgement;
     if (result.slug !== creation.slug || result.startedAt < creation.at) return false;
@@ -907,8 +909,9 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * made anything. Ended with nothing on the machine, it is undone, and its
    * name comes back once this turn is over (see the queues above). Not ended
    * within `CREATION_MAX_AGE_MS`: dropped, nobody made Admin, the project, if
-   * there is one, the owner's to give by hand. A result not there yet waits
-   * for the next call.
+   * there is one, the owner's to give by hand. A result not there yet, its
+   * installer active or the creation within the grace, waits for the next
+   * call.
    */
   async function settleCreations(): Promise<void> {
     const undone: PendingCreation[] = [];
@@ -955,16 +958,21 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
   /**
    * The names of creations undone given back, in the tokens' queue: each one
-   * still its token's and still not on the machine, checked once the turn
-   * has come, so that a project laid meanwhile keeps its owner. Otherwise
+   * still its token's, still not on the machine and with no creation of it
+   * noted since, checked once the turn has come, so that a project laid
+   * meanwhile keeps its owner, and a new creation of it its name. Otherwise
    * `owners` would grow by one name per attempt.
    */
   function giveNamesBack(undone: readonly PendingCreation[]): Promise<void> {
     return serially(async () => {
       let registry = await team();
       if (registry instanceof Response) return;
+      // The tokens' queue may wait on the creations' turn, never the other way.
+      const noted = await inCreationsTurn(pending);
+      if (noted instanceof Response) return;
       const given: string[] = [];
       for (const creation of undone) {
+        if (noted.some((one) => one.slug === creation.slug)) continue;
         if (registry.owners[creation.slug] !== creation.token || (await system.projectExists(creation.slug))) continue;
         const forgotten = forgetOwnership(registry, creation.slug);
         if (forgotten === null) continue;

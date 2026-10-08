@@ -167,10 +167,12 @@ SystemCallFilter=@system-service
 # and the steward's own heap. Measured on 8 October 2026 with the bundle
 # bin/deploy-steward.sh builds, in a Linux container capped like this unit,
 # without swap: the access log at 6.5, 12 (its byte cap, longest rows) and 16
-# MB, the journal empty and at its 1,000 lines, bursts of 20 + 20 GET /log, a
-# site that matches nothing among them, and the owner's unlock in the middle.
-# The anonymous memory peaked at 111 MB, the unlock alone at 83 MB: 192M leaves
-# some 80 MB, where 128M left 17 and the page cache squeezed to nothing. Two
+# MB, the journal empty and at its 1,000 lines, bursts of 20 + 20 and 40 + 40
+# GET /log, pages of 500, a site that matches nothing among them, and the
+# owner's unlock at once or in the middle. The worst case, a site named by one
+# letter every row holds, so that each line passes the byte prefilter and is
+# decoded, peaked at 124 MB of anonymous memory, the unlock alone at 83 MB:
+# 192M leaves some 68 MB, where 128M would leave 4 and no page cache. Two
 # verifications at once got the service killed at 128M on the bench (m2) and
 # three at 192M: a higher ceiling only moves that threshold, so the code
 # conducts one at a time, bounds the requests in flight and keeps the rate

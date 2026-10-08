@@ -7,7 +7,7 @@ import { createAccessSystem } from "../src/access/system";
 import { EMPTY_REGISTRY, encodeRegistry, putEntry, removePerson, setCreate, type Registry } from "../src/access/registry";
 import { createMemberRoutes, type JournalRefusal } from "../src/people/steward";
 import { createMembersSystem } from "../src/people/system";
-import { createControlSteward, type ControlHandler } from "../src/control/steward";
+import { createControlSteward, installerUnit, type ControlHandler } from "../src/control/steward";
 import { createControlSystem } from "../src/control/system";
 import { CREATION_MAX_AGE_MS } from "../src/control/creations";
 import { MAX_UNCARRIED_NAMES } from "../src/control/tokens";
@@ -75,6 +75,8 @@ async function wire(registry: Registry, sites: string[]) {
     });
     return release;
   };
+  /** The installer units `systemctl is-active` says are running. */
+  const active = new Set<string>();
   const now = () => clock.now;
   const journal: JournalRefusal[] = [];
   const accessSystem = {
@@ -121,7 +123,7 @@ async function wire(registry: Registry, sites: string[]) {
       async systemctl(args) {
         if (args[0] === "is-active") {
           if (held !== null) await held;
-          return { code: 3, output: "inactive\n" };
+          return active.has(args[1]!) ? { code: 0, output: "active\n" } : { code: 3, output: "inactive\n" };
         }
         return { code: 0, output: "" };
       },
@@ -188,7 +190,7 @@ async function wire(registry: Registry, sites: string[]) {
     const file = join(root, "state", "creations.json");
     return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as { creations: { deployment: string; slug: string; email: string; token: string; at: number }[] }).creations : [];
   };
-  return { root, clock, holdActive, journal, store, access, members, control: handler, post, mint, deploy, preflight, request, result, forget, ownerGrant, entries, team, creations };
+  return { root, clock, holdActive, active, journal, store, access, members, control: handler, post, mint, deploy, preflight, request, result, forget, ownerGrant, entries, team, creations };
 }
 
 const creates = (bench: Wired) => bench.journal.filter((event) => event.operation === "project.create" && event.result === "ok");
@@ -251,6 +253,31 @@ describe("a creation's own project, nobody given access to it, makes its creator
     expect(await again.json()).toEqual({ deployment: "222222222222222222222222", slug: "shop", creating: false });
     expect(bench.request("shop")).toMatchObject({ deployment: "222222222222222222222222", creating: false });
   });
+
+  test("its installer stopped by a reboot after laying it, no result left on /run: Admin once past the grace with its unit not active", async () => {
+    const bench = await wire(registryWith([], [DAVE]), []);
+    const dave = await bench.mint(DAVE, true);
+    const D = "333333333333333333333333";
+    expect((await bench.deploy(dave.secret, D, "shop")).status).toBe(202);
+    mkdirSync(join(bench.root, "sites", "shop"), { recursive: true });
+    // Within the grace its installer may not have written yet, and past it
+    // one still active may still write: nothing settled either way.
+    await bench.control.settleCreations();
+    expect(bench.creations()).toHaveLength(1);
+    bench.clock.now += STALE;
+    bench.active.add(installerUnit("shop"));
+    await bench.control.settleCreations();
+    expect(bench.creations()).toHaveLength(1);
+    expect(await bench.entries("shop")).toEqual([]);
+    // The machine rebooted: the unit is not active, and no result will come.
+    bench.active.clear();
+    await bench.control.settleCreations();
+    expect(await bench.entries("shop")).toEqual([`${DAVE}:admin`]);
+    expect(creates(bench)).toHaveLength(1);
+    expect(bench.creations()).toEqual([]);
+    const again = await bench.deploy(dave.secret, "444444444444444444444444", "shop");
+    expect(await again.json()).toEqual({ deployment: "444444444444444444444444", slug: "shop", creating: false });
+  });
 });
 
 describe("the owner's project and grants are never a creation's", () => {
@@ -283,8 +310,8 @@ describe("the owner's project and grants are never a creation's", () => {
       await untouched();
       expect(await refusal(await bench.preflight(dave.secret, "shop"))).toEqual({ status: 403, message: `${DAVE} holds no role on shop` });
       expect(await refusal(await bench.deploy(dave.secret, "abcabcabcabcabcabcabcabc", "shop"))).toEqual({ status: 403, message: `${DAVE} holds no role on shop` });
-      // An ended creation is dropped at once; one with no result waits out its day.
-      expect(bench.creations()).toHaveLength(left === "nothing" ? 1 : 0);
+      // An ended creation is dropped at once, one a reboot left with no result too.
+      expect(bench.creations()).toEqual([]);
       bench.clock.now += CREATION_MAX_AGE_MS;
       await bench.control.settleCreations();
       await untouched();
@@ -564,6 +591,29 @@ describe("undone creations give their names back", () => {
     expect((await deploying).status).toBe(202);
     await settled;
     expect(bench.team().owners).toEqual({ cafe: dave.token.id, bar: dave.token.id });
+  });
+
+  test("a name created again before it comes back keeps its token: the new creation makes its person Admin", async () => {
+    const bench = await wire(registryWith([], [DAVE]), []);
+    const dave = await bench.mint(DAVE, true);
+    expect((await bench.deploy(dave.secret, idOf(1), "shop")).status).toBe(202);
+    bench.result(idOf(1), "shop", "failed", false);
+    // Dave deploys shop again, held on systemctl in the tokens' queue; the
+    // first creation is undone meanwhile, its name to come back behind him.
+    const release = bench.holdActive();
+    const deploying = bench.deploy(dave.secret, idOf(2), "shop");
+    await Bun.sleep(20);
+    const settled = bench.control.settleCreations();
+    await Bun.sleep(20);
+    release();
+    expect((await deploying).status).toBe(202);
+    await settled;
+    expect(bench.team().owners).toEqual({ shop: dave.token.id });
+    expect(bench.creations()).toEqual([expect.objectContaining({ deployment: idOf(2), slug: "shop" })]);
+    bench.result(idOf(2), "shop", "succeeded", true);
+    await bench.control.settleCreations();
+    expect(await bench.entries("shop")).toEqual([`${DAVE}:admin`]);
+    expect(creates(bench)).toHaveLength(1);
   });
 });
 

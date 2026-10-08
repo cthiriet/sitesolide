@@ -59,6 +59,7 @@ import {
   isAccessLogFull,
   isRecentLine,
   MAX_ENTRY_BYTES,
+  reread,
   truncate,
   type AccessWindow,
 } from "./log";
@@ -823,9 +824,11 @@ export function createSystem(config: SystemConfig): System {
 
     async readAccessLog(window) {
       // A window of it, however big it has grown (log.ts); a site's rows
-      // found by the bytes of its name before any line is decoded.
+      // found by the bytes of its name before any line is decoded. A line
+      // counts only once it reads as an entry: one torn by a crash would
+      // otherwise take a row's place, and a page would come up short.
       const needle = window.slug === null ? null : encoder.encode(window.slug);
-      const read = readWindow(accessLogFile, window.need, (line) => inWindow(line, window), needle);
+      const read = readWindow(accessLogFile, window.need, (line) => inWindow(line, window) && reread(line).length > 0, needle);
       return read === "not-plain" ? "" : read;
     },
 

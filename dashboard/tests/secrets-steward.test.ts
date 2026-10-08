@@ -44,7 +44,7 @@ import {
   type StewardOptions,
 } from "../src/secrets/steward";
 import { createSystem, isTemporary, readAccount, readGroup, type Command, type SystemConfig, type System } from "../src/secrets/system";
-import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_RETENTION_MS, createHistory, encodeEntry, inWindow, MAX_ENTRY_BYTES, page, reread, type AccessWindow } from "../src/secrets/log";
+import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_RETENTION_MS, createHistory, encodeEntry, inWindow, latest, MAX_ENTRY_BYTES, mergeLogs, page, reread, type AccessWindow } from "../src/secrets/log";
 
 /**
  * The steward set up on a throwaway tree: real files, real atomic writes, but a
@@ -2912,9 +2912,9 @@ describe("the real system", () => {
       expect(readFileSync(accessLog(root), "utf8")).toBe(line(NOW - DAY, { detail: "kept" }));
     });
 
-    /** The window GET /log reads, worked out the plain way: every line, then the newest `need` of them. */
+    /** The window GET /log reads, worked out the plain way: every line that reads as an entry, then the newest `need` of them. */
     function expectedWindow(text: string, window: AccessWindow): string {
-      const lines = text.split("\n").filter((one) => one !== "" && one.length <= MAX_ENTRY_BYTES && inWindow(one, window));
+      const lines = text.split("\n").filter((one) => one !== "" && one.length <= MAX_ENTRY_BYTES && inWindow(one, window) && reread(one).length > 0);
       const kept = lines.slice(Math.max(0, lines.length - window.need));
       return kept.length === 0 ? "" : `${kept.join("\n")}\n`;
     }
@@ -2967,6 +2967,41 @@ describe("the real system", () => {
       expect(rare.every((one) => one.slug === "rare")).toBe(true);
       expect(rare.some((one) => one.member === "reordered@acme.test")).toBe(true);
       expect(reread((await system.readAccessLog({ before: null, slug: "shop", need: 500 }))!)).toHaveLength(500);
+    });
+
+    test("a line torn by a crash takes no row's place: every page of GET /log is what the two whole files merged give", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "state"));
+      // Rows of two sites, every seventh line dated and torn mid-append, and
+      // a journal with rows of its own between them.
+      const rows: string[] = [];
+      for (let i = 0; i < 3000; i++) {
+        const a = NOW - DAY + i * 1000;
+        const slug = i % 3 === 0 ? "shop" : "blog";
+        rows.push(i % 7 === 3 ? `{"a":${a},"operation":"access.add","slug":"${slug}"\n` : line(a, { slug, detail: `p${i}@acme.test: Can open` }));
+      }
+      const text = rows.join("");
+      writeFileSync(accessLog(root), text, { mode: 0o600 });
+      const journal = Array.from({ length: 300 }, (_, i) => line(NOW - DAY + i * 9_000 + 500, { operation: "read", member: null, file: "blog.env", variable: "X", detail: null })).join("");
+      writeFileSync(join(root, "state", "journal.jsonl"), journal, { mode: 0o600 });
+      const system = systemOn(root);
+      const history = createHistory({ readJournal: () => system.readLog(), readAccessLog: (window) => system.readAccessLog(window) });
+      const whole = mergeLogs(reread(journal), reread(text));
+      for (const slug of [null, "shop", "blog"]) {
+        expect(await history.read({ before: null, slug, need: 50 }, (entries) => latest(entries, 50, slug))).toEqual(latest(whole, 50, slug));
+        // Paged back to the first row, each page from the date of the last
+        // one's oldest: every row once, none skipped.
+        const seen: LogEntry[] = [];
+        for (let before: number | null = null; ; ) {
+          const query = { limit: 100, before };
+          const got: LogEntry[] = await history.read({ before, slug, need: 100 }, (entries) => page(entries, query, slug));
+          expect(got).toEqual(page(whole, query, slug));
+          if (got.length === 0) break;
+          seen.push(...got);
+          before = got.at(-1)!.a;
+        }
+        expect(seen).toEqual(page(whole, { limit: whole.length, before: null }, slug));
+      }
     });
 
     test("a burst of GET /log over a 12 MB access log holds one window at a time, and keeps none", async () => {
