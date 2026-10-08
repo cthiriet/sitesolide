@@ -36,9 +36,6 @@ const BORROWINGS = [
   "api/src/locks.ts",
   "api/src/config.ts",
   "api/src/table.ts",
-  // The types and the durations of guest access, which the portal applies: the
-  // page's menu must offer only what the portal will accept.
-  "portal/src/guests.ts",
   // The sharing modes and the rules of an email and a domain, which the portal
   // applies, and the names of its sign-in settings, which the steward lets the
   // dashboard write into portal.env.

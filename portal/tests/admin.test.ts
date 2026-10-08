@@ -20,10 +20,9 @@ const SETTINGS = readSettings(
   "https://portal.test-zone.invalid",
 ).settings!;
 
-/** `uid`: the account behind every connection, root unless a test says otherwise. */
-function admin(settings: Settings | null = SETTINGS, uid: number | null = 0, state: { reading: Reading; writtenAt: number | null } = { reading: "steward", writtenAt: NOW }) {
+function admin(settings: Settings | null = SETTINGS, state: { reading: Reading; writtenAt: number | null } = { reading: "steward", writtenAt: NOW }) {
   const audit = memoryAudit();
-  return { audit, routes: createAccessAdmin({ access: { state: () => state }, audit, settings, callerUid: () => uid }) };
+  return { audit, routes: createAccessAdmin({ access: { state: () => state }, audit, settings }) };
 }
 
 function request(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Request {
@@ -42,9 +41,6 @@ const MOVED_ROUTES: { name: string; ask: (body?: unknown, headers?: Record<strin
   { name: "DELETE /admin/invites/:id", ask: (body, headers) => request("DELETE", "/admin/invites/AAAAAAAAAAAAAAA0", body, headers) },
 ];
 
-/** Those that took a body, and with it an actor. */
-const CHANGING_ROUTES = MOVED_ROUTES.filter((route) => !route.name.startsWith("GET "));
-
 describe("what the portal reads who may open a site from", () => {
   test("GET /admin/access says where its decisions come from, and when the steward wrote them", async () => {
     const { routes } = admin();
@@ -56,7 +52,7 @@ describe("what the portal reads who may open a site from", () => {
 
   test("before the steward's projection, or with one it cannot believe, it says so", async () => {
     for (const reading of ["portal", "unreadable"] as const) {
-      const { routes } = admin(SETTINGS, 0, { reading, writtenAt: null });
+      const { routes } = admin(SETTINGS, { reading, writtenAt: null });
       expect(await routes.access(request("GET", "/admin/access")).json()).toEqual({ reading, writtenAt: null });
     }
   });
@@ -88,11 +84,11 @@ describe("how people sign in", () => {
   });
 });
 
-describe("the routes that changed sharing and guest access", () => {
+describe("the routes that changed who may open a site before the steward kept it", () => {
   for (const route of MOVED_ROUTES) {
     test(`${route.name} answers that it moved, and records nothing`, async () => {
       const { audit, routes } = admin();
-      const response = await routes.moved(route.ask());
+      const response = routes.moved(route.ask());
       expect(response.status).toBe(410);
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(await response.json()).toEqual(MOVED);
@@ -105,44 +101,15 @@ describe("the routes that changed sharing and guest access", () => {
     expect(MOVED.message).toInclude("sitesolide share");
   });
 
-  test("as the owner, or naming an email or a token from root, the answer is the same: moved", async () => {
-    const { routes } = admin();
+  test("whatever the body names, an actor or nothing, from whichever account, the answer is the same: moved", async () => {
+    const { audit, routes } = admin();
     for (const route of MOVED_ROUTES) {
-      for (const body of [{ mode: "admins" }, { actor: "owner" }, { actor: "token:abc_1" }, { actor: "Alice@acme.test" }, [], "null", '"text"']) {
-        const response = await routes.moved(route.ask(body));
+      for (const body of [{ mode: "admins" }, { actor: "owner" }, { actor: "token:abc_1" }, { actor: "Alice@acme.test" }, { actor: "root; drop" }, [], "null", '"text"', "{"]) {
+        const response = routes.moved(route.ask(body));
         expect({ route: route.name, body, status: response.status }).toEqual({ route: route.name, body, status: 410 });
       }
     }
-  });
-
-  test("an email or a token named as the actor from any account but root is refused first, 403 actor-not-root", async () => {
-    // The dashboard's uid, and a connection whose owner could not be read.
-    for (const uid of [997, null]) {
-      const { audit, routes } = admin(SETTINGS, uid);
-      for (const route of CHANGING_ROUTES) {
-        for (const actor of ["alice@acme.test", "token:abc_1"]) {
-          const refused = await routes.moved(route.ask({ host: HOST, label: "Alice", actor }));
-          expect({ route: route.name, uid, actor, status: refused.status }).toEqual({ route: route.name, uid, actor, status: 403 });
-          expect(await refused.json()).toEqual({ error: "actor-not-root" });
-        }
-        // The dashboard's own word, as the owner, only learns that the route moved.
-        expect((await routes.moved(route.ask({ host: HOST }))).status).toBe(410);
-        expect((await routes.moved(route.ask({ actor: "owner" }))).status).toBe(410);
-      }
-      expect(audit.events).toEqual([]);
-    }
-  });
-
-  test("an actor that is neither the owner, an email nor a token is refused, and so is a body that is not JSON", async () => {
-    const { routes } = admin();
-    for (const actor of ["root; drop", "Bob <bob@acme.test>", 42, "token:", "token:a b"]) {
-      const refused = await routes.moved(request("DELETE", "/admin/invites/AAAAAAAAAAAAAAA0", { actor }));
-      expect({ actor, status: refused.status }).toEqual({ actor, status: 400 });
-      expect(await refused.json()).toEqual({ error: "invalid-actor" });
-    }
-    const unreadable = await routes.moved(request("PUT", `/admin/sharing/${HOST}`, "{"));
-    expect(unreadable.status).toBe(400);
-    expect(await unreadable.json()).toEqual({ error: "unreadable-body" });
+    expect(audit.events).toEqual([]);
   });
 });
 
@@ -169,7 +136,7 @@ describe("a request that came through Caddy reaches nothing", () => {
       expect(routes.sso(request("GET", "/admin/sharing", undefined, carried)).status).toBe(403);
       expect(routes.audit(request("GET", "/admin/audit", undefined, carried)).status).toBe(403);
       for (const route of MOVED_ROUTES) {
-        const refused = await routes.moved(route.ask({ actor: "alice@acme.test" }, carried));
+        const refused = routes.moved(route.ask({ actor: "alice@acme.test" }, carried));
         expect(refused.status).toBe(403);
         expect(await refused.json()).toEqual({ error: "relayed-request" });
       }

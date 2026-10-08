@@ -133,7 +133,7 @@ const extractPortal: Extraction<{ slug: string; confirmation: string; active: bo
 export function createMemberRelay(dependencies: MemberRelayDependencies, clock: () => number = Date.now): MemberRelay {
   const { steward, tokens, resolve } = dependencies;
 
-  type Open = { session: { hash: string }; token: string; identity: Extract<Identity, { kind: "member" }> };
+  type Open = { session: { hash: string }; token: string; identity: Extract<Identity, { kind: "person" }> };
 
   /** The member behind the request, the origin checked first for a change; or the refusal. */
   async function member(req: Request, writing: boolean): Promise<Open | Response> {
@@ -141,7 +141,7 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
     const resolved: Resolved = await resolve(req, clock());
     if (resolved === "unreachable") return error(502, "failure", "Can't reach the steward to say who this person is.");
     if (resolved === null) return json({ error: "no-session" }, 401);
-    if (resolved.identity.kind !== "member") return error(403, "out-of-scope", "This route is a member's.");
+    if (resolved.identity.kind !== "person") return error(403, "out-of-scope", "This route is a person's.");
     return { session: resolved.session, token: resolved.token, identity: resolved.identity };
   }
 
@@ -194,7 +194,7 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
     async secrets(req) {
       const open = await member(req, false);
       if (open instanceof Response) return open;
-      const received = await reach(() => steward.act("POST", "/members/secrets/projects", { session: open.token }), null, [open.token]);
+      const received = await reach(() => steward.act("POST", "/people/secrets/projects", { session: open.token }), null, [open.token]);
       if (received.kind !== "received" || received.status !== 200) return answer(open, received);
       const projects = received.body?.projects;
       if (!Array.isArray(projects)) return error(502, "failure", "The steward sent an unreadable answer.");
@@ -231,15 +231,15 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
       return new Response(null, { status: 204, headers: NO_STORE });
     },
 
-    readValue: withToken(fields(["slug", "file", "variable"] as const), "POST", "/members/secrets/value", { long: true }),
-    setVariable: withToken(fields(["slug", "file", "variable", "value"] as const), "PUT", "/members/secrets/variable", { long: true }),
-    removeVariable: withToken(fields(["slug", "file", "variable"] as const), "DELETE", "/members/secrets/variable", { long: true }),
-    createFile: withToken(fields(["slug", "file"] as const), "POST", "/members/secrets/file", { long: true }),
-    restoreFile: withToken(fields(["slug", "file"] as const), "POST", "/members/secrets/restore", { long: true }),
-    readContent: withToken(fields(["slug", "file"] as const), "POST", "/members/secrets/content", { long: true }),
-    replaceContent: withToken(fields(["slug", "file", "content"] as const), "PUT", "/members/secrets/content", { long: true, max: MAX_CONTENT_BODY_BYTES }),
-    togglePortal: withToken(extractPortal, "POST", "/members/portal", { long: true }),
-    restoreBackup: withToken(fields(["slug", "snapshot", "confirmation"] as const), "POST", "/members/backups/restore", { long: true }),
+    readValue: withToken(fields(["slug", "file", "variable"] as const), "POST", "/people/secrets/value", { long: true }),
+    setVariable: withToken(fields(["slug", "file", "variable", "value"] as const), "PUT", "/people/secrets/variable", { long: true }),
+    removeVariable: withToken(fields(["slug", "file", "variable"] as const), "DELETE", "/people/secrets/variable", { long: true }),
+    createFile: withToken(fields(["slug", "file"] as const), "POST", "/people/secrets/file", { long: true }),
+    restoreFile: withToken(fields(["slug", "file"] as const), "POST", "/people/secrets/restore", { long: true }),
+    readContent: withToken(fields(["slug", "file"] as const), "POST", "/people/secrets/content", { long: true }),
+    replaceContent: withToken(fields(["slug", "file", "content"] as const), "PUT", "/people/secrets/content", { long: true, max: MAX_CONTENT_BODY_BYTES }),
+    togglePortal: withToken(extractPortal, "POST", "/people/portal", { long: true }),
+    restoreBackup: withToken(fields(["slug", "snapshot", "confirmation"] as const), "POST", "/people/backups/restore", { long: true }),
 
     async backups(req) {
       const open = await member(req, false);
@@ -269,7 +269,7 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
     async team(req) {
       const open = await member(req, false);
       if (open instanceof Response) return open;
-      const received = await reach(() => steward.act("POST", "/team/member/list", { session: open.token }), null, [open.token]);
+      const received = await reach(() => steward.act("POST", "/tokens/person/list", { session: open.token }), null, [open.token]);
       const until = tokens.read(open.session.hash)?.expiresAt ?? null;
       const self = { email: open.identity.email, roles: open.identity.roles, create: open.identity.create };
       if (received.kind === "received" && received.status === 404 && received.body?.message === "no such route") {
@@ -312,7 +312,7 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
       if (kept === null) return locked();
       const { label, expiresAt, scope } = body;
       const received = await reach(
-        () => steward.act("POST", "/team/member/tokens", { session: open.token, token: kept.token, label, expiresAt, scope }),
+        () => steward.act("POST", "/tokens/person/create", { session: open.token, token: kept.token, label, expiresAt, scope }),
         kept.token,
         [open.token],
       );
@@ -324,7 +324,7 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
       if (open instanceof Response) return open;
       const body = await readBody(req);
       if (body === null || typeof body.id !== "string") return error(400, "invalid", "Missing or non-text field: id.");
-      return withSession(open, "POST", "/team/member/revoke", { id: body.id });
+      return withSession(open, "POST", "/tokens/person/revoke", { id: body.id });
     },
 
     async forgetUnlock(sessionToken) {

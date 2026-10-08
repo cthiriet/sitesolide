@@ -49,7 +49,7 @@ function setup(options: { signedIn?: boolean; old?: boolean; stewardLocked?: boo
 const post = (path: string, body: unknown, origin = PUBLIC_URL) =>
   new Request(`http://127.0.0.1:3022${path}`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
-const REQUEST = { label: "Ada", email: "ada@test-zone.invalid", expiresAt: null, scope: view.scope };
+const REQUEST = { label: "Ada", holder: "owner", expiresAt: null, scope: view.scope };
 
 describe("the Team page's routes", () => {
   test("the list needs a session, and says when the steward is too old", async () => {

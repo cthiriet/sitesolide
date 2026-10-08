@@ -40,13 +40,13 @@ export function localMembersSteward(socket: string): MembersSteward {
     });
   }
   return {
-    key: () => call("GET", "/members/key"),
-    signIn: (assertion) => call("POST", "/members/signin", { assertion }),
-    whoami: (session) => call("POST", "/members/whoami", { session }),
-    signOut: (session) => call("POST", "/members/signout", { session }),
-    restart: (session, slug) => call("POST", "/members/restart", { session, slug }, RESTART_TIMEOUT_MS),
-    unlock: (session, assertion) => call("POST", "/members/unlock", { session, assertion }),
-    lock: (session, token) => call("POST", "/members/lock", { session, token }),
+    key: () => call("GET", "/people/key"),
+    signIn: (assertion) => call("POST", "/people/signin", { assertion }),
+    whoami: (session) => call("POST", "/people/whoami", { session }),
+    signOut: (session) => call("POST", "/people/signout", { session }),
+    restart: (session, slug) => call("POST", "/people/restart", { session, slug }, RESTART_TIMEOUT_MS),
+    unlock: (session, assertion) => call("POST", "/people/unlock", { session, assertion }),
+    lock: (session, token) => call("POST", "/people/lock", { session, token }),
     act: (method, path, body, long = false) => call(method, path, body, long ? RESTART_TIMEOUT_MS : MEMBERS_TIMEOUT_MS),
   };
 }

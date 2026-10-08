@@ -126,19 +126,59 @@ describe("domains", () => {
     expect(judgeGrant(registry({}), "blog", "@acme.test", "visitor", OWNER, NO_SSO)).toMatchObject({ refusal: expect.stringContaining("not set up"), code: "invalid" });
   });
 
-  test("the owner gives any domain; an admin and a token only the company's own", () => {
+  test("with the company's domains listed, a domain is one of them for everyone, the owner included", () => {
     const token: Granter = { kind: "token", id: "t1", email: null, role: null };
-    expect(judgeGrant(registry({}), "blog", "@other.test", "visitor", OWNER, SSO)).toMatchObject({ role: "visitor" });
-    expect(judgeGrant(registry({}), "blog", "@other.test", "visitor", admin("ann@acme.test", "admin"), SSO)).toMatchObject({ code: "out-of-scope" });
-    expect(judgeGrant(registry({}), "blog", "@other.test", "visitor", token, SSO)).toMatchObject({ code: "out-of-scope" });
-    expect(judgeGrant(registry({}), "blog", "@acme.test", "visitor", token, SSO)).toMatchObject({ role: "visitor" });
-    // With no list of the company's domains, nobody but the owner opens a whole domain.
-    expect(judgeGrant(registry({}), "blog", "@acme.test", "visitor", token, { ...SSO, allowedDomains: [] })).toMatchObject({ code: "out-of-scope" });
+    for (const granter of [OWNER, admin("ann@acme.test", "admin"), token]) {
+      expect(judgeGrant(registry({}), "blog", "@other.test", "visitor", granter, SSO)).toMatchObject({ refusal: expect.stringContaining("not among the company's domains (acme.test)"), code: "invalid" });
+      expect(judgeGrant(registry({}), "blog", "@acme.test", "visitor", granter, SSO)).toMatchObject({ role: "visitor", unlock: false });
+    }
+  });
+
+  test("with none listed, a whole domain is a wide door: given under the unlock, never with a token", () => {
+    const open = { ...SSO, allowedDomains: [] };
+    const token: Granter = { kind: "token", id: "t1", email: null, role: null };
+    expect(judgeGrant(registry({}), "blog", "@other.test", "visitor", OWNER, open)).toMatchObject({ role: "visitor", unlock: true });
+    expect(judgeGrant(registry({}), "blog", "@other.test", "visitor", admin("ann@acme.test", "admin"), open)).toMatchObject({ role: "visitor", unlock: true });
+    expect(judgeGrant(registry({}), "blog", "@acme.test", "visitor", token, open)).toMatchObject({ code: "out-of-scope", refusal: expect.stringContaining("never with a token") });
+    // One already there is kept without an unlock.
+    expect(judgeGrant(registry({ blog: [["@other.test", "visitor"]] }), "blog", "@other.test", "visitor", admin("ann@acme.test", "admin"), open)).toMatchObject({ unlock: false });
   });
 
   test("a domain already there is not widened by being kept", () => {
     const current = registry({ blog: [["@other.test", "visitor"]] });
     expect(judgeGrant(current, "blog", "@other.test", "visitor", admin("ann@acme.test", "admin"), SSO)).toMatchObject({ role: "visitor" });
+  });
+});
+
+describe("lowering is always allowed", () => {
+  test("someone whose domain left the company's since is lowered to any lower role, not only Can open", () => {
+    const current = registry({ blog: [["dev@gone.test", "admin"]] });
+    for (const role of ["developer", "viewer", "visitor"] as const) {
+      expect(judgeGrant(current, "blog", "dev@gone.test", role, OWNER, SSO)).toMatchObject({ role, raises: false, unlock: false, password: false });
+      expect(judgeGrant(current, "blog", "dev@gone.test", role, admin("ann@acme.test", "admin"), SSO)).toMatchObject({ role, unlock: false });
+    }
+    // Raising them again is not lowering: refused, they no longer sign in with their account.
+    const lowered = registry({ blog: [["dev@gone.test", "viewer"]] });
+    expect(judgeGrant(lowered, "blog", "dev@gone.test", "developer", OWNER, SSO)).toMatchObject({ code: "invalid" });
+  });
+
+  test("without company sign-in any more, lowering still goes through", () => {
+    const current = registry({ blog: [["dev@acme.test", "developer"]] });
+    expect(judgeGrant(current, "blog", "dev@acme.test", "viewer", OWNER, NO_SSO)).toMatchObject({ role: "viewer", password: false });
+  });
+});
+
+describe("what never reads back is never accepted", () => {
+  test("an address longer than an email may be is refused, by its length, before anything else", () => {
+    for (const length of [255, 300, 5000]) {
+      const long = `${"a".repeat(64)}@${"b".repeat(length - 65 - 5)}.test`;
+      expect(judgeGrant(registry({}), "blog", long, "visitor", OWNER, SSO)).toMatchObject({ code: "invalid", refusal: expect.stringContaining("254 characters at most") });
+    }
+  });
+
+  test("a dotted or misshapen slug is refused, as the registry would refuse to read it", () => {
+    const machine = { zone: "test-zone.invalid", exists: () => true };
+    for (const slug of ["blog.old", "a.b", "-blog", "blog-", "Blog", "a".repeat(64)]) expect(projectRefusal(slug, machine, true)).toMatchObject({ code: "invalid" });
   });
 });
 
@@ -198,7 +238,8 @@ describe("the projects", () => {
     expect(projectRefusal("blog", machine, false)).toBeNull();
     expect(projectRefusal("dashboard", machine, false)).toMatchObject({ code: "out-of-scope" });
     expect(projectRefusal("portal", machine, false)).toMatchObject({ code: "out-of-scope" });
-    expect(projectRefusal("test-zone.invalid", machine, false)).toMatchObject({ code: "out-of-scope" });
+    // The zone's own folder, the landing's, is no project's slug at all.
+    expect(projectRefusal("test-zone.invalid", machine, false)).toMatchObject({ code: "invalid" });
     expect(projectRefusal("gone", machine, false)).toMatchObject({ code: "not-found" });
     expect(projectRefusal("gone", machine, true)).toBeNull();
     expect(projectRefusal("../x", machine, false)).toMatchObject({ code: "invalid" });

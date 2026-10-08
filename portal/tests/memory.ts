@@ -1,5 +1,5 @@
 import type { AuditEvent, AuditStore, GuestStore, SharingStore } from "../src/database";
-import type { Guest } from "../src/guests";
+import type { Guest } from "../src/database";
 import { DEFAULT_POLICY, type Policy } from "../src/sharing";
 
 /**

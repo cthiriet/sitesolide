@@ -77,7 +77,7 @@ function call(s: Setup, method: string, path: string, body?: unknown): Promise<R
 const SCOPE = { slugs: ["cms"], create: true, outbound: false, domain: false, public: false };
 
 async function newToken(s: Setup, scope = SCOPE): Promise<{ token: TokenView; secret: string }> {
-  const response = await call(s, "POST", "/team/tokens", { token: UNLOCK, label: "Ada", email: "ada@test-zone.invalid", expiresAt: null, scope });
+  const response = await call(s, "POST", "/tokens/create", { token: UNLOCK, label: "Ada", holder: "owner", expiresAt: null, scope });
   expect(response.status).toBe(201);
   return (await response.json()) as { token: TokenView; secret: string };
 }
@@ -85,32 +85,32 @@ async function newToken(s: Setup, scope = SCOPE): Promise<{ token: TokenView; se
 describe("the registry", () => {
   test("empty at first, then the token created, its value returned once and never written", async () => {
     const s = setup();
-    expect(await (await call(s, "GET", "/team/tokens")).json()).toEqual({ tokens: [] });
+    expect(await (await call(s, "GET", "/tokens/list")).json()).toEqual({ tokens: [] });
     const { token, secret } = await newToken(s);
-    expect(token).toMatchObject({ label: "Ada", email: "ada@test-zone.invalid", scope: SCOPE, owned: [], revokedAt: null });
+    expect(token).toMatchObject({ label: "Ada", email: "owner", member: null, by: "owner", scope: SCOPE, owned: [], revokedAt: null });
     const file = join(s.root, "state", "team.json");
     expect(readFileSync(file, "utf8")).not.toContain(secret);
     expect(statSync(file).mode & 0o777).toBe(0o600);
-    const listed = (await (await call(s, "GET", "/team/tokens")).json()) as { tokens: TokenView[] };
+    const listed = (await (await call(s, "GET", "/tokens/list")).json()) as { tokens: TokenView[] };
     expect(listed.tokens.map((view) => view.id)).toEqual([token.id]);
     expect(JSON.stringify(listed)).not.toContain(secret);
   });
 
   test("creating demands the dashboard unlocked", async () => {
     const s = setup();
-    const response = await call(s, "POST", "/team/tokens", { token: "stale", label: "Ada", email: "ada@test-zone.invalid", expiresAt: null, scope: SCOPE });
+    const response = await call(s, "POST", "/tokens/create", { token: "stale", label: "Ada", holder: "owner", expiresAt: null, scope: SCOPE });
     expect(response.status).toBe(401);
     expect(await response.json()).toMatchObject({ error: "locked" });
   });
 
   test("a malformed request says which field, a reserved slug is never granted", async () => {
     const s = setup();
-    const bad = await call(s, "POST", "/team/tokens", { token: UNLOCK, label: "", email: "ada@test-zone.invalid", expiresAt: null, scope: SCOPE });
+    const bad = await call(s, "POST", "/tokens/create", { token: UNLOCK, label: "", holder: "owner", expiresAt: null, scope: SCOPE });
     expect(bad.status).toBe(400);
     expect(((await bad.json()) as { message: string }).message).toContain("label");
-    const reserved = await call(s, "POST", "/team/tokens", { token: UNLOCK, label: "Ada", email: "ada@test-zone.invalid", expiresAt: null, scope: { ...SCOPE, slugs: ["portal"] } });
+    const reserved = await call(s, "POST", "/tokens/create", { token: UNLOCK, label: "Ada", holder: "owner", expiresAt: null, scope: { ...SCOPE, slugs: ["portal"] } });
     expect(((await reserved.json()) as { message: string }).message).toContain("reserved");
-    const extra = await call(s, "POST", "/team/tokens", { token: UNLOCK, label: "Ada", email: "a@b.c", expiresAt: null, scope: SCOPE, admin: true });
+    const extra = await call(s, "POST", "/tokens/create", { token: UNLOCK, label: "Ada", holder: "owner", expiresAt: null, scope: SCOPE, admin: true });
     expect(extra.status).toBe(400);
   });
 
@@ -118,12 +118,12 @@ describe("the registry", () => {
     const s = setup();
     const { token, secret } = await newToken(s);
     expect((await call(s, "POST", "/control/authenticate", { bearer: secret })).status).toBe(200);
-    const revoked = await call(s, "POST", "/team/revoke", { id: token.id });
+    const revoked = await call(s, "POST", "/tokens/revoke", { id: token.id });
     expect(revoked.status).toBe(200);
     const refused = await call(s, "POST", "/control/authenticate", { bearer: secret });
     expect(refused.status).toBe(401);
     expect(((await refused.json()) as { message: string }).message).toContain("revoked");
-    expect((await call(s, "POST", "/team/revoke", { id: "000000000000" })).status).toBe(404);
+    expect((await call(s, "POST", "/tokens/revoke", { id: "000000000000" })).status).toBe(404);
   });
 
   test("a registry that does not read refuses every token, and says where to look", async () => {
@@ -141,7 +141,7 @@ describe("authentication and preflight", () => {
     const s = setup();
     const { token, secret } = await newToken(s);
     const response = await call(s, "POST", "/control/authenticate", { bearer: secret });
-    expect(await response.json()).toEqual({ identity: { id: token.id, label: "Ada", email: "ada@test-zone.invalid", expiresAt: null, scope: SCOPE, owned: [], member: null } });
+    expect(await response.json()).toEqual({ identity: { id: token.id, label: "Ada", email: "owner", expiresAt: null, scope: SCOPE, owned: [], member: null } });
     expect((await call(s, "POST", "/control/authenticate", { bearer: `sst_${"x".repeat(43)}` })).status).toBe(401);
     expect((await call(s, "POST", "/control/authenticate", {})).status).toBe(401);
   });
@@ -170,9 +170,9 @@ describe("starting the installer", () => {
     expect(response.status).toBe(202);
     expect(await response.json()).toEqual({ deployment: DEPLOYMENT, slug: "shop", creating: true });
     const request = JSON.parse(readFileSync(join(s.root, "state", "installs", "shop.json"), "utf8")) as InstallRequest;
-    expect(request).toMatchObject({ deployment: DEPLOYMENT, slug: "shop", creating: true, scope: SCOPE, manifest, token: { id: token.id, email: "ada@test-zone.invalid" } });
+    expect(request).toMatchObject({ deployment: DEPLOYMENT, slug: "shop", creating: true, scope: SCOPE, manifest, token: { id: token.id, email: "owner" } });
     expect(s.calls).toContain("start --no-block sitesolide-installer@shop.service");
-    const listed = (await (await call(s, "GET", "/team/tokens")).json()) as { tokens: TokenView[] };
+    const listed = (await (await call(s, "GET", "/tokens/list")).json()) as { tokens: TokenView[] };
     expect(listed.tokens[0]!.owned).toEqual(["shop"]);
   });
 
@@ -285,5 +285,47 @@ describe("routing", () => {
     const s = setup();
     expect(await (await call(s, "GET", "/control/nothing")).json()).toEqual({ error: "not-found", message: "no such route" });
     expect((await call(s, "DELETE", "/team/tokens")).status).toBe(405);
+  });
+});
+
+describe("the routes under their names before", () => {
+  test("a dashboard deployed before this steward still lists, creates and revokes under /team/", async () => {
+    const s = setup();
+    const created = await call(s, "POST", "/team/tokens", { token: UNLOCK, label: "Ada", holder: "owner", expiresAt: null, scope: SCOPE });
+    expect(created.status).toBe(201);
+    const { token } = (await created.json()) as { token: TokenView };
+    expect(((await (await call(s, "GET", "/team/tokens")).json()) as { tokens: TokenView[] }).tokens.map((one) => one.id)).toEqual([token.id]);
+    expect((await call(s, "POST", "/team/revoke", { id: token.id })).status).toBe(200);
+  });
+
+  test("a project removed is forgotten on the owner's socket under either name, its people with access with it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "control-forget-"));
+    toClean.push(root);
+    for (const folder of ["state", "sites", "units", "installer"]) mkdirSync(join(root, folder));
+    const forgotten: [string, string][] = [];
+    const handler = createControlSteward(
+      createControlSystem({ stateFolder: join(root, "state"), sitesDir: join(root, "sites"), unitsFolder: join(root, "units"), installerFolder: join(root, "installer"), systemctl: "/bin/false", journalctl: "/bin/false" }),
+      {
+        zone: ZONE,
+        isUnlocked: async () => false,
+        uidRoot: null,
+        forgetAccess: async (slug, actor) => {
+          forgotten.push([slug, actor]);
+          return 2;
+        },
+      },
+    );
+    for (const path of ["/tokens/project", "/team/project"]) {
+      const response = await handler.owner(new Request(`http://steward${path}`, { method: "DELETE", body: JSON.stringify({ slug: "omega" }) }));
+      expect(await response.json()).toEqual({ slug: "omega", forgotten: null, access: 2 });
+    }
+    expect(forgotten).toEqual([
+      ["omega", "owner"],
+      ["omega", "owner"],
+    ]);
+    // Still on the machine: nothing forgotten, the people with access kept.
+    mkdirSync(join(root, "sites", "omega"));
+    expect((await handler.owner(new Request("http://steward/tokens/project", { method: "DELETE", body: JSON.stringify({ slug: "omega" }) }))).status).toBe(409);
+    expect(forgotten).toHaveLength(2);
   });
 });

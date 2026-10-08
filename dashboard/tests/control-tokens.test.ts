@@ -12,6 +12,10 @@ import {
   readScope,
   readTeam,
   readTokenRequest,
+  migrateTeam,
+  readHolder,
+  viewOf,
+  revokeMemberTokens,
   recordOwnership,
   refusalMessage,
   revokeToken,
@@ -172,7 +176,7 @@ describe("the registry", () => {
   test("the file round-trips, and a file that does not read refuses everyone", async () => {
     const { team } = await teamWith();
     expect(readTeam(encodeTeam(team))).toEqual(team);
-    expect(readTeam(null)).toEqual({ tokens: [], owners: {} });
+    expect(readTeam(null)).toEqual({ version: 2, tokens: [], owners: {} });
     expect(readTeam("{")).toHaveProperty("unreadable");
     expect(readTeam(JSON.stringify({ tokens: [{ id: "x" }], owners: {} }))).toHaveProperty("unreadable");
     expect(readTeam(JSON.stringify({ tokens: [], owners: { "../x": "000000000000" } }))).toHaveProperty("unreadable");
@@ -186,10 +190,90 @@ describe("the registry", () => {
 
 describe("a project removed", () => {
   test("its owner forgotten, the others and every token kept; nothing to forget is said so", () => {
-    const team = { tokens: [], owners: { shop: "aaaaaaaaaaaa", blog: "bbbbbbbbbbbb" } };
-    expect(forgetOwnership(team, "shop")).toEqual({ team: { tokens: [], owners: { blog: "bbbbbbbbbbbb" } }, id: "aaaaaaaaaaaa" });
+    const team: Team = { version: 2, tokens: [], owners: { shop: "aaaaaaaaaaaa", blog: "bbbbbbbbbbbb" } };
+    expect(forgetOwnership(team, "shop")).toEqual({ team: { version: 2, tokens: [], owners: { blog: "bbbbbbbbbbbb" } }, id: "aaaaaaaaaaaa" });
     expect(forgetOwnership(team, "notes")).toBeNull();
     expect(forgetOwnership(team, "constructor")).toBeNull();
     expect(team.owners).toEqual({ shop: "aaaaaaaaaaaa", blog: "bbbbbbbbbbbb" });
+  });
+});
+
+describe("whose a token is", () => {
+  test("the owner names a holder: owner, or a person's email, lowercase; nothing else", () => {
+    expect(readHolder("owner")).toBe("owner");
+    expect(readHolder(" Alice@Acme.test ")).toBe("alice@acme.test");
+    for (const value of ["", "alice", "@acme.test", 42, null, "a".repeat(250) + "@x.test"]) expect(readHolder(value)).toHaveProperty("refusal");
+  });
+
+  test("the owner's own carries no person and says the owner made it; one made for a person says so; a person's own, themselves", async () => {
+    const own = await createToken(EMPTY_TEAM, { label: "agent", email: "owner", expiresAt: null, scope: SCOPE }, NOW, counter());
+    if ("refusal" in own) throw new Error(own.refusal);
+    expect(own.view).toMatchObject({ email: "owner", member: null, by: "owner" });
+    const forAlice = await createToken(own.team, { label: "laptop", email: "alice@acme.test", expiresAt: null, scope: SCOPE }, NOW, counter(), "alice@acme.test", true);
+    if ("refusal" in forAlice) throw new Error(forAlice.refusal);
+    expect(forAlice.view).toMatchObject({ email: "alice@acme.test", member: "alice@acme.test", by: "owner" });
+    const hers = await createToken(forAlice.team, { label: "agent", email: "alice@acme.test", expiresAt: null, scope: SCOPE }, NOW, counter(), "alice@acme.test");
+    if ("refusal" in hers) throw new Error(hers.refusal);
+    expect(hers.view).toMatchObject({ member: "alice@acme.test", by: "alice@acme.test" });
+    // The file reads back with both, and a `by` other than the owner is refused.
+    expect(readTeam(encodeTeam(hers.team))).toEqual(hers.team);
+    expect(readTeam(encodeTeam({ ...hers.team, tokens: [{ ...hers.team.tokens[0]!, by: "mallory@acme.test" }] }))).toHaveProperty("unreadable");
+  });
+
+  test("a person leaving takes every token of theirs, the one the owner made for them included, never the owner's own", async () => {
+    let team: Team = EMPTY_TEAM;
+    for (const [email, member, byOwner] of [["owner", null, false], ["alice@acme.test", "alice@acme.test", true], ["alice@acme.test", "alice@acme.test", false]] as const) {
+      const made = await createToken(team, { label: "x", email, expiresAt: null, scope: SCOPE }, NOW, counter(), member, byOwner);
+      if ("refusal" in made) throw new Error(made.refusal);
+      team = made.team;
+    }
+    const revoked = revokeMemberTokens(team, "alice@acme.test", NOW + 1);
+    expect(revoked.revoked.map((view) => view.by).sort()).toEqual(["alice@acme.test", "owner"]);
+    expect(revoked.team.tokens.filter((record) => record.revokedAt === null).map((record) => record.email)).toEqual(["owner"]);
+  });
+});
+
+describe("the tokens from before every token belonged to someone", () => {
+  async function legacy(): Promise<Team> {
+    let team: Team = { ...EMPTY_TEAM, version: 1 };
+    for (const email of ["alice@acme.test", "Contractor@Elsewhere.test", "bot@acme.test"]) {
+      const made = await createToken(team, { label: email, email, expiresAt: null, scope: SCOPE }, NOW, counter());
+      if ("refusal" in made) throw new Error(made.refusal);
+      team = made.team;
+    }
+    return team;
+  }
+
+  test("a registry from before reads as version 1, one without a version field included", async () => {
+    const team = await legacy();
+    const text = JSON.stringify({ tokens: team.tokens, owners: team.owners });
+    expect((readTeam(text) as Team).version).toBe(1);
+    expect((readTeam(encodeTeam(team)) as Team).version).toBe(1);
+    expect(readTeam(JSON.stringify({ version: 3, tokens: [], owners: {} }))).toHaveProperty("unreadable");
+  });
+
+  test("an email of a person of People becomes theirs, made by the owner; any other the owner's own, its email kept as its label", async () => {
+    const migrated = migrateTeam(await legacy(), (email) => email === "alice@acme.test");
+    expect(migrated.team.version).toBe(2);
+    const views = migrated.team.tokens.map((record) => viewOf(migrated.team, record));
+    expect(views.map((view) => [view.email, view.member, view.by])).toEqual([
+      ["alice@acme.test", "alice@acme.test", "owner"],
+      ["Contractor@Elsewhere.test", null, "owner"],
+      ["bot@acme.test", null, "owner"],
+    ]);
+    expect(migrated.persons.map((record) => record.id)).toEqual([migrated.team.tokens[0]!.id]);
+    expect(migrated.owner).toHaveLength(2);
+  });
+
+  test("once migrated, never again: a person who signs in later does not take over the owner's token", async () => {
+    const once = migrateTeam(await legacy(), () => false);
+    const again = migrateTeam(once.team, () => true);
+    expect(again.team).toBe(once.team);
+    expect(again.persons).toEqual([]);
+  });
+
+  test("a registry begun on this code has nothing to migrate", () => {
+    expect(EMPTY_TEAM.version).toBe(2);
+    expect(migrateTeam(EMPTY_TEAM, () => true).team).toBe(EMPTY_TEAM);
   });
 });

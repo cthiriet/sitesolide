@@ -587,22 +587,10 @@ systemd's proxy forwards to this port and nowhere else; it asks
 `GET /admin/access` alone now. None of these routes changes who may open a
 site: the steward writes that, in the projection, and nothing here can.
 
-**Only root says who acts.** The routes that took an actor, the ones that
-moved, keep the rule they had: `owner` when the body says nothing, and an
-email or a token's `token:<id>` believed from root alone. The portal tells
-root from the dashboard by the uid of the connection's other end, read from
-the kernel's socket tables, the egress proxy's reading borrowed (`src/peer.ts`,
-`borrowed/proc-net.ts`): the established socket whose local end is the
-caller's address and port and whose remote end is this server, in
-`/proc/net/tcp` or `tcp6`. Nothing the caller sends changes it. Any other
-account naming an email or a token gets `403 actor-not-root` before the route
-says it moved, and the journal says which uid, never the name it gave. It
-fails closed: a table that cannot be read, or no single matching socket, is
-not root. It holds because the portal runs in the host's network namespace
-and its unit hides neither the network nor `/proc/net`, as the unit generator
-writes it. A compromised dashboard never wrote under someone else's name here,
-and still cannot; and the portal records no change of access any more, so
-there is nothing left here to write under anyone's name.
+**The routes that moved answer to anyone.** `PUT /admin/sharing/:host`,
+`GET` and `POST /admin/guests` and `DELETE /admin/invites/:id` change nothing
+any more: they answer `410 moved` whatever the body names and whoever asks,
+so there is no actor to believe or refuse.
 
 Caddy never relays them: a protected site forwards to the portal only
 `/_portal/*` and the `forward_auth` call to `/verifier`, and the portal's own
@@ -867,15 +855,6 @@ key, and the dashboard that asks: see [dashboard/README.md](../dashboard/README.
 `sitesolide upgrade` runs all three. Check: `journalctl -u portal` says
 `dashboard sign-in offered`, and someone with a role signs in.
 
-**The actor rule**, root alone naming who acts, came with people's own tokens:
-the steward first, then the dashboard, then this portal, the order
-`sitesolide upgrade` runs them in. It still holds on the routes that moved.
-Check, on the machine:
-`echo '{"actor":"someone@<a domain>"}' | sudo -u site-dashboard curl -sS -X DELETE -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:3026/admin/invites/AAAAAAAAAAAAAAA0`
-answers `{"error":"actor-not-root"}`, where root gets the route's `410`,
-`{"error":"moved",...}`, and `journalctl -u portal` says `refused: only root
-names who acts`.
-
 **Who may open a site, from the steward.** The release of the access registry
 deploys the steward first: at its first start it makes the registry from the
 old stores and writes the projection, while this portal, the previous one,
@@ -932,16 +911,12 @@ code, more codes in flight than one email may hold; then a site cookie capped by
 a session about to expire, and a sign-out that ends the portal's session and
 makes the next sign-in ask which account.
 
-`tests/peer.test.ts` reads socket tables written as a little-endian kernel
-prints them: the dashboard's connection named by its uid, the relay's by
-root's, the portal's mirror of each never taken for the caller, two lines that
-disagree and a table that cannot be read refused; and the actor rule end to
-end, a person's email from the dashboard's connection refused, the relay's
-told that the route moved. `tests/admin.test.ts` refuses an email or a token
-from any account but root, and from a connection whose owner cannot be read,
-before the moved routes answer `410`; and reads what `GET /admin/access` says.
+`tests/admin.test.ts` has every moved route answer `410` whatever its body
+names, and reads what `GET /admin/access` says.
 
-`tests/projection.test.ts` reads the steward's projection from disk: a rewrite
+`tests/projection.test.ts` reads the steward's projection from disk: a read
+that failed on the way, too many open files or an I/O error, tried again a few
+seconds later rather than at the next change; a rewrite
 seen at the very next call, a file that has not moved never read again, a
 malformed one, a link, a folder or a file beyond the bound opening nothing but
 the admin emails, the old tables read before the first projection only, and

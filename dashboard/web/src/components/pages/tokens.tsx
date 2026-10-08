@@ -7,11 +7,11 @@ import { Banner, EmptyState, ErrorState, PageBody, PageHeader, Panel, PanelSkele
 import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { CreateTokenDialog, RevokeTokenDialog } from "@/components/token-dialogs"
-import { readTokens, revokeToken } from "@/lib/api"
+import { readPeople, readTokens, revokeToken } from "@/lib/api"
 import { isPerson } from "@/lib/identity"
 import { ago, dateTime } from "@/lib/format"
-import { auditLine, deploymentLabel, deploymentTone, isLive, reachedProjects, scopeSummary, tokenStatus } from "@/lib/tokens"
-import type { TeamPageResponse, TokenView } from "@/lib/types"
+import { auditLine, deploymentLabel, deploymentTone, isLive, reachedProjects, scopeSummary, tokenHolders, tokenOwnerLine, tokenStatus } from "@/lib/tokens"
+import type { Roles, TeamPageResponse, TokenView } from "@/lib/types"
 
 /**
  * The tokens that deploy without SSH, what each may do, and what they did.
@@ -22,9 +22,10 @@ import type { TeamPageResponse, TokenView } from "@/lib/types"
  * header's lock, the same one as the Secrets section; revoking does not, so
  * that a stolen token is closed without looking for a password first.
  *
- * The owner sees every token, a person's own marked with whose it is. A
- * person sees their own alone, mints them under their own unlock, a forced
- * sign-in at their provider, and never beyond their roles.
+ * The owner sees every token, each with whose it is and who made it, and
+ * makes one for themselves or for a person of People. A person sees theirs
+ * alone, those the owner made for them included, mints them under their own
+ * unlock, a forced sign-in at their provider, and never beyond their roles.
  */
 
 type Loaded = { state: "loading" } | { state: "failed" } | { state: "ready"; list: TeamPageResponse }
@@ -38,9 +39,8 @@ function TokenRow({ token, now, mine, onRevoke }: { token: TokenView; now: numbe
       <div className="grid min-w-0 flex-1 basis-64 gap-1">
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
           <span className="font-medium wrap-anywhere">{token.label}</span>
-          {!mine && <span className="text-muted-foreground wrap-anywhere">{token.email}</span>}
+          <span className="text-muted-foreground wrap-anywhere">{tokenOwnerLine(token, mine ? "person" : "owner")}</span>
           <Status tone={status.tone}>{status.label}</Status>
-          {!mine && token.member !== null && <Status tone="neutral">Their own</Status>}
         </div>
         <p className="text-xs text-muted-foreground">{scopeSummary(token.scope, token.member !== null).join(" · ")}</p>
         <p className="text-xs text-muted-foreground">
@@ -77,6 +77,7 @@ export function TokensPage() {
   const announce = useAnnounce()
   const serverNow = now + offset
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" })
+  const [holders, setHolders] = useState<{ email: string; roles: Roles; create: boolean }[]>([])
   const [creating, setCreating] = useState<{ open: boolean; opening: number }>({ open: false, opening: 0 })
   const [revoking, setRevoking] = useState<{ token: TokenView | null; open: boolean; inProgress: boolean; error: string }>({
     token: null,
@@ -99,9 +100,15 @@ export function TokensPage() {
     void reload()
   }, [reload])
 
-  function openCreation() {
+  async function openCreation() {
     // The unlock first, as for a secret: the dialog would only end in a 423.
     if (!actions.state.open) return actions.unlock()
+    // The owner may make a token for a person of People: who they are, and their roles now.
+    if (!signedPerson) {
+      const { status, body } = await readPeople()
+      if (status === 401) return sessionExpired()
+      setHolders(status === 200 && body !== null && Array.isArray(body.people) ? tokenHolders(body.people) : [])
+    }
     setCreating((previous) => ({ open: true, opening: previous.opening + 1 }))
   }
 
@@ -135,7 +142,7 @@ export function TokensPage() {
         <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
           {signedPerson
             ? "Your tokens let your CLI or an agent deploy over HTTPS with sitesolide deploy, without SSH. A token deploys only projects where you are a Developer or an Admin, creates projects only if you may, and never does more than your roles do now."
-            : "A token lets someone, or an agent, deploy over HTTPS with sitesolide deploy, without SSH and without root. Each one deploys only the projects you grant it and the ones it creates, restricted unless you allow public sites. People with a role create their own, never beyond their roles."}
+            : "A token lets your agents, or a person, deploy over HTTPS with sitesolide deploy, without SSH and without root. Every token is someone's: yours deploys what you grant it and what it creates; a person's, made by them or by you, never does more than their roles, and goes with them."}
         </p>
 
         {loaded.state === "loading" && <PanelSkeleton lines={4} />}
@@ -155,7 +162,7 @@ export function TokensPage() {
             count={live}
             full
             actions={
-              <Button size="sm" onClick={openCreation} className="max-md:h-10">
+              <Button size="sm" onClick={() => void openCreation()} className="max-md:h-10">
                 <Plus />
                 {actions.state.open ? "New token" : "Unlock to create"}
               </Button>
@@ -230,6 +237,7 @@ export function TokensPage() {
         origin={window.location.origin}
         knownSlugs={knownSlugs}
         person={person === null ? null : { roles: person.roles, create: person.create }}
+        holders={holders}
         now={serverNow}
         onClose={() => setCreating((previous) => ({ ...previous, open: false }))}
         onCreated={() => void reload()}

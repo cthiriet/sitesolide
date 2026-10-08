@@ -182,6 +182,10 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "ssh-failed": "a command over SSH failed, nothing was changed: run the same command again; if it fails twice, check that `ssh <server> true` connects without a prompt (load the key with ssh-add)",
   "steward-outdated": "the steward on the machine does not keep people with access yet: run `sitesolide upgrade` from this workstation, then the same command again",
   locked: "this change needs the dashboard's unlock: make it from the dashboard, or over the owner's SSH",
+  migrating: "the machine is carrying access over to its registry: run the same command again in a minute; if it lasts, tell the owner of the machine, who reads the steward's log",
+  "too-many-changes": "too many changes of access this hour: wait, then run the same command again; never retry in a loop",
+  "log-full": "the access log is full of recent changes, which are kept 180 days: tell the owner of the machine; nothing more can be changed until older ones age out",
+  conflict: "the access registry is already made: there is nothing left to carry over",
   "no-portal": "the project is not behind the portal: its general access is the dashboard's Access section",
   // --- a deployment that failed on the machine
   "install-failed": "run the install command from the message in the project folder, fix what it reports, then deploy again",
@@ -189,7 +193,9 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "edited-by-hand": "do not re-run with --force, a token has none: tell the owner of the machine, who reads the file and decides",
   "system-unit": "pick another slug in sitesolide.json: this one names a service of the machine",
   "caddy-busy": LOCK_BUSY,
-  "door-changed": "the portal changed from the dashboard while the deployment ran: deploy again",
+  "access-changed": "the project's general access changed from the dashboard while the deployment ran: deploy again",
+  // The same, as an installer from before the rename names it.
+  "door-changed": "the project's general access changed from the dashboard while the deployment ran: deploy again",
   "port-taken": "delete `port` from sitesolide.json and let the machine choose one, or pick a free one between 3000 and 3099",
   "no-port": "the owner has to free a port by removing a project the machine no longer needs",
   "bundle-refused": "replace symbolic links and special files with the files they point to, or exclude them in sitesolide.json, then deploy again",

@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { isValidId } from "../src/guests";
+import { isAccessId } from "../src/access";
 import {
   deriveKey,
   issueToken,
   guestHash,
-  generateId,
   doorHeaders,
   isValidHost,
   readCookie,
@@ -120,13 +119,15 @@ describe("a guest token", () => {
   });
 });
 
-describe("the identifier and the hash of a guest", () => {
-  test("the identifier fits in a cookie, and is recognized", () => {
-    const id = generateId((n) => new Uint8Array(n).fill(255));
-    expect(id).toBe("________________");
-    expect(isValidId(id)).toBe(true);
-    expect(isValidId(generateId())).toBe(true);
-    expect(generateId()).not.toBe(generateId());
+describe("the identifier and the hash of a password access", () => {
+  test("the identifier a cookie carries is 16 characters of base64url, and nothing else", () => {
+    expect(isAccessId("________________")).toBe(true);
+    for (const id of ["_______________", "_________________", "_______________=", "AAAAAAAAAAAAAAA.", 42, null]) expect(isAccessId(id)).toBe(false);
+  });
+
+  test("a cookie naming an identifier of another shape is refused", () => {
+    const [expiration, , signature] = issueToken(KEY, HOST, NOW + 3600, GUEST_ID).split(".");
+    expect(readToken(`${expiration}.short.${signature}`, KEY, HOST, NOW, DURATION)).toBeNull();
   });
 
   test("the hash is stable, and does not look like the password", () => {

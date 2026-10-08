@@ -25,7 +25,7 @@ export type Power =
   | "secrets.write"
   | "secrets.read"
   | "secrets.restore"
-  | "door"
+  | "general"
   | "access"
   | "backups"
   | "deploy"
@@ -51,7 +51,7 @@ const POWERS: Readonly<Record<Role, readonly Power[]>> = {
     "secrets.write",
     "secrets.read",
     "secrets.restore",
-    "door",
+    "general",
     "access",
     "backups",
     "deploy",
@@ -72,15 +72,21 @@ export function mayRestart(role: Role | null): boolean {
 
 /**
  * Which powers ask for the person's own unlock, the ten minutes a forced
- * sign-in at the provider opens: whatever reads or writes a secret, changes
- * general access, puts a project's data back. Giving someone a role above
- * Can open, or password access, which lets someone from outside the company
- * in, asks for it too (`Grant.unlock` in src/access/rules.ts); a restart,
- * removing someone, and giving Can open to a company account or a domain do
- * not, as for the owner, whose session alone does them.
+ * sign-in at the provider opens: whatever reads or writes a secret, makes a
+ * site public, puts a project's data back. Giving someone a role above Can
+ * open, or password access, which lets someone from outside the company in,
+ * asks for it too (`Grant.unlock` in src/access/rules.ts); a restart,
+ * restricting a site, removing someone, and giving Can open to a company
+ * account do not, as for the owner, whose session alone does them.
+ * `general` is judged by its direction (`generalNeedsUnlock`).
  */
 export function needsUnlock(power: Power): boolean {
-  return power === "secrets.write" || power === "secrets.read" || power === "secrets.restore" || power === "door" || power === "backups";
+  return power === "secrets.write" || power === "secrets.read" || power === "secrets.restore" || power === "backups";
+}
+
+/** General access asks for the unlock to make a site public, never to restrict it: less exposure is never refused for want of one. */
+export function generalNeedsUnlock(restricting: boolean): boolean {
+  return !restricting;
 }
 
 const ROLE_NAMES: Readonly<Record<Role, string>> = { visitor: "Can open", viewer: "a Viewer", developer: "a Developer", admin: "an Admin" };
@@ -91,7 +97,7 @@ const WHAT: Readonly<Record<Power, string>> = {
   "secrets.write": "changing its secrets takes a Developer or an Admin",
   "secrets.read": "reading a value back takes an Admin: a Developer sets, replaces and removes values, and never reads one",
   "secrets.restore": "putting a previous version back takes an Admin",
-  door: "changing its general access takes an Admin",
+  general: "changing its general access takes an Admin",
   access: "its people with access are its Admin's",
   backups: "its backups and their restore are an Admin's",
   deploy: "deploying it takes a Developer or an Admin",

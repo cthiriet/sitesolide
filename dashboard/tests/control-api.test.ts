@@ -104,9 +104,9 @@ beforeAll(async () => {
 
   const create = async (scope: object) => {
     const response = await control(
-      new Request("http://steward/team/tokens", {
+      new Request("http://steward/tokens/create", {
         method: "POST",
-        body: JSON.stringify({ token: UNLOCK, label: "Ada", email: "ada@test-zone.invalid", expiresAt: null, scope }),
+        body: JSON.stringify({ token: UNLOCK, label: "Ada", holder: "owner", expiresAt: null, scope }),
       }),
     );
     return ((await response.json()) as { secret: string }).secret;
@@ -143,7 +143,7 @@ async function follow(id: string, token = secret): Promise<DeploymentView> {
 describe("a deployment, from the manifest to the site", () => {
   test("whoami says who the token is", async () => {
     const identity = ((await (await api("/api/v1/whoami")).json()) as { identity: Identity }).identity;
-    expect(identity).toMatchObject({ email: "ada@test-zone.invalid", scope: SCOPE, owned: [] });
+    expect(identity).toMatchObject({ email: "owner", member: null, scope: SCOPE, owned: [] });
   });
 
   test("manifest, archive, installer, result: a private site, its port chosen on the machine", async () => {

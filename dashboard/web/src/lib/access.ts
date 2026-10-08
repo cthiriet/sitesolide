@@ -377,14 +377,13 @@ export function planAddition(
     if (!page.signIn.configured) {
       return { ...base, state: "blocked", hint: "Company sign-in isn't set up here, so nobody at a domain could open the site. Add people by email: they get password access." }
     }
-    if (page.you.kind !== "owner" && !page.signIn.allowedDomains.includes(who.domain)) {
+    // The steward's rule: with the company's domains listed, a domain is one of
+    // them, whoever gives it; with none listed, any domain, under the unlock.
+    if (page.signIn.allowedDomains.length > 0 && !page.signIn.allowedDomains.includes(who.domain)) {
       return {
         ...base,
         state: "blocked",
-        hint:
-          page.signIn.allowedDomains.length === 0
-            ? "Only the owner gives a whole domain access here. Add people by email."
-            : `Only the owner gives a domain outside the company's (${domainsText(page.signIn)}) access. Add people by email.`,
+        hint: `${who.domain} isn't one of the company's domains (${domainsText(page.signIn)}): nobody there could sign in. Add people by email.`,
       }
     }
     return {

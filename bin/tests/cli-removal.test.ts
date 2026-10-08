@@ -217,14 +217,17 @@ describe("leftToDo", () => {
 describe("the token that created it", () => {
   test("root asks the steward's owner socket, the slug on standard input, never on the command line", () => {
     expect(ownershipReleaseCommand()).toBe(
-      "sudo curl -sS --max-time 10 -X DELETE -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' --unix-socket /run/sitesolide-steward-owner/owner.sock http://steward/team/project",
+      "sudo curl -sS --max-time 10 -X DELETE -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' --unix-socket /run/sitesolide-steward-owner/owner.sock http://steward/tokens/project",
     );
   });
 
   test("the steward's answers, read whole, never thrown", () => {
     const ok = (body: object, status = 200) => ({ code: 0, output: `${JSON.stringify(body)}\n${status}\n`, error: "" });
-    expect(readOwnershipRelease(ok({ slug: "shop", forgotten: "aaaaaaaaaaaa" }))).toEqual({ kind: "released", token: "aaaaaaaaaaaa" });
-    expect(readOwnershipRelease(ok({ slug: "shop", forgotten: null }))).toEqual({ kind: "none" });
+    expect(readOwnershipRelease(ok({ slug: "shop", forgotten: "aaaaaaaaaaaa" }))).toEqual({ kind: "released", token: "aaaaaaaaaaaa", access: 0 });
+    expect(readOwnershipRelease(ok({ slug: "shop", forgotten: "aaaaaaaaaaaa", access: 3 }))).toEqual({ kind: "released", token: "aaaaaaaaaaaa", access: 3 });
+    expect(readOwnershipRelease(ok({ slug: "shop", forgotten: null, access: 2 }))).toEqual({ kind: "none", access: 2 });
+    expect(readOwnershipRelease(ok({ slug: "shop", forgotten: null, access: -1 }))).toEqual({ kind: "none", access: 0 });
+    expect(readOwnershipRelease(ok({ slug: "shop", forgotten: null }))).toEqual({ kind: "none", access: 0 });
     expect(readOwnershipRelease(ok({ error: "not-found", message: "no such route" }, 404))).toEqual({ kind: "outdated" });
     expect(readOwnershipRelease({ code: 7, output: "", error: "curl: (7) Couldn't connect" })).toEqual({ kind: "outdated" });
     expect(readOwnershipRelease(ok({ error: "busy", message: "shop is still on the machine" }, 409))).toEqual({ kind: "failed", reason: "shop is still on the machine" });

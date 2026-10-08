@@ -25,7 +25,7 @@
  * revoked, and so is in no row to carry over; an expired one is carried with
  * its expiry, and opens nothing, as before.
  */
-import { atLeast, isAccessId, rank, type Role } from "../../borrowed/access";
+import { atLeast, isAccessId, rank, WHO_MAX, type Role } from "../../borrowed/access";
 import { cleanDomain, cleanEmail, readPolicy } from "../../borrowed/sharing";
 import { isValidSlug } from "../../borrowed/manifest";
 import { reservedReason } from "../control/policy";
@@ -116,10 +116,30 @@ function legacyName(label: string): string | null {
 }
 
 /**
- * The registry, from the old stores. `now` dates the record; every entry
- * keeps the dates it had.
+ * What the record says when the owner carried the rest over without the
+ * portal's database, which did not read (`sitesolide people
+ * --migrate-without-portal`): who could open which site, and password
+ * access, were not carried over, and stay in that database, read-only.
  */
-export function migrate(members: MemberRecord[], portal: PortalRows | null, zone: string, now: number): { registry: Registry; report: MigrationReport } {
+export const WITHOUT_PORTAL: SetAside = {
+  source: "sharing",
+  slug: null,
+  who: "portal.db",
+  reason: "carried over without the portal's database, at the owner's request: who could open which site, and password access, were left in it",
+};
+
+/**
+ * The registry, from the old stores. `now` dates the record; every entry
+ * keeps the dates it had. `withoutPortal`: the owner left the portal's
+ * database out, and the record says so.
+ */
+export function migrate(
+  members: MemberRecord[],
+  portal: PortalRows | null,
+  zone: string,
+  now: number,
+  options: { withoutPortal?: boolean } = {},
+): { registry: Registry; report: MigrationReport } {
   const projects = new Map<string, Map<string, Entry>>();
   const setAside: SetAside[] = [];
   const report: MigrationReport = { roles: 0, people: 0, domains: 0, passwords: 0, creators: 0, setAside: 0 };
@@ -218,8 +238,8 @@ export function migrate(members: MemberRecord[], portal: PortalRows | null, zone
       report.passwords++;
       continue;
     }
-    // Two accesses given under one name stay two entries.
-    for (let n = 2; entries.has(who); n++) who = `${base} (${n})`;
+    // Two accesses given under one name stay two entries, within the bound of a `who`.
+    for (let n = 2; entries.has(who); n++) who = `${base.slice(0, WHO_MAX - String(n).length - 3)} (${n})`;
     const at = isDate(row.cree_a) ? row.cree_a : now;
     entries.set(who, { who, role: "visitor", by: "migration", createdAt: at, updatedAt: at, password: { id: row.id, hash: row.empreinte, expiresAt: row.expire_a } });
     report.passwords++;
@@ -229,6 +249,7 @@ export function migrate(members: MemberRecord[], portal: PortalRows | null, zone
   for (const [slug, entries] of [...projects.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     if (entries.size > 0) registryProjects[slug] = sortEntries([...entries.values()]);
   }
+  if (options.withoutPortal === true) setAside.push(WITHOUT_PORTAL);
   report.setAside = setAside.length;
   const from = ["members.json", ...(portal === null ? [] : ["portal.db"])];
   return {

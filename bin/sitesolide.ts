@@ -2540,7 +2540,7 @@ async function remove(
   releaseCaddyLock();
   step("token ownership, on the steward");
   if (executor.simulated) {
-    say(`   [dry-run] release ${slug} from the team token that created it, if one did: the steward's owner socket`);
+    say(`   [dry-run] release ${slug} from the token that created it, if one did, and drop its people with access: the steward's owner socket`);
     say("-> dry run, nothing was removed");
     return;
   }
@@ -2548,9 +2548,10 @@ async function remove(
   // running this command again, which tolerates every absence, finishes it.
   const release = readOwnershipRelease(await executor.execute(config, ownershipReleaseCommand(), JSON.stringify({ slug })));
   if (release.kind === "released") say(`   ${slug} created by token ${release.token}: its name is free again for another token`);
-  else if (release.kind === "none") say(`   no team token created ${slug}`);
-  else if (release.kind === "outdated") warn(`the steward on the server keeps no record to release, or predates it: run sitesolide upgrade, then this command again, if a team token created ${slug}`);
-  else warn(`the steward kept ${slug} as its team token's (${release.reason}): run this command again`);
+  else if (release.kind === "none") say(`   no token created ${slug}`);
+  else if (release.kind === "outdated") warn(`the steward on the server keeps no record to release, or predates it: run sitesolide upgrade, then this command again, if a token created ${slug} or people had access to it`);
+  else warn(`the steward kept ${slug} as its token's, or kept its people with access (${release.reason}): run this command again`);
+  if ((release.kind === "released" || release.kind === "none") && release.access > 0) say(`   its people with access dropped: ${release.access}, so that a project created later under that name starts from nobody`);
 
   say("");
   say("-> gone from the machine. What is left, and this command will not do it:");
@@ -2835,12 +2836,13 @@ function usage(zone: string | null): string {
     "  sitesolide backups              this project's data snapshots, read only",
     "  sitesolide share                this project's general access and people with access",
     "     <email|@domain>...           give them access, Can open by default",
-    "     --role <role>                visitor (Can open), viewer, developer or admin",
+    "     --role <role>                can-open, viewer, developer or admin",
     "     --expires <24h|7d|30d|never> for password access, 7d by default",
     "     --remove <email|@domain>...  take their access away, from their next request",
     "  sitesolide people               everyone with access, their roles, who may create projects",
     "     <email> --may-create         let them create projects, Admin of what they create",
     "     <email> --no-create          take that right back",
+    "     --migrate-without-portal     carry access over without the portal's database, when it does not read",
     "  sitesolide lock   [--dry-run]   close the preview behind a code, or show it",
     "     --status                     wanted / installed / measured, without touching",
     "     --new-code                   replace the code in force by a fresh one",

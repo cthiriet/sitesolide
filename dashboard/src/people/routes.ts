@@ -264,7 +264,7 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
       if (reauth) {
         const now = clock();
         const resolved = await resolve(req, now);
-        if (resolved === "unreachable" || resolved === null || resolved.identity.kind !== "member") return refused("expired");
+        if (resolved === "unreachable" || resolved === null || resolved.identity.kind !== "person") return refused("expired");
         keepPending(bindingKey(binding), { token: resolved.token, hash: resolved.session.hash, email: resolved.identity.email, expiresAt: now + BINDING_DURATION_S * 1000 }, now);
       }
       let start: string | null = null;
@@ -353,9 +353,10 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
       const reached = await reach(() => steward.signIn(assertion!));
       if (reached.kind !== "received") return refused(reached.kind === "unavailable" ? "unavailable" : "failed", spent);
       if (reached.status !== 200) {
-        if (reached.body.error === "not-a-member") {
+        // `not-a-member`: a steward from before the word changed, read for one release.
+        if (reached.body.error === "no-role" || reached.body.error === "not-a-member") {
           limiter.refused(email, now);
-          return refused("not-a-member", spent);
+          return refused("no-role", spent);
         }
         limiter.refused(email, now);
         return refused(reached.body.error === "invalid-assertion" ? "invalid" : "failed", spent);
@@ -381,7 +382,7 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
       const resolved = await resolve(req, now);
       if (resolved === "unreachable") return error(502, "failure", "Can't reach the steward.");
       if (resolved === null) return json({ error: "no-session" }, 401);
-      if (resolved.identity.kind !== "member") {
+      if (resolved.identity.kind !== "person") {
         return error(403, "out-of-scope", "The owner restarts a service from its Secrets section, unlocked.");
       }
       const body = await readBody(req);

@@ -8,7 +8,6 @@ import { auditStore, guestStore, openDatabase, sharingStore } from "./src/databa
 import { COOKIE_DURATION_S, PASSWORD_HASH, ONLINE, DATABASE_FILE, KEY_FILE, ACCESS_MARK_FILE, PORT, PUBLIC_URL } from "./src/config";
 import { deriveKey, KEY_BYTES } from "./src/gate";
 import { handoffStore } from "./src/handoff";
-import { callerUidOn } from "./src/peer";
 import { createProvider, readSettings } from "./src/oidc";
 import { createRoutes } from "./src/routes";
 import { createSso } from "./src/sso";
@@ -99,10 +98,7 @@ const dashboardAdmin = createDashboardAdmin({
   readKey: () => readKeyFile(process.env.ASSERTION_KEY_FILE ?? ASSERTION_KEY_FILE),
 });
 
-// Whose account opened a connection to the admin routes, read from the
-// kernel: only root may name who acts there. See src/peer.ts.
-const callerUid = callerUidOn((req) => server.requestIP(req), { address: "127.0.0.1", port: PORT });
-const admin = createAccessAdmin({ access, audit, settings, callerUid });
+const admin = createAccessAdmin({ access, audit, settings });
 
 const server = Bun.serve({
   port: PORT,

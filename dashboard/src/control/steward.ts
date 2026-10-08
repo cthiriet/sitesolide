@@ -1,7 +1,8 @@
 /**
- * The steward's control routes: the team registry, and the start of the
+ * The steward's control routes: the token registry, and the start of the
  * installer. Mounted beside the secrets routes on the same socket, by
- * dashboard/steward.ts, under `/team/` and `/control/`.
+ * dashboard/steward.ts, under `/tokens/` and `/control/` (and `/team/`, the
+ * names before, one release).
  *
  * **The steward judges every token itself.** The dashboard relays the bearer
  * it received, untouched; the steward finds it by its hash, refuses it expired
@@ -15,13 +16,17 @@
  * is revoke every token, and an owner revoking a stolen one must not have to
  * look for their password first.
  *
- * **A member mints their own tokens**, under their own unlock, never stronger
- * than their roles (src/people/tokens.ts): this steward reads the members
- * registry when one is minted, and again at every use of it, so that a role
- * lowered, the create right taken back or a member removed holds from the
- * next request. A project a member's token creates makes that member its
- * Admin, recorded with the token's ownership. And a member removed
- * takes their tokens with them.
+ * **Every token belongs to a person**, or is the owner's own. A person mints
+ * theirs under their own unlock; the owner makes one for a person under the
+ * owner's, minted exactly as the person's own would be. Either way it is
+ * never stronger than their roles (src/people/tokens.ts): this steward reads
+ * the access registry when one is minted, and again at every use of it, so
+ * that a role lowered, the create right taken back or a person removed holds
+ * from the next request, and a person removed takes every token of theirs
+ * with them, whoever made it. A project a person's token creates makes that
+ * person its Admin once the installer has succeeded (`settleCreations`), and
+ * the token owns its name from its first deployment. The tokens from before
+ * every token belonged to someone are made someone's once (`migrateTokens`).
  *
  * **A token's changes of access are judged here**, the token first, then
  * the access rules (src/access/rules.ts), which let a token give Can open
@@ -38,6 +43,7 @@ import { unitArgument } from "../../borrowed/unit";
 import type { MemberEvent, MemberPrincipal } from "../people/steward";
 import type { AccessRoutes } from "../access/steward";
 import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../people/tokens";
+import { CREATION_MAX_AGE_MS, encodeCreations, MAX_PENDING, readCreations, type PendingCreation } from "./creations";
 import { decideSlug, reservedReason, type SlugDecision } from "./policy";
 import {
   CONTROL_STATUSES,
@@ -53,6 +59,7 @@ import {
   type InstallRequest,
   type LogsResponse,
   type TeamResponse,
+  OWNER_HOLDER,
 } from "./protocol";
 import { cleanLine, interrupted, judgeResult } from "./results";
 import type { ControlSystem } from "./system";
@@ -62,6 +69,8 @@ import {
   encodeTeam,
   forgetOwnership,
   liveTokensOf,
+  migrateTeam,
+  readHolder,
   readTeam,
   readTokenRequest,
   recordOwnership,
@@ -74,17 +83,17 @@ import {
 } from "./tokens";
 
 /**
- * What this steward asks the members routes (src/people/steward.ts) for a
- * member's tokens: their session and unlock, their rights as the registry
- * reads now, and the project one of their tokens creates.
+ * What this steward asks the people's routes (src/people/steward.ts) for a
+ * person's tokens: their session and unlock, their rights as the registry
+ * reads now, and the project one of their tokens created.
  */
 export type MemberAuthority = {
-  /** The member behind a session, and their unlock when it is not null; or the refusal to send back. */
+  /** The person behind a session, and their unlock when it is not null; or the refusal to send back. */
   authorize: (session: unknown, unlock: unknown | null) => Promise<MemberPrincipal | Response>;
   unlockedUntil: (session: unknown) => Promise<number | null>;
-  /** Their rights now; null: no member; a Response: the registry does not read. */
+  /** Their rights now; null: they do not sign in; a Response: the registry does not read. */
   rights: (email: string) => Promise<MemberRights | null | Response>;
-  /** They become Admin of what their token creates, journaled; a Response when it cannot be recorded. */
+  /** They become Admin of what their token created, the installer done, journaled; a Response when it cannot be recorded. */
   recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | null>;
   journal: (event: MemberEvent) => Promise<void>;
   /** A refusal, bounded per minute. */
@@ -107,8 +116,8 @@ export type ControlStewardOptions = {
   /** A `running` result whose unit stopped this long ago is an interrupted installer. */
   graceMs?: number;
   /**
-   * The dashboard's members, for their own tokens. Absent, a steward built
-   * without them: a member's token is refused, and the member routes do not
+   * The people who sign in, for their tokens. Absent, a steward built
+   * without them: a person's token is refused, and their routes do not
    * exist.
    */
   members?: MemberAuthority;
@@ -117,23 +126,29 @@ export type ControlStewardOptions = {
    * here first. Absent, a steward built without the access registry.
    */
   access?: AccessRoutes["forToken"] | null;
+  /** A project removed from the machine: its people with access dropped. Absent, a steward without the registry. */
+  forgetAccess?: AccessRoutes["forgetProject"] | null;
 };
 
 type Handler = (req: Request) => Promise<Response>;
 type Body = Record<string, unknown>;
 
 /**
- * The handler of the dashboard's socket, what the members routes ask of it, a
- * member removed, every token of theirs revoked, `actor` the one who removed
- * them, and the handler of the owner's socket, which only root opens.
+ * The handler of the dashboard's socket, what the people's routes ask of it,
+ * a person who left, every token of theirs revoked, `actor` the one who took
+ * them out, and the handler of the owner's socket, which only root opens.
  */
 export type ControlHandler = Handler & {
   revokeMember: (email: string, actor: string) => Promise<number>;
-  /** `DELETE /team/project`: a project removed from the machine, its token ownership forgotten. */
+  /** `DELETE /tokens/project`: a project removed from the machine, its token ownership and its people with access forgotten. */
   owner: Handler;
+  /** Every token made someone's, once the access registry reads: true once done, false to try again later. */
+  migrateTokens: () => Promise<boolean>;
+  /** The creations whose installer has finished, settled: the person Admin of what succeeded. */
+  settleCreations: () => Promise<void>;
 };
 
-/** Who a bearer is, narrowed to their member's rights for a member's token. */
+/** Who a bearer is, narrowed to their person's rights for a person's token. */
 type Holder = { identity: Identity; rights: MemberRights | null };
 
 /** The biggest body: a deployment request, its manifest included. */
@@ -240,9 +255,9 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
-   * The bearer's holder, or the refusal. A member's token is narrowed to the
-   * member's rights as the registry reads now, and refused once they are no
-   * member. The last use moves forward at most once an hour.
+   * The bearer's holder, or the refusal. A person's token is narrowed to
+   * their rights as the registry reads now, and refused once they no longer
+   * sign in. The last use moves forward at most once an hour.
    */
   async function identify(bearer: unknown): Promise<Holder | Response> {
     const registry = await team();
@@ -278,10 +293,10 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
-   * May this holder deploy this slug, and would it create it? For a member's
-   * token, the member's role first, or the create right for a new project,
-   * then the token's own rule, its refusals said in a member's words: the
-   * Tokens page is where they mint another.
+   * May this holder deploy this slug, and would it create it? For a person's
+   * token, their role first, or the create right for a new project, then the
+   * token's own rule, its refusals said in a person's words: the Tokens page
+   * is where they mint another.
    */
   function judgeSlug(holder: Holder, slug: unknown, state: { exists: boolean; owner: string | null }): SlugDecision {
     const { rights } = holder;
@@ -316,22 +331,46 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return Response.json(body);
   }
 
+  /**
+   * The owner's route, under the owner's unlock. `holder` says whose token it
+   * is: `owner`, the owner's own, its scope free; or a person of People, the
+   * token minted exactly as their own would be, within their roles, counted
+   * among theirs, and revoked with them. A person mints theirs at
+   * /tokens/person/create.
+   */
   async function newToken(req: Request): Promise<Response> {
-    // The owner's route, under the owner's unlock: a member mints theirs at /team/member/tokens.
-    const body = await readBody(req, ["token", "label", "email", "expiresAt", "scope"], bodyTimeoutMs);
+    const body = await readBody(req, ["token", "label", "holder", "expiresAt", "scope"], bodyTimeoutMs);
     if (body instanceof Response) return body;
     if (!(await options.isUnlocked(body.token))) return failure("locked", "locked, unlock again");
-    const request = readTokenRequest(body, system.now(), options.zone);
+    const holder = readHolder(body.holder);
+    if (typeof holder !== "string") return failure("invalid", holder.refusal);
+    const request = readTokenRequest({ label: body.label, email: holder, expiresAt: body.expiresAt, scope: body.scope }, system.now(), options.zone);
     if ("refusal" in request) return failure("invalid", request.refusal);
     return serially(async () => {
       // Checked again once its turn has come, as the secrets routes do.
       if (!(await options.isUnlocked(body.token))) return failure("locked", "locked, unlock again");
+      let member: string | null = null;
+      if (holder !== OWNER_HOLDER) {
+        if (options.members === undefined) return failure("not-available", "this steward does not keep people with access: a token is the owner's own");
+        const rights = await options.members.rights(holder);
+        if (rights instanceof Response) return rights;
+        if (rights === null) return failure("invalid", `${holder} does not sign in to this dashboard: a token belongs to a person of People with a role above Can open, or to you`);
+        const refusals = mintRefusals(request.scope, rights);
+        if (refusals.length > 0) return failure("out-of-scope", refusals.join("; "), refusals);
+        member = holder;
+      }
       const registry = await team();
       if (registry instanceof Response) return registry;
-      const created = await createToken(registry, request, system.now(), options.random);
+      if (member !== null && liveTokensOf(registry, member, system.now()).length >= MAX_TOKENS_PER_MEMBER) {
+        return failure("invalid", `${MAX_TOKENS_PER_MEMBER} live tokens per person at most: revoke one of ${member}'s first`);
+      }
+      const created = await createToken(registry, request, system.now(), options.random, member, member !== null);
       if ("refusal" in created) return failure("invalid", created.refusal);
       await system.writeTeam(encodeTeam(created.team));
-      console.log(`control: token ${created.view.id} created for ${created.view.email}`);
+      if (member !== null) {
+        await options.members?.journal({ operation: "token.create", result: "ok", actor: OWNER_HOLDER, member, detail: line(`${created.view.id}: ${scopeText(created.view.scope)}; made by the owner for ${member}`) });
+      }
+      console.log(`control: token ${created.view.id} created ${member === null ? "for the owner" : `by the owner for ${member}`}`);
       const response: CreatedTokenResponse = { token: created.view, secret: created.secret };
       return Response.json(response, { status: 201 });
     });
@@ -417,12 +456,12 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       if (await isActive(unit)) return failure("busy", `a deployment of ${target} is already running: wait for it to finish, then try again`);
 
       if (decision.creating) {
-        // A member's creation first: they become its Admin before the
-        // token owns it, so that a refusal there leaves no slug held for
-        // nobody to deploy.
+        // The token owns the name from its first deployment; a person
+        // becomes its Admin once the installer has succeeded, noted here so
+        // that it is settled then, even across a restart of this steward.
         if (identity.member !== null && options.members !== undefined) {
-          const recorded = await options.members.recordCreation(target, identity.member, identity.id);
-          if (recorded !== null) return recorded;
+          const noted = await notePending({ deployment, slug: target, email: identity.member, token: identity.id, at: system.now() });
+          if (noted !== null) return noted;
         }
         const registry = await team();
         if (registry instanceof Response) return registry;
@@ -464,6 +503,9 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (result.state === "running" && system.now() - result.updatedAt > graceMs && !(await isActive(installerUnit(result.slug)))) {
       result = interrupted(result, system.now());
     }
+    // A creation that just finished is settled before its result is handed
+    // over: whoever reads "succeeded" finds its creator Admin already.
+    if (result.state !== "running") await settleCreations();
     return Response.json({ result });
   }
 
@@ -532,7 +574,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   const accessGrant = (req: Request) => accessRoute(req, ["who", "role"], (holder, slug, body) => options.access!.grant(slug, body.who, body.role, granterOf(holder)));
   const accessRemove = (req: Request) => accessRoute(req, ["who"], (holder, slug, body) => options.access!.remove(slug, body.who, granterOf(holder)));
 
-  // --- a member's own tokens ------------------------------------------------------
+  // --- a person's own tokens ------------------------------------------------------
 
   const members = options.members;
 
@@ -552,9 +594,9 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
-   * A member's token: under their own unlock, with their email, within their
-   * roles as the registry reads once its turn has come. A refusal names every
-   * reason, and enters the journal.
+   * A person's own token: under their own unlock, with their email, within
+   * their roles as the registry reads once its turn has come. A refusal names
+   * every reason, and enters the journal.
    */
   async function memberCreate(req: Request): Promise<Response> {
     if (members === undefined) return failure("not-found", "no such route");
@@ -589,7 +631,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     });
   }
 
-  /** A member revokes a token of theirs, no unlock, as the owner does; anyone else's reads as unknown. */
+  /** A person revokes a token of theirs, whoever made it, no unlock, as the owner does; anyone else's reads as unknown. */
   async function memberRevoke(req: Request): Promise<Response> {
     if (members === undefined) return failure("not-found", "no such route");
     const body = await readBody(req, ["session", "id"], bodyTimeoutMs);
@@ -612,7 +654,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     });
   }
 
-  /** Every live token of a member removed, revoked, journaled under whoever removed them. */
+  /** Every live token of a person who left, whoever made it, revoked, journaled under whoever took them out. */
   function revokeMember(email: string, actor: string): Promise<number> {
     return serially(async () => {
       const registry = await team();
@@ -643,24 +685,139 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (body instanceof Response) return body;
     const { slug } = body;
     if (typeof slug !== "string" || !isValidSlug(slug)) return failure("invalid", "slug: lowercase letters, digits and dashes");
-    return serially(async () => {
+    const released = await serially(async () => {
       if (await system.projectExists(slug)) {
         return failure("busy", `${slug} is still on the machine: remove it first, with sitesolide remove --confirm ${slug}`);
       }
       const registry = await team();
       if (registry instanceof Response) return registry;
       const forgotten = forgetOwnership(registry, slug);
-      if (forgotten === null) return Response.json({ slug, forgotten: null });
+      if (forgotten === null) return null;
       await system.writeTeam(encodeTeam(forgotten.team));
-      await options.members?.journal({ operation: "project.remove", result: "ok", actor: "owner", member: null, detail: `created by token ${forgotten.id}, its name free again`, slug });
       console.log(`control: ${slug} removed, no longer token ${forgotten.id}'s`);
-      return Response.json({ slug, forgotten: forgotten.id });
+      return forgotten.id;
+    });
+    if (released instanceof Response) return released;
+    // Its people with access go with it, outside this file's queue: someone
+    // they were the last role of leaves, and their tokens are revoked there.
+    let dropped = 0;
+    if (options.forgetAccess !== undefined && options.forgetAccess !== null) {
+      const result = await options.forgetAccess(slug, "owner");
+      if (result instanceof Response) return result;
+      dropped = result;
+    }
+    if (released !== null) {
+      await options.members?.journal({ operation: "project.remove", result: "ok", actor: "owner", member: null, detail: `created by token ${released}, its name free again`, slug });
+    }
+    return Response.json({ slug, forgotten: released, access: dropped });
+  }
+
+  // --- creations and the tokens from before -----------------------------------------
+
+  /** The creations waiting for their installer, one change at a time. */
+  let creationsTurn: Promise<unknown> = Promise.resolve();
+  function inCreationsTurn<T>(task: () => Promise<T>): Promise<T> {
+    const next = creationsTurn.then(task, task);
+    creationsTurn = next.catch(() => undefined);
+    return next;
+  }
+
+  async function pending(): Promise<PendingCreation[] | Response> {
+    let text: string | null;
+    try {
+      text = await system.readCreations();
+    } catch (e) {
+      console.error(`control: creations.json unreadable (${errorName(e)})`);
+      return failure("failure", "the creations in progress cannot be read on the machine: the owner must read the steward's log");
+    }
+    const read = readCreations(text);
+    if ("unreadable" in read) {
+      console.error(`control: ${read.unreadable}`);
+      return failure("failure", "the creations in progress do not read on the machine: the owner must read the steward's log");
+    }
+    return read;
+  }
+
+  /** A creation noted before its installer starts; a refusal when it cannot be, and nothing is started. */
+  function notePending(creation: PendingCreation): Promise<Response | null> {
+    return inCreationsTurn(async () => {
+      const current = await pending();
+      if (current instanceof Response) return current;
+      const kept = current.filter((one) => one.slug !== creation.slug && system.now() - one.at < CREATION_MAX_AGE_MS);
+      await system.writeCreations(encodeCreations([...kept, creation].slice(-MAX_PENDING)));
+      return null;
+    });
+  }
+
+  /**
+   * Every creation whose installer has finished: succeeded, its person made
+   * Admin, in the registry's queue, where their create right is read again;
+   * failed, or too old to be waiting still, dropped. A result not there yet
+   * waits for the next call.
+   */
+  function settleCreations(): Promise<void> {
+    return inCreationsTurn(async () => {
+      const current = await pending();
+      if (current instanceof Response || current.length === 0) return;
+      const left: PendingCreation[] = [];
+      for (const creation of current) {
+        const judgement = judgeResult(await system.readResult(creation.deployment), creation.deployment, options.uidRoot);
+        const state = judgement.kind === "read" && judgement.result.slug === creation.slug ? judgement.result.state : null;
+        if (state === "succeeded" && options.members !== undefined) {
+          const recorded = await options.members.recordCreation(creation.slug, creation.email, creation.token);
+          // The registry being made or unreadable: tried again at the next call.
+          if (recorded !== null && recorded.status >= 500) {
+            left.push(creation);
+            continue;
+          }
+          if (recorded !== null) console.log(`control: ${creation.email} not made Admin of ${creation.slug}, refused by the registry`);
+          continue;
+        }
+        if (state === "failed") continue;
+        if (system.now() - creation.at >= CREATION_MAX_AGE_MS) {
+          console.log(`control: the creation of ${creation.slug} by ${creation.email} never finished: dropped, nobody made Admin`);
+          continue;
+        }
+        left.push(creation);
+      }
+      if (left.length !== current.length) await system.writeCreations(encodeCreations(left));
+    });
+  }
+
+  /**
+   * Every token made someone's, once: those whose email signs in to the
+   * dashboard become that person's, the others the owner's own. Waits for an
+   * access registry that reads: false, and nothing written, until then.
+   */
+  async function migrateTokens(): Promise<boolean> {
+    if (options.members === undefined) return true;
+    const members = options.members;
+    return serially(async () => {
+      const registry = await team();
+      if (registry instanceof Response) return false;
+      if (registry.version === 2) return true;
+      const people = new Map<string, boolean>();
+      for (const record of registry.tokens) {
+        const email = record.email.trim().toLowerCase();
+        if (record.member !== undefined || people.has(email)) continue;
+        const rights = await members.rights(email);
+        if (rights instanceof Response) return false;
+        people.set(email, rights !== null);
+      }
+      const migrated = migrateTeam(registry, (email) => people.get(email) === true);
+      await system.writeTeam(encodeTeam(migrated.team));
+      for (const record of migrated.persons) {
+        await members.journal({ operation: "token.create", result: "ok", actor: "system", member: record.member ?? null, detail: line(`${record.id}: now ${record.member}'s, narrowed to their roles; made by the owner before every token belonged to someone`) });
+      }
+      console.log(`control: tokens made someone's: ${migrated.persons.length} a person's, ${migrated.owner.length} the owner's own`);
+      return true;
     });
   }
 
   const routes: Record<string, Record<string, Handler>> = {
-    "/team/tokens": { GET: listTokens, POST: newToken },
-    "/team/revoke": { POST: revoke },
+    "/tokens/list": { GET: listTokens },
+    "/tokens/create": { POST: newToken },
+    "/tokens/revoke": { POST: revoke },
     "/control/authenticate": { POST: authenticateRoute },
     "/control/preflight": { POST: preflight },
     "/control/deploy": { POST: deploy },
@@ -668,9 +825,16 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     "/control/logs": { POST: logs },
     "/control/access/list": { POST: accessList },
     "/control/access": { PUT: accessGrant, DELETE: accessRemove },
+    // The names before `/tokens/`, which a dashboard deployed before this
+    // steward still calls: kept one release.
+    "/team/tokens": { GET: listTokens, POST: newToken },
+    "/team/revoke": { POST: revoke },
     ...(members === undefined
       ? {}
       : {
+          "/tokens/person/list": { POST: memberList },
+          "/tokens/person/create": { POST: memberCreate },
+          "/tokens/person/revoke": { POST: memberRevoke },
           "/team/member/list": { POST: memberList },
           "/team/member/tokens": { POST: memberCreate },
           "/team/member/revoke": { POST: memberRevoke },
@@ -703,11 +867,17 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       inFlight--;
     }
   };
-  return Object.assign(serve(routes), { revokeMember, owner: serve({ "/team/project": { DELETE: forgetProject } }) });
+  return Object.assign(serve(routes), {
+    revokeMember,
+    // `/team/project`: what a CLI from before the rename calls, kept one release.
+    owner: serve({ "/tokens/project": { DELETE: forgetProject }, "/team/project": { DELETE: forgetProject } }),
+    migrateTokens,
+    settleCreations,
+  });
 }
 
 /** Does this path belong to the control routes? The steward's entry point routes on it. */
 export function isControlPath(path: string): boolean {
-  return path.startsWith("/team/") || path.startsWith("/control/");
+  return path.startsWith("/tokens/") || path.startsWith("/team/") || path.startsWith("/control/");
 }
 

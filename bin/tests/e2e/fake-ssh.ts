@@ -498,7 +498,8 @@ if (import.meta.main) {
     answer(200, { person, change: had === asked.create ? "none" : asked.create ? "create" : "remove" });
   }
   // The steward's owner socket again: a removed project's token ownership
-  // released, the slug on standard input, recorded with it.
+  // released and its people with access dropped, the slug on standard input,
+  // recorded with it.
   if (command === ownershipReleaseCommand()) {
     if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
     const body = await Bun.stdin.text();
@@ -509,7 +510,13 @@ if (import.meta.main) {
     const forgotten = Object.hasOwn(owners, slug) ? owners[slug]! : null;
     delete owners[slug];
     writeFileSync(ownersFile, JSON.stringify(owners));
-    process.stdout.write(`${JSON.stringify({ slug, forgotten })}\n200\n`);
+    const current = registry();
+    const access = Object.hasOwn(current.projects, slug) ? current.projects[slug]!.entries.length : 0;
+    if (access > 0) {
+      delete current.projects[slug];
+      writeFileSync(accessFile, JSON.stringify(current));
+    }
+    process.stdout.write(`${JSON.stringify({ slug, forgotten, access })}\n200\n`);
     process.exit(0);
   }
 

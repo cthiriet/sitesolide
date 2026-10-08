@@ -238,11 +238,12 @@ export function readTokens() {
   return callApi<TeamPageResponse & SecretsRefusal>("/api/tokens")
 }
 
-export function createToken(request: { label: string; email: string; expiresAt: number | null; scope: Scope }) {
+/** `holder`: whose token the owner makes, `owner` or a person's email; a person's own carries none, it is theirs. */
+export function createToken(request: { label: string; holder?: string; expiresAt: number | null; scope: Scope }) {
   return callApi<CreatedTokenResponse & SecretsRefusal>("/api/tokens", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label: request.label, email: request.email, expiresAt: request.expiresAt, scope: request.scope }),
+    body: JSON.stringify({ label: request.label, ...(request.holder === undefined ? {} : { holder: request.holder }), expiresAt: request.expiresAt, scope: request.scope }),
   })
 }
 

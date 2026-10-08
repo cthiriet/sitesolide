@@ -346,7 +346,9 @@ describe("login, status, logs", () => {
     const status = await cli(home, ["status"], { HOME: home });
     expect(status.code).toBe(0);
     expect(status.output).toContain("shop");
-    expect(status.output).toContain("portal");
+    expect(status.output).toContain("GENERAL ACCESS");
+    expect(status.output).toContain("Restricted");
+    expect(status.output).not.toContain("DOOR");
   });
 
   test("login refuses a token of the wrong shape and an address that is not https", async () => {

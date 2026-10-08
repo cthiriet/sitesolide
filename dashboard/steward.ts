@@ -226,12 +226,7 @@ if (keys !== null) {
   console.log(keys.kind === "ready" ? `steward: dashboard sign-in key ${keys.publicKey.kid} in place` : `steward: nobody signs in to the dashboard with an account yet, ${keys.reason}`);
 }
 
-// The access registry: made from members.json and the portal's database at the
-// first start on this code, then its projection written again for the portal.
-// A store that does not read is said, and tried again at the next request.
-await handler.ensureAccess().catch((e: unknown) => console.error(`steward: access registry not ready (${(e as Error).name}), tried again at the next request`));
-
-// The control API's routes, under /team/ and /control/: the token registry and
+// The control API's routes, under /tokens/ and /control/: the token registry and
 // the start of the installer. They share the socket and its permissions, and
 // ask the secrets routes whether a token is the live unlock, the members
 // routes who a person is and what they may do now, for a person's own
@@ -252,9 +247,30 @@ const control = createControlSteward(
     uidRoot: OWNERS === "" ? null : 0,
     members: handler.memberAuthority ?? undefined,
     access: handler.accessForToken,
+    forgetAccess: handler.forgetProjectAccess,
   },
 );
 revokeMemberTokens = control.revokeMember;
+
+// The access registry: made from members.json and the portal's database at the
+// first start on this code, then its projection written again for the portal.
+// In the background, never in the sockets' way: until it is done the access
+// routes answer `migrating`, and an attempt that fails is tried again later
+// and later. Then, once, every token made someone's.
+void handler
+  .startAccess()
+  .then(async () => {
+    for (let wait = 5_000; !(await control.migrateTokens()); wait = Math.min(wait * 2, 600_000)) {
+      console.log(`steward: tokens not made someone's yet, tried again in ${Math.round(wait / 1000)} s`);
+      await Bun.sleep(wait);
+    }
+  })
+  .catch((e: unknown) => console.error(`steward: access registry not ready (${(e as Error).name})`));
+
+// A person becomes Admin of what their token created once its installer has
+// succeeded: the dashboard's tracker reads every result within seconds, which
+// settles it; this settles it too when nobody reads.
+setInterval(() => void control.settleCreations().catch((e: unknown) => console.error(`steward: creations not settled (${(e as Error).name})`)), 30_000);
 
 /**
  * A restart is observed for eight seconds, a portal takes up to ninety, and a

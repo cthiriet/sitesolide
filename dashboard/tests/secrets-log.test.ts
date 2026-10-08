@@ -2,9 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
   ACCESS_MAX_LINES,
   ACCESS_OPERATIONS,
+  ACCESS_PRUNE_BYTES,
   ACCESS_RETENTION_MS,
   accessLogSeed,
+  accessLogTopUp,
+  createHistory,
   isAccessChange,
+  isAccessLogFull,
   mergeLogs,
   pruneAccessLog,
   EARLIER_FIELDS,
@@ -290,7 +294,7 @@ describe("the access log", () => {
   const text = (entries: LogEntry[]) => entries.map(encodeEntry).join("");
 
   test("an accepted change of access goes there, a refusal and everything else stay in the journal", () => {
-    for (const operation of ["access.add", "access.change", "access.remove", "access.migrate", "people.create"] as const) {
+    for (const operation of ["access.add", "access.change", "access.remove", "access.migrate", "people.create", "portal", "project.create", "project.remove"] as const) {
       expect(isAccessChange(access(1, { operation }))).toBe(true);
       expect(isAccessChange(access(1, { operation, result: "rejects" }))).toBe(false);
       expect(isAccessChange(access(1, { operation, result: "failure" }))).toBe(false);
@@ -299,7 +303,7 @@ describe("the access log", () => {
     for (const operation of ["member.invite", "member.role", "member.remove", "sharing", "guest.create", "guest.revoke"] as const) {
       expect(isAccessChange(access(1, { operation }))).toBe(true);
     }
-    for (const operation of ["unlock", "read", "set", "dashboard.signin", "member.signin", "token.create", "project.create"] as const) {
+    for (const operation of ["unlock", "read", "set", "dashboard.signin", "member.signin", "token.create", "restart"] as const) {
       expect(isAccessChange(access(1, { operation }))).toBe(false);
     }
     for (const operation of ACCESS_OPERATIONS) expect(OPERATIONS).toContain(operation);
@@ -317,12 +321,31 @@ describe("the access log", () => {
     expect(pruneAccessLog(text([access(NOW - 200 * DAY)]), NOW)).toBe("");
   });
 
-  test("pruned by count: past the cap the newest by place in the file stay, however young the rest", () => {
-    const lines = Array.from({ length: 7 }, (_, i) => access(NOW - DAY, { detail: `line ${i}` }));
-    expect(reread(pruneAccessLog(text(lines), NOW, ACCESS_RETENTION_MS, 5)!).map((one) => one.detail)).toEqual(["line 2", "line 3", "line 4", "line 5", "line 6"]);
-    expect(pruneAccessLog(text(lines.slice(0, 5)), NOW, ACCESS_RETENTION_MS, 5)).toBeNull();
+  test("never pushed out young: however many rows younger than 180 days, every one stays; the steward refuses changes instead", () => {
+    const lines = Array.from({ length: 30_000 }, (_, i) => access(NOW - DAY, { detail: `line ${i}` }));
+    expect(pruneAccessLog(text(lines), NOW)).toBeNull();
     expect(ACCESS_MAX_LINES).toBe(20_000);
     expect(ACCESS_RETENTION_MS).toBe(180 * DAY);
+    // Full by its lines, or by its bytes, the longer rows' bound.
+    expect(isAccessLogFull({ lines: ACCESS_MAX_LINES - 1, bytes: 1 })).toBe(false);
+    expect(isAccessLogFull({ lines: ACCESS_MAX_LINES, bytes: 1 })).toBe(true);
+    expect(isAccessLogFull({ lines: 1, bytes: ACCESS_PRUNE_BYTES })).toBe(true);
+  });
+
+  test("an access log seeded by an earlier steward is topped up once with the journal's changes it lacks, general access and projects included", () => {
+    const seeded = text([access(NOW - 10 * DAY, { detail: "seeded" })]);
+    const journal = text([
+      access(NOW - 200 * DAY, { operation: "portal", detail: "too old" }),
+      access(NOW - 10 * DAY, { detail: "seeded" }),
+      access(NOW - 9 * DAY, { operation: "portal", detail: "on, ok" }),
+      access(NOW - 8 * DAY, { operation: "project.create", detail: "admin" }),
+      access(NOW - 7 * DAY, { operation: "portal", result: "rejects", detail: "invalid" }),
+      entry(NOW - 6 * DAY),
+    ]);
+    const added = accessLogTopUp(journal, seeded, NOW);
+    expect(reread(added).map((one) => one.detail)).toEqual(["on, ok", "admin"]);
+    // Topped up, nothing more to add.
+    expect(accessLogTopUp(journal, seeded + added, NOW)).toBe("");
   });
 
   test("a line that carries no date is dropped: no reader could read it either", () => {
@@ -365,13 +388,91 @@ describe("the access log", () => {
     expect(mergeLogs(journal, accessLog)).toEqual(merged);
   });
 
-  test("the journal's own accepted changes of access are left out once there is an access log, which holds them; refusals stay", () => {
-    const journal = [entry(1), access(2, { detail: "seeded" }), access(3, { result: "rejects", detail: "refused" })];
-    const accessLog = [access(2, { detail: "seeded" }), access(4, { detail: "new" })];
-    expect(mergeLogs(journal, accessLog).map((one) => one.detail ?? one.variable)).toEqual(["TOKEN", "seeded", "refused", "new"]);
+  test("a change of access in both files is shown once, from the access log; one the access log lacks stays; refusals stay", () => {
+    const journal = [entry(1), access(2, { detail: "seeded" }), access(3, { result: "rejects", detail: "refused" }), access(4, { operation: "portal", detail: "on, ok" })];
+    const accessLog = [access(2, { detail: "seeded" }), access(5, { detail: "new" })];
+    expect(mergeLogs(journal, accessLog).map((one) => one.detail ?? one.variable)).toEqual(["TOKEN", "seeded", "refused", "on, ok", "new"]);
     // No access log yet: the journal is read whole.
-    expect(mergeLogs(journal, null).map((one) => one.detail ?? one.variable)).toEqual(["TOKEN", "seeded", "refused"]);
+    expect(mergeLogs(journal, null).map((one) => one.detail ?? one.variable)).toEqual(["TOKEN", "seeded", "refused", "on, ok"]);
     // Of one site, as before.
     expect(latest(mergeLogs(journal, [...accessLog, access(5, { slug: "shop", detail: "shop" })]), 50, "shop").map((one) => one.detail)).toEqual(["shop"]);
+  });
+});
+
+describe("GET /log's history, a full access log behind it", () => {
+  const NOW = 1_800_000_000_000;
+  /** A row of the longest kind a change of access writes: every field near its bound. */
+  const row = (i: number): LogEntry => ({
+    a: NOW - 3_600_000 + i,
+    operation: "access.add",
+    result: "ok",
+    actor: `token:${"t".repeat(60)}`,
+    member: `person${i}@${"acme-corporation".repeat(6)}.example`.slice(0, 150),
+    slug: "some-project-with-a-long-name",
+    file: null,
+    variable: null,
+    detail: `person${i}@acme-corporation.example: Can open, password access until 2027-01-01 00:00 UTC`.padEnd(150, "."),
+  });
+  const full = Array.from({ length: ACCESS_MAX_LINES }, (_, i) => encodeEntry(row(i))).join("");
+
+  function source(accessText: string) {
+    const counts = { journal: 0, access: 0 };
+    let stamp = "1";
+    return {
+      counts,
+      touch: () => void (stamp = String(Number(stamp) + 1)),
+      source: {
+        stamps: () => ({ journal: "j", access: stamp }),
+        readJournal: async () => {
+          counts.journal++;
+          return encodeEntry({ ...row(0), operation: "unlock", member: null, slug: null, detail: null });
+        },
+        readAccessLog: async () => {
+          counts.access++;
+          return accessText;
+        },
+      },
+    };
+  }
+
+  test("parsed once per change of either file, however many read it, and read again once it changes", async () => {
+    const bench = source(full);
+    const history = createHistory(bench.source);
+    const answers = await Promise.all(Array.from({ length: 8 }, () => history.read((entries) => latest(entries, 50).length)));
+    expect(answers).toEqual(Array(8).fill(50));
+    expect(bench.counts).toEqual({ journal: 1, access: 1 });
+    bench.touch();
+    expect(await history.read((entries) => entries.length)).toBe(ACCESS_MAX_LINES + 1);
+    expect(bench.counts).toEqual({ journal: 2, access: 2 });
+  });
+
+  test("one read at a time: a burst never runs two in parallel", async () => {
+    const history = createHistory(source(full).source);
+    let running = 0;
+    let most = 0;
+    await Promise.all(
+      Array.from({ length: 16 }, () =>
+        history.read(async () => {
+          running++;
+          most = Math.max(most, running);
+          await Bun.sleep(1);
+          running--;
+        }),
+      ),
+    );
+    expect(most).toBe(1);
+  });
+
+  test("a burst of reads over a full access log stays well under the steward's 128M", async () => {
+    expect(full.length).toBeGreaterThan(5 * 1024 * 1024);
+    const history = createHistory(source(full).source);
+    Bun.gc(true);
+    const before = process.memoryUsage().rss;
+    const pages = await Promise.all(Array.from({ length: 16 }, (_, i) => history.read((entries) => page(entries, { limit: 500, before: NOW - i * 1000 }))));
+    Bun.gc(true);
+    const grown = process.memoryUsage().rss - before;
+    expect(pages.every((one) => one.length === 500)).toBe(true);
+    // One parsed copy and the pages handed out, in the tens of megabytes at most.
+    expect(grown).toBeLessThan(48 * 1024 * 1024);
   });
 });

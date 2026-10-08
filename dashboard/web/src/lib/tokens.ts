@@ -75,16 +75,15 @@ export function parseSlugs(text: string): string[] {
   return seen
 }
 
-export type TokenField = "label" | "email" | "slugs"
+export type TokenField = "label" | "slugs"
 export type TokenErrors = Partial<Record<TokenField, string>>
 
 const SLUG = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 
-/** What the form can see is wrong before sending. The steward judges the rest. */
-export function validateTokenForm(fields: { label: string; email: string; slugs: string[] }, knownSlugs: readonly string[]): TokenErrors {
+/** What the owner's form for a token of their own can see is wrong before sending. The steward judges the rest. */
+export function validateTokenForm(fields: { label: string; slugs: string[] }, knownSlugs: readonly string[]): TokenErrors {
   const errors: TokenErrors = {}
-  if (fields.label.trim() === "") errors.label = "Name the person or the agent this token is for."
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.email.trim())) errors.email = "Enter the address of the person who will hold it."
+  if (fields.label.trim() === "") errors.label = "Name the agent or the workstation this token is for."
   const bad = fields.slugs.find((slug) => !SLUG.test(slug) || slug.length > 63)
   if (bad !== undefined) errors.slugs = `${bad} is not a slug: lowercase letters, digits and dashes.`
   else {
@@ -95,8 +94,31 @@ export function validateTokenForm(fields: { label: string; email: string; slugs:
 }
 
 export function firstTokenField(errors: TokenErrors): TokenField | null {
-  for (const field of ["label", "email", "slugs"] as const) if (errors[field] !== undefined) return field
+  for (const field of ["label", "slugs"] as const) if (errors[field] !== undefined) return field
   return null
+}
+
+/** Who a token may be made for by the owner: the people who sign in, a role above Can open or the right to create projects. */
+export function tokenHolders(people: readonly { who: string; roles: Record<string, Role | "visitor">; create: boolean }[]): { email: string; roles: Roles; create: boolean }[] {
+  return people
+    .map((person) => ({
+      email: person.who,
+      roles: Object.fromEntries(Object.entries(person.roles).filter((entry): entry is [string, Role] => entry[1] !== "visitor")) as Roles,
+      create: person.create,
+    }))
+    .filter((person) => person.create || Object.keys(person.roles).length > 0)
+    .sort((a, b) => a.email.localeCompare(b.email))
+}
+
+/**
+ * Whose a token is and who made it, as a row says it: the owner's own; a
+ * person's, made by the owner for them, or by themselves. `viewer`: who reads
+ * the row, the owner or the person it belongs to.
+ */
+export function tokenOwnerLine(token: Pick<TokenView, "member" | "by" | "email">, viewer: "owner" | "person"): string {
+  if (token.member === null) return token.email === "owner" ? "Yours" : `Yours, made for ${token.email}`
+  if (viewer === "person") return token.by === "owner" ? "Made by the owner for you" : "Yours"
+  return token.by === "owner" ? `Made by you for ${token.member}` : `${token.member}'s own`
 }
 
 /** The command the holder runs, without the token: typed at its prompt, it never lands in a shell history. */
@@ -154,7 +176,6 @@ export function tokenRefusal(status: number, body: { error?: string; message?: s
   const message = body?.message ?? (status === 0 ? "Can't reach the dashboard." : `Refused (${status}).`)
   if (status === 400) {
     if (message.startsWith("label")) return { field: "label", message: "One line of text, 64 characters at most." }
-    if (message.startsWith("email")) return { field: "email", message: "Enter the address of the person who will hold it." }
     if (message.startsWith("scope.slugs")) return { field: "slugs", message: message.replace(/^scope\.slugs: /, "") }
   }
   // A person's token above their roles: the steward's words, each reason without its field's prefix.

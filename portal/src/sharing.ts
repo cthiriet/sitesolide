@@ -3,7 +3,7 @@
  * shape of an email and of a domain, and the sign-in settings the portal reads
  * from its environment.
  *
- * Pure and with no import at all, like `guests.ts`: the dashboard borrows this
+ * Pure and with no import at all: the dashboard borrows this
  * file, its page included, so that the page refuses an address with the exact
  * rule the portal applies, and the steward borrows the names of the settings
  * it lets the dashboard write into `portal.env`.

@@ -103,7 +103,7 @@ import { createMemberRoutes } from "../src/people/steward";
 import { createAccessRoutes, createAccessStore } from "../src/access/steward";
 import { createAccessSystem } from "../src/access/system";
 import { mintRefusals, scopeText } from "../src/people/tokens";
-import { may, needsUnlock, powerRefusal, type Power } from "../src/people/powers";
+import { generalNeedsUnlock, may, needsUnlock, powerRefusal, type Power } from "../src/people/powers";
 import { createMembersSystem } from "../src/people/system";
 
 const PASSWORD = "demo";
@@ -1014,16 +1014,20 @@ type BenchToken = {
   lastUsedAt: number | null;
   scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean };
   owned: string[];
-  /** The member who minted it, null for the owner's. */
+  /** The person it belongs to, null for the owner's own. */
   member: string | null;
+  /** Who made it: `owner`, or the person themselves. */
+  by: string;
 };
 
 const teamTokens: BenchToken[] = [
-  { id: "a1b2c3d4e5f6", label: "Alice's laptop", email: "alice@example.com", createdAt: start - 12 * DAY, expiresAt: start + 78 * DAY, revokedAt: null, lastUsedAt: start - 3 * HOUR, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false }, owned: ["notes"], member: null },
-  { id: "0f1e2d3c4b5a", label: "Release agent", email: "agent@example.com", createdAt: start - 40 * DAY, expiresAt: start + 4 * DAY, revokedAt: null, lastUsedAt: start - DAY, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: true }, owned: [], member: null },
-  { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com", createdAt: start - 90 * DAY, expiresAt: null, revokedAt: start - 20 * DAY, lastUsedAt: start - 21 * DAY, scope: { slugs: [], create: true, outbound: false, domain: false, public: false }, owned: ["mockups"], member: null },
+  // Made by the owner for Alice: narrowed to her roles, revoked with her.
+  { id: "a1b2c3d4e5f6", label: "Alice's laptop", email: "alice@example.com", createdAt: start - 12 * DAY, expiresAt: start + 78 * DAY, revokedAt: null, lastUsedAt: start - 3 * HOUR, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false }, owned: ["notes"], member: "alice@example.com", by: "owner" },
+  // The owner's own, for an agent of theirs.
+  { id: "0f1e2d3c4b5a", label: "Release agent", email: "owner", createdAt: start - 40 * DAY, expiresAt: start + 4 * DAY, revokedAt: null, lastUsedAt: start - DAY, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: true }, owned: [], member: null, by: "owner" },
+  { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com", createdAt: start - 90 * DAY, expiresAt: null, revokedAt: start - 20 * DAY, lastUsedAt: start - 21 * DAY, scope: { slugs: [], create: true, outbound: false, domain: false, public: false }, owned: ["mockups"], member: null, by: "owner" },
   // A person's own, minted from her Tokens page: a Developer on cms, an Admin on calendar.
-  { id: "c0ffee123456", label: "Alice's agent", email: "alice@example.com", createdAt: start - 2 * DAY, expiresAt: start + 88 * DAY, revokedAt: null, lastUsedAt: start - 5 * HOUR, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: false }, owned: [], member: "alice@example.com" },
+  { id: "c0ffee123456", label: "Alice's agent", email: "alice@example.com", createdAt: start - 2 * DAY, expiresAt: start + 88 * DAY, revokedAt: null, lastUsedAt: start - 5 * HOUR, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: false }, owned: [], member: "alice@example.com", by: "alice@example.com" },
 ];
 
 // The control API's history, written by the service's own store in its data
@@ -1125,6 +1129,8 @@ const accessStore = createAccessStore({
   hostOf: (slug) => `${slug}.example.com`,
   journal: benchJournal,
 });
+// Made from the fixture above before anything asks, as the steward does at startup.
+await accessStore.start();
 
 const memberRoutes = createMemberRoutes({
   system: {
@@ -1188,7 +1194,8 @@ const accessRoutes = createAccessRoutes({
 function memberAction(power: Power, operation: (req: Request) => Response | Promise<Response>) {
   return async (req: Request): Promise<Response> => {
     const body = await readBody(req);
-    const principal = await memberRoutes.authorize(body.session, needsUnlock(power) ? body.token : null);
+    const asks = power === "general" ? generalNeedsUnlock(body.active === true) : needsUnlock(power);
+    const principal = await memberRoutes.authorize(body.session, asks ? body.token : null);
     if (principal instanceof Response) return principal;
     const slug = text(body.slug);
     const role = Object.hasOwn(principal.roles, slug) ? principal.roles[slug]! : null;
@@ -1220,49 +1227,63 @@ const steward =
         routes: {
           ...memberRoutes.dashboard,
           ...accessRoutes.dashboard,
-          "/members/secrets/projects": { POST: memberProjects },
+          "/people/secrets/projects": { POST: memberProjects },
           // The owner's fake routes, judged by role first: see memberAction.
           ...(() => {
             // Through the bench's own socket: the owner's route, as it stands.
             const owner = (path: string, method: string) => async (req: Request) =>
               fetch(`http://steward${path}`, { unix: socket, method, headers: { "Content-Type": "application/json" }, body: await req.text() });
             return {
-              "/members/secrets/value": { POST: memberAction("secrets.read", owner("/value", "POST")) },
-              "/members/secrets/variable": { PUT: memberAction("secrets.write", owner("/variable", "PUT")), DELETE: memberAction("secrets.write", owner("/variable", "DELETE")) },
-              "/members/secrets/file": { POST: memberAction("secrets.write", owner("/file", "POST")) },
-              "/members/secrets/restore": { POST: memberAction("secrets.restore", owner("/restore", "POST")) },
-              "/members/secrets/content": { POST: memberAction("secrets.read", owner("/content", "POST")), PUT: memberAction("secrets.write", owner("/content", "PUT")) },
-              "/members/portal": { POST: memberAction("door", owner("/portal", "POST")) },
+              "/people/secrets/value": { POST: memberAction("secrets.read", owner("/value", "POST")) },
+              "/people/secrets/variable": { PUT: memberAction("secrets.write", owner("/variable", "PUT")), DELETE: memberAction("secrets.write", owner("/variable", "DELETE")) },
+              "/people/secrets/file": { POST: memberAction("secrets.write", owner("/file", "POST")) },
+              "/people/secrets/restore": { POST: memberAction("secrets.restore", owner("/restore", "POST")) },
+              "/people/secrets/content": { POST: memberAction("secrets.read", owner("/content", "POST")), PUT: memberAction("secrets.write", owner("/content", "PUT")) },
+              "/people/portal": { POST: memberAction("general", owner("/portal", "POST")) },
             };
           })(),
           // The backups, their troubles and a simulated restore: scripts/bench-backups.ts.
           ...benchBackupRoutes({ start, folders: FOLDERS, isValidToken }),
           "/projects": { GET: () => Response.json({ projects: PROJECTS.map(projectView) }) },
-          "/team/tokens": {
+          "/tokens/list": {
             GET: () => Response.json({ tokens: [...teamTokens].sort((a, b) => b.createdAt - a.createdAt) }),
+          },
+          "/tokens/create": {
             POST: async (req) => {
               const requested = await readBody(req);
               if (!isValidToken(requested)) return refusal(401, "locked", "locked, unlock again");
               const scope = requested.scope as BenchToken["scope"];
               if (scope.slugs.includes("dashboard")) return refusal(400, "invalid", "scope.slugs: dashboard is reserved for the platform: pick another slug");
+              // Whose token: the owner's own, or a person's, within their roles.
+              const holder = text(requested.holder).toLowerCase();
+              let member: string | null = null;
+              if (holder !== "owner") {
+                const rights = await memberRoutes.rights(holder);
+                if (rights instanceof Response) return rights;
+                if (rights === null) return refusal(400, "invalid", `${holder} does not sign in to this dashboard: a token belongs to a person of People with a role above Can open, or to you`);
+                const refusals = mintRefusals(scope, rights);
+                if (refusals.length > 0) return refusal(403, "out-of-scope", refusals.join("; "), { details: refusals });
+                member = holder;
+              }
               const created: BenchToken = {
                 id: draw(12, "0123456789abcdef"),
                 label: text(requested.label),
-                email: text(requested.email).toLowerCase(),
+                email: member ?? "owner",
                 createdAt: Date.now(),
                 expiresAt: typeof requested.expiresAt === "number" ? requested.expiresAt : null,
                 revokedAt: null,
                 lastUsedAt: null,
                 scope,
                 owned: [],
-                member: null,
+                member,
+                by: "owner",
               };
               teamTokens.push(created);
               return Response.json({ token: created, secret: `sst_${draw(43, ALPHABET)}` }, { status: 201 });
             },
           },
           // A member's own tokens, judged by the real rules (src/people/tokens.ts) on her session and unlock.
-          "/team/member/list": {
+          "/tokens/person/list": {
             POST: async (req) => {
               const requested = await readBody(req);
               const principal = await memberRoutes.authorize(requested.session, null);
@@ -1274,7 +1295,7 @@ const steward =
               });
             },
           },
-          "/team/member/tokens": {
+          "/tokens/person/create": {
             POST: async (req) => {
               const requested = await readBody(req);
               const principal = await memberRoutes.authorize(requested.session, requested.token);
@@ -1293,13 +1314,14 @@ const steward =
                 scope,
                 owned: [],
                 member: principal.email,
+                by: principal.email,
               };
               teamTokens.push(created);
               record({ operation: "token.create", result: "ok", actor: principal.email, member: principal.email, slug: null, file: null, variable: null, detail: `${created.id}: ${scopeText(scope)}` });
               return Response.json({ token: created, secret: `sst_${draw(43, ALPHABET)}` }, { status: 201 });
             },
           },
-          "/team/member/revoke": {
+          "/tokens/person/revoke": {
             POST: async (req) => {
               const requested = await readBody(req);
               const principal = await memberRoutes.authorize(requested.session, null);
@@ -1310,7 +1332,7 @@ const steward =
               return Response.json({ token: found });
             },
           },
-          "/team/revoke": {
+          "/tokens/revoke": {
             POST: async (req) => {
               const requested = await readBody(req);
               const found = teamTokens.find((candidate) => candidate.id === requested.id);
@@ -1490,7 +1512,8 @@ const steward =
           "/portal": {
             POST: async (req) => {
               const requested = await readBody(req);
-              if (!isValidToken(requested)) return refusal(401, "locked", "Locked.");
+              // Restricting a site takes no unlock, making it public does: the steward's rule.
+              if (requested.active !== true && !isValidToken(requested)) return refusal(401, "locked", "Locked.");
               const project = projectOf(requested);
               if (project instanceof Response) return project;
               if (typeof requested.active !== "boolean") return refusal(400, "invalid", "active must be a boolean");

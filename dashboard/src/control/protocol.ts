@@ -53,11 +53,24 @@ export type Scope = {
   public: boolean;
 };
 
-/** What the page and the API show of a token. Never its hash, never its value. */
+/**
+ * What the page and the API show of a token. Never its hash, never its value.
+ *
+ * **Every token belongs to a person**: `member`, a person of People, or null
+ * for the owner's own, the owner's agents'. A person's token never does more
+ * than that person's roles, read at every use, and dies with them, whoever
+ * made it; `by` says who did: the owner, for themselves or for a person, or
+ * the person themselves.
+ */
 export type TokenView = {
   /** Short and random, the token's name in the audit: `token:<id>`. */
   id: string;
   label: string;
+  /**
+   * The person's email for a person's token. For the owner's own, `owner`;
+   * a token from before every token belonged to someone keeps the address
+   * it was made for, as a label.
+   */
   email: string;
   createdAt: number;
   /** null: no expiry. */
@@ -69,17 +82,22 @@ export type TokenView = {
   /** The projects it created, recorded at the start of their first deployment. */
   owned: string[];
   /**
-   * The dashboard's member who minted it, null for a token the owner created.
-   * A member's token is never stronger than its member: the steward narrows
-   * it to their roles at every use (src/people/tokens.ts).
+   * The person it belongs to, null for the owner's own. Never stronger than
+   * that person: the steward narrows it to their roles at every use
+   * (src/people/tokens.ts), and revokes it when they leave.
    */
   member: string | null;
+  /** Who made it: `owner`, or the person's own email when they minted it themselves. */
+  by: string;
 };
 
+/** The owner's own token, the owner's agents': whose it is when the owner makes one for themselves. */
+export const OWNER_HOLDER = "owner";
+
 /**
- * What a request authenticated by a token knows of its holder. For a member's
- * token, its scope and projects as the steward narrowed them to the member's
- * roles at that moment, not as they were minted.
+ * What a request authenticated by a token knows of its holder. For a
+ * person's token, its scope and projects as the steward narrowed them to
+ * their roles at that moment, not as they were minted.
  */
 export type Identity = {
   id: string;
@@ -146,8 +164,8 @@ export type InstallRequest = {
   slug: string;
   requestedAt: number;
   /**
-   * `member`: the member whose token it is, null for an owner's token. The
-   * installer narrows the scope again to that member's roles as the registry
+   * `member`: the person whose token it is, null for the owner's own. The
+   * installer narrows the scope again to that person's roles as the registry
    * reads when it starts.
    */
   token: { id: string; email: string; member: string | null };
@@ -269,9 +287,9 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 
 // --- The steward's control routes, on its socket -------------------------------
 //
-//   GET    /team/tokens                            -> TeamResponse
-//   POST   /team/tokens     CreateTokenRequest     -> CreatedTokenResponse   (unlocked)
-//   POST   /team/revoke     { id }                 -> { token: TokenView }
+//   GET    /tokens/list                            -> TeamResponse
+//   POST   /tokens/create   CreateTokenRequest     -> CreatedTokenResponse   (unlocked)
+//   POST   /tokens/revoke   { id }                 -> { token: TokenView }
 //   POST   /control/authenticate  { bearer }       -> { identity: Identity }
 //   POST   /control/preflight     { bearer, slug } -> { creating: boolean }
 //   POST   /control/deploy        DeployRequest    -> { deployment, slug, creating }   202
@@ -281,20 +299,27 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   PUT    /control/access        { bearer, slug, who, role } -> EntryResponse     Can open alone
 //   DELETE /control/access        { bearer, slug, who }       -> EntryResponse
 //
-// A member's own tokens, judged by their session, their unlock to create, and
+// A person's own tokens, judged by their session, their unlock to create, and
 // their roles (src/people/tokens.ts):
 //
-//   POST   /team/member/list      { session }                                     -> MemberTeamResponse
-//   POST   /team/member/tokens    { session, token, label, expiresAt, scope }     -> CreatedTokenResponse   (their unlock)
-//   POST   /team/member/revoke    { session, id }                                 -> { token: TokenView }   their own alone
+//   POST   /tokens/person/list    { session }                                     -> MemberTeamResponse
+//   POST   /tokens/person/create  { session, token, label, expiresAt, scope }     -> CreatedTokenResponse   (their unlock)
+//   POST   /tokens/person/revoke  { session, id }                                 -> { token: TokenView }   their own alone
 //
-// Any error returns `ControlFailure`. An older steward answers 404 `no such
-// route` to all of them: the dashboard turns that into `not-available`.
+// And on the owner's socket, which only root opens:
+//
+//   DELETE /tokens/project        { slug }    a project removed: its token ownership and its people with access forgotten
+//
+// The paths under `/team/` answer too, for one release: a dashboard or a CLI
+// from before the rename still calls them. Any error returns
+// `ControlFailure`. An older steward answers 404 `no such route` to all of
+// them: the dashboard turns that into `not-available`.
 
 export type TeamResponse = { tokens: TokenView[] };
 /**
- * A member's tokens and what they may mint them for: their roles, and the
- * create right. `until`: the end of their session's unlock, null if locked.
+ * A person's tokens, those the owner made for them included, and what they
+ * may mint them for: their roles, and the create right. `until`: the end of
+ * their session's unlock, null if locked.
  */
 export type MemberTeamResponse = { tokens: TokenView[]; rights: { roles: Record<string, "viewer" | "developer" | "admin">; create: boolean }; until: number | null };
 export type CreateMemberTokenRequest = { session: string; token: string; label: string; expiresAt: number | null; scope: Scope };
@@ -302,7 +327,11 @@ export type CreateTokenRequest = {
   /** The unlock token of src/secrets: creating a token demands the dashboard unlocked. */
   token: string;
   label: string;
-  email: string;
+  /**
+   * Whose token: `owner`, the owner's own, its scope free; or the email of a
+   * person of People, minted as their own would be, within their roles.
+   */
+  holder: string;
   expiresAt: number | null;
   scope: Scope;
 };
@@ -315,7 +344,7 @@ export type LogsResponse = { lines: string[]; cursor: string | null };
 // --- The Tokens page's routes, under /api/tokens, behind the session --------------
 //
 //   GET    /api/tokens                             -> TeamPageResponse
-//   POST   /api/tokens        { label, email, expiresAt, scope }  -> CreatedTokenResponse   (unlocked)
+//   POST   /api/tokens        { label, holder, expiresAt, scope }  -> CreatedTokenResponse   (unlocked)
 //   POST   /api/tokens/revoke { id }               -> { token: TokenView }
 
 /** One line of the dashboard's audit, in the shape every component shares. */
@@ -397,6 +426,8 @@ export type ProjectStatus = {
   deployed: boolean;
   type: "static" | "app" | null;
   url: string | null;
+  /** Who may open the site at all: public, restricted to its people with access, or anyone with the preview code; null when not deployed. */
+  general: "public" | "restricted" | "code" | null;
   portal: { wanted: boolean; installed: boolean } | null;
   services: { name: string | null; unit: string; port: number | null; state: string; subState: string; restarts: number | null; since: number | null; memory: number | null }[];
   deployedAt: number | null;

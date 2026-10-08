@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Identity, Scope } from "../src/control/protocol";
-import { recordCreation, rightsOf, rolesText } from "../src/access/registry";
+import { forgetProject, recordCreation, rightsOf, rolesText, setCreate } from "../src/access/registry";
 import { deployRefusal, installScope, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../src/people/tokens";
 import { registryOf } from "./registry-fixtures";
 
@@ -136,16 +136,33 @@ describe("the access registry's side", () => {
     expect(rightsOf(registryOf({}, ["dan@acme.test"]), "dan@acme.test")).toEqual({ email: "dan@acme.test", roles: {}, create: true });
   });
 
-  test("a project they create makes them its Admin, whatever was written there by hand, the rest kept", () => {
-    const created = recordCreation(registry, "ada@acme.test", "omega", T + 1);
+  test("a project they create makes them its Admin, alone: what a project of that name left behind is dropped, the other projects kept", () => {
+    const left = registryOf({ "ada@acme.test": { alpha: "developer", omega: "viewer" }, "eve@acme.test": { omega: "admin" }, "@acme.test": { omega: "visitor" } }, ["ada@acme.test"], T);
+    const created = recordCreation(left, "ada@acme.test", "omega", T + 1);
     if ("refusal" in created) throw new Error(created.refusal);
-    expect(created.change).toBe("role");
-    expect(created.entry).toMatchObject({ who: "ada@acme.test", role: "admin", createdAt: T, updatedAt: T + 1 });
+    expect(created.change).toBe("add");
+    expect(created.entry).toMatchObject({ who: "ada@acme.test", role: "admin", by: "ada@acme.test", createdAt: T + 1 });
+    expect(created.registry.projects.omega!.map((entry) => entry.who)).toEqual(["ada@acme.test"]);
+    expect(created.dropped.map((entry) => entry.who)).toEqual(["@acme.test", "ada@acme.test", "eve@acme.test"]);
     expect(rightsOf(created.registry, "ada@acme.test")).toEqual({ email: "ada@acme.test", roles: { alpha: "developer", omega: "admin" }, create: true });
+    expect(rightsOf(created.registry, "eve@acme.test")).toBeNull();
     const fresh = recordCreation(registry, "ada@acme.test", "zeta", T + 1);
-    expect(fresh).toMatchObject({ change: "add", entry: { who: "ada@acme.test", role: "admin", by: "ada@acme.test" } });
-    expect(recordCreation(registry, "eve@acme.test", "omega", T + 1)).toEqual({ refusal: "eve@acme.test no longer signs in to this dashboard", code: "out-of-scope" });
+    expect(fresh).toMatchObject({ change: "add", entry: { who: "ada@acme.test", role: "admin", by: "ada@acme.test" }, dropped: [] });
+  });
+
+  test("the create right is read when the creation is recorded: taken back, or never held, nothing is recorded", () => {
+    expect(recordCreation(registry, "eve@acme.test", "omega", T + 1)).toMatchObject({ code: "out-of-scope", refusal: expect.stringContaining("may no longer create projects") });
     expect(recordCreation(registry, "carol@acme.test", "omega", T + 1)).toMatchObject({ code: "out-of-scope" });
+    const taken = setCreate(registry, "ada@acme.test", false, "owner", T + 1);
+    if ("refusal" in taken) throw new Error(taken.refusal);
+    expect(recordCreation(taken.registry, "ada@acme.test", "zeta", T + 2)).toMatchObject({ code: "out-of-scope" });
+  });
+
+  test("a project removed takes its entries with it; nothing to drop leaves the registry as it was", () => {
+    const removed = forgetProject(registry, "beta");
+    expect(removed.dropped.map((entry) => entry.who)).toEqual(["ada@acme.test", "carol@acme.test"]);
+    expect(removed.registry.projects.beta).toBeUndefined();
+    expect(forgetProject(removed.registry, "beta").registry).toBe(removed.registry);
   });
 
   test("roles and a scope in a line, for the journal", () => {

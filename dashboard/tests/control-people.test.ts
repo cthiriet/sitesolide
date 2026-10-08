@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { INSTALLER_TEMPLATE, type Identity, type InstallRequest, type TokenView } from "../src/control/protocol";
+import { INSTALLER_TEMPLATE, type Identity, type InstallerResult, type InstallRequest, type TokenView } from "../src/control/protocol";
 import { createControlSteward, type ControlHandler, type MemberAuthority } from "../src/control/steward";
 import { createControlSystem, type ControlSystem } from "../src/control/system";
 import type { Role } from "../borrowed/access";
@@ -35,6 +35,7 @@ afterEach(() => {
 type Bench = {
   root: string;
   handler: ControlHandler;
+  members: MemberAuthority;
   registry: { value: Registry };
   journal: MemberEvent[];
   /** Sessions the members routes know, and the one unlocked. */
@@ -102,7 +103,7 @@ function bench(): Bench {
     uidRoot: null,
     members,
   });
-  return { root, handler, registry, journal, sessions, unlocked };
+  return { root, handler, members, registry, journal, sessions, unlocked };
 }
 
 function call(b: Bench, method: string, path: string, body?: unknown): Promise<Response> {
@@ -332,20 +333,198 @@ describe("a person who no longer signs in", () => {
   });
 });
 
+/** The installer's result, as it leaves it in its folder: what the steward settles a creation by. */
+function finish(b: Bench, deployment: string, slug: string, state: "running" | "succeeded" | "failed") {
+  const result: InstallerResult = {
+    deployment,
+    slug,
+    state,
+    startedAt: 1,
+    updatedAt: 2,
+    finishedAt: state === "running" ? null : 3,
+    log: [],
+    error: state === "failed" ? { code: "failure", message: "it broke" } : null,
+    url: state === "succeeded" ? `https://${slug}.${ZONE}/` : null,
+    allocated: [],
+  };
+  writeFileSync(join(b.root, "installer", `${deployment}.json`), `${JSON.stringify(result)}\n`);
+}
+
+function pendingCreations(b: Bench): { deployment: string; slug: string; email: string }[] {
+  const file = join(b.root, "state", "creations.json");
+  return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as { creations: { deployment: string; slug: string; email: string }[] }).creations : [];
+}
+
 describe("ownership of what a person's token creates", () => {
-  test("the person becomes its Admin, before the token owns it, and the installer is told whose token it is", async () => {
+  test("the token owns the name from the start; the person becomes its Admin once the installer has succeeded, not before", async () => {
     const b = bench();
     setRoles(b, ADA, { alpha: "developer" }, true);
     const { secret, token } = await minted(b, { create: true });
     const response = await call(b, "POST", "/control/deploy", { bearer: secret, deployment: DEPLOYMENT, slug: "omega", manifest: JSON.stringify({ slug: "omega" }) });
     expect(response.status).toBe(202);
-    expect(rightsOf(b.registry.value, ADA)?.roles).toEqual({ alpha: "developer", omega: "admin" });
-    expect(b.journal.at(-1)).toEqual({ operation: "project.create", result: "ok", actor: ADA, member: ADA, detail: `admin, created with token ${token.id}`, slug: "omega" });
+    // Started, not done: nobody is Admin of a name the machine may never carry.
+    expect(rightsOf(b.registry.value, ADA)?.roles).toEqual({ alpha: "developer" });
+    expect(pendingCreations(b)).toEqual([expect.objectContaining({ deployment: DEPLOYMENT, slug: "omega", email: ADA })]);
     const team = JSON.parse(readFileSync(join(b.root, "state", "team.json"), "utf8")) as { owners: Record<string, string> };
     expect(team.owners).toEqual({ omega: token.id });
     const request = JSON.parse(readFileSync(join(b.root, "state", "installs", "omega.json"), "utf8")) as InstallRequest;
     expect(request.token).toEqual({ id: token.id, email: ADA, member: ADA });
     expect(request.creating).toBe(true);
+
+    // Still running: nothing settled.
+    finish(b, DEPLOYMENT, "omega", "running");
+    await b.handler.settleCreations();
+    expect(rightsOf(b.registry.value, ADA)?.roles).toEqual({ alpha: "developer" });
+
+    // Succeeded, read by whoever follows it: Admin of it, journaled under them, settled once.
+    finish(b, DEPLOYMENT, "omega", "succeeded");
+    const read = await call(b, "GET", `/control/deployment?id=${DEPLOYMENT}`);
+    expect(((await read.json()) as { result: { state: string } }).result.state).toBe("succeeded");
+    expect(rightsOf(b.registry.value, ADA)?.roles).toEqual({ alpha: "developer", omega: "admin" });
+    expect(b.journal.at(-1)).toEqual({ operation: "project.create", result: "ok", actor: ADA, member: ADA, detail: `admin, created with token ${token.id}`, slug: "omega" });
+    expect(pendingCreations(b)).toEqual([]);
+    const journaled = b.journal.length;
+    await b.handler.settleCreations();
+    expect(b.journal).toHaveLength(journaled);
+  });
+
+  test("a creation that failed makes nobody Admin, and is dropped", async () => {
+    const b = bench();
+    setRoles(b, ADA, { alpha: "developer" }, true);
+    const { secret } = await minted(b, { create: true });
+    expect((await call(b, "POST", "/control/deploy", { bearer: secret, deployment: DEPLOYMENT, slug: "omega", manifest: JSON.stringify({ slug: "omega" }) })).status).toBe(202);
+    finish(b, DEPLOYMENT, "omega", "failed");
+    await b.handler.settleCreations();
+    expect(rightsOf(b.registry.value, ADA)?.roles).toEqual({ alpha: "developer" });
+    expect(pendingCreations(b)).toEqual([]);
+  });
+
+  test("the create right taken back while the installer ran: nothing recorded, the refusal said, the creation dropped", async () => {
+    const b = bench();
+    setRoles(b, ADA, { alpha: "developer" }, true);
+    const { secret } = await minted(b, { create: true });
+    expect((await call(b, "POST", "/control/deploy", { bearer: secret, deployment: DEPLOYMENT, slug: "omega", manifest: JSON.stringify({ slug: "omega" }) })).status).toBe(202);
+    const taken = setCreate(b.registry.value, ADA, false, "owner", 2);
+    if ("refusal" in taken) throw new Error(taken.refusal);
+    b.registry.value = taken.registry;
+    finish(b, DEPLOYMENT, "omega", "succeeded");
+    await b.handler.settleCreations();
+    expect(rightsOf(b.registry.value, ADA)?.roles).toEqual({ alpha: "developer" });
+    expect(pendingCreations(b)).toEqual([]);
+  });
+
+  test("a steward restarted while the installer ran still settles it: the creation is on disk", async () => {
+    const b = bench();
+    setRoles(b, ADA, { alpha: "developer" }, true);
+    const { secret } = await minted(b, { create: true });
+    expect((await call(b, "POST", "/control/deploy", { bearer: secret, deployment: DEPLOYMENT, slug: "omega", manifest: JSON.stringify({ slug: "omega" }) })).status).toBe(202);
+    const restarted = bench();
+    // The same tree, a new handler: as a restart leaves it.
+    const handler = createControlSteward(
+      { ...createControlSystem({ stateFolder: join(b.root, "state"), sitesDir: join(b.root, "sites"), unitsFolder: join(b.root, "units"), installerFolder: join(b.root, "installer"), systemctl: "/bin/false", journalctl: "/bin/false" }) },
+      { zone: ZONE, isUnlocked: async () => false, uidRoot: null, members: restarted.members },
+    );
+    restarted.registry.value = b.registry.value;
+    finish(b, DEPLOYMENT, "omega", "succeeded");
+    await handler.settleCreations();
+    expect(rightsOf(restarted.registry.value, ADA)?.roles).toEqual({ alpha: "developer", omega: "admin" });
+  });
+});
+
+describe("a token the owner makes for a person", () => {
+  const make = (b: Bench, holder: string, scope: Partial<typeof SCOPE>) =>
+    call(b, "POST", "/tokens/create", { token: "owner-unlock", label: "for them", holder, expiresAt: null, scope: { ...SCOPE, ...scope } });
+
+  test("minted as their own would be: theirs, made by the owner, within their roles, journaled", async () => {
+    const b = bench();
+    const response = await make(b, "Ada@Acme.test", { slugs: ["alpha"] });
+    expect(response.status).toBe(201);
+    const { token } = (await response.json()) as { token: TokenView };
+    expect(token).toMatchObject({ email: ADA, member: ADA, by: "owner", scope: { slugs: ["alpha"] } });
+    expect(b.journal.at(-1)).toMatchObject({ operation: "token.create", actor: "owner", member: ADA });
+    // In her own list, and hers to revoke.
+    const hers = (await (await call(b, "POST", "/tokens/person/list", { session: "ada-session" })).json()) as { tokens: TokenView[] };
+    expect(hers.tokens.map((one) => one.id)).toEqual([token.id]);
+  });
+
+  test("never beyond their roles: a project they only view, the create right they lack, the options without Admin", async () => {
+    const b = bench();
+    const refused = await message(await make(b, ADA, { slugs: ["gamma"], create: true }));
+    expect(refused).toMatchObject({ status: 403, error: "out-of-scope" });
+    expect(refused.details?.length).toBe(2);
+    expect(await message(await make(b, ADA, { slugs: ["alpha"], public: true }))).toMatchObject({ status: 403 });
+  });
+
+  test("someone who does not sign in to the dashboard holds no token: Can open only, or nobody at all", async () => {
+    const b = bench();
+    setRoles(b, BOB, { gamma: "visitor" });
+    expect(await message(await make(b, BOB, { slugs: [] , create: false }))).toMatchObject({ status: 400, error: "invalid", message: expect.stringContaining("does not sign in to this dashboard") });
+    expect(await message(await make(b, "nobody@acme.test", { slugs: ["alpha"] }))).toMatchObject({ status: 400 });
+    expect(await message(await make(b, "not an email", { slugs: ["alpha"] }))).toMatchObject({ status: 400, message: expect.stringContaining("holder") });
+  });
+
+  test("narrowed at every use and revoked with them, whoever made it", async () => {
+    const b = bench();
+    const { secret, token } = (await (await make(b, ADA, { slugs: ["alpha", "beta"] })).json()) as { secret: string; token: TokenView };
+    setRoles(b, ADA, { alpha: "viewer", beta: "admin" });
+    const narrowed = (await (await call(b, "POST", "/control/authenticate", { bearer: secret })).json()) as { identity: Identity };
+    expect(narrowed.identity.scope.slugs).toEqual(["beta"]);
+    expect(narrowed.identity.member).toBe(ADA);
+    setRoles(b, ADA, {});
+    expect(await message(await call(b, "POST", "/control/authenticate", { bearer: secret }))).toMatchObject({ status: 401 });
+    expect(await b.handler.revokeMember(ADA, "owner")).toBe(1);
+    const all = (await (await call(b, "GET", "/tokens/list")).json()) as { tokens: TokenView[] };
+    expect(all.tokens.find((one) => one.id === token.id)?.revokedAt).not.toBeNull();
+  });
+
+  test("the owner's own stays free of anyone's roles", async () => {
+    const b = bench();
+    const response = await make(b, "owner", { slugs: ["gamma"], create: true, public: true });
+    expect(response.status).toBe(201);
+    expect(((await response.json()) as { token: TokenView }).token).toMatchObject({ email: "owner", member: null, by: "owner" });
+    expect(await b.handler.revokeMember(ADA, "owner")).toBe(0);
+  });
+});
+
+describe("the tokens from before every token belonged to someone", () => {
+  function legacyTeam(b: Bench, emails: string[]): void {
+    const tokens = emails.map((email, index) => ({
+      id: `00000000000${index}`,
+      label: `token ${index}`,
+      email,
+      createdAt: 1,
+      expiresAt: null,
+      revokedAt: null,
+      lastUsedAt: null,
+      scope: { slugs: ["gamma"], create: false, outbound: false, domain: false, public: false },
+      hash: String(index).repeat(64).slice(0, 64),
+    }));
+    writeFileSync(join(b.root, "state", "team.json"), `${JSON.stringify({ tokens, owners: {} })}\n`);
+  }
+
+  test("made someone's once: a person of People's theirs, narrowed from then on; anyone else's the owner's own", async () => {
+    const b = bench();
+    legacyTeam(b, [ADA, "contractor@elsewhere.test", BOB]);
+    expect(await b.handler.migrateTokens()).toBe(true);
+    const tokens = ((await (await call(b, "GET", "/tokens/list")).json()) as { tokens: TokenView[] }).tokens.sort((x, y) => x.id.localeCompare(y.id));
+    expect(tokens.map((one) => [one.email, one.member, one.by])).toEqual([
+      [ADA, ADA, "owner"],
+      ["contractor@elsewhere.test", null, "owner"],
+      [BOB, BOB, "owner"],
+    ]);
+    expect(b.journal.filter((event) => event.operation === "token.create").map((event) => event.member)).toEqual([ADA, BOB]);
+    // Once: run again, nothing changes even for someone who signs in since.
+    expect(JSON.parse(readFileSync(join(b.root, "state", "team.json"), "utf8")).version).toBe(2);
+    expect(await b.handler.migrateTokens()).toBe(true);
+  });
+
+  test("a registry that does not read waits: nothing written, tried again later", async () => {
+    const b = bench();
+    legacyTeam(b, [ADA]);
+    const before = readFileSync(join(b.root, "state", "team.json"), "utf8");
+    b.members.rights = async () => Response.json({ error: "migrating", message: "later" }, { status: 503 });
+    expect(await b.handler.migrateTokens()).toBe(false);
+    expect(readFileSync(join(b.root, "state", "team.json"), "utf8")).toBe(before);
   });
 });
 
@@ -363,21 +542,21 @@ describe("a project removed from the machine", () => {
     // Still on the machine: refused, the ownership kept.
     expect(await message(await forget(b, "omega"))).toMatchObject({ status: 409, error: "busy", message: "omega is still on the machine: remove it first, with sitesolide remove --confirm omega" });
     // Another token may not create it meanwhile.
-    const other = await call(b, "POST", "/team/tokens", { token: "owner-unlock", label: "ci", email: "ci@acme.test", expiresAt: null, scope: { ...SCOPE, create: true } });
+    const other = await call(b, "POST", "/tokens/create", { token: "owner-unlock", label: "ci", holder: "owner", expiresAt: null, scope: { ...SCOPE, create: true } });
     const ci = (await other.json()) as { secret: string };
     rmSync(join(b.root, "sites", "omega"), { recursive: true });
     expect((await message(await call(b, "POST", "/control/preflight", { bearer: ci.secret, slug: "omega" }))).message).toContain("belongs to another token");
 
     // Removed: forgotten, journaled under the owner, the token in the detail.
     const released = await forget(b, "omega");
-    expect(await released.json()).toEqual({ slug: "omega", forgotten: token.id });
+    expect(await released.json()).toEqual({ slug: "omega", forgotten: token.id, access: 0 });
     expect(b.journal.at(-1)).toEqual({ operation: "project.remove", result: "ok", actor: "owner", member: null, detail: `created by token ${token.id}, its name free again`, slug: "omega" });
     const team = JSON.parse(readFileSync(join(b.root, "state", "team.json"), "utf8")) as { owners: Record<string, string> };
     expect(team.owners).toEqual({});
     expect(await (await call(b, "POST", "/control/preflight", { bearer: ci.secret, slug: "omega" })).json()).toEqual({ creating: true });
     // Asked again: nothing left to forget, nothing journaled.
     const journaled = b.journal.length;
-    expect(await (await forget(b, "omega")).json()).toEqual({ slug: "omega", forgotten: null });
+    expect(await (await forget(b, "omega")).json()).toEqual({ slug: "omega", forgotten: null, access: 0 });
     expect(b.journal).toHaveLength(journaled);
   });
 

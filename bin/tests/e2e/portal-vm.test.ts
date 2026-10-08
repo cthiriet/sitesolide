@@ -600,7 +600,7 @@ describe("sitesolide remove also removes the block laid from the dashboard", () 
     expect(vm.logs()).toEqual([`READ ${SHOWCASE.slug}`]);
   });
 
-  test("for real, an open static site: gone, then its name released from the team token that created it", async () => {
+  test("for real, an open static site: gone, then its name released from the token that created it", async () => {
     vm = createFakeVm();
     vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
     vm.setOwners({ [SHOWCASE.slug]: "aaaaaaaaaaaa", other: "bbbbbbbbbbbb" });
@@ -618,7 +618,7 @@ describe("sitesolide remove also removes the block laid from the dashboard", () 
     // Run again, as after a failure half way: nothing left to release, said so.
     const again = await run(project(SHOWCASE), ["remove", "--confirm", SHOWCASE.slug], { vm });
     expect(again.code).toBe(0);
-    expect(again.output).toContain(`no team token created ${SHOWCASE.slug}`);
+    expect(again.output).toContain(`no token created ${SHOWCASE.slug}`);
   });
 
   test("a dry run says it would release the name, and asks the steward nothing", async () => {
@@ -626,7 +626,7 @@ describe("sitesolide remove also removes the block laid from the dashboard", () 
     vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
     const r = await run(project(SHOWCASE), ["remove", "--confirm", SHOWCASE.slug, "--dry-run"], { vm });
     expect(r.code).toBe(0);
-    expect(r.output).toContain(`[dry-run] release ${SHOWCASE.slug} from the team token that created it`);
+    expect(r.output).toContain(`[dry-run] release ${SHOWCASE.slug} from the token that created it, if one did, and drop its people with access`);
     expect(vm.logs().some((line) => line.startsWith("OWNERSHIP"))).toBe(false);
   });
 

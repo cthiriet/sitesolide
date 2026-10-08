@@ -196,19 +196,21 @@ export function leftToDo(slug: string, siteFolder: string | null): string[] {
 // --- the token that created it --------------------------------------------------------
 
 /**
- * The steward's last word on a removed project: the team token that created
- * it, if one did, no longer owns its name, so that another token may create a
- * project of that name later. Root asks the steward's owner socket on the
- * machine, the slug on standard input; the steward refuses while the machine
- * still carries the project, so this comes once the folder is gone.
+ * The steward's last word on a removed project: the token that created it,
+ * if one did, no longer owns its name, so that another token may create a
+ * project of that name later, and its people with access are dropped, so that
+ * such a project starts from nobody. Root asks the steward's owner socket on
+ * the machine, the slug on standard input; the steward refuses while the
+ * machine still carries the project, so this comes once the folder is gone.
  */
 export function ownershipReleaseCommand(): string {
-  return `sudo curl -sS --max-time 10 -X DELETE -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' --unix-socket ${OWNER_SOCKET} http://steward/team/project`;
+  return `sudo curl -sS --max-time 10 -X DELETE -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' --unix-socket ${OWNER_SOCKET} http://steward/tokens/project`;
 }
 
 export type OwnershipRelease =
-  | { kind: "released"; token: string }
-  | { kind: "none" }
+  /** `access`: the people with access dropped with it, 0 from a steward that kept none. */
+  | { kind: "released"; token: string; access: number }
+  | { kind: "none"; access: number }
   /** A steward from before it, or one with no owner's socket: nothing released. */
   | { kind: "outdated" }
   | { kind: "failed"; reason: string };
@@ -228,7 +230,8 @@ export function readOwnershipRelease(done: { code: number; output: string; error
   }
   if (answer.status === 404 && body.message === "no such route") return { kind: "outdated" };
   if (answer.status !== 200) return { kind: "failed", reason: typeof body.message === "string" ? body.message : `refused (${answer.status})` };
-  return typeof body.forgotten === "string" ? { kind: "released", token: body.forgotten } : { kind: "none" };
+  const access = typeof body.access === "number" && Number.isInteger(body.access) && body.access >= 0 ? body.access : 0;
+  return typeof body.forgotten === "string" ? { kind: "released", token: body.forgotten, access } : { kind: "none", access };
 }
 
 /**

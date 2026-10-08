@@ -219,13 +219,15 @@ describe("adding someone, said before it is sent", () => {
     expect(domain.hint).toContain("Company sign-in isn't set up")
   })
 
-  test("a domain can only open the site; an Admin adds one of the company's alone, the owner any", () => {
+  test("a domain can only open the site, and is one of the company's for everyone, the owner included; with none listed, any", () => {
     expect(planAddition("@acme.test", page())).toMatchObject({ state: "ready", kind: "domain", roles: ["visitor"], limit: "A domain can only open the site: give people roles one by one." })
-    expect(planAddition("@partner.test", page())).toMatchObject({ state: "ready" })
-    const refused = planAddition("@partner.test", page({ you: ADMIN }))
-    expect(refused).toMatchObject({ state: "blocked" })
-    expect(refused.hint).toContain("Only the owner gives a domain outside the company's (acme.test)")
+    for (const you of [undefined, ADMIN]) {
+      const refused = planAddition("@partner.test", page(you === undefined ? {} : { you }))
+      expect(refused).toMatchObject({ state: "blocked" })
+      expect(refused.hint).toContain("partner.test isn't one of the company's domains (acme.test)")
+    }
     expect(planAddition("@acme.test", page({ you: ADMIN })).state).toBe("ready")
+    expect(planAddition("@partner.test", page({ signIn: { ...page().signIn, allowedDomains: [] } })).state).toBe("ready")
   })
 
   test("someone already on the list is changed there, not added again", () => {

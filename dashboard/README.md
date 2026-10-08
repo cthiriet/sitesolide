@@ -928,35 +928,37 @@ reading, giving Can open, removing, is what the owner's session allows.
 | owner's, dashboard's | `GET /people` | everyone, their roles per project, the create right, the domains, the sign-in settings |
 | owner's, dashboard's | `PUT /people/person` `{ email, create }` | the create right; on the dashboard's, `token` to give it |
 | owner's, dashboard's | `DELETE /people/person` `{ email }` | someone taken off every project and the create right, signed out |
-| dashboard's | `POST /access/person/list` `{ session, slug }` | an Admin reads their project's access |
+| owner's | `POST /access/migrate` `{ withoutPortal: true }` | the registry made from members.json alone, the portal's database left out at the owner's word (`sitesolide people --migrate-without-portal`) |
+| dashboard's | `POST /access/person/list` `{ session, slug }` | a Viewer or above reads their project's access, never the admin emails |
 | dashboard's | `PUT /access/person/entry` `{ session, token?, slug, who, role, expiresInS? }` | an Admin gives access or changes a role, their unlock for a role above Can open or password access |
 | dashboard's | `DELETE /access/person/entry` `{ session, slug, who }` | an Admin takes access away |
-| dashboard's | `GET /members/key` | the public key, laid first if missing |
-| dashboard's | `POST /members/signin` `{ assertion }` | a session, from an assertion it verifies |
-| dashboard's | `POST /members/whoami` `{ session }` | who the session is, their roles above Can open and create right now |
-| dashboard's | `POST /members/signout` `{ session }` | closes it |
-| dashboard's | `POST /members/restart` `{ session, slug }` | a Developer's or an Admin's restart, judged under the lock |
-| dashboard's | `POST /members/unlock` `{ session, assertion }` | a person's unlock, from a forced sign-in's assertion |
-| dashboard's | `POST /members/lock` `{ session, token }` | locks it |
-| dashboard's | `POST /members/secrets/projects`, `/members/secrets/value`, `/variable`, `/file`, `/restore`, `/content`, `/members/portal`, `/members/backups/restore` | a person's work on their projects, see src/people/actions.ts |
+| dashboard's | `GET /people/key` | the public key, laid first if missing |
+| dashboard's | `POST /people/signin` `{ assertion }` | a session, from an assertion it verifies |
+| dashboard's | `POST /people/whoami` `{ session }` | who the session is, their roles above Can open and create right now |
+| dashboard's | `POST /people/signout` `{ session }` | closes it |
+| dashboard's | `POST /people/restart` `{ session, slug }` | a Developer's or an Admin's restart, judged under the lock |
+| dashboard's | `POST /people/unlock` `{ session, assertion }` | a person's unlock, from a forced sign-in's assertion |
+| dashboard's | `POST /people/lock` `{ session, token }` | locks it |
+| dashboard's | `POST /people/secrets/projects`, `/people/secrets/value`, `/variable`, `/file`, `/restore`, `/content`, `/people/portal`, `/people/backups/restore` | a person's work on their projects, see src/people/actions.ts; `/people/portal` asks the unlock to make a site public, never to restrict it |
 | dashboard's | `POST /control/access/list` `{ bearer, slug }`, `PUT` and `DELETE /control/access` `{ bearer, slug, who, role? }` | a token's, see [Access by token](#access-by-token) |
-| dashboard's | `POST /team/member/list`, `/team/member/tokens`, `/team/member/revoke` | a person's own tokens, see [A person's own tokens](#a-persons-own-tokens) |
-| owner's | `DELETE /team/project` `{ slug }` | a project removed: the name its token owned, free again, once the machine no longer carries it |
+| dashboard's | `GET /tokens/list`, `POST /tokens/create` `{ token, label, holder, expiresAt, scope }`, `POST /tokens/revoke` | the owner's: every token, one made for themselves (`holder: owner`) or for a person of People, minted within that person's roles |
+| dashboard's | `POST /tokens/person/list`, `/tokens/person/create`, `/tokens/person/revoke` | a person's own tokens, see [A person's own tokens](#a-persons-own-tokens) |
+| owner's | `DELETE /tokens/project` `{ slug }` | a project removed: the name its token owned free again, and its people with access dropped, once the machine no longer carries it |
 
 The routes of before the registry, `/members`, `/members/member`,
 `/members/project/member`, `/members/sharing`, `/members/guests` and
 `/control/sharing`, are gone and answer `no such route`. The session routes
-kept their `/members/` paths, and a person's tokens their `/team/` ones:
-renaming them would only make a dashboard and a steward of different days
-disagree. The files on the machine keep their names for the same reason,
-`member-sessions.json` and `team.json` in the steward's state folder, and
-`members.json`, read-only since the registry: they are the machine's state,
-not words of the page.
+were under `/members/`, the tokens' under `/team/`: both still answer there
+for one release, so that a dashboard or a CLI deployed before this steward
+keeps working while `sitesolide upgrade` brings everything up to date. The
+files on the machine keep their names, `member-sessions.json` and
+`team.json` in the steward's state folder, and `members.json`, read-only
+since the registry: they are the machine's state, not words of the page.
 
 On the dashboard's side, the page reaches these routes at the owner's
 addresses: `/api/tokens` and `/api/tokens/revoke` for tokens, and
 `/api/secrets/restart` for a restart, which `server.ts` sends, for a person's
-session, to `/members/restart`.
+session, to `/people/restart`.
 
 A person's restart is the Secrets section's restart, under the same lock and
 the same eight seconds of observation, without its check that the unit reads

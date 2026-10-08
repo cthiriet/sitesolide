@@ -142,7 +142,7 @@ function bench(options: { access?: boolean } = {}): Bench {
 
 /** An owner's token, reaching these projects. */
 async function ownerToken(b: Bench, slugs: string[]): Promise<{ token: TokenView; secret: string }> {
-  const response = await b.call("POST", "/team/tokens", { token: "owner-unlock", label: "ci", email: "ci@acme.test", expiresAt: null, scope: { ...SCOPE, slugs } });
+  const response = await b.call("POST", "/tokens/create", { token: "owner-unlock", label: "ci", holder: "owner", expiresAt: null, scope: { ...SCOPE, slugs } });
   expect(response.status).toBe(201);
   return (await response.json()) as { token: TokenView; secret: string };
 }
@@ -251,9 +251,9 @@ describe("the steward: giving Can open with a token", () => {
     const { secret } = await ownerToken(b, ["kanban"]);
     const give = (who: string) => b.call("PUT", "/control/access", { bearer: secret, slug: "kanban", who, role: "visitor" });
     expect(await answer(await give("@gmail.test"))).toMatchObject({
-      status: 403,
-      error: "out-of-scope",
-      message: "@gmail.test: only the owner gives a domain outside the company's (acme.test, acme-labs.test) access",
+      status: 400,
+      error: "invalid",
+      message: "@gmail.test is not among the company's domains (acme.test, acme-labs.test): only people at those domains sign in",
     });
     b.signIn.allowedDomains = [];
     expect((await answer(await give("@acme.test"))).message).toContain("the company's domains are not listed on this machine (OIDC_ALLOWED_DOMAINS)");
@@ -298,12 +298,12 @@ describe("the steward: giving Can open with a token", () => {
     expect(await answer(await b.call("PUT", "/control/access", { bearer: secret, slug: "kanban", who: CAROL, role: "visitor" }))).toMatchObject({ status: 201 });
     // An Admin's token still gives Can open alone.
     expect(await answer(await b.call("PUT", "/control/access", { bearer: secret, slug: "kanban", who: DAN, role: "viewer" }))).toMatchObject({ status: 403 });
-    // People with access are an Admin's to see: the token lists kanban, not roster.
+    // People with access are read from Viewer up: the token lists both, a Developer's roster included, never the admin emails.
     expect((await b.call("POST", "/control/access/list", { bearer: secret, slug: "kanban" })).status).toBe(200);
-    expect(await answer(await b.call("POST", "/control/access/list", { bearer: secret, slug: "roster" }))).toMatchObject({ status: 403, error: "out-of-scope" });
-    // Lowered to Developer on kanban: the token gives nothing there any more, nor removes, nor lists.
+    expect(await answer(await b.call("POST", "/control/access/list", { bearer: secret, slug: "roster" }))).toMatchObject({ status: 200, signIn: { admins: [] } });
+    // Lowered to Developer on kanban: the token gives nothing there any more, nor removes; it still lists.
     b.seed({ [ADA]: { kanban: "developer", roster: "developer" }, [CAROL]: { kanban: "visitor" } });
-    expect((await b.call("POST", "/control/access/list", { bearer: secret, slug: "kanban" })).status).toBe(403);
+    expect((await b.call("POST", "/control/access/list", { bearer: secret, slug: "kanban" })).status).toBe(200);
     expect((await b.call("PUT", "/control/access", { bearer: secret, slug: "kanban", who: DAN, role: "visitor" })).status).toBe(403);
     expect((await b.call("DELETE", "/control/access", { bearer: secret, slug: "kanban", who: CAROL })).status).toBe(403);
   });

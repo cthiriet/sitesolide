@@ -11,23 +11,28 @@
  * | a person outside them, or anyone without company sign-in, is `visitor` with a password | the portal could not tell who they are otherwise; the password is theirs, for one site, until its expiry |
  * | an admin grants at most their own role, on their project alone | a role handed on is never more than the one that hands it |
  * | the owner grants anything | the machine is theirs |
- * | a token grants `visitor` alone, never a password | what a token did before, sharing: whoever holds one is not the one who chose the company's people |
+ * | a token grants `visitor` alone, never a password | whoever holds a token is not the one who chose the company's people |
+ * | a domain is one of the company's (`OIDC_ALLOWED_DOMAINS`) when that list is set, for everyone, the owner included | a domain outside it could not even sign in: giving it access would say something false |
  *
  * And the narrowing nobody needs leave for: removing anyone, lowering anyone
- * the granter may grant, as soon as they may manage the project.
+ * the granter may grant, to any lower role, as soon as they may manage the
+ * project, whatever has changed in the company's domains since.
  *
  * What asks for the granter's live unlock, the owner's password or an
  * Admin's forced sign-in, is said by `Grant.unlock`, which the steward
- * enforces: a role above `visitor` given or raised, and password access,
- * which lets someone from outside the company in. Can open for a company
- * account or a domain does not: those are people the company's own sign-in
- * vouches for. Over the owner's socket root needs no unlock at all.
+ * enforces: a role above `visitor` given or raised; password access, which
+ * lets someone from outside the company in; and a whole domain while the
+ * company's domains are not listed, since nothing then bounds who signs in
+ * from it. Can open for a company account, or for one of the listed
+ * domains, does not: those are people the company's own sign-in vouches
+ * for. Over the owner's socket root needs no unlock at all.
  *
  * Whether a person may manage a project at all, an admin's role there, a
  * token's reach, is the caller's to judge first; these rules then judge the
  * change itself.
  */
 import { atLeast, rank, type Role } from "../../borrowed/access";
+import { isValidSlug } from "../../borrowed/manifest";
 import { domainOf, maySignIn } from "../../borrowed/sharing";
 import { reservedReason } from "../control/policy";
 import { DEFAULT_PASSWORD_DURATION_S, PASSWORD_DURATIONS_S, type SignInSettings } from "./protocol";
@@ -63,9 +68,13 @@ export function signsInWithAccount(email: string, signIn: SignInSettings): boole
   return signIn.configured && maySignIn(email, signIn.allowedDomains, signIn.admins);
 }
 
-/** The project's slug, refused for the platform's own and for one not deployed (a change to an existing entry excepted). */
+/**
+ * The project's slug, refused for the platform's own and for one not
+ * deployed (a change to an existing entry excepted). The registry's own
+ * shape of a slug, no dot: one it would not read back is never written.
+ */
 export function projectRefusal(slug: unknown, machine: Machine, existing: boolean): Refusal | null {
-  if (typeof slug !== "string" || !/^[a-z0-9][a-z0-9.-]{0,62}$/.test(slug)) return { refusal: "slug: a project's slug", code: "invalid" };
+  if (typeof slug !== "string" || !isValidSlug(slug)) return { refusal: "slug: a project's slug, lowercase letters, digits and dashes", code: "invalid" };
   if (reservedReason(slug, machine.zone) !== null) return { refusal: `${slug} belongs to the platform, which stays the owner's`, code: "out-of-scope" };
   if (!existing && !machine.exists(slug)) return { refusal: `${slug} is not deployed on this machine`, code: "not-found" };
   return null;
@@ -121,19 +130,19 @@ export function judgeGrant(registry: Registry, slug: string, whoValue: unknown, 
     if (!signIn.configured) {
       return { refusal: `${who.who}: signing in with a company account is not set up on this machine, so nobody at a domain could open the site; add people by email, who get password access`, code: "invalid" };
     }
-    // Whoever is not the owner did not choose the company's domains: the owner
-    // did, in OIDC_ALLOWED_DOMAINS. A domain already there is not widened by
-    // keeping it.
-    if (granter.kind !== "owner" && existing === null && !signIn.allowedDomains.includes(who.domain)) {
-      return {
-        refusal:
-          signIn.allowedDomains.length === 0
-            ? `${who.who}: the company's domains are not listed on this machine (OIDC_ALLOWED_DOMAINS), so only the owner gives a whole domain access; add people by email`
-            : `${who.who}: only the owner gives a domain outside the company's (${signIn.allowedDomains.join(", ")}) access`,
-        code: "out-of-scope",
-      };
+    // The owner chose the company's domains, in OIDC_ALLOWED_DOMAINS: a
+    // domain outside them could not sign in at all, whoever gives it. A
+    // domain already there is not widened by keeping it.
+    if (existing === null && signIn.allowedDomains.length > 0 && !signIn.allowedDomains.includes(who.domain)) {
+      return { refusal: `${who.who} is not among the company's domains (${signIn.allowedDomains.join(", ")}): only people at those domains sign in`, code: "invalid" };
     }
-    return { who, role, existing, password: false, raises: false, unlock: false };
+    // No list: anyone the provider vouches for signs in, so a whole domain
+    // opens wide, given under the granter's unlock; a token has none.
+    const unlock = existing === null && signIn.allowedDomains.length === 0;
+    if (unlock && granter.kind === "token") {
+      return { refusal: `${who.who}: the company's domains are not listed on this machine (OIDC_ALLOWED_DOMAINS), so a whole domain is given from the dashboard, unlocked, or by the owner over SSH, never with a token`, code: "out-of-scope" };
+    }
+    return { who, role, existing, password: false, raises: false, unlock };
   }
 
   if (rank(role) > rank(ceiling)) {
@@ -153,6 +162,11 @@ export function judgeGrant(registry: Registry, slug: string, whoValue: unknown, 
   if (existing?.password !== undefined) {
     if (role !== "visitor") return { refusal: `${who.who} has password access, which opens the site and nothing more: remove it first to give them a role`, code: "out-of-scope" };
     // Kept as it is: no password drawn, nobody let in who was not already.
+    return { who, role, existing, password: false, raises: false, unlock: false };
+  }
+  // Lowering is always allowed, to any lower role: someone whose domain left
+  // the company's since keeps nothing they are no longer meant to have.
+  if (existing !== null && rank(role) < rank(existing.role)) {
     return { who, role, existing, password: false, raises: false, unlock: false };
   }
   if (!signsInWithAccount(who.email, signIn)) {

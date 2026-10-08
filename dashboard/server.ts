@@ -277,7 +277,6 @@ const accessRoutes = createAccessRoutes({
   tokens: unlockTokens,
   unlocks: memberUnlocks,
   providerName: members.providerName,
-  togglePortal: (req) => either(secrets.togglePortal, memberRelay.togglePortal)(req, { timeout: () => undefined }),
 });
 
 const server = Bun.serve({

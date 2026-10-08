@@ -17,6 +17,13 @@
  * first time it reads a projection it leaves a mark in its data folder:
  * from then on, a missing file opens nothing either, and its old tables, kept
  * read-only, are never read again.
+ *
+ * **A failed read is tried again.** A file judged and refused stays refused
+ * until it changes: reading it again would refuse it again. A read that
+ * failed on the way, too many open files or an I/O error, says nothing of
+ * the file: the file is not marked seen, and is read again a few seconds
+ * later, so that a passing error does not keep every restricted site closed
+ * until the steward writes again.
  */
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, writeFileSync } from "node:fs";
 import {
@@ -30,8 +37,7 @@ import {
   type Projection,
   type Role,
 } from "./access";
-import type { GuestStore, SharingStore } from "./database";
-import { guestOpens, type Guest } from "./guests";
+import type { Guest, GuestStore, SharingStore } from "./database";
 import { DEFAULT_POLICY, identityRole } from "./sharing";
 
 /** What the portal decides from: the steward's projection, its own tables before it, or nothing. */
@@ -56,7 +62,14 @@ export type AccessReaderOptions = {
   /** The tables from before the steward kept access, read-only. */
   legacy: { guests: Pick<GuestStore, "byId" | "byHash">; sharing: Pick<SharingStore, "get"> } | null;
   log?: (line: string) => void;
+  /** Milliseconds; the tests hand their own. */
+  now?: () => number;
+  /** How the file is read: `readText`, unless a test hands a read that fails. */
+  read?: (path: string) => Read;
 };
+
+/** How long a read that failed on the way waits before the file is read again. */
+export const READ_RETRY_MS = 3_000;
 
 /**
  * The file's identity: what changes when the steward writes it again, or when
@@ -72,35 +85,59 @@ function identityOf(path: string): string | null {
   }
 }
 
-/** The file's text, opened without following a link, bounded. */
-function readText(path: string): string | null {
+/**
+ * The file's text, opened without following a link, bounded; `refused`, with
+ * why, for a file that is no projection whatever happens to it next (a link,
+ * not a plain file, too big, not UTF-8); `failed` for a read that broke on the
+ * way and may well succeed in a moment.
+ */
+export type Read = { text: string } | { refused: string } | { failed: string };
+
+function errorName(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : error instanceof Error ? error.name : "unknown";
+}
+
+export function readText(path: string): Read {
   let fd: number;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  } catch {
-    return null;
+  } catch (error) {
+    // A link in its place is refused by O_NOFOLLOW: no projection, whatever comes.
+    return errorName(error) === "ELOOP" ? { refused: "access.json is a link" } : { failed: errorName(error) };
   }
   try {
     const info = fstatSync(fd);
-    if (!info.isFile() || info.size > PROJECTION_MAX_BYTES) return null;
+    if (!info.isFile()) return { refused: "access.json is not a plain file" };
+    if (info.size > PROJECTION_MAX_BYTES) return { refused: "access.json is larger than a projection ever is" };
     const buffer = new Uint8Array(info.size + 1);
-    let read = 0;
-    while (read <= info.size) {
-      const n = readSync(fd, buffer, read, buffer.length - read, null);
+    let done = 0;
+    while (done <= info.size) {
+      const n = readSync(fd, buffer, done, buffer.length - done, null);
       if (n === 0) break;
-      read += n;
+      done += n;
     }
-    if (read > info.size) return null;
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer.slice(0, read));
-  } catch {
-    return null;
+    // Grown while it was read: written again in the meantime, read again.
+    if (done > info.size) return { failed: "changing" };
+    try {
+      return { text: new TextDecoder("utf-8", { fatal: true }).decode(buffer.slice(0, done)) };
+    } catch {
+      return { refused: "access.json is not UTF-8" };
+    }
+  } catch (error) {
+    return { failed: errorName(error) };
   } finally {
     closeSync(fd);
   }
 }
 
+/** Does this access from the portal's own table open this host, right now? */
+function legacyOpens(guest: Guest | null, host: string, now: number): guest is Guest {
+  return guest !== null && guest.host === host && (guest.expiresAt === null || guest.expiresAt > now);
+}
+
 function legacyGrant(guest: Guest | null, host: string, now: number): PasswordGrant | null {
-  if (!guestOpens(guest, host, now)) return null;
+  if (!legacyOpens(guest, host, now)) return null;
   // The hash is never read back here: the cookie names the access, the
   // sign-in found it by its hash already.
   return { id: guest.id, who: guest.label, hash: "", expiresAt: guest.expiresAt };
@@ -108,7 +145,10 @@ function legacyGrant(guest: Guest | null, host: string, now: number): PasswordGr
 
 export function createAccessReader(options: AccessReaderOptions): AccessReader {
   const log = options.log ?? ((line: string) => console.log(line));
+  const now = options.now ?? Date.now;
   let seen: string | null = null;
+  /** A read that failed on the way: the identity it was for, and when, so that it is tried again a few seconds later and not at every request. */
+  let failure: { identity: string; at: number } | null = null;
   let current: { reading: Reading; projection: Projection; index: ReturnType<typeof passwordIndex> } = {
     reading: "unreadable",
     projection: EMPTY_PROJECTION,
@@ -136,9 +176,20 @@ export function createAccessReader(options: AccessReaderOptions): AccessReader {
       return;
     }
     if (identity === seen) return;
+    if (failure !== null && failure.identity === identity && now() - failure.at < READ_RETRY_MS) return;
+    const text = (options.read ?? readText)(options.file);
+    if ("failed" in text) {
+      // Nothing is known of the file: nothing opens from it for now, and it is
+      // read again in a few seconds, changed or not.
+      failure = { identity, at: now() };
+      current = { reading: "unreadable", projection: EMPTY_PROJECTION, index: new Map() };
+      say(`failed:${text.failed}`, `access: ${options.file} could not be read (${text.failed}): only the owner's password and the admin emails open a site, read again in a few seconds`);
+      return;
+    }
+    failure = null;
+    // Judged from here on: a file refused stays refused until it changes.
     seen = identity;
-    const text = readText(options.file);
-    const read = text === null ? { unreadable: `${options.file} cannot be read` } : readProjection(text);
+    const read = "refused" in text ? { unreadable: text.refused } : readProjection(text.text);
     if ("unreadable" in read) {
       current = { reading: "unreadable", projection: EMPTY_PROJECTION, index: new Map() };
       say(`unreadable:${identity}`, `access: ${read.unreadable}: only the owner's password and the admin emails open a site until the steward writes it again`);

@@ -76,12 +76,14 @@ describe("the access routes", () => {
 describe("the tokens and the restart", () => {
   test("Tokens reads and writes under /api/tokens; a restart goes to the Secrets section's route, for the owner and a person alike", async () => {
     await readTokens()
-    await createToken({ label: "laptop", email: "ada@acme.test", expiresAt: null, scope: { slugs: ["blog"], create: false, outbound: false, domain: false, public: false } })
+    await createToken({ label: "laptop", holder: "ada@acme.test", expiresAt: null, scope: { slugs: ["blog"], create: false, outbound: false, domain: false, public: false } })
+    await createToken({ label: "agent", expiresAt: null, scope: { slugs: [], create: true, outbound: false, domain: false, public: false } })
     await revokeToken("abc")
     await restartService({ slug: "blog" })
     expect(requests).toEqual([
       "GET /api/tokens same-origin",
-      'POST /api/tokens {"label":"laptop","email":"ada@acme.test","expiresAt":null,"scope":{"slugs":["blog"],"create":false,"outbound":false,"domain":false,"public":false}} same-origin',
+      'POST /api/tokens {"label":"laptop","holder":"ada@acme.test","expiresAt":null,"scope":{"slugs":["blog"],"create":false,"outbound":false,"domain":false,"public":false}} same-origin',
+      'POST /api/tokens {"label":"agent","expiresAt":null,"scope":{"slugs":[],"create":true,"outbound":false,"domain":false,"public":false}} same-origin',
       'POST /api/tokens/revoke {"id":"abc"} same-origin',
       'POST /api/secrets/restart {"slug":"blog"} same-origin',
     ])

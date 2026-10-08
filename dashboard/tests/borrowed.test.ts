@@ -58,7 +58,7 @@ describe("nothing imports above the project", () => {
   });
 
   test("the borrowings are there, so the build ran", () => {
-    for (const name of ["manifest.ts", "locks.ts", "config.ts", "table.ts", "guests.ts"]) {
+    for (const name of ["manifest.ts", "locks.ts", "config.ts", "table.ts", "sharing.ts", "access.ts"]) {
       expect(readFileSync(join(PROJECT, "borrowed", name), "utf8")).toContain("borrow.ts");
     }
   });

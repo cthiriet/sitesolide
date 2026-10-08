@@ -34,15 +34,11 @@
  * password: changing the password invalidates every cookie in circulation,
  * the guests' included, and erasing the draw does too.
  */
-import { isValidId } from "./guests";
-import type { Role } from "./access";
+import { isAccessId, type Role } from "./access";
 import { cleanEmail } from "./sharing";
 
 /** Size of the draw kept in the data folder. */
 export const KEY_BYTES = 32;
-
-/** Bytes of a guest access identifier: 16 characters in base64url. */
-const ID_BYTES = 12;
 
 /** The methods that change nothing, and that therefore escape the Origin check. */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -204,7 +200,7 @@ export function readToken(
   }
 
   const guest = parts.length === 3 ? parts[1]! : null;
-  if (guest !== null && !isValidId(guest)) return null;
+  if (guest !== null && !isAccessId(guest)) return null;
 
   const expected = Buffer.from(sign(key, host, expiration, guest));
   if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) return null;
@@ -250,16 +246,9 @@ export function readIdentity(value: unknown): Identity | null {
   return identityFrom(value);
 }
 
-/** The identifier of a new guest access, which will travel in its cookie. */
-export function generateId(
-  randomSource: (bytes: number) => Uint8Array = (bytes) => crypto.getRandomValues(new Uint8Array(bytes)),
-): string {
-  return Buffer.from(randomSource(ID_BYTES)).toString("base64url");
-}
-
 /**
- * The hash under which the database keeps a guest password. A SHA-256
- * is enough for a randomly drawn password: see `guests.ts`.
+ * The hash a password access is found by. A SHA-256 is enough for a password
+ * drawn at random: see src/access.ts.
  */
 export function guestHash(password: string): string {
   return new Bun.CryptoHasher("sha256").update(password).digest("hex");

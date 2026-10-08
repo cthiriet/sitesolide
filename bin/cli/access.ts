@@ -6,12 +6,14 @@
  *   sitesolide share                                   general access and people with access
  *   sitesolide share <email|@domain>... [--role <role>] [--expires <24h|7d|30d|never>]
  *                                                      give access, or change a role; Can open by default
- *   sitesolide share --remove <email|@domain>...       take access away
+ *   sitesolide share --remove <email|@domain|name>...  take access away
  *   sitesolide people                                  everyone, their roles, who may create projects
  *   sitesolide people <email> --may-create|--no-create the right to create projects
+ *   sitesolide people --migrate-without-portal         carry access over without the portal's database
  *
- * A role is one rung of a ladder, each including the ones below: `visitor`
- * (Can open), `viewer`, `developer`, `admin`. A domain is Can open only. A
+ * A role is one rung of a ladder, each including the ones below: `can-open`
+ * (`visitor`, the name the machine keeps, is read too), `viewer`,
+ * `developer`, `admin`. A domain is Can open only. A
  * person outside the company's domains, or anyone when signing in with a
  * company account is not set up, is Can open only, with password access:
  * the machine draws the password, which the command shows once.
@@ -42,6 +44,18 @@ export type Role = (typeof ROLES)[number];
 
 /** What a person reads for each role. */
 export const ROLE_WORDS: Readonly<Record<Role, string>> = { visitor: "Can open", viewer: "Viewer", developer: "Developer", admin: "Admin" };
+
+/**
+ * The roles as the command takes and prints them: `can-open` for the first
+ * rung, which the machine keeps as `visitor`; `visitor` is read too, the
+ * name scripts written before may carry.
+ */
+export const ROLE_ARGUMENTS: Readonly<Record<string, Role>> = { "can-open": "visitor", visitor: "visitor", viewer: "viewer", developer: "developer", admin: "admin" };
+
+/** A role as the command prints it in `--json` and takes it back: `can-open`, never `visitor`. */
+export function roleName(role: Role): string {
+  return role === "visitor" ? "can-open" : role;
+}
 
 /** The durations of password access the steward accepts, by what the command takes. */
 export const DURATIONS: Readonly<Record<string, number | null>> = { "24h": 24 * 3600, "7d": 7 * 24 * 3600, "30d": 30 * 24 * 3600, never: null };
@@ -91,15 +105,16 @@ export const SHARE_OPTIONS: Readonly<Record<string, boolean>> = { "--role": true
 export const SHARE_USAGE = [
   "sitesolide share                 this project's general access and people with access",
   "   <email|@domain>...            give them access, Can open by default",
-  "   --role <role>                 visitor (Can open), viewer, developer or admin",
+  "   --role <role>                 can-open, viewer, developer or admin",
   "   --expires <24h|7d|30d|never>  for password access, 7d by default",
-  "   --remove <email|@domain>...   take their access away",
+  "   --remove <email|@domain>...   take their access away; a name given before, as it is listed",
 ];
 
 export const PEOPLE_USAGE = [
   "sitesolide people                everyone with access, their roles, who may create projects",
   "   <email> --may-create          let them create projects, Admin of what they create",
   "   <email> --no-create           take that right back",
+  "   --migrate-without-portal      when the portal's database does not read: carry the rest over without it",
 ];
 
 export type ShareRequest =
@@ -114,9 +129,6 @@ function usage(message: string, details: string[]): Failure {
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DOMAIN = /^@[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 
-function isRole(value: string): value is Role {
-  return (ROLES as readonly string[]).includes(value);
-}
 
 /**
  * An email or a `@domain`, lowercase, or why not. The steward judges it
@@ -150,11 +162,11 @@ export function readShareArguments(arguments_: string[]): ShareRequest | Failure
       const value = rest[i + 1];
       i++;
       if (value === undefined || value.startsWith("-")) {
-        return usage(`${argument}: ${argument === "--role" ? "visitor, viewer, developer or admin" : "24h, 7d, 30d or never"} must follow`, SHARE_USAGE);
+        return usage(`${argument}: ${argument === "--role" ? "can-open, viewer, developer or admin" : "24h, 7d, 30d or never"} must follow`, SHARE_USAGE);
       }
       if (argument === "--role") {
-        if (!isRole(value)) return { error: "invalid", message: `${value} is not a role: visitor (Can open), viewer, developer or admin; nothing was changed` };
-        role = value;
+        if (!Object.hasOwn(ROLE_ARGUMENTS, value)) return { error: "invalid", message: `${value} is not a role: can-open, viewer, developer or admin; nothing was changed` };
+        role = ROLE_ARGUMENTS[value]!;
       } else {
         if (!Object.hasOwn(DURATIONS, value)) return { error: "invalid", message: `${value} is not a duration: 24h, 7d, 30d or never; nothing was changed` };
         expires = DURATIONS[value];
@@ -166,9 +178,10 @@ export function readShareArguments(arguments_: string[]): ShareRequest | Failure
     }
     if (argument.startsWith("-")) return { error: "unknown-option", message: `${argument}: not an option of sitesolide share: nothing was changed`, details: SHARE_USAGE };
     let read = readWho(argument);
-    // A name a password access was carried over under ("Client Bob") is taken
-    // away as it stands, and given never.
-    if (typeof read !== "string" && removing && /^[\x20-\x7e]{1,120}$/.test(argument) && !argument.includes("@")) read = argument.trim();
+    // A name a password access was carried over under ("Client Bob", "Bob @
+    // the agency") is taken away as it stands, and given never. One starting
+    // with @ is a domain, typed wrong.
+    if (typeof read !== "string" && removing && /^[\x20-\x7e]{1,254}$/.test(argument) && argument.trim() !== "" && !argument.trim().startsWith("@")) read = argument.trim();
     if (typeof read !== "string") return read;
     if (!removing) given = true;
     if (!who.includes(read)) who.push(read);
@@ -185,11 +198,15 @@ export function readShareArguments(arguments_: string[]): ShareRequest | Failure
   return { action: "give", who, role: role ?? "visitor", expiresInS: expires };
 }
 
-export type PeopleRequest = { action: "list" } | { action: "create"; email: string; create: boolean };
+export type PeopleRequest = { action: "list" } | { action: "create"; email: string; create: boolean } | { action: "migrate" };
 
 export function readPeopleArguments(arguments_: string[]): PeopleRequest | Failure {
   const rest = (arguments_[0] === "people" ? arguments_.slice(1) : arguments_).filter((argument) => argument !== "--json");
   if (rest.length === 0) return { action: "list" };
+  if (rest.includes("--migrate-without-portal")) {
+    if (rest.length !== 1) return usage("--migrate-without-portal takes nothing else", PEOPLE_USAGE);
+    return { action: "migrate" };
+  }
   let email: string | null = null;
   let create: boolean | null = null;
   for (const argument of rest) {
@@ -260,12 +277,22 @@ export function accessWarnings(state: AccessState): string[] {
   return [];
 }
 
+/** An entry as `--json` prints it: its role named as the command takes it, `can-open` for the first rung. */
+function printedEntry(entry: EntryView): Omit<EntryView, "role"> & { role: string } {
+  return { ...entry, role: roleName(entry.role) };
+}
+
+/** Roles per project as `--json` prints them. */
+function printedRoles(roles: Record<string, Role>): Record<string, string> {
+  return Object.fromEntries(Object.entries(roles).map(([slug, role]) => [slug, roleName(role)]));
+}
+
 function resultFields(state: AccessState, extra: Record<string, unknown>): Record<string, unknown> {
   return {
     slug: state.slug,
     url: state.url,
     general: state.general?.access ?? null,
-    entries: state.entries,
+    entries: state.entries.map(printedEntry),
     signIn: { configured: state.signIn.configured, allowedDomains: state.signIn.allowedDomains },
     message: accessMessage(state),
     ...extra,
@@ -300,7 +327,7 @@ export async function share(arguments_: string[], slug: string, transport: Acces
     return 0;
   }
 
-  const changes: { who: string; change: string; role: Role | null; password?: string }[] = [];
+  const changes: { who: string; change: string; role: string | null; password?: string }[] = [];
   for (const who of request.who) {
     const done = request.action === "give" ? await transport.give(slug, who, request.role, request.expiresInS) : await transport.remove(slug, who);
     if (!done.ok) {
@@ -309,7 +336,7 @@ export async function share(arguments_: string[], slug: string, transport: Acces
       return 1;
     }
     const { entry, change, password } = done.value;
-    changes.push({ who: entry.who, change, role: change === "remove" ? null : entry.role, ...(password === undefined ? {} : { password }) });
+    changes.push({ who: entry.who, change, role: change === "remove" ? null : roleName(entry.role), ...(password === undefined ? {} : { password }) });
     if (change === "remove") output.say(`-> ${entry.who} no longer has access to ${slug}: refused from their next request`);
     else if (change === "none") output.say(`   nothing to change: ${entry.who} already has ${entryText(entry)}`);
     else output.say(`-> ${entry.who}: ${entryText(entry)} on ${slug}${change === "role" ? ", from their next request" : ""}`);
@@ -348,6 +375,8 @@ export type PeopleState = {
 export type PeopleTransport = {
   list: () => Promise<Reading<PeopleState>>;
   setCreate: (email: string, create: boolean) => Promise<Reading<{ person: PersonView; change: string }>>;
+  /** The registry made from members.json alone, the portal's database left out at the owner's word. */
+  migrateWithoutPortal: () => Promise<Reading<{ people: number; projects: number }>>;
 };
 
 /** `alpha: Developer, beta: Admin; may create projects`. */
@@ -384,6 +413,17 @@ export async function people(arguments_: string[], dashboardUrl: string, transpo
     output.failed(request);
     return 1;
   }
+  if (request.action === "migrate") {
+    const migrated = await transport.migrateWithoutPortal();
+    if (!migrated.ok) {
+      output.failed(migrated.failure);
+      return 1;
+    }
+    output.say(`-> access carried over on ${dashboardUrl} without the portal's database: ${migrated.value.people} person(s) signing in to the dashboard, ${migrated.value.projects} project(s) with people`);
+    output.say("   who could open which site, and password access, stay in the portal's database, read-only: give them again with sitesolide share");
+    output.succeeded("people", { migrated: true, withoutPortal: true, people: migrated.value.people, projects: migrated.value.projects, changed: true });
+    return 0;
+  }
   const read = await transport.list();
   if (!read.ok) {
     output.failed(read.failure);
@@ -392,7 +432,7 @@ export async function people(arguments_: string[], dashboardUrl: string, transpo
   output.say(`-> people of ${dashboardUrl}, over SSH, as the owner`);
   if (request.action === "list") {
     for (const line of describePeople(read.value)) output.say(line);
-    output.succeeded("people", { people: read.value.people, domains: read.value.domains, signIn: read.value.signIn, changed: false });
+    output.succeeded("people", { people: read.value.people.map((person) => ({ ...person, roles: printedRoles(person.roles) })), domains: read.value.domains, signIn: read.value.signIn, changed: false });
     return 0;
   }
   const set = await transport.setCreate(request.email, request.create);
@@ -409,7 +449,7 @@ export async function people(arguments_: string[], dashboardUrl: string, transpo
         : `-> ${request.email} may no longer create projects`,
   );
   output.say(`   ${person.who}  ${personText(person)}`);
-  output.succeeded("people", { email: request.email, create: person.create, roles: person.roles, change, changed: change !== "none" });
+  output.succeeded("people", { email: request.email, create: person.create, roles: printedRoles(person.roles), change, changed: change !== "none" });
   return 0;
 }
 
@@ -431,7 +471,7 @@ export function readCurlAnswer(output: string): { status: number; body: string }
 }
 
 const SOCKET = `--unix-socket ${OWNER_SOCKET}`;
-const SLUG = /^[a-z0-9][a-z0-9.-]{0,62}$/;
+const SLUG = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /**
  * A read, as root on the machine; the status on a line of its own after the
@@ -442,7 +482,7 @@ export function ownerReadCommand(path: "/people" | `/access?slug=${string}`): st
 }
 
 /** A change, the JSON body on standard input: no address of the request ever goes through a shell. */
-export function ownerWriteCommand(method: "PUT" | "DELETE", path: "/access/entry" | "/people/person"): string {
+export function ownerWriteCommand(method: "PUT" | "DELETE" | "POST", path: "/access/entry" | "/people/person" | "/access/migrate"): string {
   return `sudo curl -sS --max-time 30 -X ${method} -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' ${SOCKET} http://steward${path}`;
 }
 
@@ -539,6 +579,13 @@ export function sshPeople(run: RunOnMachine): PeopleTransport {
       if (!read.ok) return read;
       if (!isObject(read.value.person) || typeof read.value.change !== "string") return unreadable("answer");
       return { ok: true, value: read.value as unknown as { person: PersonView; change: string } };
+    },
+    async migrateWithoutPortal() {
+      const read = await askSteward(run, ownerWriteCommand("POST", "/access/migrate"), JSON.stringify({ withoutPortal: true }));
+      if (!read.ok) return read;
+      const { people: counted, projects } = read.value;
+      if (typeof counted !== "number" || typeof projects !== "number") return unreadable("answer");
+      return { ok: true, value: { people: counted, projects } };
     },
   };
 }

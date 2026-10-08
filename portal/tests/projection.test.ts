@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { encodeProjection, PROJECTION_MAX_BYTES } from "../src/access";
-import { createAccessReader } from "../src/projection";
+import { createAccessReader, READ_RETRY_MS, readText, type Read } from "../src/projection";
 import { accessFolder, grant, projection, site, WRITTEN_AT } from "./access-file";
 import { memoryGuests, memorySharing } from "./memory";
 
@@ -109,6 +109,77 @@ describe("reading the steward's projection", () => {
     if (process.getuid?.() !== 0) expect(reader.state().reading).toBe("unreadable");
     chmodSync(access.file, 0o640);
     expect(reader.state().reading).toBe("steward");
+  });
+});
+
+describe("a read that fails on the way", () => {
+  test("too many open files, or an I/O error, keeps nothing closed beyond a few seconds, the file unchanged", () => {
+    for (const code of ["EMFILE", "EIO", "ENFILE"]) {
+      const access = accessFolder(`transient-${code}`);
+      access.write(KANBAN);
+      let now = NOW;
+      let failing = true;
+      const reads: string[] = [];
+      const lines: string[] = [];
+      const read = (path: string): Read => {
+        reads.push(failing ? "failed" : "read");
+        return failing ? { failed: code } : readText(path);
+      };
+      const reader = access.reader(null, (line) => lines.push(line), { now: () => now, read });
+
+      // The first read fails: nothing opens from the file, the owner's emails aside.
+      expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
+      expect(reader.roleOf(HOST, "owner@acme.test", ADMINS)).toBe("admin");
+      expect(reader.state()).toEqual({ reading: "unreadable", writtenAt: null });
+      expect(lines.filter((line) => line.includes(code))).toHaveLength(1);
+
+      // Within the retry delay the file is not read again at every request.
+      now += READ_RETRY_MS - 1;
+      expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
+      expect(reads).toEqual(["failed"]);
+
+      // Past it, the same file, never rewritten by the steward, is read again and believed.
+      failing = false;
+      now += 1;
+      expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("developer");
+      expect(reader.state()).toEqual({ reading: "steward", writtenAt: WRITTEN_AT });
+      expect(reads).toEqual(["failed", "read"]);
+      // Believed, it is not read again until it changes.
+      now += 10 * READ_RETRY_MS;
+      reader.roleOf(HOST, "alice@acme.test", ADMINS);
+      expect(reads).toEqual(["failed", "read"]);
+    }
+  });
+
+  test("a file judged and refused stays refused until it changes, however long it waits", () => {
+    const access = accessFolder("refused-stays");
+    access.write("{ not json");
+    let now = NOW;
+    let reads = 0;
+    const reader = access.reader(null, () => {}, {
+      now: () => now,
+      read: (path) => {
+        reads++;
+        return readText(path);
+      },
+    });
+    expect(reader.state().reading).toBe("unreadable");
+    now += 100 * READ_RETRY_MS;
+    expect(reader.state().reading).toBe("unreadable");
+    expect(reads).toBe(1);
+    access.write(KANBAN);
+    expect(reader.state().reading).toBe("steward");
+  });
+
+  test("the real read says a link and a folder are refused, never a failure to retry", () => {
+    const access = accessFolder("kinds");
+    mkdirSync(access.file);
+    expect("refused" in readText(access.file)).toBe(true);
+    const linked = accessFolder("kinds-link");
+    writeFileSync(join(linked.folder, "elsewhere.json"), encodeProjection(KANBAN));
+    symlinkSync(join(linked.folder, "elsewhere.json"), linked.file);
+    expect(readText(linked.file)).toEqual({ refused: "access.json is a link" });
+    expect(readText(join(linked.folder, "absent.json"))).toEqual({ failed: "ENOENT" });
   });
 });
 

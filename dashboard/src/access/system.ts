@@ -17,8 +17,18 @@
  * link, only as regular files with a single name owned by the folder's
  * owner, copied into a folder of the steward's own, checked whole by SQLite
  * there, and read from that copy, which is then deleted. A copy that does
- * not check out is taken again, a few times; then the migration waits for
- * the next start.
+ * not check out is taken again, a few times; then the migration is tried
+ * again later.
+ *
+ * **A database the portal's account could have written is read as hostile.**
+ * The two tables read must carry exactly the portal's own definitions
+ * (`sqlite_master.sql`, against `EXPECTED_TABLES`), nothing else hung on
+ * them, no trigger, no index of their own, no generated column; the schema
+ * is not trusted to run functions (`trusted_schema = OFF`); the rows are
+ * counted, and their sizes measured without being read, before any is read
+ * (`octet_length`). Anything else stops the migration, which the owner can
+ * finish without the portal's database. The reasons are error names, never
+ * a path or a message that could quote one.
  */
 import { Database } from "bun:sqlite";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeSync } from "node:fs";
@@ -47,6 +57,8 @@ export type PortalReading = { kind: "absent" } | { kind: "read"; rows: PortalRow
 
 export type AccessSystem = {
   now: () => number;
+  /** The projection's identity as it lies, inode, size and times; null when it is not there. */
+  projectionStamp: () => string | null;
   /** The registry's text, null when there is none yet. Throws when it is there but cannot be read whole. */
   readRegistry: () => Promise<string | null>;
   writeRegistry: (text: string) => Promise<void>;
@@ -79,6 +91,19 @@ function errorCode(error: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
+/** A copy refused for what the file is, named: never a message that could quote its path. */
+class Refused extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+  }
+}
+
+/** What a failure is called in an answer and the log: its name, its code, never its message. */
+function reasonOf(error: unknown): string {
+  if (error instanceof Refused) return error.reason;
+  return errorCode(error) ?? (error instanceof Error ? error.name : "unknown");
+}
+
 /**
  * One file of the portal's folder copied to `destination`, or `absent`: opened
  * without following a link, a regular file with one name, owned by `uid`.
@@ -95,9 +120,9 @@ function copyOwnedFile(source: string, destination: string, uid: number | null):
   }
   try {
     const info = fstatSync(fd);
-    if (!info.isFile() || info.nlink !== 1) throw new Error(`${source} is not a plain file`);
-    if (uid !== null && info.uid !== uid) throw new Error(`${source} is not the portal's`);
-    if (info.size > MAX_DATABASE_BYTES) throw new Error(`${source} is larger than a portal's database ever is`);
+    if (!info.isFile() || info.nlink !== 1) throw new Refused("not-a-plain-file");
+    if (uid !== null && info.uid !== uid) throw new Refused("not-the-portals");
+    if (info.size > MAX_DATABASE_BYTES) throw new Refused("too-large");
     const out = openSync(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     try {
       const buffer = new Uint8Array(1024 * 1024);
@@ -106,7 +131,7 @@ function copyOwnedFile(source: string, destination: string, uid: number | null):
         const n = readSync(fd, buffer, 0, buffer.length, null);
         if (n === 0) break;
         total += n;
-        if (total > MAX_DATABASE_BYTES) throw new Error(`${source} grew past what a portal's database ever is`);
+        if (total > MAX_DATABASE_BYTES) throw new Refused("too-large");
         let written = 0;
         while (written < n) written += writeSync(out, buffer, written, n - written);
       }
@@ -128,26 +153,99 @@ function sameAsCopied(path: string, copied: { size: number; mtimeMs: number } | 
   }
 }
 
-function hasTable(db: Database, name: string): boolean {
-  return db.query<{ name: string }, [string]>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== null;
+/** A statement as SQLite keeps it, its spaces and line breaks collapsed, none around a parenthesis or a comma: what is compared. */
+export function normalizedSql(sql: string): string {
+  return sql
+    .replace(/\s+/g, " ")
+    .replace(/ ?([(),]) ?/g, "$1")
+    .trim();
+}
+
+/**
+ * The portal's own definitions of the two tables read, as `sqlite_master`
+ * keeps them (portal/src/database.ts, `IF NOT EXISTS` dropped by SQLite): the
+ * only one either table ever had.
+ */
+export const EXPECTED_TABLES: Readonly<Record<"sharing" | "invites", string>> = {
+  sharing: normalizedSql(`CREATE TABLE sharing (
+     host       TEXT PRIMARY KEY,
+     mode       TEXT NOT NULL,
+     people     TEXT NOT NULL,
+     domains    TEXT NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`),
+  invites: normalizedSql(`CREATE TABLE invites (
+     id        TEXT PRIMARY KEY,
+     hote      TEXT NOT NULL,
+     libelle   TEXT NOT NULL,
+     empreinte TEXT NOT NULL UNIQUE,
+     cree_a    INTEGER NOT NULL,
+     expire_a  INTEGER,
+     vu_a      INTEGER
+   )`),
+};
+
+/** Rows read at most: a hundred sites shared, a few thousand password access. */
+export const MAX_SHARING_ROWS = 10_000;
+export const MAX_INVITE_ROWS = 50_000;
+
+/**
+ * Each value's type and size, in bytes, before any is read: a value bigger
+ * than any the portal ever wrote stops the migration rather than filling the
+ * steward's memory. `octet_length` reads a value's size from its record,
+ * without loading it.
+ */
+const SHARING_BOUNDS =
+  "typeof(host) = 'text' AND octet_length(host) <= 253 AND typeof(mode) = 'text' AND octet_length(mode) <= 16 " +
+  "AND typeof(people) = 'text' AND octet_length(people) <= 262144 AND typeof(domains) = 'text' AND octet_length(domains) <= 32768 " +
+  "AND typeof(updated_at) = 'integer'";
+const INVITE_BOUNDS =
+  "typeof(id) = 'text' AND octet_length(id) <= 16 AND typeof(hote) = 'text' AND octet_length(hote) <= 253 " +
+  "AND typeof(libelle) = 'text' AND octet_length(libelle) <= 1024 AND typeof(empreinte) = 'text' AND octet_length(empreinte) = 64 " +
+  "AND typeof(cree_a) = 'integer' AND (expire_a IS NULL OR typeof(expire_a) = 'integer')";
+
+/** Why a table may not be read, or null; "absent" for a portal from before it. */
+function tableRefusal(db: Database, name: "sharing" | "invites", maxRows: number, bounds: string): string | null | "absent" {
+  const objects = db
+    .query<{ type: string; name: string; sql: string | null }, [string, string]>("SELECT type, name, sql FROM sqlite_master WHERE tbl_name = ? OR name = ? LIMIT 16")
+    .all(name, name);
+  const table = objects.find((one) => one.type === "table" && one.name === name);
+  if (table === undefined) return objects.length === 0 ? "absent" : "unexpected-schema";
+  if (typeof table.sql !== "string" || normalizedSql(table.sql) !== EXPECTED_TABLES[name]) return "unexpected-schema";
+  // Its primary key's and its UNIQUE's own indexes, which SQLite makes and
+  // keeps no statement for; nothing else.
+  for (const one of objects) {
+    if (one === table) continue;
+    if (one.type !== "index" || one.sql !== null || !one.name.startsWith(`sqlite_autoindex_${name}_`)) return "unexpected-schema";
+  }
+  const rows = db.query<{ n: number }, []>(`SELECT count(*) AS n FROM ${name}`).get()?.n ?? 0;
+  if (rows > maxRows) return "too-many-rows";
+  const outside = db.query<{ n: number }, []>(`SELECT count(*) AS n FROM ${name} WHERE NOT (${bounds})`).get()?.n ?? 0;
+  if (outside > 0) return "oversized-rows";
+  return null;
 }
 
 /** The copy, opened, checked and read: its two tables, either missing on a portal from before them. */
-function readCopy(path: string): PortalRows | { reason: string } {
+export function readCopy(path: string): PortalRows | { reason: string } {
   // A private copy read once and deleted: it needs none of openDatabase's
-  // settings but the wait for a lock, which no one else holds on it.
+  // settings but the wait for a lock, which no one else holds on it, and a
+  // schema that runs no function of its own.
   const db = new Database(path, { readwrite: true, create: false, strict: true });
   try {
     db.run("PRAGMA busy_timeout = 10000");
+    db.run("PRAGMA trusted_schema = OFF");
     const check = db.query<{ quick_check: string }, []>("PRAGMA quick_check").get();
-    if (check?.quick_check !== "ok") return { reason: "the copy of the portal's database does not check out" };
-    const sharing = hasTable(db, "sharing")
-      ? db.query<SharingRow, []>("SELECT host, mode, people, domains, updated_at FROM sharing ORDER BY host").all()
-      : [];
-    const invites = hasTable(db, "invites")
-      ? db.query<InviteRow, []>("SELECT id, hote, libelle, empreinte, cree_a, expire_a FROM invites ORDER BY cree_a, id").all()
-      : [];
-    return { sharing, invites };
+    if (check?.quick_check !== "ok") return { reason: "check-failed" };
+    const sharing = tableRefusal(db, "sharing", MAX_SHARING_ROWS, SHARING_BOUNDS);
+    if (sharing !== null && sharing !== "absent") return { reason: sharing };
+    const invites = tableRefusal(db, "invites", MAX_INVITE_ROWS, INVITE_BOUNDS);
+    if (invites !== null && invites !== "absent") return { reason: invites };
+    return {
+      sharing: sharing === "absent" ? [] : db.query<SharingRow, []>(`SELECT host, mode, people, domains, updated_at FROM sharing ORDER BY host LIMIT ${MAX_SHARING_ROWS}`).all(),
+      invites: invites === "absent" ? [] : db.query<InviteRow, []>(`SELECT id, hote, libelle, empreinte, cree_a, expire_a FROM invites ORDER BY cree_a, id LIMIT ${MAX_INVITE_ROWS}`).all(),
+    };
+  } catch (error) {
+    return { reason: errorCode(error) ?? (error instanceof Error ? error.name : "unknown") };
   } finally {
     db.close();
   }
@@ -157,8 +255,19 @@ export function createAccessSystem(config: AccessSystemConfig, checkOwner: boole
   const registryFile = join(config.stateFolder, REGISTRY_NAME);
   const prepare = () => mkdirSync(config.stateFolder, { recursive: true, mode: 0o700 });
 
+  const projectionFile = join(config.portalKeyFolder, PROJECTION_NAME);
+
   return {
     now: () => Date.now(),
+
+    projectionStamp() {
+      try {
+        const info = lstatSync(projectionFile);
+        return `${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+      } catch {
+        return null;
+      }
+    },
 
     readRegistry: async () => readRootFile(registryFile, MAX_REGISTRY_BYTES),
     async writeRegistry(text) {
@@ -182,13 +291,13 @@ export function createAccessSystem(config: AccessSystemConfig, checkOwner: boole
         folder = lstatSync(config.portalDataFolder);
       } catch (error) {
         if (errorCode(error) === "ENOENT") return { kind: "absent" };
-        return { kind: "unreadable", reason: `the portal's data folder cannot be read (${errorCode(error) ?? "unknown"})` };
+        return { kind: "unreadable", reason: `folder-${reasonOf(error)}` };
       }
-      if (!folder.isDirectory() || folder.isSymbolicLink()) return { kind: "unreadable", reason: "the portal's data folder is not a folder" };
+      if (!folder.isDirectory() || folder.isSymbolicLink()) return { kind: "unreadable", reason: "folder-not-a-folder" };
       const uid = checkOwner ? folder.uid : null;
-      if (uid === 0) return { kind: "unreadable", reason: "the portal's data folder is root's, not the portal's" };
+      if (uid === 0) return { kind: "unreadable", reason: "folder-root-owned" };
       const source = join(config.portalDataFolder, PORTAL_DATABASE);
-      let last = "the portal's database kept changing while it was copied";
+      let last = "kept-changing";
       for (let attempt = 0; attempt < 5; attempt++) {
         prepare();
         const copy = join(config.stateFolder, `.portal-copy-${crypto.randomUUID()}`);
@@ -205,7 +314,7 @@ export function createAccessSystem(config: AccessSystemConfig, checkOwner: boole
           }
           return { kind: "read", rows };
         } catch (error) {
-          last = error instanceof Error ? error.message : String(error);
+          last = reasonOf(error);
         } finally {
           rmSync(copy, { recursive: true, force: true });
         }

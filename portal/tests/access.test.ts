@@ -15,6 +15,7 @@ import {
   passwordIndex,
   rank,
   readProjection,
+  WHO_MAX,
   type Projection,
 } from "../src/access";
 import { grant, projection, site } from "./access-file";
@@ -164,7 +165,7 @@ describe("reading the steward's projection", () => {
       { who: "" },
       { who: "Alice\nX-Injected: yes" },
       { who: "Zoë" },
-      { who: "a".repeat(121) },
+      { who: "a".repeat(255) },
       { who: 42 },
       { hash: "A".repeat(64) },
       { hash: "a".repeat(63) },
@@ -178,6 +179,15 @@ describe("reading the steward's projection", () => {
     }
     refused(withSite({ passwords: [null] }));
     refused(withSite({ passwords: ["a".repeat(64)] }));
+  });
+
+  test("who it was given to is bounded by an email's own length, 254 characters, the steward's bound too", () => {
+    const longest = `${"a".repeat(64)}@${"b".repeat(60)}.${"c".repeat(63)}.${"d".repeat(63)}`.slice(0, 254);
+    for (const who of [`${"a".repeat(64)}@${"b".repeat(60)}.example`, longest, "n".repeat(254)]) {
+      const read = readProjection(withGrant({ who }));
+      expect({ who: who.length, readable: !("unreadable" in read) }).toEqual({ who: who.length, readable: true });
+    }
+    expect(WHO_MAX).toBe(254);
   });
 
   test("an access given under a name, before the registry, is kept as such", () => {

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { AUDIT_FLOOR_MS, AUDIT_RETENTION_MS, COLLAPSE_WINDOW_MS, auditStore, guestStore, openDatabase, PRAGMAS, sharingStore } from "../src/database";
 import { DATA_DIR } from "../src/config";
-import type { Guest } from "../src/guests";
+import type { Guest } from "../src/database";
 import { DEFAULT_POLICY } from "../src/sharing";
 
 // Safety rail: tests/setup.ts must have diverted DATA_DIR before any import,

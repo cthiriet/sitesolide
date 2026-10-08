@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { machineRefusal, may, mayRestart, needsUnlock, powerRefusal, roleDetail, type Power } from "../src/people/powers";
+import { generalNeedsUnlock, machineRefusal, may, mayRestart, needsUnlock, powerRefusal, roleDetail, type Power } from "../src/people/powers";
 import { UNLOCK_DURATION_MS } from "../src/secrets/protocol";
 import {
   attemptWait,
@@ -31,7 +31,7 @@ describe("what each role may do", () => {
     "secrets.write",
     "secrets.read",
     "secrets.restore",
-    "door",
+    "general",
     "access",
     "backups",
     "deploy",
@@ -52,15 +52,17 @@ describe("what each role may do", () => {
     expect([mayRestart("visitor"), mayRestart("viewer"), mayRestart("developer"), mayRestart("admin"), mayRestart(null)]).toEqual([false, false, true, true, false]);
   });
 
-  test("whatever reads or writes a secret, changes general access or restores asks for the person's own unlock", () => {
-    expect(all.filter(needsUnlock)).toEqual(["secrets.write", "secrets.read", "secrets.restore", "door", "backups"]);
+  test("whatever reads or writes a secret, or restores, asks for the person's own unlock; general access only to make a site public", () => {
+    expect(all.filter(needsUnlock)).toEqual(["secrets.write", "secrets.read", "secrets.restore", "backups"]);
+    expect(generalNeedsUnlock(false)).toBe(true);
+    expect(generalNeedsUnlock(true)).toBe(false);
     // People with access ask for it only to give a role above Can open, which the access rules judge.
     expect(needsUnlock("access")).toBe(false);
   });
 
   test("the refusal names the person, their role and what it would take, in the words of the page", () => {
-    expect(powerRefusal("a@acme.test", null, "blog", "door")).toBe("a@acme.test holds no role on blog");
-    expect(powerRefusal("a@acme.test", "visitor", "blog", "door")).toBe("a@acme.test can open blog and nothing more: changing its general access takes an Admin");
+    expect(powerRefusal("a@acme.test", null, "blog", "general")).toBe("a@acme.test holds no role on blog");
+    expect(powerRefusal("a@acme.test", "visitor", "blog", "general")).toBe("a@acme.test can open blog and nothing more: changing its general access takes an Admin");
     expect(powerRefusal("a@acme.test", "viewer", "blog", "access")).toBe("a@acme.test is a Viewer on blog: its people with access are its Admin's");
     expect(powerRefusal("a@acme.test", "developer", "blog", "secrets.read")).toBe(
       "a@acme.test is a Developer on blog: reading a value back takes an Admin: a Developer sets, replaces and removes values, and never reads one",

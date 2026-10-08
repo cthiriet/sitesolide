@@ -210,7 +210,7 @@ describe("refusals, before anything served changes", () => {
     deposit(bench, { ...APP, port: 3040, portal: true });
     stageBundle(bench, APP_FILES);
     const outcome = await run(bench, request({ ...APP, port: 3040 }, PUBLIC));
-    expect(outcome).toMatchObject({ ok: false, code: "door-changed" });
+    expect(outcome).toMatchObject({ ok: false, code: "access-changed" });
     expect(bench.events).toContain("release");
   });
 

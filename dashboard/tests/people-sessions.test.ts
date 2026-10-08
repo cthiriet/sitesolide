@@ -121,9 +121,9 @@ describe("who a member is, asked of the steward", () => {
   }
 
   test("the steward's answer, kept a few seconds", async () => {
-    const { resolve, asked } = resolver(async () => Response.json({ identity: { kind: "member", email: "alice@acme.test", name: null, roles: { blog: "viewer" } }, expiresAt: 5 }));
+    const { resolve, asked } = resolver(async () => Response.json({ identity: { kind: "person", email: "alice@acme.test", name: null, roles: { blog: "viewer" } }, expiresAt: 5 }));
     const first = await resolve(request, 1000);
-    expect(first !== null && first !== "unreachable" && first.identity).toMatchObject({ kind: "member", roles: { blog: "viewer" } });
+    expect(first !== null && first !== "unreachable" && first.identity).toMatchObject({ kind: "person", roles: { blog: "viewer" } });
     await resolve(request, 2000);
     expect(asked()).toBe(1);
     await resolve(request, 1000 + 6000);
@@ -142,7 +142,7 @@ describe("who a member is, asked of the steward", () => {
     });
     expect(await mute.resolve(request, 1)).toBe("unreachable");
     expect(mute.closed).toEqual([]);
-    const other = resolver(async () => Response.json({ identity: { kind: "member", email: "boss@acme.test", name: null, roles: { blog: "admin" } }, expiresAt: 5 }));
+    const other = resolver(async () => Response.json({ identity: { kind: "person", email: "boss@acme.test", name: null, roles: { blog: "admin" } }, expiresAt: 5 }));
     expect(await other.resolve(request, 1)).toBe("unreachable");
   });
 });

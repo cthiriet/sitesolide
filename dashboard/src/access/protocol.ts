@@ -80,7 +80,7 @@ export const REGISTRY_NAME = "access.json";
 /** The registry before it: the dashboard's people and their roles, kept read-only once carried over. */
 export const LEGACY_REGISTRY_NAME = "members.json";
 
-/** The portal's database, where sharing and password access lived before the registry. */
+/** The portal's database, where who could open a site and password access lived before the registry. */
 export const PORTAL_DATABASE = "portal.db";
 
 /** Entries on one project: a few hundred people, a few domains. */
@@ -90,8 +90,9 @@ export const MAX_ENTRIES = 600;
 export const MAX_DASHBOARD_PEOPLE = 200;
 
 /**
- * How long a password access lasts, chosen when it is given. The portal's
- * guest durations, the same four, so that nothing is offered that was not.
+ * How long a password access lasts, chosen when it is given: the same four
+ * durations the portal offered before the registry, so that nothing is
+ * offered that was not.
  */
 export const PASSWORD_DURATIONS_S = [24 * 3600, 7 * 24 * 3600, 30 * 24 * 3600, null] as const;
 

@@ -1,6 +1,8 @@
 /**
  * The Tokens page's routes, `/api/tokens`: the owner's side of the control API,
- * behind the dashboard's session like every other page.
+ * behind the dashboard's session like every other page. The owner makes a
+ * token for themselves, or for a person of People (`holder`), which the
+ * steward mints within that person's roles.
  *
  * Same stance as src/secrets/routes.ts: the dashboard checks the origin, the
  * session and the shape of the body, adds the unlock token it holds, and
@@ -12,15 +14,15 @@
  * on the machine, it deserves the password retyped. The token's value comes
  * back once, in the answer to the creation, and is never stored here.
  *
- * Every creation and revocation goes into the audit, actor `owner`. A member's
- * own tokens answer at the same addresses through src/people/relay.ts, and
- * the steward journals them under the member's email.
+ * Every creation and revocation goes into the audit, actor `owner`. A
+ * person's own tokens answer at the same addresses through
+ * src/people/relay.ts, and the steward journals them under their email.
  */
 import type { SessionReader } from "../routes";
 import { isAcceptableOrigin, type Session } from "../sessions";
 import type { Tokens } from "../secrets/tokens";
 import { reach, type ControlSteward } from "./client";
-import type { TeamPageResponse, TokenView } from "./protocol";
+import type { Scope, TeamPageResponse, TokenView } from "./protocol";
 import type { ControlStore } from "./store";
 
 export type TeamDependencies = {
@@ -104,9 +106,9 @@ export function createTeamRoutes(dependencies: TeamDependencies, clock: () => nu
       const kept = tokens.read(open.hash);
       if (kept === null) return error(423, "locked", "Unlock first: creating a token needs the dashboard password.");
 
-      const { label, email, expiresAt, scope } = body;
+      const { label, holder, expiresAt, scope } = body;
       const reached = await reach(
-        () => steward.createToken({ token: kept.token, label: label as string, email: email as string, expiresAt: expiresAt as number | null, scope: scope as never }),
+        () => steward.createToken({ token: kept.token, label: label as string, holder: holder as string, expiresAt: expiresAt as number | null, scope: scope as Scope }),
         [kept.token],
       );
       if (reached.kind === "received" && reached.status === 401 && reached.body.error === "locked") {
@@ -120,7 +122,7 @@ export function createTeamRoutes(dependencies: TeamDependencies, clock: () => nu
         actor: "owner",
         action: "token.create",
         target: null,
-        detail: { id: created.id, label: created.label, email: created.email, expiresAt: created.expiresAt, scope: created.scope },
+        detail: { id: created.id, label: created.label, email: created.email, member: created.member, expiresAt: created.expiresAt, scope: created.scope },
       });
       return json({ token: created, secret: reached.body.secret }, 201);
     },

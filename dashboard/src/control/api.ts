@@ -213,7 +213,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
   function statusOf(slug: string, identity: Identity, site: Site | undefined, age: number | null): ProjectStatus {
     const access = identity.owned.includes(slug) ? "owned" : "granted";
     if (site === undefined) {
-      return { slug, access, deployed: false, type: null, url: null, portal: null, services: [], deployedAt: null, snapshotAge: age };
+      return { slug, access, deployed: false, type: null, url: null, general: null, portal: null, services: [], deployedAt: null, snapshotAge: age };
     }
     return {
       slug,
@@ -221,6 +221,8 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       deployed: true,
       type: site.type === "no-manifest" ? null : site.type,
       url: `https://${site.address}/`,
+      // What a visitor meets: the preview code first, then the portal in front, else nothing.
+      general: site.lock.closed ? "code" : site.portal.installed ? "restricted" : "public",
       portal: { wanted: site.portal.wanted, installed: site.portal.installed },
       services: site.services.map((service) => ({
         name: service.name,

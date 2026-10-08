@@ -19,24 +19,15 @@
  *
  * The portal keeps no list of people any more: the steward holds the access
  * registry and writes the projection the portal reads (src/projection.ts).
- * The routes that changed sharing and guest access answer `410 moved`, and
- * their tables stay in `portal.db`, read-only, for a rollback. `GET
- * /admin/access` says what the portal reads, for the steward and the CLI.
- *
- * ## Who may say who acts
- *
- * The routes that took an actor kept the rule they had: an email or a
- * token named as the actor is believed from root alone, recognised by the
- * uid of the connection's other end (src/peer.ts), and refused `403
- * actor-not-root` from anyone else, before the route says it moved. A
- * compromised dashboard never wrote under someone else's name here, and
- * still does not.
+ * The routes that changed who may open a site before it answer `410 moved`
+ * to whoever asks, whatever the body: they change nothing, so there is no
+ * actor to believe or refuse. Their tables stay in `portal.db`, read-only,
+ * for a rollback. `GET /admin/access` says what the portal reads, for the
+ * steward and the CLI.
  */
 import type { AuditStore } from "./database";
 import type { Settings } from "./oidc";
-import { ROOT_UID, type CallerUid } from "./peer";
 import type { AccessReader } from "./projection";
-import { cleanEmail } from "./sharing";
 
 function respond(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -47,7 +38,7 @@ function isRelayed(req: Request): boolean {
   return req.headers.has("x-forwarded-for") || req.headers.has("x-portal-hote");
 }
 
-// --- Sign-in settings and the actor rule ------------------------------------------
+// --- Sign-in settings -----------------------------------------------------------
 
 /**
  * What the dashboard shows about signing in with the provider: whether it is
@@ -74,43 +65,23 @@ export function ssoView(settings: Settings | null): SsoView {
   };
 }
 
-/**
- * Who a change names as its actor: `owner` by default; a token's `token:<id>`
- * or an email, which only root may name: anyone else naming one is refused,
- * 403 `actor-not-root`. Anything else is refused as invalid.
- */
-export function readActor(actor: unknown, req: Request, callerUid: CallerUid): { actor: string } | { refusal: Response } {
-  if (actor === undefined || actor === "owner") return { actor: "owner" };
-  const token = typeof actor === "string" && /^token:[A-Za-z0-9_-]{1,64}$/.test(actor) ? actor : null;
-  const named = token ?? cleanEmail(actor);
-  if (named === null) return { refusal: respond({ error: "invalid-actor" }, 400) };
-  const uid = callerUid(req);
-  if (uid !== ROOT_UID) {
-    // The kind of actor, never its value: an address is a person's.
-    console.warn(`admin: ${token === null ? "an email" : "a token"} named as actor by uid ${uid ?? "unknown"} refused: only root names who acts`);
-    return { refusal: respond({ error: "actor-not-root" }, 403) };
-  }
-  return { actor: named };
-}
-
 export type AccessAdmin = {
   /** `GET /admin/access`: what the portal decides who may open a site from. */
   access: (req: Request) => Response;
   /** `GET /admin/sharing`: how people sign in, which the dashboard offers on its sign-in page. */
   sso: (req: Request) => Response;
-  /** The routes that changed sharing and guest access: the steward keeps access now. */
-  moved: (req: Request) => Promise<Response>;
+  /** The routes that changed who may open a site before the steward kept it. */
+  moved: (req: Request) => Response;
   audit: (req: Request) => Response;
 };
 
-/** What the moved routes answer, once the actor rule is satisfied. */
+/** What the moved routes answer. */
 export const MOVED = {
   error: "moved",
   message: "who may open a site is kept by the steward now: sitesolide share, or the dashboard's Access section",
 };
 
-export function createAccessAdmin(stores: { access: Pick<AccessReader, "state">; audit: AuditStore; settings: Settings | null; callerUid?: CallerUid }): AccessAdmin {
-  const callerUid: CallerUid = stores.callerUid ?? (() => null);
+export function createAccessAdmin(stores: { access: Pick<AccessReader, "state">; audit: AuditStore; settings: Settings | null }): AccessAdmin {
   return {
     access(req) {
       if (isRelayed(req)) return respond({ error: "relayed-request" }, 403);
@@ -123,21 +94,8 @@ export function createAccessAdmin(stores: { access: Pick<AccessReader, "state">;
       return respond({ sso: ssoView(stores.settings), sites: [] });
     },
 
-    async moved(req) {
+    moved(req) {
       if (isRelayed(req)) return respond({ error: "relayed-request" }, 403);
-      const text = await req.text().catch(() => "");
-      if (text !== "") {
-        let body: unknown;
-        try {
-          body = JSON.parse(text);
-        } catch {
-          return respond({ error: "unreadable-body" }, 400);
-        }
-        if (typeof body === "object" && body !== null && !Array.isArray(body)) {
-          const reading = readActor((body as { actor?: unknown }).actor, req, callerUid);
-          if ("refusal" in reading) return reading.refusal;
-        }
-      }
       return respond(MOVED, 410);
     },
 

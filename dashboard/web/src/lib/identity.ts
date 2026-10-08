@@ -80,6 +80,8 @@ export function signInFailure(reason: string | null): string | null {
     case null:
     case "":
       return null
+    case "no-role":
+    // An address from before the reason was renamed, in a bookmark or history.
     case "not-a-member":
       return "This account has no role on any project here. Ask the owner, or an Admin of the project, to add you."
     case "domain-not-allowed":

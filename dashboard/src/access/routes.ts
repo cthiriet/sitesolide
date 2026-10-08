@@ -6,7 +6,7 @@
  *   GET    /api/access?slug=<slug>      the owner, or the project's Admin
  *   PUT    /api/access/entry            someone given access, or their role changed
  *   DELETE /api/access/entry            someone taken off
- *   PUT    /api/access/general          public or restricted; the preview code is `sitesolide lock`'s
+ *   PUT    /api/access/general          public, with the unlock and the slug retyped; restricted, with neither; the preview code is `sitesolide lock`'s
  *   GET    /api/people                  the owner's
  *   PUT    /api/people/person           the right to create projects
  *   DELETE /api/people/person           someone taken off every project
@@ -50,12 +50,6 @@ export type AccessRoutesDependencies = {
   unlocks: Tokens;
   /** The provider's name, for the line to send someone given a role. */
   providerName: (now: number) => Promise<string | null>;
-  /**
-   * The Secrets section's change of a site's portal, the owner's or a
-   * person's, which general access takes: public is the portal off,
-   * restricted the portal on.
-   */
-  togglePortal: (req: Request) => Promise<Response>;
 };
 
 export type AccessRoutes = {
@@ -80,7 +74,7 @@ const error = (status: number, code: string, message: string) => json({ error: c
 export const ACCESS_NOT_AVAILABLE = "The steward on this machine does not keep people with access yet: run sitesolide upgrade.";
 
 /** What the page reads when a change needs the unlock. */
-export const ACCESS_LOCKED = "Unlock first: giving someone a role above Can open, password access, or the right to create projects needs it.";
+export const ACCESS_LOCKED = "Unlock first: giving someone a role above Can open, password access, a whole domain, the right to create projects, or making a site public needs it.";
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -224,9 +218,11 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies, clock
     },
 
     /**
-     * General access, public or restricted: the portal turned off or on, by
-     * the very route the Secrets section takes, under the same unlock. A
-     * preview code is set and removed with `sitesolide lock`, never here.
+     * General access, public or restricted: the portal turned off or on, the
+     * steward judging. Making a site public takes the unlock and its slug
+     * retyped; restricting it takes neither, less exposure being refused to
+     * nobody who manages it. A preview code is set and removed with
+     * `sitesolide lock`, never here.
      */
     async general(req) {
       const who = await asker(req, true);
@@ -235,15 +231,22 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies, clock
       if (body === null) return error(400, "invalid", "Unreadable request body.");
       if (body.access === "code") return error(400, "invalid", "A preview code is set and removed with sitesolide lock, from the project's folder.");
       if (body.access !== "public" && body.access !== "restricted") return error(400, "invalid", "access: public or restricted.");
-      const headers = new Headers(req.headers);
-      headers.delete("content-length");
-      headers.set("content-type", "application/json");
-      const translated = new Request(req.url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ slug: body.slug, active: body.access === "restricted", confirmation: typeof body.confirmation === "string" ? body.confirmation : "" }),
-      });
-      return dependencies.togglePortal(translated);
+      if (typeof body.slug !== "string" || body.slug === "" || body.slug.length > 128) return error(400, "invalid", "Name one project.");
+      const restricting = body.access === "restricted";
+      const fields = { slug: body.slug, active: restricting, confirmation: typeof body.confirmation === "string" ? body.confirmation : "" };
+      if (who.kind === "owner") {
+        const kept = dependencies.tokens.read(who.hash)?.token ?? null;
+        if (!restricting && kept === null) return error(423, "locked", ACCESS_LOCKED);
+        const reached = await reach(() => steward.portal({ ...(kept === null ? {} : { token: kept }), ...fields }), kept === null ? [] : [kept]);
+        return ownerAnswer(who, reached, kept);
+      }
+      const kept = dependencies.unlocks.read(who.hash)?.token ?? null;
+      if (!restricting && kept === null) return error(423, "locked", ACCESS_LOCKED);
+      const reached = await reach(
+        () => dependencies.members.act("POST", "/people/portal", { session: who.token, ...(kept === null ? {} : { token: kept }), ...fields }, true),
+        kept === null ? [who.token] : [who.token, kept],
+      );
+      return personAnswer(who, reached, kept);
     },
 
     async people(req) {

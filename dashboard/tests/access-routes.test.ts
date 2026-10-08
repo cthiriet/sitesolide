@@ -38,6 +38,7 @@ function setup(who: "owner" | "person" | "none", answers: { status?: number; bod
     people: () => answer("GET", "/people", null),
     putPerson: (body) => answer("PUT", "/people/person", body as Record<string, unknown>),
     removePerson: (email) => answer("DELETE", "/people/person", { email }),
+    portal: (body) => answer("POST", "/portal", body as Record<string, unknown>),
   };
   const tokens = createTokens(() => NOW);
   const unlocks = createTokens(() => NOW);
@@ -49,10 +50,9 @@ function setup(who: "owner" | "person" | "none", answers: { status?: number; bod
         ? null
         : who === "owner"
           ? { session, token: "owner-session", identity: { kind: "owner" } }
-          : { session, token: "person-session", identity: { kind: "member", email: "ann@acme.test", name: null, roles: { blog: "admin" }, create: false, expiresAt: NOW + 1000 } },
+          : { session, token: "person-session", identity: { kind: "person", email: "ann@acme.test", name: null, roles: { blog: "admin" }, create: false, expiresAt: NOW + 1000 } },
     { forget: (hash: string) => void forgotten.push(hash) },
   );
-  const toggled: Record<string, unknown>[] = [];
   const routes = createAccessRoutes(
     {
       publicUrl: PUBLIC_URL,
@@ -65,16 +65,12 @@ function setup(who: "owner" | "person" | "none", answers: { status?: number; bod
       tokens,
       unlocks,
       providerName: async () => "Acme",
-      togglePortal: async (req) => {
-        toggled.push((await req.json()) as Record<string, unknown>);
-        return Response.json({ portal: { requested: true } });
-      },
     },
     () => NOW,
   );
   const request = (method: string, path: string, body?: object, origin: string | null = PUBLIC_URL) =>
     new Request(`${PUBLIC_URL}${path}`, { method, headers: origin === null ? {} : { origin }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  return { routes, calls, tokens, unlocks, forgotten, toggled, request };
+  return { routes, calls, tokens, unlocks, forgotten, request };
 }
 
 describe("reading a project's access", () => {
@@ -136,12 +132,29 @@ describe("changing it", () => {
     expect(calls[0]).toEqual({ method: "PUT", path: "/access/person/entry", body: { session: "person-session", token: "person-unlock-123456", slug: "blog", who: "b@acme.test", role: "developer" } });
   });
 
-  test("general access: public or restricted through the portal's route, the code never here", async () => {
-    const { routes, toggled, request } = setup("owner");
+  test("general access: public with the unlock and the slug retyped; restricted with neither; the code never here", async () => {
+    const { routes, calls, tokens, request } = setup("owner");
+    // Public without the unlock: the page's 423, the steward not even asked.
+    expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "public", confirmation: "blog" }))).status).toBe(423);
+    expect(calls).toEqual([]);
+    // Restricted without the unlock: less exposure is never refused for want of one.
+    expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "restricted" }))).status).toBe(200);
+    expect(calls).toEqual([{ method: "POST", path: "/portal", body: { slug: "blog", active: true, confirmation: "" } }]);
+    tokens.set("h1", { token: "unlock-1234567890ab", expiresAt: NOW + 1000 });
     expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "public", confirmation: "blog" }))).status).toBe(200);
-    expect(toggled).toEqual([{ slug: "blog", active: false, confirmation: "blog" }]);
+    expect(calls.at(-1)).toEqual({ method: "POST", path: "/portal", body: { token: "unlock-1234567890ab", slug: "blog", active: false, confirmation: "blog" } });
     expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "code" }))).status).toBe(400);
     expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "open" }))).status).toBe(400);
+  });
+
+  test("a person's general access goes their way, their unlock only to make the site public", async () => {
+    const { routes, calls, unlocks, request } = setup("person");
+    expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "public", confirmation: "blog" }))).status).toBe(423);
+    expect((await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "restricted" }))).status).toBe(200);
+    expect(calls).toEqual([{ method: "POST", path: "/people/portal", body: { session: "person-session", slug: "blog", active: true, confirmation: "" } }]);
+    unlocks.set("h1", { token: "person-unlock-123456", expiresAt: NOW + 1000 });
+    await routes.general(request("PUT", "/api/access/general", { slug: "blog", access: "public", confirmation: "blog" }));
+    expect(calls.at(-1)).toEqual({ method: "POST", path: "/people/portal", body: { session: "person-session", token: "person-unlock-123456", slug: "blog", active: false, confirmation: "blog" } });
   });
 });
 

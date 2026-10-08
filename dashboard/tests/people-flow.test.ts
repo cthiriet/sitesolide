@@ -287,6 +287,8 @@ beforeAll(async () => {
     },
   );
   await steward.ensureMemberKeys();
+  // The registry made before anything asks, as the entry point starts it.
+  await steward.startAccess();
   writeFileSync(join(units, INSTALLER_TEMPLATE), "[Service]\n");
   control = createControlSteward(
     {
@@ -410,11 +412,11 @@ describe("a person, end to end", () => {
 
   test("someone the registry does not name, or who can only open a site, is refused at sign-in, and gets no session", async () => {
     const { browser, landed } = await signInAs("bob@acme.test");
-    expect(landed).toBe(`${DASHBOARD}/?signin=not-a-member`);
+    expect(landed).toBe(`${DASHBOARD}/?signin=no-role`);
     expect(browser.jar.has("session")).toBe(false);
     await give("vera@acme.test", { shop: "visitor" });
     const visitor = await signInAs("vera@acme.test");
-    expect(visitor.landed).toBe(`${DASHBOARD}/?signin=not-a-member`);
+    expect(visitor.landed).toBe(`${DASHBOARD}/?signin=no-role`);
     expect(visitor.browser.jar.has("session")).toBe(false);
     await takeOff("vera@acme.test");
   });
@@ -547,7 +549,9 @@ describe("a person's secrets, general access and people, end to end", () => {
 
     const page = await json(await browser.api("/api/access?slug=shop"));
     expect(page).toMatchObject({ slug: "shop", you: { kind: "person", email: HAL, role: "admin" }, grantable: ["visitor", "viewer", "developer", "admin"], portal: { reading: "steward" } });
-    expect((await browser.api("/api/access?slug=blog")).status).toBe(403);
+    // A Developer on blog reads its people, read-only, and changes nothing there.
+    expect(await json(await browser.api("/api/access?slug=blog"))).toMatchObject({ slug: "blog", you: { role: "developer" }, grantable: [], signIn: { admins: [] } });
+    expect((await browser.api("/api/access/entry", { method: "PUT", body: { slug: "blog", who: "bob@acme.test", role: "visitor" } })).status).toBe(403);
 
     const given = await browser.api("/api/access/entry", { method: "PUT", body: { slug: "shop", who: "bob@acme.test", role: "visitor" } });
     expect(given.status).toBe(201);

@@ -54,6 +54,8 @@ import {
   ACCESS_PRUNE_INTERVAL_MS,
   ACCESS_READ_BYTES,
   accessLogSeed,
+  accessLogTopUp,
+  isAccessLogFull,
   pruneAccessLog,
   truncate,
 } from "./log";
@@ -138,8 +140,16 @@ export type System = {
    * has grown past its bound. `now` is the steward's clock.
    */
   appendAccessLog: (line: string, now: number) => Promise<void>;
-  /** At startup: the access log seeded from the journal if it does not exist yet, then pruned. */
+  /**
+   * At startup: the access log seeded from the journal if it does not exist
+   * yet, or topped up with the journal's changes of access it lacks, then
+   * pruned.
+   */
   prepareAccessLog: (now: number) => Promise<void>;
+  /** Does the access log hold as many rows younger than its retention as it keeps? Pruned first when due. */
+  accessLogFull: (now: number) => Promise<boolean>;
+  /** The identity of the journal and of the access log as they lie, inode, size and modification time: a reader caches what it parsed by it. */
+  logStamps: () => { journal: string | null; access: string | null };
   readRateLimit: () => Promise<RateLimitRead>;
   writeRateLimit: (text: string) => Promise<void>;
   /** The file that carries PASSWORD_HASH, with its rights. */
@@ -431,13 +441,36 @@ export function createSystem(config: SystemConfig): System {
 
   /** When the access log was last pruned, by the steward's clock; null before the first time. */
   let accessPrunedAt: number | null = null;
+  /** Its lines and bytes once pruned, kept as it grows: null until the first pruning reads it. */
+  let accessCount: { lines: number; bytes: number } | null = null;
 
   function pruneAccess(now: number): void {
     accessPrunedAt = now;
     const examination = readBounded(accessLogFile, ACCESS_READ_BYTES);
-    if (examination.kind !== "present" || examination.bytes === null) return;
-    const pruned = pruneAccessLog(decoder.decode(examination.bytes), now);
+    if (examination.kind !== "present" || examination.bytes === null) {
+      // Absent, nothing in it; a file that cannot be read whole counts as full.
+      accessCount = examination.kind === "absent" ? { lines: 0, bytes: 0 } : { lines: Number.MAX_SAFE_INTEGER, bytes: Number.MAX_SAFE_INTEGER };
+      return;
+    }
+    const text = decoder.decode(examination.bytes);
+    const pruned = pruneAccessLog(text, now);
+    const kept = pruned ?? text;
     if (pruned !== null) writeAtomically(config.stateFolder, ACCESS_LOG_NAME, encoder.encode(pruned), aRoot);
+    accessCount = { lines: kept === "" ? 0 : kept.split("\n").length - (kept.endsWith("\n") ? 1 : 0), bytes: encoder.encode(kept).length };
+  }
+
+  /** A clock set back counts as an hour gone: the pruning is never put off for good. */
+  function pruneDue(now: number): boolean {
+    return accessPrunedAt === null || now - accessPrunedAt >= ACCESS_PRUNE_INTERVAL_MS || now < accessPrunedAt;
+  }
+
+  function stamp(path: string): string | null {
+    try {
+      const info = lstatSync(path);
+      return `${info.ino}:${info.size}:${info.mtimeMs}`;
+    } catch {
+      return null;
+    }
   }
 
   /** The directories where a temporary file of ours can remain: each root, and its secrets subdirectories. */
@@ -597,15 +630,40 @@ export function createSystem(config: SystemConfig): System {
     async appendAccessLog(line, now) {
       seedAccessLog();
       appendFileSync(accessLogFile, line, { mode: 0o600 });
-      // A clock set back counts as an hour gone: the pruning is never put off for good.
-      const due = accessPrunedAt === null || now - accessPrunedAt >= ACCESS_PRUNE_INTERVAL_MS || now < accessPrunedAt;
-      if (due || lstatSync(accessLogFile).size > ACCESS_PRUNE_BYTES) pruneAccess(now);
+      if (accessCount !== null) accessCount = { lines: accessCount.lines + 1, bytes: accessCount.bytes + encoder.encode(line).length };
+      if (pruneDue(now) || lstatSync(accessLogFile).size > ACCESS_PRUNE_BYTES) pruneAccess(now);
     },
 
     async prepareAccessLog(now) {
+      let existed = true;
+      try {
+        lstatSync(accessLogFile);
+      } catch (error) {
+        if (errorCode(error) !== "ENOENT") throw error;
+        existed = false;
+      }
       seedAccessLog();
+      if (existed) {
+        // Seeded by an earlier steward, whose changes of access were fewer:
+        // what the journal still holds of the others joins it, once.
+        const examination = readBounded(accessLogFile, ACCESS_READ_BYTES);
+        if (examination.kind === "present" && examination.bytes !== null) {
+          const added = accessLogTopUp(readJournal(), decoder.decode(examination.bytes), now);
+          if (added !== "") appendFileSync(accessLogFile, added, { mode: 0o600 });
+        }
+      }
       pruneAccess(now);
     },
+
+    async accessLogFull(now) {
+      if (accessCount === null || pruneDue(now)) {
+        seedAccessLog();
+        pruneAccess(now);
+      }
+      return isAccessLogFull(accessCount ?? { lines: 0, bytes: 0 });
+    },
+
+    logStamps: () => ({ journal: stamp(logFile), access: stamp(accessLogFile) }),
 
     async readRateLimit() {
       try {

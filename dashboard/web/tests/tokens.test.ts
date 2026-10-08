@@ -17,6 +17,8 @@ import {
   tokenRefusal,
   tokenStatus,
   validateTokenForm,
+  tokenHolders,
+  tokenOwnerLine,
 } from "../src/lib/tokens"
 
 const NOW = 1_800_000_000_000
@@ -60,11 +62,11 @@ describe("the form", () => {
 
   test("what it can see before sending", () => {
     const known = ["cms", "shop"]
-    expect(validateTokenForm({ label: "Ada", email: "ada@test-zone.invalid", slugs: ["cms"] }, known)).toEqual({})
-    expect(validateTokenForm({ label: " ", email: "ada", slugs: [] }, known)).toMatchObject({ label: expect.any(String), email: expect.any(String) })
-    expect(validateTokenForm({ label: "Ada", email: "ada@test-zone.invalid", slugs: ["Bad Slug"] }, known).slugs).toContain("not a slug")
-    expect(validateTokenForm({ label: "Ada", email: "ada@test-zone.invalid", slugs: ["blog"] }, known).slugs).toContain("Not on this machine: blog")
-    expect(firstTokenField({ slugs: "x", email: "y" })).toBe("email")
+    expect(validateTokenForm({ label: "Ada", slugs: ["cms"] }, known)).toEqual({})
+    expect(validateTokenForm({ label: " ", slugs: [] }, known)).toMatchObject({ label: expect.any(String) })
+    expect(validateTokenForm({ label: "Ada", slugs: ["Bad Slug"] }, known).slugs).toContain("not a slug")
+    expect(validateTokenForm({ label: "Ada", slugs: ["blog"] }, known).slugs).toContain("Not on this machine: blog")
+    expect(firstTokenField({ slugs: "x", label: "y" })).toBe("label")
     expect(firstTokenField({})).toBeNull()
   })
 
@@ -78,7 +80,7 @@ describe("the form", () => {
       field: "slugs",
       message: "dashboard is reserved for the platform: pick another slug",
     })
-    expect(tokenRefusal(400, { error: "invalid", message: "email: the address" }).field).toBe("email")
+    expect(tokenRefusal(400, { error: "invalid", message: "holder: owner, for a token of your own, or the email of a person of People" }).field).toBeNull()
     expect(tokenRefusal(503, { error: "not-available", message: "run sitesolide upgrade" })).toEqual({ field: null, message: "run sitesolide upgrade" })
     expect(tokenRefusal(0, null).message).toBe("Can't reach the dashboard.")
   })
@@ -155,5 +157,30 @@ describe("a person's own token", () => {
     expect(tokenRefusal(403, { error: "out-of-scope", message })).toEqual({ field: "slugs", message: "a@acme.test is a Viewer on gamma: deploying it takes a Developer or an Admin" })
     const options = "scope.public: a@acme.test is a Developer on alpha: deploying it in the open, its general access public, takes an Admin"
     expect(tokenRefusal(403, { error: "out-of-scope", message: options }).field).toBeNull()
+  })
+})
+
+describe("whose a token is", () => {
+  test("the owner makes one for the people who sign in, never for someone who can only open sites", () => {
+    expect(
+      tokenHolders([
+        { who: "zed@acme.test", roles: { blog: "developer", shop: "visitor" }, create: false },
+        { who: "ann@acme.test", roles: {}, create: true },
+        { who: "guest@example.org", roles: { blog: "visitor" }, create: false },
+        { who: "Client Bob", roles: { blog: "visitor" }, create: false },
+      ]),
+    ).toEqual([
+      { email: "ann@acme.test", roles: {}, create: true },
+      { email: "zed@acme.test", roles: { blog: "developer" }, create: false },
+    ])
+  })
+
+  test("each row says whose it is and who made it, to the owner and to the person", () => {
+    expect(tokenOwnerLine({ member: null, by: "owner", email: "owner" }, "owner")).toBe("Yours")
+    expect(tokenOwnerLine({ member: null, by: "owner", email: "bob@elsewhere.test" }, "owner")).toBe("Yours, made for bob@elsewhere.test")
+    expect(tokenOwnerLine({ member: "alice@acme.test", by: "owner", email: "alice@acme.test" }, "owner")).toBe("Made by you for alice@acme.test")
+    expect(tokenOwnerLine({ member: "alice@acme.test", by: "alice@acme.test", email: "alice@acme.test" }, "owner")).toBe("alice@acme.test's own")
+    expect(tokenOwnerLine({ member: "alice@acme.test", by: "owner", email: "alice@acme.test" }, "person")).toBe("Made by the owner for you")
+    expect(tokenOwnerLine({ member: "alice@acme.test", by: "alice@acme.test", email: "alice@acme.test" }, "person")).toBe("Yours")
   })
 })

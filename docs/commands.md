@@ -38,12 +38,13 @@ sitesolide logs [--follow]      journalctl for this project
 sitesolide backups              this project's data snapshots, read only
 sitesolide share                this project's general access and people with access
    <email|@domain>...           give them access, Can open by default
-   --role <role>                visitor (Can open), viewer, developer or admin
+   --role <role>                can-open, viewer, developer or admin
    --expires <24h|7d|30d|never> for password access, 7d by default
    --remove <email|@domain>...  take their access away, from their next request
 sitesolide people               everyone with access, their roles, who may create projects
    <email> --may-create         let them create projects, Admin of what they create
    <email> --no-create          take that right back
+   --migrate-without-portal     carry access over without the portal's database, when it does not read
 sitesolide lock   [--dry-run]   close the preview behind a code, or show it
    --status                     wanted / installed / measured, without touching
    --new-code                   replace the code in force by a fresh one

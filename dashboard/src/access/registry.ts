@@ -14,7 +14,7 @@
  * parameter. The rules of who may grant what are rules.ts's; reading and
  * writing the file are system.ts's.
  */
-import { atLeast, encodeProjection, isAccessId, isRole, PROJECTION_VERSION, rank, type PasswordGrant, type Projection, type Role, type SiteAccess } from "../../borrowed/access";
+import { atLeast, encodeProjection, isAccessId, isRole, PROJECTION_VERSION, rank, readProjection, WHO_MAX, type PasswordGrant, type Projection, type Role, type SiteAccess } from "../../borrowed/access";
 import { cleanDomain, cleanEmail } from "../../borrowed/sharing";
 import { isValidSlug } from "../../borrowed/manifest";
 import { MAX_DASHBOARD_PEOPLE, MAX_ENTRIES, type EntryKind, type EntryView, type PersonView } from "./protocol";
@@ -62,8 +62,14 @@ function isObject(value: unknown): value is Record<string, unknown> {
 const isDate = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 
 const HASH = /^[0-9a-f]{64}$/;
-/** A name carried over from an access given before the registry: printable ASCII, a line at most. */
-const LEGACY_NAME = /^[\x20-\x7e]{1,120}$/;
+/**
+ * A name carried over from an access given before the registry: printable
+ * ASCII, a line at most. Bounded like any `who`, by an email's own length,
+ * the bound the portal's projection reads with (borrowed/access.ts): one
+ * bound everywhere, so that nothing this registry accepts makes the
+ * projection unreadable.
+ */
+const LEGACY_NAME = new RegExp(`^[\\x20-\\x7e]{1,${WHO_MAX}}$`);
 /** Who acted: `owner`, `migration`, an email, a token. */
 const BY = /^(owner|migration|token:[A-Za-z0-9_-]{1,64}|[^\s]{1,254})$/;
 
@@ -79,6 +85,7 @@ export type Who = { kind: "person"; who: string; email: string } | { kind: "doma
 export function readWho(value: unknown): Who | Refusal {
   if (typeof value !== "string") return { refusal: "who: an email, like alice@acme.com, or a domain, like @acme.com", code: "invalid" };
   const text = value.trim();
+  if (text.length > WHO_MAX) return { refusal: `who: ${WHO_MAX} characters at most, the longest an email address may be`, code: "invalid" };
   if (text.startsWith("@")) {
     const domain = cleanDomain(text.slice(1));
     if (domain === null) return { refusal: `${text.slice(0, 80)} is not a domain, like @acme.com`, code: "invalid" };
@@ -398,21 +405,32 @@ export function removePerson(registry: Registry, email: string): { registry: Reg
 }
 
 /**
- * A project a person created, through a token of their own that may create:
- * they become its admin, whatever a registry edited by hand said there
- * before. Recorded at the start of the project's first deployment, before
- * anything is written on the machine.
+ * A project a person created, through a token of theirs that may create:
+ * they become its Admin, alone. Recorded once the installer has succeeded,
+ * never before: a creation refused or undone leaves nobody Admin of a name
+ * the machine does not carry.
+ *
+ * **A new project starts from an empty list.** Entries left under its slug,
+ * by a project of that name removed by hand, or a registry edited by hand,
+ * are someone else's project's: they are dropped, and returned so that the
+ * journal says so. The create right is read here, in the registry's own
+ * queue: taken back while the installer ran, nothing is recorded.
  */
-export function recordCreation(registry: Registry, email: string, slug: string, now: number): Put | Refusal {
-  if (!isDashboardPerson(registry, email)) return { refusal: `${email} no longer signs in to this dashboard`, code: "out-of-scope" };
-  const found = findEntry(registry, slug, email);
-  if (found !== null && found.password !== undefined) {
-    // A password access cannot be raised: the admin entry replaces it.
-    const removed = removeEntry(registry, slug, email);
-    if ("refusal" in removed) return removed;
-    return putEntry(removed.registry, slug, email, "admin", email, now);
-  }
-  return putEntry(registry, slug, email, "admin", email, now);
+export function recordCreation(registry: Registry, email: string, slug: string, now: number): (Put & { dropped: Entry[] }) | Refusal {
+  if (!mayCreate(registry, email)) return { refusal: `${email} may no longer create projects: the owner took that right back while the project was being created`, code: "out-of-scope" };
+  const dropped = entriesOf(registry, slug);
+  const put = putEntry(withEntries(registry, slug, []), slug, email, "admin", email, now);
+  return "refusal" in put ? put : { ...put, dropped };
+}
+
+/**
+ * A project removed from the machine: its entries go with it, so that a
+ * project created later under the same name starts from nobody. Returns
+ * what was dropped; the registry unchanged when there was nothing.
+ */
+export function forgetProject(registry: Registry, slug: string): { registry: Registry; dropped: Entry[] } {
+  const dropped = entriesOf(registry, slug);
+  return dropped.length === 0 ? { registry, dropped } : { registry: withEntries(registry, slug, []), dropped };
 }
 
 /** Does this change raise someone above `visitor`, the changes that ask for an unlock? */
@@ -421,6 +439,21 @@ export function raisesAboveVisitor(before: Role | null, after: Role): boolean {
 }
 
 // --- the portal's projection ---------------------------------------------------------
+
+/**
+ * Does this registry, and the projection made from it, read back whole? The
+ * steward asks before it writes either: a registry it could not read again
+ * would refuse everyone at the next request, and a projection the portal
+ * could not read would close every restricted site. A change that would
+ * write either is refused instead, and nothing is written. Null: both read.
+ */
+export function readsBack(registry: Registry, projection: Projection): string | null {
+  const again = readRegistry(encodeRegistry(registry));
+  if ("unreadable" in again) return again.unreadable;
+  const portal = readProjection(encodeProjection(projection));
+  if ("unreadable" in portal) return portal.unreadable;
+  return null;
+}
 
 /**
  * What the portal reads: every project's people by host, the address Caddy

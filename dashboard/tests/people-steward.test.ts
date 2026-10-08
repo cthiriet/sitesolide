@@ -15,7 +15,7 @@ import {
 import { createAccessSystem } from "../src/access/system";
 import { fromJournal } from "../src/audit/normalize";
 import { MAX_AUTH_AGE_S, MEMBER_SESSION_DURATION_MS } from "../src/people/protocol";
-import { createMemberRoutes, type MemberEvent, type MemberRoutes, type RestartRefusal } from "../src/people/steward";
+import { createMemberRoutes, type JournalRefusal, type MemberRoutes } from "../src/people/steward";
 import { createMembersSystem, type MembersSystem } from "../src/people/system";
 import { reread } from "../src/secrets/log";
 import type { LogEntry } from "../src/secrets/protocol";
@@ -190,7 +190,7 @@ function assertion(bench: Pick<Bench, "clock" | "privateKey">, email = ALICE, au
 }
 
 async function signIn(bench: Bench, token: string): Promise<Response> {
-  return bench.call("POST", "/members/signin", { assertion: token });
+  return bench.call("POST", "/people/signin", { assertion: token });
 }
 
 async function sessionOf(bench: Bench, email = ALICE): Promise<string> {
@@ -216,7 +216,7 @@ describe("the key pair", () => {
     expect(bench.privateKey().kid).toBe(first.kid);
 
     rmSync(join(bench.root, "portal-key", "assertion.key"));
-    const key = await bench.call("GET", "/members/key");
+    const key = await bench.call("GET", "/people/key");
     const { publicKey } = (await key.json()) as { publicKey: { kid: string } };
     expect(publicKey.kid).not.toBe(first.kid);
     expect(bench.privateKey().kid).toBe(publicKey.kid);
@@ -226,7 +226,7 @@ describe("the key pair", () => {
     const bench = await mount();
     rmSync(join(bench.root, "portal-key"), { recursive: true });
     rmSync(join(bench.root, "state", "assertion.pub"));
-    const key = await bench.call("GET", "/members/key");
+    const key = await bench.call("GET", "/people/key");
     expect(key.status).toBe(503);
     expect(await key.json()).toMatchObject({ error: "not-ready", message: expect.stringContaining("/etc/sitesolide-portal") });
   });
@@ -237,10 +237,10 @@ describe("the owner's socket", () => {
     const bench = await mount();
     withAlice(bench);
     expect((await bench.asRoot("GET", "/people")).status).toBe(200);
-    for (const path of ["/members/signin", "/members/restart", "/members/whoami", "/members/unlock", "/projects", "/unlock"]) {
+    for (const path of ["/people/signin", "/people/restart", "/people/whoami", "/people/unlock", "/projects", "/unlock"]) {
       expect([path, (await bench.asRoot("POST", path, {})).status]).toEqual([path, 404]);
     }
-    expect((await bench.asRoot("GET", "/members/key")).status).toBe(404);
+    expect((await bench.asRoot("GET", "/people/key")).status).toBe(404);
   });
 });
 
@@ -253,7 +253,7 @@ describe("signing in", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { session: string; expiresAt: number; identity: unknown };
     expect(body.expiresAt).toBe(bench.clock.t + MEMBER_SESSION_DURATION_MS);
-    expect(body.identity).toEqual({ kind: "member", email: ALICE, name: "Alice Martin", roles: { blog: "developer", shop: "viewer", notes: "developer" }, create: false });
+    expect(body.identity).toEqual({ kind: "person", email: ALICE, name: "Alice Martin", roles: { blog: "developer", shop: "viewer", notes: "developer" }, create: false });
     expect(bench.journal().at(-1)).toMatchObject({
       operation: "dashboard.signin",
       result: "ok",
@@ -328,7 +328,7 @@ describe("signing in", () => {
     const response = await signIn(bench, await assertion(bench, BOB));
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({
-      error: "not-a-member",
+      error: "no-role",
       message: `${BOB} has no role on this dashboard: ask its owner, or the Admin of a project, for access`,
     });
     expect(bench.journal().at(-1)).toMatchObject({ operation: "dashboard.signin_failed", actor: BOB, detail: "no-role" });
@@ -341,7 +341,7 @@ describe("signing in", () => {
     for (const email of [carol, BOB]) {
       const response = await signIn(bench, await assertion(bench, email));
       expect([email, response.status]).toEqual([email, 403]);
-      expect(await response.json()).toMatchObject({ error: "not-a-member", message: expect.stringContaining("has no role on this dashboard") });
+      expect(await response.json()).toMatchObject({ error: "no-role", message: expect.stringContaining("has no role on this dashboard") });
     }
     expect(bench.journal().at(-1)).toMatchObject({ operation: "dashboard.signin_failed", actor: BOB, detail: "no-role" });
   });
@@ -365,7 +365,8 @@ describe("signing in", () => {
     writeFileSync(join(bench.root, "state", "access.json"), "{ not json");
     const response = await signIn(bench, await assertion(bench));
     expect(response.status).toBe(500);
-    expect(await response.json()).toMatchObject({ error: "failure", message: expect.stringContaining("access.json") });
+    // Where to look, never a path: the steward's log names the file and why.
+    expect(await response.json()).toMatchObject({ error: "failure", message: expect.stringContaining("journalctl -u sitesolide-steward") });
   });
 
   test("a flood of forged assertions fills a minute's share of the journal, never more", async () => {
@@ -381,7 +382,7 @@ describe("a person's session", () => {
     const bench = await mount();
     withAlice(bench);
     const session = await sessionOf(bench);
-    const whoami = async () => bench.call("POST", "/members/whoami", { session });
+    const whoami = async () => bench.call("POST", "/people/whoami", { session });
     expect(await (await whoami()).json()).toMatchObject({ identity: { email: ALICE, roles: { blog: "developer" } } });
 
     bench.seed({ [ALICE]: { blog: "viewer" } });
@@ -390,11 +391,11 @@ describe("a person's session", () => {
     bench.restartSteward();
     expect((await whoami()).status).toBe(200);
 
-    expect((await bench.call("POST", "/members/signout", { session })).status).toBe(204);
+    expect((await bench.call("POST", "/people/signout", { session })).status).toBe(204);
     expect(bench.journal().at(-1)).toMatchObject({ operation: "dashboard.signout", actor: ALICE });
     expect((await whoami()).status).toBe(401);
     // Signing out what is already closed is not a fault.
-    expect((await bench.call("POST", "/members/signout", { session })).status).toBe(204);
+    expect((await bench.call("POST", "/people/signout", { session })).status).toBe(204);
   });
 
   test("lapses after half a day", async () => {
@@ -402,7 +403,7 @@ describe("a person's session", () => {
     withAlice(bench);
     const session = await sessionOf(bench);
     bench.clock.t += MEMBER_SESSION_DURATION_MS;
-    expect((await bench.call("POST", "/members/whoami", { session })).status).toBe(401);
+    expect((await bench.call("POST", "/people/whoami", { session })).status).toBe(401);
   });
 
   test("falls with its person: taken off the registry, they are out at the next request", async () => {
@@ -410,10 +411,10 @@ describe("a person's session", () => {
     withAlice(bench);
     const session = await sessionOf(bench);
     bench.seed({});
-    const whoami = await bench.call("POST", "/members/whoami", { session });
+    const whoami = await bench.call("POST", "/people/whoami", { session });
     expect(whoami.status).toBe(401);
     expect(await whoami.json()).toEqual({ error: "signed-out", message: `${ALICE} no longer has a role on this dashboard` });
-    const restart = await bench.call("POST", "/members/restart", { session, slug: "blog" });
+    const restart = await bench.call("POST", "/people/restart", { session, slug: "blog" });
     expect(restart.status).toBe(401);
     expect(await restart.json()).toMatchObject({ error: "signed-out" });
     expect(bench.calls.some((call) => call[0] === "restart")).toBe(false);
@@ -424,7 +425,7 @@ describe("a person's session", () => {
     withAlice(bench);
     const session = await sessionOf(bench);
     bench.seed({ [ALICE]: { blog: "visitor", shop: "visitor" } });
-    expect(await (await bench.call("POST", "/members/whoami", { session })).json()).toMatchObject({ error: "signed-out" });
+    expect(await (await bench.call("POST", "/people/whoami", { session })).json()).toMatchObject({ error: "signed-out" });
   });
 });
 
@@ -433,7 +434,7 @@ describe("a person's restart", () => {
     const bench = await mount();
     withAlice(bench);
     const session = await sessionOf(bench);
-    const response = await bench.call("POST", "/members/restart", { session, slug: "blog" });
+    const response = await bench.call("POST", "/people/restart", { session, slug: "blog" });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ verdict: { kind: "active" } });
     expect(bench.calls).toContainEqual(["restart", "blog"]);
@@ -447,17 +448,17 @@ describe("a person's restart", () => {
     const bench = await mount();
     bench.seed({ [ALICE]: { blog: "visitor", shop: "viewer", notes: "developer" } });
     const session = await sessionOf(bench);
-    const viewer = await bench.call("POST", "/members/restart", { session, slug: "shop" });
+    const viewer = await bench.call("POST", "/people/restart", { session, slug: "shop" });
     expect(viewer.status).toBe(403);
     expect(await viewer.json()).toEqual({
       error: "out-of-scope",
       message: `${ALICE} is a Viewer on shop: restarting its service takes a Developer or an Admin`,
     });
     expect(bench.journal().at(-1)).toMatchObject({ operation: "restart", result: "rejects", actor: ALICE, slug: "shop", detail: "role viewer" });
-    const stranger = await bench.call("POST", "/members/restart", { session, slug: "dashboard" });
+    const stranger = await bench.call("POST", "/people/restart", { session, slug: "dashboard" });
     expect(await stranger.json()).toMatchObject({ error: "out-of-scope", message: `${ALICE} holds no role on dashboard` });
     // Can open is no role the dashboard knows.
-    const visitor = await bench.call("POST", "/members/restart", { session, slug: "blog" });
+    const visitor = await bench.call("POST", "/people/restart", { session, slug: "blog" });
     expect(await visitor.json()).toMatchObject({ error: "out-of-scope", message: `${ALICE} holds no role on blog` });
     expect(bench.calls.some((call) => call[0] === "restart")).toBe(false);
   });
@@ -466,7 +467,7 @@ describe("a person's restart", () => {
     const bench = await mount();
     withAlice(bench);
     const session = await sessionOf(bench);
-    const response = await bench.call("POST", "/members/restart", { session, slug: "notes" });
+    const response = await bench.call("POST", "/people/restart", { session, slug: "notes" });
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ message: "notes is a static site: it has no service to restart" });
   });
@@ -474,7 +475,7 @@ describe("a person's restart", () => {
   test("a session the steward did not open restarts nothing", async () => {
     const bench = await mount();
     withAlice(bench);
-    const response = await bench.call("POST", "/members/restart", { session: "a".repeat(43), slug: "blog" });
+    const response = await bench.call("POST", "/people/restart", { session: "a".repeat(43), slug: "blog" });
     expect(response.status).toBe(401);
   });
 
@@ -488,9 +489,9 @@ describe("a person's restart", () => {
       release = resolve;
     });
     // Bob's restart holds the lock; Alice's waits behind it.
-    const first = bench.call("POST", "/members/restart", { session: bob, slug: "shop" });
+    const first = bench.call("POST", "/people/restart", { session: bob, slug: "shop" });
     await Bun.sleep(20);
-    const second = bench.call("POST", "/members/restart", { session: alice, slug: "blog" });
+    const second = bench.call("POST", "/people/restart", { session: alice, slug: "blog" });
     await Bun.sleep(20);
     bench.seed({ [BOB]: { shop: "admin" } });
     bench.barrier.promise = null;
@@ -589,10 +590,10 @@ describe("the create right, and a person's own tokens", () => {
     bench.seed({ [ALICE]: { blog: "viewer" } });
     const session = await sessionOf(bench);
     const forced = () => assertion(bench, ALICE, 10, true);
-    const refused = await bench.call("POST", "/members/unlock", { session, assertion: await forced() });
+    const refused = await bench.call("POST", "/people/unlock", { session, assertion: await forced() });
     expect(await refused.json()).toMatchObject({ error: "out-of-scope", message: `${ALICE} is a Viewer on every project: there is nothing to unlock` });
     bench.seed({ [ALICE]: { blog: "viewer" } }, [ALICE]);
-    expect((await bench.call("POST", "/members/unlock", { session, assertion: await forced() })).status).toBe(200);
+    expect((await bench.call("POST", "/people/unlock", { session, assertion: await forced() })).status).toBe(200);
   });
 
   test("taken off every project by root, their sessions close and their tokens go, revoked under the owner", async () => {
@@ -601,7 +602,7 @@ describe("the create right, and a person's own tokens", () => {
     const session = await sessionOf(bench);
     expect((await bench.asRoot("DELETE", "/people/person", { email: ALICE })).status).toBe(200);
     expect(bench.revoked).toEqual([[ALICE, "owner"]]);
-    expect((await bench.call("POST", "/members/whoami", { session })).status).toBe(401);
+    expect((await bench.call("POST", "/people/whoami", { session })).status).toBe(401);
   });
 
   test("their rights as the registry reads now, and a creation recorded: Admin of it, journaled under them", async () => {
@@ -614,10 +615,12 @@ describe("the create right, and a person's own tokens", () => {
     expect(await authority.rights("carol@acme.test")).toBeNull();
     expect(await authority.recordCreation("omega", ALICE, "aaaaaaaaaaaa")).toBeNull();
     expect(await authority.rights(ALICE)).toMatchObject({ roles: { blog: "developer", omega: "admin" } });
-    expect(bench.journal().at(-1)).toMatchObject({ operation: "project.create", result: "ok", actor: ALICE, member: ALICE, slug: "omega", detail: "admin, created with token aaaaaaaaaaaa" });
+    // A project created is a change of access: kept 180 days in the access log, not rotated with the journal.
+    const kept = reread(readFileSync(join(bench.root, "state", "access-log.jsonl"), "utf8"));
+    expect(kept.findLast((event) => event.operation === "project.create")).toMatchObject({ result: "ok", actor: ALICE, member: ALICE, slug: "omega", detail: "admin, created with token aaaaaaaaaaaa" });
     const refused = await authority.recordCreation("omega", "eve@acme.test", "aaaaaaaaaaaa");
     expect(refused?.status).toBe(403);
-    expect(await refused?.json()).toMatchObject({ error: "out-of-scope", message: "eve@acme.test no longer signs in to this dashboard" });
+    expect(await refused?.json()).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("eve@acme.test may no longer create projects") });
   });
 });
 
@@ -633,7 +636,9 @@ describe("leaving", () => {
     privateKey: () => PrivateKey;
     call: (path: string, body: unknown) => Promise<Response>;
     revoked: [string, string][];
-    journal: (MemberEvent | RestartRefusal)[];
+    journal: JournalRefusal[];
+    /** The registry the routes read, which the test changes as the owner would. */
+    access: ReturnType<typeof memoryAccess>;
   };
 
   async function alone(revokeTokens: "records" | "throws" | "absent" = "records"): Promise<Alone> {
@@ -642,7 +647,8 @@ describe("leaving", () => {
     for (const name of ["state", "sites/blog", "secrets", "portal-key"]) mkdirSync(join(root, name), { recursive: true });
     const clock = { t: Date.now() };
     const revoked: [string, string][] = [];
-    const journal: (MemberEvent | RestartRefusal)[] = [];
+    const journal: JournalRefusal[] = [];
+    const access = memoryAccess(registryOf({ [ALICE]: { blog: "developer" }, [BOB]: { blog: "viewer" } }));
     const routes = createMemberRoutes({
       system: {
         ...createMembersSystem({
@@ -655,7 +661,7 @@ describe("leaving", () => {
         }),
         now: () => clock.t,
       },
-      access: memoryAccess(registryOf({ [ALICE]: { blog: "developer" }, [BOB]: { blog: "viewer" } })),
+      access,
       zone: ZONE,
       readBody: async (req, fields) => {
         const body = (await req.json()) as Record<string, unknown>;
@@ -679,52 +685,109 @@ describe("leaving", () => {
       const route = routes.dashboard[path]!;
       return route.POST!(new Request(`http://steward${path}`, { method: "POST", body: JSON.stringify(body) }));
     };
-    return { routes, clock, privateKey, call, revoked, journal };
+    return { routes, clock, privateKey, call, revoked, journal, access };
+  }
+
+  /** Alice taken off, as a change of the registry leaves her before it calls `leave`. */
+  function takeOff(bench: Alone, email: string): void {
+    bench.access.value = registryOf({ [BOB]: { blog: "viewer" }, ...(email === ALICE ? {} : { [ALICE]: { blog: "developer" } }) });
   }
 
   async function sessionIn(bench: Alone, email: string): Promise<string> {
-    const response = await bench.call("/members/signin", { assertion: await assertion(bench, email) });
+    const response = await bench.call("/people/signin", { assertion: await assertion(bench, email) });
     expect(response.status).toBe(200);
     return ((await response.json()) as { session: string }).session;
   }
 
-  test("closes every session of theirs at once, while the registry still names them, their unlocks and their tokens with them", async () => {
+  test("closes every session of theirs at once, their unlocks and their tokens with them", async () => {
     const bench = await alone();
     const laptop = await sessionIn(bench, ALICE);
     const phone = await sessionIn(bench, ALICE);
     const bob = await sessionIn(bench, BOB);
-    const opened = await bench.call("/members/unlock", { session: laptop, assertion: await assertion(bench, ALICE, 10, true) });
+    const opened = await bench.call("/people/unlock", { session: laptop, assertion: await assertion(bench, ALICE, 10, true) });
     expect(opened.status).toBe(200);
     const { token } = (await opened.json()) as { token: string };
     expect(await bench.routes.authorize(laptop, token)).toMatchObject({ email: ALICE });
 
+    takeOff(bench, ALICE);
     await bench.routes.leave(ALICE, "admin@acme.test");
+    // Given a role again: she may sign in again.
+    bench.access.value = registryOf({ [ALICE]: { blog: "developer" }, [BOB]: { blog: "viewer" } });
 
     for (const session of [laptop, phone]) {
-      expect(await (await bench.call("/members/whoami", { session })).json()).toEqual({ error: "signed-out", message: "this session is closed: sign in again" });
+      expect(await (await bench.call("/people/whoami", { session })).json()).toEqual({ error: "signed-out", message: "this session is closed: sign in again" });
     }
     const unlocked = await bench.routes.authorize(laptop, token);
     expect(unlocked instanceof Response && unlocked.status).toBe(401);
     expect(await bench.routes.unlockedUntil(laptop)).toBeNull();
     expect(bench.revoked).toEqual([[ALICE, "admin@acme.test"]]);
     // Someone else's session is untouched.
-    expect((await bench.call("/members/whoami", { session: bob })).status).toBe(200);
-    // The registry decides who signs in: still named there, she may sign in again.
-    expect((await bench.call("/members/signin", { assertion: await assertion(bench, ALICE) })).status).toBe(200);
+    expect((await bench.call("/people/whoami", { session: bob })).status).toBe(200);
+    // The registry decides who signs in: named there again, she may sign in again.
+    expect((await bench.call("/people/signin", { assertion: await assertion(bench, ALICE) })).status).toBe(200);
+  });
+
+  test("given a role back before it runs, they keep everything: leaving is judged again in the registry's queue", async () => {
+    const bench = await alone();
+    const session = await sessionIn(bench, ALICE);
+    // Lowered, then raised again by someone else before the lowering's leave ran.
+    takeOff(bench, ALICE);
+    bench.access.value = registryOf({ [ALICE]: { blog: "admin" }, [BOB]: { blog: "viewer" } });
+    await bench.routes.leave(ALICE, "owner");
+    expect((await bench.call("/people/whoami", { session })).status).toBe(200);
+    expect(bench.revoked).toEqual([]);
   });
 
   test("a failure to revoke their tokens is said and left: their sessions are closed all the same", async () => {
     const bench = await alone("throws");
     const session = await sessionIn(bench, ALICE);
+    takeOff(bench, ALICE);
     await bench.routes.leave(ALICE, "owner");
-    expect((await bench.call("/members/whoami", { session })).status).toBe(401);
+    expect((await bench.call("/people/whoami", { session })).status).toBe(401);
   });
 
   test("without the control routes to ask, nothing is revoked and the sessions close", async () => {
     const bench = await alone("absent");
     const session = await sessionIn(bench, ALICE);
+    takeOff(bench, ALICE);
     await bench.routes.leave(ALICE, "owner");
-    expect((await bench.call("/members/whoami", { session })).status).toBe(401);
+    expect((await bench.call("/people/whoami", { session })).status).toBe(401);
     expect(bench.revoked).toEqual([]);
+  });
+});
+
+describe("the steward's start, never waiting on the migration", () => {
+  test("while the registry is being made, the access routes say so and everything else answers", async () => {
+    const bench = await mount();
+    // No registry yet, and a portal's database that does not read: the migration cannot finish.
+    rmSync(join(bench.root, "state", "access.json"), { force: true });
+    mkdirSync(join(bench.root, "portal-data"), { recursive: true });
+    writeFileSync(join(bench.root, "portal-data", "portal.db"), "not a database");
+    writeFileSync(join(bench.root, "state", "members.json"), JSON.stringify({ members: [] }));
+    for (const [table, path] of [["owner", "/people"], ["dashboard", "/people"], ["owner", "/access?slug=blog"]] as const) {
+      const response = table === "owner" ? await bench.asRoot("GET", path) : await bench.call("GET", path);
+      expect({ path, status: response.status }).toEqual({ path, status: 503 });
+      expect(await response.json()).toMatchObject({ error: "migrating" });
+    }
+    // The steward's other routes answer meanwhile.
+    expect((await bench.call("GET", "/projects")).status).toBe(200);
+    expect((await bench.call("GET", "/log")).status).toBe(200);
+    // The owner's way out, over the owner's socket alone.
+    expect((await bench.call("POST", "/access/migrate", { withoutPortal: true })).status).toBe(404);
+    const migrated = await bench.asRoot("POST", "/access/migrate", { withoutPortal: true });
+    expect(migrated.status).toBe(200);
+    expect((await bench.asRoot("GET", "/people")).status).toBe(200);
+  });
+});
+
+describe("the routes under their names before", () => {
+  test("a dashboard deployed before this steward still reaches a person's routes under /members/", async () => {
+    const bench = await mount();
+    withAlice(bench);
+    const session = await sessionOf(bench);
+    const old = await bench.call("POST", "/members/whoami", { session });
+    expect(old.status).toBe(200);
+    expect(await old.json()).toMatchObject({ identity: { kind: "person", email: ALICE } });
+    expect((await bench.call("POST", "/people/whoami", { session })).status).toBe(200);
   });
 });

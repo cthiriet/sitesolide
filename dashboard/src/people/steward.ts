@@ -53,7 +53,8 @@ import {
 } from "./protocol";
 import { may, mayRestart, powerRefusal } from "./powers";
 import type { AccessStore } from "../access/steward";
-import { recordCreation as creationRecorded, rightsOf, rolesText, type Registry } from "../access/registry";
+import { emailOf, isDashboardPerson, recordCreation as creationRecorded, rightsOf, rolesText, type Registry } from "../access/registry";
+import type { AccessEvent } from "../access/steward";
 import type { MemberRights } from "./tokens";
 import { attemptWait, countAttempt, EMPTY_UNLOCKS, failed, grant, isUnlocked, revokeMember, revokeSession, unlockedUntil, type UnlockBook } from "./unlocks";
 import { dropMember, dropSession, encodeBook, findSession, openMemberSession, readBook, spendNonce, type SessionBook } from "./sessions";
@@ -75,7 +76,8 @@ export type MemberEvent = {
     | "token.revoke"
     | "project.create"
     | "project.remove"
-    | "access.add";
+    | "access.add"
+    | "access.remove";
   result: "ok" | "rejects";
   actor: string;
   /** The person the event is about. */
@@ -101,6 +103,9 @@ export type RestartRefusal = {
   detail: string;
 };
 
+/** Every event the journal's refusals take, bounded per minute: a person's, a restart's, an access change's. */
+export type JournalRefusal = MemberEvent | RestartRefusal | AccessEvent;
+
 export type MemberRoutesDependencies = {
   system: MembersSystem;
   /** The access registry: who signs in, and their roles. */
@@ -109,7 +114,7 @@ export type MemberRoutesDependencies = {
   zone: string;
   /** The steward's body reader: bounded in size and in time, the expected fields and those alone. */
   readBody: (req: Request, fields: string[]) => Promise<Body | Response>;
-  journal: (event: MemberEvent | RestartRefusal) => Promise<void>;
+  journal: (event: JournalRefusal) => Promise<void>;
   /**
    * The restart of a project's service for a person, under the secrets routes'
    * lock and observation. `allowed` is asked again once its turn has come: a
@@ -143,16 +148,21 @@ export type MemberRoutes = {
   /** When this session's unlock ends, null when locked. */
   unlockedUntil: (session: unknown) => Promise<number | null>;
   /** A refusal for the journal, bounded per minute so that a flood cannot push its history out. */
-  journalRefusal: (event: MemberEvent | RestartRefusal) => Promise<void>;
+  journalRefusal: (event: JournalRefusal) => Promise<void>;
   journal: (event: MemberEvent) => Promise<void>;
   /** A person's rights as the registry reads now; null: they do not sign in; a Response: the registry does not read. */
   rights: (email: string) => Promise<MemberRights | null | Response>;
   /**
-   * A project a person's token creates: they become its Admin, and the
-   * journal says so under their email. Null once recorded, or the refusal.
+   * A project a person's token created, the installer done: they become its
+   * Admin, alone, and the journal says so under their email. Null once
+   * recorded, or the refusal.
    */
   recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | null>;
-  /** Someone who no longer signs in: their sessions and unlocks closed, their tokens revoked under `actor`. */
+  /**
+   * Someone who may no longer sign in: their sessions and unlocks closed,
+   * their tokens revoked under `actor`. Judged again in the registry's queue:
+   * given a role again since, they keep everything.
+   */
   leave: (email: string, actor: string) => Promise<void>;
 };
 
@@ -163,7 +173,7 @@ const STATUSES: Record<string, number> = {
   locked: 401,
   "signed-out": 401,
   "invalid-assertion": 401,
-  "not-a-member": 403,
+  "no-role": 403,
   "out-of-scope": 403,
   "not-found": 404,
   "too-many-attempts": 429,
@@ -236,7 +246,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
   let failureMinute = -1;
   let failureCount = 0;
   /** A refusal for the journal, unless this minute already holds its share of them. */
-  async function journalRefusal(event: MemberEvent | RestartRefusal): Promise<void> {
+  async function journalRefusal(event: JournalRefusal): Promise<void> {
     const minute = Math.floor(system.now() / 60_000);
     if (minute !== failureMinute) {
       failureMinute = minute;
@@ -265,13 +275,22 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
     }
   }
 
+  /**
+   * In the registry's queue, so that no change slips in between: the person
+   * judged again first, a role given back since the change that took them out
+   * keeping everything; then their sessions, unlocks and tokens.
+   */
   async function leave(email: string, actor: string): Promise<void> {
-    await serially(async () => {
-      await system.writeBook(encodeBook(dropMember(await book(), email)));
-      unlocks = revokeMember(unlocks, email);
+    const left = await dependencies.access.change<boolean>(async (current) => {
+      if (isDashboardPerson(current, email)) return { registry: current, value: false };
+      await serially(async () => {
+        await system.writeBook(encodeBook(dropMember(await book(), email)));
+        unlocks = revokeMember(unlocks, email);
+      });
+      await revokeTokensOf(email, actor);
+      return { registry: current, value: true };
     });
-    console.log(`dashboard sign-in: ${email} no longer signs in, sessions closed`);
-    await revokeTokensOf(email, actor);
+    if (left === true) console.log(`dashboard sign-in: ${email} no longer signs in, sessions closed`);
   }
 
   // --- the sessions --------------------------------------------------------------------
@@ -285,7 +304,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
 
   function identityOf(current: Registry, email: string, name: string | null): MemberIdentity | null {
     const rights = rightsOf(current, email);
-    return rights === null ? null : { kind: "member", email, name, roles: rights.roles, create: rights.create };
+    return rights === null ? null : { kind: "person", email, name, roles: rights.roles, create: rights.create };
   }
 
   async function signIn(req: Request): Promise<Response> {
@@ -320,7 +339,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
         // The nonce stays spent: the same assertion is not tried again.
         await system.writeBook(encodeBook(spent));
         await journalFailure(claims.email, "no-role");
-        return fail("not-a-member", `${claims.email} has no role on this dashboard: ask its owner, or the Admin of a project, for access`);
+        return fail("no-role", `${claims.email} has no role on this dashboard: ask its owner, or the Admin of a project, for access`);
       }
       const opened = await openMemberSession(spent, claims.email, now, dependencies.random);
       await system.writeBook(encodeBook(opened.book));
@@ -481,30 +500,50 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
   }
 
   /**
-   * A project created by a person's token: its creator becomes its Admin, in
-   * the registry's queue, journaled as `project.create` under their email,
-   * the token in the detail.
+   * A project created by a person's token, once the installer succeeded: its
+   * creator becomes its Admin, alone, in the registry's queue, where the
+   * create right is read again; journaled as `project.create` under their
+   * email, the token in the detail, with whatever entries a project of that
+   * name left behind and that were dropped. Someone those entries were the
+   * last role of leaves the dashboard.
    */
   async function recordCreation(slug: string, email: string, tokenId: string): Promise<Response | null> {
+    const leaving: string[] = [];
     const answer = await dependencies.access.change<null>(async (current) => {
       const result = creationRecorded(current, email, slug, system.now());
-      if ("refusal" in result) return fail("out-of-scope", result.refusal);
-      await journal({ operation: "project.create", result: "ok", actor: email, member: email, detail: `admin, created with token ${tokenId}`, slug });
+      if ("refusal" in result) {
+        await journalRefusal({ operation: "project.create", result: "rejects", actor: email, member: email, detail: result.refusal.slice(0, 150), slug });
+        return fail("out-of-scope", result.refusal);
+      }
+      const dropped = result.dropped.filter((entry) => entry.who !== email);
+      for (const entry of dropped) {
+        const other = emailOf(entry);
+        if (other !== null && isDashboardPerson(current, other) && !isDashboardPerson(result.registry, other)) leaving.push(other);
+      }
+      await journal({
+        operation: "project.create",
+        result: "ok",
+        actor: email,
+        member: email,
+        detail: `admin, created with token ${tokenId}${dropped.length === 0 ? "" : `; left from before and dropped: ${dropped.map((entry) => entry.who).join(", ")}`}`,
+        slug,
+      });
       console.log(`access: ${email} created ${slug} with token ${tokenId}, its Admin`);
       return { registry: result.registry, value: null };
     });
+    if (answer === null) for (const other of leaving) await leave(other, email);
     return answer;
   }
 
   return {
     dashboard: {
-      "/members/key": { GET: key },
-      "/members/signin": { POST: signIn },
-      "/members/whoami": { POST: whoami },
-      "/members/signout": { POST: signOut },
-      "/members/restart": { POST: restart },
-      "/members/unlock": { POST: unlockRoute },
-      "/members/lock": { POST: lockRoute },
+      "/people/key": { GET: key },
+      "/people/signin": { POST: signIn },
+      "/people/whoami": { POST: whoami },
+      "/people/signout": { POST: signOut },
+      "/people/restart": { POST: restart },
+      "/people/unlock": { POST: unlockRoute },
+      "/people/lock": { POST: lockRoute },
     },
     ensureKeys,
     authorize,

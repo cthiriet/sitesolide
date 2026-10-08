@@ -1,9 +1,10 @@
 /**
- * The team's tokens: one per person, created and revoked by the owner, held by
- * the steward in `/var/lib/sitesolide-steward/team.json`.
+ * The tokens: each one a person's, or the owner's own, held by the steward in
+ * `/var/lib/sitesolide-steward/team.json` (the file keeps its name: it is
+ * the one on the machine).
  *
  * **Only a SHA-256 of each token is kept**, for the reason portal/README.md
- * gives for guest passwords: argon2id slows down whoever guesses a password a
+ * gives for password access: argon2id slows down whoever guesses a password a
  * human chose; a token is 256 random bits, there is nothing to guess, and a
  * fast hash finds it by lookup instead of checking every record at 64 MiB each.
  * The value is shown once, at creation, and never again: lost, it is revoked
@@ -26,6 +27,7 @@ import {
   LABEL_MAX,
   MAX_EXPIRY_MS,
   MAX_TOKENS,
+  OWNER_HOLDER,
   TOKEN_PREFIX,
   type Identity,
   type Scope,
@@ -35,18 +37,25 @@ import { isValidSlug } from "../../borrowed/manifest";
 
 /**
  * What the registry keeps of a token: its view without `owned`, and its hash.
- * `member` is written for a member's token alone, so that an owner's token
- * reads as it always did.
+ * `member` is written for a person's token alone, so that the owner's own
+ * reads as it always did; `by` when the owner made it for someone, a token a
+ * person minted themselves carrying none.
  */
-export type TokenRecord = Omit<TokenView, "owned" | "member"> & { hash: string; member?: string };
+export type TokenRecord = Omit<TokenView, "owned" | "member" | "by"> & { hash: string; member?: string; by?: string };
 
 export type Team = {
+  /**
+   * 2 once every token belongs to someone: those of a person of People made
+   * theirs, the others the owner's (`migrateTeam`). 1, or absent, a registry
+   * from before.
+   */
+  version: 1 | 2;
   tokens: TokenRecord[];
   /** slug -> id of the token that created it. */
   owners: Record<string, string>;
 };
 
-export const EMPTY_TEAM: Team = { tokens: [], owners: {} };
+export const EMPTY_TEAM: Team = { version: 2, tokens: [], owners: {} };
 
 /** Slugs one token may be granted. A longer list is a team sharing one token. */
 export const MAX_GRANTED = 100;
@@ -118,13 +127,26 @@ export function readScope(value: unknown, zone: string): Scope | Refusal {
 
 export type TokenRequest = { label: string; email: string; expiresAt: number | null; scope: Scope };
 
-/** What the owner asks for, judged: label, email, expiry, scope. */
+/**
+ * Whose token the owner makes: `owner`, their own, or a person's email,
+ * lowercase; or the refusal. Whether that person may hold one is the
+ * steward's to judge, against the access registry.
+ */
+export function readHolder(value: unknown): string | Refusal {
+  if (value === OWNER_HOLDER) return OWNER_HOLDER;
+  if (typeof value !== "string" || value.length > EMAIL_MAX || !EMAIL_SHAPE.test(value.trim())) {
+    return { refusal: "holder: owner, for a token of your own, or the email of a person of People" };
+  }
+  return value.trim().toLowerCase();
+}
+
+/** What is asked for, judged: label, expiry, scope; `email` the holder's, `owner` for the owner's own. */
 export function readTokenRequest(body: Record<string, unknown>, now: number, zone: string): TokenRequest | Refusal {
   const { label, email, expiresAt, scope } = body;
   if (typeof label !== "string" || label.trim() === "" || label.length > LABEL_MAX || /[\u0000-\u001f\u007f]/.test(label)) {
     return { refusal: `label: one line of text, ${LABEL_MAX} characters at most` };
   }
-  if (typeof email !== "string" || email.length > EMAIL_MAX || !EMAIL_SHAPE.test(email.trim())) {
+  if (email !== OWNER_HOLDER && (typeof email !== "string" || email.length > EMAIL_MAX || !EMAIL_SHAPE.test(email.trim()))) {
     return { refusal: "email: the address of the person who will hold this token" };
   }
   if (expiresAt !== null) {
@@ -134,7 +156,7 @@ export function readTokenRequest(body: Record<string, unknown>, now: number, zon
   }
   const readScopeResult = readScope(scope, zone);
   if ("refusal" in readScopeResult) return readScopeResult;
-  return { label: label.trim(), email: email.trim().toLowerCase(), expiresAt, scope: readScopeResult };
+  return { label: label.trim(), email: (email as string).trim().toLowerCase(), expiresAt, scope: readScopeResult };
 }
 
 // --- the registry -------------------------------------------------------------------
@@ -168,7 +190,8 @@ function isRecord(value: unknown): value is TokenRecord {
     isOptionalDate(value.revokedAt) &&
     isOptionalDate(value.lastUsedAt) &&
     isScope(value.scope) &&
-    (value.member === undefined || (typeof value.member === "string" && EMAIL_SHAPE.test(value.member)))
+    (value.member === undefined || (typeof value.member === "string" && EMAIL_SHAPE.test(value.member))) &&
+    (value.by === undefined || value.by === OWNER_HOLDER)
   );
 }
 
@@ -178,14 +201,14 @@ function isRecord(value: unknown): value is TokenRecord {
  * is the safe failure for a list of who may deploy.
  */
 export function readTeam(text: string | null): Team | { unreadable: string } {
-  if (text === null) return { tokens: [], owners: {} };
+  if (text === null) return { version: 2, tokens: [], owners: {} };
   let object: unknown;
   try {
     object = JSON.parse(text);
   } catch {
     return { unreadable: "team.json is not JSON" };
   }
-  if (!isObject(object) || !Array.isArray(object.tokens) || !isObject(object.owners)) {
+  if (!isObject(object) || !Array.isArray(object.tokens) || !isObject(object.owners) || (object.version !== undefined && object.version !== 1 && object.version !== 2)) {
     return { unreadable: "team.json does not have the expected shape" };
   }
   if (!object.tokens.every(isRecord)) return { unreadable: "a token of team.json does not have the expected shape" };
@@ -196,11 +219,37 @@ export function readTeam(text: string | null): Team | { unreadable: string } {
     }
     owners[slug] = id;
   }
-  return { tokens: object.tokens as TokenRecord[], owners };
+  return { version: object.version === 2 ? 2 : 1, tokens: object.tokens as TokenRecord[], owners };
 }
 
 export function encodeTeam(team: Team): string {
-  return `${JSON.stringify({ tokens: team.tokens, owners: team.owners }, null, 2)}\n`;
+  return `${JSON.stringify({ version: team.version, tokens: team.tokens, owners: team.owners }, null, 2)}\n`;
+}
+
+/**
+ * Every token made someone's, once: one whose email names a person of
+ * People becomes theirs, made by the owner, narrowed to their roles from then
+ * on and revoked with them; any other becomes the owner's own, its email kept
+ * as the label it always was. `isPerson`: does this email sign in to the
+ * dashboard, a role above Can open or the create right. A registry already
+ * migrated comes back as it is.
+ */
+export function migrateTeam(team: Team, isPerson: (email: string) => boolean): { team: Team; persons: TokenRecord[]; owner: TokenRecord[] } {
+  if (team.version === 2) return { team, persons: [], owner: [] };
+  const persons: TokenRecord[] = [];
+  const owner: TokenRecord[] = [];
+  const tokens = team.tokens.map((record) => {
+    if (record.member !== undefined) return record;
+    const email = record.email.trim().toLowerCase();
+    if (EMAIL_SHAPE.test(email) && isPerson(email)) {
+      const made: TokenRecord = { ...record, member: email, by: OWNER_HOLDER };
+      persons.push(made);
+      return made;
+    }
+    owner.push(record);
+    return record;
+  });
+  return { team: { version: 2, tokens, owners: team.owners }, persons, owner };
 }
 
 /** The projects a token created, sorted. */
@@ -212,8 +261,8 @@ export function ownedBy(team: Team, id: string): string[] {
 }
 
 export function viewOf(team: Team, record: TokenRecord): TokenView {
-  const { hash: _hash, member, ...view } = record;
-  return { ...view, scope: { ...record.scope, slugs: [...record.scope.slugs] }, owned: ownedBy(team, record.id), member: member ?? null };
+  const { hash: _hash, member, by, ...view } = record;
+  return { ...view, scope: { ...record.scope, slugs: [...record.scope.slugs] }, owned: ownedBy(team, record.id), member: member ?? null, by: by ?? member ?? OWNER_HOLDER };
 }
 
 /** The holder as minted. A member's token is narrowed to the member's rights before anyone reads it (src/people/tokens.ts). */
@@ -234,7 +283,7 @@ function isLive(record: TokenRecord, now: number): boolean {
   return record.revokedAt === null && (record.expiresAt === null || now < record.expiresAt);
 }
 
-/** The live tokens a member minted. */
+/** The live tokens that belong to a person, whoever made them. */
 export function liveTokensOf(team: Team, email: string, now: number): TokenRecord[] {
   return team.tokens.filter((record) => record.member === email && isLive(record, now));
 }
@@ -253,7 +302,8 @@ function newId(team: Team, random: RandomSource): string {
 
 /**
  * A new token. The value lives only in what is returned: the registry keeps
- * its hash.
+ * its hash. `member`: the person it belongs to, null for the owner's own;
+ * `byOwner`: the owner made it for that person.
  */
 export async function createToken(
   team: Team,
@@ -261,6 +311,7 @@ export async function createToken(
   now: number,
   random: RandomSource = (bytes) => crypto.getRandomValues(new Uint8Array(bytes)),
   member: string | null = null,
+  byOwner = false,
 ): Promise<{ team: Team; view: TokenView; secret: string } | Refusal> {
   const alive = team.tokens.filter((record) => record.revokedAt === null).length;
   if (alive >= MAX_TOKENS) return { refusal: `${MAX_TOKENS} live tokens at most: revoke the ones nobody uses` };
@@ -276,8 +327,9 @@ export async function createToken(
     scope: request.scope,
     hash: await tokenHash(secret),
     ...(member === null ? {} : { member }),
+    ...(member !== null && byOwner ? { by: OWNER_HOLDER } : {}),
   };
-  const next: Team = { tokens: [...team.tokens, record], owners: { ...team.owners } };
+  const next: Team = { version: team.version, tokens: [...team.tokens, record], owners: { ...team.owners } };
   return { team: next, view: viewOf(next, record), secret };
 }
 
@@ -291,18 +343,19 @@ export function revokeToken(team: Team, id: unknown, now: number): { team: Team;
   if (record === undefined) return { refusal: "no such token" };
   if (record.revokedAt !== null) return { team, view: viewOf(team, record) };
   const revoked = { ...record, revokedAt: now };
-  const next: Team = { tokens: team.tokens.map((candidate) => (candidate.id === id ? revoked : candidate)), owners: team.owners };
+  const next: Team = { version: team.version, tokens: team.tokens.map((candidate) => (candidate.id === id ? revoked : candidate)), owners: team.owners };
   return { team: next, view: viewOf(next, revoked) };
 }
 
 /**
- * Every live token a member minted, revoked: the member was removed. Their
- * projects stay where they are, as for any revoked token.
+ * Every live token that belongs to a person, revoked, whoever made it: the
+ * person no longer signs in. Their projects stay where they are, as for any
+ * revoked token.
  */
 export function revokeMemberTokens(team: Team, email: string, now: number): { team: Team; revoked: TokenView[] } {
   const ids = new Set(team.tokens.filter((record) => record.member === email && record.revokedAt === null).map((record) => record.id));
   if (ids.size === 0) return { team, revoked: [] };
-  const next: Team = { tokens: team.tokens.map((record) => (ids.has(record.id) ? { ...record, revokedAt: now } : record)), owners: team.owners };
+  const next: Team = { version: team.version, tokens: team.tokens.map((record) => (ids.has(record.id) ? { ...record, revokedAt: now } : record)), owners: team.owners };
   return { team: next, revoked: next.tokens.filter((record) => ids.has(record.id)).map((record) => viewOf(next, record)) };
 }
 
@@ -326,7 +379,7 @@ export async function authenticate(team: Team, bearer: unknown, now: number): Pr
   return { kind: "accepted", record, identity: identityOf(team, record) };
 }
 
-/** What the holder is told: the reason, and what to do about it. A member mints their own again, from the Tokens page. */
+/** What the holder is told: the reason, and what to do about it. A person mints their own again, from the Tokens page. */
 export function refusalMessage(reason: Authentication & { kind: "refused" }): string {
   const another = reason.member === true ? "mint a new one from the dashboard's Tokens page if you still have a role there" : "ask the owner of the machine for a new one";
   switch (reason.reason) {
@@ -345,6 +398,7 @@ export function touch(team: Team, id: string, now: number): Team | null {
   const record = team.tokens.find((candidate) => candidate.id === id);
   if (record === undefined || record.lastUsedAt === rounded) return null;
   return {
+    version: team.version,
     tokens: team.tokens.map((candidate) => (candidate.id === id ? { ...candidate, lastUsedAt: rounded } : candidate)),
     owners: team.owners,
   };
@@ -360,11 +414,11 @@ export function forgetOwnership(team: Team, slug: string): { team: Team; id: str
   const owners = { ...team.owners };
   const id = owners[slug]!;
   delete owners[slug];
-  return { team: { tokens: team.tokens, owners }, id };
+  return { team: { version: team.version, tokens: team.tokens, owners }, id };
 }
 
 /** The registry with this slug recorded as the token's, or null when it already is. */
 export function recordOwnership(team: Team, slug: string, id: string): Team | null {
   if (team.owners[slug] === id) return null;
-  return { tokens: team.tokens, owners: { ...team.owners, [slug]: id } };
+  return { version: team.version, tokens: team.tokens, owners: { ...team.owners, [slug]: id } };
 }

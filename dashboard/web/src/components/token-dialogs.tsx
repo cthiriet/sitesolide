@@ -45,10 +45,12 @@ import { cn } from "@/lib/utils"
  * asks for the password first, and a 423 from the service closes this dialog
  * and asks again, the steward having forgotten the unlock.
  *
- * A person creates their own: no email, theirs is the token's; the projects
- * where they are a Developer or an Admin to choose from; creating projects
- * only with the right the owner granted them; and the options only for
- * projects they are an Admin of. The steward judges it all again.
+ * Every token belongs to someone. The owner chooses whose: their own, for
+ * their agents, its projects typed freely; or a person of People, made
+ * exactly as that person's own would be. A person's token, whoever makes it,
+ * offers the projects where they are a Developer or an Admin; creating
+ * projects only with the right the owner granted them; and the options only
+ * for projects they are an Admin of. The steward judges it all again.
  */
 
 const COPY_WARNING = "You haven't copied the token. It can't be shown again."
@@ -121,6 +123,7 @@ export function CreateTokenDialog({
   onCreated,
   onLocked,
   onSessionExpired,
+  holders = [],
 }: {
   open: boolean
   /** The dashboard's address, which the holder logs in to. */
@@ -129,6 +132,8 @@ export function CreateTokenDialog({
   knownSlugs: readonly string[]
   /** A person minting their own: their roles and the create right. Null for the owner. */
   person?: { roles: Roles; create: boolean } | null
+  /** For the owner, the people a token may be made for, with their roles and the create right. */
+  holders?: readonly { email: string; roles: Roles; create: boolean }[]
   now: number
   onClose: () => void
   onCreated: () => void
@@ -138,13 +143,18 @@ export function CreateTokenDialog({
 }) {
   const announce = useAnnounce()
   const [label, setLabel] = useState("")
-  const [email, setEmail] = useState("")
+  // Whose token, for the owner: `owner`, their own, or a person's email.
+  const [holder, setHolder] = useState("owner")
   const [slugsText, setSlugsText] = useState("")
   const [expiry, setExpiry] = useState<number | null>(DEFAULT_EXPIRY_DAYS)
-  const [scope, setScope] = useState<Omit<Scope, "slugs">>({ create: person === null, outbound: false, domain: false, public: false })
+  const [scope, setScope] = useState<Omit<Scope, "slugs">>({ create: false, outbound: false, domain: false, public: false })
   const [chosen, setChosen] = useState<string[]>([])
-  const mintable = person === null ? [] : mintableProjects(person.roles)
-  const options = person === null || optionsAllowed(person.roles, chosen, scope.create)
+  // The person the token will be made for: the one minting their own, or the one the owner chose.
+  const target = person ?? (holder === "owner" ? null : (holders.find((one) => one.email === holder) ?? null))
+  // The person the owner makes it for, by name; null for the owner's own, or a person's own.
+  const holderEmail = person === null && holder !== "owner" ? holder : null
+  const mintable = target === null ? [] : mintableProjects(target.roles)
+  const options = target === null || optionsAllowed(target.roles, chosen, scope.create)
   // A person's options fall as soon as their choice no longer allows them.
   const effective = options ? scope : { ...scope, outbound: false, domain: false, public: false }
   const [errors, setErrors] = useState<TokenErrors>({})
@@ -155,15 +165,14 @@ export function CreateTokenDialog({
   const [warned, setWarned] = useState(false)
 
   const labelField = useRef<HTMLInputElement>(null)
-  const emailField = useRef<HTMLInputElement>(null)
   const slugsField = useRef<HTMLInputElement>(null)
   const labelId = useId()
-  const emailId = useId()
+  const holderId = useId()
   const slugsId = useId()
   const expiryId = useId()
 
   function focusField(field: TokenField) {
-    ;({ label: labelField, email: emailField, slugs: slugsField })[field].current?.focus()
+    ;({ label: labelField, slugs: slugsField })[field].current?.focus()
   }
 
   function askToClose() {
@@ -176,8 +185,8 @@ export function CreateTokenDialog({
   async function create(event: SyntheticEvent) {
     event.preventDefault()
     if (inProgress) return
-    const slugs = person === null ? parseSlugs(slugsText) : chosen
-    const faults = person === null ? validateTokenForm({ label, email, slugs }, knownSlugs) : validatePersonTokenForm({ label, slugs, create: effective.create })
+    const slugs = target === null ? parseSlugs(slugsText) : chosen
+    const faults = target === null ? validateTokenForm({ label, slugs }, knownSlugs) : validatePersonTokenForm({ label, slugs, create: effective.create })
     setErrors(faults)
     setFormError("")
     const first = firstTokenField(faults)
@@ -185,8 +194,8 @@ export function CreateTokenDialog({
 
     setInProgress(true)
     try {
-      // A person's token carries their own email: the steward writes it, whatever is sent.
-      const { status, body } = await createToken({ label: label.trim(), email: person === null ? email.trim() : "", expiresAt: expiryFrom(expiry, now), scope: { ...effective, slugs } })
+      // A person minting their own sends no holder: the token is theirs, the steward says so.
+      const { status, body } = await createToken({ label: label.trim(), ...(person === null ? { holder } : {}), expiresAt: expiryFrom(expiry, now), scope: { ...effective, slugs } })
       if (status === 401) {
         onClose()
         return onSessionExpired()
@@ -202,7 +211,7 @@ export function CreateTokenDialog({
         return focusField(refusal.field)
       }
       setCreated({ token: body.token, secret: body.secret })
-      announce(`Token created for ${body.token.email}. Copy it now: it won't be shown again.`)
+      announce(`Token created for ${body.token.member ?? "you"}. Copy it now: it won't be shown again.`)
       onCreated()
     } finally {
       setInProgress(false)
@@ -225,14 +234,39 @@ export function CreateTokenDialog({
             <DialogHeader>
               <DialogTitle>New token</DialogTitle>
               <DialogDescription className="text-pretty">
-                {person === null
-                  ? "One token per person or agent. It deploys over HTTPS, without SSH and without root, and only what you allow here. You can revoke it at any time."
-                  : "A token of your own, for your CLI or an agent. It never does more than your roles: lowered, they narrow it at once, and you can revoke it at any time."}
+                {person !== null
+                  ? "A token of your own, for your CLI or an agent. It never does more than your roles: lowered, they narrow it at once, and you can revoke it at any time."
+                  : target !== null
+                    ? `A token for ${holderEmail}, made as their own would be: it never does more than their roles, and goes with them if they leave.`
+                    : "A token of yours, for your own agents. It deploys over HTTPS, without SSH and without root, and only what you allow here. You can revoke it at any time."}
               </DialogDescription>
             </DialogHeader>
 
             <div className={cn("grid gap-4", person === null && "sm:grid-cols-2")}>
-              <Field id={labelId} labelText="For" error={errors.label} help="A name you will recognise: a person, a laptop, an agent.">
+              {person === null && (
+                <Field id={holderId} labelText="Whose token" help="Yours, for your agents; or a person's, never beyond their roles.">
+                  <select
+                    id={holderId}
+                    value={holder}
+                    onChange={(event) => {
+                      setHolder(event.target.value)
+                      setChosen([])
+                      setScope({ create: false, outbound: false, domain: false, public: false })
+                      setErrors({})
+                    }}
+                    aria-describedby={`${holderId}-help`}
+                    className="h-10 rounded-lg border border-input bg-transparent px-2.5 text-sm sm:h-9"
+                  >
+                    <option value="owner">Yours</option>
+                    {holders.map((one) => (
+                      <option key={one.email} value={one.email}>
+                        {one.email}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+              <Field id={labelId} labelText="For" error={errors.label} help="A name you will recognise: a laptop, a workstation, an agent.">
                 <Input
                   ref={labelField}
                   id={labelId}
@@ -248,31 +282,13 @@ export function CreateTokenDialog({
                   className="h-10 sm:h-9"
                 />
               </Field>
-              {person === null && (
-              <Field id={emailId} labelText="Email" error={errors.email} help="Recorded with every deployment it makes.">
-                <Input
-                  ref={emailField}
-                  id={emailId}
-                  type="email"
-                  value={email}
-                  autoComplete="off"
-                  onChange={(event) => {
-                    setEmail(event.target.value)
-                    setErrors(({ email: _, ...rest }) => rest)
-                  }}
-                  aria-invalid={errors.email !== undefined || undefined}
-                  aria-describedby={describedby(emailId, errors.email)}
-                  className="h-10 sm:h-9"
-                />
-              </Field>
-              )}
             </div>
 
-            {person !== null ? (
+            {target !== null ? (
               <fieldset aria-describedby={errors.slugs !== undefined ? `${slugsId}-error` : `${slugsId}-help`}>
                 <legend className="mb-2 text-sm leading-none font-medium">Projects it may deploy</legend>
                 {mintable.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">None of your projects: you are a Viewer on each. It may still create projects.</p>
+                  <p className="text-xs text-muted-foreground">{person !== null ? "None of your projects: you are a Viewer on each." : `None of ${holderEmail}'s projects: a Viewer on each.`}{target.create ? " It may still create projects." : ""}</p>
                 ) : (
                   <div className="grid gap-2 sm:grid-cols-2">
                     {mintable.map(({ slug, role }) => (
@@ -296,7 +312,7 @@ export function CreateTokenDialog({
                   </p>
                 ) : (
                   <p id={`${slugsId}-help`} className="mt-2 text-xs text-muted-foreground">
-                    Where you are a Developer or an Admin. A role lowered later stops it there.
+                    {person !== null ? "Where you are a Developer or an Admin." : "Where they are a Developer or an Admin."} A role lowered later stops it there.
                   </p>
                 )}
               </fieldset>
@@ -327,7 +343,7 @@ export function CreateTokenDialog({
             <fieldset>
               <legend className="mb-2 text-sm leading-none font-medium">It may also</legend>
               <div className="grid gap-2 sm:grid-cols-2">
-                {(person === null || person.create) && (
+                {(target === null || target.create) && (
                   <Permission
                     checked={effective.create}
                     onChange={(next) => {
@@ -336,9 +352,11 @@ export function CreateTokenDialog({
                     }}
                     title="Create projects"
                   >
-                    {person === null
+                    {target === null
                       ? "New projects, restricted unless public sites are allowed. It deploys what it creates."
-                      : "New projects, restricted unless public sites are allowed. You become Admin of what it creates."}
+                      : person !== null
+                        ? "New projects, restricted unless public sites are allowed. You become Admin of what it creates."
+                        : "New projects, restricted unless public sites are allowed. They become Admin of what it creates."}
                   </Permission>
                 )}
                 <Permission checked={effective.public} disabled={!options} onChange={(next) => setScope({ ...scope, public: next })} title="Deploy public sites">
@@ -352,7 +370,9 @@ export function CreateTokenDialog({
                 </Permission>
               </div>
               {!options && (
-                <p className="mt-2 text-xs text-muted-foreground">Public sites, outbound network and a domain are for projects you are an Admin of: choose only those.</p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Public sites, outbound network and a domain are for projects {person !== null ? "you are" : "they are"} an Admin of: choose only those.
+                </p>
               )}
             </fieldset>
 
@@ -422,9 +442,9 @@ function TokenScreen({ created, origin, warned, onCopied, onDone }: { created: C
       <DialogHeader>
         <DialogTitle className="pr-8 leading-snug wrap-anywhere">Token for {created.token.label}</DialogTitle>
         <DialogDescription className="text-pretty">
-          {created.token.member === null
-            ? `Send it to ${created.token.email}. They run the command below and paste the token at its prompt. The token is shown only once.`
-            : "Run the command below where you deploy from, and paste the token at its prompt. The token is shown only once."}
+          {created.token.member !== null && created.token.by === "owner"
+            ? `Send it to ${created.token.member}. They run the command below and paste the token at its prompt. The token is shown only once.`
+            : "Run the command below where it deploys from, and paste the token at its prompt. The token is shown only once."}
         </DialogDescription>
       </DialogHeader>
 

@@ -48,6 +48,8 @@ type Bench = {
   barrier: { promise: Promise<void> | null };
   call: (method: string, path: string, body?: unknown) => Promise<Response>;
   journal: () => LogEntry[];
+  /** The accepted changes of access, general access among them, kept 180 days. */
+  accessLog: () => LogEntry[];
   privateKey: () => PrivateKey;
   file: (name: string) => string;
   /** The access registry laid as the owner would have left it. */
@@ -167,6 +169,7 @@ async function mount(): Promise<Bench> {
     barrier,
     call,
     journal: () => (existsSync(join(state, "journal.jsonl")) ? reread(readFileSync(join(state, "journal.jsonl"), "utf8")) : []),
+    accessLog: () => (existsSync(join(state, "access-log.jsonl")) ? reread(readFileSync(join(state, "access-log.jsonl"), "utf8")) : []),
     privateKey: () => readPrivateKey(readFileSync(join(portalKey, "assertion.key"), "utf8"))!,
     file: (name) => readFileSync(join(secrets, name), "utf8"),
     seed: (people) => writeRegistry(state, registryOf(people)),
@@ -180,13 +183,13 @@ function assertion(bench: Bench, email: string, options: { reauth?: boolean; aut
 }
 
 async function sessionOf(bench: Bench, email: string): Promise<string> {
-  const response = await bench.call("POST", "/members/signin", { assertion: await assertion(bench, email, { authAgeS: 3600 }) });
+  const response = await bench.call("POST", "/people/signin", { assertion: await assertion(bench, email, { authAgeS: 3600 }) });
   expect(response.status).toBe(200);
   return ((await response.json()) as { session: string }).session;
 }
 
 async function unlockAs(bench: Bench, session: string, email: string): Promise<string> {
-  const response = await bench.call("POST", "/members/unlock", { session, assertion: await assertion(bench, email, { reauth: true }) });
+  const response = await bench.call("POST", "/people/unlock", { session, assertion: await assertion(bench, email, { reauth: true }) });
   expect(response.status).toBe(200);
   return ((await response.json()) as { token: string }).token;
 }
@@ -212,7 +215,7 @@ describe("a member's own unlock", () => {
   test("opens only on a forced sign-in, for the session's own email, fresh, once", async () => {
     const bench = await mount();
     const { alice } = await team(bench);
-    const unlock = async (token: string) => bench.call("POST", "/members/unlock", { session: alice, assertion: token });
+    const unlock = async (token: string) => bench.call("POST", "/people/unlock", { session: alice, assertion: token });
 
     const plain = await unlock(await assertion(bench, ALICE));
     expect(plain.status).toBe(401);
@@ -241,7 +244,7 @@ describe("a member's own unlock", () => {
     const bench = await mount();
     bench.seed({ [ALICE]: { shop: "viewer", beta: "visitor" } });
     const session = await sessionOf(bench, ALICE);
-    const response = await bench.call("POST", "/members/unlock", { session, assertion: await assertion(bench, ALICE, { reauth: true }) });
+    const response = await bench.call("POST", "/people/unlock", { session, assertion: await assertion(bench, ALICE, { reauth: true }) });
     expect(response.status).toBe(403);
   });
 
@@ -255,7 +258,7 @@ describe("a member's own unlock", () => {
     expect(ownerAgain).not.toBe(owner);
 
     const set = (session: string, token: string, value: string) =>
-      bench.call("PUT", "/members/secrets/variable", { session, token, slug: "alpha", file: "alpha.env", variable: "FLAG", value });
+      bench.call("PUT", "/people/secrets/variable", { session, token, slug: "alpha", file: "alpha.env", variable: "FLAG", value });
     expect((await set(alice, aliceToken, "a")).status).toBe(200);
     expect((await set(bob, bobToken, "b")).status).toBe(200);
     // The owner's new unlock replaced the owner's old one, and only that one.
@@ -275,7 +278,7 @@ describe("a member's own unlock", () => {
     const onPhone = await unlockAs(bench, phone, ALICE);
     const second = await unlockAs(bench, alice, ALICE);
     const set = (session: string, token: string) =>
-      bench.call("PUT", "/members/secrets/variable", { session, token, slug: "alpha", file: "alpha.env", variable: "FLAG", value: "x" });
+      bench.call("PUT", "/people/secrets/variable", { session, token, slug: "alpha", file: "alpha.env", variable: "FLAG", value: "x" });
     expect((await set(alice, first)).status).toBe(401);
     expect((await set(alice, second)).status).toBe(200);
     expect((await set(phone, onPhone)).status).toBe(200);
@@ -285,19 +288,19 @@ describe("a member's own unlock", () => {
     const bench = await mount();
     const { alice, bob } = await team(bench);
     const set = (session: string, token: string) =>
-      bench.call("PUT", "/members/secrets/variable", { session, token, slug: "alpha", file: "alpha.env", variable: "FLAG", value: "x" });
+      bench.call("PUT", "/people/secrets/variable", { session, token, slug: "alpha", file: "alpha.env", variable: "FLAG", value: "x" });
 
     let token = await unlockAs(bench, alice, ALICE);
     bench.clock.t += 10 * 60 * 1000;
     expect(await body(await set(alice, token))).toMatchObject({ error: "locked" });
 
     token = await unlockAs(bench, alice, ALICE);
-    expect((await bench.call("POST", "/members/lock", { session: alice, token })).status).toBe(204);
+    expect((await bench.call("POST", "/people/lock", { session: alice, token })).status).toBe(204);
     expect(bench.journal().at(-1)).toMatchObject({ operation: "lock", actor: ALICE });
     expect((await set(alice, token)).status).toBe(401);
 
     token = await unlockAs(bench, alice, ALICE);
-    await bench.call("POST", "/members/signout", { session: alice });
+    await bench.call("POST", "/people/signout", { session: alice });
     expect((await set(alice, token)).status).toBe(401);
 
     const bobToken = await unlockAs(bench, bob, BOB);
@@ -314,9 +317,9 @@ describe("a member's own unlock", () => {
     const bench = await mount();
     const { alice, bob } = await team(bench);
     for (let i = 0; i < 4; i++) {
-      await bench.call("POST", "/members/unlock", { session: alice, assertion: await assertion(bench, ALICE) });
+      await bench.call("POST", "/people/unlock", { session: alice, assertion: await assertion(bench, ALICE) });
     }
-    const slowed = await bench.call("POST", "/members/unlock", { session: alice, assertion: await assertion(bench, ALICE, { reauth: true }) });
+    const slowed = await bench.call("POST", "/people/unlock", { session: alice, assertion: await assertion(bench, ALICE, { reauth: true }) });
     expect(slowed.status).toBe(429);
     // Bob and the owner are not slowed by Alice's refusals.
     await unlockAs(bench, bob, BOB);
@@ -328,7 +331,7 @@ describe("secrets, by role", () => {
   test("a Developer lists names and metadata, never a value, a size nor a previous version; another project, nothing", async () => {
     const bench = await mount();
     const { alice } = await team(bench);
-    const listed = await body(await bench.call("POST", "/members/secrets/projects", { session: alice }));
+    const listed = await body(await bench.call("POST", "/people/secrets/projects", { session: alice }));
     const projects = listed.projects as { slug: string; files: { name: string; readable: boolean; bytes: number | null; previous: boolean; variables: string[] }[] }[];
     expect(projects.map((project) => project.slug)).toEqual(["alpha", "beta"]);
     const alpha = projects.find((project) => project.slug === "alpha")!;
@@ -347,7 +350,7 @@ describe("secrets, by role", () => {
     const bench = await mount();
     const { alice } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
-    const set = await bench.call("PUT", "/members/secrets/variable", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "NEW_KEY", value: "set-by-a-developer-0001" });
+    const set = await bench.call("PUT", "/people/secrets/variable", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "NEW_KEY", value: "set-by-a-developer-0001" });
     expect(set.status).toBe(200);
     const view = await body(set);
     expect(view.file).toMatchObject({ name: "alpha.env", readable: false, previous: false, bytes: null });
@@ -355,10 +358,10 @@ describe("secrets, by role", () => {
     expect(bench.file("alpha.env")).toContain("NEW_KEY=set-by-a-developer-0001");
     expect(bench.journal().at(-1)).toMatchObject({ operation: "set", result: "ok", actor: ALICE, slug: "alpha", variable: "NEW_KEY" });
 
-    expect((await bench.call("PUT", "/members/secrets/content", { session: alice, token, slug: "alpha", file: "alpha-signing.pub", content: "ssh-ed25519 BBBB new\n" })).status).toBe(200);
+    expect((await bench.call("PUT", "/people/secrets/content", { session: alice, token, slug: "alpha", file: "alpha-signing.pub", content: "ssh-ed25519 BBBB new\n" })).status).toBe(200);
     expect(bench.file("alpha-signing.pub")).toBe("ssh-ed25519 BBBB new\n");
 
-    const removed = await bench.call("DELETE", "/members/secrets/variable", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "NEW_KEY" });
+    const removed = await bench.call("DELETE", "/people/secrets/variable", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "NEW_KEY" });
     expect(removed.status).toBe(200);
     expect(bench.file("alpha.env")).not.toContain("NEW_KEY");
     expect(bench.journal().at(-1)).toMatchObject({ operation: "remove", actor: ALICE, variable: "NEW_KEY" });
@@ -368,34 +371,34 @@ describe("secrets, by role", () => {
     const bench = await mount();
     const { alice } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
-    const value = await bench.call("POST", "/members/secrets/value", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "API_KEY" });
+    const value = await bench.call("POST", "/people/secrets/value", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "API_KEY" });
     expect(value.status).toBe(403);
     const refusal = await body(value);
     expect(refusal).toEqual({ error: "out-of-scope", message: `${ALICE} is a Developer on alpha: reading a value back takes an Admin: a Developer sets, replaces and removes values, and never reads one` });
     expect(JSON.stringify(refusal)).not.toContain(SECRET_VALUE);
     expect(bench.journal().at(-1)).toMatchObject({ operation: "read", result: "rejects", actor: ALICE, slug: "alpha", detail: "role developer" });
-    expect((await bench.call("POST", "/members/secrets/content", { session: alice, token, slug: "alpha", file: "alpha-signing.pub" })).status).toBe(403);
-    expect((await bench.call("POST", "/members/secrets/restore", { session: alice, token, slug: "alpha", file: "alpha.env" })).status).toBe(403);
+    expect((await bench.call("POST", "/people/secrets/content", { session: alice, token, slug: "alpha", file: "alpha-signing.pub" })).status).toBe(403);
+    expect((await bench.call("POST", "/people/secrets/restore", { session: alice, token, slug: "alpha", file: "alpha.env" })).status).toBe(403);
   });
 
   test("an Admin reads their project's values, and the journal names them", async () => {
     const bench = await mount();
     const { alice } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
-    const value = await bench.call("POST", "/members/secrets/value", { session: alice, token, slug: "beta", file: "beta.env", variable: "API_KEY" });
+    const value = await bench.call("POST", "/people/secrets/value", { session: alice, token, slug: "beta", file: "beta.env", variable: "API_KEY" });
     expect(value.status).toBe(200);
     expect(await body(value)).toEqual({ value: SECRET_VALUE });
     expect(bench.journal().at(-1)).toMatchObject({ operation: "read", result: "ok", actor: ALICE, slug: "beta", variable: "API_KEY" });
-    const content = await bench.call("POST", "/members/secrets/content", { session: alice, token, slug: "beta", file: "beta-signing.pub" });
+    const content = await bench.call("POST", "/people/secrets/content", { session: alice, token, slug: "beta", file: "beta-signing.pub" });
     expect(await body(content)).toEqual({ content: "ssh-ed25519 AAAA beta\n" });
   });
 
   test("every unlocked write needs the person's own unlock, the session alone is not enough", async () => {
     const bench = await mount();
     const { alice } = await team(bench);
-    const missing = await bench.call("PUT", "/members/secrets/variable", { session: alice, slug: "alpha", file: "alpha.env", variable: "A", value: "b" });
+    const missing = await bench.call("PUT", "/people/secrets/variable", { session: alice, slug: "alpha", file: "alpha.env", variable: "A", value: "b" });
     expect(await body(missing)).toMatchObject({ error: "locked" });
-    const wrong = await bench.call("PUT", "/members/secrets/variable", { session: alice, token: "x".repeat(43), slug: "alpha", file: "alpha.env", variable: "A", value: "b" });
+    const wrong = await bench.call("PUT", "/people/secrets/variable", { session: alice, token: "x".repeat(43), slug: "alpha", file: "alpha.env", variable: "A", value: "b" });
     expect(await body(wrong)).toMatchObject({ error: "locked" });
   });
 
@@ -403,7 +406,7 @@ describe("secrets, by role", () => {
     const bench = await mount();
     const { alice } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
-    const set = (slug: string, file: string) => bench.call("PUT", "/members/secrets/variable", { session: alice, token, slug, file, variable: "X", value: "y" });
+    const set = (slug: string, file: string) => bench.call("PUT", "/people/secrets/variable", { session: alice, token, slug, file, variable: "X", value: "y" });
     expect(await body(await set("shop", "shop.env"))).toMatchObject({ error: "out-of-scope", message: `${ALICE} is a Viewer on shop: changing its secrets takes a Developer or an Admin` });
     expect(await body(await set("dashboard", "dashboard.env"))).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("belongs to the platform") });
     expect(await body(await set("portal", "portal.env"))).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("belongs to the platform") });
@@ -421,9 +424,9 @@ describe("secrets, by role", () => {
     bench.seed({ ...TEAM, [ALICE]: { ...TEAM[ALICE]!, dashboard: "admin" } });
     const alice = await sessionOf(bench, ALICE);
     const token = await unlockAs(bench, alice, ALICE);
-    const read = await bench.call("POST", "/members/secrets/value", { session: alice, token, slug: "dashboard", file: "dashboard.env", variable: "PASSWORD_HASH" });
+    const read = await bench.call("POST", "/people/secrets/value", { session: alice, token, slug: "dashboard", file: "dashboard.env", variable: "PASSWORD_HASH" });
     expect(await body(read)).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("platform") });
-    const listed = await body(await bench.call("POST", "/members/secrets/projects", { session: alice }));
+    const listed = await body(await bench.call("POST", "/people/secrets/projects", { session: alice }));
     expect((listed.projects as { slug: string }[]).map((project) => project.slug)).not.toContain("dashboard");
   });
 
@@ -431,7 +434,7 @@ describe("secrets, by role", () => {
     const bench = await mount();
     const { alice } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
-    const set = await bench.call("PUT", "/members/secrets/variable", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "PASSWORD_HASH", value: "$argon2id$x" });
+    const set = await bench.call("PUT", "/people/secrets/variable", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "PASSWORD_HASH", value: "$argon2id$x" });
     expect(await body(set)).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("Change password") });
     expect(bench.journal().at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: ALICE });
   });
@@ -442,9 +445,9 @@ describe("secrets, by role", () => {
     const token = await unlockAs(bench, alice, ALICE);
     let release!: () => void;
     bench.barrier.promise = new Promise((resolve) => (release = resolve));
-    const restart = bench.call("POST", "/members/restart", { session: alice, slug: "alpha" });
+    const restart = bench.call("POST", "/people/restart", { session: alice, slug: "alpha" });
     await Bun.sleep(20);
-    const write = bench.call("PUT", "/members/secrets/variable", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "LATE", value: "never-written" });
+    const write = bench.call("PUT", "/people/secrets/variable", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "LATE", value: "never-written" });
     await Bun.sleep(20);
     bench.seed({ [BOB]: TEAM[BOB]! });
     release();
@@ -459,15 +462,27 @@ describe("an Admin's project", () => {
     const bench = await mount();
     const { alice, bob } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
-    const off = await bench.call("POST", "/members/portal", { session: alice, token, slug: "beta", active: false, confirmation: "beta" });
+    const off = await bench.call("POST", "/people/portal", { session: alice, token, slug: "beta", active: false, confirmation: "beta" });
     expect(off.status).toBe(200);
     expect(bench.calls).toContainEqual(["start", "sitesolide-gatekeeper-off@beta.service"]);
-    expect(bench.journal().at(-1)).toMatchObject({ operation: "portal", result: "ok", actor: ALICE, slug: "beta", detail: "off, ok" });
+    expect(bench.accessLog().at(-1)).toMatchObject({ operation: "portal", result: "ok", actor: ALICE, slug: "beta", detail: "off, ok" });
 
     const bobToken = await unlockAs(bench, bob, BOB);
-    const refused = await bench.call("POST", "/members/portal", { session: bob, token: bobToken, slug: "alpha", active: true, confirmation: "" });
+    const refused = await bench.call("POST", "/people/portal", { session: bob, token: bobToken, slug: "alpha", active: true, confirmation: "" });
     expect(await body(refused)).toMatchObject({ error: "out-of-scope", message: `${BOB} is a Developer on alpha: changing its general access takes an Admin` });
     expect(bench.journal().at(-1)).toMatchObject({ operation: "portal", result: "rejects", actor: BOB, detail: "role developer" });
+  });
+
+  test("restricts it without unlocking, makes it public only unlocked", async () => {
+    const bench = await mount();
+    const { alice } = await team(bench);
+    const locked = await bench.call("POST", "/people/portal", { session: alice, slug: "beta", active: false, confirmation: "beta" });
+    expect(locked.status).toBe(401);
+    expect(await body(locked)).toMatchObject({ error: "locked" });
+    const restricted = await bench.call("POST", "/people/portal", { session: alice, slug: "beta", active: true, confirmation: "" });
+    expect(restricted.status).toBe(200);
+    expect(bench.calls).toContainEqual(["start", "sitesolide-gatekeeper-on@beta.service"]);
+    expect(bench.accessLog().at(-1)).toMatchObject({ operation: "portal", result: "ok", actor: ALICE, slug: "beta" });
   });
 
   test("restores a snapshot of it, the requester the email the steward verified; a Developer cannot", async () => {
@@ -475,17 +490,17 @@ describe("an Admin's project", () => {
     const { alice, bob } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
     const snapshot = snapshotName("beta", bench.clock.t - SNAPSHOT_AGE_MS, "scheduled");
-    const started = await bench.call("POST", "/members/backups/restore", { session: alice, token, slug: "beta", snapshot, confirmation: "beta" });
+    const started = await bench.call("POST", "/people/backups/restore", { session: alice, token, slug: "beta", snapshot, confirmation: "beta" });
     expect(started.status).toBe(202);
     expect(await body(started)).toMatchObject({ restore: { state: "running", actor: ALICE, snapshot } });
     const request = JSON.parse(readFileSync(join(bench.root, "backup-state", "requests", "beta.json"), "utf8"));
     expect(request.actor).toBe(ALICE);
     expect(bench.calls).toContainEqual(["start", "--no-block", "sitesolide-restore@beta.service"]);
     // The requester is never the request's to name.
-    expect((await bench.call("POST", "/members/backups/restore", { session: alice, token, slug: "beta", snapshot, confirmation: "beta", actor: "owner" })).status).toBe(400);
+    expect((await bench.call("POST", "/people/backups/restore", { session: alice, token, slug: "beta", snapshot, confirmation: "beta", actor: "owner" })).status).toBe(400);
 
     const bobToken = await unlockAs(bench, bob, BOB);
-    const refused = await bench.call("POST", "/members/backups/restore", { session: bob, token: bobToken, slug: "alpha", snapshot, confirmation: "alpha" });
+    const refused = await bench.call("POST", "/people/backups/restore", { session: bob, token: bobToken, slug: "alpha", snapshot, confirmation: "alpha" });
     expect(await body(refused)).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("backups") });
     expect(bench.journal().at(-1)).toMatchObject({ operation: "backup.restore", result: "rejects", actor: BOB });
   });

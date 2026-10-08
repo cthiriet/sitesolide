@@ -20,19 +20,19 @@
  *
  * The routes, on the dashboard's socket:
  *
- *   POST   /members/secrets/projects  { session }                                      -> MemberProjectsResponse
- *   POST   /members/secrets/value     { session, token, slug, file, variable }         -> ValueResponse     Admin
- *   PUT    /members/secrets/variable  { session, token, slug, file, variable, value }  -> FileResponse      Developer
- *   DELETE /members/secrets/variable  { session, token, slug, file, variable }         -> FileResponse      Developer
- *   POST   /members/secrets/file      { session, token, slug, file }                   -> FileResponse      Developer
- *   POST   /members/secrets/restore   { session, token, slug, file }                   -> FileResponse      Admin
- *   POST   /members/secrets/content   { session, token, slug, file }                   -> ContentResponse   Admin
- *   PUT    /members/secrets/content   { session, token, slug, file, content }          -> FileResponse      Developer
- *   POST   /members/portal            { session, token, slug, active, confirmation }   -> PortalResponse    Admin
- *   POST   /members/backups/restore   { session, token, slug, snapshot, confirmation } -> 202 RestoreResponse  Admin
+ *   POST   /people/secrets/projects  { session }                                      -> MemberProjectsResponse
+ *   POST   /people/secrets/value     { session, token, slug, file, variable }         -> ValueResponse     Admin
+ *   PUT    /people/secrets/variable  { session, token, slug, file, variable, value }  -> FileResponse      Developer
+ *   DELETE /people/secrets/variable  { session, token, slug, file, variable }         -> FileResponse      Developer
+ *   POST   /people/secrets/file      { session, token, slug, file }                   -> FileResponse      Developer
+ *   POST   /people/secrets/restore   { session, token, slug, file }                   -> FileResponse      Admin
+ *   POST   /people/secrets/content   { session, token, slug, file }                   -> ContentResponse   Admin
+ *   PUT    /people/secrets/content   { session, token, slug, file, content }          -> FileResponse      Developer
+ *   POST   /people/portal            { session, token?, slug, active, confirmation }  -> PortalResponse    Admin, the unlock to make it public
+ *   POST   /people/backups/restore   { session, token, slug, snapshot, confirmation } -> 202 RestoreResponse  Admin
  */
 import type { ProjectView } from "../secrets/protocol";
-import { machineRefusal, may, needsUnlock, powerRefusal, roleDetail, type Power } from "./powers";
+import { generalNeedsUnlock, machineRefusal, may, needsUnlock, powerRefusal, roleDetail, type Power } from "./powers";
 import type { Role, Roles } from "./protocol";
 import type { MemberPrincipal, MemberRoutes, RestartRefusal } from "./steward";
 
@@ -88,7 +88,7 @@ function fail(code: string, message: string, details?: string[]): Response {
   return Response.json(details === undefined ? { error: code, message } : { error: code, message, details }, { status: STATUSES[code] ?? 500 });
 }
 
-const SLUG_SHAPE = /^[a-z0-9][a-z0-9.-]{0,62}$/;
+const SLUG_SHAPE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 export function createMemberActions(dependencies: MemberActionsDependencies): Routes {
   const { members, readBody, underLock, ops } = dependencies;
@@ -127,19 +127,22 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
     others?: readonly string[];
     check?: (body: Body) => Response | null;
     max?: number;
+    /** Whether this request asks for the unlock, read from its body; absent, the power says (`needsUnlock`). */
+    unlockFor?: (body: Body) => boolean;
     run: (req: Request, body: Body, who: Who) => Promise<Response>;
   };
 
-  /** One operation on a project's secrets, door or data, under the lock, judged twice. */
+  /** One operation on a project's secrets, general access or data, under the lock, judged twice. */
   function action(spec: Spec): Handler {
-    const unlock = needsUnlock(spec.power);
+    const always = needsUnlock(spec.power);
     const fields = [...spec.texts, ...(spec.others ?? [])];
     return async (req) => {
-      const body = await readBody(req, ["session", ...(unlock ? ["token"] : []), ...fields], spec.max);
+      const body = await readBody(req, ["session", ...(always || spec.unlockFor !== undefined ? ["token"] : []), ...fields], spec.max);
       if (body instanceof Response) return body;
       for (const field of spec.texts) if (typeof body[field] !== "string") return fail("invalid", `${field} must be a string`);
       const shape = spec.check?.(body) ?? null;
       if (shape !== null) return shape;
+      const unlock = spec.unlockFor === undefined ? always : spec.unlockFor(body);
       const principal = await members.authorize(body.session, unlock ? body.token : null);
       if (principal instanceof Response) return principal;
       const refusal = await judge(principal, body.slug, spec.power, spec.operation);
@@ -172,29 +175,31 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
   const startRestore = dependencies.startRestore;
 
   return {
-    "/members/secrets/projects": { POST: projects },
-    "/members/secrets/value": { POST: action({ operation: "read", power: "secrets.read", texts: VARIABLE, run: ops.readValue }) },
-    "/members/secrets/variable": {
+    "/people/secrets/projects": { POST: projects },
+    "/people/secrets/value": { POST: action({ operation: "read", power: "secrets.read", texts: VARIABLE, run: ops.readValue }) },
+    "/people/secrets/variable": {
       PUT: action({ operation: "set", power: "secrets.write", texts: [...VARIABLE, "value"], run: ops.setVariable }),
       DELETE: action({ operation: "remove", power: "secrets.write", texts: VARIABLE, run: ops.removeVariable }),
     },
-    "/members/secrets/file": { POST: action({ operation: "create", power: "secrets.write", texts: FILE, run: ops.createFile }) },
-    "/members/secrets/restore": { POST: action({ operation: "restore", power: "secrets.restore", texts: FILE, run: ops.restoreFile }) },
-    "/members/secrets/content": {
+    "/people/secrets/file": { POST: action({ operation: "create", power: "secrets.write", texts: FILE, run: ops.createFile }) },
+    "/people/secrets/restore": { POST: action({ operation: "restore", power: "secrets.restore", texts: FILE, run: ops.restoreFile }) },
+    "/people/secrets/content": {
       POST: action({ operation: "read", power: "secrets.read", texts: FILE, run: ops.readContent }),
       PUT: action({ operation: "replace", power: "secrets.write", texts: [...FILE, "content"], max: dependencies.maxContentBytes, run: ops.replaceContent }),
     },
-    "/members/portal": {
+    "/people/portal": {
       POST: action({
         operation: "portal",
-        power: "door",
+        power: "general",
         texts: ["slug", "confirmation"],
         others: ["active"],
         check: (body) => (typeof body.active === "boolean" ? null : fail("invalid", "active must be a boolean")),
+        // Restricting a site needs no unlock; making it public does.
+        unlockFor: (body) => generalNeedsUnlock(body.active === true),
         run: ops.portal,
       }),
     },
-    "/members/backups/restore": {
+    "/people/backups/restore": {
       POST: action({
         operation: "backup.restore",
         power: "backups",

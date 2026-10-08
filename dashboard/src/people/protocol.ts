@@ -22,23 +22,26 @@
  *
  * On the dashboard's socket, `secretaire.sock`, for site-dashboard:
  *
- *   GET    /members/key                         -> KeyResponse
- *   POST   /members/signin   { assertion }      -> SignInResponse
- *   POST   /members/whoami   { session }        -> WhoamiResponse
- *   POST   /members/signout  { session }        -> 204
- *   POST   /members/restart  { session, slug }  -> RestartResponse (src/secrets/protocol.ts)
- *   POST   /members/unlock   { session, assertion }                 -> MemberUnlockResponse   a forced sign-in's assertion
- *   POST   /members/lock     { session, token }                     -> 204
+ *   GET    /people/key                         -> KeyResponse
+ *   POST   /people/signin   { assertion }      -> SignInResponse
+ *   POST   /people/whoami   { session }        -> WhoamiResponse
+ *   POST   /people/signout  { session }        -> 204
+ *   POST   /people/restart  { session, slug }  -> RestartResponse (src/secrets/protocol.ts)
+ *   POST   /people/unlock   { session, assertion }                 -> MemberUnlockResponse   a forced sign-in's assertion
+ *   POST   /people/lock     { session, token }                     -> 204
  *
  * And a person's work on their projects, judged by role (src/people/powers.ts)
- * in src/people/actions.ts: `/members/secrets/*`, `/members/portal`,
- * `/members/backups/restore`, each carrying the session, and the person's
+ * in src/people/actions.ts: `/people/secrets/*`, `/people/portal`,
+ * `/people/backups/restore`, each carrying the session, and the person's
  * unlock token where the power needs it. Their people with access are the
  * access routes' (src/access/steward.ts), under `/access/person/`.
  *
  * A person's own tokens are the control routes', src/control/steward.ts,
- * under `/team/member/`, which ask these routes for the person's session,
+ * under `/tokens/person/`, which ask these routes for the person's session,
  * unlock and rights (src/people/tokens.ts).
+ *
+ * The paths under `/members/` answer too, for one release: a dashboard
+ * deployed before the steward it speaks to still calls them.
  *
  * Every refusal is `{ error, message }`, the message in English, shown as it
  * stands.
@@ -96,7 +99,7 @@ export type PublicKeyView = { kty: "OKP"; crv: "Ed25519"; x: string; kid: string
 export type KeyResponse = { publicKey: PublicKeyView };
 
 /** Who a member session belongs to, as the steward reads its registry now. */
-export type MemberIdentity = { kind: "member"; email: string; name: string | null; roles: Roles; create: boolean };
+export type MemberIdentity = { kind: "person"; email: string; name: string | null; roles: Roles; create: boolean };
 
 export type SignInResponse = { session: string; expiresAt: number; identity: MemberIdentity };
 
@@ -106,13 +109,13 @@ export type WhoamiResponse = { identity: MemberIdentity; expiresAt: number };
 export type MemberUnlockResponse = { token: string; expiresAt: number };
 
 /**
- * The steward's refusals for members, beside those of src/secrets/protocol.ts:
- * `signed-out` (401), the session is unknown, expired, or its member was
- * removed; `not-a-member` (403), the verified email is in no registry;
- * `invalid-assertion` (401), the assertion fails its checks; `not-ready`
- * (503), the key pair is not in place yet.
+ * The steward's refusals for people, beside those of src/secrets/protocol.ts:
+ * `signed-out` (401), the session is unknown, expired, or its person was
+ * removed; `no-role` (403), the verified email holds no role above Can open
+ * and may not create projects; `invalid-assertion` (401), the assertion fails
+ * its checks; `not-ready` (503), the key pair is not in place yet.
  */
-export type MemberErrorCode = "signed-out" | "not-a-member" | "invalid-assertion" | "not-ready";
+export type MemberErrorCode = "signed-out" | "no-role" | "invalid-assertion" | "not-ready";
 
 export type MemberFailure = { error: string; message: string };
 

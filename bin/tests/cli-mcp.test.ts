@@ -261,10 +261,12 @@ describe("the tools", () => {
 
   test("share's command line: the addresses as arguments, never as options", () => {
     expect(planCall("access", { folder: FOLDER })).toEqual({ argv: ["share"], cwd: FOLDER });
-    expect(planCall("share", { folder: FOLDER, who: ["a@acme.test", "@acme.test"] })).toEqual({ argv: ["share", "a@acme.test", "@acme.test", "--role", "visitor"], cwd: FOLDER });
+    expect(planCall("share", { folder: FOLDER, who: ["a@acme.test", "@acme.test"] })).toEqual({ argv: ["share", "a@acme.test", "@acme.test", "--role", "can-open"], cwd: FOLDER });
+    // `visitor`, the machine's name for it, is read too.
+    expect(planCall("share", { folder: FOLDER, who: ["a@acme.test"], role: "visitor" })).toEqual({ argv: ["share", "a@acme.test", "--role", "visitor"], cwd: FOLDER });
     expect(planCall("share", { folder: FOLDER, who: ["a@acme.test"], role: "developer" })).toEqual({ argv: ["share", "a@acme.test", "--role", "developer"], cwd: FOLDER });
-    expect(planCall("share", { folder: FOLDER, who: ["e@elsewhere.test"], expires: "24h" })).toEqual({ argv: ["share", "e@elsewhere.test", "--role", "visitor", "--expires", "24h"], cwd: FOLDER });
-    expect(planCall("share", { folder: FOLDER, who: ["e@elsewhere.test"], expires: "never" })).toEqual({ argv: ["share", "e@elsewhere.test", "--role", "visitor", "--expires", "never"], cwd: FOLDER });
+    expect(planCall("share", { folder: FOLDER, who: ["e@elsewhere.test"], expires: "24h" })).toEqual({ argv: ["share", "e@elsewhere.test", "--role", "can-open", "--expires", "24h"], cwd: FOLDER });
+    expect(planCall("share", { folder: FOLDER, who: ["e@elsewhere.test"], expires: "never" })).toEqual({ argv: ["share", "e@elsewhere.test", "--role", "can-open", "--expires", "never"], cwd: FOLDER });
     expect(planCall("share", { folder: FOLDER, remove: ["@old.test", "c@acme.test"] })).toEqual({ argv: ["share", "--remove", "@old.test", "c@acme.test"], cwd: FOLDER });
   });
 
@@ -277,7 +279,7 @@ describe("the tools", () => {
     expect(planCall("share", { folder: FOLDER, who: "a@acme.test" })).toEqual({ error: "who: a list of email addresses or @domains" });
     expect(planCall("share", { folder: FOLDER, who: [""] })).toHaveProperty("error");
     expect(planCall("share", { folder: FOLDER, who: [`${"a".repeat(250)}@acme.test`] })).toHaveProperty("error");
-    expect(planCall("share", { folder: FOLDER, who: ["a@acme.test"], role: "owner" })).toEqual({ error: "role: visitor, viewer, developer or admin" });
+    expect(planCall("share", { folder: FOLDER, who: ["a@acme.test"], role: "owner" })).toEqual({ error: "role: can-open, viewer, developer or admin" });
     expect(planCall("share", { folder: FOLDER, who: ["a@acme.test"], expires: "1y" })).toEqual({ error: "expires: 24h, 7d, 30d or never" });
     expect(planCall("share", { folder: FOLDER, who: ["a@acme.test"], expires: 86400 })).toEqual({ error: "expires: 24h, 7d, 30d or never" });
     // The arguments of before are gone.
@@ -291,7 +293,7 @@ describe("the tools", () => {
     const share = TOOLS.find((tool) => tool.name === "share")!;
     expect(Object.keys(share.inputSchema.properties)).toEqual(["folder", "who", "role", "expires", "remove"]);
     const properties = share.inputSchema.properties as Record<string, { enum?: string[]; default?: unknown }>;
-    expect(properties.role).toMatchObject({ enum: ["visitor", "viewer", "developer", "admin"], default: "visitor" });
+    expect(properties.role).toMatchObject({ enum: ["can-open", "viewer", "developer", "admin"], default: "can-open" });
     expect(properties.expires).toMatchObject({ enum: ["24h", "7d", "30d", "never"] });
     expect(share.description).toContain("password access");
     const access = TOOLS.find((tool) => tool.name === "access")!;

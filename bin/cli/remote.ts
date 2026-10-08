@@ -534,9 +534,18 @@ type ProjectStatus = {
   deployed: boolean;
   type: string | null;
   url: string | null;
+  /** Absent from a dashboard from before it: read from `portal` then. */
+  general?: "public" | "restricted" | "code" | null;
   portal: { wanted: boolean; installed: boolean } | null;
   services: { name: string | null; state: string; subState: string; port: number | null }[];
 };
+
+/** Who may open the site, in the words of the dashboard's Access section. */
+export function generalWord(project: Pick<ProjectStatus, "general" | "portal" | "deployed">): string {
+  const general = project.general !== undefined ? project.general : project.portal === null ? null : project.portal.installed ? "restricted" : "public";
+  if (!project.deployed || general === null) return "-";
+  return { public: "Public", restricted: "Restricted", code: "Anyone with the code" }[general];
+}
 
 async function status(remote: Remote, dependencies: RemoteDependencies): Promise<number> {
   const output = dependencies.output ?? humanOutput;
@@ -547,11 +556,10 @@ async function status(remote: Remote, dependencies: RemoteDependencies): Promise
   const answer = await call<{ projects: ProjectStatus[] }>(remote, "/api/v1/projects", {}, dependencies.fetcher);
   if (!answer.ok) return report(output, answer.failure);
   output.say("");
-  output.say(`${"PROJECT".padEnd(22)} ${"ACCESS".padEnd(8)} ${"TYPE".padEnd(7)} ${"SERVICE".padEnd(10)} ${"DOOR".padEnd(8)} ADDRESS`);
+  output.say(`${"PROJECT".padEnd(22)} ${"TYPE".padEnd(7)} ${"SERVICE".padEnd(10)} ${"GENERAL ACCESS".padEnd(21)} ADDRESS`);
   for (const project of answer.body.projects) {
     const service = project.services.length === 0 ? "-" : project.services.every((entry) => entry.state === "active") ? "active" : project.services.map((entry) => entry.state).join(",");
-    const door = project.portal === null ? "-" : project.portal.installed ? "portal" : "public";
-    output.say(`${project.slug.padEnd(22)} ${project.access.padEnd(8)} ${(project.type ?? (project.deployed ? "?" : "-")).padEnd(7)} ${service.padEnd(10)} ${door.padEnd(8)} ${project.url ?? "not deployed"}`);
+    output.say(`${project.slug.padEnd(22)} ${(project.type ?? (project.deployed ? "?" : "-")).padEnd(7)} ${service.padEnd(10)} ${generalWord(project).padEnd(21)} ${project.url ?? "not deployed"}`);
   }
   output.succeeded("status", { api: remote.api, identity: who.body.identity, projects: answer.body.projects });
   return 0;

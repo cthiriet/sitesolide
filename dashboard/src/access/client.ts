@@ -12,19 +12,24 @@ export type AccessSteward = {
   people: () => Promise<Response>;
   putPerson: (requested: { token?: string; email: unknown; create: unknown }) => Promise<Response>;
   removePerson: (email: unknown) => Promise<Response>;
+  /** The site's portal put up or taken away, the steward's `/portal`: the unlock to take it away, none to put it up. */
+  portal: (requested: { token?: string; slug: unknown; active: boolean; confirmation: string }) => Promise<Response>;
 };
 
-/** Every access route answers within seconds; the migration, at most once, a few more. */
+/** Every access route answers within seconds. */
 export const ACCESS_TIMEOUT_MS = 20_000;
+
+/** The portal's change waits for the gatekeeper, up to ninety seconds, and for the steward's lock. */
+export const PORTAL_TIMEOUT_MS = 200_000;
 
 /** `redirect: "error"`: a redirect would carry a request to the address it names. */
 export function localAccessSteward(socket: string): AccessSteward {
-  function call(method: string, path: string, requested?: object): Promise<Response> {
+  function call(method: string, path: string, requested?: object, timeoutMs = ACCESS_TIMEOUT_MS): Promise<Response> {
     return fetch(`http://steward${path}`, {
       method,
       unix: socket,
       redirect: "error",
-      signal: AbortSignal.timeout(ACCESS_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
       ...(requested === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(requested) }),
     });
   }
@@ -35,5 +40,6 @@ export function localAccessSteward(socket: string): AccessSteward {
     people: () => call("GET", "/people"),
     putPerson: (requested) => call("PUT", "/people/person", requested),
     removePerson: (email) => call("DELETE", "/people/person", { email }),
+    portal: (requested) => call("POST", "/portal", requested, PORTAL_TIMEOUT_MS),
   };
 }

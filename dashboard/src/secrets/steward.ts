@@ -59,7 +59,7 @@ import {
   checkValue,
   type EnvDocument,
 } from "./envfile";
-import { latest, page, readPageQuery, RETURNED_ENTRIES, encodeEntry, isAccessChange, mergeLogs, MAX_FIELD, reread } from "./log";
+import { createHistory, latest, page, readPageQuery, RETURNED_ENTRIES, encodeEntry, isAccessChange, MAX_FIELD } from "./log";
 import {
   MAX_FILE_BYTES,
   expectedText,
@@ -210,14 +210,21 @@ export type Handler = (req: Request) => Promise<Response>;
 export type StewardHandler = Handler & {
   isUnlocked: (token: unknown) => Promise<boolean>;
   /**
-   * The handler of the owner's socket, which only root opens: the members
-   * registry, for `sitesolide members` over the owner's SSH.
+   * The handler of the owner's socket, which only root opens: the access
+   * registry, for `sitesolide share` and `sitesolide people` over the
+   * owner's SSH.
    */
   owner: Handler;
   /** The sign-in key pair, laid if missing: the entry point asks at startup. */
   ensureMemberKeys: () => Promise<KeyState | null>;
-  /** The access registry made if it is missing, its projection written again: the entry point asks at startup. */
-  ensureAccess: () => Promise<void>;
+  /**
+   * The access registry made if it is missing, its projection written again,
+   * in the background, tried again later and later until it is: the entry
+   * point starts it and does not wait. Resolves once the registry is there.
+   */
+  startAccess: () => Promise<void>;
+  /** A project removed from the machine: its people with access dropped (src/access/steward.ts); null without them. */
+  forgetProjectAccess: AccessRoutes["forgetProject"] | null;
   /** What the control routes ask of the people for a person's own tokens; null without them. */
   memberAuthority: MemberAuthority | null;
   /** A token's changes of access, the token judged by the control routes. */
@@ -941,6 +948,16 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return views;
   }
 
+  /** The journal and the access log as one history, parsed once per change and read one request at a time (log.ts). */
+  const history = createHistory({
+    stamps: () => system.logStamps(),
+    readJournal: async () => {
+      await accessLogPrepared;
+      return system.readLog();
+    },
+    readAccessLog: () => system.readAccessLog(),
+  });
+
   async function readLog(req: Request): Promise<Response> {
     const params = new URL(req.url).searchParams;
     const wanted = params.getAll("slug");
@@ -952,9 +969,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     // One history, the journal's and the access log's, sorted by date before
     // `latest` takes its last lines or `page` its dates.
     await accessLogPrepared;
-    const accessLog = await system.readAccessLog();
-    const entries = mergeLogs(reread(await system.readLog()), accessLog === null ? null : reread(accessLog));
-    const body: LogResponse = asked === null ? { entries: latest(entries, RETURNED_ENTRIES, slug) } : { entries: page(entries, asked, slug), paged: true };
+    const body: LogResponse = await history.read((entries) => (asked === null ? { entries: latest(entries, RETURNED_ENTRIES, slug) } : { entries: page(entries, asked, slug), paged: true }));
     return Response.json(body);
   }
 
@@ -1392,12 +1407,17 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   /**
    * Puts up or takes away a site's portal through the gatekeeper, under the
-   * exclusion lock: two actions on Caddy never cross.
+   * exclusion lock: two actions on Caddy never cross. Making a site public
+   * takes the unlock, and its name retyped; restricting it takes neither:
+   * less exposure is never refused for want of a password.
    */
   async function togglePortal(req: Request): Promise<Response> {
-    const body = await bodyWithToken(req, ["slug", "confirmation"], ["active"]);
+    const body = await readBody(req, ["token", "slug", "confirmation", "active"]);
     if (body instanceof Response) return body;
     if (typeof body.active !== "boolean") return error("invalid", "active must be a boolean");
+    for (const field of ["slug", "confirmation"]) if (typeof body[field] !== "string") return error("invalid", `${field} must be a string`);
+    if (body.active) return underLockWith(req, async () => null, () => portalTask(req, body, OWNER));
+    if (!(await isValidToken(state, body.token, system.now()))) return error("locked", "locked, unlock again");
     return underLock(req, body, () => portalTask(req, body, OWNER));
   }
 
@@ -1609,6 +1629,16 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           zone: memberZone,
           hostOf: (slug) => (reservedReason(slug, memberZone) === null ? addressOf(slug, memberZone) : null),
           journal: journalEvent,
+          logFull: async () => {
+            await accessLogPrepared;
+            try {
+              return await system.accessLogFull(system.now());
+            } catch (e) {
+              // A log that cannot be counted takes nothing more.
+              console.error(`access log: not counted (${errorName(e)}), changes of access refused`);
+              return true;
+            }
+          },
         });
 
   const members =
@@ -1648,7 +1678,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           isUnlocked: (token) => isValidToken(state, token, system.now()),
           readBody: (req, fields) => readBody(req, fields),
           journal: journalEvent,
-          journalRefusal: (event) => members.journalRefusal(event as never),
+          journalRefusal: members.journalRefusal,
           authorize: members.authorize,
           leave: members.leave,
         });
@@ -1730,12 +1760,19 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   let inFlight = 0;
 
+  /**
+   * A person's routes under the names they had before `/people/`: a
+   * dashboard deployed before this steward still calls them. Kept one
+   * release.
+   */
+  const current = (path: string): string => (path.startsWith("/members/") ? `/people/${path.slice("/members/".length)}` : path);
+
   /** One socket's routes, behind the same bound on requests in flight and the same catch. */
   const serve = (table: Record<string, Record<string, (req: Request) => Promise<Response>>>): Handler => async (req) => {
     if (inFlight >= maxInFlight) return busy();
     inFlight++;
     try {
-      const path = new URL(req.url).pathname;
+      const path = current(new URL(req.url).pathname);
       const route = Object.hasOwn(table, path) ? table[path] : undefined;
       if (route === undefined) return error("not-found", "no such route");
 
@@ -1760,7 +1797,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     isUnlocked: (token: unknown) => isValidToken(state, token, system.now()),
     owner: serve(access?.owner ?? {}),
     ensureMemberKeys: async () => (members === null ? null : members.ensureKeys()),
-    ensureAccess: async () => accessStore?.ensure(),
+    startAccess: async () => accessStore?.start(),
+    forgetProjectAccess: access?.forgetProject ?? null,
     memberAuthority:
       members === null
         ? null

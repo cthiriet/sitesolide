@@ -17,7 +17,6 @@
  * their own.
  */
 import { Database } from "bun:sqlite";
-import type { Guest } from "./guests";
 import { DEFAULT_POLICY, readPolicy, type Policy } from "./sharing";
 
 /**
@@ -82,6 +81,25 @@ export function openDatabase(path: string): Database {
   for (const table of SCHEMA) db.run(table);
   return db;
 }
+
+/**
+ * A row of `invites`, the password access the portal kept before the steward
+ * did: read-only, for a portal that finds no projection yet, and carried
+ * over once into the steward's registry.
+ */
+export type Guest = {
+  id: string;
+  /** The host this password opens, and it alone. */
+  host: string;
+  /** For whom, as it was given. */
+  label: string;
+  /** Milliseconds, like `seenAt` and `expiresAt`. */
+  createdAt: number;
+  /** `null`: no deadline, until revocation. */
+  expiresAt: number | null;
+  /** Last accepted request, noted at most once a minute. */
+  seenAt: number | null;
+};
 
 /** The password access from before the steward kept it, read-only. */
 export type GuestStore = {

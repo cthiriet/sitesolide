@@ -357,7 +357,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
       underLock = { kind: "unreadable", reason: (error as Error).message };
     }
     const agreement = confirmDoorUnderLock(slug, behindPortal, underLock);
-    if (agreement.kind === "rejects") throw new Stop("door-changed", `${agreement.message}; nothing served was changed`);
+    if (agreement.kind === "rejects") throw new Stop("access-changed", `${agreement.message}; nothing served was changed`);
     // The ports again, under the lock every deposit takes: two deployments
     // running side by side chose theirs from the same reading, and the first
     // to get here has deposited its own since.

@@ -44,9 +44,9 @@ export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_
     });
   }
   return {
-    listTokens: () => call("GET", "/team/tokens"),
-    createToken: (requested) => call("POST", "/team/tokens", requested),
-    revokeToken: (id) => call("POST", "/team/revoke", { id }),
+    listTokens: () => call("GET", "/tokens/list"),
+    createToken: (requested) => call("POST", "/tokens/create", requested),
+    revokeToken: (id) => call("POST", "/tokens/revoke", { id }),
     authenticate: (bearer) => call("POST", "/control/authenticate", { bearer }),
     preflight: (bearer, slug) => call("POST", "/control/preflight", { bearer, slug }),
     deploy: (requested) => call("POST", "/control/deploy", requested),

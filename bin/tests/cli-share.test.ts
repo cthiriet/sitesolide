@@ -16,6 +16,7 @@ import {
   readCurlAnswer,
   readPeopleArguments,
   readShareArguments,
+  roleName,
   readWho,
   share,
   sshAccess,
@@ -216,10 +217,10 @@ describe("share with a token, through the API", () => {
       general: "restricted",
       changed: true,
       changes: [
-        { who: "alice@acme.test", change: "add", role: "visitor" },
-        { who: "@acme.test", change: "add", role: "visitor" },
+        { who: "alice@acme.test", change: "add", role: "can-open" },
+        { who: "@acme.test", change: "add", role: "can-open" },
       ],
-      entries: [{ who: "alice@acme.test", kind: "person", role: "visitor" }, { who: "@acme.test", kind: "domain", role: "visitor" }],
+      entries: [{ who: "alice@acme.test", kind: "person", role: "can-open" }, { who: "@acme.test", kind: "domain", role: "can-open" }],
       signIn: { configured: true, allowedDomains: ["acme.test"] },
       message: SEND,
     });
@@ -242,7 +243,7 @@ describe("share with a token, through the API", () => {
     const list = events(result.output);
     expect(list).toContainEqual({ type: "info", message: "nothing to change: alice@acme.test already has Can open" });
     expect(list.some((event) => String(event.message).startsWith("send:"))).toBe(false);
-    expect(list.at(-1)).toMatchObject({ type: "result", command: "share", changed: false, changes: [{ who: "alice@acme.test", change: "none", role: "visitor" }] });
+    expect(list.at(-1)).toMatchObject({ type: "result", command: "share", changed: false, changes: [{ who: "alice@acme.test", change: "none", role: "can-open" }] });
   });
 
   test("a role above Can open is the dashboard's refusal, carried with its hint", async () => {
@@ -284,7 +285,7 @@ describe("share with a token, through the API", () => {
     for (const [arguments_, message] of [
       [["share", "acme.test"], "acme.test: write a whole domain with its @, like @acme.test; nothing was changed"],
       [["share", "not an address"], "not an address is neither an email address nor a domain like @acme.com: nothing was changed"],
-      [["share", "a@acme.test", "--role", "owner"], "owner is not a role: visitor (Can open), viewer, developer or admin; nothing was changed"],
+      [["share", "a@acme.test", "--role", "owner"], "owner is not a role: can-open, viewer, developer or admin; nothing was changed"],
       [["share", "a@acme.test", "--expires", "1y"], "1y is not a duration: 24h, 7d, 30d or never; nothing was changed"],
       [["share", "--role", "viewer"], "--role: name who to give access to first"],
       [["share", "--remove", "a@acme.test", "--role", "viewer"], "--remove takes access away: it takes no --role nor --expires"],
@@ -394,7 +395,7 @@ describe("share and people as the owner, over SSH to the steward's owner socket"
 
     const forever = await owner(project(), ["share", "zoe@elsewhere.test", "--expires", "never", "--json"]);
     expect(machine.logs()).toContain('ACCESS PUT {"slug":"kanban","who":"zoe@elsewhere.test","role":"visitor","expiresInS":null}');
-    expect(events(forever.output).at(-1)).toMatchObject({ type: "result", changes: [{ who: "zoe@elsewhere.test", change: "add", role: "visitor", password: FAKE_PASSWORD }] });
+    expect(events(forever.output).at(-1)).toMatchObject({ type: "result", changes: [{ who: "zoe@elsewhere.test", change: "add", role: "can-open", password: FAKE_PASSWORD }] });
     expect(events(forever.output)).toContainEqual({ type: "step", message: "zoe@elsewhere.test: Can open, password access with no expiry on kanban" });
   });
 
@@ -570,8 +571,8 @@ describe("the share and access tools, through the MCP server", () => {
       command: "share",
       changed: true,
       changes: [
-        { who: "alice@acme.test", change: "add", role: "visitor" },
-        { who: "@acme.test", change: "add", role: "visitor" },
+        { who: "alice@acme.test", change: "add", role: "can-open" },
+        { who: "@acme.test", change: "add", role: "can-open" },
       ],
       message: SEND,
     });
@@ -724,7 +725,7 @@ describe("share, over a fake transport", () => {
     expect(out.said.filter((line) => line.includes("drawn-once"))).toEqual(["   password for eve@elsewhere.test: drawn-once"]);
     expect(out.said).toContain("   shown once: send it to them yourself, with the address; the machine keeps only its hash");
     expect(out.said.some((line) => line.includes("send:"))).toBe(false);
-    expect(out.results[0]!.fields.changes).toEqual([{ who: "eve@elsewhere.test", change: "add", role: "visitor", password: "drawn-once" }]);
+    expect(out.results[0]!.fields.changes).toEqual([{ who: "eve@elsewhere.test", change: "add", role: "can-open", password: "drawn-once" }]);
   });
 
   test("the line to send: for a person given access with an account, never for a domain, nor without sign-in set up", async () => {
@@ -782,7 +783,8 @@ describe("share, over a fake transport", () => {
     const out = recorder();
     expect(await share(["share", "--remove", "old@acme.test"], "kanban", transport, out.output)).toBe(0);
     expect(out.said).toContain("-> old@acme.test no longer has access to kanban: refused from their next request");
-    expect(out.results[0]!.fields).toMatchObject({ entries: before.entries, changed: true, changes: [{ who: "old@acme.test", change: "remove", role: null }] });
+    // The roles as the command prints them: can-open for the first rung.
+    expect(out.results[0]!.fields).toMatchObject({ entries: before.entries.map((one) => ({ ...one, role: roleName(one.role) })), changed: true, changes: [{ who: "old@acme.test", change: "remove", role: null }] });
   });
 });
 
@@ -808,9 +810,22 @@ describe("people, over a fake transport", () => {
         calls.push(`create ${email} ${create}`);
         return { ok: true, value: { person: person(email, { create, roles: { blog: "viewer" } }), change } };
       },
+      async migrateWithoutPortal() {
+        calls.push("migrate");
+        return { ok: true, value: { people: 3, projects: 2 } };
+      },
     };
     return { calls, transport };
   }
+
+  test("carried over without the portal's database, at the owner's word: said, and nothing listed first", async () => {
+    const { calls, transport } = peopleTransport();
+    const out = recorder();
+    expect(await people(["people", "--migrate-without-portal"], DASHBOARD, transport, out.output)).toBe(0);
+    expect(calls).toEqual(["migrate"]);
+    expect(out.said[0]).toContain("without the portal's database: 3 person(s)");
+    expect(out.results).toEqual([{ command: "people", fields: { migrated: true, withoutPortal: true, people: 3, projects: 2, changed: true } }]);
+  });
 
   test("the list, and its result", async () => {
     const { calls, transport } = peopleTransport();
@@ -988,6 +1003,10 @@ describe("the pure parts", () => {
     for (const role of ["visitor", "viewer", "developer", "admin"] as const) {
       expect(readShareArguments(["share", "a@acme.test", "--role", role])).toMatchObject({ action: "give", role });
     }
+    // The first rung as the command names it, the machine keeping it as visitor.
+    expect(readShareArguments(["share", "a@acme.test", "--role", "can-open"])).toMatchObject({ action: "give", role: "visitor" });
+    expect(roleName("visitor")).toBe("can-open");
+    expect(roleName("developer")).toBe("developer");
     for (const [duration, seconds] of [
       ["24h", 86_400],
       ["7d", 604_800],
@@ -996,7 +1015,7 @@ describe("the pure parts", () => {
     ] as const) {
       expect(readShareArguments(["share", "--expires", duration, "e@elsewhere.test"])).toEqual({ action: "give", who: ["e@elsewhere.test"], role: "visitor", expiresInS: seconds });
     }
-    expect(readShareArguments(["share", "a@acme.test", "--role"])).toMatchObject({ error: "usage", message: "--role: visitor, viewer, developer or admin must follow" });
+    expect(readShareArguments(["share", "a@acme.test", "--role"])).toMatchObject({ error: "usage", message: "--role: can-open, viewer, developer or admin must follow" });
     expect(readShareArguments(["share", "a@acme.test", "--expires", "--role", "viewer"])).toMatchObject({ error: "usage", message: "--expires: 24h, 7d, 30d or never must follow" });
     expect(readShareArguments(["share", "a@acme.test", "--role", "owner"])).toMatchObject({ error: "invalid" });
     expect(readShareArguments(["share", "a@acme.test", "--expires", "48h"])).toMatchObject({ error: "invalid" });
@@ -1013,6 +1032,11 @@ describe("the pure parts", () => {
     // Giving and taking away in one command is refused, never read as taking both away.
     expect(readShareArguments(["share", "alice@acme.test", "--remove", "bob@acme.test"])).toMatchObject({ error: "usage", message: expect.stringContaining("one command each") });
     expect(readShareArguments(["share", "--remove", "a@acme.test", "--role", "visitor"])).toMatchObject({ error: "usage" });
+    // A name carried over from before the registry, an @ inside it or not, is taken away as it stands; given, never.
+    expect(readShareArguments(["share", "--remove", "Bob @ the agency"])).toEqual({ action: "remove", who: ["Bob @ the agency"] });
+    expect(readShareArguments(["share", "--remove", "Client Bob (2)"])).toEqual({ action: "remove", who: ["Client Bob (2)"] });
+    expect(readShareArguments(["share", "Bob @ the agency"])).toHaveProperty("error");
+    expect(readShareArguments(["share", "--remove", "@not a domain"])).toHaveProperty("error");
     expect(readShareArguments(["share", "--remove", "a@acme.test", "--expires", "never"])).toMatchObject({ error: "usage" });
   });
 
@@ -1047,6 +1071,9 @@ describe("the pure parts", () => {
     expect(readPeopleArguments(["people", "a@acme.test", "b@acme.test", "--may-create"])).toMatchObject({ error: "usage" });
     expect(readPeopleArguments(["people", "@acme.test", "--may-create"])).toMatchObject({ error: "invalid" });
     expect(readPeopleArguments(["people", "a@acme.test", "--project", "blog"])).toMatchObject({ error: "unknown-option" });
+    expect(readPeopleArguments(["people", "--migrate-without-portal"])).toEqual({ action: "migrate" });
+    expect(readPeopleArguments(["people", "--migrate-without-portal", "--json"])).toEqual({ action: "migrate" });
+    expect(readPeopleArguments(["people", "a@acme.test", "--migrate-without-portal"])).toMatchObject({ error: "usage" });
   });
 
   test("an entry in words: its role, and for password access until when", () => {

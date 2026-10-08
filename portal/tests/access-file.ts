@@ -54,8 +54,8 @@ export function accessFolder(name: string) {
     remove(): void {
       rmSync(file, { force: true });
     },
-    reader(legacy: AccessReaderOptions["legacy"] = null, log: (line: string) => void = () => {}): AccessReader {
-      return createAccessReader({ file, mark, legacy, log });
+    reader(legacy: AccessReaderOptions["legacy"] = null, log: (line: string) => void = () => {}, extra: Pick<AccessReaderOptions, "now" | "read"> = {}): AccessReader {
+      return createAccessReader({ file, mark, legacy, log, ...extra });
     },
   };
 }

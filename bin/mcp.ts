@@ -133,7 +133,7 @@ export const TOOLS: ToolDefinition[] = [
       "Needs a sitesolide.json in the folder, or accept_inferred true to write the inferred one first (refused if the server already has a project of that name). " +
       "On success the result carries the site's url, and manifestWritten true when sitesolide.json was written (an inferred manifest, a port chosen): commit it. " +
       "On failure the error carries a hint: follow it. A missing secret stops the deploy and names the dashboard page where the user sets it. " +
-      "On a workstation that deploys with a team token rather than the owner's SSH access, dry_run is refused and nothing is sent: review sitesolide.json with the user instead.",
+      "On a workstation that deploys with a token rather than the owner's SSH access, dry_run is refused and nothing is sent: review sitesolide.json with the user instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -188,7 +188,7 @@ export const TOOLS: ToolDefinition[] = [
     title: "Who may open a project",
     description:
       "A deployed project's general access (Public, Restricted to the people with access, or Anyone with the code) and its people with access, each with their role: " +
-      "Can open (visitor), Viewer, Developer or Admin, people by email, whole domains as @acme.com, password access with its expiry. Read-only. " +
+      "Can open, Viewer, Developer or Admin, people by email, whole domains as @acme.com, password access with its expiry. Read-only. " +
       "Access gives real people the app and the data it holds: read it before and after share, and show the user who has access.",
     inputSchema: { type: "object", properties: { folder: FOLDER }, required: ["folder"], additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: true },
@@ -197,17 +197,17 @@ export const TOOLS: ToolDefinition[] = [
     name: "share",
     title: "Give or take away access to a project",
     description:
-      "Give people access to a deployed project, by email, or everyone at a domain written @acme.com, with a role: visitor (Can open, the default), viewer, developer or admin; " +
+      "Give people access to a deployed project, by email, or everyone at a domain written @acme.com, with a role: can-open (the default), viewer, developer or admin; " +
       "or take access away with remove. THIS GIVES REAL PEOPLE ACCESS to the app and to the data it holds or shows, from their next request: ask the user before every call, " +
       "naming the exact addresses, domains and role, and never add anyone the user did not name. A person outside the company's domains gets password access, Can open only: " +
-      "the result carries the password once, which the user sends them. With a team token, only Can open, only people inside the company's domains or one of those domains. " +
+      "the result carries the password once, which the user sends them. With a token, only Can open, only people inside the company's domains or one of those domains. " +
       "General access, public or restricted, stays the dashboard's. On success the result carries the people with access and the message to send.",
     inputSchema: {
       type: "object",
       properties: {
         folder: FOLDER,
         who: { type: "array", items: { type: "string" }, description: "Email addresses, or domains written @acme.com, exactly as the user gave them." },
-        role: { type: "string", enum: ["visitor", "viewer", "developer", "admin"], description: "The role to give: visitor (Can open) by default.", default: "visitor" },
+        role: { type: "string", enum: ["can-open", "viewer", "developer", "admin"], description: "The role to give: can-open by default.", default: "can-open" },
         expires: { type: "string", enum: ["24h", "7d", "30d", "never"], description: "How long password access lasts. Default 7d.", default: "7d" },
         remove: { type: "array", items: { type: "string" }, description: "Email addresses or @domains whose access to take away." },
       },
@@ -288,8 +288,9 @@ export function planCall(name: string, args: Record<string, unknown>, cwd = proc
       const remove = list("remove");
       if (typeof who === "string") return { error: who };
       if (typeof remove === "string") return { error: remove };
-      const role = args.role ?? "visitor";
-      if (role !== "visitor" && role !== "viewer" && role !== "developer" && role !== "admin") return { error: "role: visitor, viewer, developer or admin" };
+      // `visitor`, the machine's name for can-open, is read too.
+      const role = args.role ?? "can-open";
+      if (role !== "can-open" && role !== "visitor" && role !== "viewer" && role !== "developer" && role !== "admin") return { error: "role: can-open, viewer, developer or admin" };
       const expires = args.expires;
       if (expires !== undefined && expires !== "24h" && expires !== "7d" && expires !== "30d" && expires !== "never") return { error: "expires: 24h, 7d, 30d or never" };
       if (who.length > 0 && remove.length > 0) return { error: "share: give access or take it away, one call each" };

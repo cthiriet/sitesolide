@@ -33,12 +33,13 @@
  * A person outside the company's domains signs in with a password the steward
  * drew for them, for one site, until its expiry. The projection carries its
  * SHA-256, never the password: drawn at random over about 92 bits, there is
- * nothing to guess, and a fast hash finds it by index (see guests.ts).
+ * nothing to guess, and a fast hash finds it by index rather than checking
+ * every access one by one, as argon2id would make it.
  *
  * Pure: the dashboard borrows this file, so that the steward writes exactly
  * what the portal reads. Its one import, `./sharing`, is borrowed beside it.
  */
-import { cleanDomain, cleanEmail, domainOf } from "./sharing";
+import { EMAIL_MAX, cleanDomain, cleanEmail, domainOf } from "./sharing";
 
 /** The ladder, from the narrowest. */
 export const ROLES = ["visitor", "viewer", "developer", "admin"] as const;
@@ -112,8 +113,14 @@ const HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/
 const SLUG = /^[a-z0-9][a-z0-9.-]{0,62}$/;
 const ACCESS_ID = /^[A-Za-z0-9_-]{16}$/;
 const HASH = /^[0-9a-f]{64}$/;
-/** A name an access was given under before the registry: printable ASCII, a line at most. */
-const NAME = /^[\x20-\x7e]{1,120}$/;
+/**
+ * Who a password access was given to: an email, or a name an access was given
+ * under before the registry, printable ASCII on one line. One bound for both,
+ * an email's own: the steward's registry reads `who` with the same one, so
+ * that nothing it accepts makes this file unreadable.
+ */
+export const WHO_MAX = EMAIL_MAX;
+const NAME = new RegExp(`^[\\x20-\\x7e]{1,${WHO_MAX}}$`);
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

@@ -369,6 +369,16 @@ function log(bench: Bench): LogEntry[] {
     .map((line) => JSON.parse(line) as LogEntry);
 }
 
+/** The accepted changes of access, general access among them, kept 180 days apart from the journal. */
+function accessLogOf(bench: Bench): LogEntry[] {
+  const path = join(bench.state, "access-log.jsonl");
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line) as LogEntry);
+}
+
 async function projects(bench: Bench): Promise<ProjectView[]> {
   return ((await (await bench.call("GET", "/projects")).json()) as ProjectsResponse).projects;
 }
@@ -1278,7 +1288,8 @@ describe("the scope of requests", () => {
       ["POST", "/content", { slug: "builder", file: "builder-ssh.pub" }],
       ["PUT", "/content", { slug: "builder", file: "builder-ssh", content: "x" }],
       ["POST", "/password", { slug: "portal", file: "portal.env", variable: "PASSWORD_HASH", dashboardPassword: PASSWORD, newPassword: null }],
-      ["POST", "/portal", { slug: "cms", active: true, confirmation: "" }],
+      // Making a site public; restricting one takes no token (POST /portal's own tests).
+      ["POST", "/portal", { slug: "cms", active: false, confirmation: "cms" }],
       ["POST", "/restart", { slug: "cms" }],
     ];
     for (const [method, path, body] of wanted) {
@@ -2069,7 +2080,25 @@ describe("POST /portal", () => {
       detail: "portal on, caddy reloaded, checked",
     });
     expect(bench.systemctlCalls.filter((call) => call[0] === "start")).toEqual([["start", "sitesolide-gatekeeper-on@cms.service"]]);
-    expect(log(bench).at(-1)).toMatchObject({ operation: "portal", result: "ok", slug: "cms", file: null, detail: "on, ok" });
+    // A change of general access: kept 180 days in the access log, not rotated with the journal.
+    expect(accessLogOf(bench).at(-1)).toMatchObject({ operation: "portal", result: "ok", slug: "cms", file: null, detail: "on, ok" });
+  });
+
+  test("restricting a site takes no unlock; making it public does", async () => {
+    const bench = await mount();
+    bench.simulatedGatekeeper.current = gatekeeperThatSucceeds(bench);
+    // No token at all, or a wrong one: restricting goes through all the same.
+    for (const extra of [{}, { token: "wrong" }]) {
+      const restricted = await bench.call("POST", "/portal", { ...extra, slug: "cms", active: true, confirmation: "" });
+      expect(restricted.status).toBe(200);
+    }
+    expect(accessLogOf(bench).at(-1)).toMatchObject({ operation: "portal", result: "ok", actor: "owner", detail: "on, ok" });
+    const opened = await bench.call("POST", "/portal", { slug: "cms", active: false, confirmation: "cms" });
+    expect(opened.status).toBe(401);
+    expect(bench.systemctlCalls.filter((call) => call[0] === "start")).toEqual([
+      ["start", "sitesolide-gatekeeper-on@cms.service"],
+      ["start", "sitesolide-gatekeeper-on@cms.service"],
+    ]);
   });
 
   test("removing requires the site's name retyped: without it, 400 and nothing is started", async () => {
@@ -2086,7 +2115,7 @@ describe("POST /portal", () => {
     const confirmed = await bench.call("POST", "/portal", { token, slug: "cms", active: false, confirmation: "cms" });
     expect(confirmed.status).toBe(200);
     expect(bench.systemctlCalls.filter((call) => call[0] === "start")).toEqual([["start", "sitesolide-gatekeeper-off@cms.service"]]);
-    expect(log(bench).at(-1)).toMatchObject({ detail: "off, ok" });
+    expect(accessLogOf(bench).at(-1)).toMatchObject({ detail: "off, ok" });
   });
 
   test("not changeable, unknown or malformed: refused without starting the gatekeeper", async () => {
@@ -2775,11 +2804,13 @@ describe("the real system", () => {
       // The journal is left as it was: the reader filters it.
       expect(readFileSync(join(root, "state", "journal.jsonl"), "utf8")).toBe(journal);
 
-      // An access log that exists is never seeded again, by a restart or an append.
+      // An access log that exists is never seeded again: a restart tops it up
+      // with what the journal holds and it lacks, once; an append adds itself alone.
       writeFileSync(join(root, "state", "journal.jsonl"), journal + line(NOW, { detail: "journal only" }));
       await systemOn(root).prepareAccessLog(NOW);
+      await systemOn(root).prepareAccessLog(NOW);
       await systemOn(root).appendAccessLog(line(NOW, { detail: "appended" }), NOW);
-      expect(details(root)).toEqual(["given", "removed", "appended"]);
+      expect(details(root)).toEqual(["given", "removed", "journal only", "appended"]);
       expect(readdirSync(join(root, "state")).filter((name) => name.endsWith(".tmp"))).toEqual([]);
     });
 
@@ -2788,7 +2819,8 @@ describe("the real system", () => {
       const system = systemOn(root);
       await system.prepareAccessLog(NOW);
       expect(await system.readAccessLog()).toBe("");
-      writeFileSync(join(root, "state", "journal.jsonl"), line(NOW, { detail: "too late" }));
+      // A refusal in the journal is no change of access: never topped up with it.
+      writeFileSync(join(root, "state", "journal.jsonl"), line(NOW, { result: "rejects", detail: "refused" }));
       await system.prepareAccessLog(NOW);
       expect(await system.readAccessLog()).toBe("");
     });
@@ -2830,15 +2862,30 @@ describe("the real system", () => {
       expect(details(root)).toEqual(["after the flood"]);
     });
 
-    test("bounded to its newest lines whatever their age", async () => {
+    test("never pushed out young: past its count of rows younger than 180 days, it is full, and keeps every one", async () => {
       const root = throwawayRoot();
       mkdirSync(join(root, "state"));
       const many = Array.from({ length: ACCESS_MAX_LINES + 5 }, (_, i) => `{"a":${NOW - DAY + i}}\n`).join("");
       writeFileSync(accessLog(root), many, { mode: 0o600 });
-      await systemOn(root).prepareAccessLog(NOW);
+      const system = systemOn(root);
+      await system.prepareAccessLog(NOW);
       const lines = readFileSync(accessLog(root), "utf8").split("\n").filter((one) => one !== "");
-      expect(lines.length).toBe(ACCESS_MAX_LINES);
-      expect(lines[0]).toBe(`{"a":${NOW - DAY + 5}}`);
+      expect(lines.length).toBe(ACCESS_MAX_LINES + 5);
+      expect(lines[0]).toBe(`{"a":${NOW - DAY}}`);
+      expect(await system.accessLogFull(NOW)).toBe(true);
+      // Once 180 days have passed for them, they age out and room comes back.
+      expect(await system.accessLogFull(NOW + ACCESS_RETENTION_MS + 2 * DAY)).toBe(false);
+    });
+
+    test("counted as it grows: below its cap, it has room; at it, it is full", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "state"));
+      writeFileSync(accessLog(root), Array.from({ length: ACCESS_MAX_LINES - 1 }, (_, i) => `{"a":${NOW - DAY + i}}\n`).join(""), { mode: 0o600 });
+      const system = systemOn(root);
+      await system.prepareAccessLog(NOW);
+      expect(await system.accessLogFull(NOW)).toBe(false);
+      await system.appendAccessLog(line(NOW + 1, { detail: "the last one" }), NOW + 1);
+      expect(await system.accessLogFull(NOW + 2)).toBe(true);
     });
   });
 
