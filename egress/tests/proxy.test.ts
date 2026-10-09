@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Server, Socket } from "bun";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EGRESS_PROXY_PORT, egressUnitLines, parseEgressEntry, type HostPattern } from "../../bin/cli/egress";
 import { DATA_DIR } from "../src/config";
 import type { Caller } from "../src/proc-net";
-import { startProxy, type Limits, type Proxy, type ProxyOptions } from "../src/proxy";
+import { DEFAULT_LIMITS, startProxy, type Limits, type Proxy, type ProxyOptions } from "../src/proxy";
 import { certificate, lateReader, OPENSSL, rawExchange, recordingAudit, stubLookup, stubRoute } from "./helpers";
 
 /**
@@ -388,6 +388,31 @@ function identifyByPort(owners: Map<number, Caller>) {
 const BLOCK = new Uint8Array(1024 * 1024).fill(9);
 
 /**
+ * The most a socket's kernel receive buffer grows to: on Linux the third field
+ * of net.ipv4.tcp_rmem, 6 MiB by default; on macOS net.inet.tcp.autorcvbufmax,
+ * 4 MiB by default. Read from the machine running the tests, never assumed:
+ * a constant that fits one is either too loose or too tight on the other.
+ */
+function receiveBufferMax(): number {
+  const value =
+    process.platform === "darwin"
+      ? Bun.spawnSync(["sysctl", "-n", "net.inet.tcp.autorcvbufmax"]).stdout.toString()
+      : readFileSync("/proc/sys/net/ipv4/tcp_rmem", "utf8").trim().split(/\s+/)[2];
+  const bytes = Number(value?.trim());
+  if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new Error(`the kernel's receive buffer maximum does not read: ${JSON.stringify(value)}`);
+  return bytes;
+}
+
+/**
+ * How far past a mark or a budget the socket being read when it is crossed may
+ * still go, as DEFAULT_LIMITS in src/proxy.ts works it out: its pause lands
+ * once its kernel receive buffer is drained, plus the one read of up to 512 KiB
+ * Bun hands over. The tests' allowances follow from it: a guess of 4 MiB sat
+ * under the 4.5 MiB macOS allows, and failed one release run in a few.
+ */
+const OVERSHOOT = receiveBufferMax() + 512 * 1024;
+
+/**
  * One end of a tunnel that writes as fast as the other lets it and reads
  * nothing: what makes the proxy hold bytes for it in both directions.
  */
@@ -530,8 +555,8 @@ describe("what the proxy holds for a slow reader", () => {
       const written = await settled(() => origin.written() + client.flood.written);
       expect(written.after - written.before).toBeLessThan(BLOCK.length);
       // Per direction, the mark and what was already read when the pause
-      // landed: at most the kernel's receive buffer, a few MiB here.
-      expect(proxy.buffered()).toBeLessThan(16 * 1024 * 1024);
+      // landed: the overshoot, for each of the two.
+      expect(proxy.buffered()).toBeLessThanOrEqual(2 * (DEFAULT_LIMITS.bufferBytes + OVERSHOOT));
       expect(proxy.buffered()).toBeGreaterThan(0);
     } finally {
       stop();
@@ -572,7 +597,7 @@ describe("what the proxy holds for a slow reader", () => {
       const written = await settled(() => origin.written());
       expect(written.after - written.before).toBeLessThan(BLOCK.length);
       // The budget, and what the one read under way delivered past it.
-      expect(proxy.buffered()).toBeLessThan(limits.projectBufferBytes + 4 * 1024 * 1024);
+      expect(proxy.buffered()).toBeLessThanOrEqual(limits.projectBufferBytes + OVERSHOOT);
 
       // Another project is not held back by shop's budget.
       const blog = await floodingClient(proxy.port, false, as("blog"));
@@ -603,7 +628,8 @@ describe("what the proxy holds for a slow reader", () => {
       }
       const written = await settled(() => origin.written());
       expect(written.after - written.before).toBeLessThan(BLOCK.length);
-      expect(proxy.buffered()).toBeLessThan(limits.totalBufferBytes + 4 * 1024 * 1024);
+      // The budget, and what the one read under way delivered past it.
+      expect(proxy.buffered()).toBeLessThanOrEqual(limits.totalBufferBytes + OVERSHOOT);
     } finally {
       stop();
     }
