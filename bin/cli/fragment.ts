@@ -8,9 +8,10 @@
  *
  *   1. `import tls-zone` in the preview block, failing which that block gets
  *      its own certificate instead of sharing the wildcard, silently;
- *   2. `import /etc/caddy/locks/*.caddy` in that same block, and in it alone:
- *      without it the gatekeeper's check of a code fails and nothing changes; put
- *      on a final domain, it would close the customer's site;
+ *   2. `import /etc/caddy/locks/*.caddy` in that same block, and in the block
+ *      of the site's own domain beside `vars sitesolide_site <slug>`: without
+ *      it the gatekeeper's check of a code fails and nothing changes, and the
+ *      domain would serve without a code what the preview closes;
  *   3. **no `handle`**: all the `handle` of one block form an exclusive group,
  *      the lock's would win, and the visitor holding the right code would get a
  *      200 with an empty body;
@@ -22,6 +23,7 @@
  */
 import { sameDirectives } from "./comparison";
 import {
+  domainHosts,
   hasServices,
   isApp,
   isProtected,
@@ -32,10 +34,13 @@ import {
   servicesOf,
   type Manifest,
 } from "./manifest";
-import { openStanza, portalHostStanza, portalStanza, PORTAL_GENERATIONS, type PortalGeneration } from "./portal";
+import { announcedFor, openStanza, portalHostStanza, portalStanza, PORTAL_GENERATIONS, type PortalGeneration } from "./portal";
 import { projectPaths } from "./unit";
 
 export const IMPORT_LOCKS = "import /etc/caddy/locks/*.caddy";
+
+/** The preview locks the gatekeeper writes, under the name the machine carries (CLAUDE.md). */
+export const LOCKS_FRAGMENT = "/etc/caddy/locks/verrous.caddy";
 
 /**
  * The matcher that decides what wakes the service up.
@@ -96,6 +101,24 @@ export function declaresRobots(manifest: Manifest): boolean {
 export const FILE_GENERATIONS = ["hidden", "plain"] as const;
 
 export type FileGeneration = (typeof FILE_GENERATIONS)[number];
+
+/**
+ * The generations of the blocks of a site's own domain, the current one first:
+ *
+ * - `closable`: the domain closes with the preview, the portal's guard or the
+ *   preview locks in its block too, and every other name the table carries
+ *   for it, its aliases and its `www`, sends there;
+ * - `open`: the blocks deployed before, the domain's own name alone, always
+ *   open, its other names left to the nameless block of static files.
+ *
+ * A fragment without a domain is the same in both.
+ */
+export const DOMAIN_GENERATIONS = ["closable", "open"] as const;
+
+export type DomainGeneration = (typeof DOMAIN_GENERATIONS)[number];
+
+/** The variable that tells the preview locks whose site a block serves, see api/src/locks.ts. */
+export const SITE_VARIABLE = "sitesolide_site";
 
 function fileServer(files: FileGeneration): string[] {
   return files === "hidden" ? ["\tfile_server {", `\t\thide ${NEVER_SENT.join(" ")}`, "\t}"] : ["\tfile_server"];
@@ -229,7 +252,12 @@ export const ZONE_HOST = "{$SITESOLIDE_ZONE}";
  * wrote, see `isEarlierGeneration`; everything that deposits a block takes the
  * defaults.
  */
-export function generateFragment(manifest: Manifest, generation: PortalGeneration = "identity", files: FileGeneration = "hidden"): string | null {
+export function generateFragment(
+  manifest: Manifest,
+  generation: PortalGeneration = "identity",
+  files: FileGeneration = "hidden",
+  domains: DomainGeneration = "closable",
+): string | null {
   if (!isApp(manifest)) return null;
 
   const slug = manifest.slug;
@@ -244,10 +272,7 @@ export function generateFragment(manifest: Manifest, generation: PortalGeneratio
     "",
   ];
 
-  if (domain !== undefined) {
-    // An application site must not land in the nameless block of customer
-    // domains: that one only serves static files and would never wake the
-    // service up.
+  if (domain !== undefined && domains === "open") {
     lines.push(
       "# The project's own domain. The certificate is obtained on the first",
       "# request, once the ask endpoint agrees: the domain must appear in",
@@ -258,13 +283,55 @@ export function generateFragment(manifest: Manifest, generation: PortalGeneratio
       "\t\ton_demand",
       "\t}",
       "",
-      // No portal on a customer domain, whatever the manifest says: validate()
-      // refuses the two together, and this block carries no forward_auth.
       ...openStanza(generation),
       `\timport ${slug}-routes`,
       "}",
       "",
     );
+  } else if (domain !== undefined) {
+    // An application site must not land in the nameless block of customer
+    // domains: that one only serves static files and would never wake the
+    // service up. Neither may any of its names, which is why the others are
+    // claimed here too, to send them to the first.
+    const [name, ...others] = domainHosts(domain);
+    lines.push(
+      "# The project's own domain. The certificate is obtained on the first",
+      "# request, once the ask endpoint agrees: the domain must appear in",
+      "# sitesolide.json and the table must have been regenerated. No tls-zone",
+      "# here, the server's Cloudflare token only covers the served zone.",
+      `${name} {`,
+      "\ttls {",
+      "\t\ton_demand",
+      "\t}",
+      "",
+      "\t# The same site as the preview, closed when it is: the preview locks",
+      "\t# recognise it by this variable, and a site behind the portal is",
+      "\t# guarded here as there, judged on its preview's people. See",
+      "\t# api/src/locks.ts and announcedFor in bin/cli/portal.ts.",
+      `\tvars ${SITE_VARIABLE} ${slug}`,
+      `\t${IMPORT_LOCKS}`,
+      "",
+      ...portalStanza(manifest, generation, announcedFor(slug, ZONE_HOST)),
+      ...(isProtected(manifest) ? [] : openStanza(generation)),
+      `\timport ${slug}-routes`,
+      "}",
+      "",
+    );
+    if (others.length > 0) {
+      lines.push(
+        "# The domain's other names, its aliases and its www, send to it: one",
+        "# address for the site, so one door, one cookie, and one page for",
+        "# search engines. Nothing is served here, open or closed.",
+        `${others.join(", ")} {`,
+        "\ttls {",
+        "\t\ton_demand",
+        "\t}",
+        "",
+        `\tredir https://${name}{uri} permanent`,
+        "}",
+        "",
+      );
+    }
   }
 
   lines.push(
@@ -307,12 +374,49 @@ export function generateFragment(manifest: Manifest, generation: PortalGeneratio
 export function isEarlierGeneration(block: string, manifest: Manifest): boolean {
   const current = generateFragment(manifest);
   return PORTAL_GENERATIONS.some((generation) =>
-    FILE_GENERATIONS.some((files) => {
-      if (generation === PORTAL_GENERATIONS[0] && files === FILE_GENERATIONS[0]) return false;
-      const earlier = generateFragment(manifest, generation, files);
-      return earlier !== null && earlier !== current && sameDirectives(block, earlier);
-    }),
+    FILE_GENERATIONS.some((files) =>
+      DOMAIN_GENERATIONS.some((domains) => {
+        const earlier = generateFragment(manifest, generation, files, domains);
+        return earlier !== null && earlier !== current && sameDirectives(block, earlier);
+      }),
+    ),
   );
+}
+
+/** What Caddy serves that decides whether a closed site's own domain closes with it. */
+export type Served = { block: string | null; caddyfile: string | null; locks: string | null };
+
+/**
+ * Why what Caddy serves would not close a site's own domain with its preview,
+ * null when it would. `sitesolide domain --activate` asks it of a closed site,
+ * before the table certifies a single name: a domain switched on behind any of
+ * these would serve without its door what the preview closes.
+ *
+ * - an app's block in service must be the one this manifest generates: an
+ *   earlier release's leaves the domain open, and one that predates a change
+ *   of the domain's names claims none of the new ones, which the Caddyfile
+ *   then refuses to serve;
+ * - a static site's domain is served by the Caddyfile's nameless block, which
+ *   must say whose site it serves;
+ * - a site that opens with a code needs its stanza in the form that closes
+ *   every address, the one api/src/locks.ts `stanza` writes now: an earlier
+ *   one matches the preview's host alone. The line is read here as
+ *   `stanzaClosesEveryAddress` reads it there.
+ */
+export function domainLeftOpen(manifest: Manifest, served: Served): string | null {
+  const generated = generateFragment(manifest);
+  if (generated !== null && (served.block === null || !sameDirectives(served.block, generated))) {
+    return "the Caddy block in service is not the one this sitesolide.json generates";
+  }
+  if (generated === null && (served.caddyfile === null || !served.caddyfile.includes(`\tvars ${SITE_VARIABLE} {folder}\n`))) {
+    return "the Caddyfile in service predates closing a static site's own domain";
+  }
+  if (manifest.lock === true) {
+    const matcher = `@lock_host_${manifest.slug} expression `;
+    const current = (served.locks ?? "").split("\n").some((line) => line.startsWith(matcher) && line.includes(`vars({'${SITE_VARIABLE}': '${manifest.slug}'})`));
+    if (!current) return "the code's stanza in service predates closing a site's own domain";
+  }
+  return null;
 }
 
 /** What `deploy` does with its block, given the one in service. */

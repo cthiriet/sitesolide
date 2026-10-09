@@ -10,6 +10,7 @@ import { CodeChip } from "@/components/access-word"
 import { Track, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { setGeneralAccess } from "@/lib/api"
 import {
+  addressesLine,
   CHANGE_DURATION,
   DEPLOY_NOTE,
   changeProgress,
@@ -77,12 +78,15 @@ export function GeneralAccessPanel({
   renewable,
   stewardReason,
   failedNote,
+  addresses,
   onChoose,
 }: {
   slug: string
   state: GeneralState
   options: ChoiceOption[]
   reader: GeneralReader
+  /** Every address the site answers on: named when there is more than the preview. */
+  addresses: string[]
   /** *New code* is offered beside the code in force. */
   renewable: boolean
   /** The steward's reason when no other choice may be taken from here, said once under the choices. */
@@ -106,6 +110,7 @@ export function GeneralAccessPanel({
         {problem}
         <div className="grid gap-2 px-4 py-3">
           <p className="text-pretty">{generalLine(state, slug)}</p>
+          {addressesLine(addresses) !== null && <p className="text-xs text-pretty text-muted-foreground">{addressesLine(addresses)}</p>}
           {state.current === "code" && <Code slug={slug} state={state} />}
           {state.current === "restricted" && state.exemptions.length > 0 && <Exemptions paths={state.exemptions} />}
         </div>
@@ -175,6 +180,13 @@ export function GeneralAccessPanel({
         })}
       </ul>
 
+      {addressesLine(addresses) !== null && (
+        <p className="flex gap-2 border-t px-4 py-3 text-xs text-pretty text-muted-foreground">
+          <Globe aria-hidden="true" className="mt-px size-3.5 shrink-0" />
+          <span>{addressesLine(addresses)}</span>
+        </p>
+      )}
+
       {stewardReason !== null && (
         <p className="flex gap-2 border-t px-4 py-3 text-xs text-pretty text-muted-foreground">
           <Info aria-hidden="true" className="mt-px size-3.5 shrink-0" />
@@ -199,6 +211,8 @@ export type ChangeState = {
   from: GeneralAccess
   /** Said before restricting a site nobody is on the list of: who will still open it. */
   warning: string | null
+  /** Every address the site answers on, which the change applies to together. */
+  addresses: string[]
   open: boolean
   opening: number
 }
@@ -230,7 +244,7 @@ export function GeneralAccessDialog({
   focusReturn: FocusReturn
 }) {
   const busy = useRef(false)
-  const typed = state !== null && changeTexts(state.slug, state.target, state.from).typed
+  const typed = state !== null && changeTexts(state.slug, state.target, state.from, state.addresses).typed
   return (
     <Dialog
       open={state?.open ?? false}
@@ -258,7 +272,7 @@ function ChangeFlow({
 }) {
   const announce = useAnnounce()
   const { slug, target } = state
-  const texts = changeTexts(slug, target, state.from)
+  const texts = changeTexts(slug, target, state.from, state.addresses)
   const typed = texts.typed
   const [phase, setPhase] = useState<Phase>({ phase: "confirmation" })
   const [entry, setEntry] = useState("")

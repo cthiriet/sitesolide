@@ -58,7 +58,7 @@ import { generateFragment, decideBlock } from "../../borrowed/fragment";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts, type ProjectAccount } from "../../borrowed/loopback";
 import { isApp, readManifest, servicesOf, setLock, setPortal, type Manifest } from "../../borrowed/manifest";
 import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "../../borrowed/portal-vm";
-import { foreignUnit, portConflicts, staleUnits } from "../../borrowed/services";
+import { domainConflicts, foreignUnit, portConflicts, staleUnits } from "../../borrowed/services";
 import { decideUnit, generateUnits, unitArgument } from "../../borrowed/unit";
 import { compareDirectives, sameDirectives, summariseDivergence } from "../../borrowed/comparison";
 import { isPortalReady, portalHost, fromPortal, answers, describe } from "../gatekeeper/probe";
@@ -167,6 +167,8 @@ export function finalManifest(
   }
   const conflicts = portConflicts(final.manifest, deposited);
   if (conflicts.length > 0) throw new Stop("port-taken", `${conflicts.join("; ")}: pick a free port between 3000 and 3099, or leave the port out and the machine chooses one`);
+  const names = domainConflicts(final.manifest, deposited);
+  if (names.length > 0) throw new Stop("domain-taken", `${names.join("; ")}: a name belongs to one project`);
   return { text, manifest: final.manifest, portal: door.portal, allocated: allocation.allocated, doorConfirmed: onMachine.kind === "present" };
 }
 
@@ -370,6 +372,8 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     if (collisions.length > 0) {
       throw new Stop("port-taken", `${collisions.join("; ")}, since this deployment started: nothing served was changed, deploy again`);
     }
+    const claimed = current === null ? [] : domainConflicts(manifest, current);
+    if (claimed.length > 0) throw new Stop("domain-taken", `${claimed.join("; ")}, since this deployment started: nothing served was changed`);
     // The first change anybody may see: a protected site's block, or the
     // trees. A Caddy step that fails restores the block, but one whose
     // restore failed leaves it to the owner, and this run cannot tell them

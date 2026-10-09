@@ -29,12 +29,12 @@
 import { isProtected } from "../../borrowed/manifest";
 import { fragmentIsProtected } from "../../borrowed/portal";
 import { isPasswordValid, isAcceptableSubmission } from "../auth";
-import { addressOf, unitOf } from "../state";
+import { addressOf, codeAddress, unitOf } from "../state";
 import { reservedReason } from "../control/policy";
 import { generatePassword } from "../password";
 import { portalModifiable, generalChoices, DASHBOARD_SLUG, type Choices } from "../gatekeeper/rules";
 import { actionFor, type GeneralAccess } from "../gatekeeper/instance";
-import { installedCode, isValidCode, readCodes as readLockCodes } from "../../borrowed/locks";
+import { installedCode, isValidCode, readCodes as readLockCodes, stanzaClosesEveryAddress } from "../../borrowed/locks";
 import type { RandomSource } from "../sessions";
 import {
   INITIAL_STATE,
@@ -953,7 +953,10 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     try {
       const raw = readLockCodes(await system.readCodes())[slug];
       const code = isValidCode(raw) ? raw : null;
-      return { code, applied: code !== null && installedCode(await system.readLocksFragment(), slug) === code };
+      // Applied in the form that closes the site's own domain too: one an
+      // earlier release wrote is no reason to say there is nothing to change.
+      const fragment = await system.readLocksFragment();
+      return { code, applied: code !== null && installedCode(fragment, slug) === code && stanzaClosesEveryAddress(fragment, slug) };
     } catch (e) {
       console.error(`general: preview code unreadable for ${slug} (${errorName(e)})`);
       return { code: null, applied: false };
@@ -989,9 +992,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /** The code and the link that carries it, for whoever may see them. */
-  function codeView(slug: string, code: string | null): { code: string; url: string | null } | null {
+  function codeView(site: Site, code: string | null): { code: string; url: string | null } | null {
     if (code === null) return null;
-    return { code, url: memberZone === "" ? null : `https://${addressOf(slug, memberZone)}/?key=${code}` };
+    return { code, url: memberZone === "" ? null : `https://${codeAddress(site.folder, memberZone, site.manifest)}/?key=${code}` };
   }
 
   // --- The routes ------------------------------------------------------------
@@ -1590,7 +1593,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       return { portal: current.portal, general: current.view, detail: `${site.folder} is already restricted: nothing to change`, code: null };
     }
     if (!renew && target === "code" && current.view.access === "code" && current.applied) {
-      return { portal: current.portal, general: current.view, detail: `${site.folder} already opens with a code: nothing to change`, code: codeView(site.folder, current.code) };
+      return { portal: current.portal, general: current.view, detail: `${site.folder} already opens with a code: nothing to change`, code: codeView(site, current.code) };
     }
     if (renew && current.view.access !== "code") {
       return refuse(operation, body, { error: "invalid", message: `${site.folder} does not open with a code: choose Anyone with the code first` }, null, who);
@@ -1642,7 +1645,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     if (result === "failure") return error("failure", message);
     const reread = (await sites()).get(site.folder) ?? site;
     const after = await generalState(reread);
-    return { portal: after.portal, general: after.view, detail: message, code: target === "code" ? codeView(site.folder, after.code) : null };
+    return { portal: after.portal, general: after.view, detail: message, code: target === "code" ? codeView(site, after.code) : null };
   }
 
   /** Eight seconds of readings after a restart, and the verdict that comes out of them. */

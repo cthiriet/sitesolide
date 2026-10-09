@@ -137,6 +137,15 @@ describe("stanza", () => {
     expect(rendered).toInclude('{http.request.cookie.lock_sample-wheels} == "A7B2K9"');
   });
 
+  test("closes the preview by its host and any other block that says it serves the site", () => {
+    // The block of the site's own domain, and the nameless block of the static
+    // sites' domains, set the variable: the stanza needs no domain's name.
+    // Inside an expression, through the host matcher: it compares as Caddy
+    // routes, without regard to case, where {host} == would not.
+    expect(rendered).toInclude("@lock_host_sample-wheels expression `host('sample-wheels.test-zone.invalid') || vars({'sitesolide_site': 'sample-wheels'})`\n");
+    expect(rendered).not.toInclude("{host}");
+  });
+
   test("suffixes the three matchers with the slug", () => {
     // Named matchers share a single namespace for the whole block, imports
     // included: two stanzas with the same name would make the entire

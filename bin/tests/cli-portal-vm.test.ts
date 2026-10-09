@@ -248,16 +248,12 @@ describe("the guard of the domain", () => {
     }
   });
 
-  test("an own domain on a site behind the portal: it comes off from the dashboard first", () => {
-    for (const local of ["public", "restricted"] as const) {
-      const agreement = guardDepositedManifest("vineyard", G[local], present("restricted"), "domain");
-      expect(agreement.kind).toBe("rejects");
-      if (agreement.kind !== "rejects") return;
-      expect(agreement.message).toBe("vineyard is restricted: make it public from the dashboard's Access section first");
-      expect(agreement.details).toContain("a restricted site cannot switch to its own domain yet");
-      // The local manifest that still asks for the door will have to catch up.
-      expect(agreement.details.some((line) => line.includes("sitesolide deploy"))).toBe(local === "restricted");
-    }
+  test("a site behind the portal switches its domain like any other, once the repository agrees", () => {
+    expect(guardDepositedManifest("vineyard", G.restricted, present("restricted"), "domain")).toEqual({ kind: "agreed" });
+    const behind = guardDepositedManifest("vineyard", G.public, present("restricted"), "domain");
+    expect(behind.kind).toBe("rejects");
+    if (behind.kind !== "rejects") return;
+    expect(behind.message).toBe("general access of vineyard changed from the dashboard: run `sitesolide deploy` in its folder first");
   });
 
   test("an unreadable reading authorises nothing", () => {

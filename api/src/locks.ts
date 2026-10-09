@@ -8,6 +8,9 @@ import { isValidDomain } from "./table";
  * behind a six character code that the client receives once and that their
  * browser then keeps in a cookie.
  *
+ * It closes the site on every address it answers on, its own domain included:
+ * see `stanza` for how a block says whose site it serves.
+ *
  * This module only decides and renders text: no disk access, no network
  * access. Reading the manifests and the codes, drawing a code, installing the
  * fragment and reloading Caddy belong to the dashboard's gatekeeper
@@ -143,6 +146,13 @@ export function previewHost(slug: string, zone: string): string {
   return `${slug}.${zone}`;
 }
 
+/**
+ * The variable a block sets to say whose site it serves when its host is not
+ * the site's preview. bin/cli/fragment.ts writes the same name, and
+ * bin/tests/cli-fragment.test.ts checks that the two agree.
+ */
+export const SITE_VARIABLE = "sitesolide_site";
+
 export type LockOptions = {
   /** Root of the door pages, one subfolder per site. */
   doorPagesDir?: string;
@@ -156,6 +166,24 @@ export type LockOptions = {
 
 /**
  * Renders the Caddy stanza of a locked site.
+ *
+ * ## Which blocks it closes
+ *
+ * Every block imports every stanza, and each stanza picks its site's blocks
+ * out of them: the preview's by its host, as always, and any other by
+ * `vars sitesolide_site <slug>`, which the block of a site's own domain sets
+ * (bin/cli/fragment.ts) and the nameless block of the static sites' domains
+ * sets from its table (infra/caddy/Caddyfile). The block says whose site it
+ * serves, and the stanza needs to know no domain: the one a deployment
+ * declares or activates later closes with the preview the moment it is
+ * served, with nothing here to write again.
+ *
+ * Through `expression` and the `host` and `vars` matchers called inside it,
+ * since a named matcher's own lines all have to match. `host` compares as
+ * Caddy routes, without regard to case: `{host} == "..."` would let
+ * `SHOP.example.com` reach the site its block serves, and skip its lock.
+ *
+ * ## The stanza
  *
  * Three sibling `handle`s, therefore mutually exclusive: the first one that
  * accepts the request excludes the other two. The order carries the whole
@@ -223,7 +251,7 @@ export function stanza(slug: string, host: string, code: string, options: LockOp
   // using the same name would make the entire adaptation fail, therefore all
   // of production, and not only the faulty site.
   return `# Preview lock: ${slug}
-@lock_host_${slug} host ${host}
+@lock_host_${slug} expression \`host('${host}') || vars({'${SITE_VARIABLE}': '${slug}'})\`
 handle @lock_host_${slug} {
 	# The response depends on a cookie: a shared cache that ignored it would
 	# serve to everyone what an authorized visitor brought back.
@@ -347,7 +375,8 @@ export const CODES_FILE = "/etc/caddy/locks-codes.json";
 
 /**
  * The folder Caddy imports by glob, `import /etc/caddy/locks/*.caddy`, from
- * the wildcard block and from every app's own block.
+ * the wildcard block, the nameless block of the customer domains, and every
+ * app's own blocks.
  */
 export const LOCKS_DIR = "/etc/caddy/locks";
 
@@ -396,6 +425,20 @@ export function lockField(raw: string, slug: string): unknown {
   } catch {
     throw new Error(`${slug}: sitesolide.json unreadable`);
   }
+}
+
+/**
+ * Does the stanza of `slug` in a fragment close every address the site
+ * answers on, as `stanza` writes it now? One an earlier release wrote matches
+ * the preview's host alone, and leaves the site's own domain open: the
+ * gatekeeper writes the fragment again rather than call it in place, and
+ * `sitesolide domain --activate` waits for it. bin/cli/fragment.ts reads the
+ * same line for the CLI, which bin/tests/cli-fragment.test.ts keeps in step.
+ */
+export function stanzaClosesEveryAddress(fragment: string | null, slug: string): boolean {
+  if (fragment === null || !isValidLockSlug(slug)) return false;
+  const matcher = `@lock_host_${slug} expression `;
+  return fragment.split("\n").some((line) => line.startsWith(matcher) && line.includes(`vars({'${SITE_VARIABLE}': '${slug}'})`));
 }
 
 /**

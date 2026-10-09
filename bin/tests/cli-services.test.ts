@@ -18,6 +18,7 @@ import {
   unitOriginsCommand,
   projectPortsCommand,
   readCurrentPairs,
+  domainConflicts,
   portConflicts,
   readLoopbackState,
   readUidsAnswer,
@@ -372,6 +373,37 @@ describe("ports taken on the machine", () => {
     ]);
     expect(portConflicts({ ...APP, slug: "portal", port: 3026 }, new Map())).toEqual([]);
     expect(portConflicts({ ...APP, slug: "dashboard", port: 3022 }, new Map())).toEqual([]);
+  });
+});
+
+describe("domain names taken on the machine", () => {
+  const deposited = new Map([
+    ["shop", JSON.stringify({ slug: "shop", publicDir: "public", domain: { name: "shop.example", aliases: ["boutique.example"], active: true } })],
+    ["draft", JSON.stringify({ ...APP, slug: "draft", port: 3040, domain: { name: "draft.example", active: false } })],
+    ["broken", "{ not json"],
+  ]);
+  const own = (domain: { name: string; aliases?: string[] }) => ({ ...APP, slug: "budget", domain });
+
+  test("a name, an alias or their www another project declares, active or not, is refused", () => {
+    // An app's block names its host, and beats the nameless block of the
+    // static sites' domains: it would take the other site's visitors.
+    expect(domainConflicts(own({ name: "shop.example" }), deposited)).toEqual([
+      "shop.example is already declared by project shop",
+      "www.shop.example is already declared by project shop",
+    ]);
+    expect(domainConflicts(own({ name: "budget.example", aliases: ["www.boutique.example"] }), deposited)).toEqual([
+      "www.boutique.example is already declared by project shop",
+    ]);
+    expect(domainConflicts(own({ name: "draft.example" }), deposited)).toEqual([
+      "draft.example is already declared by project draft",
+      "www.draft.example is already declared by project draft",
+    ]);
+  });
+
+  test("its own previous names, another name, or no domain at all, are not", () => {
+    expect(domainConflicts({ ...APP, slug: "shop", domain: { name: "shop.example", active: true } }, deposited)).toEqual([]);
+    expect(domainConflicts(own({ name: "budget.example" }), deposited)).toEqual([]);
+    expect(domainConflicts(APP, deposited)).toEqual([]);
   });
 });
 

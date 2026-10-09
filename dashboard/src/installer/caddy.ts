@@ -64,7 +64,7 @@ async function probeAfter(machine: Machine, step: BlockStep, target: string, bef
     const responses = await Promise.all(pending.map((host) => machine.probe(host, "/", remaining)));
     pending.forEach((host, i) => seen.set(host, responses[i]!));
     const problem = judgeTarget(step.protected, target, seen.get(target)!);
-    const lost = regressions(before, seen, target);
+    const lost = regressions(before, seen, [target]);
     if (problem === null && lost.length === 0) return null;
     if (machine.now() + TIMEOUTS.pause >= deadline) {
       const reasons = problem === null ? [] : [problem];

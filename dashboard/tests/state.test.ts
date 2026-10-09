@@ -4,6 +4,7 @@ import {
   LANDING_FOLDER,
   LANDING_UNIT,
   addressOf,
+  codeAddress,
   buildSnapshot,
   computeCpuShare,
   readTable,
@@ -394,6 +395,14 @@ describe("the machine's special cases", () => {
     expect(addressOf("client", "test-zone.invalid")).toBe("client.test-zone.invalid");
     const snapshot = buildSnapshot(raw([folder(LANDING_FOLDER, null)]));
     expect(snapshot.sites[0]?.address).toBe("test-zone.invalid");
+  });
+
+  test("the code's link leads to the site's own domain once it serves one, the preview otherwise", () => {
+    const manifest = { slug: "client", publicDir: "public" };
+    expect(codeAddress("client", "test-zone.invalid", manifest)).toBe("client.test-zone.invalid");
+    expect(codeAddress("client", "test-zone.invalid", { ...manifest, domain: { name: "client.example", active: false } })).toBe("client.test-zone.invalid");
+    expect(codeAddress("client", "test-zone.invalid", { ...manifest, domain: { name: "client.example", active: true } })).toBe("client.example");
+    expect(codeAddress("client", "test-zone.invalid", null)).toBe("client.test-zone.invalid");
   });
 
   test("any other directory with no manifest is flagged", () => {

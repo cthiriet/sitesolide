@@ -327,11 +327,9 @@ export type Agreement = { kind: "agreed" } | { kind: "rejects"; message: string;
  * bin/deploy-caddy.sh would then see no divergence left to refuse. It refuses
  * instead, and points to `deploy`, which makes the repository catch up.
  *
- * One refusal says something else, because `deploy` would not be enough
- * there: `validate()` forbids the customer domain on a site behind the
- * portal. When the VM carries the door, switching the domain therefore
- * requires making the site public from the dashboard first, and the message
- * says so.
+ * A restricted site switches its domain like any other: the domain closes
+ * with its preview, which `sitesolide domain` checks of what Caddy serves
+ * before it switches (requireClosingDomain in bin/sitesolide.ts).
  *
  * A site absent from the machine has nothing to lose: the action goes through,
  * and it is up to it to refuse a site never deployed if need be. An unreadable
@@ -355,19 +353,6 @@ export function guardDepositedManifest(
   }
   if (reading.kind === "absent") return { kind: "agreed" };
 
-  if (reading.portal) {
-    return {
-      kind: "rejects",
-      message: `${slug} is restricted: make it public from the dashboard's Access section first`,
-      details: [
-        "a restricted site cannot switch to its own domain yet",
-        // The local manifest still asking for the door would contradict it once
-        // removed: `deploy` makes it catch up.
-        ...(local.portal ? ["then run `sitesolide deploy` in its folder, so that the repository follows"] : []),
-        "nothing was written",
-      ],
-    };
-  }
   if (!agrees(reading, local)) {
     return {
       kind: "rejects",

@@ -616,3 +616,89 @@ describe("the audit of sign-ins", () => {
     }
   });
 });
+
+describe("a site's own domain", () => {
+  const DOMAIN = "kanban.example";
+  const DOMAIN_ORIGIN = `https://${DOMAIN}`;
+  /** What the block of kanban's own domain announces: its host, then the site's address. */
+  const ANNOUNCED = `${DOMAIN} ${HOST}`;
+  const ACCESS_ID = "PaSsWoRdAcCeSs03";
+  const NOW_S = START / 1000;
+
+  /** A steward that filed kanban's people under its preview, the one address it knows. */
+  function withSite(rest: Parameters<typeof site>[1] = {}) {
+    const access = accessFolder("routes-domain");
+    access.write(projection({ [HOST]: site("kanban", rest) }));
+    return routes({ settings: SETTINGS, access: access.reader() });
+  }
+
+  function onDomain(fields: Record<string, string>): Request {
+    return signIn(fields, { "X-Portal-Hote": ANNOUNCED, Origin: DOMAIN_ORIGIN });
+  }
+
+  function visit(r: ReturnType<typeof routes>, cookie: string, announced = ANNOUNCED) {
+    return r.verify(verification({ "X-Portal-Hote": announced, Cookie: cookie }));
+  }
+
+  test("a password access given on the site opens it on its domain too, with a cookie for the domain alone", async () => {
+    const r = withSite({ passwords: [grant({ id: ACCESS_ID, hash: guestHash(ACCESS_PASSWORD) })] });
+    const response = await r.signIn(onDomain({ motdepasse: ACCESS_PASSWORD, retour: "/list" }));
+    expect(response.status).toBe(303);
+    const cookie = cookieOf(response);
+    expect(visit(r, cookie).status).toBe(200);
+    // Signed for the host the browser is on: the preview does not take it,
+    // and the preview's cookie does not open the domain.
+    expect(visit(r, cookie, HOST).status).toBe(401);
+    const preview = cookieOf(await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD })));
+    expect(visit(r, preview).status).toBe(401);
+    expect(visit(r, preview, HOST).status).toBe(200);
+  });
+
+  test("a person is judged on the site's people, under the role of their entry", () => {
+    const r = withSite({ people: { "alice@acme.test": "developer" } });
+    const alice = `__Host-portal=${issueIdentityToken(KEY, DOMAIN, NOW_S + 3600, { email: "alice@acme.test", name: null })}`;
+    const response = visit(r, alice);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-sitesolide-role")).toBe("developer");
+    const bob = `__Host-portal=${issueIdentityToken(KEY, DOMAIN, NOW_S + 3600, { email: "bob@acme.test", name: null })}`;
+    expect(visit(r, bob).status).toBe(401);
+  });
+
+  test("a person with access to another site gets nothing here by announcing it: only the block says whose site it is", () => {
+    // The visitor cannot write X-Portal-Hote, Caddy overwrites it; a block
+    // that announced a site other than its own would be a generator's fault,
+    // and the cookie, signed for its host, still opens nothing elsewhere.
+    const access = accessFolder("routes-domain-other");
+    access.write(projection({ [HOST]: site("kanban"), [OTHER]: site("roster", { people: { "alice@acme.test": "viewer" } }) }));
+    const r = routes({ settings: SETTINGS, access: access.reader() });
+    const alice = `__Host-portal=${issueIdentityToken(KEY, DOMAIN, NOW_S + 3600, { email: "alice@acme.test", name: null })}`;
+    expect(visit(r, alice).status).toBe(401);
+    expect(visit(r, alice, `${DOMAIN} ${OTHER}`).status).toBe(200);
+    expect(visit(r, alice, `${OTHER} ${OTHER}`).status).toBe(401);
+  });
+
+  test("the owner's password opens the domain, and the failures count with the preview's", async () => {
+    const r = withSite();
+    for (let i = 0; i < 2; i++) await r.signIn(signIn({ motdepasse: "wrong" }));
+    for (let i = 0; i < 2; i++) await r.signIn(onDomain({ motdepasse: "wrong" }));
+    // Four failures on one site, two per address: the right password waits.
+    expect((await r.signIn(onDomain({ motdepasse: PASSWORD }))).status).toBe(429);
+    expect((await withSite().signIn(onDomain({ motdepasse: PASSWORD }))).status).toBe(303);
+  });
+
+  test("the origin checked is the domain's", async () => {
+    const r = withSite();
+    const fromPreview = signIn({ motdepasse: PASSWORD }, { "X-Portal-Hote": ANNOUNCED, Origin: ORIGIN });
+    expect((await r.signIn(fromPreview)).status).toBe(403);
+  });
+
+  test("an announcement of any other shape opens nothing", async () => {
+    const r = withSite();
+    const owner = cookieOf(await r.signIn(onDomain({ motdepasse: PASSWORD })));
+    expect(visit(r, owner).status).toBe(200);
+    // Spaces around the value are no part of it in HTTP, and never reach here.
+    for (const announced of [`${DOMAIN} ${HOST} ${OTHER}`, `${DOMAIN}  ${HOST}`, `${DOMAIN},${HOST}`, `${DOMAIN}\t${HOST}`]) {
+      expect(visit(r, owner, announced).status).toBe(401);
+    }
+  });
+});

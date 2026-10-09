@@ -102,7 +102,7 @@ export type SecretsActions = {
   restart: (slug: string) => void
   /** `warning`, said in the confirmation: who still opens a site restricted with nobody on its list. */
   /** `from`: how the site opens before the change. */
-  changeAccess: (slug: string, target: ChangeTarget, from: GeneralAccess, warning?: string | null) => void
+  changeAccess: (slug: string, target: ChangeTarget, from: GeneralAccess, warning?: string | null, addresses?: string[]) => void
   /** The common fate of a refusal: the session handed to the sign-in, the unlock asked again; the message to show otherwise. */
   refusal: OnRefusal
 }
@@ -579,10 +579,10 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
 
   // --- General access
 
-  function changeAccess(slug: string, target: ChangeTarget, from: GeneralAccess, warning: string | null = null) {
+  function changeAccess(slug: string, target: ChangeTarget, from: GeneralAccess, warning: string | null = null, addresses: string[] = []) {
     const open = () => {
       openings.current += 1
-      setAccessChange({ slug, target, from, warning, open: true, opening: openings.current })
+      setAccessChange({ slug, target, from, warning, addresses, open: true, opening: openings.current })
     }
     // Restricting lets nobody new in: it waits for no unlock. Making a site
     // public, opening it with a code and a new code do.

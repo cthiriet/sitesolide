@@ -197,10 +197,12 @@ const READ_BLOCK = new RegExp(
 );
 /**
  * A deposited manifest or a unit, read the same way by `deploy --dry-run
- * --compare`, which measures what a deployment would change.
+ * --compare`, which measures what a deployment would change; and the
+ * Caddyfile and the preview locks, which `sitesolide domain --activate` reads
+ * of a closed site.
  */
 const READ_FILE = new RegExp(
-  `^if sudo test -f (/srv/sites/[a-z0-9-]+/sitesolide\\.json|/etc/systemd/system/[a-z0-9.-]+\\.service); then echo ${MARKER_PRESENT}; sudo cat \\1; else echo ${MARKER_ABSENT}; fi$`,
+  `^if sudo test -f (/srv/sites/[a-z0-9-]+/sitesolide\\.json|/etc/systemd/system/[a-z0-9.-]+\\.service|/etc/caddy/Caddyfile|/etc/caddy/locks/verrous\\.caddy); then echo ${MARKER_PRESENT}; sudo cat \\1; else echo ${MARKER_ABSENT}; fi$`,
 );
 /** What bin/deploy-caddy.sh reads to tell a first install, before its guard. */
 export const FIRST_INSTALL_FILES = "test -f /etc/caddy/sitesolide.env && test -f /etc/caddy/domaines.map";

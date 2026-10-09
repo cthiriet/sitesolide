@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment } from "../../cli/fragment";
 import { setPortal, type Manifest } from "../../cli/manifest";
+import { buildFragment } from "../../../api/src/locks";
 import { REPO, run, TEST_EMAIL, TEST_ZONE } from "./run";
 import { createFakeVm, type FakeVm } from "./fake-vm";
 import { FAKE_CODE, FAKE_NEW_CODE, SWITCHES } from "./fake-ssh";
@@ -525,11 +526,11 @@ describe("sitesolide lock and unlock, through the steward", () => {
     vm = createFakeVm();
     vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
     vm.acceptWrites();
-    vm.setGeneral(403, { error: "out-of-scope", message: "it serves its own domain, sample-door.example, which a code would not close: switch it back to its preview first, sitesolide domain --deactivate" });
+    vm.setGeneral(409, { error: "rejects", message: "the codes file on the server does not read (a symbolic link), nothing was changed: check /etc/caddy/locks-codes.json" });
     const folder = project(SHOWCASE);
     const r = await run(folder, ["lock"], { vm });
     expect(r.code).toBe(1);
-    expect(r.error).toContain("it serves its own domain, sample-door.example, which a code would not close");
+    expect(r.error).toContain("the codes file on the server does not read (a symbolic link)");
     expect(readFileSync(join(folder, "sitesolide.json"), "utf8")).toBe(text(SHOWCASE));
   });
 
@@ -564,7 +565,7 @@ describe("sitesolide domain does not deposit a stale door", () => {
 
     const r = await run(folder, ["domain", "--deactivate", "--dry-run"], { vm });
     expect(r.code).toBe(1);
-    expect(r.error).toContain(`${SHOWCASE.slug} is restricted: make it public from the dashboard's Access section first`);
+    expect(r.error).toContain(`general access of ${SHOWCASE.slug} changed from the dashboard: run \`sitesolide deploy\` in its folder first`);
     // Only the lock, which precedes the guard, is announced.
     expect(r.all.split("\n").filter((line) => line.includes("[dry-run]"))).toEqual([
       "   [dry-run] take the Caddy lock shared with the dashboard's gatekeeper",
@@ -579,8 +580,48 @@ describe("sitesolide domain does not deposit a stale door", () => {
 
     const r = await run(project(inactive), ["domain", "--activate", "--dry-run"], { vm });
     expect(r.code).toBe(1);
-    expect(r.error).toContain("make it public from the dashboard's Access section first");
+    expect(r.error).toContain("changed from the dashboard: run `sitesolide deploy` in its folder first");
     expect(r.all).not.toContain("does not resolve");
+  });
+
+  test("a closed static site's domain waits for a Caddyfile that closes it too", async () => {
+    const inactive: Manifest = { ...SHOWCASE, lock: true, domain: { name: "sample-door.example", active: false } };
+    vm = createFakeVm();
+    vm.writeManifest(SHOWCASE.slug, text(inactive));
+    vm.writeFile("/etc/caddy/Caddyfile", "https:// {\n\troot * /srv/sites/{folder}/public\n}\n");
+    const r = await run(project(inactive), ["domain", "--activate", "--dry-run"], { vm });
+    expect(r.code).toBe(1);
+    expect(r.error).toContain(`${SHOWCASE.slug} is closed, and what Caddy serves would not close its domain`);
+    expect(r.all).toContain("sitesolide upgrade");
+
+    vm.writeFile("/etc/caddy/Caddyfile", "https:// {\n\tvars sitesolide_site {folder}\n\timport /etc/caddy/locks/*.caddy\n}\n");
+    // The Caddyfile now closes it, the code's stanza from before still does not.
+    const earlier = buildFragment([{ slug: SHOWCASE.slug, host: `${SHOWCASE.slug}.test-zone.invalid`, lock: true, code: "K7M2PQ" }]);
+    vm.writeFile("/etc/caddy/locks/verrous.caddy", earlier.replace(/^@lock_host_.* expression .*$/m, `@lock_host_${SHOWCASE.slug} host ${SHOWCASE.slug}.test-zone.invalid`));
+    const stale = await run(project(inactive), ["domain", "--activate", "--dry-run", "--force"], { vm });
+    expect(stale.code).toBe(1);
+    expect(stale.all).toContain("the code's stanza in service predates closing a site's own domain");
+    expect(stale.all).toContain("sitesolide lock");
+
+    vm.writeFile("/etc/caddy/locks/verrous.caddy", earlier);
+    const again = await run(project(inactive), ["domain", "--activate", "--dry-run", "--force"], { vm });
+    expect(again.code).toBe(0);
+    expect(again.output).toContain("generate-domains.sh");
+  });
+
+  test("a closed app's domain waits for a block that closes it too: an earlier release's does not", async () => {
+    const inactive: Manifest = { ...PROTECTED, domain: { name: "sample-door.example", active: false } };
+    vm = createFakeVm();
+    vm.writeManifest(APP.slug, text(inactive));
+    vm.writeBlock(APP.slug, generateFragment(inactive, "identity", "hidden", "open")!);
+    const r = await run(project(inactive), ["domain", "--activate", "--dry-run"], { vm });
+    expect(r.code).toBe(1);
+    expect(r.error).toContain(`${APP.slug} is closed, and what Caddy serves would not close its domain`);
+    expect(r.all).toContain("sitesolide deploy");
+
+    vm.writeBlock(APP.slug, generateFragment(inactive)!);
+    const again = await run(project(inactive), ["domain", "--activate", "--dry-run", "--force"], { vm });
+    expect(again.code).toBe(0);
   });
 
   test("in agreement with the VM, the switch follows its course", async () => {

@@ -3,8 +3,9 @@
  * site and two on the portal's own host. src/handoff.ts says why the flow
  * takes that detour, and what each of its pieces defends.
  *
- * On the site, reached through `/_portal/*`, the host coming from Caddy's
- * `X-Portal-Hote` as for the password:
+ * On the site, reached through `/_portal/*`, the host and the site coming from
+ * Caddy's `X-Portal-Hote` as for the password, the site's own domain as its
+ * preview:
  *
  * - `GET /_portal/oidc` draws the binding, seals the flow, leaves for the
  *   portal's host;
@@ -67,9 +68,9 @@ import {
   clearCookie,
   cookieName,
   doorHeaders,
-  isValidHost,
   issueIdentityToken,
   pageHeaders,
+  readAnnounced,
   readCookie,
   safeReturnTo,
   setCookie,
@@ -197,9 +198,9 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
     return new Response(portalPage(title, message, link), { status, headers: headers(cookies, pageHeaders()) });
   }
 
-  function hostOf(req: Request): string | null {
-    const host = (req.headers.get("x-portal-hote") ?? "").toLowerCase();
-    return isValidHost(host) ? host : null;
+  /** The host set by Caddy and the site whose people decide: see readAnnounced in src/gate.ts. */
+  function announcedOf(req: Request): { host: string; site: string } | null {
+    return readAnnounced(req.headers.get("x-portal-hote"));
   }
 
   /**
@@ -239,7 +240,9 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
 
   return {
     begin(req) {
-      const host = hostOf(req);
+      // The flow is sealed for the host the browser is on, the one it comes
+      // back to; whose people decide is judged at completion, from the block.
+      const host = announcedOf(req)?.host ?? null;
       if (host === null) return new Response("portal: unknown host", { status: 400, headers: headers([]) });
       const params = new URL(req.url).searchParams;
       const returnTo = safeReturnTo(params.get("retour"));
@@ -367,8 +370,9 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
     },
 
     complete(req) {
-      const host = hostOf(req);
-      if (host === null) return new Response("portal: unknown host", { status: 400, headers: headers([]) });
+      const announced = announcedOf(req);
+      if (announced === null) return new Response("portal: unknown host", { status: 400, headers: headers([]) });
+      const { host, site } = announced;
       if (options.key === null || options.settings === null) {
         return door("/", 404, "Signing in with a company account isn't available here.", []);
       }
@@ -385,7 +389,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       }
 
       const { identity, returnTo } = redemption.handoff;
-      const role = options.access.roleOf(host, identity.email, options.settings.admins);
+      const role = options.access.roleOf(site, identity.email, options.settings.admins);
       if (role === null) {
         audit({ actor: identity.email, action: "portal.signin_failed", target: host, detail: { method: "oidc", reason: "not-shared" } }, now);
         return door(returnTo, 403, notSharedMessage(identity.email), spent, true);

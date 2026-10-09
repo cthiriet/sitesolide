@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { decideBlock, generateFragment, isEarlierGeneration, ZONE_HOST, IMPORT_LOCKS, matcher } from "../cli/fragment";
+import { decideBlock, domainLeftOpen, generateFragment, isEarlierGeneration, ZONE_HOST, IMPORT_LOCKS, matcher, SITE_VARIABLE } from "../cli/fragment";
+import { buildFragment, SITE_VARIABLE as LOCKS_SITE_VARIABLE, stanzaClosesEveryAddress } from "../../api/src/locks";
 import { validate, type Manifest } from "../cli/manifest";
 import { fragmentPassesIdentity, IDENTITY_STRIP, PORTAL_GENERATIONS, PORTAL_PORT, portalStanza } from "../cli/portal";
 
@@ -104,12 +105,20 @@ describe("the four non negotiable rules", () => {
     }
   });
 
-  test("no other block imports the locks", () => {
-    // A lock laid on the final domain would close the site in production.
-    const manifest = { ...MIXED, domain: { name: "sample-agency.example", active: true } };
+  test("the domain's block imports the locks too, saying whose site it serves; no other block does", () => {
+    // The stanza recognises the domain by the variable, never by its name: a
+    // domain closes with the preview without the stanza knowing it.
+    const manifest = { ...MIXED, domain: { name: "sample-agency.example", aliases: ["shop.sample-agency.example"], active: true } };
     const fragment = generateFragment(manifest) ?? "";
     const preview = block(fragment, `budget.${ZONE_HOST} {`);
-    expect(fragment.split(preview).join("")).not.toInclude("/etc/caddy/locks");
+    const domain = block(fragment, "sample-agency.example {");
+    expect(domain).toInclude(`\tvars ${SITE_VARIABLE} budget\n`);
+    expect(domain).toInclude(`\t${IMPORT_LOCKS}\n`);
+    expect(fragment.split(preview).join("").split(domain).join("")).not.toInclude("/etc/caddy/locks");
+  });
+
+  test("the variable is the one the preview locks match on", () => {
+    expect(SITE_VARIABLE).toBe(LOCKS_SITE_VARIABLE);
   });
 
   test("the site's own domain does not import tls-zone", () => {
@@ -366,6 +375,84 @@ describe("portal", () => {
  * protections it gave: a block edited by hand is never overwritten in silence,
  * and a door changed from the dashboard is caught up without --force.
  */
+describe("the site's own domain", () => {
+  const OWN: Manifest = { ...MIXED, domain: { name: "sample-agency.example", active: true } };
+
+  test("its other names send to it: the www of a second level domain, every alias and theirs", () => {
+    const fragment = generateFragment({ ...OWN, domain: { ...OWN.domain!, aliases: ["sample-agency.test", "shop.sample-agency.example"] } })!;
+    const aliases = block(fragment, "www.sample-agency.example, sample-agency.test, www.sample-agency.test, shop.sample-agency.example {");
+    expect(aliases).toInclude("\tredir https://sample-agency.example{uri} permanent\n");
+    expect(aliases).toInclude("on_demand");
+    expect(aliases).not.toInclude("tls-zone");
+    expect(aliases).not.toInclude("import budget-routes");
+  });
+
+  test("a third level domain with no alias has no other name, and no block to send it", () => {
+    const fragment = generateFragment({ ...OWN, domain: { name: "shop.sample-agency.example", active: true } })!;
+    expect(fragment).not.toInclude("redir");
+  });
+
+  test("behind the portal, guarded as the preview, announcing its host then the site's address", () => {
+    const fragment = generateFragment({ ...OWN, portal: true })!;
+    const domain = block(fragment, "sample-agency.example {");
+    expect(domain).toInclude(`forward_auth @portal_guard 127.0.0.1:${PORTAL_PORT} {`);
+    expect(domain.match(/header_up X-Portal-Hote "\{host\} budget\.\{\$SITESOLIDE_ZONE\}"/g)?.length).toBe(2);
+    expect(fragmentPassesIdentity(domain)).toBe(true);
+    for (const pattern of IDENTITY_STRIP) expect(domain).toInclude(`request_header -${pattern}`);
+    // The preview announces its host alone, as before.
+    const preview = block(fragment, `budget.${ZONE_HOST} {`);
+    expect(preview.match(/header_up X-Portal-Hote \{host\}\n/g)?.length).toBe(2);
+  });
+
+  test("open, it takes the visitor's identity headers off and asks no portal", () => {
+    const domain = block(generateFragment(OWN)!, "sample-agency.example {");
+    expect(domain).not.toInclude("forward_auth");
+    for (const pattern of IDENTITY_STRIP) expect(domain).toInclude(`\trequest_header -${pattern}\n`);
+  });
+
+  test("the block an earlier release wrote, its domain alone and open, is upgraded without --force", () => {
+    const earlier = generateFragment(OWN, "identity", "hidden", "open")!;
+    expect(earlier).not.toInclude(SITE_VARIABLE);
+    expect(isEarlierGeneration(earlier, OWN)).toBe(true);
+    expect(decideBlock({ manifest: OWN, inService: earlier, replace: false, doorConfirmed: false })).toBe("upgrades");
+    // Two releases behind, before the identities too.
+    expect(decideBlock({ manifest: OWN, inService: generateFragment(OWN, "cookie", "plain", "open"), replace: false, doorConfirmed: false })).toBe("upgrades");
+    // Closed since by the dashboard: the door is followed.
+    expect(decideBlock({ manifest: { ...OWN, portal: true }, inService: earlier, replace: false, doorConfirmed: true })).toBe("follows-door");
+    // Without a domain, the two generations are one block.
+    expect(generateFragment(MIXED, "identity", "hidden", "open")).toBe(generateFragment(MIXED));
+  });
+});
+
+describe("a closed site's domain switched on: what Caddy serves must close it", () => {
+  const OWN: Manifest = { ...MIXED, portal: true, domain: { name: "sample-agency.example", active: false } };
+  const STATIC: Manifest = { slug: "notes", publicDir: "dist", lock: true, domain: { name: "notes.example", active: false } };
+  const CADDYFILE = "https:// {\n\tvars sitesolide_site {folder}\n\timport /etc/caddy/locks/*.caddy\n}\n";
+  const locks = (slug: string) => buildFragment([{ slug, host: `${slug}.test-zone.invalid`, lock: true, code: "K7M2PQ" }]);
+  const earlier = (slug: string) => locks(slug).replace(new RegExp(`^@lock_host_${slug} expression .*$`, "m"), `@lock_host_${slug} host ${slug}.test-zone.invalid`);
+
+  test("an app: the block this manifest generates, nothing else", () => {
+    expect(domainLeftOpen(OWN, { block: generateFragment(OWN), caddyfile: null, locks: null })).toBeNull();
+    for (const block of [null, generateFragment(OWN, "identity", "hidden", "open"), generateFragment({ ...OWN, domain: { ...OWN.domain!, aliases: ["shop.sample-agency.example"] } })]) {
+      expect(domainLeftOpen(OWN, { block, caddyfile: null, locks: null })).toBe("the Caddy block in service is not the one this sitesolide.json generates");
+    }
+  });
+
+  test("a static site: a Caddyfile whose nameless block says whose site it serves", () => {
+    expect(domainLeftOpen(STATIC, { block: null, caddyfile: CADDYFILE, locks: locks("notes") })).toBeNull();
+    expect(domainLeftOpen(STATIC, { block: null, caddyfile: "https:// {\n}\n", locks: locks("notes") })).toBe("the Caddyfile in service predates closing a static site's own domain");
+  });
+
+  test("a code: its stanza in the form that closes every address, read as the gatekeeper reads it", () => {
+    expect(domainLeftOpen(STATIC, { block: null, caddyfile: CADDYFILE, locks: earlier("notes") })).toBe("the code's stanza in service predates closing a site's own domain");
+    expect(domainLeftOpen(STATIC, { block: null, caddyfile: CADDYFILE, locks: null })).toBe("the code's stanza in service predates closing a site's own domain");
+    expect(domainLeftOpen(STATIC, { block: null, caddyfile: CADDYFILE, locks: locks("other") })).toBe("the code's stanza in service predates closing a site's own domain");
+    for (const fragment of [locks("notes"), earlier("notes"), locks("other")]) {
+      expect(domainLeftOpen(STATIC, { block: null, caddyfile: CADDYFILE, locks: fragment }) === null).toBe(stanzaClosesEveryAddress(fragment, "notes"));
+    }
+  });
+});
+
 describe("the block against the one in service", () => {
   const OPEN: Manifest = { slug: "budget", port: 3030, start: "bun run server.ts" };
   const CLOSED: Manifest = { ...OPEN, portal: true };

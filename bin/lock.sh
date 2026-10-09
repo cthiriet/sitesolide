@@ -111,9 +111,9 @@ case "$SUBCOMMAND" in
     # shows a perfectly reassuring 401 while the link already sent to the client
     # no longer opens anything.
     #
-    # FINAL DOMAIN recalls that the code only closes the preview. An active final
-    # domain serves the same site without a code: the line measures it too,
-    # otherwise a 401 on the preview would let one believe the site closed.
+    # FINAL DOMAIN measures the site's own domain the same way: the code closes
+    # it with the preview, and a 401 on the preview alone would not say that
+    # the domain's block, or the Caddyfile for a static site, does too.
     printf '%-22s %-7s %-9s %-10s %-10s %s\n' \
       "SITE" "WANTED" "INSTALLED" "NO CODE" "WITH CODE" "FINAL DOMAIN"
     FRAGMENT="$(ssh "$SITESOLIDE_SERVER" "sudo cat $LOCKS_DIR/verrous.caddy 2>/dev/null || true")"
@@ -160,7 +160,9 @@ case "$SUBCOMMAND" in
       if [ -z "$domain" ]; then
         column="-"
       elif [ "$active" = "true" ]; then
-        column="$domain $(http_code "$domain") (active, outside the lock)"
+        column="$domain $(http_code "$domain")"
+        [ "$installed" = no ] || [ -z "${installed_code:-}" ] || column="$column, $(http_code_with_cookie "$installed_code" "$domain" "$name") with code"
+        column="$column (active)"
       else
         column="$domain (inactive)"
       fi

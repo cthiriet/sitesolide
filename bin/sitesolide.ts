@@ -115,7 +115,7 @@ import {
 } from "./cli/config";
 import { backupComponentCommand, backupsReport, readBackupComponent } from "./cli/backups";
 import { sourceRefusal } from "./cli/source";
-import { decideBlock, generateFragment } from "./cli/fragment";
+import { decideBlock, domainLeftOpen, generateFragment, LOCKS_FRAGMENT, type Served } from "./cli/fragment";
 import { hintFor } from "./cli/hints";
 import { inferManifest, renderManifest, slugFromFolder, type Inference } from "./cli/infer";
 import {
@@ -204,6 +204,7 @@ import {
   foreignUnit,
   listUnitsCommand,
   loopbackStateCommand,
+  domainConflicts,
   portConflicts,
   projectPortsCommand,
   readCurrentPairs,
@@ -1260,6 +1261,10 @@ async function rereadUnderLock(
       "neither the manifest nor the Caddy block was deposited",
     ]);
   }
+  const names = domainConflicts(manifest, reading.manifests);
+  if (names.length > 0) {
+    die("domain already declared on the server, by a deployment that ran meanwhile", [...names, "neither the manifest nor the Caddy block was deposited"]);
+  }
   const conflicts = portConflicts(manifest, reading.manifests);
   if (conflicts.length > 0) {
     die("port already taken on the server, by a deployment that ran meanwhile", [
@@ -1793,6 +1798,10 @@ async function checkPorts(manifest: Manifest, config: Config, executor: Executor
   const conflicts = portConflicts(manifest, reading.manifests);
   if (conflicts.length > 0) {
     die("port already taken on the server", [...conflicts, "pick a free port between 3000 and 3099 in sitesolide.json"]);
+  }
+  const names = domainConflicts(manifest, reading.manifests);
+  if (names.length > 0) {
+    die("domain already declared on the server", [...names, "a name belongs to one project: take it out of this sitesolide.json, or out of the other project's first"]);
   }
 }
 
@@ -2494,6 +2503,7 @@ async function switchDomain(
   // next deployment, which follows the VM, would reopen the site.
   await takeCaddyLock(config, executor, "nothing was written");
   await requireAgreedDoor(project, config, executor, "domain");
+  if (active) await requireClosingDomain(project.manifest, config, executor);
 
   // A domain activated before its DNS makes a certificate be asked for that the
   // authority will refuse, and those refusals are counted: a few attempts are
@@ -2531,6 +2541,39 @@ async function switchDomain(
   if (!executor.simulated) await showDomain(reread, config, executor);
   say("");
   say(`   commit ${MANIFEST_NAME}: a deployment would otherwise put back the state in git.`);
+}
+
+/**
+ * A closed site's domain switched on must close with its preview. It does
+ * when what Caddy serves says whose site the domain's block serves: an app's
+ * block as this release writes it, the Caddyfile for a static site. A block
+ * from before would serve the site there without its door, and nothing would
+ * say so: the switch waits for the deployment or the upgrade that brings it.
+ * An open site has nothing to close, and switches as it always did.
+ */
+async function requireClosingDomain(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
+  if (!isProtected(manifest) && manifest.lock !== true) return;
+  const app = generateFragment(manifest) !== null;
+  const read = async (path: string): Promise<string | null> => {
+    const reading = await readRemoteFile(config, executor, path);
+    if (reading.kind === "unreadable") {
+      die(`cannot tell whether ${path} closes the domain`, ["nothing was written: a closed site's domain is never switched on unread"]);
+    }
+    return reading.kind === "present" ? reading.content : null;
+  };
+  const served: Served = {
+    block: app ? await read(blockPath(manifest.slug)) : null,
+    caddyfile: app ? null : await read("/etc/caddy/Caddyfile"),
+    locks: manifest.lock === true ? await read(LOCKS_FRAGMENT) : null,
+  };
+  const open = domainLeftOpen(manifest, served);
+  if (open === null) return;
+  die(`${manifest.slug} is closed, and what Caddy serves would not close its domain`, [
+    open,
+    app ? "deploy the site first:  sitesolide deploy" : "upgrade the machine first:  sitesolide upgrade",
+    ...(manifest.lock === true ? ["then write its code's stanza again:  sitesolide lock"] : []),
+    "then switch again:  sitesolide domain --activate",
+  ]);
 }
 
 // --- remove ------------------------------------------------------------------

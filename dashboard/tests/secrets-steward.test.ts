@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildFragment } from "../borrowed/locks";
 import { TOLERATED_FAILURES, INITIAL_BACKOFF_MS, MAXIMUM_BACKOFF_MS } from "../src/auth";
 import { portalModifiable } from "../src/gatekeeper/rules";
 import type {
@@ -2100,7 +2101,7 @@ describe("POST /general", () => {
       if (code === null) delete codes[slug!];
       else codes[slug!] = code;
       writeFileSync(codesPath, `${JSON.stringify(codes)}\n`, { mode: 0o600 });
-      writeFileSync(bench.config.locksFragment, code === null ? "# Preview locks\n" : `# Preview lock: ${slug}\n@lock_key_${slug} query key=${code}\n`);
+      writeFileSync(bench.config.locksFragment, code === null ? "# Preview locks\n" : buildFragment([{ slug: slug!, host: `${slug}.test-zone.invalid`, lock: true, code }]));
       writeFileSync(join(bench.gatekeeper, `${slug}.json`), `${JSON.stringify({ a: bench.clock.t, result: "ok", message: `${action}: validated, reloaded`, requested: action === "on", installed: action === "on" })}\n`, { mode: 0o644 });
       return 0;
     };
@@ -2183,6 +2184,21 @@ describe("POST /general", () => {
     expect(await again.json()).toMatchObject({ detail: "cms already opens with a code: nothing to change", code: { code: CODE } });
     expect(starts(bench)).toHaveLength(1);
     expect(accessLogOf(bench)).toHaveLength(1);
+  });
+
+  test("already open with its code, its stanza from an earlier release: the gatekeeper writes it again", async () => {
+    // An earlier stanza matches the preview's host alone, and leaves the
+    // site's own domain open: never "nothing to change".
+    const bench = await mount();
+    bench.simulatedGatekeeper.current = gatekeeperThatDoes(bench);
+    const token = await unlock(bench);
+    await bench.call("POST", "/general", { token, slug: "cms", access: "code", confirmation: "cms" });
+    const current = readFileSync(bench.config.locksFragment, "utf8");
+    writeFileSync(bench.config.locksFragment, current.replace(/^@lock_host_cms expression .*$/m, "@lock_host_cms host cms.test-zone.invalid"));
+    const again = await bench.call("POST", "/general", { token, slug: "cms", access: "code", confirmation: "cms" });
+    expect(again.status).toBe(200);
+    expect(starts(bench)).toHaveLength(2);
+    expect(readFileSync(bench.config.locksFragment, "utf8")).toBe(current);
   });
 
   test("each choice the rule refuses is said, and refused before the gatekeeper", async () => {

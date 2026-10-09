@@ -117,6 +117,71 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## A site closes on every address
+
+Restricted and Anyone with the code now close a site on its own domain too,
+not only on its preview: the dashboard and `sitesolide lock` used to refuse a
+site that served its own domain, since the domain would have stayed open. The
+domain's other names, its aliases and the `www` the table adds to a second
+level domain, now send to the domain with a permanent redirect. They used to
+fall into Caddy's nameless block, which serves `public/` and never wakes an
+app: an app on its own domain answered its `www` without its service, every
+`/api/*` there a 404.
+
+**What `sitesolide upgrade` brings**, in its usual order: the steward and the
+dashboard, which offer all three accesses to a site on its own domain and name
+both addresses before a change; the gatekeeper, which checks the domain beside
+the preview after every change, and writes an app's block anew when the one in
+service is an earlier release's; the Caddyfile, whose nameless block lets a
+static site's code close its domain; and the portal, which judges a domain's
+visitors on its site's people. Two changes reach sites at once, and nothing else
+does until a site is deployed or its access changed:
+
+- the nameless block no longer serves an app's folder: a name the table
+  carries for an app and its block does not claim answers 404 instead of the
+  app's `public/`, which skipped its portal. The `www` of an app deployed
+  before this release is one such name, until the app is deployed again;
+- the preview locks in service keep matching their previews alone; the
+  gatekeeper writes all of them in the new form at its next change of any
+  site's code.
+
+**Then each app site that serves its own domain**, when traffic allows:
+`sitesolide deploy` in its folder. It says the block "was written by an
+earlier release, the current one replaces it", without `--force`. Check:
+`curl -sI https://www.<domain>/` answers `301` to `https://<domain>/`, and
+`https://<domain>/` answers as before. Until then its `www` keeps falling into
+the nameless block; restricting it or giving it a code from the dashboard
+writes the new block in the same change.
+
+**What changes for you.**
+
+- **A site that opens with a code and serves its own domain** stays open
+  there until its stanza is written again: `sitesolide lock` in its folder,
+  or *New code* in its Access section, after the deployment above. Either
+  rewrites every site's stanza at once. The dashboard no longer calls such a
+  code in place.
+- `sitesolide domain --activate` on a restricted site, or one that opens with
+  a code, no longer refuses the restricted one, and refuses either while what
+  Caddy serves would not close the domain: an app's block other than the one
+  its manifest generates (deploy it first), a Caddyfile from before (upgrade
+  first), or a code's stanza from before (`sitesolide lock` first).
+- A deployment refuses a domain name, an alias or their `www` that another
+  project declares, active or not, and an alias in the served zone.
+- The link that carries a site's code leads to its own domain once it serves
+  one.
+- `bin/lock.sh state`, which `sitesolide lock --status` runs, measures the
+  domain with the code too.
+- An app reading `X-Sitesolide-*` behind the portal receives them on its
+  domain as on its preview.
+
+**Going back.** A portal from before refuses the announcement of a domain's
+block, so a restricted site on its own domain is closed to everyone there,
+its preview unaffected: make it public before going back, or upgrade again.
+The previous gatekeeper refuses to change the access of a site whose block is
+this release's, as one it did not write: deploy such a site with the previous
+release first. The redirect of a domain's other names stays until the site is
+deployed with the previous release.
+
 ## Access: one registry
 
 Who may do what on a project now lives in one place, the steward's access
@@ -280,6 +345,8 @@ end mends both.
   dashboard refuses it: the code would close the preview and leave the domain
   open. Switch the site back to its preview first, `sitesolide domain
   --deactivate`. `LOCK_DESPITE_DOMAIN` is gone with the script that read it.
+  The release after this one closes the domain too, see *A site closes on
+  every address*.
 - A Viewer or a Developer of a site that opens with a code reads that it opens
   with one, no longer the code itself: its Admins and the owner hold it.
 

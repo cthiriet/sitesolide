@@ -6,6 +6,7 @@ import {
   guestHash,
   doorHeaders,
   isValidHost,
+  readAnnounced,
   readCookie,
   readToken,
   cookieName,
@@ -398,5 +399,21 @@ describe("sealed tokens", () => {
     expect(cookieName(true, "-sso")).toBe("__Host-portal-sso");
     expect(cookieName(false, "-sso")).toBe("portal-sso");
     expect(setCookie("v", true, 60, "-sso").startsWith("__Host-portal-sso=v;")).toBe(true);
+  });
+});
+
+describe("readAnnounced", () => {
+  test("a preview's host is both the host and the site", () => {
+    expect(readAnnounced("kanban.test-zone.invalid")).toEqual({ host: "kanban.test-zone.invalid", site: "kanban.test-zone.invalid" });
+  });
+
+  test("a domain's block announces its host, then the site's address", () => {
+    expect(readAnnounced("Kanban.Example kanban.test-zone.invalid")).toEqual({ host: "kanban.example", site: "kanban.test-zone.invalid" });
+  });
+
+  test("anything else is nothing", () => {
+    for (const header of [null, "", " ", "a.example b.example c.example", "a.example  b.example", "a.example ", " a.example", "a.example\tb.example", "a_b.example", "a.example b.example:443"]) {
+      expect(readAnnounced(header)).toBeNull();
+    }
   });
 });

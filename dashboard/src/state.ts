@@ -53,6 +53,16 @@ export function addressOf(slug: string, zone: string): string {
 }
 
 /**
+ * Where the link carrying a site's code leads: its own domain once it serves
+ * one, where its visitors go and where the code opens it as on the preview;
+ * its preview otherwise.
+ */
+export function codeAddress(slug: string, zone: string, manifest: Manifest | null): string {
+  const domain = manifest?.domain;
+  return domain?.active === true && typeof domain.name === "string" ? domain.name : addressOf(slug, zone);
+}
+
+/**
  * Beyond that, the snapshot is announced as stale rather than presented as the
  * current state. The timer passes every minute: three minutes without a new
  * collection means that the timer no longer runs, and that is precisely what a
@@ -430,7 +440,7 @@ function readLock(slug: string, manifest: Manifest | null, codes: Record<string,
     code,
     // The address the client receives once and that his browser then keeps in
     // a cookie. It carries the code in the clear, like the Caddy fragment.
-    url: code === null ? null : `https://${addressOf(slug, zone)}/?key=${code}`,
+    url: code === null ? null : `https://${codeAddress(slug, zone, manifest)}/?key=${code}`,
   };
 }
 

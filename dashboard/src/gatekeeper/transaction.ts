@@ -51,7 +51,7 @@ import { MESSAGE_MAX } from "../secrets/portal";
 import { MAX_PORTAL_MS, type OperationResult } from "../secrets/protocol";
 import { RUN_FOLDER, backupFolder, targetOf, type Action, type GeneralAccess } from "./instance";
 import type { Backup, GeneralMachine, ManifestRead } from "./machine";
-import { portalState, planGeneral, type Deployed, type Plan } from "./plan";
+import { activeDomain, portalState, planGeneral, type Deployed, type Plan } from "./plan";
 import {
   alreadySilent,
   portalHost,
@@ -63,6 +63,7 @@ import {
   isPortalReady,
   regressions,
   answers,
+  targetHosts,
   type ProbeResponse,
 } from "./probe";
 import { redact } from "./real";
@@ -397,7 +398,10 @@ async function underLock(
   if (plan.code !== null) hidden.push(plan.code);
   const leavingCode = plan.leaving;
 
+  // The site's own domain, when it serves one, closes and opens with it.
+  const domain = activeDomain(first.deployed.manifest);
   let hosts: string[];
+  let targets: string[];
   let reading: Map<string, ProbeResponse>;
   try {
     if (!(await machine.isCaddyActive(TIMEOUTS.active))) {
@@ -416,13 +420,14 @@ async function underLock(
     }
 
     hosts = servedHosts(zone, await machine.servedSites(TIMEOUTS.sites));
-    if (!hosts.includes(host)) hosts.push(host);
+    for (const one of [host, domain]) if (one !== null && !hosts.includes(one)) hosts.push(one);
 
     const [beforeAction, portal] = await Promise.all([
       probeAll(machine, hosts),
       target === "restricted" ? machine.probe(portalHost(zone), "/sante", TIMEOUTS.probeConfig) : Promise.resolve(null),
     ]);
     reading = beforeAction;
+    targets = targetHosts(host, domain, reading);
     if (portal !== null && !isPortalReady(portal)) {
       return finish(
         "rejects",
@@ -503,7 +508,7 @@ async function underLock(
     if (!(await machine.isCaddyActive(TIMEOUTS.active))) throw new StepFailure(step, "Caddy is no longer active");
 
     step = "probe";
-    const problem = await probeAfter(machine, { slug, host, target, code: plan.code, previous: plan.previous, leavingCode }, reading);
+    const problem = await probeAfter(machine, { slug, hosts: targets, target, code: plan.code, previous: plan.previous, leavingCode }, reading);
     if (problem !== null) throw new StepFailure(step, problem);
   } catch (error) {
     const failure = error instanceof StepFailure ? error : new StepFailure(step, errorMessage(error));
@@ -532,20 +537,21 @@ async function underLock(
 
   await cleanUp(machine, slug);
 
-  const others = hosts.filter((one) => one !== host && answers(reading.get(one) ?? { error: "" })).length;
-  const silent = alreadySilent(reading, host);
+  const others = hosts.filter((one) => !targets.includes(one) && answers(reading.get(one) ?? { error: "" })).length;
+  const silent = alreadySilent(reading, targets);
+  const site = `${targets.join(" and ")} ${targets.length > 1 ? "answer" : "answers"}`;
   const checked =
     target === "restricted"
-      ? `${host} answers the portal's 401`
+      ? `${site} the portal's 401`
       : target === "public"
         ? leavingCode
-          ? `${host} answers without a code`
-          : `${host} answers without the portal`
+          ? `${site} without a code`
+          : `${site} without the portal`
         : plan.previous !== null
-          ? `${host} answers the door page's 401 and opens with the new code, not the old one`
-          : `${host} answers the door page's 401 and opens with its code`;
+          ? `${site} the door page's 401 and ${targets.length > 1 ? "open" : "opens"} with the new code, not the old one`
+          : `${site} the door page's 401 and ${targets.length > 1 ? "open" : "opens"} with its code`;
   const tail = silent.length > 0 ? `; already not answering before: ${enumerate(silent)}` : "";
-  const words = actionWords(action, plan.block.kind !== "none", leavingCode);
+  const words = actionWords(action, plan.portalChanged, leavingCode);
   return finish("ok", `${words}: validated, reloaded, ${checked}, ${others} other site(s) still answer${tail}`);
 }
 
@@ -567,12 +573,19 @@ async function probeAll(machine: GeneralMachine, hosts: string[]): Promise<Map<s
   return new Map(hosts.map((host, i) => [host, responses[i]!]));
 }
 
-/** The targeted site and what it must answer once the action is done. */
-type Expected = { slug: string; host: string; target: GeneralAccess; code: string | null; previous: string | null; leavingCode: boolean };
+/** The targeted site, its addresses, and what they must answer once the action is done. */
+type Expected = { slug: string; hosts: string[]; target: GeneralAccess; code: string | null; previous: string | null; leavingCode: boolean };
 
-/** The targeted site's answers, judged by what its general access now is. */
+/** The targeted site's answers on every address it is judged on: what is wrong, or null. */
 async function judgeAfter(machine: GeneralMachine, expected: Expected, timeoutMs: number): Promise<string | null> {
-  const { host, target } = expected;
+  const problems = await Promise.all(expected.hosts.map((host) => judgeHost(machine, expected, host, timeoutMs)));
+  const found = problems.filter((problem): problem is string => problem !== null);
+  return found.length === 0 ? null : found.join("; ");
+}
+
+/** One address of the targeted site, judged by what its general access now is. */
+async function judgeHost(machine: GeneralMachine, expected: Expected, host: string, timeoutMs: number): Promise<string | null> {
+  const { target } = expected;
   const without = await machine.probe(host, "/", timeoutMs);
   if (target === "restricted") return judgeTarget(true, host, without);
   if (target === "public") return expected.leavingCode ? judgeOpened(host, without) : judgeTarget(false, host, without);
@@ -592,8 +605,8 @@ async function judgeAfter(machine: GeneralMachine, expected: Expected, timeoutMs
  */
 async function probeAfter(machine: GeneralMachine, expected: Expected, reading: Map<string, ProbeResponse>): Promise<string | null> {
   const deadline = machine.now() + TIMEOUTS.probes;
-  const target = expected.host;
-  const others = [...reading].filter(([host, r]) => host !== target && answers(r)).map(([host]) => host);
+  const targets = expected.hosts;
+  const others = [...reading].filter(([host, r]) => !targets.includes(host) && answers(r)).map(([host]) => host);
   const seen = new Map<string, ProbeResponse>();
   let pending = others;
   let checkTarget = true;
@@ -608,7 +621,7 @@ async function probeAfter(machine: GeneralMachine, expected: Expected, reading: 
     targetProblem = judged;
     pending.forEach((host, i) => seen.set(host, responses[i]!));
 
-    const lost = regressions(reading, seen, target);
+    const lost = regressions(reading, seen, targets);
     if (targetProblem === null && lost.length === 0) return null;
 
     if (machine.now() + TIMEOUTS.pause >= deadline) {

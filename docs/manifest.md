@@ -408,10 +408,20 @@ also rebuilds the domain table, and without that step the certificate would
 never be authorised. A domain under the served zone is refused, the wildcard
 already covers it.
 
+The domain is the site's address once it is active: its aliases, and the
+`www` of a second level domain, which the table adds by itself, answer with a
+permanent redirect to `name`, the path kept. An alias in the served zone is
+refused, and so is a name, an alias or their `www` that another project on
+the machine declares, active or not: a name belongs to one project. It opens as the preview does,
+Restricted or with a code alike: the domain closes with the site, and
+`sitesolide domain --activate` on a closed site checks that what Caddy serves
+closes it too.
+
 ### `lock`
 
-Not written by hand. It says the preview is closed behind a code, its general
-access *Anyone with the code*, and the machine is its source of truth, as for
+Not written by hand. It says the site is closed behind a code, its preview and
+its own domain alike, its general access *Anyone with the code*, and the
+machine is its source of truth, as for
 `portal`: the site's *Access* section in the dashboard, or `sitesolide lock`
 in its folder, sets it on the machine with the code, and the next `sitesolide
 deploy` writes it here, to commit. The code itself lives on the machine and

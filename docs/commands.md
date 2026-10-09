@@ -279,7 +279,8 @@ opening it, and puts everything back at the slightest failure. The command
 prints the code and the link that carries it, once, and the local
 `sitesolide.json` then says what the machine does, to commit. The steward
 records the change under `owner`, never the code. A site that serves its own
-domain takes no code: the code would close its preview alone.
+domain closes there too, and the gatekeeper checks both addresses; the link
+then leads to the domain, where its visitors go.
 
 ```console
 $ sitesolide lock

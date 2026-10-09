@@ -106,12 +106,13 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   // --- the door and the lock, shared with the dashboard
   [/^cannot take the Caddy lock/, "the lock could not be taken, nothing was changed: run the same command again; if it fails twice, check that `ssh <server> true` connects without a prompt"],
   [/try again in a moment/, LOCK_BUSY],
+  [/^domain already declared on the server/, "a domain name belongs to one project: take it out of this sitesolide.json, or out of the other project's first, then deploy again"],
   [/is not a workstation lock holder line/, "unset CADDY_LOCK_HELD in this environment, then run the command again"],
   [/changed from the dashboard during this deploy/, "the server changed while deploy ran: run `sitesolide deploy` again"],
   [/was given a code again while it was being removed/, "its general access changed from the dashboard meanwhile, and nothing was removed: run the same `sitesolide remove --confirm <slug>` again, which takes it back to Public first"],
   [/cannot change a site's general access yet/, "the machine predates the code being set through the gatekeeper: the owner runs `sitesolide upgrade`, then this command again; never edit the codes file or the locks on the machine by hand"],
   [/^general access of .* changed from the dashboard/, "run `sitesolide deploy` in the project's folder first, so that sitesolide.json follows the server, then run this command again"],
-  [/is restricted: make it public from the dashboard's Access section first/, "ask the owner, or an Admin of the project, to make it public in the dashboard's Access section, then run `sitesolide deploy` in this folder, then this command"],
+  [/is closed, and what Caddy serves would not close its domain/, "the owner brings what Caddy serves up to date first, `sitesolide deploy` in this folder for an app or `sitesolide upgrade` for a static site, as the message says, then runs this command again; never switch the domain by hand"],
   [/^the portal is not ready/, "the portal has to be deployed before a site can sit behind it: ask the owner, or remove `portal` from sitesolide.json"],
   [/^interrupted by /, "the run was interrupted between two steps: run the same command again"],
 
@@ -199,6 +200,7 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   // The same, as an installer from before the rename names it.
   "door-changed": "the project's general access changed from the dashboard while the deployment ran: deploy again",
   "port-taken": "delete `port` from sitesolide.json and let the machine choose one, or pick a free one between 3000 and 3099",
+  "domain-taken": "a domain name belongs to one project: take it out of this sitesolide.json, or ask the owner to take it out of the project that declares it",
   "no-port": "the owner has to free a port by removing a project the machine no longer needs",
   "bundle-refused": "replace symbolic links and special files with the files they point to, or exclude them in sitesolide.json, then deploy again",
   "public-empty": "make the build produce the site in publicDir: an empty folder would wipe the live one",

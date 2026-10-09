@@ -90,7 +90,36 @@ export const PORTAL_GENERATIONS = ["identity", "cookie"] as const;
 export type PortalGeneration = (typeof PORTAL_GENERATIONS)[number];
 
 /**
- * The stanza for a protected site's preview block, or nothing.
+ * What a preview block announces to the portal: the host the visitor asked
+ * for, which is the site's own address.
+ */
+export const ANNOUNCED_HOST = "{host}";
+
+/**
+ * What the block of a site's own domain announces: the host the visitor asked
+ * for, then the site's address under the zone, `<slug>.{$SITESOLIDE_ZONE}`,
+ * which Caddy substitutes while reading the configuration.
+ *
+ * The portal signs its cookies, checks origins and sends people back with the
+ * first, the host the browser is on, and finds who may open the site with the
+ * second: the steward's projection files a site's people under its address,
+ * and a domain is not one, nor written anywhere the portal reads. The block
+ * knows whose domain it serves, it is generated from that site's manifest,
+ * and says so on every request.
+ *
+ * In the one header every protected block overwrites, never in a second one:
+ * a block deployed before this one existed would pass a visitor's second
+ * header through untouched, and a person allowed on one site would have the
+ * portal judge them against it on any other. A block matches its host
+ * exactly, so `{host}` holds no space a visitor could add a second name with.
+ */
+export function announcedFor(slug: string, zoneHost: string): string {
+  return `"{host} ${slug}.${zoneHost}"`;
+}
+
+/**
+ * The stanza for a protected site's block, its preview's or its own
+ * domain's, or nothing.
  *
  * Measured in a local Caddy laboratory, and checked by
  * `bin/tests/cli-portal-caddy.test.ts` against the text generated here:
@@ -101,7 +130,8 @@ export type PortalGeneration = (typeof PORTAL_GENERATIONS)[number];
  * - `reverse_proxy /_portal/*`, a single path matcher, comes before the site's
  *   `reverse_proxy @dynamic`: sign-in reaches the portal;
  * - `header_up` overwrites an `X-Portal-Hote` forged by the visitor, and it is
- *   the only source of the host the portal believes;
+ *   the only source of the host the portal believes, and of the site it
+ *   judges (see `announcedFor`);
  * - portal stopped, Caddy answers 502 and serves nothing: the door fails
  *   closed.
  *
@@ -127,7 +157,7 @@ export type PortalGeneration = (typeof PORTAL_GENERATIONS)[number];
  * `file_server`, still sorts after the `route`. The exempted paths go through
  * it too: they are taken off the visitor's headers and skip the portal.
  */
-export function portalStanza(manifest: Manifest, generation: PortalGeneration = "identity"): string[] {
+export function portalStanza(manifest: Manifest, generation: PortalGeneration = "identity", announced = ANNOUNCED_HOST): string[] {
   if (!isProtected(manifest)) return [];
 
   const upstream = `127.0.0.1:${PORTAL_PORT}`;
@@ -140,7 +170,7 @@ export function portalStanza(manifest: Manifest, generation: PortalGeneration = 
   const guard = [
     `forward_auth @portal_guard ${upstream} {`,
     "\turi /verifier",
-    "\theader_up X-Portal-Hote {host}",
+    `\theader_up X-Portal-Hote ${announced}`,
     "\tlb_try_duration 5s",
     ...(generation === "identity" ? [`\tcopy_headers ${IDENTITY_HEADERS.join(" ")}`] : []),
     "}",
@@ -173,7 +203,7 @@ export function portalStanza(manifest: Manifest, generation: PortalGeneration = 
     ...AMBIGUOUS_GUARD,
     "",
     `\treverse_proxy /_portal/* ${upstream} {`,
-    "\t\theader_up X-Portal-Hote {host}",
+    `\t\theader_up X-Portal-Hote ${announced}`,
     "\t}",
     `\t@portal_guard not path ${open}`,
     ...check,

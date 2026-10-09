@@ -27,7 +27,7 @@
  */
 import { compareDirectives, sameDirectives } from "../../borrowed/comparison";
 import { generateFragment, isEarlierGeneration } from "../../borrowed/fragment";
-import { buildFragment, encodeCodes, generateCode, installedCode, isValidCode, previewHost, readCodes } from "../../borrowed/locks";
+import { buildFragment, encodeCodes, generateCode, installedCode, isValidCode, previewHost, readCodes, stanzaClosesEveryAddress } from "../../borrowed/locks";
 import { isProtected, readManifest, setLock, setPortal, validate, type Manifest } from "../../borrowed/manifest";
 import { fragmentIsProtected } from "../../borrowed/portal";
 import { targetOf, type Action, type GeneralAccess } from "./instance";
@@ -71,6 +71,8 @@ export type Plan =
       /** The new manifest, null when it stays as it is. */
       manifest: string | null;
       block: BlockAction;
+      /** The portal goes up or comes down: the block may be rewritten for its generation alone. */
+      portalChanged: boolean;
       locks: LocksChange | null;
       /** The code in force once done, the one to probe with; null outside the code. */
       code: string | null;
@@ -184,9 +186,14 @@ export function planGeneral(slug: string, action: Action, deployed: Deployed, op
   const current = codes === null ? null : codes[slug];
   const currentCode = isValidCode(current) ? current : null;
   if (action !== "renew" && isProtected(manifest) === (target === "restricted") && locked === (target === "code")) {
-    // The code in force, and the stanza that asks for it in service; or, for
-    // the other two, neither a code nor a stanza left behind.
-    const inPlace = target === "code" ? currentCode !== null && inService === currentCode : !hasCode && inService === null;
+    // The code in force, and the stanza that asks for it in service, in the
+    // form that closes the site's own domain too: one an earlier release
+    // wrote is written again; or, for the other two, neither a code nor a
+    // stanza left behind.
+    const inPlace =
+      target === "code"
+        ? currentCode !== null && inService === currentCode && stanzaClosesEveryAddress(deployed.fragment, slug)
+        : !hasCode && inService === null;
     if (inPlace) return { kind: "nothing", message: ALREADY[target], target, code: target === "code" ? currentCode : null };
   }
 
@@ -212,10 +219,22 @@ export function planGeneral(slug: string, action: Action, deployed: Deployed, op
     return { kind: "rejects", message: `the rewritten sitesolide.json is invalid: ${errors[0] ?? "portal or lock"}` };
   }
 
-  // The block follows the manifest: rewritten only when the portal changes, as
-  // it is the only field of the two the block reads.
+  // The block follows the manifest: rewritten when the portal changes, as it
+  // is the only field of the two the block reads, and when the block in
+  // service is the generator's own from an earlier release. The latter is no
+  // detail: a site's own domain closes with its preview only in the current
+  // generation, and a code set over the earlier block would leave the domain
+  // open behind a closed preview, which the probe would then refuse.
   let blockAction: BlockAction = { kind: "none" };
-  if (isProtected(manifest) !== (target === "restricted")) {
+  const portalChanged = isProtected(manifest) !== (target === "restricted");
+  if (!portalChanged && expected !== null && deployed.block !== null && !sameDirectives(deployed.block, expected)) {
+    const block = generate(newManifest);
+    if (block === null || fragmentIsProtected(block) !== (target === "restricted")) {
+      return { kind: "rejects", message: "the generated Caddy block does not carry the door the site has" };
+    }
+    blockAction = { kind: "write", text: block };
+  }
+  if (portalChanged) {
     const block = generate(newManifest);
     // The last lock: a manifest that asks for the door must generate a block
     // that carries it. The day `validate()` would admit a static site behind
@@ -237,7 +256,7 @@ export function planGeneral(slug: string, action: Action, deployed: Deployed, op
 
   const leaving = target !== "code" && (locked || inService !== null);
   if (!involved) {
-    return { kind: "change", target, manifest: newRaw, block: blockAction, locks: null, code: null, previous: null, leaving };
+    return { kind: "change", target, manifest: newRaw, block: blockAction, portalChanged, locks: null, code: null, previous: null, leaving };
   }
 
   // The preview locks: this site's code set or taken away, and the fragment
@@ -288,7 +307,17 @@ export function planGeneral(slug: string, action: Action, deployed: Deployed, op
   };
   // The probe after a new code: the old one must have stopped opening the site.
   const previous = target === "code" && inService !== null && inService !== code ? inService : null;
-  return { kind: "change", target, manifest: newRaw, block: blockAction, locks, code, previous, leaving };
+  return { kind: "change", target, manifest: newRaw, block: blockAction, portalChanged, locks, code, previous, leaving };
+}
+
+/**
+ * The site's own domain when it is served, read from the deposited manifest:
+ * its name, which the gatekeeper checks beside the preview. Null without one,
+ * inactive, or a manifest that does not read.
+ */
+export function activeDomain(raw: string | null): string | null {
+  const domain = read(raw)?.domain;
+  return domain?.active === true && typeof domain.name === "string" ? domain.name : null;
 }
 
 /** What the machine carries, read as the dashboard reads it. */

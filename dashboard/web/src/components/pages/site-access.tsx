@@ -21,6 +21,7 @@ import {
   readingProblem,
   refusalText,
   sharedReason,
+  siteAddresses,
   stewardChoices,
   type GeneralReader,
 } from "@/lib/access"
@@ -99,6 +100,7 @@ function Content({ site }: { site: Site }) {
   if (platform) return <PlatformContent site={site} />
 
   const state = generalState(site)
+  const addresses = siteAddresses(site)
   const steward = stewardChoices(page?.general ?? null)
   const options = generalOptions(state, steward, admin)
   const stewardReason = admin ? sharedReason(state, steward) : null
@@ -138,8 +140,15 @@ function Content({ site }: { site: Site }) {
         renewable={mayRenew(state, steward, admin)}
         stewardReason={stewardReason}
         failedNote={admin && loaded.state === "failed" ? "Shown as last read: it can't change until the server answers." : null}
+        addresses={addresses}
         onChoose={(target) =>
-          actions.changeAccess(slug, target, state.current, target === "restricted" && page !== null ? emptyListWarning(slug, page.entries.length, page.signIn.admins) : null)
+          actions.changeAccess(
+            slug,
+            target,
+            state.current,
+            target === "restricted" && page !== null ? emptyListWarning(slug, page.entries.length, page.signIn.admins) : null,
+            addresses,
+          )
         }
       />
 

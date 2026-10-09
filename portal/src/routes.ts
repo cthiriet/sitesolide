@@ -17,7 +17,7 @@ import {
   guestHash,
   doorHeaders,
   identityHeaders,
-  isValidHost,
+  readAnnounced,
   readCookie,
   readToken,
   cookieName,
@@ -97,10 +97,12 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
    */
   let verifying = false;
 
-  /** The host set by Caddy, in lowercase, or null if it does not have that shape. */
-  function hostOf(req: Request): string | null {
-    const host = (req.headers.get("x-portal-hote") ?? "").toLowerCase();
-    return isValidHost(host) ? host : null;
+  /**
+   * The host set by Caddy and the site whose people decide, in lowercase, or
+   * null if they do not have that shape: see readAnnounced in src/gate.ts.
+   */
+  function announcedOf(req: Request): { host: string; site: string } | null {
+    return readAnnounced(req.headers.get("x-portal-hote"));
   }
 
   const settings = options.settings ?? null;
@@ -149,11 +151,14 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
      *
      * Without `X-Portal-Hote`, 401: this route is never reached by anything
      * but Caddy, which always sets the header, and its absence must open
-     * nothing.
+     * nothing. The cookie is read for the host the browser is on, and judged
+     * against the site's people, the same on the site's own domain as on its
+     * preview.
      */
     verify(req) {
-      const host = hostOf(req);
-      if (host === null) return refuse("portal: unknown host", 401);
+      const announced = announcedOf(req);
+      if (announced === null) return refuse("portal: unknown host", 401);
+      const { host, site } = announced;
 
       const method = req.headers.get("x-forwarded-method") ?? "GET";
       const returnTo = returnForRequest(method, req.headers.get("x-forwarded-uri"));
@@ -183,12 +188,12 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
         if (settings === null || !maySignIn(bearer.identity.email, settings.allowedDomains, settings.admins)) {
           return door(returnTo, 401);
         }
-        const granted = options.access.roleOf(host, bearer.identity.email, settings.admins);
+        const granted = options.access.roleOf(site, bearer.identity.email, settings.admins);
         if (granted === null) return door(returnTo, 401, notSharedMessage(bearer.identity.email), {}, true);
         identity = bearer.identity;
         role = granted;
       } else if (bearer.guest !== null) {
-        if (options.access.passwordById(host, bearer.guest, now) === null) return door(returnTo, 401, "This access is no longer valid.");
+        if (options.access.passwordById(site, bearer.guest, now) === null) return door(returnTo, 401, "This access is no longer valid.");
         role = "visitor";
       }
 
@@ -203,8 +208,9 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
     },
 
     async signIn(req) {
-      const host = hostOf(req);
-      if (host === null) return refuse("portal: unknown host", 400);
+      const announced = announcedOf(req);
+      if (announced === null) return refuse("portal: unknown host", 400);
+      const { host, site } = announced;
 
       // The only check that exists before there is a cookie. Without it, any
       // page at all could aim at this route and, through failed attempts made
@@ -222,7 +228,8 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       const returnTo = safeReturnTo(form.get("retour"));
 
       const now = clock();
-      const record = attempts.get(host) ?? { failures: 0, lastAt: 0 };
+      // Counted by site: its own domain is no second set of attempts.
+      const record = attempts.get(site) ?? { failures: 0, lastAt: 0 };
       const wait = remainingWait(record.failures, record.lastAt, now);
       if (wait > 0) {
         const seconds = Math.ceil(wait / 1000);
@@ -240,9 +247,9 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       // general case and counts as a failure.
       const nowS = Math.floor(now / 1000);
       if (options.key !== null) {
-        const grant = options.access.passwordByHash(guestHash(submitted), host, now);
+        const grant = options.access.passwordByHash(guestHash(submitted), site, now);
         if (grant !== null) {
-          attempts.delete(host);
+          attempts.delete(site);
           // A name given before the registry is not an email: the activity shows it beside the access's identifier.
           const actor = grantActor(grant);
           audit({ actor, action: "portal.signin", target: host, detail: actor === grant.who ? { method: "password-access" } : { method: "password-access", name: grant.who } }, now);
@@ -263,7 +270,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       }
 
       if (!ok) {
-        attempts.set(host, { failures: record.failures + 1, lastAt: now });
+        attempts.set(site, { failures: record.failures + 1, lastAt: now });
         // The rate limiting above bounds these writes: a stranger hammering
         // one site writes a row per attempt it is allowed, not per request.
         audit({ actor: "anonymous", action: "portal.signin_failed", target: host, detail: { method: "password" } }, now);
@@ -273,7 +280,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
         return door(returnTo, 401, "Password refused.");
       }
 
-      attempts.delete(host);
+      attempts.delete(site);
       audit({ actor: "owner", action: "portal.signin", target: host, detail: { method: "password" } }, now);
       const expiration = nowS + options.cookieDurationS;
       return open(returnTo, issueToken(options.key!, host, expiration), options.cookieDurationS);
@@ -294,8 +301,9 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
      * reloads on it, as it did on the sign-in page the 303 led to.
      */
     signOut(req) {
-      const host = hostOf(req);
-      if (host === null) return refuse("portal: unknown host", 400);
+      const announced = announcedOf(req);
+      if (announced === null) return refuse("portal: unknown host", 400);
+      const { host, site } = announced;
       if (!isAcceptableOrigin(req.headers.get("origin"), host, options.online)) {
         return refuse("portal: origin refused", 403);
       }
@@ -305,7 +313,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       const bearer = readToken(token, options.key, host, nowS, options.cookieDurationS, IDENTITY_DURATION_S);
       // Only someone who was in signs out: a stranger posting here, any Origin
       // being easy to forge outside a browser, writes nothing.
-      const grant = bearer?.guest === null || bearer?.guest === undefined ? null : options.access.passwordById(host, bearer.guest, now);
+      const grant = bearer?.guest === null || bearer?.guest === undefined ? null : options.access.passwordById(site, bearer.guest, now);
       if (bearer !== null) audit({ actor: actorOf(bearer, grant), action: "portal.signout", target: host }, now);
       // The cookie is erased even if it was no longer valid: a dead cookie
       // would otherwise stay in the browser.

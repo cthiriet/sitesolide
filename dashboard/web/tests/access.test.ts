@@ -19,6 +19,8 @@ import {
   changeProgress,
   changeResult,
   changeTexts,
+  addressesLine,
+  siteAddresses,
   closeOutcome,
   codeWithheld,
   confirmationValid,
@@ -254,6 +256,21 @@ describe("general access", () => {
     expect(confirmationValid("CMS", "cms")).toBe(false)
   })
 
+  test("a site on its own domain is told the change applies there too, its preview alone is not", () => {
+    const preview = site({ slug: "cms", address: "cms.test-zone.invalid" })
+    expect(siteAddresses(preview)).toEqual(["cms.test-zone.invalid"])
+    expect(addressesLine(siteAddresses(preview))).toBeNull()
+    const pending = site({ slug: "cms", address: "cms.test-zone.invalid", domain: { name: "cms.example", aliases: [], active: false, route: false } })
+    expect(siteAddresses(pending)).toEqual(["cms.test-zone.invalid"])
+    const own = site({ slug: "cms", address: "cms.test-zone.invalid", domain: { name: "cms.example", aliases: [], active: true, route: true } })
+    expect(siteAddresses(own)).toEqual(["cms.test-zone.invalid", "cms.example"])
+    const line = "Applies to every address it answers on: cms.test-zone.invalid and cms.example."
+    expect(addressesLine(siteAddresses(own))).toBe(line)
+    for (const target of ["restricted", "public", "code"] as const) expect(changeTexts("cms", target, "public", siteAddresses(own)).consequence).toEndWith(` ${line}`)
+    expect(changeTexts("cms", "renew", "code", siteAddresses(own)).consequence).not.toContain(line)
+    expect(changeTexts("cms", "code", "public", siteAddresses(preview)).consequence).toBe(changeTexts("cms", "code").consequence)
+  })
+
   test("restricting a site nobody is on the list of says who will still open it", () => {
     expect(emptyListWarning("wheels", 0, ["owner@acme.test"])).toBe("Nobody is on the list yet: after this, only the owner and the admin emails can open wheels.")
     expect(emptyListWarning("wheels", 0, [])).toBe("Nobody is on the list yet: after this, only the owner can open wheels.")
@@ -276,6 +293,12 @@ describe("general access", () => {
     expect(changeResult("renew", "new code set: validated, reloaded, cms.example.com answers the door page's 401 and opens with the new code, not the old one, 4 other site(s) still answer")).toBe(
       "cms.example.com opens with the new code; the old one no longer does. The 4 other sites still answer.",
     )
+    expect(changeResult("restricted", "portal set: validated, reloaded, cms.example.com and cms.example answer the portal's 401, 4 other site(s) still answer")).toBe(
+      "cms.example.com and cms.example now ask visitors to sign in. The 4 other sites still answer.",
+    )
+    expect(changeResult("code", "code set: validated, reloaded, cms.example.com and cms.example answer the door page's 401 and open with its code, 4 other site(s) still answer")).toBe(
+      "cms.example.com and cms.example now ask for its code. The 4 other sites still answer.",
+    )
     expect(changeResult("restricted", "something else")).toBe("something else")
     expect(DEPLOY_NOTE).toBe("Your next sitesolide deploy writes this into sitesolide.json.")
   })
@@ -284,8 +307,9 @@ describe("general access", () => {
   test("the verdict the page reads is the gatekeeper's own wording", async () => {
     const transaction = await Bun.file(new URL("../../src/gatekeeper/transaction.ts", import.meta.url)).text()
     expect(transaction).toContain("`${words}: validated, reloaded, ${checked}, ${others} other site(s) still answer${tail}`")
-    expect(transaction).toContain("`${host} answers the portal's 401`")
-    expect(transaction).toContain("`${host} answers the door page's 401 and opens with its code`")
+    expect(transaction).toContain('const site = `${targets.join(" and ")} ${targets.length > 1 ? "answer" : "answers"}`;')
+    expect(transaction).toContain("`${site} the portal's 401`")
+    expect(transaction).toContain("`${site} the door page's 401 and ${targets.length > 1 ? \"open\" : \"opens\"} with its code`")
     expect(transaction).toContain("already not answering before: ")
   })
 

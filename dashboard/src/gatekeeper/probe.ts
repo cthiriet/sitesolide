@@ -128,17 +128,17 @@ export function portalHost(zone: string): string {
 
 /**
  * The hosts that answered before the action and no longer answer, the targeted
- * site aside: it has its own rule. A host the second series did not question
- * counts as lost.
+ * site's addresses aside: they have their own rule. A host the second series
+ * did not question counts as lost.
  */
 export function regressions(
   before: Map<string, ProbeResponse>,
   after: Map<string, ProbeResponse>,
-  target: string,
+  targets: readonly string[],
 ): string[] {
   const lost: string[] = [];
   for (const [host, response] of before) {
-    if (host === target || !answers(response)) continue;
+    if (targets.includes(host) || !answers(response)) continue;
     const now = after.get(host);
     if (now === undefined || !answers(now)) lost.push(host);
   }
@@ -146,6 +146,19 @@ export function regressions(
 }
 
 /** The sites that already did not answer before the action, for the message. */
-export function alreadySilent(before: Map<string, ProbeResponse>, target: string): string[] {
-  return [...before].filter(([host, response]) => host !== target && !answers(response)).map(([host]) => host);
+export function alreadySilent(before: Map<string, ProbeResponse>, targets: readonly string[]): string[] {
+  return [...before].filter(([host, response]) => !targets.includes(host) && !answers(response)).map(([host]) => host);
+}
+
+/**
+ * The targeted site's addresses, judged after the action: its preview always,
+ * its own domain when one is active and Caddy answered there before, whatever
+ * the status, a redirect or a 404 at `/` included. Every address the site is
+ * served on closes and opens with it, and the change is said done only once
+ * each one answers as it must. A domain Caddy did not answer for, its
+ * certificate not issued yet, serves nothing to close: it is named with the
+ * sites that already did not answer.
+ */
+export function targetHosts(preview: string, domain: string | null, before: Map<string, ProbeResponse>): string[] {
+  return domain === null || !("code" in (before.get(domain) ?? { error: "" })) ? [preview] : [preview, domain];
 }

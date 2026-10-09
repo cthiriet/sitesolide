@@ -244,11 +244,31 @@ export type ChangeTexts = {
 }
 
 /**
+ * Every address a site answers on: its preview, and its own domain once it is
+ * switched to. A change of general access applies to all of them at once.
+ */
+export function siteAddresses(site: Pick<Site, "address" | "domain">): string[] {
+  return site.domain !== null && site.domain.active ? [site.address, site.domain.name] : [site.address]
+}
+
+/** The sentence that names them, when there is more than the preview to name. */
+export function addressesLine(addresses: readonly string[]): string | null {
+  return addresses.length > 1 ? `Applies to every address it answers on: ${addresses.join(" and ")}.` : null
+}
+
+/**
  * What the confirmation, the wait and the result of a change of general
  * access say. `from`, how the site opens now: leaving a code says the code
- * stops working.
+ * stops working. `addresses`, every address the site answers on, named when
+ * there is more than the preview.
  */
-export function changeTexts(slug: string, target: ChangeTarget, from: GeneralAccess = "public"): ChangeTexts {
+export function changeTexts(slug: string, target: ChangeTarget, from: GeneralAccess = "public", addresses: readonly string[] = []): ChangeTexts {
+  const texts = changeWords(slug, target, from)
+  const line = target === "renew" ? null : addressesLine(addresses)
+  return line === null ? texts : { ...texts, consequence: `${texts.consequence} ${line}` }
+}
+
+function changeWords(slug: string, target: ChangeTarget, from: GeneralAccess): ChangeTexts {
   const leavingCode = from === "code" && target !== "code" && target !== "renew"
   switch (target) {
     case "restricted":
@@ -321,13 +341,16 @@ export function emptyListWarning(slug: string, entries: number, admins: readonly
  * as it stands when it does not read that way.
  */
 export function changeResult(target: ChangeTarget, detail: string): string {
-  const host = /: validated, reloaded, (\S+) answers /.exec(detail)?.[1]
-  if (host === undefined) return detail
+  // One address, or the preview and the site's own domain, checked together.
+  const found = /: validated, reloaded, (\S+)(?: and (\S+))? answers? /.exec(detail)
+  if (found === null) return detail
+  const host = found[2] === undefined ? found[1]! : `${found[1]} and ${found[2]}`
+  const one = found[2] === undefined
   const first: Record<ChangeTarget, string> = {
-    restricted: `${host} now asks visitors to sign in.`,
-    public: `${host} now opens without signing in.`,
-    code: `${host} now asks for its code.`,
-    renew: `${host} opens with the new code; the old one no longer does.`,
+    restricted: `${host} now ${one ? "asks" : "ask"} visitors to sign in.`,
+    public: `${host} now ${one ? "opens" : "open"} without signing in.`,
+    code: `${host} now ${one ? "asks" : "ask"} for its code.`,
+    renew: `${host} ${one ? "opens" : "open"} with the new code; the old one no longer does.`,
   }
   const lines = [first[target]]
   const others = Number(/(\d+) other site\(s\) still answer/.exec(detail)?.[1] ?? 0)

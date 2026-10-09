@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { generateFragment } from "../borrowed/fragment";
+import { generateFragment, SITE_VARIABLE } from "../borrowed/fragment";
 import { readManifest, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected } from "../borrowed/portal";
 import { MESSAGE_MAX } from "../src/secrets/portal";
 import { MAX_PORTAL_MS } from "../src/secrets/protocol";
-import { buildFragment, cookieName, installedCode } from "../borrowed/locks";
+import { buildFragment, cookieName, installedCode, stanzaClosesEveryAddress } from "../borrowed/locks";
 import { DOOR_PAGE_MARKER } from "../borrowed/page";
 import type { Action } from "../src/gatekeeper/instance";
 import type { Command, Permissions, GeneralMachine, ManifestRead } from "../src/gatekeeper/machine";
@@ -115,6 +115,8 @@ type Options = {
   writeFragment?: Counter;
   /** The code each draw gives, in turn. */
   draws?: string[];
+  /** False: the Caddyfile in service is from before its nameless block closed a static site's domain. */
+  caddyfileCloses?: boolean;
 };
 
 function simulate(options: Options = {}) {
@@ -233,9 +235,19 @@ function simulate(options: Options = {}) {
       const guarded = served.block !== null && fragmentIsProtected(served.block);
       const replaced = options.probeConfig?.(host, n, guarded, cookie);
       if (replaced !== undefined) return replaced;
-      const named = host.endsWith(`.${ZONE}`) ? host.slice(0, -ZONE.length - 1) : null;
-      const locked = named === null ? null : installedCode(served.fragment, named);
-      if (host === `${slug}.${ZONE}` && guarded) return DOOR;
+      // The site's own domain answers as its preview when the block in
+      // service says whose site it serves, or, for a static site, when the
+      // nameless block of the Caddyfile does; an earlier block left it open.
+      const declared = disk.manifest === null ? undefined : (JSON.parse(disk.manifest.text) as Manifest).domain;
+      const domain = declared?.active === true ? declared.name : null;
+      const says = served.block === null ? options.caddyfileCloses !== false : served.block.includes(`vars ${SITE_VARIABLE} ${slug}`);
+      const preview = host === `${slug}.${ZONE}`;
+      const own = preview || (host === domain && says);
+      const named = own ? slug : host.endsWith(`.${ZONE}`) ? host.slice(0, -ZONE.length - 1) : null;
+      // A stanza an earlier release wrote matches the preview's host alone.
+      const reaches = named === null ? false : preview || named !== slug || stanzaClosesEveryAddress(served.fragment, named);
+      const locked = named === null || !reaches ? null : installedCode(served.fragment, named);
+      if (own && guarded) return DOOR;
       if (locked !== null) return cookie === `${cookieName(named!)}=${locked}` ? OK : DOOR_PAGE;
       return OK;
     },
@@ -965,13 +977,7 @@ describe("Anyone with the code", () => {
     expect(s.backups.get("library")).toMatchObject({ locks: { codes: `{"other":"${NEW_CODE}"}`, fragment: locksFor({ other: NEW_CODE }) } });
   });
 
-  test("a site on its own domain takes no code, a static site takes one but cannot be restricted", async () => {
-    const domain = text({ ...readManifest(OPEN).manifest!, domain: { name: "library.example", active: true } });
-    const s = simulate({ manifest: domain });
-    const result = await s.spawn("code");
-    expect(result.result).toBe("rejects");
-    expect(result.message).toContain("serves its own domain, library.example, which a code would not close");
-
+  test("a static site takes a code but cannot be restricted", async () => {
     const showcase = simulate({ manifest: STATIC, block: null });
     expect((await showcase.spawn("code")).result).toBe("ok");
     expect(showcase.disk.block).toBeNull();
@@ -1003,5 +1009,106 @@ describe("Anyone with the code", () => {
     const s = simulate({ lockSites: new Error("sitesolide.json unreadable") });
     expect((await s.spawn("on")).result).toBe("ok");
     expect(s.count("writeFragment")).toBe(0);
+  });
+});
+
+describe("a site on its own domain closes and opens with its preview", () => {
+  const DOMAIN = "library.example";
+  const ON_DOMAIN = text({ ...readManifest(OPEN).manifest!, domain: { name: DOMAIN, aliases: [`www.${DOMAIN}`], active: true } });
+  /** The block an earlier release wrote: the domain's own name alone, always open. */
+  const EARLIER = generateFragment(readManifest(ON_DOMAIN).manifest!, "identity", "hidden", "open")!;
+
+  test("restricted: the portal's 401 on both, and the message names both", async () => {
+    const s = simulate({ manifest: ON_DOMAIN });
+    const result = await s.spawn(true);
+    expect(result.result).toBe("ok");
+    expect(result.message).toContain(`library.${ZONE} and ${DOMAIN} answer the portal's 401`);
+    expect(s.count(`probe ${DOMAIN}/`)).toBeGreaterThanOrEqual(2);
+    expect(s.disk.block).toBe(blockOf(text({ ...readManifest(ON_DOMAIN).manifest!, portal: true })));
+  });
+
+  test("a code: the door page on both, and both open with it", async () => {
+    const s = simulate({ manifest: ON_DOMAIN });
+    const result = await s.spawn("code");
+    expect(result.result).toBe("ok");
+    expect(result.message).toContain(`library.${ZONE} and ${DOMAIN} answer the door page's 401 and open with its code`);
+    expect(s.count(`probe ${DOMAIN}/ with ${cookieName("library")}=${CODE}`)).toBe(1);
+  });
+
+  test("a block from an earlier release is replaced by the current one in the same change, never left with the domain open", async () => {
+    const s = simulate({ manifest: ON_DOMAIN, block: EARLIER });
+    const result = await s.spawn("code");
+    expect(result.result).toBe("ok");
+    expect(result.message).toStartWith("code set:");
+    expect(s.disk.block).toBe(blockOf(ON_DOMAIN));
+  });
+
+  test("a domain still served open after the reload is a failure, and everything comes back", async () => {
+    // A block that would not close the domain, as an earlier release's would
+    // not: the probe sees the site there without a code.
+    const s = simulate({ manifest: ON_DOMAIN, probeConfig: (host, _n, _guarded, cookie) => (host === DOMAIN && cookie === undefined ? OK : undefined) });
+    const result = await s.spawn("code");
+    expect(result.result).toBe("failure");
+    expect(result.message).toContain(`${DOMAIN} should answer the door page's 401 without a code, got 200`);
+    expect(result.message).toEndWith("previous configuration restored");
+    unchanged(s, ON_DOMAIN, blockOf(ON_DOMAIN));
+  });
+
+  test("a domain that did not answer before is no reason to refuse: it is named, the preview judged", async () => {
+    const s = simulate({ manifest: ON_DOMAIN, probeConfig: (host) => (host === DOMAIN ? { error: "certificate not issued" } : undefined) });
+    const result = await s.spawn(true);
+    expect(result.result).toBe("ok");
+    expect(result.message).toContain(`library.${ZONE} answers the portal's 401`);
+    expect(result.message).toContain(`already not answering before: ${DOMAIN}`);
+  });
+
+  test("public again: both open, without the portal and without a code", async () => {
+    const restricted = text({ ...readManifest(ON_DOMAIN).manifest!, portal: true });
+    const s = simulate({ manifest: restricted });
+    const result = await s.spawn(false);
+    expect(result.result).toBe("ok");
+    expect(result.message).toContain(`library.${ZONE} and ${DOMAIN} answer without the portal`);
+  });
+
+  test("a domain declared and not switched to is not probed: the preview is all the site serves", async () => {
+    const inactive = text({ ...readManifest(OPEN).manifest!, domain: { name: DOMAIN, active: false } });
+    const s = simulate({ manifest: inactive });
+    expect((await s.spawn("code")).result).toBe("ok");
+    expect(s.calls.some((call) => call.startsWith(`probe ${DOMAIN}`))).toBe(false);
+  });
+
+  test("a site already open with a code, its stanza from an earlier release: the same code is written again, never called in place", async () => {
+    const locked = text({ ...readManifest(ON_DOMAIN).manifest!, lock: true });
+    const earlier = locksFor({ library: CODE }).replace(/^@lock_host_library expression .*$/m, `@lock_host_library host library.${ZONE}`);
+    const s = simulate({ manifest: locked, codes: `{"library":"${CODE}"}`, fragment: earlier, lockSites: [["library", true]] });
+    const result = await s.spawn("code");
+    expect(result.result).toBe("ok");
+    expect(result.message).toContain(`and ${DOMAIN} answer the door page's 401 and open with its code`);
+    expect(stanzaClosesEveryAddress(s.disk.fragment, "library")).toBe(true);
+    expect(installedCode(s.disk.fragment, "library")).toBe(CODE);
+  });
+
+  test("a static site's domain behind a Caddyfile from before stays open: the change fails and everything comes back", async () => {
+    const STATIC_ON_DOMAIN = text({ slug: "library", publicDir: "public", domain: { name: DOMAIN, active: true } });
+    const s = simulate({ manifest: STATIC_ON_DOMAIN, block: null, caddyfileCloses: false });
+    const result = await s.spawn("code");
+    expect(result.result).toBe("failure");
+    expect(result.message).toContain(`${DOMAIN} should answer the door page's 401 without a code, got 200`);
+    unchanged(s, STATIC_ON_DOMAIN, null);
+  });
+
+  test("a domain that redirects at its root is judged all the same", async () => {
+    const s = simulate({ manifest: ON_DOMAIN, probeConfig: (host, n, _guarded, cookie) => (host === DOMAIN && n === 1 && cookie === undefined ? { code: 302, door: false, body: "" } : undefined) });
+    const result = await s.spawn("code");
+    expect(result.result).toBe("ok");
+    expect(result.message).toContain(`and ${DOMAIN} answer the door page's 401`);
+  });
+
+  test("a static site's domain closes with its code through the Caddyfile's nameless block", async () => {
+    const STATIC_ON_DOMAIN = text({ slug: "library", publicDir: "public", domain: { name: DOMAIN, active: true } });
+    const s = simulate({ manifest: STATIC_ON_DOMAIN, block: null });
+    const result = await s.spawn("code");
+    expect(result.result).toBe("ok");
+    expect(result.message).toContain(`and ${DOMAIN} answer the door page's 401`);
   });
 });

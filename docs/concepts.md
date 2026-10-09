@@ -230,7 +230,13 @@ silently get its own certificate instead, so they all import the same snippet.
 
 **A customer domain** gets its own certificate over HTTP-01, issued on first
 request. The token on the machine cannot edit someone else's zone, and the
-customer usually keeps their DNS elsewhere.
+customer usually keeps their DNS elsewhere. An app's block claims every name
+the table carries for its domain, the `www` of a second level domain and the
+aliases, and sends them to the domain itself: a name no block claimed fell
+into the nameless block of static files, which serves `public/` and never
+wakes the service. That block now refuses an app's folder outright, with a
+404: a name the table still carries and the app's block does not claim would
+otherwise serve its files past its portal.
 
 On-demand issuance is guarded by the `ask` endpoint: Caddy asks the shared
 service, during the TLS handshake, whether a domain is allowed. It answers yes
@@ -298,6 +304,14 @@ section, with the link that carries it, and draw a new one there. Every URL of
 the locked host is rewritten to a code page that stands on its own, inline
 CSS, inline icon, no external request, because anything it asked for would
 come back as HTML.
+
+**A site closes on every address it answers on.** Its own domain answers as
+its preview does, the portal's guard or the code alike, and the domain's other
+names, its aliases and its `www`, send there. Every block that serves a site's
+content off its preview says whose site it is: the domain's block in its
+fragment, and, for a static site, Caddy's nameless block from the domain
+table. The preview locks and the portal read that, never the domain's name,
+so a domain switched to later closes with the site the moment it is served.
 
 **The portal** stands in front of every restricted site, and Caddy consults it
 with `forward_auth` before every request. A project's **general access** is

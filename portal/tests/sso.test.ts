@@ -25,6 +25,10 @@ if (!DATA_DIR.endsWith(".attempts")) throw new Error(`isolated tests expected, D
 
 const SITE = "kanban.localhost";
 const OTHER_SITE = "roster.localhost";
+/** kanban's own domain: its block announces the site's address after its host. */
+const DOMAIN = "kanban-domain.localhost";
+/** What each protected host's block announces, as the generated fragments do. */
+const ANNOUNCED: Record<string, string> = { [SITE]: SITE, [OTHER_SITE]: OTHER_SITE, [DOMAIN]: `${DOMAIN} ${SITE}` };
 /** The dashboard, which the test plays: the browser stops when it is sent there. */
 const DASHBOARD = "dashboard.localhost";
 const PASSWORD = "sample-portal-password";
@@ -76,12 +80,12 @@ class Browser {
     const url = new URL(address);
     const host = url.host;
     if (host === DASHBOARD) return new Response(null, { status: 204 });
-    const isSite = host === SITE || host === OTHER_SITE;
+    const isSite = Object.hasOwn(ANNOUNCED, host);
     const target = isSite ? `${PORTAL}${url.pathname}${url.search}` : address;
     const headers: Record<string, string> = { ...extra };
     const cookie = this.cookies(host);
     if (cookie !== "") headers.Cookie = cookie;
-    if (isSite) headers["X-Portal-Hote"] = url.hostname;
+    if (isSite) headers["X-Portal-Hote"] = ANNOUNCED[url.hostname]!;
     const response = await fetch(target, { headers, redirect: "manual" });
     this.keep(host, response);
     return response;
@@ -104,7 +108,7 @@ class Browser {
   /** What Caddy's forward_auth would ask the portal before a request to the site. */
   verify(site = SITE, path = "/board"): Promise<Response> {
     return fetch(`${PORTAL}/verifier`, {
-      headers: { "X-Portal-Hote": site, "X-Forwarded-Method": "GET", "X-Forwarded-Uri": path, Cookie: this.cookies(site) },
+      headers: { "X-Portal-Hote": ANNOUNCED[site] ?? site, "X-Forwarded-Method": "GET", "X-Forwarded-Uri": path, Cookie: this.cookies(site) },
     });
   }
 }
@@ -269,6 +273,24 @@ describe("signing in with the provider, end to end", () => {
     const refused = await browser.verify();
     expect(refused.status).toBe(401);
     expect(await refused.text()).toInclude("You are signed in as alice@acme.test, but you don&#39;t have access to this site.");
+  });
+
+  test("on the site's own domain, the same person signs in, judged on the site's people, with a cookie for the domain", async () => {
+    share(SITE, { "alice@acme.test": "viewer" });
+    const browser = new Browser();
+    const { url } = await browser.follow(signInAt(DOMAIN));
+    expect(url).toBe(`http://${DOMAIN}/board`);
+    const verified = await browser.verify(DOMAIN);
+    expect(verified.status).toBe(200);
+    expect(verified.headers.get("x-sitesolide-role")).toBe("viewer");
+    // The domain's cookie is the domain's: the preview asks again, the
+    // portal's session sparing the provider.
+    expect((await browser.verify(SITE)).status).toBe(401);
+    expect(providerVisits((await browser.follow(signInAt(SITE))).visited)).toBe(0);
+    expect((await browser.verify(SITE)).status).toBe(200);
+
+    share(SITE, {});
+    expect((await browser.verify(DOMAIN)).status).toBe(401);
   });
 
   test("everyone at a domain given access gets in, as visitor", async () => {

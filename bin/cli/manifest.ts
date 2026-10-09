@@ -407,6 +407,19 @@ export function isProtected(manifest: Manifest): boolean {
 }
 
 /**
+ * Every name a declared domain answers on, its own name first: the name and
+ * each alias, each with its `www` when it is a second level domain. The same
+ * forms as api/src/table.ts writes into the table Caddy certifies and routes
+ * by, which bin/tests/cli-manifest.test.ts checks: a name the table carries
+ * and no block of the site claims falls into the nameless block of static
+ * files, and serves the site's public/ without its service, or its door.
+ */
+export function domainHosts(domain: { name: string; aliases?: string[] }): string[] {
+  const forms = (name: string) => (name.split(".").length === 2 ? [name, `www.${name}`] : [name]);
+  return [...new Set([domain.name, ...(domain.aliases ?? [])].flatMap(forms))];
+}
+
+/**
  * An exemption goes as is into a Caddy `path` matcher: a path, with no space,
  * quote or brace that would cut the line, and with no `..`.
  */
@@ -813,6 +826,11 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
       for (const alias of domain.aliases ?? []) {
         if (typeof alias !== "string" || !isValidDomain(alias)) {
           errors.push(`domain.aliases: "${String(alias)}" is invalid`);
+        } else if (zone !== "" && (alias === zone || alias.endsWith(`.${zone}`))) {
+          // An alias is a Caddy address of the site's block, which sends it to
+          // the domain: one under the zone would be more specific than the
+          // wildcard, and send another site's preview away.
+          errors.push(`domain.aliases: "${alias}" is in the ${zone} zone, which serves the previews`);
         }
       }
     }
@@ -828,9 +846,6 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
       }
       if (manifest.lock === true) {
         errors.push("portal: a site behind the portal needs no preview lock");
-      }
-      if (manifest.domain !== undefined) {
-        errors.push("portal: not yet on a customer domain, only under the served zone");
       }
       if (manifest.slug === PORTAL_SLUG) {
         errors.push("portal: the portal cannot sit behind itself");

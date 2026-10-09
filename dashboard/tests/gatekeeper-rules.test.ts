@@ -78,12 +78,9 @@ describe("portalModifiable", () => {
     });
   });
 
-  test("a site that opens with a code can be restricted, its code taken away in the same change; on its own domain, what would have to change", () => {
+  test("a site that opens with a code can be restricted, its code taken away in the same change; on its own domain too", () => {
     expect(portalModifiable("tool", { ...appSite, lock: true })).toEqual({ modifiable: true, reason: null });
-    expect(portalModifiable("tool", { ...appSite, domain: { name: "example.test", active: true } })).toEqual({
-      modifiable: false,
-      reason: "not on a customer domain, only under the served zone",
-    });
+    expect(portalModifiable("tool", { ...appSite, domain: { name: "example.test", active: true } })).toEqual({ modifiable: true, reason: null });
   });
 
   test("the action judged is the one the page offers: removing a door in place is allowed", () => {
@@ -150,11 +147,14 @@ describe("the three general accesses", () => {
     expect(generalChoices("vineyard", staticSite)).toEqual({ public: null, restricted: "a static site cannot be restricted yet", code: null });
   });
 
-  test("a site on its own domain takes no code: it would go on serving there without one", () => {
+  test("a site on its own domain takes all three: the domain closes with the preview", () => {
     const own: Manifest = { ...appSite, domain: { name: "example.test", active: true } };
-    expect(generalChoices("tool", own).code).toContain("serves its own domain, example.test, which a code would not close");
-    // A domain declared but not yet switched to closes nothing: the preview is all there is.
-    expect(generalChoices("tool", { ...appSite, domain: { name: "example.test", active: false } }).code).toBeNull();
+    expect(generalChoices("tool", own)).toEqual({ public: null, restricted: null, code: null });
+    expect(generalChoices("vineyard", { ...staticSite, domain: { name: "example.test", active: true } })).toEqual({
+      public: null,
+      restricted: "a static site cannot be restricted yet",
+      code: null,
+    });
   });
 
   test("the dashboard, the portal and the landing take none of the three", () => {

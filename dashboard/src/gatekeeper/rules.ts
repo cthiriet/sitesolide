@@ -45,10 +45,7 @@ export function fixedRefusal(slug: string, manifest: Manifest | null): string | 
  * The refusals from `validate()` that a general access can trigger, said as
  * the page must say them: what would have to be changed, not the rule broken.
  */
-const REASONS: [prefix: string, reason: string][] = [
-  ["portal: only a project with `start`", "a static site cannot be restricted yet"],
-  ["portal: not yet on a customer domain", "not on a customer domain, only under the served zone"],
-];
+const REASONS: [prefix: string, reason: string][] = [["portal: only a project with `start`", "a static site cannot be restricted yet"]];
 
 /** How the manifest says the site opens: the portal, the code, or neither. */
 export function manifestAccess(manifest: Manifest): GeneralAccess {
@@ -70,17 +67,14 @@ export function targetManifest(manifest: Manifest, target: GeneralAccess): Manif
 }
 
 /**
- * Does the manifest the target would produce pass `validate()`, and the rules
- * `validate()` does not hold? null if it passes.
+ * Does the manifest the target would produce pass `validate()`? null if it
+ * passes.
  *
- * A code closes only the site's address under the zone: a site that serves its
- * own domain would go on serving the same content there, without a code and
- * indexable, and "Anyone with the code" would be a lie by omission.
+ * A site's own domain is no reason to refuse: it closes with the preview, the
+ * code and the portal alike, and the gatekeeper checks both addresses before
+ * it says so (see bin/cli/fragment.ts and api/src/locks.ts).
  */
 export function targetRefusal(manifest: Manifest, target: GeneralAccess): string | null {
-  if (target === "code" && manifest.domain?.active === true) {
-    return `it serves its own domain, ${manifest.domain.name}, which a code would not close: switch it back to its preview first, sitesolide domain --deactivate`;
-  }
   const errors = validate(targetManifest(manifest, target));
   if (errors.length === 0) return null;
   const first = errors[0]!;

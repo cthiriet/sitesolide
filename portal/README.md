@@ -214,7 +214,8 @@ site skips the provider and only bounces through the portal. A site's cookie
 never outlives that session: a site reached in its last minute gets a minute,
 not a day, so an account closed at the provider is out of every site 24 hours
 after it last signed in there. Nothing relies on a cookie shared across the
-zone, which is why a customer's own domain would work the same way.
+zone, which is why a site's own domain works the same way: see *A site's own
+domain* below.
 
 What each step defends, tested in `tests/sso.test.ts` against a provider the
 tests run themselves, through real HTTP:
@@ -545,7 +546,7 @@ portal's starts with `X-Sitesolide` or `X_sitesolide`: the block takes off
 `X-Sitesolide*` and `X_sitesolide*`, see `IDENTITY_STRIP` in `bin/cli/portal.ts`.
 
 **A public site takes them off too**: a site made
-Public, or never restricted, and every customer domain. Its block carries the
+Public, or never restricted, and its own domain's block. Its block carries the
 same two `request_header` lines, at the block's level, where they need no
 `route` since nothing in the block copies anything on. Its app is told nobody,
 and never a stranger's `X-Sitesolide-Role: admin`.
@@ -688,6 +689,18 @@ account*, which asks the provider to choose.
   overwrites it, and it is the host the cookie signs. On the portal's own host,
   where Caddy does not set it, only `/sante` and the provider's two steps reach
   the service, which never read it: that is the manifest's `routes` allow list.
+- **A site's own domain is judged on the site's people.** Its block announces
+  `X-Portal-Hote: <domain> <slug>.<zone>`: the host the browser is on, which
+  signs the cookie, checks the Origin and is where a sign-in comes back to,
+  then the site's address, under which the steward's projection files its
+  people and password access. Both in the one header every protected block
+  overwrites: a second header would pass through a block deployed before it
+  existed, untouched, and a visitor allowed on one site would have the portal
+  judge them against it on any other. A cookie is the domain's alone, so the
+  preview and the domain each ask once, the portal's session sparing the
+  provider the second time; failed passwords count per site, the two
+  addresses together. `readAnnounced` in `src/gate.ts`, `announcedFor` in
+  `bin/cli/portal.ts`, measured in `bin/tests/cli-domain-caddy.test.ts`.
 - **A protected site trusts Caddy**, and that trust only holds because of the
   loopback rule, `bin/deploy-loopback.sh`: without it, any service on the machine
   could reach the site's port without going through Caddy, identity headers

@@ -5,6 +5,7 @@ import { knownManifests } from "./manifests";
 import {
   isInternalPath,
   isApp,
+  domainHosts,
   missingExclusions,
   readManifest,
   setDomainActive,
@@ -14,7 +15,7 @@ import {
   validate,
   type Manifest,
 } from "../cli/manifest";
-import { isValidDomain as isValidDomainApi, isValidSlug as isValidSlugApi } from "../../api/src/table";
+import { domainForms, isValidDomain as isValidDomainApi, isValidSlug as isValidSlugApi } from "../../api/src/table";
 
 /** The tests' zone: a reserved TLD, which resolves nowhere. */
 const ZONE = "test-zone.invalid";
@@ -157,10 +158,27 @@ describe("validation", () => {
     expect(validate({ ...STATIC, domain: { name: `notes.${ZONE}` } }, "")).toEqual([]);
   });
 
+  test("an alias in the served zone is refused: it would take another site's preview", () => {
+    for (const alias of [ZONE, `notes.${ZONE}`, `www.notes.${ZONE}`]) {
+      expect(validate({ ...STATIC, domain: { name: "sample-agency.example", aliases: [alias] } }, ZONE)).toContainEqual(expect.stringContaining(`"${alias}" is in the ${ZONE} zone`));
+    }
+    expect(validate({ ...STATIC, domain: { name: "sample-agency.example", aliases: ["www.sample-agency.example"] } }, ZONE)).toEqual([]);
+  });
+
   test("every domain accepted here is accepted by api/src/table.ts", () => {
     const name = "sample-agency.example";
     expect(validate({ ...STATIC, domain: { name: name } })).toEqual([]);
     expect(isValidDomainApi(name)).toBe(true);
+  });
+
+  test("a domain's names are the forms the table certifies and routes, its own first", () => {
+    // A name the table carries and no block claims would fall into the
+    // nameless block of static files.
+    const domain = { name: "sample-agency.example", aliases: ["sample-agency.test", "shop.sample-agency.example", "www.sample-agency.example"] };
+    const table = [domain.name, ...domain.aliases].flatMap(domainForms);
+    expect(domainHosts(domain)).toEqual([...new Set(table)]);
+    expect(domainHosts(domain)[0]).toBe("sample-agency.example");
+    expect(domainHosts({ name: "shop.sample-agency.example" })).toEqual(["shop.sample-agency.example"]);
   });
 });
 
@@ -629,11 +647,14 @@ describe("portal", () => {
     for (const [manifest, expected] of [
       [{ ...STATIC, portal: true }, "start"],
       [{ ...PROTECTED, lock: true }, "lock"],
-      [{ ...PROTECTED, domain: { name: "example.test" } }, "domain"],
       [{ ...PROTECTED, slug: "portal" }, "itself"],
     ] as const) {
       expect(validate(manifest)).toContainEqual(expect.stringContaining(expected));
     }
+  });
+
+  test("a site behind the portal may serve its own domain: it is guarded there too", () => {
+    expect(validate({ ...PROTECTED, domain: { name: "example.test", active: true } })).toEqual([]);
   });
 
   test("exemptions without a portal are kept in reserve, and judged all the same", () => {

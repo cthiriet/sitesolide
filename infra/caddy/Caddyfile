@@ -218,6 +218,26 @@ https:// {
 		import /etc/caddy/domaines.map
 	}
 
+	# A site that opens with a code closes on its own domain too: the
+	# preview locks recognise the site this block serves by this variable,
+	# which no stanza names for an unknown domain. See stanza() in
+	# api/src/locks.ts. The same glob as the wildcard block's, with the same
+	# reason for being one.
+	vars sitesolide_site {folder}
+	import /etc/caddy/locks/*.caddy
+
+	# Never an app's folder: an app's names are its own block's, guarded there
+	# by its portal or its code. One that reaches this block is one the table
+	# still carries and the block in service does not claim, a name taken out
+	# of the manifest or one switched on ahead of its deployment, and serving
+	# its public/ here would skip the portal. The block is how an app is told
+	# from a static site, which has none. A 404 until the app is deployed.
+	@app file {
+		root /etc/caddy/sites
+		try_files {folder}.caddy
+	}
+	respond @app 404
+
 	root * /srv/sites/{folder}/public
 	file_server {
 		hide .git .env*

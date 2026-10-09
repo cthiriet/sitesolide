@@ -125,7 +125,9 @@ marked; the owner and its Admins choose among the three there, *Make public*,
 with its link to copy, and *New code*, which stops the old one at once; a
 Viewer or a Developer reads that the site opens with one, and whom to ask.
 The code is drawn on the machine, six characters without O, I, 0 or 1, and
-`sitesolide lock` from the project's folder reaches the same path. Then its
+`sitesolide lock` from the project's folder reaches the same path. A site that
+serves its own domain opens the same way on every address, the preview and
+the domain together, and the section names both before anything changes. Then its
 people with access: an *Add people* field taking an email or a
 `@domain` and a role, which says before anything is sent whether the person
 signs in with their company account or gets password access, and every entry

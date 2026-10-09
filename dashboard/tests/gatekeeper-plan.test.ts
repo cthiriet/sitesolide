@@ -203,13 +203,14 @@ describe("planPortal refuses what the rules refuse", () => {
     expect(planPortal("library", true, { manifest: "[]", block: blockOf(LIBRARY) }).kind).toBe("rejects");
   });
 
-  test("a site on its own domain", () => {
+  test("a site on its own domain: the guard goes on the domain's block too", () => {
     // With no headers: an X-Robots-Tag would count for the customer's domain too, which validate() refuses.
     const domain = `${JSON.stringify({ ...parsed(LIBRARY), headers: undefined, domain: { name: "example.test", active: true } }, null, 2)}\n`;
-    expect(planPortal("library", true, { manifest: domain, block: blockOf(domain) })).toEqual({
-      kind: "rejects",
-      message: "not on a customer domain, only under the served zone",
-    });
+    const plan = change(planPortal("library", true, { manifest: domain, block: blockOf(domain) }));
+    expect(plan.portalChanged).toBe(true);
+    const block = (plan.block as { text: string }).text;
+    expect(block.split("forward_auth @portal_guard").length - 1).toBe(2);
+    expect(block).toInclude('header_up X-Portal-Hote "{host} library.{$SITESOLIDE_ZONE}"');
   });
 });
 
@@ -313,10 +314,24 @@ describe("planGeneral and the preview locks", () => {
     expect(installedCode(planned.locks!.fragment!, "library")).toBeNull();
   });
 
-  test("refused: a new code for a site without one, a site on its own domain, the codes unreadable, another site's lock broken", () => {
-    expect(plan("renew", { manifest: LIBRARY })).toEqual({ kind: "rejects", message: "library does not open with a code: choose Anyone with the code first" });
+  test("a site on its own domain takes a code: its block already closes the domain, and is left as it is", () => {
     const domain = `${JSON.stringify({ ...parsed(LIBRARY), headers: undefined, domain: { name: "example.test", active: true } }, null, 2)}\n`;
-    expect(plan("code", { manifest: domain })).toMatchObject({ kind: "rejects", message: expect.stringContaining("serves its own domain, example.test") });
+    const planned = change(plan("code", { manifest: domain }));
+    expect(planned.block).toEqual({ kind: "none" });
+    expect(planned.portalChanged).toBe(false);
+    expect(installedCode(planned.locks!.fragment!, "library")).toBe("K7M2PQ");
+  });
+
+  test("a block an earlier release wrote is replaced by the current one, the portal unchanged", () => {
+    const domain = `${JSON.stringify({ ...parsed(LIBRARY), headers: undefined, domain: { name: "example.test", active: true } }, null, 2)}\n`;
+    const earlier = generateFragment(readManifest(domain).manifest!, "identity", "hidden", "open")!;
+    const planned = change(plan("code", { manifest: domain, block: earlier }));
+    expect(planned.block).toEqual({ kind: "write", text: blockOf(domain)! });
+    expect(planned.portalChanged).toBe(false);
+  });
+
+  test("refused: a new code for a site without one, the codes unreadable, another site's lock broken", () => {
+    expect(plan("renew", { manifest: LIBRARY })).toEqual({ kind: "rejects", message: "library does not open with a code: choose Anyone with the code first" });
     expect(plan("code", { manifest: LIBRARY, codes: "[]" })).toMatchObject({ kind: "rejects", message: expect.stringContaining("the codes file on the server does not read") });
     expect(plan("code", { manifest: LIBRARY, codes: { error: "a symbolic link" } })).toMatchObject({ kind: "rejects", message: expect.stringContaining("a symbolic link") });
     expect(plan("code", { manifest: LIBRARY, sites: [{ slug: "library", lock: undefined }, { slug: "other", lock: true }] })).toEqual({

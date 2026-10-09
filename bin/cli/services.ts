@@ -8,7 +8,7 @@
  * a marker, for the reason given in unit.ts: an empty output is a failed read,
  * never an answer.
  */
-import { isValidSlug, PORTAL_SLUG, readManifest, servicesOf, type Manifest } from "./manifest";
+import { domainHosts, isValidSlug, PORTAL_SLUG, readManifest, servicesOf, type Manifest } from "./manifest";
 import { PORTAL_PORT } from "./portal";
 import { LOOPBACK_TABLE, PROJECT_PORTS_FILE, PROJECT_PORTS_SET } from "./loopback";
 import { systemUser, unitArgument } from "./unit";
@@ -78,6 +78,31 @@ export function portConflicts(manifest: Manifest, deposited: ReadonlyMap<string,
       const who = service.name === null ? "" : ` (service ${service.name})`;
       conflicts.push(`port ${service.port}${who} is already declared by ${owner}`);
     }
+  }
+  return conflicts;
+}
+
+/**
+ * The names of `manifest`'s domain another project already declares on the
+ * machine, active or not.
+ *
+ * An app's fragment claims every name of its domain in a block of its own,
+ * and a block that names a host beats the nameless one of the static sites'
+ * domains: an app declaring a static site's domain, or its alias, would take
+ * that site's visitors as soon as the table certifies the name for its owner.
+ * Two apps declaring the same name would fail Caddy's validation for every
+ * site. Measured against the deposited manifests, like the ports.
+ */
+export function domainConflicts(manifest: Manifest, deposited: ReadonlyMap<string, string>): string[] {
+  if (manifest.domain === undefined) return [];
+  const mine = domainHosts(manifest.domain);
+  const conflicts: string[] = [];
+  for (const [slug, raw] of deposited) {
+    if (slug === manifest.slug) continue;
+    const { manifest: other } = readManifest(raw);
+    if (other?.domain === undefined || typeof other.domain.name !== "string") continue;
+    const theirs = new Set(domainHosts(other.domain));
+    for (const name of mine) if (theirs.has(name)) conflicts.push(`${name} is already declared by project ${slug}`);
   }
   return conflicts;
 }

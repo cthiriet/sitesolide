@@ -269,6 +269,30 @@ export function isValidHost(host: string): boolean {
 }
 
 /**
+ * What a protected block announces in `X-Portal-Hote`: the host the visitor
+ * asked for, then, from the block of a site's own domain, a space and the
+ * site's address under the zone.
+ *
+ * - `host` is the browser's: it signs the cookie, checks the Origin, and is
+ *   where a sign-in sends back;
+ * - `site` is whose people decide: the steward's projection files them under
+ *   the site's address, and a domain is not one. A preview block announces
+ *   its host alone, which is both.
+ *
+ * Both from the one header every protected block overwrites, deployed before
+ * domains could be guarded or after, never from a second header a block from
+ * before would let a visitor send (announcedFor in bin/cli/portal.ts).
+ * Lowercase, as the projection and the cookies are; null for anything else,
+ * which opens nothing.
+ */
+export function readAnnounced(header: string | null): { host: string; site: string } | null {
+  const names = (header ?? "").toLowerCase().split(" ");
+  if (names.length > 2) return null;
+  const [host = "", site = host] = names;
+  return isValidHost(host) && isValidHost(site) ? { host, site } : null;
+}
+
+/**
  * The token read from the Cookie header. An exact name comparison, never an
  * inclusion: a cookie named `trapportal` must not pass for ours.
  */

@@ -7,8 +7,10 @@ import {
   regressions,
   answers,
   fromPortal,
+  targetHosts,
   type ProbeResponse,
 } from "../src/gatekeeper/probe";
+import { activeDomain } from "../src/gatekeeper/plan";
 
 /**
  * What the sites have to answer after a reload. The case that matters most: a
@@ -81,7 +83,7 @@ describe("regressions", () => {
       ["test-zone.invalid", ok],
       ["calendar.test-zone.invalid", badGateway],
     ]);
-    expect(regressions(before, after, target)).toEqual(["calendar.test-zone.invalid"]);
+    expect(regressions(before, after, [target])).toEqual(["calendar.test-zone.invalid"]);
   });
 
   test("a site that was already silent is not a regression, it is named", () => {
@@ -90,12 +92,38 @@ describe("regressions", () => {
       ["calendar.test-zone.invalid", portal],
       ["vineyard.test-zone.invalid", unreachable],
     ]);
-    expect(regressions(before, after, target)).toEqual([]);
-    expect(alreadySilent(before, target)).toEqual(["vineyard.test-zone.invalid"]);
+    expect(regressions(before, after, [target])).toEqual([]);
+    expect(alreadySilent(before, [target])).toEqual(["vineyard.test-zone.invalid"]);
   });
 
   test("a site not queried afterwards counts as lost, the target has its own rule", () => {
     const after = new Map<string, ProbeResponse>([[target, unreachable]]);
-    expect(regressions(before, after, target)).toEqual(["test-zone.invalid", "calendar.test-zone.invalid"]);
+    expect(regressions(before, after, [target])).toEqual(["test-zone.invalid", "calendar.test-zone.invalid"]);
+  });
+});
+
+describe("the targeted site's addresses", () => {
+  const preview = "cms.test-zone.invalid";
+
+  test("its preview always, its domain when it answered before the action", () => {
+    expect(targetHosts(preview, null, new Map())).toEqual([preview]);
+    expect(targetHosts(preview, "cms.example", new Map([["cms.example", ok]]))).toEqual([preview, "cms.example"]);
+    expect(targetHosts(preview, "cms.example", new Map([["cms.example", portal]]))).toEqual([preview, "cms.example"]);
+    expect(targetHosts(preview, "cms.example", new Map([["cms.example", unreachable]]))).toEqual([preview]);
+    // Served, whatever it answers at its root: a redirect, a 404, a 502.
+    for (const code of [302, 404, 502]) {
+      expect(targetHosts(preview, "cms.example", new Map([["cms.example", { code, door: false, body: "" }]]))).toEqual([preview, "cms.example"]);
+    }
+    expect(targetHosts(preview, "cms.example", new Map())).toEqual([preview]);
+  });
+
+  test("a domain is the deposited manifest's when it is active, and nothing else", () => {
+    const manifest = (domain: unknown) => JSON.stringify({ slug: "cms", publicDir: "public", domain });
+    expect(activeDomain(manifest({ name: "cms.example", active: true }))).toBe("cms.example");
+    expect(activeDomain(manifest({ name: "cms.example", active: false }))).toBeNull();
+    expect(activeDomain(manifest({ name: "cms.example" }))).toBeNull();
+    expect(activeDomain(JSON.stringify({ slug: "cms", publicDir: "public" }))).toBeNull();
+    expect(activeDomain("{ not json")).toBeNull();
+    expect(activeDomain(null)).toBeNull();
   });
 });
