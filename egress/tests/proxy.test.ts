@@ -549,15 +549,29 @@ describe("what the proxy holds for a slow reader", () => {
     // Each end makes the proxy write to it while it is paused. Bun turns a
     // paused socket's reading back on when such a write comes up short: left
     // to itself, the proxy read gigabytes here, holding all of it.
+    //
+    // What the proxy holds is checked all along: per direction, the mark and
+    // what was already read when the pause landed, the overshoot, for each of
+    // the two. That the ends then stop writing is the kernel's to say, and
+    // only Linux, which production runs, says it: tcp_rmem bounds a socket's
+    // receive queue, and once the proxy stops reading, both ends block.
+    // macOS lets the receive queues of two loopback sockets flooding each
+    // other grow far past net.inet.tcp.autorcvbufmax, some 125 MB in three
+    // seconds, 1 run in 6 with Bun alone and no proxy between them, and
+    // delivers every byte once the socket reads again: measured on 9 October
+    // 2026, the ends there may write on into the kernel, the proxy forwarding
+    // what it accepts and holding no more.
     const { origin, proxy, stop } = bench();
+    const ceiling = 2 * (DEFAULT_LIMITS.bufferBytes + OVERSHOOT);
     try {
       const client = await floodingClient(proxy.port);
       const written = await settled(() => origin.written() + client.flood.written);
-      expect(written.after - written.before).toBeLessThan(BLOCK.length);
-      // Per direction, the mark and what was already read when the pause
-      // landed: the overshoot, for each of the two.
-      expect(proxy.buffered()).toBeLessThanOrEqual(2 * (DEFAULT_LIMITS.bufferBytes + OVERSHOOT));
+      for (let i = 0; i < 5; i++) {
+        expect(proxy.buffered()).toBeLessThanOrEqual(ceiling);
+        await Bun.sleep(100);
+      }
       expect(proxy.buffered()).toBeGreaterThan(0);
+      if (process.platform === "linux") expect(written.after - written.before).toBeLessThan(BLOCK.length);
     } finally {
       stop();
     }
