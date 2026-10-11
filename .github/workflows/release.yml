@@ -87,11 +87,14 @@ jobs:
         run: |
           set -euo pipefail
           files="dist/sitesolide-darwin-arm64 dist/sitesolide-darwin-x64 dist/sitesolide-linux-x64 dist/sitesolide-linux-arm64 dist/SHA256SUMS install.sh"
+          # A release is titled by its tag, v0.4.2, and by nothing else: the
+          # list reads alike from the first release to the last. One made by
+          # hand beforehand is brought to that title too.
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" $files --clobber
             # Published, never left a draft: releases/latest/download only
             # serves a published release.
-            gh release edit "$TAG" --draft=false
+            gh release edit "$TAG" --draft=false --title "$TAG"
           else
             # Created with its files in one call, so that latest/download is
             # never a release without them. A tag with a suffix, v0.3.0-rc.1,

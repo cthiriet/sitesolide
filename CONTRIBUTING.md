@@ -99,9 +99,11 @@ cache by hand: `chmod -R u+w ~/.cache/sitesolide`, then `rm -rf` it.
 On macOS the build signs the darwin binaries again, ad hoc, which is why the
 release workflow, `.github/workflows/release.yml`, runs there. On every `v*`
 tag it runs `bin/test.sh`, builds, and publishes the four binaries,
-`SHA256SUMS` and `install.sh` on the tag's release. Cross-compiling fetches the
-Bun runtime of each target once, and the dashboard's build its packages, so a
-build needs the network.
+`SHA256SUMS` and `install.sh` on the tag's release, titled by the tag alone.
+Cross-compiling fetches the Bun runtime of each target once, and the
+dashboard's build its packages, so a build needs the network. Cutting a
+release, its notes' format included, is
+[.claude/skills/release/SKILL.md](.claude/skills/release/SKILL.md).
 
 ## What has to be tested
 
