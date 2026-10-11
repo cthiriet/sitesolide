@@ -29,9 +29,11 @@ analytics/node_modules/
 # installation, which this repository does not know.
 infra/verrous/verrou.html
 
-# Terraform's values and state live in ~/.config/sitesolide/terraform/, see
-# bin/terraform.sh. These lines stay as a second guard, should a file land here
-# again by an old habit: each would carry a token or the machine's address.
+# Terraform left the repository in 0.3; up to 0.2 its values and state lived in
+# ~/.config/sitesolide/terraform/. These lines stay as a second guard, should a
+# file land here again by an old habit: each would carry a token or the
+# machine's address, and its working folder the providers and a backend path.
+infra/.terraform/
 infra/terraform.tfstate
 infra/terraform.tfstate.*
 infra/*.tfvars
