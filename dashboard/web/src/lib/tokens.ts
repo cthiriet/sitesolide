@@ -8,9 +8,10 @@
  * see is empty or malformed, so that the owner does not wait for a round trip
  * to learn a field is missing.
  */
+import { isPlatform } from "./access"
 import { duration } from "./format"
 import type { Tone } from "./tones"
-import type { AuditEntry, DeploymentState, Role, Roles, Scope, TokenView } from "./types"
+import type { AuditEntry, DeploymentState, Role, Roles, Scope, Site, TokenView } from "./types"
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -90,32 +91,53 @@ export function reachedProjects(token: Pick<TokenView, "owned" | "scope">): { sl
   return [...created, ...granted]
 }
 
-/** The slugs typed in the form: commas, spaces or lines between them, each once, in order. */
-export function parseSlugs(text: string): string[] {
-  const seen: string[] = []
-  for (const part of text.split(/[\s,]+/)) {
-    const slug = part.trim().toLowerCase()
-    if (slug !== "" && !seen.includes(slug)) seen.push(slug)
-  }
-  return seen
-}
-
 export type TokenField = "label" | "slugs"
 export type TokenErrors = Partial<Record<TokenField, string>>
 
-const SLUG = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
-
-/** What the owner's form for a token of their own can see is wrong before sending. The steward judges the rest. */
-export function validateTokenForm(fields: { label: string; slugs: string[] }, knownSlugs: readonly string[]): TokenErrors {
+/** What the form can see is wrong before sending: a name, and something to deploy. The steward judges the rest. */
+export function validateTokenForm(fields: { label: string; slugs: readonly string[]; create: boolean }): TokenErrors {
   const errors: TokenErrors = {}
-  if (fields.label.trim() === "") errors.label = "Name the agent or the workstation this token is for."
-  const bad = fields.slugs.find((slug) => !SLUG.test(slug) || slug.length > 63)
-  if (bad !== undefined) errors.slugs = `${bad} is not a slug: lowercase letters, digits and dashes.`
-  else {
-    const unknown = fields.slugs.filter((slug) => !knownSlugs.includes(slug))
-    if (unknown.length > 0) errors.slugs = `Not on this machine: ${unknown.join(", ")}. A new project needs "May create projects" instead.`
-  }
+  if (fields.label.trim() === "") errors.label = "Name the laptop, the workstation or the agent this token is for."
+  if (fields.slugs.length === 0 && !fields.create) errors.slugs = "Choose at least one project, or New projects."
   return errors
+}
+
+/**
+ * A project the dialog offers, and what deploying it takes from a token, read
+ * from the server's snapshot: `open`, its general access is not Restricted;
+ * `exempt`, it lets paths through the portal; `domain`, it declares a domain.
+ */
+export type TokenProject = { slug: string; open: boolean; exempt: boolean; domain: boolean }
+
+/** The projects a token may be given: every one on the server but the platform's own, which the steward refuses. Sorted. */
+export function tokenProjects(sites: readonly Pick<Site, "slug" | "portal" | "domain">[], zone: string | null): TokenProject[] {
+  return sites
+    .filter((site) => !isPlatform(site.slug, zone))
+    .map((site) => ({ slug: site.slug, open: !site.portal.wanted, exempt: site.portal.exemptions.length > 0, domain: site.domain !== null }))
+    .sort((a, b) => a.slug.localeCompare(b.slug))
+}
+
+/**
+ * The options the projects chosen cannot be deployed without, each with the
+ * projects that ask for it. The steward refuses the rest (src/control/policy.ts):
+ * an owner's token deploys a project that is not Restricted only with public
+ * sites, a person's deploys it as it stands (`decideDoor`); exempted paths
+ * take public sites and a declared domain takes its option from both
+ * (`scopeRefusals`). `member`: a person's token.
+ */
+export function neededOptions(projects: readonly TokenProject[], chosen: readonly string[], member: boolean): { public: string[]; domain: string[] } {
+  const picked = projects.filter((project) => chosen.includes(project.slug))
+  return {
+    public: picked.filter((project) => project.exempt || (!member && project.open)).map((project) => project.slug),
+    domain: picked.filter((project) => project.domain).map((project) => project.slug),
+  }
+}
+
+/** Why an option is ticked for the owner: "Needed by cms", "Needed by cms and shop", "Needed by blog, cms and 2 more". */
+export function neededLine(slugs: readonly string[]): string {
+  if (slugs.length <= 2) return `Needed by ${slugs.join(" and ")}`
+  if (slugs.length === 3) return `Needed by ${slugs[0]}, ${slugs[1]} and ${slugs[2]}`
+  return `Needed by ${slugs[0]}, ${slugs[1]} and ${slugs.length - 2} more`
 }
 
 export function firstTokenField(errors: TokenErrors): TokenField | null {
@@ -248,20 +270,13 @@ export function mintableProjects(roles: Roles): { slug: string; role: Exclude<Ro
 
 /**
  * What the token dialog says when the person it is for has no project it
- * may deploy: no project at all yet, or a Viewer on each; then that it may
- * still create projects, when it may. `holder`: the person, when the owner
- * makes it for them; null for one's own.
+ * may deploy: no project at all yet, or a Viewer on each. *New projects*,
+ * right below, says whether it may still create some. `holder`: the person,
+ * when the owner makes it for them; null for one's own.
  */
-export function noProjectText(target: { roles: Roles; create: boolean }, holder: string | null): string {
-  const first =
-    Object.keys(target.roles).length === 0
-      ? holder === null
-        ? "No project yet."
-        : `${holder} has no project yet.`
-      : holder === null
-        ? "None of your projects: you are a Viewer on each."
-        : `None of ${holder}'s projects: a Viewer on each.`
-  return target.create ? `${first} It may still create projects.` : first
+export function noProjectText(roles: Roles, holder: string | null): string {
+  if (Object.keys(roles).length === 0) return holder === null ? "No project yet." : `${holder} has no project yet.`
+  return holder === null ? "None of your projects: you are a Viewer on each." : `None of ${holder}'s projects: a Viewer on each.`
 }
 
 /**
@@ -273,12 +288,4 @@ export function noProjectText(target: { roles: Roles; create: boolean }, holder:
 export function optionsAllowed(roles: Roles, slugs: readonly string[], create: boolean): boolean {
   if (slugs.length === 0) return create
   return slugs.every((slug) => Object.hasOwn(roles, slug) && roles[slug] === "admin")
-}
-
-/** What a person's form can see is wrong before sending: a name, and something to deploy. */
-export function validatePersonTokenForm(fields: { label: string; slugs: readonly string[]; create: boolean }): TokenErrors {
-  const errors: TokenErrors = {}
-  if (fields.label.trim() === "") errors.label = "Name the laptop, the workstation or the agent this token is for."
-  if (fields.slugs.length === 0 && !fields.create) errors.slugs = "Choose at least one project, or creating projects."
-  return errors
 }

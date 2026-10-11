@@ -3,7 +3,8 @@ import {
   mintableProjects,
   noProjectText,
   optionsAllowed,
-  validatePersonTokenForm,
+  neededLine,
+  neededOptions,
   auditLine,
   deploymentLabel,
   deploymentTone,
@@ -12,7 +13,6 @@ import {
   messageText,
   isLive,
   loginCommand,
-  parseSlugs,
   reachedProjects,
   scopeSummary,
   scopeLines,
@@ -22,7 +22,9 @@ import {
   tokenStatus,
   validateTokenForm,
   tokenHolders,
+  tokenProjects,
 } from "../src/lib/tokens"
+import { site } from "./factory"
 
 const NOW = 1_800_000_000_000
 const DAY = 24 * 60 * 60 * 1000
@@ -58,17 +60,11 @@ describe("a token's state", () => {
 })
 
 describe("the form", () => {
-  test("slugs separated by commas, spaces or lines, each once", () => {
-    expect(parseSlugs(" cms, shop\nCMS  blog,")).toEqual(["cms", "shop", "blog"])
-    expect(parseSlugs("")).toEqual([])
-  })
-
-  test("what it can see before sending", () => {
-    const known = ["cms", "shop"]
-    expect(validateTokenForm({ label: "Ada", slugs: ["cms"] }, known)).toEqual({})
-    expect(validateTokenForm({ label: " ", slugs: [] }, known)).toMatchObject({ label: expect.any(String) })
-    expect(validateTokenForm({ label: "Ada", slugs: ["Bad Slug"] }, known).slugs).toContain("not a slug")
-    expect(validateTokenForm({ label: "Ada", slugs: ["blog"] }, known).slugs).toContain("Not on this machine: blog")
+  test("what it can see before sending: a name, and something to deploy", () => {
+    expect(validateTokenForm({ label: "Ada", slugs: ["cms"], create: false })).toEqual({})
+    expect(validateTokenForm({ label: " ", slugs: ["cms"], create: false })).toMatchObject({ label: expect.any(String) })
+    expect(validateTokenForm({ label: "Ada", slugs: [], create: false })).toHaveProperty("slugs")
+    expect(validateTokenForm({ label: "Ada", slugs: [], create: true })).toEqual({})
     expect(firstTokenField({ slugs: "x", label: "y" })).toBe("label")
     expect(firstTokenField({})).toBeNull()
   })
@@ -126,6 +122,39 @@ describe("deployments and the audit", () => {
   })
 })
 
+describe("the projects offered", () => {
+  const sites = [
+    site({ slug: "shop", portal: { wanted: false, installed: false, exemptions: [] }, domain: { name: "shop.example", aliases: [], active: true, route: true } }),
+    site({ slug: "cms", portal: { wanted: true, installed: true, exemptions: [] } }),
+    site({ slug: "calendar", portal: { wanted: true, installed: true, exemptions: ["/book"] } }),
+    site({ slug: "dashboard" }),
+    site({ slug: "test-zone.invalid" }),
+  ]
+
+  test("every project but the platform's own, sorted, with what deploying it takes", () => {
+    expect(tokenProjects(sites, "test-zone.invalid")).toEqual([
+      { slug: "calendar", open: false, exempt: true, domain: false },
+      { slug: "cms", open: false, exempt: false, domain: false },
+      { slug: "shop", open: true, exempt: false, domain: true },
+    ])
+  })
+
+  test("an option a project chosen cannot be deployed without, with the projects that need it", () => {
+    const projects = tokenProjects(sites, "test-zone.invalid")
+    expect(neededOptions(projects, ["cms"], false)).toEqual({ public: [], domain: [] })
+    expect(neededOptions(projects, ["shop", "calendar"], false)).toEqual({ public: ["calendar", "shop"], domain: ["shop"] })
+    // A person's token deploys a public project as it stands: exempted paths and a domain still take the option.
+    expect(neededOptions(projects, ["shop", "calendar"], true)).toEqual({ public: ["calendar"], domain: ["shop"] })
+  })
+
+  test("which projects need it, in a few words", () => {
+    expect(neededLine(["cms"])).toBe("Needed by cms")
+    expect(neededLine(["cms", "shop"])).toBe("Needed by cms and shop")
+    expect(neededLine(["blog", "cms", "shop"])).toBe("Needed by blog, cms and shop")
+    expect(neededLine(["blog", "cms", "shop", "wiki"])).toBe("Needed by blog, cms and 2 more")
+  })
+})
+
 describe("a person's own token", () => {
   const roles = { alpha: "developer", beta: "admin", gamma: "viewer" } as const
 
@@ -137,11 +166,11 @@ describe("a person's own token", () => {
     expect(mintableProjects({ gamma: "viewer" })).toEqual([])
   })
 
-  test("nothing to offer: no project yet, or a Viewer on each, and the create right said when it is held", () => {
-    expect(noProjectText({ roles: {}, create: false }, null)).toBe("No project yet.")
-    expect(noProjectText({ roles: {}, create: true }, "maya@example.com")).toBe("maya@example.com has no project yet. It may still create projects.")
-    expect(noProjectText({ roles: { gamma: "viewer" }, create: false }, null)).toBe("None of your projects: you are a Viewer on each.")
-    expect(noProjectText({ roles: { gamma: "viewer" }, create: true }, "maya@example.com")).toBe("None of maya@example.com's projects: a Viewer on each. It may still create projects.")
+  test("nothing to offer: no project yet, or a Viewer on each", () => {
+    expect(noProjectText({}, null)).toBe("No project yet.")
+    expect(noProjectText({}, "maya@example.com")).toBe("maya@example.com has no project yet.")
+    expect(noProjectText({ gamma: "viewer" }, null)).toBe("None of your projects: you are a Viewer on each.")
+    expect(noProjectText({ gamma: "viewer" }, "maya@example.com")).toBe("None of maya@example.com's projects: a Viewer on each.")
   })
 
   test("the options: an Admin of every project chosen, or a token that only creates", () => {
@@ -149,12 +178,6 @@ describe("a person's own token", () => {
     expect(optionsAllowed(roles, ["alpha", "beta"], false)).toBe(false)
     expect(optionsAllowed(roles, [], true)).toBe(true)
     expect(optionsAllowed(roles, [], false)).toBe(false)
-  })
-
-  test("the form: a name, and something to deploy", () => {
-    expect(validatePersonTokenForm({ label: "", slugs: ["alpha"], create: false })).toHaveProperty("label")
-    expect(validatePersonTokenForm({ label: "laptop", slugs: [], create: false })).toHaveProperty("slugs")
-    expect(validatePersonTokenForm({ label: "laptop", slugs: [], create: true })).toEqual({})
   })
 
   test("the steward's refusal above their roles, without the fields' prefixes, under the projects when it is about them", () => {

@@ -12,7 +12,7 @@ import { CreateTokenDialog, RevokeTokenDialog } from "@/components/token-dialogs
 import { readPeople, readTokens, revokeToken } from "@/lib/api"
 import { isPerson } from "@/lib/identity"
 import { ago, dateTime } from "@/lib/format"
-import { auditLine, deploymentLabel, deploymentTone, isLive, liveReach, madeByLine, scopeLines, tokenHolders, tokenStatus } from "@/lib/tokens"
+import { auditLine, deploymentLabel, deploymentTone, isLive, liveReach, madeByLine, scopeLines, tokenHolders, tokenProjects, tokenStatus } from "@/lib/tokens"
 import type { AccessRole, Roles, TeamPageResponse, TokenView } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -173,7 +173,7 @@ export function TokensPage() {
     void reload()
   }
 
-  const knownSlugs = snapshot?.sites.map((site) => site.slug) ?? []
+  const projects = tokenProjects(snapshot?.sites ?? [], snapshot?.zone ?? null)
   const list = loaded.state === "ready" ? loaded.list : null
   const person = list?.member ?? null
   const rightsOf = (token: TokenView): { roles: Readonly<Record<string, AccessRole>>; create: boolean } | null =>
@@ -288,7 +288,7 @@ export function TokensPage() {
         key={creating.opening}
         open={creating.open}
         origin={window.location.origin}
-        knownSlugs={knownSlugs}
+        projects={projects}
         person={person === null ? null : { roles: person.roles, create: person.create }}
         holders={holders}
         now={serverNow}
