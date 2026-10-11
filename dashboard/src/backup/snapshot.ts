@@ -54,6 +54,7 @@ import { liveArgument } from "./child";
 import { MAX_ENTRIES, type CopySummary } from "./copy";
 import { entryPlace } from "./extract";
 import { discardHooks, hooksFolder, liveFolders, projectHooks, runHooks, type Hook } from "./hooks";
+import { machineBinds } from "./machine";
 import { freeBytes, type Project } from "./projects";
 import {
   backupArguments,
@@ -225,7 +226,8 @@ export async function takeSnapshot(
   const commands = !stopped && hooks.length > 0;
   // What an earlier removal left, for a project that has since dropped its
   // command or not, goes too: looked at by its name alone, never opened.
-  const leftover = lstatOrNull(hooksFolder(place.path)) !== null;
+  // The machine's own state runs no command and leaves none.
+  const leftover = project.sources === undefined && lstatOrNull(hooksFolder(place.path)) !== null;
   try {
     if (commands) {
       const ran = await runHooks(config, project, hooks, deadline, place.cacheDirectory, log);
@@ -271,11 +273,14 @@ async function copySnapshot(config: BackupConfig, project: Project, plan: CopyPl
   const repository = localRepository(config);
   const folder = project.folder;
 
+  // The machine's own state: its folders bound read-only, read by a dynamic
+  // user through one capability, every file as it is (machine.ts).
+  const machine = project.sources !== undefined;
   const job: Job = {
     mode: "copy",
     folder,
-    account: project.account,
-    uid: project.owner?.uid ?? null,
+    account: machine ? null : project.account,
+    uid: machine ? null : (project.owner?.uid ?? null),
     // The time to the second, as the name carries it: the description says the same.
     args: [
       project.dataDir,
@@ -283,16 +288,17 @@ async function copySnapshot(config: BackupConfig, project: Project, plan: CopyPl
       folder,
       String(Math.floor(now / 1000) * 1000),
       String(room),
-      ...(raw ? ["raw"] : []),
+      ...(raw || machine ? ["raw"] : []),
       ...(stopped ? ["stopped"] : []),
       ...plan.live.map(liveArgument),
     ],
-    readWrite: [project.dataDir],
-    bind: [project.dataDir],
+    readWrite: machine ? [] : [project.dataDir],
+    bind: machine ? [] : [project.dataDir],
     cacheDirectory: place.cacheDirectory,
     stdin: null,
     stdout: "pipe",
     timeoutMs,
+    ...(machine ? { bindReadOnly: machineBinds(project), readAll: true } : {}),
   };
 
   /**

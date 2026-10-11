@@ -70,9 +70,12 @@ asks for is put to the repository's author, never run on the agent's say-so.
 
 ## Secrets
 
-**The machine is the source of truth, and the only holder.** `/etc/sitesolide`
-is the production vault, and the dashboard holds the files of every deployed
-project there. `sitesolide deploy` never pushes a secret: it checks one is
+**The machine is the source of truth, and the only holder but its
+backups.** `/etc/sitesolide` is the production vault, and the dashboard holds
+the files of every deployed project there. The backups copy it every hour with
+the rest of the machine's own state, into the server's restic repository and,
+encrypted, the bucket; nothing lists or restores that copy but a person, by
+hand. `sitesolide deploy` never pushes a secret: it checks one is
 present, and points to the dashboard when it is not. The detail is in
 [docs/secrets.md](docs/secrets.md) and [dashboard/README.md](dashboard/README.md).
 

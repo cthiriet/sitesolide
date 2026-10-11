@@ -101,6 +101,13 @@ export type Job = {
   workingDirectory?: string | null;
   /** Its memory ceiling, CHILD_MEMORY unless said: a backup command is given its service's. */
   memory?: string;
+  /**
+   * The copy of the machine's own state alone (machine.ts): a dynamic user
+   * of its own, no account's and not root, reading every account's files
+   * through CAP_DAC_READ_SEARCH alone, the secrets and the steward's state
+   * bound read-only through `bindReadOnly` rather than hidden.
+   */
+  readAll?: boolean;
 };
 
 /** What PID 1 allows a stopped unit before SIGKILL: a copy has nothing to save on its way out. */
@@ -143,9 +150,9 @@ export function confinement(job: Job): string[] {
     "TemporaryFileSystem=/srv:ro",
     ...(job.bindReadOnly ?? []).map((path) => `BindReadOnlyPaths=${path}`),
     ...job.bind.map((path) => `BindPaths=${path}`),
-    // Neither the secrets nor the steward's state: nothing here needs them.
-    "InaccessiblePaths=-/etc/sitesolide",
-    "InaccessiblePaths=-/var/lib/sitesolide-steward",
+    // Neither the secrets nor the steward's state: nothing here needs them,
+    // but the copy of the machine's own state, which has them bound read-only.
+    ...(job.readAll === true ? [] : ["InaccessiblePaths=-/etc/sitesolide", "InaccessiblePaths=-/var/lib/sitesolide-steward"]),
     "InaccessiblePaths=-/var/backups",
     "ProtectKernelTunables=yes",
     "ProtectKernelModules=yes",
@@ -170,6 +177,10 @@ export function confinement(job: Job): string[] {
     `TimeoutStopSec=${STOP_GRACE}`,
   ];
   if (job.cacheDirectory !== null) properties.push(`CacheDirectory=${job.cacheDirectory}`, "CacheDirectoryMode=0700");
+  // The machine's own state: reading the files of every account is all it
+  // may do. Not root with that capability alone: uid 0 may still signal
+  // root's processes and ask PID 1 for a unit, which judges by the uid.
+  if (job.readAll === true) properties.push("DynamicUser=yes", "AmbientCapabilities=CAP_DAC_READ_SEARCH", "CapabilityBoundingSet=CAP_DAC_READ_SEARCH");
   return properties;
 }
 

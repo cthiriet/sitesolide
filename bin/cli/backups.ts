@@ -94,6 +94,16 @@ export const LEGACY_SUFFIX = ".tar.gz";
 const PRE_RESTORE_SUFFIX = "-pre-restore";
 
 /**
+ * The folder the machine's own state is snapshotted under, beside the
+ * projects': the secrets of /etc/sitesolide, the steward's registry and
+ * Caddy's configuration, which no project's data holds
+ * (dashboard/src/backup/README.md). Never a site: `deploy` refuses it as a
+ * slug, and the steward never takes it for one, so the dashboard neither
+ * lists nor restores it.
+ */
+export const MACHINE_FOLDER = "machine";
+
+/**
  * A project's folder as it can appear in a snapshot's path and name: a slug,
  * or the landing's folder, which bears the zone's name and therefore dots.
  * Never `..`, never a slash, never a leading or trailing dot or dash: the name

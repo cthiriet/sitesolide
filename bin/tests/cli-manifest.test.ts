@@ -79,6 +79,12 @@ describe("validation", () => {
     );
   });
 
+  test("refuses the name the machine's own state is backed up under", () => {
+    // Its snapshots would mix with those of the secrets, which no page restores.
+    expect(validate({ ...APP, slug: "machine" })).toEqual([expect.stringContaining("reserved for the backups of the machine's own state")]);
+    expect(validate({ ...APP, slug: "machines" })).toEqual([]);
+  });
+
   test("refuses the name of a service the machine runs, which deploy would replace", () => {
     // caddy.service lives in /lib/systemd/system: deploy, seeing no file in
     // /etc, would lay one there, and the next restart would take every site

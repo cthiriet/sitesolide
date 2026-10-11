@@ -598,8 +598,9 @@ To undo a deletion made by mistake, put a copy of the file back, root
 The steward reads it at the next decision and writes the portal's
 projection again from it; the changes made to the rebuilt registry
 meanwhile are lost, and the tokens the sweep revoked stay revoked, as every
-revoked token does: their holders mint new ones. The machine's backups do
-not hold the steward's state, so that copy is yours to make before you edit
+revoked token does: their holders mint new ones. The machine's backups hold
+the steward's state, as it stood an hour ago at most (src/backup/README.md,
+"The machine's own state"); make your own copy all the same before you edit
 the file by hand.
 
 ### Who decides what

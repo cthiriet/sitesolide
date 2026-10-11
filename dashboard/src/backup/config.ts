@@ -17,6 +17,7 @@
  * of its repository move for the tests alone.
  */
 import { BACKUP_FOLDER, RESTIC_KEY, RESTIC_REPOSITORY } from "../../borrowed/backups";
+import { MACHINE_SOURCES, MACHINE_VIEW, type MachineSource } from "./machine";
 import { offsiteFrom, type OffsiteSetting } from "./offsite";
 import { policyFrom, type RetentionPolicy } from "./retention";
 
@@ -76,6 +77,14 @@ export type BackupConfig = {
    * download child is handed it by name, read by PID 1 (runner.ts).
    */
   offsiteFile: string;
+  /**
+   * The machine's own state (machine.ts). Under systemd, always: the
+   * folders bound read-only into the copy's view. With no isolation, the
+   * workstation's tests name a folder copied as it is, BACKUP_MACHINE_DIR,
+   * or there is none: root never takes that variable under systemd, where
+   * the dashboard's Secrets page writes the unit's environment.
+   */
+  machine: { dataDir: string; sources: readonly MachineSource[] } | null;
   zone: string;
   /** The contact address, for a `{contact}` in the env a backup command is handed: /etc/caddy/sitesolide.env sets it. */
   contact: string;
@@ -107,6 +116,11 @@ export function isolationRefusal(isolation: Isolation, uid: number | null, invoc
 function countFrom(raw: string, name: string): number {
   if (!/^[0-9]+$/.test(raw)) throw new Error(`${name} must be a whole number`);
   return Number(raw);
+}
+
+/** The workstation's tests' machine state: a folder copied as it is, or none. */
+function testMachine(folder: string | null): BackupConfig["machine"] {
+  return folder === null ? null : { dataDir: folder, sources: [] };
 }
 
 /** The configuration, or an exception naming the variable at fault: the run then fails loudly, never half-configured. */
@@ -144,6 +158,7 @@ export function configFrom(env: Environment, entry: { bun: string; script: strin
     childTimeoutMs: countFrom(env.BACKUP_CHILD_TIMEOUT_MS ?? String(DEFAULT_CHILD_TIMEOUT_MS), "BACKUP_CHILD_TIMEOUT_MS"),
     offsite: offsiteFrom(env),
     offsiteFile: env.BACKUP_OFFSITE_FILE ?? OFFSITE_FILE,
+    machine: isolation === "systemd" ? { dataDir: MACHINE_VIEW, sources: MACHINE_SOURCES } : testMachine(env.BACKUP_MACHINE_DIR ?? null),
     // No default: the landing's folder bears the zone's name, and an invented
     // zone would leave the landing's data out of every snapshot.
     zone: env.SITESOLIDE_ZONE ?? "",

@@ -21,7 +21,7 @@
  * through the steward, since a restore can take longer than any request should
  * stay open.
  */
-import { isBackupFolder, readSnapshotName } from "../../borrowed/backups";
+import { isBackupFolder, MACHINE_FOLDER, readSnapshotName } from "../../borrowed/backups";
 import { PORTAL_SLUG } from "../../borrowed/manifest";
 import { DASHBOARD_SLUG } from "../gatekeeper/rules";
 
@@ -38,6 +38,7 @@ export const MAX_RESULT_BYTES = 8192;
 export const MESSAGE_MAX = 400;
 
 export const DASHBOARD_REFUSAL = "the dashboard's own data is not restored from the dashboard: see the Backups README to do it by hand";
+export const MACHINE_REFUSAL = "the machine's own state is not restored from the dashboard: see the Backups README to put its files back by hand";
 export const PORTAL_REFUSAL =
   "the portal's data is not restored from the dashboard: an old copy would bring back its old audit and the tables it kept before the access registry; see the Backups README to do it by hand";
 
@@ -46,11 +47,13 @@ export const PORTAL_REFUSAL =
  * and the one-shot both judge it. The dashboard: the page doing it would cut
  * itself off. The portal: its data holds the key its cookies are signed with,
  * its audit and the tables it kept before the access registry, and an old copy
- * would bring all three back as they were. Both are restored by hand, by
- * someone who knows what they bring back (README).
+ * would bring all three back as they were. The machine's own state: no site
+ * at all, every project's secrets, put back file by file. Each is restored
+ * by hand, by someone who knows what it brings back (README).
  */
 export function excludedFromRestore(folder: string): string | null {
   if (folder === DASHBOARD_SLUG) return DASHBOARD_REFUSAL;
+  if (folder === MACHINE_FOLDER) return MACHINE_REFUSAL;
   if (folder === PORTAL_SLUG) return PORTAL_REFUSAL;
   return null;
 }

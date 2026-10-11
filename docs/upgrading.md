@@ -117,6 +117,53 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## The machine's own state is backed up
+
+Every run now takes, first, a snapshot named `machine`: `/etc/sitesolide`,
+every project's secret files; `/var/lib/sitesolide-steward`, the access
+registry, the previous versions of the secrets and the steward's log; and
+`/etc/caddy`, the preview codes, the zone's settings, the DNS token and the
+domains table. It is read back, kept, copied to the bucket and checked like a
+project's snapshot. Until now a lost machine took all of it along: the data
+came back from the bucket, and every key had to be minted again.
+
+**What `sitesolide upgrade` brings**: the backup component, which takes it;
+the steward and the dashboard, which never take `machine` for a site. Check
+after the next run, or at once with `ssh you@your-machine 'sudo systemctl
+start sitesolide-backup.service'`: `sudo cat
+/var/lib/sitesolide-backup/last-run.json` names `machine` first, with a
+snapshot. Its files are put back by hand, never from a page:
+[dashboard/src/backup/README.md](../dashboard/src/backup/README.md#the-machines-own-state).
+
+**What changes for you.**
+
+- `deploy` refuses the slug `machine`. A project deployed under that slug
+  before this release is no longer a site to the steward nor to the backups:
+  deploy it under another slug before upgrading, and remove the old one.
+- The monitor's backup line counts `machine` among the projects, and names it
+  when its snapshot fails.
+- The secrets now sit in the bucket too, encrypted with
+  `BACKUP_ENCRYPTION_PASSPHRASE`: whoever holds that passphrase and read
+  access to the bucket holds every secret of the machine, as they already
+  held every project's data.
+
+**Going back.** Forget the snapshots of `machine` first, in the server's
+repository and in the bucket's: the previous steward takes any deployed
+folder for a site, `machine` included, and a project deployed under that
+slug with the previous CLI would list them and could restore every secret
+into its own data.
+
+```bash
+ssh you@your-machine
+sudo -i
+export RESTIC_REPOSITORY=/var/backups/sitesolide-restic RESTIC_PASSWORD_FILE=/var/backups/sitesolide-restic.key
+restic forget --prune $(restic snapshots --path /machine.tar --json | python3 -c 'import json, sys; print(" ".join(s["id"] for s in json.load(sys.stdin)))')
+```
+
+Then the same with the bucket's repository, as [Restoring by
+hand](../dashboard/src/backup/README.md#restoring-by-hand-when-the-dashboard-does-not-answer)
+opens it. The previous component takes no new snapshot of `machine`.
+
 ## A site closes on every address
 
 Restricted and Anyone with the code now close a site on its own domain too,
@@ -304,9 +351,9 @@ of the file, root `0600`:
 `ssh deploy@203.0.113.10 'sudo install -m 600 -o root -g root <copy> /var/lib/sitesolide-steward/access.json'`.
 Everyone's roles and access come back with it; the changes made to the
 rebuilt registry in between are lost, and the tokens the sweep revoked stay
-revoked, to be minted again. The machine's backups do not hold the steward's
-state: make that copy yourself, `sudo cp -p` of the file, before you edit it
-by hand.
+revoked, to be minted again. The machine's backups hold the steward's state
+from 0.4.2 on, an hour old at most; make a copy yourself all the same,
+`sudo cp -p` of the file, before you edit it by hand.
 
 ## Anyone with the code, from the dashboard
 

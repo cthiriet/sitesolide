@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { isBackupFolder } from "../../borrowed/backups";
 import { isBackedUp, readManifest, type Manifest } from "../../borrowed/manifest";
 import { isSiteFolder, siteAccount } from "../secrets/scope";
+import type { MachineSource } from "./machine";
 import { readAccount } from "../secrets/system";
 
 export type Project = {
@@ -27,6 +28,12 @@ export type Project = {
   owner: { uid: number; gid: number } | null;
   dataDir: string;
   manifest: Manifest | null;
+  /**
+   * The machine's own state alone (machine.ts): the folders its copy's unit
+   * binds read-only under `dataDir`, its view, the copy reading as root.
+   * Absent for a project, whose data folder is bound as it is.
+   */
+  sources?: readonly MachineSource[];
 };
 
 /** Why a project has no snapshot this time, on purpose. */

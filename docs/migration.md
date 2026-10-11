@@ -720,6 +720,6 @@ changes made after the first migration are then lost instead: choose the
 side that holds what you want to keep. Within thirty seconds of the rebuild,
 the steward revokes the tokens of anyone the rebuilt registry no longer
 names, and they stay revoked even if the file is put back: copy
-`access.json` first, since the machine's backups do not hold
-`/var/lib/sitesolide-steward`.
+`access.json` first. The machine's backups hold
+`/var/lib/sitesolide-steward` from 0.4.2 on, an hour old at most.
 

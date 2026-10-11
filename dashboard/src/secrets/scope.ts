@@ -40,6 +40,7 @@
  * would become a mute 500, a refusal is read and displayed.
  */
 import { relative, resolve } from "node:path";
+import { MACHINE_FOLDER } from "../../borrowed/backups";
 import { isApp, readManifest, isValidSlug, type Manifest } from "../../borrowed/manifest";
 import { IDENTITY_VARIABLES } from "../../borrowed/sharing";
 import { PASSWORD_MAX } from "../auth";
@@ -174,7 +175,9 @@ const octal = (mode: number) => mode.toString(8).padStart(3, "0");
 /**
  * Is a directory of /srv/sites a site? A slug, or the landing's directory.
  * `landing` itself is not one: the CLI refuses that slug, and a directory of
- * that name would fight the landing over the `landing-*` files.
+ * that name would fight the landing over the `landing-*` files. Nor is
+ * `machine`, the CLI refuses it too: it names the snapshots of the machine's
+ * own state, its secrets among them, which no page lists or restores.
  */
 export function isSiteFolder(folder: string): boolean {
   // The guard on the empty string is not decorative: with no declared zone,
@@ -182,7 +185,7 @@ export function isSiteFolder(folder: string): boolean {
   // landing. That is exactly the name a malformed directory entry carries.
   if (folder === "") return false;
   if (folder === LANDING_FOLDER) return true;
-  return isValidSlug(folder) && folder !== LANDING_LABEL;
+  return isValidSlug(folder) && folder !== LANDING_LABEL && folder !== MACHINE_FOLDER;
 }
 
 /** The label that prefixes a site's files and account. */

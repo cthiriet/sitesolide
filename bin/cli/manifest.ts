@@ -14,6 +14,7 @@
  * This whole file is pure: nothing in it touches the disk or the network, so
  * that every refusal from `validate()` is checkable without a server.
  */
+import { MACHINE_FOLDER } from "./backups";
 import { egressErrors } from "./egress";
 
 /**
@@ -696,6 +697,9 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     // /srv/sites/landing and publishes a duplicate of the landing that the
     // wildcard block serves straight away.
     errors.push("slug: landing is reserved for the site on the bare domain, which deploy does not handle");
+  } else if (manifest.slug === MACHINE_FOLDER) {
+    // Its snapshots would mix with those of the machine's own state.
+    errors.push(`slug: ${MACHINE_FOLDER} is reserved for the backups of the machine's own state: pick another`);
   } else if (isSystemName(manifest.slug)) {
     errors.push(`slug: ${manifest.slug} is a name the machine already uses, a system service or the landing's www: pick another`);
   }

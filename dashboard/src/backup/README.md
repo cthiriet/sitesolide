@@ -1,9 +1,9 @@
 # Backups
 
-Every project's data folder, snapshotted every hour into a restic repository
-on the server, kept by a retention policy, copied to a second restic
-repository in a bucket if you configure one, and restored one project at a
-time from the dashboard's *Backups* section.
+Every project's data folder, and the machine's own state, snapshotted every
+hour into a restic repository on the server, kept by a retention policy,
+copied to a second restic repository in a bucket if you configure one, and
+restored one project at a time from the dashboard's *Backups* section.
 
 Small software keeps its state in its data folder, mostly SQLite. Before this,
 the only backup was the cloud provider's image of the whole machine: getting
@@ -54,6 +54,23 @@ repositories, and the next deploy puts them back.
   and its description names the folder (`fromBackupCommand`). In the
   snapshot a restore takes, its services stopped, no command runs and the
   folder is saved as its files, named too (`liveAsFiles`).
+
+**The machine's own state**, under the name `machine`, first in every run:
+`/etc/sitesolide`, every project's secret files; `/var/lib/sitesolide-steward`,
+who may open which site, the previous versions of the secrets and the
+steward's log; `/etc/caddy`, the preview codes, the zone's settings, the DNS
+token and the table of the clients' domains. No repository gives them back:
+before, a lost machine took them along, and every key had to be minted again
+by hand. Its copy runs as a dynamic user of its own, not root, with
+`CAP_DAC_READ_SEARCH` alone, in a unit with no network, the three folders
+bound read-only into its empty `/srv`, every file archived as it is, no
+database opened ([machine.ts](machine.ts)); a folder the machine lacks is
+left out. Then it is
+a snapshot like a project's: read back, kept by the same retention, copied to
+the bucket encrypted by restic before it leaves the machine, checked, and a
+line of the status file, which the monitor names when it fails. No page lists
+or restores it: `machine` is no site, `deploy` refuses it as a slug, and its
+files are put back by hand ([below](#the-machines-own-state)).
 
 **Left out on purpose**, and said so on the page and in the status file: a
 static site (no data folder), an app whose data folder is missing or empty, and
@@ -204,6 +221,10 @@ backup.js run                        root, CAP_DAC_READ_SEARCH only, no write ou
    |                                 /etc/sitesolide hidden
    |-- lists  /srv/sites/*           the projects, their manifests; whether a data folder is
    |                                 empty, asked of `find`, which stops at the first name
+   |-- first, the machine's own state:
+   |     restic backup --stdin-from-command -- systemd-run --pipe -p DynamicUser=yes ... backup.js copy /srv/machine
+   |        a dynamic user with CAP_DAC_READ_SEARCH alone, no network, /etc/sitesolide,
+   |        the steward's state and /etc/caddy bound read-only into an empty /srv
    |-- starts, for each project, within its share of the time:
    |     systemd-run --pipe --uid=site-<slug> ... backup.js hook          a service's backup command, if declared
    |        as the project, in its service's walls, its environment, its
@@ -453,6 +474,40 @@ The repository's address is `s3:<BACKUP_S3_ENDPOINT>/<BACKUP_S3_BUCKET>/<BACKUP_
 `sitesolide-restic` with the default prefix. An object of the format before
 restic still in the bucket (`<prefix>/<folder>/<archive>.tar.gz.enc`) is read
 by this version's `bun backup.ts decrypt <file> <output>`, as before.
+
+### The machine's own state
+
+Never all at once: a secret file is put back where it is missing or wrong,
+the access registry when it is lost. An old copy brings back old values,
+keys since rotated among them. From the server's repository, or from the
+bucket as above:
+
+```bash
+sudo -i
+export RESTIC_REPOSITORY=/var/backups/sitesolide-restic RESTIC_PASSWORD_FILE=/var/backups/sitesolide-restic.key TZ=UTC
+restic snapshots --path /machine.tar
+mkdir -m 700 /root/machine && restic dump <id> /machine.tar | tar -xf - -C /root/machine --no-same-owner
+ls -R /root/machine/data         # etc/sitesolide, var/lib/sitesolide-steward, etc/caddy
+
+# A project's secret file, owned by its account, root's for the dashboard's files:
+# the dashboard's Secrets page names a wrong owner and the command that sets it.
+install -m 600 -o site-cms -g site-cms /root/machine/data/etc/sitesolide/cms.env /etc/sitesolide/cms.env
+systemctl restart cms
+
+# The access registry: the steward writes the portal's projection again as it starts.
+systemctl stop sitesolide-steward
+install -m 600 -o root -g root /root/machine/data/var/lib/sitesolide-steward/access.json /var/lib/sitesolide-steward/
+systemctl start sitesolide-steward
+
+# Done: the copy goes, it holds every secret.
+rm -rf /root/machine
+```
+
+On a new machine, `sitesolide init` and `sitesolide setup` first, then a
+deploy of each project, which creates its account; its secret files then
+follow, and the domains and preview codes come back as each project is
+deployed and its access set again. `/etc/caddy/cloudflare.env` holds the DNS
+token, as the copy found it.
 
 ## The offsite copy
 
@@ -838,6 +893,12 @@ sudo ls -l /srv/sites/cms/data/
 # restic, started by the run, starts the copy's unit itself: the snapshot reads back.
 sudo env RESTIC_REPOSITORY=/var/backups/sitesolide-restic RESTIC_PASSWORD_FILE=/var/backups/sitesolide-restic.key \
   restic dump latest --path /cms.tar /cms.tar | tar -tf - | head
+
+# The machine's own state: its copy as a dynamic user, one capability, the three folders
+# bound read-only (during a run), and the snapshot holds them, every file of every account.
+systemctl show 'sitesolide-backup-copy-machine-*' -p DynamicUser -p AmbientCapabilities -p BindReadOnlyPaths -p IPAddressDeny
+sudo env RESTIC_REPOSITORY=/var/backups/sitesolide-restic RESTIC_PASSWORD_FILE=/var/backups/sitesolide-restic.key \
+  restic dump latest --path /machine.tar /machine.tar | tar -tvf - | head -40
 
 # The steward can write a request and read the database under its unit.
 sudo -u site-dashboard curl -s --unix-socket /run/sitesolide-steward/secretaire.sock 'http://steward/backups?slug=cms'

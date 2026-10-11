@@ -32,7 +32,7 @@
 import { lstatSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
-import { twinName } from "../../borrowed/backups";
+import { MACHINE_FOLDER, twinName } from "../../borrowed/backups";
 import type { BackupConfig } from "./config";
 import {
   clearDoomed,
@@ -51,6 +51,7 @@ import {
 } from "./database";
 import { importLegacy, removeLegacyArchives, removeLegacyObjects } from "./legacy";
 import { waitForLock } from "./lock";
+import { machineProject } from "./machine";
 import { checksOf, maintain, MAINTENANCE_NOW, readMaintenance } from "./maintenance";
 import { bucketRepository, offsiteTarget, openLegacyBucket, redact, type LegacyBucket, type Offsite, type RemoteObject } from "./offsite";
 import { projectFolders, readProject, type Found, type Project } from "./projects";
@@ -108,11 +109,21 @@ export const OFFSITE_STOP_MS = 45 * 60 * 1000;
  */
 export const SNAPSHOT_DEADLINE_MS = 25 * 60 * 1000;
 
+export const RESERVED_FOLDER_ERROR = `a project is deployed as ${MACHINE_FOLDER}, a name now reserved for the machine's own state: its data is not saved, deploy it under another slug`;
+
 /** The least a project is given, whatever its share: a small folder's copy takes seconds, a stuck one never ends. */
 export const MIN_PROJECT_MS = 60 * 1000;
 
 /** How long a listing or a forget of the server's repository may take: a second or two, measured. */
 const LOCAL_CALL_MS = 5 * 60 * 1000;
+
+function isFolder(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 /** Whether the operator asked for the maintenance now: a plain file of the state folder, root's when owners are checked. */
 function maintenanceAsked(config: BackupConfig): boolean {
@@ -232,6 +243,13 @@ export async function runBackups(dependencies: RunDependencies): Promise<RunStat
         // Those still waiting to be forgotten are no snapshots: never listed, indexed or copied.
         const left = new Set(db === null ? [] : readDoomed(db, "local"));
         const listing = listed.snapshots.filter((stored) => !left.has(stored.id));
+
+        // A project deployed under the name before it was reserved is no
+        // site any more, so no longer saved: said, never left out in silence.
+        if (isFolder(join(config.sitesDir, MACHINE_FOLDER))) {
+          runError = RESERVED_FOLDER_ERROR;
+          log(`backup: ${RESERVED_FOLDER_ERROR}`);
+        }
 
         // --- The snapshots
         const taken = await snapshotStep(dependencies, startedAt, projects, fail, listing);
@@ -395,6 +413,9 @@ async function snapshotStep(
     log(`backup ${project.folder}: ${outcome.error}`);
   };
 
+  // The machine's own state first: small, and the one thing no repository gives back.
+  const machine = machineProject(config);
+  if (machine !== null) await attempt(machine, folders.length + 1, false, "skipped: the run ran out of time before reaching it");
   for (const [index, folder] of folders.entries()) {
     let found: Found;
     try {

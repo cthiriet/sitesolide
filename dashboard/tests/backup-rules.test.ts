@@ -2,15 +2,18 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { snapshotName } from "../borrowed/backups";
+import { MACHINE_FOLDER, snapshotName } from "../borrowed/backups";
 import { generateUnit } from "../borrowed/unit";
 import { PRAGMAS, openDatabase, openForReading, recordAudit, readAudit } from "../src/backup/database";
 import { HOLDER_NAME, LOCK_NAME, takeLock } from "../src/backup/lock";
 import { projectFolders, readProject } from "../src/backup/projects";
 import { recoveryPlan, INTERRUPTED_REASON } from "../src/backup/recovery";
-import { isActor, judgeResult, readRequest, readRestoreLaunch, restoreUnit, encodeRequest } from "../src/backup/request";
+import { excludedFromRestore, isActor, judgeResult, MACHINE_REFUSAL, readRequest, readRestoreLaunch, restoreUnit, encodeRequest } from "../src/backup/request";
 import { descriptionMismatch } from "../src/backup/extract";
 import { childCommand, confinement, readReport, unitName, type Job } from "../src/backup/runner";
+import { configFrom } from "../src/backup/config";
+import { machineBinds, machineProject } from "../src/backup/machine";
+import { isSiteFolder } from "../src/secrets/scope";
 
 const FOLDER = mkdtempSync(join(tmpdir(), "backup-rules-"));
 afterAll(() => rmSync(FOLDER, { recursive: true, force: true }));
@@ -37,6 +40,13 @@ describe("the restore's unit and request", () => {
     expect(readRequest("cms", encodeRequest({ ...good, actor: "root; rm -rf /" }), T)).toEqual({ refusal: "the restore request names no valid requester" });
     expect(readRequest("cms", encodeRequest({ ...good, nonce: "x" }), T)).toEqual({ refusal: "the restore request is unreadable" });
     expect(readRequest("cms", "{", T)).toEqual({ refusal: "the restore request is unreadable" });
+  });
+
+  test("the machine's own state is no site: never restored from the dashboard, nor by the one-shot", () => {
+    expect(excludedFromRestore(MACHINE_FOLDER)).toBe(MACHINE_REFUSAL);
+    expect(excludedFromRestore("cms")).toBeNull();
+    expect(isSiteFolder(MACHINE_FOLDER)).toBe(false);
+    expect(readProject(FOLDER, MACHINE_FOLDER, join(FOLDER, "passwd"), false)).toEqual({ folder: MACHINE_FOLDER, error: "not a project folder" });
   });
 
   test("the requester is an email, the owner or a token, as every audit says it", () => {
@@ -259,6 +269,27 @@ describe("a child, run as the project", () => {
     expect(properties).toContain("InaccessiblePaths=-/etc/sitesolide");
     expect(properties).toContain("InaccessiblePaths=-/var/backups");
     expect(properties).toContain("RuntimeMaxSec=1800");
+  });
+
+  test("the machine's own state: read by a dynamic user through one capability, its folders bound read-only, still cut from the network", () => {
+    const project = machineProject(configFrom({ BACKUP_ISOLATION: "systemd", SITESOLIDE_ZONE: "test-zone.invalid" }, { bun: "/usr/local/bin/bun", script: "/usr/local/lib/sitesolide/backup.js" }))!;
+    const machine: Job = { ...job, folder: "machine", account: null, uid: null, args: ["/srv/machine"], readWrite: [], bind: [], cacheDirectory: "sitesolide-backup/machine", bindReadOnly: machineBinds(project), readAll: true };
+    const properties = confinement(machine);
+    // Not root: uid 0 without capabilities still signals root's processes and asks PID 1 for units.
+    for (const line of ["DynamicUser=yes", "AmbientCapabilities=CAP_DAC_READ_SEARCH", "CapabilityBoundingSet=CAP_DAC_READ_SEARCH"]) expect(properties).toContain(line);
+    expect(properties.filter((line) => line.startsWith("BindReadOnlyPaths="))).toEqual([
+      "BindReadOnlyPaths=-/etc/sitesolide:/srv/machine/etc/sitesolide",
+      "BindReadOnlyPaths=-/var/lib/sitesolide-steward:/srv/machine/var/lib/sitesolide-steward",
+      "BindReadOnlyPaths=-/etc/caddy:/srv/machine/etc/caddy",
+    ]);
+    // Bound, not hidden: an inaccessible source would leave the binds empty.
+    expect(properties.filter((line) => line.startsWith("InaccessiblePaths="))).toEqual(["InaccessiblePaths=-/var/backups"]);
+    expect(properties.some((line) => /^(ReadWritePaths|BindPaths)=/.test(line))).toBe(false);
+    for (const line of ["TemporaryFileSystem=/srv:ro", "ProtectSystem=strict", "NoNewPrivileges=yes", "IPAddressDeny=any"]) expect(properties).toContain(line);
+    const command = childCommand(machine, config, "a1b2c3d4");
+    expect(command.some((arg) => arg.startsWith("--uid=") || arg.startsWith("--setenv=BACKUP_EXPECTED_UID="))).toBe(false);
+    // A project's copy keeps no capability at all, under its own account.
+    expect(confinement(job).some((line) => /^(CapabilityBoundingSet|AmbientCapabilities|DynamicUser)=/.test(line))).toBe(false);
   });
 
   test("reports one JSON line, and the rest is kept as the tail of a failure", () => {

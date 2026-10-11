@@ -2,12 +2,22 @@
 
 API keys, tokens, password hashes: what must never enter git.
 
-**The machine holds them, and nothing else does.** `/etc/sitesolide` on the VM
-is the vault, and systemd reads each project's files from it with
-`EnvironmentFile=` when the service starts. The dashboard manages every file
-there, from its *Secrets* section: you read a value, set or remove a variable,
-create a declared file that is missing, restore the previous version, and
-restart the service with a verdict.
+**The machine holds them, and nothing else does but its backups.**
+`/etc/sitesolide` on the VM is the vault, and systemd reads each project's
+files from it with `EnvironmentFile=` when the service starts. The dashboard
+manages every file there, from its *Secrets* section: you read a value, set or
+remove a variable, create a declared file that is missing, restore the
+previous version, and restart the service with a verdict.
+
+The backups keep a copy, so that a lost machine does not take its secrets
+along: every hour, `/etc/sitesolide` goes into the server's restic repository
+with the machine's own state, then to the bucket if one is configured,
+encrypted by restic before it leaves. No page lists or restores that copy;
+its files are put back by hand (dashboard/src/backup/README.md, "The machine's
+own state"). Whoever reads `dashboard-backup.env`, the owner from the
+*Secrets* page, holds the passphrase and the bucket's keys, and so every
+file of that copy, the password hashes and the DNS token the page itself
+never shows included.
 
 No copy of production waits on your workstation, in a repository or beside it.
 `sitesolide deploy` never pushes a secret: it checks that each file the manifest

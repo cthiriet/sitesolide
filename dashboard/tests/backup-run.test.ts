@@ -3,19 +3,19 @@ import { Database } from "bun:sqlite";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { snapshotName, type SnapshotKind } from "../borrowed/backups";
+import { MACHINE_FOLDER, snapshotName, type SnapshotKind } from "../borrowed/backups";
 import { configFrom, isolationRefusal, type BackupConfig } from "../src/backup/config";
 import { openDatabase, readAudit, readDoomed, readSetting, readSnapshots } from "../src/backup/database";
 import { takeLock } from "../src/backup/lock";
 import { listing } from "../src/backup/main";
 import { redact, type LegacyBucket } from "../src/backup/offsite";
 import { MAINTENANCE_NOW, nextPart } from "../src/backup/maintenance";
-import { forgotten, runBackups } from "../src/backup/run";
+import { forgotten, RESERVED_FOLDER_ERROR, runBackups } from "../src/backup/run";
 import type { Stored } from "../src/backup/restic";
 import { DEFAULT_RETENTION } from "../src/backup/retention";
 import { COPY_STOPPED_ERROR } from "../src/backup/snapshot";
 import { readStatus } from "../src/backup/status";
-import { createAccounts, names, NO_RESTIC, project, repositoryTemplate, restic, SCRIPT, stored, tree } from "./backup-fixtures";
+import { createAccounts, dumped, names, NO_RESTIC, project, repositoryTemplate, restic, SCRIPT, stored, tree } from "./backup-fixtures";
 
 setDefaultTimeout(120_000);
 
@@ -566,6 +566,101 @@ describe.skipIf(NO_RESTIC)("between the install and the first run", () => {
     old.run("CREATE TABLE audit (id INTEGER PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT, detail TEXT)");
     old.close();
     expect(listing({ BACKUP_STATE_FOLDER: made.config.stateFolder, BACKUP_ISOLATION: "none" }, "ledger").snapshots).toEqual([]);
+  });
+});
+
+describe.skipIf(NO_RESTIC)("the machine's own state", () => {
+  /** What /etc/sitesolide, the steward's state and /etc/caddy hold, laid as the copy's view sees them. */
+  function machineState(root: string): string {
+    const view = join(root, "machine");
+    for (const [path, content] of [
+      ["etc/sitesolide/ledger.env", "LEDGER_KEY=for-the-test\n"],
+      ["var/lib/sitesolide-steward/access.json", "{}\n"],
+      ["etc/caddy/locks-codes.json", "{}\n"],
+    ] as const) {
+      mkdirSync(join(view, path, ".."), { recursive: true });
+      writeFileSync(join(view, path), content, { mode: 0o600 });
+    }
+    return view;
+  }
+
+  test("is snapshotted first, as machine, copied to the bucket with the rest, and reads back as its files", async () => {
+    const holder = mkdtempSync(join(tmpdir(), "backup-machine-"));
+    roots.push(holder);
+    const { root, config, bucket } = bucketMachine({ BACKUP_MACHINE_DIR: machineState(holder) });
+    const lines: string[] = [];
+    const status = await runBackups({ config, now: () => T, log: (line) => lines.push(line), openLegacyBucket: noLegacy });
+    expect(status.ok).toBe(true);
+    expect(Object.keys(status.projects)[0]).toBe(MACHINE_FOLDER);
+    expect(status.projects[MACHINE_FOLDER]).toEqual({ ok: true, snapshot: snapshotName(MACHINE_FOLDER, T, "scheduled"), error: null });
+    expect(names(config, MACHINE_FOLDER, bucket)).toEqual([snapshotName(MACHINE_FOLDER, T, "scheduled")]);
+    // From the bucket, with stock tar: data/ holds the three folders, and the description says whose.
+    const out = join(holder, "out");
+    mkdirSync(out);
+    const archive = dumped(config, MACHINE_FOLDER, snapshotName(MACHINE_FOLDER, T, "scheduled"), bucket);
+    expect(Bun.spawnSync(["tar", "-xf", archive, "-C", out]).exitCode).toBe(0);
+    expect(readFileSync(join(out, "data", "etc", "sitesolide", "ledger.env"), "utf8")).toBe("LEDGER_KEY=for-the-test\n");
+    expect(existsSync(join(out, "data", "var", "lib", "sitesolide-steward", "access.json"))).toBe(true);
+    expect(existsSync(join(out, "data", "etc", "caddy", "locks-codes.json"))).toBe(true);
+    expect(JSON.parse(readFileSync(join(out, "sitesolide-backup.json"), "utf8"))).toMatchObject({ folder: MACHINE_FOLDER, takenAt: new Date(T).toISOString(), raw: true });
+    // Neither the status file nor the journal carries a secret's value.
+    expect(readFileSync(join(root, "state", "last-run.json"), "utf8")).not.toContain("for-the-test");
+    expect(lines.join("\n")).not.toContain("for-the-test");
+  });
+
+  test("every file as it is: a database is archived byte for byte, never opened", async () => {
+    const holder = mkdtempSync(join(tmpdir(), "backup-machine-"));
+    roots.push(holder);
+    const view = machineState(holder);
+    createAccounts(join(view, "var", "lib", "sitesolide-steward", "copy.db"), 50);
+    const { config } = machine({ BACKUP_MACHINE_DIR: view });
+    const status = await runBackups({ config, now: () => T, log: silent });
+    expect(status.projects[MACHINE_FOLDER]?.ok).toBe(true);
+    const out = join(holder, "out");
+    mkdirSync(out);
+    expect(Bun.spawnSync(["tar", "-xf", dumped(config, MACHINE_FOLDER, snapshotName(MACHINE_FOLDER, T, "scheduled")), "-C", out]).exitCode).toBe(0);
+    const copied = join(out, "data", "var", "lib", "sitesolide-steward", "copy.db");
+    expect(Bun.hash(readFileSync(copied))).toBe(Bun.hash(readFileSync(join(view, "var", "lib", "sitesolide-steward", "copy.db"))));
+    expect(JSON.parse(readFileSync(join(out, "sitesolide-backup.json"), "utf8")).databases).toEqual([]);
+  });
+
+  test("a project still deployed under the reserved name fails the run, said in a fixed sentence, the others saved", async () => {
+    const made = machine();
+    writeFileSync(join(project(made.sites, MACHINE_FOLDER), "app.db"), "data that would go unsaved");
+    const status = await runBackups({ config: made.config, now: () => T, log: silent });
+    expect(status.ok).toBe(false);
+    expect(status.projects[MACHINE_FOLDER]).toBeUndefined();
+    expect(status.projects.ledger).toMatchObject({ ok: true });
+    const db = state(made.root);
+    expect(readAudit(db, null, 1)[0]!.detail).toMatchObject({ ok: false, error: RESERVED_FOLDER_ERROR });
+    db.close();
+  });
+
+  test("is kept by the same retention as a project's", async () => {
+    const holder = mkdtempSync(join(tmpdir(), "backup-machine-"));
+    roots.push(holder);
+    const { config } = machine({ BACKUP_MACHINE_DIR: machineState(holder) });
+    for (let hour = 0; hour < 26; hour++) seed(config, MACHINE_FOLDER, T - (26 - hour) * HOUR);
+    await runBackups({ config, now: () => T, log: silent });
+    // The 24 newest hours, which hold the newest of yesterday too: the two oldest go.
+    const kept = names(config, MACHINE_FOLDER);
+    expect(kept).toHaveLength(24);
+    expect(kept).toContain(snapshotName(MACHINE_FOLDER, T, "scheduled"));
+    expect(kept).not.toContain(snapshotName(MACHINE_FOLDER, T - 26 * HOUR, "scheduled"));
+  });
+
+  test("under systemd, always the machine's own folders: root never takes a folder from the environment", () => {
+    const machineOf = (env: Record<string, string>) => configFrom({ SITESOLIDE_ZONE: "test-zone.invalid", ...env }, { bun: "bun", script: SCRIPT }).machine;
+    expect(machineOf({ BACKUP_MACHINE_DIR: "/home/someone" })).toEqual({
+      dataDir: "/srv/machine",
+      sources: [
+        { source: "/etc/sitesolide", place: "etc/sitesolide" },
+        { source: "/var/lib/sitesolide-steward", place: "var/lib/sitesolide-steward" },
+        { source: "/etc/caddy", place: "etc/caddy" },
+      ],
+    });
+    expect(machineOf({ BACKUP_ISOLATION: "none" })).toBeNull();
+    expect(machineOf({ BACKUP_ISOLATION: "none", BACKUP_MACHINE_DIR: "/tmp/view" })).toEqual({ dataDir: "/tmp/view", sources: [] });
   });
 });
 
