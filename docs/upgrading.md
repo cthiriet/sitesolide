@@ -117,6 +117,20 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## Whose token, from a menu that says who each person is
+
+*Whose token*, in the *New token* dialog, is a menu drawn by the page rather
+than the browser's: each person of People over a line saying where they
+deploy and whether they may create projects. A Viewer everywhere is no longer
+offered, since the steward mints them no token; with nobody to offer, the
+menu is left out.
+
+**What `sitesolide upgrade` brings**: the dashboard alone.
+
+**What changes for you.** Nothing beyond the dialog.
+
+**Going back.** `sitesolide upgrade` with the previous binary.
+
 ## A token's projects are ticked, not typed
 
 The *New token* dialog lists the projects on the server to tick, where the
