@@ -117,6 +117,25 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## A token's projects are ticked, not typed
+
+The *New token* dialog lists the projects on the server to tick, where the
+owner used to type slugs from memory; creating projects is one more row of
+that list, *New projects*. A permission a chosen project cannot be deployed
+without is ticked for you and says which project needs it: public sites for
+a project that is not Restricted, or that exempts paths from the portal, and
+a domain for one that declares it. A token with nothing to deploy, no
+project and no *New projects*, is refused by the form.
+
+**What `sitesolide upgrade` brings**: the dashboard alone. The tokens already
+minted are untouched, and the steward judges a new one as before.
+
+**What changes for you.** Nothing beyond the dialog.
+
+**Going back.** Deploy the previous release's dashboard: `sitesolide
+upgrade` with the previous binary. The tokens minted with this dialog stay as
+they are.
+
 ## The machine's own state is backed up
 
 Every run now takes, first, a snapshot named `machine`: `/etc/sitesolide`,
