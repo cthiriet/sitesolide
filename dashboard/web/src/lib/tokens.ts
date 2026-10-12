@@ -145,7 +145,11 @@ export function firstTokenField(errors: TokenErrors): TokenField | null {
   return null
 }
 
-/** Who a token may be made for by the owner: the people who sign in, a role above Can open or the right to create projects. */
+/**
+ * Who a token may be made for by the owner: the people who deploy somewhere,
+ * a Developer or an Admin, or may create projects. A Viewer everywhere signs
+ * in, but the steward mints them no token, so the dialog does not offer them.
+ */
 export function tokenHolders(people: readonly { who: string; roles: Readonly<Record<string, Role | "visitor">>; create: boolean }[]): { email: string; roles: Roles; create: boolean }[] {
   return people
     .map((person) => ({
@@ -153,7 +157,7 @@ export function tokenHolders(people: readonly { who: string; roles: Readonly<Rec
       roles: Object.fromEntries(Object.entries(person.roles).filter((entry): entry is [string, Role] => entry[1] !== "visitor")) as Roles,
       create: person.create,
     }))
-    .filter((person) => person.create || Object.keys(person.roles).length > 0)
+    .filter((person) => person.create || mintableProjects(person.roles).length > 0)
     .sort((a, b) => a.email.localeCompare(b.email))
 }
 
@@ -277,6 +281,22 @@ export function mintableProjects(roles: Roles): { slug: string; role: Exclude<Ro
 export function noProjectText(roles: Roles, holder: string | null): string {
   if (Object.keys(roles).length === 0) return holder === null ? "No project yet." : `${holder} has no project yet.`
   return holder === null ? "None of your projects: you are a Viewer on each." : `None of ${holder}'s projects: a Viewer on each.`
+}
+
+/**
+ * A person the owner may make a token for, in one line under their email:
+ * where they deploy, then whether they may create projects. "Admin on
+ * calendar, Developer on cms", "Developer or Admin on 4 projects · May create
+ * projects", "Viewer only".
+ */
+export function holderLine(holder: { roles: Roles; create: boolean }): string {
+  const deploys = mintableProjects(holder.roles)
+  const parts: string[] = []
+  if (deploys.length > 0 && deploys.length <= 2) parts.push(deploys.map(({ slug, role }) => `${ROLE_WORDS[role]} on ${slug}`).join(", "))
+  if (deploys.length > 2) parts.push(`Developer or Admin on ${deploys.length} projects`)
+  if (holder.create) parts.push("May create projects")
+  if (parts.length === 0) return "Viewer only"
+  return parts.join(" · ")
 }
 
 /**

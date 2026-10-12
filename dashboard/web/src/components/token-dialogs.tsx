@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectGroup, SelectGroupLabel, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Command, CopyFallback, useAnnounce, useCopy } from "@/components/copy"
 import { Banner, INPUT_DIALOG } from "@/components/page"
 import { createToken } from "@/lib/api"
@@ -22,6 +23,7 @@ import {
   EXPIRY_CHOICES,
   expiryFrom,
   firstTokenField,
+  holderLine,
   messageText,
   loginCommand,
   mintableProjects,
@@ -268,7 +270,7 @@ export function CreateTokenDialog({
               </DialogDescription>
             </DialogHeader>
 
-            <div className={cn("grid gap-4", person === null && "sm:grid-cols-2")}>
+            <div className={cn("grid gap-4", person === null && holders.length > 0 && "sm:grid-cols-2")}>
               <Field id={labelId} labelText="Name" error={errors.label}>
                 <Input
                   ref={labelField}
@@ -286,26 +288,38 @@ export function CreateTokenDialog({
                   className="h-10 sm:h-9"
                 />
               </Field>
-              {person === null && (
+              {person === null && holders.length > 0 && (
                 <Field id={holderId} labelText="Whose token">
-                  <select
+                  <Select
                     id={holderId}
                     value={holder}
-                    onChange={(event) => {
-                      setHolder(event.target.value)
+                    items={{ owner: "Mine", ...Object.fromEntries(holders.map((one) => [one.email, one.email])) }}
+                    onValueChange={(next) => {
+                      if (next === null) return
+                      setHolder(next)
                       setChosen([])
                       setScope({ create: false, outbound: false, domain: false, public: false })
                       setErrors({})
                     }}
-                    className="h-10 rounded-lg border border-input bg-transparent px-2.5 text-sm sm:h-9"
                   >
-                    <option value="owner">Mine</option>
-                    {holders.map((one) => (
-                      <option key={one.email} value={one.email}>
-                        {one.email}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="owner" description="Yours, for your own agents">
+                        Mine
+                      </SelectItem>
+                      <SelectSeparator />
+                      <SelectGroup>
+                        <SelectGroupLabel>For someone in People</SelectGroupLabel>
+                        {holders.map((one) => (
+                          <SelectItem key={one.email} value={one.email} description={holderLine(one)}>
+                            {one.email}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
                 </Field>
               )}
             </div>

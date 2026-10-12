@@ -422,7 +422,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | General access | General access, Public, Restricted, Anyone with the code, Current; Make public, Restrict; in a disagreement, On the server, In sitesolide.json, Keep Public, Apply Restricted; Preview code, Replace the code, Remove the code; Open to anyone, guarded by the app alone (the exempt paths); See changes in Activity | Door, Gate, Portal on, Portal off, Turn on portal, Behind the portal, Private, Password protected, Enable, Disable |
 | People with access | People with access, Add people, Add, Unlock to add, Remove; Can open, Viewer, Developer, Admin; company account, password access, Password access lasts, No expiry, expires in 5d, Expired, Added by; Can't sign in until company sign-in is set up; Copy message; What each role can do, a disclosure from Can open to Admin, (your role), (you); Also open it | Sharing, Share, Guest, Member, Team, Invite, Permissions, ACL, work account, Super admin, Project admin; an Owner row or rung |
 | People | People, May create projects, Let someone create projects, Allow, Unlock to allow, Remove from every project, Remove expired, Domains; Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
-| Tokens | Tokens, New token, Unlock to create, Create token, Name, Whose token, Mine, Projects it may deploy, New projects, Permissions, Needed by cms, Expires; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network, Can create projects (paused: no longer allowed); calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only |
+| Tokens | Tokens, New token, Unlock to create, Create token, Name, Whose token, Mine, For someone in People, Projects it may deploy, New projects, Permissions, Needed by cms, Expires; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network, Can create projects (paused: no longer allowed); calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only |
 | The lock | Unlock changes, Lock, Changes unlocked, 9 min left; in its dialog, Unlock, Sign in again; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked |
 | Secrets | Restart pending, Unmanaged, Missing, Write-only, Restart service, Restore previous, Add variable, Create file, Replace, Reveal | Vault, Decrypt, Edit file |
 | Passwords | Change password, Dashboard password, Generate a strong one, Set my own, New password, Copy password | Set hash, Regenerate |
@@ -545,8 +545,13 @@ once unlocked, *Unlock to create* before. Then **Recent deployments** and
 The owner sees every token; a person sees their own alone, and mints them
 under their own unlock, never beyond their roles; a person who is a Viewer
 everywhere reads "Tokens are for Developers and Admins. You're a Viewer on
-every project." The dialog takes a *Name*, and for the owner *Whose token*,
-*Mine* or a person from People. Then *Projects it may deploy*, a list to
+every project." The dialog takes a *Name*, and for the owner *Whose token*:
+a menu drawn by the page, not the browser's, with *Mine*, "Yours, for your
+own agents", then *For someone in People*, each person by their email over a
+line saying where they deploy and whether they may create projects, "Admin
+on calendar, Developer on cms", "May create projects". A Viewer everywhere is
+not offered, since the steward mints them no token, and with nobody to offer
+the menu is left out. Then *Projects it may deploy*, a list to
 tick, never slugs to type: the owner's own offered every project on the
 server but the platform's, a person's only those where they are a Developer
 or an Admin, each with that role; and below them *New projects*, the create

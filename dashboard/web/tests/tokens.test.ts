@@ -4,6 +4,7 @@ import {
   noProjectText,
   optionsAllowed,
   neededLine,
+  holderLine,
   neededOptions,
   auditLine,
   deploymentLabel,
@@ -173,6 +174,13 @@ describe("a person's own token", () => {
     expect(noProjectText({ gamma: "viewer" }, "maya@example.com")).toBe("None of maya@example.com's projects: a Viewer on each.")
   })
 
+  test("a person the owner may make a token for, in one line: where they deploy, then the create right", () => {
+    expect(holderLine({ roles, create: false })).toBe("Developer on alpha, Admin on beta")
+    expect(holderLine({ roles: {}, create: true })).toBe("May create projects")
+    expect(holderLine({ roles: { a: "admin", b: "developer", c: "developer" }, create: true })).toBe("Developer or Admin on 3 projects · May create projects")
+    expect(holderLine({ roles: { gamma: "viewer" }, create: false })).toBe("Viewer only")
+  })
+
   test("the options: an Admin of every project chosen, or a token that only creates", () => {
     expect(optionsAllowed(roles, ["beta"], false)).toBe(true)
     expect(optionsAllowed(roles, ["alpha", "beta"], false)).toBe(false)
@@ -189,13 +197,14 @@ describe("a person's own token", () => {
 })
 
 describe("whose a token is", () => {
-  test("the owner makes one for the people who sign in, never for someone who can only open sites", () => {
+  test("the owner makes one for the people who deploy or create, never for a Viewer nor someone who can only open sites", () => {
     expect(
       tokenHolders([
         { who: "zed@acme.test", roles: { blog: "developer", shop: "visitor" }, create: false },
         { who: "ann@acme.test", roles: {}, create: true },
         { who: "guest@example.org", roles: { blog: "visitor" }, create: false },
         { who: "Client Bob", roles: { blog: "visitor" }, create: false },
+        { who: "vera@acme.test", roles: { blog: "viewer" }, create: false },
       ]),
     ).toEqual([
       { email: "ann@acme.test", roles: {}, create: true },
