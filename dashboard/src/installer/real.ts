@@ -476,6 +476,10 @@ export function createHost(config: HostConfig): Host {
       await config.commands.systemctl(["disable", "--now", ...ordered.map(unitArgument)], 60_000);
       for (const unit of ordered) rmSync(join(config.unitsFolder, unitFileName(unit)), { force: true });
       await config.commands.systemctl(["daemon-reload"], 60_000);
+      // A failed unit stays in systemd's memory once its file is gone, a
+      // scheduled service after a run that failed among them: cleared, as
+      // removeUnitsCommand clears it.
+      await config.commands.systemctl(["reset-failed", ...ordered.map(unitArgument)], 60_000);
     },
 
     async enable(slug) {

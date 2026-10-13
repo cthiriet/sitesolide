@@ -607,6 +607,9 @@ describe("workers, scheduled services and anchors", () => {
     stageBundle(again, APP_FILES);
     expect((await run(again, request({ ...BACKGROUND, services: { web: BACKGROUND.services.web, jobs: BACKGROUND.services.jobs } }))).ok).toBe(true);
     expect(again.events).toContain("systemctl disable --now shop.sync.timer shop.sync.service");
+    // Their failed state cleared too: a scheduled service is `failed` after a
+    // run that failed, and systemd keeps it once the file is gone.
+    expect(order(again, "systemctl disable --now shop.sync.timer shop.sync.service", "systemctl reset-failed shop.sync.timer shop.sync.service")).toBe(true);
     expect(units(again)).toEqual(["shop.jobs.service", "shop.service"]);
   });
 

@@ -240,14 +240,19 @@ export function staleUnits(manifest: Manifest, onMachine: string[]): string[] {
 /**
  * Stops and removes units, tolerating their absence like every removal
  * gesture. The timers first, so that none starts its service between the
- * service's stop and its removal.
+ * service's stop and its removal. Then their failed state is cleared:
+ * systemd keeps a failed unit in memory after its file is gone, and a
+ * scheduled service is `failed` after a run that failed, its rest state
+ * until the next; left, it would stay in `systemctl --failed` for good.
  */
 export function removeUnitsCommand(units: string[]): string {
   const ordered = [...units.filter(isTimerUnit), ...units.filter((unit) => !isTimerUnit(unit))];
+  const names = ordered.map(unitArgument).join(" ");
   return [
-    `sudo systemctl disable --now ${ordered.map(unitArgument).join(" ")} 2>/dev/null || true`,
+    `sudo systemctl disable --now ${names} 2>/dev/null || true`,
     `sudo rm -f ${ordered.map(unitPath).join(" ")}`,
     "sudo systemctl daemon-reload",
+    `{ sudo systemctl reset-failed ${names} 2>/dev/null || true; }`,
   ].join(" && ");
 }
 

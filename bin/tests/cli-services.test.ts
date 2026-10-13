@@ -582,7 +582,8 @@ describe("units the manifest no longer declares", () => {
 
   test("removed one by one, their absence tolerated", () => {
     expect(removeUnitsCommand(["lab.old"])).toBe(
-      "sudo systemctl disable --now lab.old.service 2>/dev/null || true && sudo rm -f /etc/systemd/system/lab.old.service && sudo systemctl daemon-reload",
+      "sudo systemctl disable --now lab.old.service 2>/dev/null || true && sudo rm -f /etc/systemd/system/lab.old.service && sudo systemctl daemon-reload && " +
+        "{ sudo systemctl reset-failed lab.old.service 2>/dev/null || true; }",
     );
   });
 });
@@ -762,7 +763,7 @@ describe("removing a project with several services", () => {
     expect(unit!.command).toBe(
       "sudo systemctl disable --now lab lab.api.service lab.inference.service 2>/dev/null || true && " +
         "sudo rm -f /etc/systemd/system/lab.service /etc/systemd/system/lab.api.service /etc/systemd/system/lab.inference.service && " +
-        "sudo systemctl daemon-reload",
+        "sudo systemctl daemon-reload && { sudo systemctl reset-failed lab lab.api.service lab.inference.service 2>/dev/null || true; }",
     );
   });
 
@@ -771,7 +772,8 @@ describe("removing a project with several services", () => {
     const [legacy] = removalActions({ slug: "budget", isApplication: true, secrets: [] });
     expect(unit!.command).toBe(legacy!.command);
     expect(unit!.command).toBe(
-      "sudo systemctl disable --now budget 2>/dev/null || true && sudo rm -f /etc/systemd/system/budget.service && sudo systemctl daemon-reload",
+      "sudo systemctl disable --now budget 2>/dev/null || true && sudo rm -f /etc/systemd/system/budget.service && sudo systemctl daemon-reload && " +
+        "{ sudo systemctl reset-failed budget 2>/dev/null || true; }",
     );
   });
 });
@@ -815,7 +817,8 @@ describe("the units of workers and scheduled services, on the machine", () => {
   test("removed, the timers go first, so that none starts its service on the way out", () => {
     expect(removeUnitsCommand(["lab.sync", "lab.sync.timer"])).toBe(
       "sudo systemctl disable --now lab.sync.timer lab.sync.service 2>/dev/null || true && " +
-        "sudo rm -f /etc/systemd/system/lab.sync.timer /etc/systemd/system/lab.sync.service && sudo systemctl daemon-reload",
+        "sudo rm -f /etc/systemd/system/lab.sync.timer /etc/systemd/system/lab.sync.service && sudo systemctl daemon-reload && " +
+        "{ sudo systemctl reset-failed lab.sync.timer lab.sync.service 2>/dev/null || true; }",
     );
   });
 
@@ -867,7 +870,7 @@ describe("the units of workers and scheduled services, on the machine", () => {
     expect(unit!.command).toBe(
       "sudo systemctl disable --now lab.sync.timer lab lab.sync.service lab.queue.service 2>/dev/null || true && " +
         "sudo rm -f /etc/systemd/system/lab.sync.timer /etc/systemd/system/lab.service /etc/systemd/system/lab.sync.service /etc/systemd/system/lab.queue.service && " +
-        "sudo systemctl daemon-reload",
+        "sudo systemctl daemon-reload && { sudo systemctl reset-failed lab.sync.timer lab lab.sync.service lab.queue.service 2>/dev/null || true; }",
     );
     // An anchored project: its anchor goes with its services and timers.
     const anchored = lab({ report: { start: "/x", schedule: "daily" } });
