@@ -88,6 +88,9 @@ to production itself, then runs the command. See [secrets.md](secrets.md).
 runs of its scheduled services among them, each under its own unit,
 `<slug>.<name>.service`. A run that failed says why there, and a deployment
 that failed because a service fell right after its restart points there too.
+It reads the journal through `sudo -n`: the services write to the system
+journal, which the deployment account `setup` makes cannot read on its own,
+and that account already holds sudo without a password.
 
 `sitesolide status` reads what the machine runs, one line per unit under each
 project. A worker reads as any service, `active` with its memory. A scheduled

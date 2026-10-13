@@ -2193,9 +2193,22 @@ async function logs(
     "ssh",
     ...(follow ? ["-t"] : []),
     config.server,
-    `journalctl ${selection} -n ${lines} --no-pager${follow ? " -f" : ""}`,
+    `${JOURNAL} ${selection} -n ${lines} --no-pager${follow ? " -f" : ""}`,
   ]);
 }
+
+/**
+ * journalctl as the deployment account runs it: through sudo. A project's
+ * service writes to the system journal, which an account outside `adm` and
+ * `systemd-journal` cannot read: journalctl then prints a notice and "No
+ * entries", for every project, as on every machine `sitesolide setup`
+ * installed, whose deployment account is in neither. That account already
+ * holds sudo without a password, every deployment depends on it, so this
+ * gives it nothing it did not have, and holds on a machine installed by hand
+ * as on one `setup` made. `-n` refuses rather than asks for a password: an
+ * agent reading the logs has no keyboard to type one on.
+ */
+const JOURNAL = "sudo -n journalctl";
 
 /**
  * `logs --json`: the journal as entries, from journalctl's own JSON rather
@@ -2212,7 +2225,7 @@ async function journalEvents(
   lines: number,
   executor: Executor,
 ): Promise<void> {
-  const command = `journalctl ${selection} -n ${lines} --no-pager -o json --output-fields=MESSAGE,PRIORITY,_SYSTEMD_UNIT${follow ? " -f" : ""}`;
+  const command = `${JOURNAL} ${selection} -n ${lines} --no-pager -o json --output-fields=MESSAGE,PRIORITY,_SYSTEMD_UNIT${follow ? " -f" : ""}`;
   note({ slug, units: selection.split(" ").filter((word) => word !== "-u") });
   if (executor.simulated) {
     say(`   [dry-run] ssh ${config.server} ${command}`);

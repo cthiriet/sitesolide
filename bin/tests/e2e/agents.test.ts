@@ -432,6 +432,20 @@ describe("the reading commands, as data", () => {
     const asked = machine.logs().find((line) => line.includes("journalctl"))!;
     expect(asked).toContain("-n 20 --no-pager -o json");
     expect(asked).not.toContain(" -f");
+    // Through sudo, never waiting for a password: the deployment account that
+    // setup makes is in no group that reads the system journal.
+    expect(asked).toContain("sudo -n journalctl -u sample-bun");
+  });
+
+  test("logs, for a person: the journal's own lines, read through sudo as well", async () => {
+    const machine = fakeVm();
+    machine.acceptWrites();
+    machine.answer("journalctl", "Oct 13 15:20:05 vm bun[42]: listening on 3031\n");
+    const r = await run("projects/bun-mixed", ["logs", "--lines", "20"], { vm: machine });
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("listening on 3031");
+    const asked = machine.logs().find((line) => line.includes("journalctl"))!;
+    expect(asked).toContain("sudo -n journalctl -u sample-bun -n 20 --no-pager");
   });
 
   test("logs --lines out of bounds is refused before anything is asked", async () => {
