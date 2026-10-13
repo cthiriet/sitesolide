@@ -117,6 +117,55 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## Workers and scheduled services
+
+A project can run work that answers no request. Under `services`, an
+internal service without a `port` is a worker, which runs for good and
+listens on nothing; a service with a `schedule`, a systemd calendar
+expression, is started by a timer at the times it names and runs to its end.
+`cpu` caps a service's processor. A project of such services alone, with no
+`publicDir`, serves no page and its address says so. See
+[docs/manifest.md](manifest.md#services).
+
+**What `sitesolide upgrade` brings**: every component that reads a manifest
+is rebuilt, the dashboard, its collector and the installer, the steward, the
+gatekeeper, the backups, the egress proxy, the shared service, the portal and
+the monitor. The Caddyfile, Caddy's drop-in and the loopback rule do not move.
+The units and blocks of the projects already deployed are generated as
+before, line for line: none reads as edited by hand, none needs `--force`.
+
+**What changes for you.**
+
+- **Upgrade before deploying the first project with a `schedule`.** The
+  previous monitor and dashboard read a scheduled service between two runs,
+  `inactive` by design, as a service down. The new monitor reports a failed
+  run as a warning and a timer that stopped as an outage.
+- **`deploy` watches the services it restarted for ten seconds**, a server or
+  a worker, and fails when one is no longer active or was restarted by
+  systemd meanwhile. A project that fell at once after its restart, and was
+  restarted every two seconds behind a successful deployment, now fails its
+  deployment: `sitesolide logs` says why. The wait runs beside the Caddy step
+  and the check over HTTPS.
+- **`deploy` asks systemd on the machine** whether it reads each schedule,
+  before anything is written.
+- **`sitesolide logs` reads the journal through `sudo -n`.** On a machine
+  `sitesolide setup` installed, it printed "No entries" for every project:
+  the deployment account is in no group that reads the system journal. It
+  needs the account's sudo without a password, which every deployment
+  already does.
+- **A token deployment no longer chooses a port for an internal service that
+  names none**: it is a worker. One the machine already gave a port to keeps
+  it.
+- **A project whose services are all internal, with no `publicDir`**, was
+  refused, and now deploys as a project that serves no page.
+- **Removing a project** clears the failed state of its units, which systemd
+  otherwise keeps in `systemctl --failed` once their files are gone.
+
+**Going back.** Remove first, with this release's CLI, every project that
+declares a worker, a `schedule` or `cpu`: the previous release refuses those
+keys, and would read a scheduled service between two runs as a service down.
+Then `sitesolide upgrade` with the previous binary.
+
 ## Whose token, from a menu that says who each person is
 
 *Whose token*, in the *New token* dialog, is a menu drawn by the page rather
