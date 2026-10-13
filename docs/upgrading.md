@@ -127,10 +127,10 @@ expression, is started by a timer at the times it names and runs to its end.
 `publicDir`, serves no page and its address says so. See
 [docs/manifest.md](manifest.md#services).
 
-**What `sitesolide upgrade` brings**: every component that reads a manifest
-is rebuilt, the dashboard, its collector and the installer, the steward, the
-gatekeeper, the backups, the egress proxy, the shared service, the portal and
-the monitor. The Caddyfile, Caddy's drop-in and the loopback rule do not move.
+**What `sitesolide upgrade` brings**: the components that read a manifest,
+rebuilt: the backups, the egress proxy, the steward, the dashboard, the
+gatekeeper, the installer and the monitor. The Caddyfile, Caddy's drop-in, the
+collector, the shared service, the portal and the loopback rule do not move.
 The units and blocks of the projects already deployed are generated as
 before, line for line: none reads as edited by hand, none needs `--force`.
 
