@@ -250,10 +250,13 @@ row() {
   printf "%-22s %-8s %-10s %-8s %-8s %s\n" "$name" "$size" "$service" "$memory" "$peak" "$cap"
   # A scheduled service: when it runs, its last run and how it ended, and
   # the next, on a line of their own under its row. The times are systemd's,
-  # "n/a" or nothing for one that never was.
+  # "n/a" or nothing for one that never was. The last run is the service's
+  # own start, not the timer's LastTriggerUSec: a persistent timer stamps
+  # the moment it was first started, a deployment, as a trigger that ran
+  # nothing, and a run started by hand is no trigger at all.
   [ -e "$timer" ] || return 0
   schedule=$(sed -n 's/^OnCalendar=//p' "$timer" | head -n 1)
-  last=$(systemctl show "$unit.timer" -p LastTriggerUSec --value 2>/dev/null)
+  last=$(systemctl show "$unit" -p ExecMainStartTimestamp --value 2>/dev/null)
   next=$(systemctl show "$unit.timer" -p NextElapseUSecRealtime --value 2>/dev/null)
   case "$last" in
     ""|n/a) last=never ;;

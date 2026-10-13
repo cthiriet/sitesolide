@@ -194,9 +194,9 @@ export function runLines(entry: Pick<SiteService, "service" | "schedule">, now: 
     last = { text: `Failed${when}: ${run.failure ?? "no reason given"}`, tone: "attention" }
   } else if (run !== null && run.at !== null) {
     last = { text: `Last run ${ago(now - run.at)}`, tone: "neutral" }
-  } else if (schedule.lastTrigger !== null) {
-    last = { text: `Last started ${ago(now - schedule.lastTrigger)}`, tone: "neutral" }
   } else {
+    // Not the timer's last trigger: a persistent timer stamps the moment it
+    // was first started, at a deployment, as a trigger that ran nothing.
     last = { text: "No run yet", tone: "neutral" }
   }
   return { last, next }

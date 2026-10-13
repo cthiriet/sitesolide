@@ -222,10 +222,10 @@ describe("the status table", () => {
           "  relay:MemoryCurrent) echo 41943040 ;;",
           '  *:MemoryCurrent|*:MemoryPeak) echo "[not set]" ;;',
           "  *:MemoryMax) echo 268435456 ;;",
-          '  relay.digest.timer:LastTriggerUSec) echo "Mon 2026-10-12 14:15:00 UTC" ;;',
+          '  relay.digest:ExecMainStartTimestamp) echo "Mon 2026-10-12 14:15:00 UTC" ;;',
           '  relay.digest.timer:NextElapseUSecRealtime) echo "Mon 2026-10-12 14:30:00 UTC" ;;',
           "  relay.digest:Result) echo success ;;",
-          "  relay.cleanup.timer:LastTriggerUSec) echo n/a ;;",
+          "  relay.cleanup:ExecMainStartTimestamp) echo ;;",
           "  *) echo ;;",
           "esac",
         ]);

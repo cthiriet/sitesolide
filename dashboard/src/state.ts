@@ -380,7 +380,15 @@ function readNumber(unit: RawUnit | null, key: string): number | null {
  */
 function readTimestamp(unit: RawUnit, key: string): number | null {
   const raw = unit[key];
-  if (raw === undefined || !raw.startsWith("@")) return null;
+  if (raw === undefined) return null;
+  // A timer's next and last elapse ignore `--timestamp=unix`: the collector
+  // asks them in UTC, and they come as a date, `Tue 2026-10-13 15:30:00 UTC`.
+  const date = /^[A-Z][a-z]{2} (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) UTC$/.exec(raw);
+  if (date !== null) {
+    const ms = Date.parse(`${date[1]}T${date[2]}Z`);
+    return Number.isFinite(ms) ? ms : null;
+  }
+  if (!raw.startsWith("@")) return null;
   const seconds = Number(raw.slice(1));
   // Zero is the value of a service that has never started, not a date.
   if (!Number.isFinite(seconds) || seconds <= 0) return null;
@@ -477,8 +485,9 @@ function failureOf(result: string | null, status: number | null, timeout: string
  *
  * None while a run is in progress: systemd resets Result as a run starts, so
  * the previous one's is gone, and the page says it is running instead. None
- * either before the first run since the unit was loaded, a reboot included:
- * the timer's last trigger then still says when it last ran, not how.
+ * either before the first run since the unit was loaded, a reboot included.
+ * The timer's last trigger is no run: a persistent timer stamps the moment
+ * it was first started, at the deployment, as a trigger that ran nothing.
  */
 function readRun(unit: RawUnit | null, lastTrigger: number | null, timeout: string): Run | null {
   if (unit === null || unit.LoadState !== "loaded") return null;

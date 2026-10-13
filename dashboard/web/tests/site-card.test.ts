@@ -433,9 +433,11 @@ describe("a project with a worker and scheduled services", () => {
     expect(serviceRows(site({ services: [unread] }), NOW)[0]!.state).toEqual({ tone: "ok", label: "Waiting" })
   })
 
-  test("after a reboot, the timer still says when it last ran, and before the first run, that none has", () => {
-    const rebooted = scheduledService(NOW, {}, { lastRun: null, lastTrigger: NOW - 5 * HOUR })
-    expect(serviceRows(site({ services: [rebooted] }), NOW)[0]!.runs!.last).toEqual({ text: "Last started 5h ago", tone: "neutral" })
+  test("no run read yet is said as such, whatever the timer stamped when it was first started", () => {
+    // A persistent timer stamps the moment it is first started, at the
+    // deployment, as a last trigger that ran nothing.
+    const deployed = scheduledService(NOW, {}, { lastRun: null, lastTrigger: NOW - 5 * HOUR })
+    expect(serviceRows(site({ services: [deployed] }), NOW)[0]!.runs!.last).toEqual({ text: "No run yet", tone: "neutral" })
     const fresh = scheduledService(NOW, {}, { lastRun: null, lastTrigger: null })
     expect(serviceRows(site({ services: [fresh] }), NOW)[0]!.runs!.last).toEqual({ text: "No run yet", tone: "neutral" })
   })

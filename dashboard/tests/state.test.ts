@@ -310,10 +310,29 @@ describe("workers and scheduled services", () => {
   const before = (seconds: number) => `@${GENERATED / 1000 - seconds}`;
   const after = (seconds: number) => `@${GENERATED / 1000 + seconds}`;
 
+  /**
+   * A date as systemd 257 writes a timer's next and last elapse, which
+   * `--timestamp=unix` does not reach, in the UTC the collector asks for.
+   */
+  const timerDate = (offsetSeconds: number) => {
+    const date = new Date(GENERATED + offsetSeconds * 1000);
+    const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][date.getUTCDay()];
+    return `${day} ${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 19)} UTC`;
+  };
+
   /** A timer as the collector reads it: armed, its last trigger and its next. */
   function timer(properties: Partial<RawUnit> = {}): RawUnit {
-    return { LoadState: "loaded", ActiveState: "active", SubState: "waiting", LastTriggerUSec: before(HOUR_S), NextElapseUSecRealtime: after(900), ...properties };
+    return { LoadState: "loaded", ActiveState: "active", SubState: "waiting", LastTriggerUSec: timerDate(-HOUR_S), NextElapseUSecRealtime: timerDate(900), ...properties };
   }
+
+  test("a timer's dates read as systemd writes them, a date in UTC, as well as in seconds", () => {
+    const manifest = JSON.stringify({ slug: "clock", services: { tick: { start: "/bin/true", schedule: "*:0/15" } } });
+    const read = (next: string) =>
+      buildSnapshot(raw([{ slug: "clock", manifest, unit: unit({ ActiveState: "active", SubState: "exited" }), units: { "clock.tick": idle(), "clock.tick.timer": timer({ NextElapseUSecRealtime: next }) }, bytes: 0, deployed: 0 }])).sites[0]!.services[0]!.schedule!.next;
+    expect(read(timerDate(900))).toBe(GENERATED + 900_000);
+    expect(read(after(900))).toBe(GENERATED + 900_000);
+    expect(read("n/a")).toBeNull();
+  });
 
   /** A scheduled service between two runs, its last one a success an hour ago. */
   function idle(properties: Partial<RawUnit> = {}): RawUnit {

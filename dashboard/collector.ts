@@ -248,7 +248,11 @@ function readMonitorStatus(): string | null {
  */
 async function readUnit(name: string, asked: readonly string[] = PROPERTIES): Promise<RawUnit | null> {
   const arguments_ = ["show", name, "--timestamp=unix", ...asked.flatMap((p) => ["-p", p])];
-  const output = await $`systemctl ${arguments_}`.nothrow().quiet();
+  // `--timestamp=unix` does not reach a timer's NextElapseUSecRealtime and
+  // LastTriggerUSec, which systemd 257 still writes as dates in the machine's
+  // time zone, `Tue 2026-10-13 15:30:00 UTC`: asked in UTC, they always read
+  // the same way, see readTimestamp in src/state.ts.
+  const output = await $`systemctl ${arguments_}`.env({ ...process.env, TZ: "UTC" }).nothrow().quiet();
   if (output.exitCode !== 0) return null;
 
   const properties: RawUnit = {};
