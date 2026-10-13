@@ -30,7 +30,8 @@ import { hostTable } from "./src/audience";
 import { copyMonitorStatus, monitorRefusal, statusFileRefusal } from "./src/monitor";
 import { readAccount, readBounded, readGroup, writeAtomically, type Examination } from "./src/secrets/system";
 import { unitOf, type Raw, type RawFolder, type RawMachine, type RawUnit } from "./src/state";
-import { readManifest, servicesOf } from "./borrowed/manifest";
+import { readManifest, scheduledServices } from "./borrowed/manifest";
+import { isTimerUnit, unitArgument, unitNames } from "./borrowed/unit";
 
 const SITES_DIR = process.env.SITES_DIR ?? "/srv/sites";
 const CODES_FILE = process.env.CODES_FILE ?? "/etc/caddy/locks-codes.json";
@@ -115,6 +116,20 @@ const PROPERTIES = [
   // level: the rate is computed between two readings, in src/state.ts.
   "CPUUsageNSec",
 ];
+
+/**
+ * What a scheduled service's unit adds: how its last run ended, and when it
+ * started and stopped. Between two runs the unit is inactive, which says
+ * nothing of whether the last one went well.
+ */
+const RUN_PROPERTIES = ["Result", "ExecMainStatus", "ExecMainStartTimestamp", "ExecMainExitTimestamp"];
+
+/**
+ * What a timer says: whether it is armed, when it last started its service,
+ * which it remembers across a reboot, and when it starts it next. A timer
+ * holds no memory and no processor of its own.
+ */
+const TIMER_PROPERTIES = ["LoadState", "ActiveState", "SubState", "LastTriggerUSec", "NextElapseUSecRealtime"];
 
 /**
  * A reading that fails returns null: an incomplete reading is worth more than
@@ -227,10 +242,12 @@ function readMonitorStatus(): string | null {
 /**
  * `--timestamp=unix` is not cosmetic: without it systemd returns a date spelled
  * out in full, in the machine's time zone and language, which would have to be
- * parsed again for a less certain result. See src/state.ts#readTimestamp.
+ * parsed again for a less certain result. See src/state.ts#readTimestamp. It
+ * covers a timer's LastTriggerUSec and NextElapseUSecRealtime too, which
+ * systemctl prints as dates.
  */
-async function readUnit(name: string): Promise<RawUnit | null> {
-  const arguments_ = ["show", name, "--timestamp=unix", ...PROPERTIES.flatMap((p) => ["-p", p])];
+async function readUnit(name: string, asked: readonly string[] = PROPERTIES): Promise<RawUnit | null> {
+  const arguments_ = ["show", name, "--timestamp=unix", ...asked.flatMap((p) => ["-p", p])];
   const output = await $`systemctl ${arguments_}`.nothrow().quiet();
   if (output.exitCode !== 0) return null;
 
@@ -383,8 +400,9 @@ async function previousReading(): Promise<Raw["previous"]> {
     };
     for (const folder of previousRaw.folders) {
       keep(folder.slug, folder.unit);
-      // The other units of a project with several services, by unit name: a
-      // slug carries no dot, so the two never collide.
+      // The other units of a project with services, by unit name: a slug
+      // carries no dot, so the two never collide. A timer has no counter, nor
+      // a scheduled service between two runs, and neither is kept.
       for (const [unit, properties] of Object.entries(folder.units ?? {})) keep(unit, properties);
     }
     return { generated: previousRaw.generated, cpu };
@@ -394,19 +412,41 @@ async function previousReading(): Promise<Raw["previous"]> {
 }
 
 /**
- * The other units of a project declaring several `services`, `<slug>.<name>`,
- * read like the main one. Named from the manifest rather than listed from
- * /etc/systemd/system: a unit the manifest declares and that is missing must
- * show as missing. The suffix is written out, systemd reading what follows
- * the last dot as a unit type.
+ * The units of a project declaring `services`, all but the main one, which is
+ * read on its own: `<slug>.<name>` for each service, and `<slug>.<name>.timer`
+ * for the timer of a scheduled one. Keyed by these names, a timer and the
+ * service it starts never collide.
+ *
+ * Named from the manifest by unitNames, the generator's own list, rather than
+ * listed from /etc/systemd/system: a unit the manifest declares and that is
+ * missing must show as missing. Not by rank either: the main unit is the
+ * first service that runs for good, or the anchor of a project whose every
+ * service is scheduled, which is no service of the manifest's.
+ *
+ * A scheduled service is read with how its last run ended, a timer with when
+ * it fires; unitArgument writes the `.service` out, systemd reading what
+ * follows the last dot as a unit type, and leaves a timer's name as it is.
  */
 async function otherUnits(manifest: string | null): Promise<Record<string, RawUnit | null> | undefined> {
   if (manifest === null) return undefined;
-  const { manifest: parsed } = readManifest(manifest);
-  const others = parsed === undefined ? [] : servicesOf(parsed).slice(1);
+  let others: string[];
+  let scheduled: Set<string>;
+  try {
+    const { manifest: parsed } = readManifest(manifest);
+    if (parsed === undefined) return undefined;
+    others = unitNames(parsed).filter((unit) => unit !== parsed.slug);
+    scheduled = new Set(scheduledServices(parsed).map((service) => service.unit));
+  } catch {
+    // A manifest odd enough to throw costs its own units, never the reading
+    // of the whole machine.
+    return undefined;
+  }
   if (others.length === 0) return undefined;
   const units: Record<string, RawUnit | null> = {};
-  for (const { unit } of others) units[unit] = await readUnit(`${unit}.service`);
+  for (const unit of others) {
+    const properties = isTimerUnit(unit) ? TIMER_PROPERTIES : scheduled.has(unit) ? [...PROPERTIES, ...RUN_PROPERTIES] : PROPERTIES;
+    units[unit] = await readUnit(unitArgument(unit), properties);
+  }
   return units;
 }
 

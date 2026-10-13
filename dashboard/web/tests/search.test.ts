@@ -11,7 +11,7 @@ import {
 } from "../src/lib/search"
 import { TYPE_LABELS } from "../src/lib/sites"
 import type { Site } from "../src/lib/types"
-import { service, site } from "./factory"
+import { scheduledService, service, site, siteService } from "./factory"
 
 const portal = (exemptions: string[] = []) => ({ wanted: true, installed: true, exemptions })
 
@@ -147,6 +147,41 @@ describe("fields covered", () => {
   test("an access anomaly is searched by its label", () => {
     const expose = site({ slug: "kanban", portal: { wanted: true, installed: false, exemptions: [] } })
     expect(slugs(filterSites([expose, cms], "public on the server"))).toEqual(["kanban"])
+  })
+
+  /**
+   * A project that runs in the background: its note, its anchor's word, and
+   * its other services by name, Background for a worker and schedule for a
+   * scheduled one, as its Overview shows them.
+   */
+  test("a project that serves no page, its worker and its schedules", () => {
+    const NOW = 1_800_000_000_000
+    const courier = site({
+      slug: "courier",
+      headless: true,
+      port: null,
+      services: [
+        siteService({ name: "queue", unit: "courier", main: true, kind: "worker", internal: true }),
+        scheduledService(NOW, { name: "digest", unit: "courier.digest" }, { expression: "Mon..Fri 08:00" }),
+        scheduledService(NOW, { name: "cleanup", unit: "courier.cleanup" }),
+      ],
+    })
+    const reports = site({
+      slug: "reports",
+      headless: true,
+      port: null,
+      service: service({ subState: "exited" }),
+      services: [scheduledService(NOW, { name: "weekly", unit: "reports.weekly" }, { expression: "Mon 07:00" })],
+    })
+    const all = [courier, reports, cms, showcase]
+    expect(slugs(filterSites(all, "serves no page"))).toEqual(["courier", "reports"])
+    expect(slugs(filterSites(all, "digest"))).toEqual(["courier"])
+    expect(slugs(filterSites(all, "hourly"))).toEqual(["courier"])
+    expect(slugs(filterSites(all, "mon..fri"))).toEqual(["courier"])
+    expect(slugs(filterSites(all, "weekly 07:00"))).toEqual(["reports"])
+    expect(slugs(filterSites(all, "scheduled"))).toEqual(["reports"])
+    // The main service is the row's, said by its word: not repeated as a name.
+    expect(slugs(filterSites(all, "queue"))).toEqual([])
   })
 
   /** The preview link carries the code as a parameter, but only the code is displayed. */

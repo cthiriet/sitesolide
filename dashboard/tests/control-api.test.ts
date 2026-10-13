@@ -7,7 +7,7 @@ import { openDatabase } from "../src/database";
 import { createApiRoutes } from "../src/control/api";
 import { localControlSteward } from "../src/control/client";
 import { createLimiter } from "../src/control/limiter";
-import { INSTALLER_TEMPLATE, type DeploymentView, type Identity } from "../src/control/protocol";
+import { INSTALLER_TEMPLATE, type DeploymentView, type Identity, type ProjectStatus } from "../src/control/protocol";
 import { createSpool } from "../src/control/spool";
 import { createControlSteward } from "../src/control/steward";
 import { createControlStore, type ControlStore } from "../src/control/store";
@@ -185,6 +185,64 @@ describe("a deployment, from the manifest to the site", () => {
     expect(((await taken.json()) as { message: string }).message).toContain("belongs to another token");
   });
 
+  test("each service says what it is, and a scheduled one its timer and last run: idle between two runs is not stopped", async () => {
+    const at = (ms: number) => `@${Math.floor(ms / 1000)}`;
+    const now = Date.now();
+    const manifest = {
+      slug: "shop",
+      publicDir: "public",
+      portal: true,
+      services: {
+        web: { start: "/usr/local/bin/bun run web.ts", port: 3002 },
+        jobs: { start: "/usr/local/bin/bun run jobs.ts", internal: true },
+        sync: { start: "/usr/local/bin/bun run sync.ts", schedule: "*:0/15" },
+      },
+    };
+    const running = { LoadState: "loaded", ActiveState: "active", SubState: "running", NRestarts: "0", ActiveEnterTimestamp: at(now - 60_000) };
+    const snapshot: Raw = {
+      generated: now,
+      zone: ZONE,
+      folders: [
+        {
+          slug: "shop",
+          manifest: JSON.stringify(manifest),
+          unit: running,
+          units: {
+            "shop.jobs": running,
+            "shop.sync": { LoadState: "loaded", ActiveState: "failed", SubState: "failed", Result: "exit-code", ExecMainStatus: "1", ExecMainStartTimestamp: at(now - 120_000), ExecMainExitTimestamp: at(now - 110_000) },
+            "shop.sync.timer": { LoadState: "loaded", ActiveState: "active", SubState: "waiting", NextElapseUSecRealtime: at(now + 600_000), LastTriggerUSec: at(now - 120_000) },
+          },
+          bytes: 1024,
+          deployed: now,
+        },
+      ],
+      codes: "{}",
+      domains: null,
+      ports: [3002],
+      blocks: { shop: "reverse_proxy 127.0.0.1:3002" },
+      machine: null,
+      previous: null,
+    };
+    writeFileSync(join(root, "state.json"), JSON.stringify(snapshot));
+    try {
+      const project = ((await (await api("/api/v1/projects/shop")).json()) as { project: ProjectStatus }).project;
+      expect(project.services.map(({ unit, kind, port, state, schedule }) => ({ unit, kind, port, state, scheduled: schedule !== null }))).toEqual([
+        { unit: "shop", kind: "server", port: 3002, state: "active", scheduled: false },
+        { unit: "shop.jobs", kind: "worker", port: null, state: "active", scheduled: false },
+        { unit: "shop.sync", kind: "scheduled", port: null, state: "failed", scheduled: true },
+      ]);
+      expect(project.services[2]!.schedule).toEqual({
+        expression: "*:0/15",
+        timer: "shop.sync.timer",
+        timerState: "active",
+        timerSubState: "waiting",
+        next: Math.floor((now + 600_000) / 1000) * 1000,
+        lastRun: { at: Math.floor((now - 110_000) / 1000) * 1000, ok: false, failure: expect.any(String) },
+      });
+    } finally {
+      rmSync(join(root, "state.json"), { force: true });
+    }
+  });
 });
 
 describe("refusals an agent can act on", () => {

@@ -198,7 +198,11 @@ export type ProjectAccount = { manifest: Manifest; uid: number };
  * one has nothing to call, and the rule stays what it was for every other site.
  */
 export function reachesOwnPorts(manifest: Manifest): boolean {
-  return hasServices(manifest) || servicesOf(manifest).some((service) => service.backup !== null);
+  const services = servicesOf(manifest);
+  // A project whose services all listen on nothing, workers and scheduled
+  // runs, has no port of its own to reach.
+  if (!services.some((service) => service.port !== null)) return false;
+  return hasServices(manifest) || services.some((service) => service.backup !== null);
 }
 
 /**
@@ -232,6 +236,9 @@ export function projectPortPairs(projects: ProjectAccount[]): string[] {
       throw new Error(`unexpected uid for ${manifest.slug}: ${uid}`);
     }
     for (const service of servicesOf(manifest)) {
+      // A worker or a scheduled service listens on nothing: it calls its
+      // siblings' ports, which the pairs of the same uid already open.
+      if (service.port === null) continue;
       if (service.port < SERVICE_PORTS.first || service.port > SERVICE_PORTS.last) {
         throw new Error(`${manifest.slug}: port ${service.port} is outside the services range`);
       }

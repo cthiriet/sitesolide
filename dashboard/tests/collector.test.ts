@@ -31,7 +31,8 @@ import type { Raw } from "../src/state";
  * directory; the owners are left empty, this test running without root. The
  * machine's readings, `systemctl show`, `du`, `ss`, answer what they answer on
  * the workstation, or fail, which the collector takes as a blank: nothing here
- * depends on them.
+ * depends on them, but for the units read beside a project's main one, where
+ * a fake `systemctl` first on the PATH says what was asked of which unit.
  */
 
 const COLLECTOR = join(import.meta.dir, "..", "collector.ts");
@@ -56,11 +57,11 @@ beforeEach(() => {
   writeFileSync(VICTIM, "untouched");
 });
 
-/** One pass of the collector; the snapshot it wrote. */
-async function collect(): Promise<Raw> {
+/** One pass of the collector; the snapshot it wrote. `path` goes before the PATH, for a fake command. */
+async function collect(path: string | null = null): Promise<Raw> {
   const child = Bun.spawn([process.execPath, "run", COLLECTOR], {
     env: {
-      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      PATH: `${path === null ? "" : `${path}:`}${process.env.PATH ?? "/usr/bin:/bin"}`,
       SITESOLIDE_ZONE: "test-zone.invalid",
       SITES_DIR: SITES,
       STATE_FILE: join(DASHBOARD_DATA, "state.json"),
@@ -88,6 +89,82 @@ function monitorStatus(): string {
     buildStatus({ now: Date.now(), zone: "test-zone.invalid", checks: {}, heartbeat: "ok", webhook: "idle", undelivered: 0, unchecked: 0 }),
   );
 }
+
+/**
+ * A `systemctl` that answers `show` with every property it is asked for, each
+ * valued with the unit it was asked about: what the collector asks, of which
+ * unit, reads straight from the snapshot. Anything else fails.
+ */
+function fakeSystemctl(): string {
+  const bin = join(D, "bin");
+  mkdirSync(bin, { recursive: true });
+  const script = [
+    "#!/bin/sh",
+    '[ "$1" = show ] || exit 1',
+    'unit="$2"',
+    "shift 2",
+    'for argument in "$@"; do',
+    '  case "$argument" in -p|--*) ;; *) printf "%s=%s\\n" "$argument" "$unit" ;; esac',
+    "done",
+    "",
+  ].join("\n");
+  writeFileSync(join(bin, "systemctl"), script, { mode: 0o755 });
+  return bin;
+}
+
+function project(slug: string, manifest: unknown): void {
+  mkdirSync(join(SITES, slug), { recursive: true });
+  writeFileSync(join(SITES, slug, "sitesolide.json"), JSON.stringify(manifest));
+}
+
+describe("the units read beside a project's main one", () => {
+  const SERVICE = ["LoadState", "ActiveState", "SubState", "MemoryCurrent", "MemoryPeak", "MemoryMax", "NRestarts", "ActiveEnterTimestamp", "CPUUsageNSec"];
+  const RUN = [...SERVICE, "Result", "ExecMainStatus", "ExecMainStartTimestamp", "ExecMainExitTimestamp"];
+  const TIMER = ["LoadState", "ActiveState", "SubState", "LastTriggerUSec", "NextElapseUSecRealtime"];
+
+  test("named from the manifest, never by rank: a scheduled service written first is not the main unit", async () => {
+    project("lab", {
+      slug: "lab",
+      services: {
+        sync: { start: "/srv/sites/lab/app/sync", schedule: "hourly" },
+        web: { start: "/srv/sites/lab/app/web", port: 3050 },
+        queue: { start: "/srv/sites/lab/app/queue", internal: true },
+      },
+    });
+    const lab = (await collect(fakeSystemctl())).folders.find((one) => one.slug === "lab")!;
+    expect(Object.keys(lab.unit!)).toEqual(SERVICE);
+    expect(lab.unit!.LoadState).toBe("lab");
+    expect(Object.keys(lab.units!).sort()).toEqual(["lab.queue", "lab.sync", "lab.sync.timer"]);
+    // The service and its timer, side by side under their own names, each
+    // asked of systemd by the name it takes.
+    expect(lab.units!["lab.queue"]).toEqual(Object.fromEntries(SERVICE.map((key) => [key, "lab.queue.service"])));
+    expect(lab.units!["lab.sync"]).toEqual(Object.fromEntries(RUN.map((key) => [key, "lab.sync.service"])));
+    expect(lab.units!["lab.sync.timer"]).toEqual(Object.fromEntries(TIMER.map((key) => [key, "lab.sync.timer"])));
+  });
+
+  test("a project whose every service is scheduled: the anchor is its main unit, every service and timer beside it", async () => {
+    project("nightly", {
+      slug: "nightly",
+      services: {
+        report: { start: "/srv/sites/nightly/app/report", schedule: "daily" },
+        purge: { start: "/srv/sites/nightly/app/purge", schedule: "*:0/15" },
+      },
+    });
+    const nightly = (await collect(fakeSystemctl())).folders.find((one) => one.slug === "nightly")!;
+    expect(nightly.unit!.LoadState).toBe("nightly");
+    expect(Object.keys(nightly.units!).sort()).toEqual(["nightly.purge", "nightly.purge.timer", "nightly.report", "nightly.report.timer"]);
+    expect(nightly.units!["nightly.report"]!.Result).toBe("nightly.report.service");
+  });
+
+  test("a single start, a static site and a manifest that does not read have no other unit", async () => {
+    project("tool", { slug: "tool", start: "bun run server.ts", port: 3030 });
+    project("notes", { slug: "notes", publicDir: "public" });
+    mkdirSync(join(SITES, "broken"), { recursive: true });
+    writeFileSync(join(SITES, "broken", "sitesolide.json"), "{ not json");
+    const { folders } = await collect(fakeSystemctl());
+    for (const slug of ["tool", "notes", "broken"]) expect([slug, folders.find((one) => one.slug === slug)!.units]).toEqual([slug, undefined]);
+  });
+});
 
 describe("the monitor's status, copied as root from the monitor's directory", () => {
   test("no status, no field: the monitor is not installed", async () => {

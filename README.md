@@ -48,6 +48,9 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
   domain once its DNS points at your machine.
 - **Apps in any language.** A static site, or anything that listens on a port:
   Node, Python, Go, Ruby, a binary, each confined to its own user and folder.
+- **Background work.** Workers that run for good and jobs on a schedule,
+  beside a site or on their own, confined the same way and yielding the
+  processor to the sites.
 - **Company sign-in, access given like a doc's.** Google Workspace, Microsoft
   Entra, Okta or any OpenID Connect provider in front of private apps, opened
   to people or a whole domain, each with a role, from opening the site to

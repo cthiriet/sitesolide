@@ -74,11 +74,15 @@ export function readProperties(output: string): Properties {
 /** One line of `systemctl list-units --plain --no-legend`. */
 export type ListedUnit = { name: string; load: string; active: string; sub: string };
 
+const SERVICE = ".service";
+const TIMER = ".timer";
+
 /**
- * The four first columns of `systemctl list-units --type=service --all --plain
- * --no-legend`. The description that follows may hold spaces and is dropped.
- * A failed unit may be preceded by a bullet on some versions even under
- * `--plain`; it is skipped rather than taken for a name.
+ * The four first columns of `systemctl list-units --type=service,timer --all
+ * --plain --no-legend`. The description that follows may hold spaces and is
+ * dropped. A failed unit may be preceded by a bullet on some versions even
+ * under `--plain`; it is skipped rather than taken for a name. Services and
+ * timers only, whatever else a systemctl that ignored the type would list.
  */
 export function readUnitList(output: string): ListedUnit[] {
   const units: ListedUnit[] = [];
@@ -87,7 +91,7 @@ export function readUnitList(output: string): ListedUnit[] {
     if (columns[0] === "●" || columns[0] === "*") columns.shift();
     const [name, load, active, sub] = columns;
     if (name === undefined || load === undefined || active === undefined || sub === undefined) continue;
-    if (!name.endsWith(".service")) continue;
+    if (!name.endsWith(SERVICE) && !name.endsWith(TIMER)) continue;
     units.push({ name, load, active, sub });
   }
   return units;
@@ -192,43 +196,86 @@ function crashLooping(unit: ListedUnit): boolean {
  * `projectUnits` maps a project's main unit, without `.service`, to its
  * directory: `<slug>`, or `sitesolide-landing` for the landing. A project's
  * other services are `<slug>.<name>.service`, found by that prefix, a slug never
- * holding a dot. They come from what systemd has loaded, not from the
+ * holding a dot, and so are the timers of its scheduled services,
+ * `<slug>.<name>.timer`. They come from what systemd has loaded, not from the
  * manifests: what the machine runs is the truth for a failed unit, and a unit a
  * manifest declares but that is missing is the dashboard's to report.
  *
  * A project's unit fails when it is failed, crashing in a loop, or stopped:
  * nothing on the platform stops a project's service for good, `sitesolide
- * remove` deletes it. The platform's units fail only when failed or looping,
- * since several are one-shots whose rest state is `inactive`; they are
- * warnings, a stopped collector or steward degrading the dashboard rather than
- * a site.
+ * remove` deletes it. A main unit whose every service is scheduled is an
+ * anchor that runs nothing and stays `active (exited)`, which reads as fine
+ * without a rule of its own.
+ *
+ * Two exceptions, both told apart by a timer systemd has loaded under the same
+ * name, which is what makes a service scheduled:
+ *
+ *   - a scheduled service is `inactive (dead)` between two runs, its rest
+ *     state, and `failed` from a failed run until the next one. Only the
+ *     latter is reported, and as a warning: no site is down with it, and the
+ *     next run may well succeed, which recovers it. Judged like a service that
+ *     runs for good, it would read as stopped, and down, from the end of its
+ *     very first run;
+ *   - its timer is what keeps it running at all, `active (waiting)` between
+ *     runs and `active (running)` during one. Anything but active is critical:
+ *     the schedule stopped and nothing will start the service again, without a
+ *     failed run to say so. A calendar with no date left, a one-off date
+ *     already past, leaves its timer `active (elapsed)`: nothing more will
+ *     run, but that is what the schedule said, not a schedule that stopped.
+ *
+ * The platform's units fail only when failed or looping, since several are
+ * one-shots whose rest state is `inactive`; they are warnings, a stopped
+ * collector or steward degrading the dashboard rather than a site. Their
+ * timers are left out, each stopped one already showing elsewhere: the
+ * monitor's as a heartbeat that stops, the collector's as a dashboard that
+ * calls its snapshot stale, the backups' as a last run that grows old. The
+ * loopback's rescue timer, transient, is armed and disarmed by each run of
+ * bin/deploy-loopback.sh and absent the rest of the time.
  */
 export function judgeUnits(units: readonly ListedUnit[], projectUnits: ReadonlyMap<string, string>): Result[] {
   const results: Result[] = [];
   const slugs = new Set(projectUnits.values());
+  const loaded = units.filter((unit) => unit.load === "loaded" && unit.name !== SELF_UNIT);
+  // The services a timer starts, `<slug>.<name>` for `<slug>.<name>.timer`.
+  const scheduled = new Set(
+    loaded.filter((unit) => unit.name.endsWith(TIMER)).map((unit) => unit.name.slice(0, -TIMER.length)),
+  );
 
-  for (const unit of units) {
-    if (unit.load !== "loaded" || unit.name === SELF_UNIT) continue;
-    const bare = unit.name.slice(0, -".service".length);
+  for (const unit of loaded) {
+    const timer = unit.name.endsWith(TIMER);
+    const bare = unit.name.slice(0, -(timer ? TIMER : SERVICE).length);
     const dot = bare.indexOf(".");
-    const owner = projectUnits.get(bare) ?? (dot > 0 && slugs.has(bare.slice(0, dot)) ? bare.slice(0, dot) : undefined);
+    // A slug never holds a dot, and a main unit never has a timer: it is the
+    // first service that runs for good, or the anchor. A timer, or a service
+    // that one starts, is always `<slug>.<name>`, which keeps a project whose
+    // slug happens to be the name of a timer of the distribution out of it.
+    const secondary = dot > 0 && slugs.has(bare.slice(0, dot));
+    const main = timer ? undefined : projectUnits.get(bare);
+    const owner = main ?? (secondary ? bare.slice(0, dot) : undefined);
     const state = `${unit.name} is ${unit.active} (${unit.sub})`;
 
     if (owner !== undefined) {
-      const failing = unit.active === "failed" || unit.active === "inactive" || crashLooping(unit);
-      results.push({
-        id: `unit:${unit.name}`,
-        kind: "unit",
-        label: unit.name,
-        severity: "critical",
-        slug: owner,
-        verdict: failing ? "fail" : "ok",
-        summary: state,
-      });
+      const base = { id: `unit:${unit.name}`, kind: "unit", label: unit.name, slug: owner } as const;
+      if (timer) {
+        const failing = unit.active !== "active";
+        const summary = failing ? `${state}: the schedule stopped, nothing starts ${bare}.service any more` : state;
+        results.push({ ...base, severity: "critical", verdict: failing ? "fail" : "ok", summary });
+      } else if (secondary && scheduled.has(bare)) {
+        const failing = unit.active === "failed";
+        const summary = failing
+          ? `${state}: its last scheduled run failed, see sitesolide logs`
+          : unit.active === "inactive"
+            ? `${state}, between two scheduled runs`
+            : state;
+        results.push({ ...base, severity: "warning", verdict: failing ? "fail" : "ok", summary });
+      } else {
+        const failing = unit.active === "failed" || unit.active === "inactive" || crashLooping(unit);
+        results.push({ ...base, severity: "critical", verdict: failing ? "fail" : "ok", summary: state });
+      }
       continue;
     }
 
-    if (unit.name.startsWith(PLATFORM_PREFIX)) {
+    if (!timer && unit.name.startsWith(PLATFORM_PREFIX)) {
       const failing = unit.active === "failed" || crashLooping(unit);
       results.push({
         id: `unit:${unit.name}`,

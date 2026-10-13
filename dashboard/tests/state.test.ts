@@ -303,6 +303,206 @@ describe("a project with several services", () => {
   });
 });
 
+describe("workers and scheduled services", () => {
+  const GENERATED = 1_756_400_000_000;
+  const HOUR_S = 3600;
+  /** A date as `systemctl show --timestamp=unix` writes it, so many seconds before the reading. */
+  const before = (seconds: number) => `@${GENERATED / 1000 - seconds}`;
+  const after = (seconds: number) => `@${GENERATED / 1000 + seconds}`;
+
+  /** A timer as the collector reads it: armed, its last trigger and its next. */
+  function timer(properties: Partial<RawUnit> = {}): RawUnit {
+    return { LoadState: "loaded", ActiveState: "active", SubState: "waiting", LastTriggerUSec: before(HOUR_S), NextElapseUSecRealtime: after(900), ...properties };
+  }
+
+  /** A scheduled service between two runs, its last one a success an hour ago. */
+  function idle(properties: Partial<RawUnit> = {}): RawUnit {
+    return unit({
+      ActiveState: "inactive",
+      SubState: "dead",
+      MemoryCurrent: "[not set]",
+      CPUUsageNSec: "[not set]",
+      Result: "success",
+      ExecMainStatus: "0",
+      ExecMainStartTimestamp: before(HOUR_S),
+      ExecMainExitTimestamp: before(HOUR_S - 40),
+      ...properties,
+    });
+  }
+
+  /** A web front, a worker and an hourly job, the job written first: it is never the main one. */
+  const SHOP = {
+    slug: "shop",
+    services: {
+      sync: { start: "/srv/sites/shop/app/sync", schedule: "hourly" },
+      web: { start: "/srv/sites/shop/app/web", port: 3050 },
+      queue: { start: "/srv/sites/shop/app/queue", internal: true },
+    },
+  };
+
+  function shop(units: Record<string, RawUnit | null>, main: RawUnit = unit()) {
+    return buildSnapshot(raw([folder("shop", SHOP, { unit: main, units })], { generated: GENERATED, ports: [3050] }));
+  }
+
+  const HEALTHY = { "shop.sync": idle(), "shop.sync.timer": timer(), "shop.queue": unit() };
+
+  test("every service with its kind, the main one first whatever the written order, a schedule for the scheduled one", () => {
+    const { sites } = shop(HEALTHY);
+    const site = sites[0]!;
+    expect(site.services.map((service) => [service.name, service.unit, service.kind, service.main, service.port])).toEqual([
+      ["web", "shop", "server", true, 3050],
+      ["sync", "shop.sync", "scheduled", false, null],
+      ["queue", "shop.queue", "worker", false, null],
+    ]);
+    expect(site.service?.unit).toBe("shop");
+    expect(site.port).toBe(3050);
+    expect(site.headless).toBe(false);
+    expect(site.services[2]!.schedule).toBeNull();
+    expect(site.services[1]!.schedule).toEqual({
+      expression: "hourly",
+      timeout: "1h",
+      timer: "shop.sync.timer",
+      timerState: { loaded: true, active: "active", subState: "waiting" },
+      lastTrigger: GENERATED - HOUR_S * 1000,
+      next: GENERATED + 900_000,
+      lastRun: { at: GENERATED - (HOUR_S - 40) * 1000, ok: true, result: "success", status: 0, failure: null },
+    });
+  });
+
+  test("an idle scheduled service, its timer waiting, and a running worker are no discrepancy", () => {
+    expect(messages(shop(HEALTHY), "shop")).toEqual([]);
+  });
+
+  test("a run in progress is none either, and has no last run until it ends", () => {
+    const snapshot = shop({ ...HEALTHY, "shop.sync": unit({ Result: "success", ExecMainStartTimestamp: before(30), ExecMainExitTimestamp: "" }) });
+    expect(messages(snapshot, "shop")).toEqual([]);
+    expect(snapshot.sites[0]!.services[1]!.schedule!.lastRun).toBeNull();
+  });
+
+  test("a failed last run is a warning naming the service, when and how", () => {
+    const failed = (result: string, status: string) =>
+      shop({ ...HEALTHY, "shop.sync": idle({ ActiveState: "failed", SubState: "failed", Result: result, ExecMainStatus: status, ExecMainExitTimestamp: before(2 * HOUR_S) }) });
+    const snapshot = failed("exit-code", "1");
+    expect(snapshot.discrepancies.filter((d) => d.slug === "shop")).toEqual([
+      { slug: "shop", severity: "warning", message: "Service sync: last run failed 2 h ago (exit code 1)" },
+    ]);
+    expect(snapshot.sites[0]!.services[1]!.schedule!.lastRun).toMatchObject({ ok: false, result: "exit-code", status: 1, failure: "exit code 1" });
+    expect(messages(failed("timeout", "15"), "shop")).toEqual(["Service sync: last run failed 2 h ago (stopped after its timeout of 1h)"]);
+    expect(messages(failed("signal", "9"), "shop")).toEqual(["Service sync: last run failed 2 h ago (killed by signal 9)"]);
+    expect(messages(failed("oom-kill", "9"), "shop")).toEqual(["Service sync: last run failed 2 h ago (killed for lack of memory)"]);
+  });
+
+  test("a timer that is not active is an error: the schedule stopped, and nothing runs", () => {
+    const stopped = shop({ ...HEALTHY, "shop.sync.timer": timer({ ActiveState: "inactive", SubState: "dead" }) });
+    expect(stopped.discrepancies.filter((d) => d.slug === "shop")).toEqual([
+      { slug: "shop", severity: "error", message: "Service sync: its schedule is stopped, shop.sync.timer is inactive (dead)" },
+    ]);
+    expect(stopped.sites[0]!.services[1]!.schedule!.next).toBeNull();
+
+    const missing = shop({ ...HEALTHY, "shop.sync.timer": { LoadState: "not-found", ActiveState: "inactive", SubState: "dead" } });
+    expect(messages(missing, "shop")).toEqual(["Service sync: no loaded timer (shop.sync.timer), it never runs"]);
+    expect(messages(shop({ ...HEALTHY, "shop.sync.timer": null }), "shop")).toEqual(["Service sync: no loaded timer (shop.sync.timer), it never runs"]);
+  });
+
+  test("a scheduled service with no loaded unit is an error, as any service", () => {
+    expect(messages(shop({ ...HEALTHY, "shop.sync": null }), "shop")).toEqual(["Service sync: no loaded unit (shop.sync.service)"]);
+  });
+
+  test("a worker that is not active is an error, as any service that runs for good", () => {
+    const snapshot = shop({ ...HEALTHY, "shop.queue": unit({ ActiveState: "activating", SubState: "auto-restart", NRestarts: "12" }) });
+    expect(snapshot.discrepancies.filter((d) => d.slug === "shop")).toEqual([
+      { slug: "shop", severity: "error", message: "Service queue activating (auto-restart)" },
+    ]);
+  });
+
+  test("a reading from a collector older than scheduled services judges no timer, and no run it did not read", () => {
+    const snapshot = shop({ "shop.sync": unit({ ActiveState: "inactive", SubState: "dead" }), "shop.queue": unit() });
+    expect(messages(snapshot, "shop")).toEqual([]);
+    expect(snapshot.sites[0]!.services[1]!.schedule).toMatchObject({ timerState: null, lastTrigger: null, next: null, lastRun: null });
+  });
+
+  test("after a reboot, systemd no longer says how the last run ended, the timer still says when it was", () => {
+    const rebooted = idle({ Result: "success", ExecMainStartTimestamp: "", ExecMainExitTimestamp: "", ExecMainStatus: "0" });
+    const snapshot = shop({ ...HEALTHY, "shop.sync": rebooted, "shop.sync.timer": timer({ LastTriggerUSec: before(5 * HOUR_S) }) });
+    expect(snapshot.sites[0]!.services[1]!.schedule).toMatchObject({ lastRun: null, lastTrigger: GENERATED - 5 * HOUR_S * 1000 });
+    expect(messages(snapshot, "shop")).toEqual([]);
+  });
+
+  test("a failure that never started the program still counts as a failed run", () => {
+    const refused = idle({ ActiveState: "failed", SubState: "failed", Result: "resources", ExecMainStartTimestamp: "", ExecMainExitTimestamp: "" });
+    const snapshot = shop({ ...HEALTHY, "shop.sync": refused });
+    expect(messages(snapshot, "shop")).toEqual(["Service sync: last run failed 1 h ago (resources)"]);
+  });
+
+  test("a scheduled service's memory peak is named, its CPU counter absent between runs", () => {
+    const snapshot = shop({ ...HEALTHY, "shop.sync": idle({ MemoryPeak: "250000000" }) });
+    expect(messages(snapshot, "shop")).toEqual([expect.stringContaining("Service sync: memory peak at")]);
+    expect(snapshot.sites[0]!.services[1]!.service?.cpuShare).toBeNull();
+  });
+
+  describe("a project whose every service is scheduled", () => {
+    const NIGHTLY = {
+      slug: "nightly",
+      services: {
+        report: { start: "/srv/sites/nightly/app/report", schedule: "daily" },
+        purge: { start: "/srv/sites/nightly/app/purge", schedule: "*:0/15", timeout: "5m" },
+      },
+    };
+    /** The anchor: a oneshot that ran /bin/true and stays active, with no memory and no ceiling. */
+    const anchor = (properties: Partial<RawUnit> = {}) =>
+      unit({ SubState: "exited", MemoryCurrent: "[not set]", MemoryPeak: "[not set]", MemoryMax: "infinity", CPUUsageNSec: "0", ...properties });
+    const UNITS = {
+      "nightly.report": idle(),
+      "nightly.report.timer": timer(),
+      "nightly.purge": idle(),
+      "nightly.purge.timer": timer({ NextElapseUSecRealtime: after(300) }),
+    };
+    const nightly = (main: RawUnit | null, units: Record<string, RawUnit | null> = UNITS) =>
+      buildSnapshot(raw([folder("nightly", NIGHTLY, { unit: main, units })], { generated: GENERATED }));
+
+    test("its main unit is the anchor, none of its services is the main one, and it serves no page", () => {
+      const snapshot = nightly(anchor());
+      const site = snapshot.sites[0]!;
+      expect(site.type).toBe("app");
+      expect(site.headless).toBe(true);
+      expect(site.service).toMatchObject({ unit: "nightly", active: "active", subState: "exited", memory: null });
+      expect(site.port).toBeNull();
+      expect(site.listening).toBeNull();
+      expect(site.services.map((service) => [service.name, service.unit, service.main, service.schedule?.timeout])).toEqual([
+        ["report", "nightly.report", false, "1h"],
+        ["purge", "nightly.purge", false, "5m"],
+      ]);
+      expect(messages(snapshot, "nightly")).toEqual([]);
+    });
+
+    test("an anchor that is not active is the project stopped, an error", () => {
+      expect(messages(nightly(anchor({ ActiveState: "inactive", SubState: "dead" })), "nightly")).toEqual(["Service inactive (dead)"]);
+      expect(messages(nightly(null), "nightly")).toEqual(["App project without a loaded unit: none of its services runs"]);
+    });
+
+    test("one of its services' memory peak is named, being none the main one", () => {
+      const snapshot = nightly(anchor(), { ...UNITS, "nightly.purge": idle({ MemoryPeak: "250000000" }) });
+      expect(messages(snapshot, "nightly")).toEqual([expect.stringContaining("Service purge: memory peak at")]);
+    });
+  });
+
+  test("a project that serves no page says so; one with a public service or a publicDir does not", () => {
+    const worker = { slug: "courier", services: { queue: { start: "/srv/sites/courier/app/queue", internal: true } } };
+    const { sites } = buildSnapshot(
+      raw([
+        folder("courier", worker, { unit: unit() }),
+        folder("pages", { ...worker, slug: "pages", publicDir: "public" }, { unit: unit() }),
+        folder("tool", { slug: "tool", port: 3030, start: "bun run server.ts" }, { unit: unit() }),
+      ], { ports: [3030] }),
+    );
+    expect(sites.map((site) => [site.slug, site.headless, site.port, site.services[0]?.kind])).toEqual([
+      ["courier", true, null, "worker"],
+      ["pages", false, null, "worker"],
+      ["tool", false, 3030, "server"],
+    ]);
+  });
+});
+
 describe("processor", () => {
   const manifest = { slug: "tool", port: 3030, publicDir: "public", start: "bun run server.ts" };
 

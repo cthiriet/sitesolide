@@ -328,6 +328,62 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     expect(recovered.heartbeat).toEqual(["/ping/5a7f"]);
   });
 
+  test("a scheduled service: at rest between runs, a failed run a warning, a stopped timer critical", async () => {
+    const units = (service: string, timer: string) => [
+      "caddy.service loaded active running Caddy",
+      `cms.report.service loaded ${service} Project cms, service report`,
+      "cms.service loaded active running cms",
+      "sitesolide-landing.service loaded active running landing",
+      "sitesolide-collector.service loaded inactive dead Machine state snapshot",
+      `cms.report.timer loaded ${timer} Project cms, schedule of service report`,
+      "sitesolide-collector.timer loaded active waiting Machine state snapshot, every minute",
+      "sitesolide-monitor.timer loaded active waiting Monitor, every minute",
+    ];
+
+    // At rest, then running: nothing to say. The service and its timer are
+    // two checks more, the platform's timers none.
+    setUnits(units("inactive dead", "active waiting"));
+    const rest = await pass();
+    expect(rest.status).toMatchObject({ checks: 18, down: [] });
+    setUnits(units("active running", "active running"));
+    expect((await pass()).webhook).toEqual([]);
+
+    // A failed run, seen twice: one warning, the heartbeat kept armed.
+    setUnits(units("failed failed", "active waiting"));
+    expect((await pass()).webhook).toEqual([]);
+    const failed = await pass();
+    const summary = "cms.report.service is failed (failed): its last scheduled run failed, see sitesolide logs";
+    expect(failed.webhook).toEqual([`sitesolide monitor, ${ZONE}: 1 down\nWARNING ${summary} (since 2026-10-04 12:02 UTC)`]);
+    expect(failed.heartbeat).toEqual(["/ping/5a7f"]);
+    expect(failed.status.down).toEqual([
+      { id: "unit:cms.report.service", kind: "unit", label: "cms.report.service", severity: "warning", slug: "cms", summary, since: T0 + 2 * MINUTE },
+    ]);
+
+    // The next run succeeds: recovered, once.
+    setUnits(units("inactive dead", "active waiting"));
+    expect((await pass()).webhook).toEqual([]);
+    expect((await pass()).webhook).toEqual([
+      `sitesolide monitor, ${ZONE}: 1 recovered\nRECOVERED cms.report.service is inactive (dead), between two scheduled runs (after 3 min)`,
+    ]);
+
+    // The timer stopped: nothing will run again, critical, yet one project's.
+    setUnits(units("inactive dead", "inactive dead"));
+    await pass();
+    const stopped = await pass();
+    expect(stopped.webhook).toEqual([
+      `sitesolide monitor, ${ZONE}: 1 down\nDOWN cms.report.timer is inactive (dead): the schedule stopped, ` +
+        "nothing starts cms.report.service any more (since 2026-10-04 12:06 UTC)",
+    ]);
+    expect(stopped.heartbeat).toEqual(["/ping/5a7f"]);
+    expect(stopped.status.down.map((problem) => [problem.id, problem.severity])).toEqual([["unit:cms.report.timer", "critical"]]);
+
+    // Timers are read in the same listing as the services, and only read.
+    const calls = readFileSync(join(systemd, "calls"), "utf8").trim().split("\n");
+    expect(calls.filter((call) => call.startsWith("list-units "))).toContain(
+      "list-units --type=service,timer --all --plain --no-legend --no-pager",
+    );
+  });
+
   test("a webhook that refuses keeps its notices for the next run, in one message", async () => {
     await pass();
     setUnits(["caddy.service loaded active running Caddy", "cms.service loaded failed failed cms"]);

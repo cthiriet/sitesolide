@@ -9,19 +9,25 @@ import { SiteDiscrepancies, AccessPanel, AddressesPanel, ServicePanel, ServicesP
 import { readAccess } from "@/lib/api"
 import { accessSummary, isPlatform } from "@/lib/access"
 import { isPerson, mayRestart, roleOn } from "@/lib/identity"
-import { siteAddress } from "@/lib/sites"
+import { HEADLESS_NOTE, siteAddress } from "@/lib/sites"
 import type { Discrepancy, Site } from "@/lib/types"
 
-/** Under the title: the site's state in one sentence, its description and its main address. */
+/**
+ * Under the title: the site's state in one sentence, its description and its
+ * main address, with, for a project that serves no page, what it answers.
+ */
 function Summary({ site, discrepancies }: { site: Site; discrepancies: readonly Discrepancy[] }) {
   const address = siteAddress(site)
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
       <SiteState site={site} discrepancies={discrepancies} />
       {site.description !== null && <span lang="fr">{site.description}</span>}
-      <ExternalLink href={address.href} className="text-foreground">
-        {address.text}
-      </ExternalLink>
+      <span className="flex flex-wrap items-baseline gap-x-2">
+        <ExternalLink href={address.href} className="text-foreground">
+          {address.text}
+        </ExternalLink>
+        {site.headless && <span className="text-xs text-muted-foreground">{HEADLESS_NOTE}</span>}
+      </span>
     </div>
   )
 }
@@ -92,7 +98,7 @@ export function OverviewSection({ slug }: { slug: string }) {
           <div className="grid items-start gap-6 @4xl/body:grid-cols-2">
             <div className="grid min-w-0 gap-6">
               <ServicePanel site={snapshot} now={now} action={mayRestart(identity, slug) && snapshot.type === "app" ? <RestartButton slug={slug} /> : undefined} />
-              <ServicesPanel site={snapshot} />
+              <ServicesPanel site={snapshot} now={now} />
               <AddressesPanel site={snapshot} />
               <StoragePanel site={snapshot} now={now} />
             </div>

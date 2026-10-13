@@ -1,7 +1,7 @@
 ---
 name: sitesolide
 description: Deploy a project folder to the user's own sitesolide server, and check on it afterwards. Use when the user asks to deploy, publish, ship or put online a site, an app or a tool, to give colleagues access to it, to see whether it is up, or to read its logs, in a setup that has the sitesolide CLI or its MCP server.
-when_to_use: Requests such as "deploy this", "put it online", "publish the site", "share this tool with my colleagues", "give alice access", "is it up?", "why does the site return 500?" or "show me the logs", and any folder holding a sitesolide.json.
+when_to_use: Requests such as "deploy this", "put it online", "publish the site", "run this every hour on the server", "keep this bot running", "share this tool with my colleagues", "give alice access", "is it up?", "why does the site return 500?" or "show me the logs", and any folder holding a sitesolide.json.
 ---
 
 # Deploying with sitesolide
@@ -31,6 +31,16 @@ Use the MCP tools when they are available (`detect`, `deploy`, `status`,
    - a `backup` command for a service that runs a server database in the
      data folder, PostgreSQL or MongoDB: without one, the hourly snapshot
      refuses the project (`docs/manifest.md`, "A service's backup command");
+   - work that is not a web server, written by hand under `services`, never
+     as the top-level `start`: a worker, `"internal": true` and no `port`,
+     runs for good and should exit cleanly on SIGTERM; a scheduled service,
+     `"schedule": "*:0/15"` (systemd calendar syntax: `hourly`, `daily`,
+     `Mon..Fri 08:00`) and optionally `"timeout": "15m"` (1h by default),
+     runs to its end at those times. `"cpu": "50%"` caps a service at half a
+     core. A project of those alone, without `publicDir`, serves no page and
+     takes no `domain`. A headless browser, heavy computing or mass email
+     from the machine itself does not belong on the machine that serves every
+     site: say so first (`docs/manifest.md`, "What fits on the machine");
    - the slug, which is the address: `<slug>.<their zone>`.
    Write `sitesolide.json` (`detect --write`, or by hand) and edit it there.
 3. **Dry run.** `deploy` with `dry_run: true` (`sitesolide deploy --dry-run
@@ -76,6 +86,12 @@ Every error carries a `hint`: follow it. The usual ones:
   `logs` (`sitesolide logs --json --lines 100`): each entry has its unit,
   priority and message. Priority 3 and below are errors. Fix the code, deploy
   again.
+- **A service fell right after its restart.** The deploy watches every
+  server and worker for ten seconds and names each one that stopped or was
+  restarted: read `logs`, fix the code, deploy again.
+- **A schedule systemd does not read.** The deploy stopped before writing
+  anything: fix the expression in `schedule`, check it with the user, deploy
+  again.
 - **A block or unit "no longer matches the manifest".** Someone edited it on
   the machine. Show the user the differing lines; only they decide whether
   `--force` replaces it.
@@ -111,8 +127,11 @@ Every error carries a `hint`: follow it. The usual ones:
 ## Status and other reads
 
 `status` lists every project on the machine with its service state and
-memory. `access` (`sitesolide share --json`) says a project's general access
-and its people with access, with their roles. `lock_status`
+memory; a scheduled service shows its schedule, its last run and how it
+ended, and its next run, and is `inactive` between two runs, which is not an
+outage. Its runs are in `logs`, beside the other services. `access`
+(`sitesolide share --json`) says a project's general access and its people
+with access, with their roles. `lock_status`
 (`sitesolide lock --status --json`) says whether a preview is closed behind an
 access code, without revealing the code.
 

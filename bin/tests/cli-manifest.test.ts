@@ -626,7 +626,7 @@ describe("what reaches a Caddy block or a unit", () => {
 
   test("every manifest of the repository and of the sites repository still passes", () => {
     const repo = join(import.meta.dir, "..", "..");
-    const folders = ["portal", "dashboard", "analytics", "examples/bun-app", "examples/static-site"];
+    const folders = ["portal", "dashboard", "analytics", "examples/bun-app", "examples/static-site", "examples/background"];
     const projects = join(repo, "bin", "tests", "e2e", "projects");
     folders.push(...readdirSync(projects).map((name) => join("bin", "tests", "e2e", "projects", name)));
     for (const folder of folders) {

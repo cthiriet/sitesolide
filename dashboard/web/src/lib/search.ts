@@ -8,7 +8,7 @@
  * the day a label changes.
  */
 import { PENDING_LABEL, type SiteSecretsPanel } from "./secrets"
-import { TYPE_LABELS, siteAccess, siteAddress, serviceState } from "./sites"
+import { TYPE_LABELS, scheduleWords, siteAccess, siteAddress, serviceState } from "./sites"
 import type { Site } from "./types"
 
 /**
@@ -17,7 +17,7 @@ import type { Site } from "./types"
  */
 export type SearchableSite = Pick<
   Site,
-  "slug" | "description" | "type" | "port" | "address" | "domain" | "portal" | "lock" | "service"
+  "slug" | "description" | "type" | "port" | "address" | "headless" | "domain" | "portal" | "lock" | "service"
 > &
   Partial<Pick<Site, "services">> &
   Partial<SiteSecretsPanel>
@@ -72,7 +72,9 @@ export function accessTexts(site: Pick<Site, "portal" | "lock">): string[] {
  * the names of its secret variables and the restart pending pill. The aliases
  * are not displayed, but a client gives them as readily as their domain; the
  * variables show in the site's Secrets and Overview, and a key is looked up
- * more often by its name than by the site that reads it.
+ * more often by its name than by the site that reads it. The other services
+ * of a project likewise, by name, port, Background for a worker and schedule
+ * for a scheduled one, as its Overview shows them.
  */
 export function siteTexts(site: SearchableSite): string[] {
   const address = siteAddress(site)
@@ -81,8 +83,12 @@ export function siteTexts(site: SearchableSite): string[] {
     site.description ?? "",
     TYPE_LABELS[site.type],
     site.port === null ? "" : `:${site.port}`,
-    // The other services of a project, by name and port.
-    ...(site.services ?? []).slice(1).flatMap((entry) => [entry.name ?? "", entry.port === null ? "" : `:${entry.port}`]),
+    ...(site.services ?? []).filter((entry) => !entry.main).flatMap((entry) => [
+      entry.name ?? "",
+      entry.port === null ? "" : `:${entry.port}`,
+      entry.kind === "worker" ? "Background" : "",
+      entry.schedule === null ? "" : (scheduleWords(entry.schedule.expression) ?? entry.schedule.expression),
+    ]),
     address.text,
     address.note?.text ?? "",
     site.address,

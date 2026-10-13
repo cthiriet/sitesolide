@@ -21,10 +21,12 @@
  * Also here, the readings that turn what the machine prints for a person, the
  * status table, the journal and the lock table, into data. They read the very
  * text the human commands show, so that the two modes never ask the machine
- * different questions, the journal's JSON aside.
+ * different questions, the journal's JSON aside. The status table's script
+ * sits beside its reading, STATUS_SCRIPT.
  *
  * Pure, the line splitter of a stream aside: returns values, touches nothing.
  */
+import type { ServiceKind } from "./manifest";
 
 /** Every event `--json` can print. `docs/agents.md` describes them for whoever reads them. */
 export type OutputEvent =
@@ -119,23 +121,74 @@ export async function forEachLine(
   if (pending !== "" && !skipping) deliver(pending.replace(/\r$/, ""));
 }
 
+// --- what a project runs -----------------------------------------------------
+
+/** How many services of each kind a project declares, see ServiceKind in manifest.ts. */
+export type Runs = { servers: number; workers: number; scheduled: number };
+
+export function runsOf(services: readonly { kind: ServiceKind }[]): Runs {
+  const count = (kind: ServiceKind): number => services.filter((service) => service.kind === kind).length;
+  return { servers: count("server"), workers: count("worker"), scheduled: count("scheduled") };
+}
+
+/**
+ * What the first line of `deploy` says a project runs. A project that only
+ * serves is named as it always was, `service` or `3 services`; once a worker
+ * or a scheduled service is among them, each kind is counted on its own,
+ * `2 services, 1 worker, 1 scheduled`, a service then meaning one that
+ * listens on its port.
+ */
+export function describeRuns(isApplication: boolean, runs: Runs): string {
+  if (!isApplication) return "static";
+  if (runs.workers === 0 && runs.scheduled === 0) return runs.servers > 1 ? `${runs.servers} services` : "service";
+  const parts: string[] = [];
+  if (runs.servers > 0) parts.push(`${runs.servers} service${runs.servers > 1 ? "s" : ""}`);
+  if (runs.workers > 0) parts.push(`${runs.workers} worker${runs.workers > 1 ? "s" : ""}`);
+  if (runs.scheduled > 0) parts.push(`${runs.scheduled} scheduled`);
+  return parts.join(", ");
+}
+
 // --- status ------------------------------------------------------------------
 
 /** One unit of a project, as `status` reads it on the machine. Memory figures in megabytes. */
 export type UnitStatus = {
-  /** `active`, `inactive`, `failed`...; null for a project with no unit, a static site. */
+  /**
+   * `active`, `inactive`, `failed`...; null for a project with no unit, a
+   * static site. `waiting` for a scheduled service between two runs, its
+   * timer armed: inactive is its ordinary state, not a service that is down.
+   */
   service: string | null;
   memoryMB: number | null;
   peakMB: number | null;
   limitMB: number | null;
 };
 
+/**
+ * When a scheduled service runs, as its timer says it: the calendar
+ * expression, the last run with how it ended, and the next. The times are
+ * systemd's, as `systemctl show` writes them, `Mon 2026-10-12 14:00:00 UTC`;
+ * null for a run that never happened, or none to come.
+ */
+export type ScheduleStatus = {
+  schedule: string;
+  lastRun: string | null;
+  /** systemd's Result of the last run, `success`, `exit-code`, `timeout`...; null when it never ran. */
+  lastResult: string | null;
+  nextRun: string | null;
+};
+
+export type ServiceStatus = UnitStatus & { name: string; unit: string } & Partial<ScheduleStatus>;
+
 export type ProjectStatus = UnitStatus & {
   slug: string;
   /** As `du -h` writes it, `12M`; null when it could not be measured. */
   size: string | null;
-  /** The project's other services, `<slug>.<name>`, for a project that declares several. */
-  services: (UnitStatus & { name: string; unit: string })[];
+  /**
+   * The project's other services, `<slug>.<name>`, for a project that
+   * declares several; a scheduled one carries its schedule, see
+   * ScheduleStatus.
+   */
+  services: ServiceStatus[];
 };
 
 export type MachineStatus = {
@@ -145,6 +198,88 @@ export type MachineStatus = {
   /** `free -m`'s memory line, in megabytes, keyed by its column names; null when absent. */
   memory: Record<string, number> | null;
 };
+
+/**
+ * What `sitesolide status` runs on the machine, a read from start to end: the
+ * machine's state is read there, never in a file of the repository, which
+ * would lie from the first deployment made from somewhere else. One string,
+ * with real line breaks: the pieces joined by "; " produced ";;" that the
+ * remote shell refused, and the empty output passed for silence. readStatus
+ * reads what it prints back into data.
+ */
+export const STATUS_SCRIPT = `
+echo "=== projects served ==="
+printf "%-22s %-8s %-10s %-8s %-8s %s\n" PROJECT SIZE SERVICE MEMORY PEAK LIMIT
+megabytes() {
+  case "$1" in
+    ""|"[not set]"|infinity) echo "-" ;;
+    *) echo "$(($1 / 1048576))MB" ;;
+  esac
+}
+# One line per unit: the project's main one, named after its folder, then the
+# others of a project with several services, <slug>.<name>, indented under it.
+row() {
+  name=$1 size=$2 unit=$3
+  # A static site has no unit, and the landing's one does not carry the name of
+  # its folder: showing "inactive" in those two cases would suggest a service
+  # that is down. LoadState tells a missing unit from a stopped one.
+  if [ "$(systemctl show "$unit" -p LoadState --value 2>/dev/null)" = loaded ]; then
+    service=$(systemctl is-active "$unit" 2>/dev/null || true)
+  else
+    service="-"
+  fi
+  # A scheduled service runs when its timer starts it, and between two runs
+  # it is inactive, which is not a service that is down: it reads "waiting"
+  # while its timer is armed. A failed last run still reads failed, and an
+  # inactive service whose timer is not armed inactive: nothing would run it.
+  timer=/etc/systemd/system/$unit.timer
+  if [ -e "$timer" ] && [ "$service" = inactive ] && [ "$(systemctl is-active "$unit.timer" 2>/dev/null)" = active ]; then
+    service=waiting
+  fi
+  memory=$(megabytes "$(systemctl show "$unit" -p MemoryCurrent --value 2>/dev/null)")
+  # The peak since the last start, which systemd keeps itself. It is the only way
+  # to read a MemoryMax decision back: the current value says nothing of the
+  # moment when the service consumed the most, and sampling from the outside
+  # misses the short spikes. It resets to zero on every restart, so a figure
+  # taken just after a deployment measures nothing.
+  peak=$(megabytes "$(systemctl show "$unit" -p MemoryPeak --value 2>/dev/null)")
+  # The ceiling in service, and not the manifest's one: it is the unit set on the
+  # machine that decides, and a manifest changed without deploy --force does not change it.
+  # The three columns together are what makes the decision readable again.
+  cap=$(megabytes "$(systemctl show "$unit" -p MemoryMax --value 2>/dev/null)")
+  printf "%-22s %-8s %-10s %-8s %-8s %s\n" "$name" "$size" "$service" "$memory" "$peak" "$cap"
+  # A scheduled service: when it runs, its last run and how it ended, and
+  # the next, on a line of their own under its row. The times are systemd's,
+  # "n/a" or nothing for one that never was.
+  [ -e "$timer" ] || return 0
+  schedule=$(sed -n 's/^OnCalendar=//p' "$timer" | head -n 1)
+  last=$(systemctl show "$unit.timer" -p LastTriggerUSec --value 2>/dev/null)
+  next=$(systemctl show "$unit.timer" -p NextElapseUSecRealtime --value 2>/dev/null)
+  case "$last" in
+    ""|n/a) last=never ;;
+    *) last="$last ($(systemctl show "$unit" -p Result --value 2>/dev/null))" ;;
+  esac
+  case "$next" in ""|n/a) next=none ;; esac
+  printf "    schedule %s; last run %s; next run %s\n" "$schedule" "$last" "$next"
+}
+for folder in /srv/sites/*/; do
+  slug=$(basename "$folder")
+  row "$slug" "$(du -sh "$folder" 2>/dev/null | cut -f1)" "$slug"
+  for file in /etc/systemd/system/"$slug".*.service; do
+    [ -e "$file" ] || continue
+    unit=$(basename "$file" .service)
+    row "  .\${unit#"$slug".}" "" "$unit"
+  done
+done
+
+echo
+echo "=== ports listening on loopback ==="
+ss -ltn 2>/dev/null | grep 127.0.0.1 | awk '{print $4}' | sort -u
+
+echo
+echo "=== memory ==="
+free -m | head -2
+`;
 
 /** `12MB` -> 12, `-` -> null: the shape `megabytes()` of the status script writes. */
 function megabytes(value: string | undefined): number | null {
@@ -169,6 +304,9 @@ function unitStatus(service: string | undefined, memory: string | undefined, pea
  * columns can be empty, and an empty column leaves no word: the size of a
  * project's other services, always, and the size of a project `du` could not
  * measure. A row of five words is therefore one without its size.
+ *
+ * A scheduled service's row is followed by a line of its own, its schedule,
+ * see readSchedule, which completes that row.
  */
 export function readStatus(text: string): MachineStatus {
   const status: MachineStatus = { projects: [], ports: [], memory: null };
@@ -185,6 +323,12 @@ export function readStatus(text: string): MachineStatus {
 
     if (section === "projects served") {
       if (words[0] === "PROJECT") continue;
+      const schedule = readSchedule(line);
+      if (schedule !== null) {
+        const service = status.projects.at(-1)?.services.at(-1);
+        if (service !== undefined) Object.assign(service, schedule);
+        continue;
+      }
       if (line.startsWith("  .")) {
         const parent = status.projects.at(-1);
         if (parent === undefined) continue;
@@ -209,6 +353,26 @@ export function readStatus(text: string): MachineStatus {
     }
   }
   return status;
+}
+
+/**
+ * The line `status` prints under a scheduled service's row, or null for any
+ * other line: `    schedule hourly; last run Mon 2026-10-12 14:00:00 UTC
+ * (success); next run Mon 2026-10-12 15:00:00 UTC`, `never` for a service
+ * that has not run yet, `none` when no run is to come. Split on `; `, which
+ * neither a schedule (isValidSchedule) nor a time of systemd's carries.
+ */
+export function readSchedule(line: string): ScheduleStatus | null {
+  const match = /^\s+schedule (.+); last run (.+); next run (.+)$/.exec(line.trimEnd());
+  if (match === null) return null;
+  const [, schedule = "", last = "", next = ""] = match;
+  const run = /^(.+) \(([a-z-]*)\)$/.exec(last);
+  return {
+    schedule,
+    lastRun: run === null ? null : run[1]!,
+    lastResult: run === null || run[2] === "" ? null : run[2]!,
+    nextRun: next === "none" ? null : next,
+  };
 }
 
 // --- journal -----------------------------------------------------------------

@@ -120,6 +120,7 @@ import { hintFor } from "./cli/hints";
 import { inferManifest, renderManifest, slugFromFolder, type Inference } from "./cli/infer";
 import {
   isApp,
+  isHeadless,
   isProtected,
   isSystemName,
   isValidSlug,
@@ -127,6 +128,7 @@ import {
   missingExclusions,
   NEVER_SENT,
   readManifest,
+  scheduledServices,
   servicesOf,
   setDomainActive,
   setLock,
@@ -137,12 +139,15 @@ import {
   type Manifest,
 } from "./cli/manifest";
 import {
+  describeRuns,
   eventFor,
   forEachLine,
   formatEvent,
   readJournalEntry,
   readLockState,
   readStatus,
+  runsOf,
+  STATUS_SCRIPT,
   type OutputEvent,
 } from "./cli/output";
 import { choosePort, needsPort, setPort } from "./cli/ports";
@@ -183,8 +188,13 @@ import {
   type UnitRead,
   MARKER_ABSENT,
   MARKER_PRESENT,
+  isTimerUnit,
+  runningUnits,
   systemUser,
   unitArgument,
+  unitFileName,
+  unitNames,
+  watchedUnits,
 } from "./cli/unit";
 import {
   lockCommand,
@@ -210,14 +220,20 @@ import {
   readCurrentPairs,
   currentPairsCommand,
   readLoopbackState,
+  readScheduleCheck,
+  readStability,
   readUidsAnswer,
   readUnitOrigins,
   readUnitsAnswer,
   removeUnitsCommand,
+  scheduleCheckCommand,
+  stabilityCommand,
   staleUnits,
   uidsCommand,
   unitOriginsCommand,
   unitPath,
+  unstableUnits,
+  type UnitStanding,
 } from "./cli/services";
 
 const MANIFEST_NAME = "sitesolide.json";
@@ -952,12 +968,16 @@ async function deploy(
   const paths = projectPaths(slug);
   const isApplication = isApp(rawProject.manifest);
 
-  const serviceCount = servicesOf(rawProject.manifest).length;
-  say(`-> project ${slug}, ${isApplication ? (serviceCount > 1 ? `${serviceCount} services` : "service") : "static"}`);
+  const services = servicesOf(rawProject.manifest);
+  // What the project runs, by kind: `kind` keeps the three words it always
+  // had, and `runs` counts its servers, workers and scheduled services.
+  const runs = runsOf(services);
+  say(`-> project ${slug}, ${describeRuns(isApplication, runs)}`);
   if (rawProject.code !== rawProject.folder) say(`   code from ${rawProject.code}`);
   note({
     slug,
-    kind: isApplication ? (serviceCount > 1 ? "services" : "service") : "static",
+    kind: isApplication ? (services.length > 1 ? "services" : "service") : "static",
+    ...(isApplication ? { runs } : {}),
     dryRun: executor.simulated,
     manifestWritten: outcome.manifestWritten === true,
   });
@@ -980,6 +1000,7 @@ async function deploy(
   if (isApplication) await checkRemoteBlock(manifest, config, executor, replace, doorConfirmed);
   if (isApplication) await checkUnitNames(manifest, config, executor);
   if (isApplication) await checkPorts(manifest, config, executor);
+  if (scheduledServices(manifest).length > 0) await checkSchedules(manifest, config, executor);
   // A backup command reaches its service on its port, through the same set.
   if (reachesOwnPorts(manifest)) await requireProjectSet(config, executor);
   if (declaresEgress(manifest) || declaresConnectors(manifest)) await requireEgress(config, executor);
@@ -1057,6 +1078,9 @@ async function deploy(
   // static site has none, a protected site has already put its door in place.
   if (!isApplication || behindPortal) releaseCaddyLock();
 
+  // How the services stood right after their restart, read again once the
+  // Caddy step and the verify are done: see STABILITY_WINDOW.
+  let stability: Standings | null = null;
   if (isApplication) {
     // The secrets come after prepareService, which creates site-<slug>, and
     // after depositManifest. That order is what makes their refusal workable:
@@ -1077,9 +1101,15 @@ async function deploy(
     // is-active must answer for each of them. reset-failed first: a release
     // that crash-looped past the start limit left its unit refusing any
     // start, the restart of the fix that follows included, until it is reset.
-    const units = servicesOf(manifest).map((service) => unitArgument(service.unit)).join(" ");
-    step(serviceCount > 1 ? "services restart" : "service restart");
+    //
+    // Never a scheduled service: restarted, it would run there and then, and
+    // is-active would find it inactive once its run ended. Its timer is
+    // restarted instead, and starts it at the times its schedule names.
+    const running = runningUnits(manifest);
+    const units = running.map(unitArgument).join(" ");
+    step(running.length > 1 ? "services restart" : "service restart");
     await executor.ssh(config, `sudo systemctl reset-failed ${units} 2>/dev/null; sudo systemctl restart ${units} && systemctl is-active ${units}`);
+    stability = await readStandings(watchedUnits(manifest), config, executor);
 
     if (!behindPortal) await installFragment(manifest, config, executor);
   }
@@ -1088,6 +1118,7 @@ async function deploy(
   // event on every failure path, `die` unwinding no finally.
   releaseCaddyLock();
   await verify(manifest, config, executor);
+  if (stability !== null) await checkStability(stability, config, executor);
   if (executor.simulated) {
     say("-> dry run, nothing was installed");
     return;
@@ -1547,9 +1578,12 @@ async function depositText(
  */
 async function verify(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
   const address = `https://${manifest.slug}.${config.zone}/`;
-  note({ url: address, status: null });
+  // `headless`: the address answers a line saying the project serves no
+  // page, and its 200 is that line, see isHeadless.
+  const headless = isHeadless(manifest);
+  note({ url: address, status: null, ...(headless ? { headless } : {}) });
   if (executor.simulated) {
-    say(`   [dry-run] verify ${address}`);
+    say(`   [dry-run] verify ${address}${headless ? ", which answers that the project serves no page" : ""}`);
     return;
   }
   step("verify");
@@ -1585,6 +1619,10 @@ async function verify(manifest: Manifest, config: Config, executor: Executor): P
     say(`   it opens with a code, see sitesolide lock --status`);
     return;
   }
+  if (code === 200 && headless) {
+    say("   it serves no page, it runs in the background: its address says so");
+    return;
+  }
   if (code === 404) {
     die(`${address} answered 404: nothing is served at the site's root`, [
       "deploy counts a 404 at / as a failure: most often it means nothing is served at all",
@@ -1593,6 +1631,110 @@ async function verify(manifest: Manifest, config: Config, executor: Executor): P
     ]);
   }
   if (code !== 200) die(`unexpected response: ${code}`);
+}
+
+/**
+ * How long the services restarted must hold before a deployment counts as
+ * done. `is-active` answers as soon as a service is spawned, `Type=simple`
+ * counting it started then: a worker that reads its configuration, finds a
+ * variable missing and exits, or a server that dies on its first import, is
+ * active to it, and the deployment used to succeed with the service already
+ * gone, systemd restarting it every two seconds behind the verify's back.
+ * Ten seconds see most of those fall, and cost little: the wait runs during
+ * the Caddy step and the verify, and is only what is left of it after them.
+ */
+const STABILITY_WINDOW = 10_000;
+
+/** The services `deploy` watches after their restart, how they stood right after it, and when. */
+type Standings = { units: string[]; at: number; before: Map<string, UnitStanding> | null };
+
+/**
+ * Reads how the services that run for good stand, right after their
+ * restart: their state, and how many times systemd has restarted them. Null
+ * for a project with none, whose every service is scheduled, and for a
+ * reading that fails, which is said and leaves the services unwatched. See
+ * stabilityCommand in bin/cli/services.ts.
+ */
+async function readStandings(units: string[], config: Config, executor: Executor): Promise<Standings | null> {
+  if (units.length === 0) return null;
+  const at = Date.now();
+  if (executor.simulated) {
+    say(`   [dry-run] read the state of ${units.map(unitArgument).join(" ")} right after the restart`);
+    return { units, at, before: null };
+  }
+  const before = readStability(await executor.read(config, stabilityCommand(units)), units);
+  if (before === null) {
+    // Said, and nothing stopped: the restart's is-active passed, and dying
+    // here, before the Caddy step, would leave the new code behind the old
+    // block. The installer reads it the same way.
+    say("   !! how the services stand could not be read after their restart: whether they hold is not checked");
+    return null;
+  }
+  return { units, at, before };
+}
+
+/**
+ * The second reading, once at least STABILITY_WINDOW has passed since the
+ * restart: a service no longer active, or one systemd restarted meanwhile,
+ * fails the deployment, named with what was seen. Its code is in place, its
+ * address answers what the service still serves: the journal says why it
+ * fell, and the fix is a deployment of its own.
+ */
+async function checkStability(standings: Standings, config: Config, executor: Executor): Promise<void> {
+  const { units, at, before } = standings;
+  const seconds = STABILITY_WINDOW / 1000;
+  if (executor.simulated || before === null) {
+    say(`   [dry-run] ${seconds} s after the restart, read it again: ${units.map(unitArgument).join(" ")} must still be active, never restarted by systemd meanwhile`);
+    return;
+  }
+  step(`${units.length > 1 ? "services" : "service"} still running ${seconds} s after the restart`);
+  const left = at + STABILITY_WINDOW - Date.now();
+  if (left > 0) await Bun.sleep(left);
+  const after = readStability(await executor.read(config, stabilityCommand(units)), units);
+  if (after === null) {
+    say("   !! how the services stand could not be read again: whether they held is not checked, sitesolide status says it");
+    return;
+  }
+  const fallen = unstableUnits(before, after);
+  if (fallen.length > 0) {
+    die("a service fell after its restart", [
+      ...fallen,
+      "the code is in place, and the address answers what still runs",
+      "read why in the journal: sitesolide logs",
+      "then fix the cause and deploy again",
+    ]);
+  }
+  say(`   ${units.map(unitArgument).join(" ")}: active, never restarted by systemd`);
+}
+
+/**
+ * Refuses, before anything is written, a schedule systemd cannot read:
+ * validate() only knows that an expression is safe to write, and a timer
+ * whose calendar systemd does not understand is laid, loads, and never
+ * starts anything, with nothing to say so. Asked of systemd itself, on the
+ * machine, the one that will read it: see scheduleCheckCommand in
+ * bin/cli/services.ts. A read, hence done in a dry run too.
+ */
+async function checkSchedules(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
+  const scheduled = scheduledServices(manifest);
+  const schedules = scheduled.map((service) => service.schedule!);
+  const refused = readScheduleCheck(await executor.read(config, scheduleCheckCommand(schedules)), schedules);
+  if (refused === null) {
+    die("cannot tell whether systemd reads the schedules of this project", [
+      "the server answered nothing readable",
+      "nothing was written: a timer systemd cannot read would never start its service",
+    ]);
+  }
+  const named = scheduled.filter((service) => refused.includes(service.schedule!));
+  if (named.length > 0) {
+    die("systemd does not read the schedule of a scheduled service", [
+      ...named.map((service) => `services.${service.name}.schedule: ${JSON.stringify(service.schedule)}`),
+      "a schedule is a systemd calendar expression: man systemd.time, section CALENDAR EVENTS",
+      'such as hourly, daily, *:0/15 (every quarter of an hour), "Mon..Fri 08:00" or "*-*-* 06:30:00"',
+      "nothing was written",
+    ]);
+  }
+  say(`   systemd reads every schedule: ${scheduled.map((service) => `${service.name} (${service.schedule})`).join(", ")}`);
 }
 
 /**
@@ -1701,7 +1843,8 @@ async function prepareService(
   // from the next reboot on, with nothing to say so.
   const [main] = decisions;
   if (main !== undefined && main.action === "diverged" && units.length > 1) {
-    say(`   ${main.path} must want the project's other services, or they do not start at boot`);
+    const others = units.some(({ unit }) => isTimerUnit(unit)) ? "other services and the timers of its scheduled ones" : "other services";
+    say(`   ${main.path} must want the project's ${others}, or they do not start at boot`);
     refuseDivergence(main.path, main.installed, main.text);
   }
 
@@ -1715,20 +1858,26 @@ async function prepareService(
         say(`   differs    ${path}, left as it is`);
         say("   it may carry a directive the manifest cannot express, such as one");
         say("   deliberately left out. Read it, then re-run with --force to switch");
-        say("   to the generated one. Until then the service keeps this unit, so a");
-        say("   changed port, memory or env in the manifest has no effect yet.");
+        if (isTimerUnit(unit)) {
+          say("   to the generated one. Until then the timer keeps this file, so a");
+          say("   changed schedule in the manifest has no effect yet.");
+        } else {
+          say("   to the generated one. Until then the service keeps this unit, so a");
+          say("   changed port, memory or env in the manifest has no effect yet.");
+        }
         continue;
     }
 
-    showFile(`${unit}.service`, text);
+    showFile(unitFileName(unit), text);
 
-    step(units.length > 1 ? `install ${unit}.service` : "install the unit");
+    step(units.length > 1 ? `install ${unitFileName(unit)}` : "install the unit");
     await depositText(executor, config, text, path, "root:root", "644");
     installed = true;
   }
 
   await removeStaleUnits(manifest, config, executor);
-  // The main unit alone is enabled: it wants the others, at boot as here.
+  // The main unit alone is enabled: it wants the others, and the timers of
+  // the scheduled ones, at boot as here.
   if (installed) await executor.ssh(config, `sudo systemctl daemon-reload && sudo systemctl enable ${slug}`);
 }
 
@@ -1736,7 +1885,9 @@ async function prepareService(
  * The secondary units still on the machine that the manifest no longer
  * declares: a service renamed or dropped from `services`. Left there, it would
  * keep running the previous code, reachable on its port, with nothing in the
- * repository saying it exists.
+ * repository saying it exists. The timer of a schedule dropped goes too: it
+ * would go on starting its service, the previous code or one that now runs
+ * for good.
  *
  * A listing that fails removes nothing: better a unit left behind, and said
  * so, than one removed on the strength of an empty answer.
@@ -1764,7 +1915,9 @@ async function removeStaleUnits(manifest: Manifest, config: Config, executor: Ex
  * a project's unit edited by hand, never a system service.
  */
 async function checkUnitNames(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
-  const units = servicesOf(manifest).map((service) => service.unit);
+  // Every name deploy lays, the timers of scheduled services and the anchor
+  // of a project whose every service is scheduled included.
+  const units = unitNames(manifest);
   const reading = readUnitOrigins(await executor.read(config, unitOriginsCommand(manifest.slug, units)), units);
   if (reading.kind === "unreadable") {
     die(`cannot tell whether systemd already runs a service named ${manifest.slug}`, [
@@ -1940,7 +2093,8 @@ async function rebuildProjectPorts(config: Config, executor: Executor, mode: "se
     // older or newer checkout may fail today's validation on a key that has
     // nothing to do with its ports, and dropping it would cut its services
     // off from each other.
-    const ports = servicesOf(manifest).map((service) => service.port);
+    // A worker or a scheduled service declares no port, and has none to check.
+    const ports = servicesOf(manifest).flatMap((service) => (service.port === null ? [] : [service.port]));
     if (manifest.slug !== folder || !ports.every((port) => Number.isInteger(port) && port >= 3000 && port <= 3099)) {
       say(`   skipped ${folder}: its services on the server do not read, they lose their access`);
       continue;
@@ -1998,7 +2152,7 @@ async function rebuildProjectPorts(config: Config, executor: Executor, mode: "se
 function showGeneratedFiles(manifest: Manifest): void {
   const slug = manifest.slug;
   const fragment = generateFragment(manifest);
-  for (const { unit, text } of generateUnits(manifest)) showFile(`${unit}.service`, text);
+  for (const { unit, text } of generateUnits(manifest)) showFile(unitFileName(unit), text);
   if (fragment !== null) {
     showFile(`${slug}.caddy`, fragment, false);
     say("   installed by deploy, once the service is up");
@@ -2010,62 +2164,8 @@ function showGeneratedFiles(manifest: Manifest): void {
 async function showStatus(config: Config, executor: Executor): Promise<void> {
   // Everything is a read: the machine's state is read on the machine, never in
   // a file of the repository, which would lie from the first deployment made
-  // from somewhere else. The script leaves as a single string, with real line
-  // breaks: the pieces joined by "; " produced ";;" that the remote shell
-  // refused, and the empty output passed for silence.
-  const script = `
-echo "=== projects served ==="
-printf "%-22s %-8s %-10s %-8s %-8s %s\n" PROJECT SIZE SERVICE MEMORY PEAK LIMIT
-megabytes() {
-  case "$1" in
-    ""|"[not set]"|infinity) echo "-" ;;
-    *) echo "$(($1 / 1048576))MB" ;;
-  esac
-}
-# One line per unit: the project's main one, named after its folder, then the
-# others of a project with several services, <slug>.<name>, indented under it.
-row() {
-  name=$1 size=$2 unit=$3
-  # A static site has no unit, and the landing's one does not carry the name of
-  # its folder: showing "inactive" in those two cases would suggest a service
-  # that is down. LoadState tells a missing unit from a stopped one.
-  if [ "$(systemctl show "$unit" -p LoadState --value 2>/dev/null)" = loaded ]; then
-    service=$(systemctl is-active "$unit" 2>/dev/null || true)
-  else
-    service="-"
-  fi
-  memory=$(megabytes "$(systemctl show "$unit" -p MemoryCurrent --value 2>/dev/null)")
-  # The peak since the last start, which systemd keeps itself. It is the only way
-  # to read a MemoryMax decision back: the current value says nothing of the
-  # moment when the service consumed the most, and sampling from the outside
-  # misses the short spikes. It resets to zero on every restart, so a figure
-  # taken just after a deployment measures nothing.
-  peak=$(megabytes "$(systemctl show "$unit" -p MemoryPeak --value 2>/dev/null)")
-  # The ceiling in service, and not the manifest's one: it is the unit set on the
-  # machine that decides, and a manifest changed without deploy --force does not change it.
-  # The three columns together are what makes the decision readable again.
-  cap=$(megabytes "$(systemctl show "$unit" -p MemoryMax --value 2>/dev/null)")
-  printf "%-22s %-8s %-10s %-8s %-8s %s\n" "$name" "$size" "$service" "$memory" "$peak" "$cap"
-}
-for folder in /srv/sites/*/; do
-  slug=$(basename "$folder")
-  row "$slug" "$(du -sh "$folder" 2>/dev/null | cut -f1)" "$slug"
-  for file in /etc/systemd/system/"$slug".*.service; do
-    [ -e "$file" ] || continue
-    unit=$(basename "$file" .service)
-    row "  .\${unit#"$slug".}" "" "$unit"
-  done
-done
-
-echo
-echo "=== ports listening on loopback ==="
-ss -ltn 2>/dev/null | grep 127.0.0.1 | awk '{print $4}' | sort -u
-
-echo
-echo "=== memory ==="
-free -m | head -2
-`;
-  const output = await executor.read(config, script);
+  // from somewhere else. See STATUS_SCRIPT in bin/cli/output.ts.
+  const output = await executor.read(config, STATUS_SCRIPT);
   if (!jsonOutput) return say(output.trimEnd());
   // An empty answer is a read that failed, already warned about: data that
   // said "no project" would be a lie.
@@ -2081,7 +2181,11 @@ async function logs(
   lines = 50,
 ): Promise<void> {
   // Every unit of the project, interleaved by time: a request that fails in
-  // the front often says why only in the log of the service it called.
+  // the front often says why only in the log of the service it called. A
+  // scheduled service's runs are in its own journal, what each printed and
+  // how it ended, systemd's lines about it included. Neither its timer nor
+  // the anchor of a project whose every service is scheduled runs anything
+  // to read: servicesOf leaves both out.
   const units = servicesOf(project.manifest).map((service) => `-u ${unitArgument(service.unit)}`);
   const selection = units.length > 0 ? units.join(" ") : `-u ${project.manifest.slug}`;
   if (jsonOutput) return journalEvents(project.manifest.slug, selection, config, follow, lines, executor);
@@ -2685,7 +2789,7 @@ async function remove(
   const hasBlock = isApplication || behindPortal;
 
   for (const removalStep of removalSteps(
-    { slug, isApplication, secrets: manifest.secrets ?? [], units: servicesOf(manifest).map((service) => service.unit) },
+    { slug, isApplication, secrets: manifest.secrets ?? [], units: unitNames(manifest) },
     { block: hasBlock, isProtected: behindPortal },
   )) {
     if (removalStep.kind === "action") {

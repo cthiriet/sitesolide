@@ -3,19 +3,26 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { knownManifests } from "./manifests";
-import { isApp, type Manifest } from "../cli/manifest";
+import { isApp, readManifest, servicesOf, type Manifest } from "../cli/manifest";
 import {
   projectPaths,
   decideUnit,
   generateUnit,
   generateUnits,
+  isTimerUnit,
   readUnitAnswer,
   MARKER_ABSENT,
   MARKER_PRESENT,
+  runningUnits,
   sandboxedInstallCommand,
   substitute,
   systemdRunArguments,
   systemUser,
+  timerUnit,
+  unitArgument,
+  unitFileName,
+  unitNames,
+  watchedUnits,
 } from "../cli/unit";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -394,5 +401,180 @@ describe("install over SSH, in the service's walls", () => {
   test("refuses an account or a slug that could leave the quotes", () => {
     expect(() => sandboxedInstallCommand("budget", "deploy'; reboot")).toThrow();
     expect(() => sandboxedInstallCommand("budget; reboot", "deploy")).toThrow();
+  });
+});
+
+describe("workers, scheduled services and their timers", () => {
+  const PLACEHOLDERS = { slug: "lab", zone: "test-zone.invalid", contact: "" };
+  /** A front, a sync every quarter of an hour, and a queue consumer, written in that order. */
+  const MIXED: Manifest = {
+    slug: "lab",
+    services: {
+      web: { start: "/srv/sites/lab/app/web", port: 3050 },
+      sync: { start: "/srv/sites/lab/app/sync", schedule: "*:0/15", timeout: "15m" },
+      queue: { start: "/srv/sites/lab/app/queue", internal: true, cpu: "50%" },
+    },
+  };
+  /** Every service scheduled: the main unit is an anchor. */
+  const ANCHORED: Manifest = {
+    slug: "lab",
+    services: {
+      report: { start: "/srv/sites/lab/app/report", schedule: "daily" },
+      cleanup: { start: "/srv/sites/lab/app/cleanup", schedule: "Sun 03:00" },
+    },
+  };
+  const units = generateUnits(MIXED, PLACEHOLDERS);
+  const text = (unit: string): string => units.find((generated) => generated.unit === unit)!.text;
+
+  test("main first, then each other service, a scheduled one followed by its timer", () => {
+    expect(units.map((generated) => generated.unit)).toEqual(["lab", "lab.sync", "lab.sync.timer", "lab.queue"]);
+    expect(unitNames(MIXED)).toEqual(["lab", "lab.sync", "lab.sync.timer", "lab.queue"]);
+  });
+
+  test("the main unit wants the timer, never the scheduled service, and starts after what runs for good alone", () => {
+    expect(text("lab")).toInclude("\nWants=lab.sync.timer lab.queue.service\n");
+    expect(text("lab")).toInclude("\nAfter=lab.queue.service\n");
+    expect(text("lab")).not.toInclude("lab.sync.service");
+    expect(text("lab")).toInclude("[Install]\nWantedBy=multi-user.target");
+    // A server keeps the machine's defaults, line for line.
+    expect(text("lab")).toInclude("Type=simple\n");
+    expect(text("lab")).toInclude("\nRestart=always\nRestartSec=2\n\n");
+    expect(text("lab")).not.toMatch(/^(CPUWeight|TasksMax|CPUQuota|StartLimitIntervalSec)=/m);
+  });
+
+  test("a worker: no port, restarted for good with a growing delay, and yielding the processor to the sites", () => {
+    const queue = text("lab.queue");
+    expect(queue).not.toInclude("PORT=");
+    expect(queue).toInclude("Environment=DATA_DIR=/srv/sites/lab/data\n");
+    expect(queue).toInclude("PartOf=lab.service\n");
+    expect(queue).toMatch(/\[Unit\][^[]*\nStartLimitIntervalSec=0\n/);
+    expect(queue).toInclude("Type=simple\n");
+    expect(queue).toInclude("\nRestart=always\nRestartSec=2\nRestartSteps=8\nRestartMaxDelaySec=5min\n");
+    expect(queue).toInclude("\nCPUWeight=20\nTasksMax=512\nCPUQuota=50%\n");
+    expect(queue).not.toMatch(/^\[Install\]$/m);
+    expect(queue).toInclude("IPAddressDeny=any");
+  });
+
+  test("a scheduled service: started by its timer, run to its end, never restarted, stopped past its timeout", () => {
+    const sync = text("lab.sync");
+    expect(sync).not.toInclude("PORT=");
+    expect(sync).toInclude("PartOf=lab.service\n");
+    expect(sync).toInclude("# Started by its timer, and stopped or restarted with the project's main unit.\n");
+    expect(sync).toInclude("Type=exec\n");
+    expect(sync).toInclude("\nRestart=no\nRuntimeMaxSec=15m\n");
+    expect(sync).not.toInclude("Restart=always");
+    expect(sync).toInclude("\nCPUWeight=20\nTasksMax=512\n");
+    expect(sync).not.toInclude("CPUQuota");
+    expect(sync).not.toInclude("StartLimitIntervalSec");
+    expect(sync).not.toMatch(/^\[Install\]$/m);
+    expect(sync).toInclude("# No [Install]: started by its timer.");
+    expect(sync).toInclude("ExecStart=/srv/sites/lab/app/sync\n");
+    // An hour unless the service says otherwise.
+    const plain = generateUnits({ slug: "lab", services: { web: { start: "/x", port: 3050 }, sync: { start: "/y", schedule: "hourly" } } }, PLACEHOLDERS);
+    expect(plain[1]!.text).toInclude("\nRuntimeMaxSec=1h\n");
+  });
+
+  test("its timer: the schedule as written, a missed run made up at boot, on time to the second, and nothing else", () => {
+    expect(text("lab.sync.timer")).toBe(
+      [
+        "# Timer of project lab, generated by bin/sitesolide.ts from its",
+        "# sitesolide.json. Do not edit by hand: the next deployment overwrites it.",
+        "",
+        "[Unit]",
+        "Description=Project lab, schedule of service sync",
+        "# Started by the project's main unit, and stopped or restarted with it.",
+        "PartOf=lab.service",
+        "",
+        "[Timer]",
+        "OnCalendar=*:0/15",
+        "Persistent=true",
+        "AccuracySec=1s",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  test("every service scheduled: the main unit is an anchor that runs nothing, as the project's account, and wants the timers", () => {
+    const anchored = generateUnits(ANCHORED, PLACEHOLDERS);
+    expect(anchored.map((generated) => generated.unit)).toEqual(["lab", "lab.report", "lab.report.timer", "lab.cleanup", "lab.cleanup.timer"]);
+    const anchor = anchored[0]!.text;
+    expect(anchor).toInclude("generated by bin/sitesolide.ts");
+    expect(anchor).toInclude("\nWants=lab.report.timer lab.cleanup.timer\n");
+    expect(anchor).not.toInclude("After=");
+    for (const line of ["Type=oneshot", "RemainAfterExit=yes", "ExecStart=/bin/true", "User=site-lab", "Group=site-lab", "WorkingDirectory=/srv/sites/lab/app", "PrivateNetwork=true", "NoNewPrivileges=true"]) {
+      expect(anchor).toInclude(`\n${line}\n`);
+    }
+    expect(anchor).toInclude("[Install]\nWantedBy=multi-user.target\n");
+    expect(generateUnit(ANCHORED, PLACEHOLDERS)).toBe(anchor);
+    for (const { unit, text: secondary } of anchored.slice(1)) {
+      expect({ unit, partOf: secondary.includes("\nPartOf=lab.service\n") }).toEqual({ unit, partOf: true });
+    }
+  });
+
+  test("what deploy restarts, and what it watches after the restart", () => {
+    expect(runningUnits(MIXED)).toEqual(["lab", "lab.sync.timer", "lab.queue"]);
+    expect(watchedUnits(MIXED)).toEqual(["lab", "lab.queue"]);
+    expect(unitNames(ANCHORED)).toEqual(["lab", "lab.report", "lab.report.timer", "lab.cleanup", "lab.cleanup.timer"]);
+    expect(runningUnits(ANCHORED)).toEqual(["lab", "lab.report.timer", "lab.cleanup.timer"]);
+    // The anchor runs nothing, a timer neither: nothing to watch.
+    expect(watchedUnits(ANCHORED)).toEqual([]);
+    // A project of servers alone: every unit, as before.
+    expect(unitNames(APP)).toEqual(["budget"]);
+    expect(runningUnits(APP)).toEqual(["budget"]);
+    expect(watchedUnits(APP)).toEqual(["budget"]);
+    expect(unitNames({ slug: "notes", publicDir: "dist" })).toEqual([]);
+  });
+
+  test("a timer is named with its suffix, a service without, and each is given to systemctl and laid in its file", () => {
+    expect(isTimerUnit("lab.sync.timer")).toBe(true);
+    expect(isTimerUnit("lab.sync")).toBe(false);
+    expect(isTimerUnit("lab")).toBe(false);
+    expect(timerUnit(servicesOf(MIXED)[1]!)).toBe("lab.sync.timer");
+    expect(unitArgument("lab")).toBe("lab");
+    expect(unitArgument("lab.sync")).toBe("lab.sync.service");
+    expect(unitArgument("lab.sync.timer")).toBe("lab.sync.timer");
+    expect(unitFileName("lab")).toBe("lab.service");
+    expect(unitFileName("lab.sync")).toBe("lab.sync.service");
+    expect(unitFileName("lab.sync.timer")).toBe("lab.sync.timer");
+  });
+
+  test("cpu caps a server too, which keeps every other default", () => {
+    const capped = generateUnit({ ...APP, cpu: "150%" }, { slug: "budget", zone: "test-zone.invalid", contact: "" });
+    expect(capped).toInclude("\nMemoryMax=256M\nCPUQuota=150%\n");
+    expect(capped).not.toInclude("CPUWeight");
+    expect(capped).toInclude("Environment=PORT=3022\n");
+  });
+
+  test("a schedule, a timeout or a cpu validate() refuses is never written, even past validate()", () => {
+    const broken = (service: Record<string, unknown>): Manifest => ({ slug: "lab", services: { web: { start: "/x", port: 3050 }, sync: { start: "/y", ...service } } as Manifest["services"] });
+    expect(() => generateUnits(broken({ schedule: "daily\nExecStartPre=/bin/sh" }), PLACEHOLDERS)).toThrow(/never written/);
+    expect(() => generateUnits(broken({ schedule: "daily", timeout: "infinity" }), PLACEHOLDERS)).toThrow(/never written/);
+    expect(() => generateUnits(broken({ internal: true, cpu: "50%\nUser=root" }), PLACEHOLDERS)).toThrow(/never written/);
+  });
+});
+
+describe("the units of servers, as they were before workers existed", () => {
+  /**
+   * A server's unit is byte for byte what the generator wrote before workers
+   * and scheduled services: a single byte of difference would make every unit
+   * in service read as diverged, and each project's next deployment refuse
+   * without --force. The fingerprints below were taken from the e2e fixtures
+   * with the generator of the release before them; a change here is a change
+   * to every unit on every machine, to be made on purpose.
+   */
+  const FINGERPRINTS: Record<string, Record<string, string>> = {
+    "bun-mixed": { "sample-bun": "add7fdc8d713e6954cf1e1456d63ff2a5a97b8f49c80149a9eac2a450900ca46" },
+    "multi-service": {
+      "sample-lab": "6a9b54567d9bebc3fd3db56dcdd8c4ae5604e3613f6f8f26ba3b54abadae9786",
+      "sample-lab.api": "fc6ce37f51ecccbcc4b4e26ac891a10bbbc96d9d4fef00e736990dfc405cc9ee",
+      "sample-lab.worker": "faca45fbdecdeecdf51d9d6c608bab2972966ecd14abbc294188dbc9435a6aef",
+    },
+  };
+
+  test.each(Object.keys(FINGERPRINTS))("projects/%s generates the same units, to the byte", (fixture) => {
+    const { manifest } = readManifest(readFileSync(join(REPO_ROOT, "bin", "tests", "e2e", "projects", fixture, "sitesolide.json"), "utf8"));
+    const generated = generateUnits(manifest!, { slug: manifest!.slug, zone: "test-zone.invalid", contact: "sample@test-zone.invalid" });
+    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(text).digest("hex")]));
+    expect(fingerprints).toEqual(FINGERPRINTS[fixture]!);
   });
 });

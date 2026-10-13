@@ -100,6 +100,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^cannot read the system users/, READ_FAILED],
   [/^cannot read the loopback's project set/, READ_FAILED],
   [/^cannot tell whether/, READ_FAILED],
+  [/^systemd does not read the schedule/, "fix `schedule` of each service `details` names in sitesolide.json: a systemd calendar expression such as hourly, daily, *:0/15 or \"Mon..Fri 08:00\" (man systemd.time, CALENDAR EVENTS); then deploy again"],
   [/^cannot compare .* with the server/, READ_FAILED],
   [/^read refused by the server/, READ_FAILED],
 
@@ -130,6 +131,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/answered 404: nothing is served at the site's root/, "make / answer 200: an app without `routes` receives / and must answer it; with `routes`, or for a static site, put an index.html in publicDir (docs/manifest.md, under start); a redirect does not count either; then deploy again"],
   [/unreachable: /, "the deployment is installed but the address did not answer: read `sitesolide logs --json`, then `sitesolide status --json`, and fix the service before deploying again"],
   [/^unexpected response: /, "the service answers with an error after the deployment: read `sitesolide logs --json` to find why, fix the code, then deploy again"],
+  [/^a service fell after its restart/, "the new code is in place and a service stopped or was restarted by systemd within seconds: read `sitesolide logs --json` to find why, fix the code or what it needs (a secret, a variable, a service it calls), then deploy again"],
   [/^failed \([0-9]+\): /, "read the `output` events just before this error, they carry the failing command's own message; fix that cause, then run the same command again"],
 
   // --- domains and removal: the owner's decisions

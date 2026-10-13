@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decideBlock, domainLeftOpen, generateFragment, isEarlierGeneration, ZONE_HOST, IMPORT_LOCKS, matcher, SITE_VARIABLE } from "../cli/fragment";
+import { decideBlock, domainLeftOpen, generateFragment, HEADLESS_ANSWER, isEarlierGeneration, ZONE_HOST, IMPORT_LOCKS, matcher, SITE_VARIABLE } from "../cli/fragment";
 import { buildFragment, SITE_VARIABLE as LOCKS_SITE_VARIABLE, stanzaClosesEveryAddress } from "../../api/src/locks";
 import { validate, type Manifest } from "../cli/manifest";
 import { fragmentPassesIdentity, IDENTITY_STRIP, PORTAL_GENERATIONS, PORTAL_PORT, portalStanza } from "../cli/portal";
@@ -54,6 +54,51 @@ describe("the three shapes", () => {
     expect(routes).toInclude("@dynamic not file");
     expect(routes).toInclude("reverse_proxy @dynamic 127.0.0.1:3022");
     expect(routes).toInclude("file_server");
+  });
+});
+
+describe("a project that serves no page", () => {
+  /** A queue consumer and a sync: services, none of them public, and no publicDir. */
+  const HEADLESS: Manifest = {
+    slug: "relay",
+    services: {
+      queue: { start: "/srv/sites/relay/app/queue", internal: true },
+      sync: { start: "/srv/sites/relay/app/sync", schedule: "hourly" },
+    },
+  };
+
+  test("its address answers a line saying so, a 200 every probe of the machine accepts", () => {
+    const routes = block(generateFragment(HEADLESS) ?? "", "(relay-routes) {");
+    expect(routes).toInclude(`\trespond "${HEADLESS_ANSWER}" 200\n`);
+    expect(routes).not.toInclude("reverse_proxy");
+    expect(routes).not.toInclude("file_server");
+    expect(HEADLESS_ANSWER).not.toMatch(/["\\{}\n]/);
+  });
+
+  test("it keeps its block, its lock import and its portal door, as any other", () => {
+    const fragment = generateFragment(HEADLESS)!;
+    expect(fragment).toInclude(`relay.${ZONE_HOST} {`);
+    expect(fragment).toInclude(IMPORT_LOCKS);
+    const closed = generateFragment({ ...HEADLESS, portal: true })!;
+    expect(closed).toInclude("forward_auth @portal_guard");
+    expect(closed).toInclude(`respond "${HEADLESS_ANSWER}" 200`);
+  });
+
+  test("an internal server without a public one answers that line too: Caddy never reaches it", () => {
+    const fragment = generateFragment({ slug: "relay", services: { jobs: { start: "/y", port: 3051, internal: true } } })!;
+    expect(fragment).toInclude(`respond "${HEADLESS_ANSWER}" 200`);
+    expect(fragment).not.toInclude("3051");
+  });
+
+  test("with a publicDir, internal services alone leave the block as it was: the files, and no line", () => {
+    const fragment = generateFragment({ slug: "lab", publicDir: "public", services: { jobs: { start: "/y", port: 3051, internal: true } } })!;
+    const routes = block(fragment, "(lab-routes) {");
+    expect(routes).toInclude("root * /srv/sites/lab/public");
+    expect(routes).toInclude("file_server");
+    expect(routes).not.toInclude("respond");
+    expect(routes).not.toInclude("reverse_proxy");
+    // The fingerprint of that block before projects without a page existed.
+    expect(new Bun.CryptoHasher("sha256").update(fragment).digest("hex")).toBe("1a0e4ac82814d105fbe4906617aa14649af87f8a3c2e4812f479cc4604d2f640");
   });
 });
 

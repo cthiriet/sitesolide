@@ -221,6 +221,7 @@ export async function main(argv: string[], env: Environment, overrides: { comman
         userdel: env.USERDEL ?? "/usr/sbin/userdel",
         systemdRun: env.SYSTEMD_RUN ?? "/usr/bin/systemd-run",
         nft: env.NFT ?? "/usr/sbin/nft",
+        systemdAnalyze: env.SYSTEMD_ANALYZE ?? "/usr/bin/systemd-analyze",
       }),
     log: (line) => reporter.log(line),
   });

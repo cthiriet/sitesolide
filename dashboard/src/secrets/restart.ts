@@ -106,7 +106,38 @@ export function serviceView(unit: string, show: Show | null): ServiceView | null
 /** The end of the window over which the counter must stay still. */
 export const STABLE_WINDOW_MS = 3000;
 
-const isRunning = (reading: ServiceReading): boolean => reading.state === "active" && reading.subState === "running";
+/**
+ * Is the unit an anchor, a `Type=oneshot` that stays active once its command
+ * exited (`RemainAfterExit=yes`)? The main unit of a project whose every
+ * service is scheduled is one (isAnchored in bin/cli/manifest.ts): it runs
+ * nothing, keeps the timers armed, and `active (exited)` is how it stands
+ * when well, where any other main unit would be `active (running)`. Read from
+ * the unit's text, what systemd runs, rather than from the manifest: the last
+ * assignment of the `[Service]` section wins, as for systemd.
+ */
+export function isAnchorUnit(text: string): boolean {
+  let section = "";
+  let type: string | null = null;
+  let remains: string | null = null;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("[")) {
+      section = line;
+      continue;
+    }
+    if (section !== "[Service]" || line.startsWith("#") || line.startsWith(";")) continue;
+    const equal = line.indexOf("=");
+    if (equal <= 0) continue;
+    const key = line.slice(0, equal).trim();
+    const value = line.slice(equal + 1).trim();
+    if (key === "Type") type = value;
+    else if (key === "RemainAfterExit") remains = value.toLowerCase();
+  }
+  return type === "oneshot" && remains !== null && ["yes", "true", "on", "1"].includes(remains);
+}
+
+/** How a unit stands when well: its program running, or, for an anchor, which runs none, exited and still active. */
+const isUp = (reading: ServiceReading, anchor: boolean): boolean => reading.state === "active" && reading.subState === (anchor ? "exited" : "running");
 
 /**
  * The verdict of a series of readings taken after the restart.
@@ -118,6 +149,10 @@ const isRunning = (reading: ServiceReading): boolean => reading.state === "activ
  *   least three seconds, and over those last three seconds every reading is
  *   running with the same counter.
  * - `failure` otherwise: fallen, stopped, never started, or observed too little.
+ *
+ * `anchor`: the unit is an anchor (isAnchorUnit), and `active (exited)` is
+ * its running. Nothing of it can loop, having no `Restart=`; the same window
+ * still applies, so that a stop by a third party within it is seen.
  *
  * Measured in the laboratory (the bench results,
  * measurement 3): `systemctl restart` returns 0 in a few milliseconds even when
@@ -134,7 +169,9 @@ const isRunning = (reading: ServiceReading): boolean => reading.state === "activ
  * the end of the window that window is not stable: the verdict cannot be
  * `active` on a unit that somebody else has just touched.
  */
-export function verdict(readings: ServiceReading[], stableWindowMs: number = STABLE_WINDOW_MS): Verdict {
+export function verdict(readings: ServiceReading[], options: { stableWindowMs?: number; anchor?: boolean } = {}): Verdict {
+  const stableWindowMs = options.stableWindowMs ?? STABLE_WINDOW_MS;
+  const anchor = options.anchor === true;
   const ordered = [...readings].sort((a, b) => a.a - b.a);
   const last = ordered[ordered.length - 1];
   if (last === undefined) return { kind: "failure", state: "unknown", subState: "unknown", restarts: 0 };
@@ -155,13 +192,13 @@ export function verdict(readings: ServiceReading[], stableWindowMs: number = STA
   });
 
   if (restarts > 0 || ordered.some((reading) => reading.subState === "auto-restart")) return render("looping");
-  if (!isRunning(last)) return render("failure");
+  if (!isUp(last, anchor)) return render("failure");
 
   const windowStart = last.a - stableWindowMs;
   if (ordered[0]!.a > windowStart) return render("failure");
 
   const finish = ordered.filter((reading) => reading.a >= windowStart);
-  const stable = finish.every((reading) => isRunning(reading) && reading.restarts === last.restarts);
+  const stable = finish.every((reading) => isUp(reading, anchor) && reading.restarts === last.restarts);
   return render(stable ? "active" : "failure");
 }
 

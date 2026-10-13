@@ -26,7 +26,9 @@ did before, and no worse.
 | Caddy's automatic restarts | `NRestarts` going up since the last pass | warning | systemd restarted Caddy on its own in the last 15 minutes: something stopped it |
 | every served site | `GET https://<host>/` on `127.0.0.1:443`, the certificate verified for `<host>` | critical | no answer, a failed handshake, or a status of 500 and above |
 | certificates | the certificate Caddy serves for the bare domain, the zone's wildcard and each customer domain | warning | expires within 14 days |
-| projects' units | `systemctl list-units`, every `<slug>.service`, `<slug>.<name>.service` and `sitesolide-landing.service` | critical | failed, stopped, or crashing in a loop (`activating (auto-restart)`) |
+| projects' units | `systemctl list-units --type=service,timer`, every `<slug>.service`, `<slug>.<name>.service` and `sitesolide-landing.service`, scheduled services aside | critical | failed, stopped, or crashing in a loop (`activating (auto-restart)`) |
+| a scheduled service's last run | the same listing, a `<slug>.<name>.service` that a loaded `<slug>.<name>.timer` starts | warning | `failed`: its last run failed, until a run succeeds; `inactive` between two runs is its rest |
+| a project's timers | the same listing, every `<slug>.<name>.timer` | critical | anything but `active`: the schedule stopped, nothing will run |
 | the platform's units | every other `sitesolide-*.service` | warning | failed or crashing in a loop |
 | disk | `statfs` on `/`, `/srv` and `/var`, merged by device | critical | 90 % used, cleared below 85 % |
 | memory | `MemAvailable` in `/proc/meminfo` | warning | less than 10 % available, cleared at 15 % |
@@ -41,6 +43,24 @@ table and the gatekeeper's probes, read the same way. Anything below 500
 answers: a locked preview's 401, the portal's redirect to its sign-in and a
 root that serves nothing all prove Caddy serves the host with a valid
 certificate.
+
+**A scheduled service is at rest between its runs.** Its timer starts it, it
+runs to its end, and until the next run it is `inactive (dead)`, which for a
+service that runs for good means stopped: judged that way, it would be down
+from the end of its very first run. What tells it apart is a timer of the same
+name loaded in systemd, never the manifest, the monitor judging what the machine
+runs. A failed run leaves it `failed` until the next one: a warning, since no
+site is down with it and the next run may succeed, which recovers it on its own.
+Its timer weighs more: stopped, nothing fails and nothing runs either, and no
+failed run will ever say so, which is critical. A timer `active (elapsed)`, a
+calendar with no date left, is fine: nothing more runs, but that is what the
+schedule said. A project whose services are all scheduled has a main unit that
+runs nothing and stays `active (exited)`, which is fine; a worker that crashes
+in a loop is `activating (auto-restart)`, critical like any service that runs
+for good. The platform's own timers are not judged, a stopped one already
+showing elsewhere: the monitor's as a heartbeat that stops, the collector's as
+a dashboard that calls its snapshot stale, the backups' as a last run that
+grows old.
 
 **When Caddy is down, the sites are not probed.** One alert for Caddy, not one
 more per site on top of it.
@@ -512,6 +532,24 @@ directory back into `/var/lib/private`, state kept. As long as the account
 exists, that unit runs as it and keeps reading systemd; `sudo userdel
 sitesolide-monitor` afterwards returns exactly to the blind monitor.
 
+**Upgrading for scheduled services.** A monitor older than this one lists
+services only, and reads a scheduled service at rest as a stopped one: deploy
+it before the first project with a `schedule`, or that service is reported
+`DOWN` a few minutes after its first run ends. Only the monitor changes, and
+`state.json` is kept, every existing unit under the same id:
+
+```bash
+bin/deploy-monitor.sh
+ssh you@your-machine 'sudo journalctl -u sitesolide-monitor -n 3 -o cat'
+```
+
+Check: the last line reads `N checks, ...`, each scheduled service's timer
+now among them, and a scheduled service already reported down by the older
+monitor says `RECOVERED` within two passes. Roll back: `bin/deploy-monitor.sh`
+from the previous commit; the timers are no longer checked, with one `NO LONGER
+CHECKED` for a timer that was down, and a scheduled service at rest reads as
+stopped again.
+
 ## Verification on a test VM
 
 What the tests here cannot prove, systemd's behaviour and the sandbox on a
@@ -570,6 +608,12 @@ sudo journalctl -u sitesolide-monitor -n 1 -o cat               # ends with "hea
 # RECOVERED; the heartbeat stays green, the site in its body.
 sudo systemctl stop <a test project>          # within 3 minutes: DOWN, heartbeat still ok
 sudo systemctl start <a test project>         # within 3 minutes: RECOVERED
+
+# A project with a scheduled service: nothing between its runs, which the
+# journal's count of what is down shows; its timer stopped, DOWN, critical.
+systemctl list-units --type=service,timer --all --plain --no-legend '<a test project>.*'
+sudo systemctl stop <a test project>.<its scheduled service>.timer    # within 3 minutes: DOWN, heartbeat still ok
+sudo systemctl start <a test project>.<its scheduled service>.timer   # within 3 minutes: RECOVERED
 
 # Caddy stopped through its admin API: systemd brings it back, the monitor
 # reports the restart as a warning and never Caddy as down.

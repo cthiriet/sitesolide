@@ -117,7 +117,7 @@ import type {
   Verdict,
 } from "./protocol";
 import { RESTART_TIMEOUT_MS, MAX_PORTAL_MS } from "./protocol";
-import { showArguments, readShow, restartPending, serviceView, verdict, type ServiceReading } from "./restart";
+import { isAnchorUnit, showArguments, readShow, restartPending, serviceView, verdict, type ServiceReading } from "./restart";
 import type { Command, Permissions, Examination, System } from "./system";
 import { createConnectorRoutes } from "../connectors/steward";
 import type { ConnectorStore } from "../connectors/store";
@@ -639,7 +639,10 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     if (response === null || response.code !== 0) return { view: null, startedUs: null, reads };
     const parsed = readShow(response.output);
     const view = serviceView(unit, parsed);
-    return { view, startedUs: view === null ? null : parsed.startedUs, reads };
+    // An anchor's startup says nothing of what reads the files: its scheduled
+    // services read them anew at every run, and no change waits for a restart.
+    const anchor = text !== null && isAnchorUnit(text);
+    return { view, startedUs: view === null || anchor ? null : parsed.startedUs, reads };
   }
 
   /**
@@ -1648,8 +1651,12 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return { portal: after.portal, general: after.view, detail: message, code: target === "code" ? codeView(site, after.code) : null };
   }
 
-  /** Eight seconds of readings after a restart, and the verdict that comes out of them. */
-  async function observe(unit: string): Promise<Verdict> {
+  /**
+   * Eight seconds of readings after a restart, and the verdict that comes out
+   * of them. `anchor`: the unit runs nothing and stays `active (exited)`, see
+   * isAnchorUnit.
+   */
+  async function observe(unit: string, anchor = false): Promise<Verdict> {
     const readings: ServiceReading[] = [];
     const start = system.now();
     for (;;) {
@@ -1658,7 +1665,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       if (system.now() - start >= observationMs) break;
       await system.wait(stepMs);
     }
-    return verdict(readings);
+    return verdict(readings, { anchor });
   }
 
   const verdictDetail = (result: Verdict) => `${result.kind}, ${result.state}/${result.subState}, ${result.restarts} restarts`;
@@ -1704,6 +1711,16 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       const text = site.isStatic ? null : await system.readUnit(unit);
       if (text === null) {
         return refuse("restart", body, { error: "not-found", message: `${unit}.service is not installed` });
+      }
+
+      // The anchor of a project whose every service is scheduled runs
+      // nothing, and its services read their files anew at every run: the
+      // next one applies the change on its own, and a restart would only cut
+      // short a run in progress. Said so, rather than that nothing reads the
+      // files, which is not true of the services.
+      if (isAnchorUnit(text)) {
+        const message = `every service of ${site.folder} is scheduled, and each run reads its files as they stand: the next run applies the change, without a restart`;
+        return refuse("restart", body, { error: "out-of-scope", message });
       }
 
       // Restarting a unit that reads none of the managed files would apply
@@ -1766,8 +1783,10 @@ export function createSteward(system: System, options: StewardOptions): StewardH
         return error("not-found", site.isStatic ? `${slug} is a static site: it has no service to restart` : `${unit}.service is not installed`);
       }
       await system.systemctl(["reset-failed", unit], showTimeoutMs);
+      // A project whose every service is scheduled restarts through its
+      // anchor: its timers, and a run in progress, follow it by their PartOf.
       await system.systemctl(["restart", unit], restartTimeoutMs);
-      const result = await observe(unit);
+      const result = await observe(unit, isAnchorUnit(text));
       await writeLog("restart", result.kind === "active" ? "ok" : "failure", body, verdictDetail(result), null, who);
       const response: RestartResponse = { verdict: result };
       return Response.json(response);

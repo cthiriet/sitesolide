@@ -26,6 +26,7 @@
  * page imports nothing from here but types.
  */
 import type { EntryView, GeneralView } from "../access/protocol";
+import type { ServiceKind } from "../../borrowed/manifest";
 
 // --- Tokens --------------------------------------------------------------------
 
@@ -429,10 +430,51 @@ export type ProjectStatus = {
   /** Who may open the site at all: public, restricted to its people with access, or anyone with the preview code; null when not deployed. */
   general: "public" | "restricted" | "code" | null;
   portal: { wanted: boolean; installed: boolean } | null;
-  services: { name: string | null; unit: string; port: number | null; state: string; subState: string; restarts: number | null; since: number | null; memory: number | null }[];
+  services: ServiceStatus[];
   deployedAt: number | null;
   /** Age of the machine's snapshot these figures come from, in milliseconds. */
   snapshotAge: number | null;
+};
+
+/** One process of a project, as a token reads it. */
+export type ServiceStatus = {
+  name: string | null;
+  unit: string;
+  /**
+   * What it is, so that an idle scheduled service does not read as a stopped
+   * one: a server listens on its port and a worker on nothing, both running
+   * for good, `active` when well; a scheduled service runs at the times its
+   * schedule names and is `inactive` between them, its timer saying whether
+   * the schedule still runs. Added with workers and scheduled services: a
+   * client that does not know it reads the rest as before.
+   */
+  kind: ServiceKind;
+  port: number | null;
+  state: string;
+  subState: string;
+  restarts: number | null;
+  since: number | null;
+  memory: number | null;
+  /** A scheduled service's timer and runs; null for a server and a worker. */
+  schedule: ScheduleStatus | null;
+};
+
+/** When a scheduled service runs, and how its last run went, from the machine's snapshot. */
+export type ScheduleStatus = {
+  /** The calendar expression, as the manifest writes it: `hourly`, `*:0/15`. */
+  expression: string;
+  /** The timer that starts it, `<slug>.<name>.timer`. */
+  timer: string;
+  /**
+   * The timer's state, `active` (`waiting`) while the schedule runs; `not-found`
+   * when systemd has no such timer, `unknown` when the snapshot does not say.
+   */
+  timerState: string;
+  timerSubState: string;
+  /** When it runs next, null when the timer is not active or the snapshot does not say. */
+  next: number | null;
+  /** The last run that ended, null while one runs or before the first since the timer was loaded. */
+  lastRun: { at: number | null; ok: boolean; failure: string | null } | null;
 };
 
 /**

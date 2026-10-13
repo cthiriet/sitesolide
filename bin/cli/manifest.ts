@@ -22,19 +22,31 @@ import { egressErrors } from "./egress";
  * front, the API it calls, a worker behind it. Each one becomes a systemd unit
  * of its own, under the project's system user, with the project's directories
  * and secrets.
+ *
+ * Three kinds, see ServiceKind: a server listens on its `port`; an internal
+ * service without one is a worker, which runs for good and listens on
+ * nothing; a service with a `schedule` runs at the times it names, and
+ * between them nothing runs.
  */
 export type Service = {
   start: string;
-  port: number;
+  /** The loopback port it listens on; absent for a worker or a scheduled service. */
+  port?: number;
   /** The paths Caddy sends to this service. Absent: every path no other service claims. */
   routes?: string[];
   /** Reached by the project's other services only, never by Caddy. */
   internal?: boolean;
   memory?: string;
+  /** The processor ceiling, as systemd's CPUQuota takes it: `50%` is half of one core. */
+  cpu?: string;
   /** Added to the project's `env`, and winning over it on a shared name. */
   env?: Record<string, string>;
   /** The folder of the data this service keeps live, and how a consistent copy of it is made, see ServiceBackup. */
   backup?: ServiceBackup;
+  /** When it runs, a systemd calendar expression such as `hourly` or `*:0/15`, see isValidSchedule. */
+  schedule?: string;
+  /** How long one scheduled run may take before systemd stops it, see isValidTimeout. */
+  timeout?: string;
 };
 
 /**
@@ -73,6 +85,8 @@ export type Manifest = {
   headers?: Record<string, string>;
   exclude?: string[];
   memory?: string;
+  /** The processor ceiling of every service, as a service's own `cpu` overrides it. */
+  cpu?: string;
   network?: "localhost" | "outbound";
   secrets?: string[];
   domain?: { name: string; aliases?: string[]; active?: boolean };
@@ -113,6 +127,7 @@ export const KNOWN_KEYS = [
   "headers",
   "exclude",
   "memory",
+  "cpu",
   "network",
   "secrets",
   "domain",
@@ -125,7 +140,7 @@ export const KNOWN_KEYS = [
 ];
 
 /** The keys of one entry of `services`, refused beyond these for the same reason. */
-export const SERVICE_KEYS = ["start", "port", "routes", "internal", "memory", "env", "backup"];
+export const SERVICE_KEYS = ["start", "port", "routes", "internal", "memory", "cpu", "env", "backup", "schedule", "timeout"];
 
 /** The keys of a service's `backup`, refused beyond these for the same reason. */
 export const BACKUP_KEYS = ["folder", "command"];
@@ -143,6 +158,16 @@ export const PORTAL_SLUG = "portal";
 
 /** Default memory ceiling, the one of the units already in service. */
 export const DEFAULT_MEMORY = "256M";
+
+/**
+ * How long a scheduled run may take when its service names no `timeout`. A
+ * run that hangs would otherwise hold its unit for good, and the timer, which
+ * never starts a unit already running, would skip every run after it.
+ */
+export const DEFAULT_TIMEOUT = "1h";
+
+/** The longest a scheduled run may be given: a run of a day is a worker. */
+export const MAX_TIMEOUT_SECONDS = 24 * 3600;
 
 /**
  * The slug becomes a DNS label, `<slug>.<zone>`, and a directory name inside a
@@ -249,6 +274,56 @@ export function isValidMemory(memory: string): boolean {
   return /^[0-9]+[KMG]$/.test(memory);
 }
 
+/**
+ * `50%`, `200%`: systemd's CPUQuota, a share of one core, so `200%` is two
+ * whole cores. A bare number means nothing to systemd, and a share above
+ * what any machine of this platform carries is a typo.
+ */
+export function isValidCpu(cpu: unknown): cpu is string {
+  if (typeof cpu !== "string" || !/^[1-9][0-9]{0,3}%$/.test(cpu)) return false;
+  return Number(cpu.slice(0, -1)) <= 6400;
+}
+
+/**
+ * A systemd calendar expression, as `OnCalendar=` takes it: `hourly`,
+ * `daily`, `*:0/15` for every quarter of an hour, `Mon..Fri 08:00`,
+ * `*-*-* 06:30:00 Europe/Paris`. Written into the timer as it is, so one line
+ * of the characters such an expression uses, nothing systemd would read as a
+ * specifier (`%`) or a continuation (`\`).
+ *
+ * Whether systemd understands it is systemd's to say: `deploy` asks
+ * `systemd-analyze calendar` on the machine before anything is written, see
+ * scheduleCheckCommand in services.ts. What passes here is only safe to
+ * write, not necessarily a time.
+ */
+export function isValidSchedule(schedule: unknown): schedule is string {
+  return (
+    typeof schedule === "string" &&
+    schedule.length <= 128 &&
+    /^[A-Za-z0-9*]/.test(schedule) &&
+    /^[A-Za-z0-9*:/.,~_+ -]+$/.test(schedule) &&
+    !schedule.endsWith(" ")
+  );
+}
+
+/**
+ * How long a scheduled run may take: `90s`, `15m`, `2h`, which systemd's
+ * RuntimeMaxSec reads as seconds, minutes and hours. A day at most.
+ */
+export function isValidTimeout(timeout: unknown): timeout is string {
+  const seconds = timeoutSeconds(timeout);
+  return seconds !== null && seconds > 0 && seconds <= MAX_TIMEOUT_SECONDS;
+}
+
+/** A timeout in seconds, or null when it is not written as isValidTimeout takes it. */
+export function timeoutSeconds(timeout: unknown): number | null {
+  if (typeof timeout !== "string") return null;
+  const match = /^([0-9]{1,5})(s|m|min|h)$/.exec(timeout);
+  if (match === null) return null;
+  const unit = { s: 1, m: 60, min: 60, h: 3600 }[match[2] as "s" | "m" | "min" | "h"];
+  return Number(match[1]) * unit;
+}
+
 /** The service is an application as soon as it declares a start command. */
 /**
  * Variables set by the generator, which a manifest cannot redefine: they
@@ -295,25 +370,46 @@ export function isValidServiceName(name: string): boolean {
  */
 const UNIT_TYPES = ["service", "socket", "device", "mount", "automount", "swap", "target", "path", "timer", "slice", "scope"];
 
+/**
+ * What a service is, from what its manifest says:
+ *
+ * - `server`: it listens on its `port`, for Caddy or for its siblings, and
+ *   runs for good;
+ * - `worker`: internal, no port, no schedule. It runs for good and listens on
+ *   nothing: a queue's consumer, a bot holding a connection, an agent;
+ * - `scheduled`: it has a `schedule`. A timer starts it at the times it names,
+ *   it runs to its end, and nothing runs between two runs.
+ */
+export type ServiceKind = "server" | "worker" | "scheduled";
+
 /** One process as the deployment sees it, whichever way the manifest declared it. */
 export type ServiceView = {
   /** Its name under `services`, null for a project with a single `start`. */
   name: string | null;
   /**
-   * The systemd unit, without `.service`. The first service keeps the slug, so
+   * The systemd unit, without `.service`. The main service keeps the slug, so
    * that every tool naming a project's unit after its folder, the dashboard,
    * the steward and the collector, still finds the one that stands for the
-   * whole project. The others are `<slug>.<name>`.
+   * whole project. The others are `<slug>.<name>`. See mainService.
    */
   unit: string;
+  kind: ServiceKind;
   start: string;
-  port: number;
+  /** Null for a worker and a scheduled service, which listen on nothing. */
+  port: number | null;
   routes?: string[];
+  /** Never reached by Caddy: an internal server, a worker, a scheduled service. */
   internal: boolean;
   memory: string;
+  /** Its CPUQuota, the service's own or the project's, null for none. */
+  cpu: string | null;
   env: Record<string, string>;
   /** Its backup command and the live folder it saves, or null. Read as written: validate() judges it. */
   backup: ServiceBackup | null;
+  /** Its calendar expression, for a scheduled service alone. */
+  schedule: string | null;
+  /** How long one of its runs may take, for a scheduled service alone. */
+  timeout: string | null;
 };
 
 /** A `backup` that has the shape of a command's, as servicesOf reads one: the judging is validate()'s. */
@@ -321,8 +417,22 @@ function asServiceBackup(value: unknown): ServiceBackup | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as ServiceBackup) : null;
 }
 
+/** What a declared service is, see ServiceKind. Read as written: validate() judges it. */
+function kindOf(service: Service): ServiceKind {
+  if (service.schedule !== undefined) return "scheduled";
+  if (service.internal === true && service.port === undefined) return "worker";
+  return "server";
+}
+
 /**
  * Every process of the project, the main one first. Empty for a static site.
+ *
+ * The main service is the first one that runs for good, in the written order:
+ * its unit keeps the slug, and it is the one the project is known by. A
+ * scheduled service is never it, being inactive between two runs; a project
+ * whose every service is scheduled has an anchor for its main unit instead,
+ * see isAnchored. A project with no scheduled service keeps its written
+ * order, its units and their names unchanged.
  *
  * A project with a single `start` gives one entry built from its top-level
  * keys, exactly those the generators read before `services` existed: its unit
@@ -336,38 +446,78 @@ export function servicesOf(manifest: Manifest): ServiceView[] {
     const entries = Object.entries(manifest.services!).filter(
       ([, service]) => typeof service === "object" && service !== null && !Array.isArray(service),
     );
-    return entries.map(([name, service], rank) => ({
-      name,
-      unit: rank === 0 ? manifest.slug : `${manifest.slug}.${name}`,
-      start: service.start,
-      port: service.port,
-      routes: service.routes,
-      internal: service.internal === true,
-      memory: service.memory ?? manifest.memory ?? DEFAULT_MEMORY,
-      env: { ...manifest.env, ...service.env },
-      backup: asServiceBackup(service.backup),
-    }));
+    const main = entries.findIndex(([, service]) => kindOf(service) !== "scheduled");
+    const ordered = main <= 0 ? entries : [entries[main]!, ...entries.slice(0, main), ...entries.slice(main + 1)];
+    return ordered.map(([name, service], rank) => {
+      const kind = kindOf(service);
+      return {
+        name,
+        unit: rank === 0 && main !== -1 ? manifest.slug : `${manifest.slug}.${name}`,
+        kind,
+        start: service.start,
+        port: typeof service.port === "number" ? service.port : null,
+        routes: service.routes,
+        internal: service.internal === true || kind !== "server",
+        memory: service.memory ?? manifest.memory ?? DEFAULT_MEMORY,
+        cpu: service.cpu ?? manifest.cpu ?? null,
+        env: { ...manifest.env, ...service.env },
+        backup: asServiceBackup(service.backup),
+        schedule: kind === "scheduled" ? service.schedule! : null,
+        timeout: kind === "scheduled" ? (service.timeout ?? DEFAULT_TIMEOUT) : null,
+      };
+    });
   }
   if (!isApp(manifest)) return [];
   return [
     {
       name: null,
       unit: manifest.slug,
+      kind: "server",
       start: manifest.start!,
-      port: manifest.port!,
+      port: typeof manifest.port === "number" ? manifest.port : null,
       routes: manifest.routes,
       internal: false,
       memory: manifest.memory ?? DEFAULT_MEMORY,
+      cpu: manifest.cpu ?? null,
       env: manifest.env ?? {},
       backup: asServiceBackup(manifest.backup),
+      schedule: null,
+      timeout: null,
     },
   ];
 }
 
+/**
+ * Does the project's main unit stand alone, as an anchor? When every service
+ * is scheduled, none runs for good to be known by: the main unit, `<slug>`,
+ * is then one that runs nothing, wants the timers and stays active, so that
+ * the dashboard, the steward, the monitor and a reboot find the project as
+ * they find any other. See generateUnits in unit.ts.
+ */
+export function isAnchored(manifest: Manifest): boolean {
+  const services = servicesOf(manifest);
+  return services.length > 0 && services.every((service) => service.kind === "scheduled");
+}
+
+/**
+ * A project that serves no page: services, none of them public, and no
+ * `publicDir`. Its address answers a line saying so, see fragment.ts, rather
+ * than a page that looks served and is not; a portal or a preview code still
+ * closes it, as any other.
+ */
+export function isHeadless(manifest: Manifest): boolean {
+  return hasServices(manifest) && manifest.publicDir === undefined && servicesOf(manifest).every((service) => service.internal);
+}
+
+/** The units a scheduled service brings: its own and its timer's, see timerUnit in unit.ts. */
+export function scheduledServices(manifest: Manifest): ServiceView[] {
+  return servicesOf(manifest).filter((service) => service.kind === "scheduled");
+}
+
 /** The port of the project's main service, the one a single-service project declares. */
 export function mainPort(manifest: Manifest): number | null {
-  const port = servicesOf(manifest)[0]?.port;
-  return typeof port === "number" ? port : null;
+  const main = servicesOf(manifest)[0];
+  return main !== undefined && main.unit === manifest.slug && typeof main.port === "number" ? main.port : null;
 }
 
 /**
@@ -749,6 +899,14 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     errors.push("memory: a number followed by K, M or G, such as 256M");
   }
 
+  if (manifest.cpu !== undefined) {
+    if (!isValidCpu(manifest.cpu)) {
+      errors.push("cpu: a share of one core followed by %, such as 50% or 200% for two cores");
+    } else if (!isApplication) {
+      errors.push("cpu: without `start`, nothing runs to be limited");
+    }
+  }
+
   if (manifest.network !== undefined && !["localhost", "outbound"].includes(manifest.network)) {
     errors.push("network: `localhost` or `outbound`");
   }
@@ -823,6 +981,11 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
       // The `ask` endpoint already refuses these domains: the wildcard and the
       // apex cover them, and a manifest declaring them would get nothing.
       errors.push(`domain.name: the ${zone} zone is already covered by the wildcard`);
+    }
+    if (isHeadless(manifest)) {
+      // Its address answers a line saying the project serves no page: a
+      // domain would be certified, and answer that line to its visitors.
+      errors.push("domain: this project serves no page, no public service and no publicDir, so a domain would have nothing to show");
     }
     if (domain.aliases !== undefined && !Array.isArray(domain.aliases)) {
       errors.push('domain.aliases: a list of domain names, such as ["www.example.com"]');
@@ -994,16 +1157,19 @@ function envErrors(env: Record<string, string> | undefined, label: string): stri
  * Every port sits in the range the loopback rule closes. Outside it, the
  * project's internal service would be reachable by every other project on the
  * machine, which is exactly what declaring it internal was meant to prevent.
+ * A worker and a scheduled service declare none: they listen on nothing, and
+ * a port held for nothing would be one less for the machine's other projects.
  *
  * Exactly one public service takes the paths nobody claims, unless a
  * `publicDir` serves them: without it, a path matched by no route would get an
- * empty 200 from Caddy, a page that looks served and is not.
+ * empty 200 from Caddy, a page that looks served and is not. A project with no
+ * public service at all and no `publicDir` serves no page, see isHeadless.
  */
 function serviceErrors(manifest: Manifest): string[] {
   const errors: string[] = [];
   const services = manifest.services as unknown;
   if (typeof services !== "object" || services === null || Array.isArray(services) || Object.keys(services).length === 0) {
-    return ['services: an object naming each service, such as { "web": { "start": "...", "port": 3040 } }'];
+    return ['services: an object naming each service, such as { "web": { "start": "...", "port": 3040 } } or { "sync": { "start": "...", "schedule": "hourly" } }'];
   }
   for (const key of ["start", "port", "routes"] as const) {
     if (manifest[key] !== undefined) {
@@ -1013,6 +1179,7 @@ function serviceErrors(manifest: Manifest): string[] {
 
   const ports = new Map<number, string>();
   const defaults: string[] = [];
+  const exposed: string[] = [];
   const claimed: { name: string; route: string }[] = [];
   const backedUp: { name: string; folder: string }[] = [];
   for (const [name, raw] of Object.entries(services as Record<string, unknown>)) {
@@ -1023,7 +1190,7 @@ function serviceErrors(manifest: Manifest): string[] {
       );
     }
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      errors.push(`${label}: an object with at least \`start\` and \`port\``);
+      errors.push(`${label}: an object with at least \`start\`, and a \`port\` unless it is internal or scheduled`);
       continue;
     }
     const service = raw as Service;
@@ -1039,9 +1206,40 @@ function serviceErrors(manifest: Manifest): string[] {
       errors.push(...commandErrors(service.start, `${label}.start`));
     }
 
+    if (service.internal !== undefined && service.internal !== true) {
+      errors.push(`${label}.internal: true, or absent`);
+    }
+    const scheduled = service.schedule !== undefined;
+    const internal = service.internal === true || scheduled;
+
+    if (scheduled) {
+      if (!isValidSchedule(service.schedule)) {
+        errors.push(
+          `${label}.schedule: a systemd calendar expression such as hourly, daily, *:0/15 (every quarter of an hour) or "Mon..Fri 08:00", on one line, with no % or backslash`,
+        );
+      }
+      if (service.timeout !== undefined && !isValidTimeout(service.timeout)) {
+        errors.push(`${label}.timeout: how long one run may take, such as 90s, 15m or 2h, a day at most`);
+      }
+      if (service.port !== undefined) {
+        errors.push(`${label}.port: a scheduled service listens on nothing, between two runs nothing runs at all`);
+      }
+      if (service.backup !== undefined) {
+        errors.push(`${label}.backup: a scheduled service keeps no live folder between its runs, the snapshot copies its data as files`);
+      }
+    } else if (service.timeout !== undefined) {
+      errors.push(`${label}.timeout: only a scheduled service has one, a service that runs for good is never stopped for its time`);
+    }
+
     const port = service.port;
-    if (typeof port !== "number" || !Number.isInteger(port)) {
-      errors.push(`${label}.port: required, the loopback port the service listens on`);
+    if (port === undefined) {
+      if (!internal) {
+        errors.push(`${label}.port: required, the loopback port the service listens on; a worker that listens on nothing says "internal": true`);
+      }
+    } else if (scheduled) {
+      // Refused above.
+    } else if (typeof port !== "number" || !Number.isInteger(port)) {
+      errors.push(`${label}.port: a whole number, the loopback port the service listens on`);
     } else if (port < SERVICE_PORTS.first || port > SERVICE_PORTS.last) {
       errors.push(
         `${label}.port: between ${SERVICE_PORTS.first} and ${SERVICE_PORTS.last}, the range only Caddy and the project itself can reach`,
@@ -1052,11 +1250,11 @@ function serviceErrors(manifest: Manifest): string[] {
       ports.set(port, name);
     }
 
-    if (service.internal !== undefined && service.internal !== true) {
-      errors.push(`${label}.internal: true, or absent`);
+    if (service.cpu !== undefined && !isValidCpu(service.cpu)) {
+      errors.push(`${label}.cpu: a share of one core followed by %, such as 50% or 200% for two cores`);
     }
-    const internal = service.internal === true;
 
+    if (!internal) exposed.push(name);
     if (service.routes !== undefined) {
       if (!Array.isArray(service.routes) || service.routes.length === 0) {
         errors.push(`${label}.routes: a non-empty list of paths, or absent to take every path left`);
@@ -1104,7 +1302,7 @@ function serviceErrors(manifest: Manifest): string[] {
   if (defaults.length > 1) {
     errors.push(`services: ${defaults.join(", ")} would all take every path left; give routes to all but one`);
   }
-  if (defaults.length === 0 && manifest.publicDir === undefined) {
+  if (exposed.length > 0 && defaults.length === 0 && manifest.publicDir === undefined) {
     errors.push("services: without publicDir, one public service must take every path left: leave its routes out");
   }
   for (const [i, a] of claimed.entries()) {

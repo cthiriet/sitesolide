@@ -11,7 +11,7 @@ import {
   readAccess,
   siteStorage,
 } from "../src/lib/site-card"
-import { discrepancy, service, site } from "./factory"
+import { discrepancy, scheduledService, service, site, siteService } from "./factory"
 
 const MO = 1024 ** 2
 const HOUR = 3600_000
@@ -79,6 +79,7 @@ describe("a site's service", () => {
     )
     expect(card).toEqual({
       kind: "app",
+      title: "Service",
       state: { tone: "ok", label: "Running" },
       unit: "cms.service",
       systemd: "active (running)",
@@ -87,6 +88,7 @@ describe("a site's service", () => {
         peak: 86,
         peakDetail: "Peak 221 MB, 86% of the limit",
       },
+      note: null,
       facts: [
         { label: "Up", value: "20h", detail: "since Jan 14, 16:00 UTC", tone: "neutral" },
         { label: "CPU", value: "5%", detail: "of one core, over the last minute", tone: "neutral" },
@@ -135,10 +137,12 @@ describe("a site's service", () => {
     )
     expect(card).toEqual({
       kind: "app",
+      title: "Service",
       state: { tone: "error", label: "Restarting" },
       unit: "calendar.service",
       systemd: "activating (auto-restart)",
       gauge: null,
+      note: "The service isn't running, so it has no memory in use.",
       facts: [
         { label: "Restarts", value: "7", detail: "Automatic restarts by systemd", tone: "attention" },
         { label: "Memory peak", value: "34 MB", detail: "of 256 MB", tone: "neutral" },
@@ -150,11 +154,17 @@ describe("a site's service", () => {
   test("an app with no loaded unit: no unit, no gauge, but its port", () => {
     expect(serviceCard(site({ service: null, port: 3040, listening: false }), NOW)).toEqual({
       kind: "app",
+      title: "Service",
       state: { tone: "error", label: "Down" },
       unit: null,
       systemd: null,
       gauge: null,
+      note: "No systemd unit is loaded for this app: nothing answers behind Caddy.",
       facts: [{ label: "Port", value: "3040", detail: "Nothing listens on it", tone: "error" }],
+    })
+    // A project that serves no page has nothing behind Caddy to answer: what stops is its services.
+    expect(serviceCard(site({ service: null, port: null, headless: true }), NOW)).toMatchObject({
+      note: "No systemd unit is loaded for this app: none of its services runs.",
     })
   })
 
@@ -229,6 +239,7 @@ describe("a site's door", () => {
     expect(readAccess(site())).toMatchObject({ title: "Public", tone: "neutral", checks: [] })
     expect(readAccess(site()).detail).toContain("the app handles its own sign-in")
     expect(readAccess(site({ type: "static" })).detail).toContain("Anyone with the address")
+    expect(readAccess(site({ headless: true })).detail).toBe("Anyone with the address reads that the project runs in the background: it serves no page.")
   })
 
   test("restricted, requested and applied", () => {
@@ -313,14 +324,14 @@ describe("a project's services", () => {
   const lab = site({
     slug: "lab",
     services: [
-      { name: "web", unit: "lab", port: 3050, listening: true, routes: null, internal: false, service: service({ unit: "lab", memory: 47 * MO, limit: 256 * MO }) },
-      { name: "api", unit: "lab.api", port: 3051, listening: false, routes: ["/v1/*"], internal: false, service: service({ unit: "lab.api", restarts: 2 }) },
-      { name: "worker", unit: "lab.worker", port: 3052, listening: true, routes: null, internal: true, service: null },
+      siteService({ name: "web", unit: "lab", main: true, port: 3050, listening: true, service: service({ unit: "lab", memory: 47 * MO, limit: 256 * MO }) }),
+      siteService({ name: "api", unit: "lab.api", port: 3051, listening: false, routes: ["/v1/*"], service: service({ unit: "lab.api", restarts: 2 }) }),
+      siteService({ name: "worker", unit: "lab.worker", port: 3052, listening: true, internal: true, service: null }),
     ],
   })
 
   test("one row per service, the main one first, with what reaches it", () => {
-    const rows = serviceRows(lab)
+    const rows = serviceRows(lab, NOW)
     expect(rows.map((row) => [row.name, row.unit, row.reach, row.port])).toEqual([
       ["web", "lab.service", { kind: "rest" }, "3050"],
       ["api", "lab.api.service", { kind: "paths", paths: ["/v1/*"] }, "3051"],
@@ -329,7 +340,7 @@ describe("a project's services", () => {
   })
 
   test("its state, its memory, its restarts and a silent port", () => {
-    const [web, api, worker] = serviceRows(lab)
+    const [web, api, worker] = serviceRows(lab, NOW)
     expect(web!.state).toEqual({ tone: "ok", label: "Running" })
     expect(web!.memory).toBe("47 of 256 MB")
     expect(web!.memoryPercent).toBe(18)
@@ -339,10 +350,164 @@ describe("a project's services", () => {
     expect(worker!.state).toEqual({ tone: "error", label: "Not loaded" })
     expect(worker!.memory).toBeNull()
     expect(worker!.memoryPercent).toBeNull()
+    expect(web!.runs).toBeNull()
   })
 
   test("a single service has no rows: the Service panel already says it all", () => {
-    expect(serviceRows(site())).toEqual([])
-    expect(serviceRows(site({ services: [lab.services[0]!] }))).toEqual([])
+    expect(serviceRows(site(), NOW)).toEqual([])
+    expect(serviceRows(site({ services: [lab.services[0]!] }), NOW)).toEqual([])
+  })
+
+  test("the main panel is the main service beside others", () => {
+    expect(serviceCard(lab, NOW)).toMatchObject({ kind: "app", title: "Main service" })
+  })
+})
+
+describe("a project with a worker and scheduled services", () => {
+  const MINUTE = 60_000
+  /** A web front, a worker and an hourly job: the main unit is the web's. */
+  const shop = site({
+    slug: "shop",
+    services: [
+      siteService({ name: "web", unit: "shop", main: true, port: 3050, listening: true, service: service({ unit: "shop" }) }),
+      siteService({ name: "queue", unit: "shop.queue", kind: "worker", internal: true, service: service({ unit: "shop.queue", memory: 30 * MO }) }),
+      scheduledService(NOW, { unit: "shop.sync" }, { timer: "shop.sync.timer" }),
+    ],
+  })
+
+  test("a worker runs in the background, and has no port to show", () => {
+    const queue = serviceRows(shop, NOW)[1]!
+    expect([queue.kind, queue.reach, queue.port, queue.state]).toEqual(["worker", { kind: "background" }, null, { tone: "ok", label: "Running" }])
+    expect(queue.memory).toBe("30 of 256 MB")
+  })
+
+  test("a worker that is down is an error, as any service", () => {
+    const down = site({ services: [shop.services[0]!, siteService({ kind: "worker", internal: true, service: service({ active: "failed", subState: "failed" }) })] })
+    expect(serviceRows(down, NOW)[1]!.state).toEqual({ tone: "error", label: "Down" })
+  })
+
+  test("an idle scheduled service is waiting, never down, with its schedule, last run and next run", () => {
+    const sync = serviceRows(shop, NOW)[2]!
+    expect(sync.kind).toBe("scheduled")
+    expect(sync.reach).toEqual({ kind: "scheduled", words: "Runs hourly", expression: "hourly", timer: "shop.sync.timer" })
+    expect(sync.state).toEqual({ tone: "ok", label: "Waiting" })
+    expect(sync.memory).toBeNull()
+    expect(sync.runs).toEqual({ last: { text: "Last run 1h ago", tone: "neutral" }, next: "Next run in 15m" })
+  })
+
+  test("an expression with no words of its own is shown as written", () => {
+    const quarter = site({ services: [scheduledService(NOW, {}, { expression: "*:0/15" })] })
+    expect(serviceRows(quarter, NOW)[0]!.reach).toMatchObject({ words: null, expression: "*:0/15" })
+  })
+
+  test("a run in progress says when it started, and weighs what it weighs", () => {
+    const running = scheduledService(NOW, { service: service({ unit: "shop.sync", active: "active", subState: "running", since: NOW - 2 * MINUTE, memory: 80 * MO }) }, { lastRun: null })
+    const [row] = serviceRows(site({ services: [running] }), NOW)
+    expect(row!.state).toEqual({ tone: "ok", label: "Running" })
+    expect(row!.runs!.last).toEqual({ text: "Started 2m ago", tone: "neutral" })
+    expect(row!.memory).toBe("80 of 256 MB")
+  })
+
+  test("a failed last run is a warning that says when and how", () => {
+    const failed = scheduledService(
+      NOW,
+      { service: service({ unit: "shop.sync", active: "failed", subState: "failed", memory: null }) },
+      { lastRun: { at: NOW - 3 * HOUR, ok: false, result: "exit-code", status: 1, failure: "exit code 1" } },
+    )
+    const [row] = serviceRows(site({ services: [failed] }), NOW)
+    expect(row!.state).toEqual({ tone: "attention", label: "Last run failed" })
+    expect(row!.runs!.last).toEqual({ text: "Failed 3h ago: exit code 1", tone: "attention" })
+  })
+
+  test("a timer that is not active is an error, and gives no next run", () => {
+    const stopped = scheduledService(NOW, {}, { timerState: { loaded: true, active: "inactive", subState: "dead" }, next: null })
+    const [row] = serviceRows(site({ services: [stopped] }), NOW)
+    expect(row!.state).toEqual({ tone: "error", label: "Schedule stopped" })
+    expect(row!.runs!.next).toBeNull()
+    const missing = scheduledService(NOW, {}, { timerState: { loaded: false, active: "inactive", subState: "dead" } })
+    expect(serviceRows(site({ services: [missing] }), NOW)[0]!.state).toEqual({ tone: "error", label: "No timer" })
+  })
+
+  test("a timer the collector did not read is judged as nothing", () => {
+    const unread = scheduledService(NOW, {}, { timerState: null, next: null })
+    expect(serviceRows(site({ services: [unread] }), NOW)[0]!.state).toEqual({ tone: "ok", label: "Waiting" })
+  })
+
+  test("after a reboot, the timer still says when it last ran, and before the first run, that none has", () => {
+    const rebooted = scheduledService(NOW, {}, { lastRun: null, lastTrigger: NOW - 5 * HOUR })
+    expect(serviceRows(site({ services: [rebooted] }), NOW)[0]!.runs!.last).toEqual({ text: "Last started 5h ago", tone: "neutral" })
+    const fresh = scheduledService(NOW, {}, { lastRun: null, lastTrigger: null })
+    expect(serviceRows(site({ services: [fresh] }), NOW)[0]!.runs!.last).toEqual({ text: "No run yet", tone: "neutral" })
+  })
+
+  test("each row says its kind, the main service first", () => {
+    expect(serviceRows(shop, NOW).map((row) => row.kind)).toEqual(["server", "worker", "scheduled"])
+  })
+})
+
+describe("a project whose every service is scheduled", () => {
+  /** Its main unit is an anchor: active (exited), no memory, none of its services is the main one. */
+  const anchor = service({ unit: "reports", subState: "exited", memory: null, peak: null, limit: null, cpuShare: null, since: NOW - 3 * HOUR })
+  const reports = site({ slug: "reports", headless: true, port: null, listening: null, service: anchor, services: [scheduledService(NOW, { unit: "reports.weekly", name: "weekly" })] })
+
+  test("the main panel shows its anchor, scheduled, with no gauge and why", () => {
+    expect(serviceCard(reports, NOW, "UTC")).toEqual({
+      kind: "app",
+      title: "Main unit",
+      state: { tone: "ok", label: "Scheduled" },
+      unit: "reports.service",
+      systemd: "active (exited)",
+      gauge: null,
+      note: "Every service of this project runs on a schedule, listed below. This unit runs nothing: it keeps their timers armed, at boot and after each deployment.",
+      facts: [{ label: "Up", value: "3h", detail: "since Jan 15, 09:00 UTC", tone: "neutral" }],
+    })
+  })
+
+  test("an anchor that is not active stops every timer, and says so", () => {
+    const stopped = site({ ...reports, service: { ...anchor, active: "inactive", subState: "dead" } })
+    expect(serviceCard(stopped, NOW)).toMatchObject({
+      state: { tone: "error", label: "Down" },
+      note: "This unit isn't active, so the timers of the project's services are stopped and none of them runs.",
+    })
+  })
+
+  test("its one service has a row of its own: the main panel describes the anchor", () => {
+    expect(serviceRows(reports, NOW).map((row) => row.name)).toEqual(["weekly"])
+  })
+
+  test("its state reads Scheduled, never Running nor Down", () => {
+    expect(siteState(reports, [])).toEqual({ tone: "ok", label: "Scheduled" })
+  })
+})
+
+describe("a project that serves no page", () => {
+  test("its address says it answers that the project runs in the background", () => {
+    const lines = siteAddresses(site({ slug: "courier", address: "courier.test-zone.invalid", headless: true }))
+    expect(lines).toEqual([
+      {
+        name: "courier.test-zone.invalid",
+        href: "https://courier.test-zone.invalid",
+        role: "preversion",
+        state: null,
+        detail: "Serves no page: it answers that the project runs in the background",
+      },
+    ])
+  })
+
+  test("its worker, main service, says it has no port", () => {
+    const courier = site({
+      headless: true,
+      port: null,
+      listening: null,
+      services: [siteService({ name: "queue", unit: "calendar", main: true, kind: "worker", internal: true })],
+    })
+    const card = serviceCard(courier, NOW)
+    expect(card.kind === "app" && card.facts.at(-1)).toEqual({
+      label: "Port",
+      value: "None",
+      detail: "A worker: it runs in the background and listens on nothing",
+      tone: "neutral",
+    })
+    expect(serviceRows(courier, NOW)).toEqual([])
   })
 })

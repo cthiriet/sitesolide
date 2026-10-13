@@ -1,0 +1,16 @@
+{
+  "slug": "background",
+  "description": "A worker and a scheduled run, with a page that shows what they wrote",
+  "services": {
+    "web": { "start": "/usr/local/bin/bun run web.ts", "port": 3041 },
+    "worker": { "start": "/usr/local/bin/bun run worker.ts", "internal": true, "cpu": "25%" },
+    "tally": { "start": "/usr/local/bin/bun run tally.ts", "schedule": "*:0/15", "timeout": "1m" }
+  },
+  "env": {
+    "NODE_ENV": "production",
+    "PUBLIC_URL": "https://{slug}.{zone}"
+  },
+  "exclude": ["node_modules", "data"],
+  "memory": "128M",
+  "network": "localhost"
+}

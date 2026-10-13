@@ -1,0 +1,17 @@
+{
+  "slug": "sample-bg",
+  "description": "A queue consumer and a digest every quarter of an hour, no page",
+  "services": {
+    "digest": {
+      "start": "/usr/local/bin/bun run digest.ts",
+      "schedule": "*:0/15",
+      "timeout": "5m",
+      "cpu": "50%"
+    },
+    "consumer": {
+      "start": "/usr/local/bin/bun run consumer.ts",
+      "internal": true,
+      "memory": "128M"
+    }
+  }
+}

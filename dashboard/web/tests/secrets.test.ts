@@ -249,9 +249,11 @@ describe("service", () => {
       systemd: null,
       detail: "up 3h",
     })
+    // The anchor of a project whose every service is scheduled: Scheduled,
+    // as on its row, and systemd's word beside it, which says more.
     expect(readService(secretService({ subState: "exited", startedAt: null }), NOW)).toEqual({
       tone: "ok",
-      text: "Running",
+      text: "Scheduled",
       systemd: "active (exited)",
       detail: null,
     })

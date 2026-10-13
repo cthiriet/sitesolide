@@ -16,7 +16,7 @@ import {
 } from "../src/lib/sites"
 import type { Site } from "../src/lib/types"
 import { worstSeverities } from "../src/lib/verdict"
-import { discrepancy, service, site } from "./factory"
+import { discrepancy, scheduledService, service, site, siteService } from "./factory"
 
 const MO = 1024 ** 2
 const DAY = 24 * 3600_000
@@ -24,6 +24,14 @@ const NOW = 1_800_000_000_000
 
 describe("main address", () => {
   const name = "agency.test"
+
+  test("a project that serves no page says so beside its address", () => {
+    expect(siteAddress(site({ headless: true }))).toEqual({
+      href: "https://calendar.test-zone.invalid",
+      text: "calendar.test-zone.invalid",
+      note: { text: "Runs in the background, serves no page", warn: false },
+    })
+  })
 
   test("with no domain, the preview address alone", () => {
     expect(siteAddress(site())).toEqual({
@@ -126,6 +134,11 @@ describe("a service's state", () => {
     expect(serviceState(site({ type: "no-manifest", service: null }))).toEqual({ tone: "neutral", label: "No manifest" })
   })
 
+  /** The anchor of a project whose every service is scheduled: it runs nothing, and stays active to keep their timers armed. */
+  test("an anchor that stays active reads Scheduled, never Running nor Down", () => {
+    expect(serviceState(site({ service: service({ subState: "exited" }) }))).toEqual({ tone: "ok", label: "Scheduled" })
+  })
+
   /** As in the server's discrepancies: any app that is not running is an error. */
   test("an app that is not running is in error, and the word says how", () => {
     expect(serviceState(site({ service: null }))).toEqual({ tone: "error", label: "Down" })
@@ -189,6 +202,7 @@ describe("a service's summary", () => {
       since: "up 13d",
       restarts: null,
       services: null,
+      next: null,
     })
   })
 
@@ -348,22 +362,66 @@ describe("the table's caption", () => {
 })
 
 describe("a project of several services in the inventory", () => {
+  const MB = 1024 ** 2
+  const running = (memory: number, limit: number, cpuShare: number) =>
+    service({ memory: memory * MB, peak: memory * MB, limit: limit * MB, cpuShare })
+
   test("its figures are the sum of its services, and their count is said", () => {
-    const MB = 1024 ** 2
-    const running = (memory: number, limit: number, cpuShare: number) =>
-      service({ memory: memory * MB, peak: memory * MB, limit: limit * MB, cpuShare })
     const summary = serviceSummaryOf(
       site({
         service: running(47, 256, 1),
         services: [
-          { name: "web", unit: "lab", port: 3050, listening: true, routes: null, internal: false, service: running(47, 256, 1) },
-          { name: "api", unit: "lab.api", port: 3051, listening: true, routes: ["/v1/*"], internal: false, service: running(38, 256, 1) },
-          { name: "worker", unit: "lab.worker", port: 3052, listening: true, routes: null, internal: true, service: running(237, 768, 2) },
+          siteService({ name: "web", unit: "lab", main: true, port: 3050, listening: true, service: running(47, 256, 1) }),
+          siteService({ name: "api", unit: "lab.api", port: 3051, listening: true, routes: ["/v1/*"], service: running(38, 256, 1) }),
+          siteService({ name: "worker", unit: "lab.worker", port: 3052, listening: true, internal: true, service: running(237, 768, 2) }),
         ],
       }),
       NOW,
     )
-    expect(summary).toMatchObject({ kind: "active", memory: "322 MB of 1.3 GB", cpu: "4% CPU", services: "3 services" })
+    expect(summary).toMatchObject({ kind: "active", memory: "322 MB of 1.3 GB", cpu: "4% CPU", services: "3 services", next: null })
+  })
+
+  /** An idle scheduled service has no memory to read: counting it would blank the whole project's figures. */
+  test("a scheduled service between two runs neither blanks nor weighs on the sum, a running one weighs what it weighs", () => {
+    const web = siteService({ name: "web", unit: "shop", main: true, service: running(47, 256, 1) })
+    const queue = siteService({ name: "queue", unit: "shop.queue", kind: "worker", internal: true, service: running(30, 256, 1) })
+    const idle = scheduledService(NOW, { unit: "shop.sync" })
+    expect(serviceSummaryOf(site({ service: running(47, 256, 1), services: [web, queue, idle] }), NOW)).toMatchObject({
+      memory: "77 of 512 MB",
+      cpu: "2% CPU",
+      services: "3 services",
+    })
+    const busy = scheduledService(NOW, { unit: "shop.sync", service: running(100, 512, 50) })
+    expect(serviceSummaryOf(site({ service: running(47, 256, 1), services: [web, queue, busy] }), NOW)).toMatchObject({
+      memory: "177 MB of 1.0 GB",
+      cpu: "52% CPU",
+    })
+  })
+
+  test("a worker that is down still makes the sum unknown, as any service that runs for good", () => {
+    const web = siteService({ name: "web", unit: "shop", main: true, service: running(47, 256, 1) })
+    const down = siteService({ kind: "worker", internal: true, service: service({ active: "failed", memory: null }) })
+    expect(serviceSummaryOf(site({ service: running(47, 256, 1), services: [web, down] }), NOW)).toMatchObject({ memory: "-" })
+  })
+
+  test("a project whose every service is scheduled weighs nothing between runs, and says when the next one comes", () => {
+    const anchor = service({ subState: "exited", memory: null, peak: null, limit: null, cpuShare: null })
+    const reports = site({
+      service: anchor,
+      services: [
+        scheduledService(NOW, { name: "weekly", unit: "reports.weekly" }, { next: NOW + 3 * DAY }),
+        scheduledService(NOW, { name: "daily", unit: "reports.daily" }, { next: NOW + 5 * 3600_000 }),
+      ],
+    })
+    expect(serviceSummaryOf(reports, NOW)).toMatchObject({
+      kind: "active",
+      memory: null,
+      percent: null,
+      cpu: null,
+      services: "2 services",
+      next: "next run in 5h",
+    })
+    expect(serviceState(reports)).toEqual({ tone: "ok", label: "Scheduled" })
   })
 
   test("a single service keeps its own figures, with no count", () => {

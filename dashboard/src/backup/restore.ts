@@ -10,7 +10,8 @@
  *      runs, streamed from `restic dump` or from a download: a snapshot that
  *      does not extract changes nothing
  *   6. check that the unit has the time left for what follows, or refuse
- *   7. stop the project's services, leaving a mark that says so
+ *   7. stop the project's services, its timers first, leaving a mark that
+ *      says so
  *   8. snapshot the current data, `pre-restore`: the restore can be undone
  *   9. swap the folders: data aside, the snapshot in its place
  *  10. start the services and watch them for eight seconds
@@ -40,8 +41,8 @@
 import { chownSync, chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { readSnapshotName, twinName } from "../../borrowed/backups";
-import { servicesOf } from "../../borrowed/manifest";
-import { unitArgument } from "../../borrowed/unit";
+import { isAnchored, scheduledServices } from "../../borrowed/manifest";
+import { isTimerUnit, unitArgument, unitNames } from "../../borrowed/unit";
 import { readShow, showArguments, verdict, type ServiceReading } from "../secrets/restart";
 import type { Verdict } from "../secrets/protocol";
 import { label } from "../secrets/scope";
@@ -147,17 +148,36 @@ export function consumeRequest(stateFolder: string, folder: string, checkOwners:
   return readRequest(folder, text, now);
 }
 
+/** A project's units as a restore handles them, named as systemctl takes them. */
+export type ProjectUnits = {
+  /** Every unit, the main one first, timers included: what is stopped, and what the mark names. */
+  all: string[];
+  /**
+   * What must be active once the main unit has started the others: every
+   * unit but the scheduled services, which their timers start, and which are
+   * inactive between two runs by design.
+   */
+  running: string[];
+  /** The main unit is an anchor, `active (exited)` when well: every service is scheduled, see isAnchored. */
+  anchored: boolean;
+};
+
 /**
- * The project's units: the main one, then its other services, as the deploy
- * named them. The others' names are drawn from the manifest's slug, which
- * must therefore be the folder's own: a manifest naming another project would
- * have this restore stop and start that project's services. Null then.
+ * The project's units: the main one, or the anchor of a project whose every
+ * service is scheduled, then its other services and their timers, as the
+ * deploy named them. The others' names are drawn from the manifest's slug,
+ * which must therefore be the folder's own: a manifest naming another project
+ * would have this restore stop and start that project's services. Null then.
  */
-export function projectUnits(project: Project): string[] | null {
+export function projectUnits(project: Project): ProjectUnits | null {
   const main = unitOf(project.folder);
-  if (project.manifest === null) return [main];
+  if (project.manifest === null) return { all: [main], running: [main], anchored: false };
   if (project.manifest.slug !== label(project.folder)) return null;
-  return [main, ...servicesOf(project.manifest).slice(1).map((service) => unitArgument(service.unit))];
+  // unitNames lists the main unit first, the anchor included, then each
+  // other service followed by its timer.
+  const all = [main, ...unitNames(project.manifest).slice(1).map(unitArgument)];
+  const scheduled = new Set(scheduledServices(project.manifest).map((service) => unitArgument(service.unit)));
+  return { all, running: all.filter((unit) => !scheduled.has(unit)), anchored: isAnchored(project.manifest) };
 }
 
 /** A child of the restore, waited for within its time, and killed past it. */
@@ -297,11 +317,16 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     }
 
     // --- Stop, save, swap, start
-    const units = await loadedUnits(dependencies, projectUnitNames);
+    const units = await loadedUnits(dependencies, projectUnitNames.all);
     if (units.length > 0) {
       publish("running", `Stopping ${folder}.`);
       markStopped(units);
-      await dependencies.systemctl(["stop", ...units], SYSTEMCTL_TIMEOUT_MS);
+      // The timers first, on their own: one that fired while its service's
+      // stop waited in the same transaction would start a run, on the data
+      // about to be set aside.
+      const timers = units.filter(isTimerUnit);
+      if (timers.length > 0) await dependencies.systemctl(["stop", ...timers], SYSTEMCTL_TIMEOUT_MS);
+      await dependencies.systemctl(["stop", ...units.filter((unit) => !isTimerUnit(unit))], SYSTEMCTL_TIMEOUT_MS);
       // A service still running would keep writing into the folder about to be
       // set aside, and its writes would be lost with it.
       for (const unit of units) {
@@ -346,7 +371,7 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     renameSync(incoming, join(root, DATA));
     syncFolder(root);
 
-    const restored = units.length === 0 ? null : await startAndWatch(dependencies, units, wait, () => publish("running", `Starting ${folder}.`));
+    const restored = units.length === 0 ? null : await startAndWatch(dependencies, units, projectUnitNames, wait, () => publish("running", `Starting ${folder}.`));
     if (restored === null || restored.running) {
       clearStopped();
       rmSync(join(root, PREVIOUS), { recursive: true, force: true });
@@ -359,11 +384,13 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
 
     // --- The service did not come back: the previous data goes back in.
     publish("running", `${folder} did not start on the restored data. Putting the previous data back.`);
-    await dependencies.systemctl(["stop", ...units], SYSTEMCTL_TIMEOUT_MS);
+    const timers = units.filter(isTimerUnit);
+    if (timers.length > 0) await dependencies.systemctl(["stop", ...timers], SYSTEMCTL_TIMEOUT_MS);
+    await dependencies.systemctl(["stop", ...units.filter((unit) => !isTimerUnit(unit))], SYSTEMCTL_TIMEOUT_MS);
     renameSync(join(root, DATA), join(root, FAILED));
     renameSync(join(root, PREVIOUS), join(root, DATA));
     syncFolder(root);
-    const back = await startAndWatch(dependencies, units, wait, () => undefined);
+    const back = await startAndWatch(dependencies, units, projectUnitNames, wait, () => undefined);
     clearStopped();
     rmSync(join(root, FAILED), { recursive: true, force: true });
     throw new Failure(
@@ -598,16 +625,21 @@ async function loadedUnits(dependencies: Pick<RestoreDependencies, "systemctl">,
 /**
  * Starts the main unit, which starts the others, and watches it like the
  * steward watches a restart (src/secrets/restart.ts): running, with a restart
- * counter that does not move, for the last three seconds of eight. The other
- * units are then asked once whether they are active.
+ * counter that does not move, for the last three seconds of eight; an
+ * anchor, which runs nothing, active and exited. The other units are then
+ * asked once whether they are active, the timers among them, but never a
+ * scheduled service: its timer starts it at its time, and between two runs
+ * it is inactive by design.
  */
 async function startAndWatch(
   dependencies: RestoreDependencies,
   units: string[],
+  plan: Pick<ProjectUnits, "running" | "anchored">,
   wait: (ms: number) => Promise<void>,
   announce: () => void,
 ): Promise<{ running: boolean; detail: string }> {
-  const [main, ...others] = units as [string, ...string[]];
+  const [main, ...rest] = units as [string, ...string[]];
+  const others = rest.filter((unit) => plan.running.includes(unit));
   announce();
   await dependencies.systemctl(["reset-failed", ...units], SYSTEMCTL_TIMEOUT_MS);
   await dependencies.systemctl(["start", main], SYSTEMCTL_TIMEOUT_MS);
@@ -620,7 +652,7 @@ async function startAndWatch(
     if (dependencies.now() - start >= observationMs) break;
     await wait(dependencies.stepMs ?? STEP_MS);
   }
-  const seen: Verdict = verdict(readings);
+  const seen: Verdict = verdict(readings, { anchor: plan.anchored && main === plan.running[0] });
   if (seen.kind !== "active") return { running: false, detail: `${main} ${seen.kind}, ${seen.state}/${seen.subState}` };
   for (const unit of others) {
     const response = await dependencies.systemctl(["is-active", unit], SYSTEMCTL_TIMEOUT_MS);

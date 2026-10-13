@@ -162,7 +162,8 @@ export const TOOLS: ToolDefinition[] = [
     name: "status",
     title: "Server status",
     description:
-      "What the server runs: every project with its service state, memory, memory peak and ceiling, the ports listening on the loopback, and the machine's memory. Read-only.",
+      "What the server runs: every project with its service state, memory, memory peak and ceiling, the ports listening on the loopback, and the machine's memory. " +
+      "A scheduled service reads waiting between two runs, which is not down, and carries its schedule, its last run with how it ended, and its next. Read-only.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: true },
   },

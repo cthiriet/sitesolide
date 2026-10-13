@@ -33,12 +33,12 @@ gets two more files, both generated from its manifest, a systemd unit and a
 Caddy block, and costs 8 to 40 MB of memory.
 
 A project that runs several processes, a front, the API it calls, a worker
-behind it, declares them under `services` and gets one unit per service. The
-first keeps the project's name, `<slug>.service`, and the others are
-`<slug>.<name>.service`, hanging on it: starting, stopping or restarting the
-main unit does the same to them, which is why the dashboard, the steward and
-the collector, which know a project by its main unit, need nothing more. The
-block sends each service its own paths.
+behind them, a job every night, declares them under `services` and gets one
+unit per service. The first that runs for good keeps the project's name,
+`<slug>.service`, and the others are `<slug>.<name>.service`, hanging on it:
+starting, stopping or restarting the main unit does the same to them, which
+is why the dashboard, the steward and the collector, which know a project by
+its main unit, need nothing more. The block sends each service its own paths.
 
 Those two generated files live nowhere but on the machine. `deploy` generates
 them from the manifest each time, installs the unit, and hands the block to
@@ -46,6 +46,27 @@ them from the manifest each time, installs the unit, and hands the block to
 in service: a block is only correct in the company of the others, and the
 machine is where they all are. A deployment never touches another project's
 block.
+
+A service is one of three kinds. A **server** listens on its port, for Caddy
+or for its siblings. A **worker** listens on nothing and runs for good:
+systemd restarts it when it falls, waiting longer after each failure, up to
+five minutes. A **scheduled service** runs at the times its `schedule` names,
+started by a timer of its own, `<slug>.<name>.timer`, and between two runs
+nothing runs. The main unit wants the timer, never the service, which would
+otherwise run at every start of the project. Timer and service both hang on
+the main unit, `PartOf=` it like every other, and systemd passes a restart
+on to them as a try-restart: restarting the project restarts the timers and
+a run in progress, and never starts a run that was not going. A project whose
+services are all scheduled has nothing that runs for good to name after
+itself: its main unit is then an anchor, which runs nothing, stays active
+once started, and wants the timers, so that a reboot, a deployment and the
+dashboard's restart reach them as they reach any project's services.
+
+A project whose services are all internal, and that has no `publicDir`,
+serves no page. Its block answers its address with a line saying so, rather
+than nothing: every probe of the machine, the deployment's, the Caddy step's
+and the gatekeeper's, asks each project's address, and the portal and a
+preview code still close it. See [docs/manifest.md](manifest.md#services).
 
 ## Isolation
 
@@ -58,6 +79,12 @@ hides even the names of the files.
 
 Services cannot reach each other over the loopback either, except those of one
 project, see [the loopback rule](#the-loopback-rule).
+
+The walls keep a project from reading its neighbours, not from slowing them
+down, so work in the background yields to the sites: a worker or a scheduled
+service gets a fifth of a site's share of the processor when they compete
+(`CPUWeight=20` against 100), and 512 processes and threads at most. `cpu`
+caps any service outright, a share of one core.
 
 ## Who may touch what
 
@@ -181,12 +208,14 @@ routes that did it, `PUT /admin/sharing/:host`, `/admin/guests` and
 `DELETE /admin/invites/:id`, answer `410 moved` to whoever asks.
 
 And one set: a project that declares several `services` reaches its own ports,
-and nobody else's. Its front calls its API, its API its worker, and a neighbour
-still reaches none of them. The set holds `port . uid` pairs, rebuilt by
-`deploy` from the manifests on the machine into
+and nobody else's. Its front calls its API, its worker calls both, and a
+neighbour still reaches none of them. The set holds `port . uid` pairs,
+rebuilt by `deploy` from the manifests on the machine into
 `/etc/sitesolide-loopback-projects.nft`, and replayed after the table at boot.
-A project with a single service does not appear in it: it has nothing of its
-own to call.
+A worker and a scheduled service declare no port, and need no pair of their
+own: they run as the project's account, which its servers' pairs already let
+through. A project with a single service does not appear in the set, nor does
+one whose services all listen on nothing: it has nothing of its own to call.
 
 ## Egress
 
@@ -429,18 +458,24 @@ In order, and the order is the point:
    service of that name that deploy did not write? Does another project already
    declare one of its ports? For a project with several services, does the
    loopback rule have room for its own ports? For a project with `egress` or
-   `connectors`, does the egress proxy run?
+   `connectors`, does the egress proxy run? For a project with scheduled
+   services, does systemd read each schedule as a time?
 3. Build locally.
 4. Create the system account and the directories.
-5. Install the systemd units that are missing, remove those of services the
-   manifest no longer declares.
+5. Install the systemd units that are missing, timers included, remove those
+   of services and schedules the manifest no longer declares, timers first.
 6. Upload the code, then the public files.
 7. Take the Caddy lock, read the general access and every port again under it, then put
    down the manifest, and rebuild the loopback's project set when the
    manifests say something other than what it carries.
 8. Run `install` as the project's account, in its service's walls.
-9. Restart every service, check each one is active, and write the block.
-10. Verify over HTTPS that the site answers.
+9. Restart the project's units, its timers among them but never a scheduled
+   service, which its timer starts; check each one is active, and write the
+   block.
+10. Verify over HTTPS that the site answers, and, ten seconds at least after
+   the restart, that every service that runs for good is still active and
+   was not restarted by systemd meanwhile: a process that falls at once
+   passes the first check.
 
 For a restricted project, the portal goes in front **before** its files,
 and comes off **after** them. Placed the other way around, its files would be served

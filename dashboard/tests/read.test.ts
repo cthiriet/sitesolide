@@ -49,4 +49,30 @@ describe("snapshot analysis", () => {
     expect(reading.present).toBe(true);
     if (reading.present) expect(reading.stale).toBe(true);
   });
+
+  /**
+   * The collector of the deployment before scheduled services named units by
+   * rank, the first service taking the slug, and read no timer: its last
+   * snapshot is read in the minute after the new deployment, and opens.
+   */
+  test("a snapshot from a collector older than scheduled services still opens", () => {
+    const manifest = {
+      slug: "nightly",
+      services: {
+        report: { start: "/srv/sites/nightly/app/report", schedule: "daily" },
+        purge: { start: "/srv/sites/nightly/app/purge", schedule: "*:0/15" },
+      },
+    };
+    const unit = { LoadState: "loaded", ActiveState: "inactive", SubState: "dead" };
+    const folders = [{ slug: "nightly", manifest: JSON.stringify(manifest), unit, units: { "nightly.purge": unit }, bytes: 1024, deployed: NOW }];
+    const reading = analyse(rawJson({ folders }), NOW);
+    expect(reading.present).toBe(true);
+    if (reading.present) {
+      const site = reading.snapshot.sites[0]!;
+      expect(site.services.map((service) => [service.unit, service.schedule?.timerState])).toEqual([
+        ["nightly.report", null],
+        ["nightly.purge", null],
+      ]);
+    }
+  });
 });

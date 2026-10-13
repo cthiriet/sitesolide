@@ -55,6 +55,10 @@ describe("the monitor among the Issues", () => {
   test("a project's unit, the disk and the memory are left to the dashboard's own judgement", () => {
     const content = status({
       "unit:cms.service": tracked("down", "unit", "critical", "cms.service is failed (failed)", "cms"),
+      // A scheduled service's failed run and its timer stopped: src/state.ts
+      // judges both from the units the collector reads.
+      "unit:shop.sync.service": tracked("down", "unit", "warning", "shop.sync.service: last run failed (exit code 1)", "shop"),
+      "unit:shop.sync.timer": tracked("down", "unit", "critical", "shop.sync.timer is inactive (dead)", "shop"),
       "disk:/": tracked("down", "disk", "critical", "/ is 93% full, 5.2 GB free"),
       memory: tracked("down", "memory", "warning", "4% of memory available"),
       "unit:sitesolide-collector.service": tracked("down", "platform", "warning", "sitesolide-collector.service is failed (failed)"),

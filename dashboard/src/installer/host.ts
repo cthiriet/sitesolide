@@ -9,7 +9,7 @@
  * shapes.
  */
 import type { Machine } from "../gatekeeper/machine";
-import type { LoopbackState, UnitFacts } from "../../borrowed/services";
+import type { LoopbackState, UnitFacts, UnitStanding } from "../../borrowed/services";
 import type { ExtractOutcome } from "./extract";
 
 export type Execution = { code: number; output: string };
@@ -27,9 +27,9 @@ export type Host = {
 
   /** Every deposited manifest, by directory name. Throws when the listing cannot be read. */
   readManifests: () => Promise<Map<string, string>>;
-  /** One unit file's text, null when it does not exist. */
+  /** One unit file's text, a service's or a timer's (see unitFileName), null when it does not exist. */
   readUnit: (unit: string) => Promise<string | null>;
-  /** The project's secondary units `deploy` generated, `<slug>.<name>`. */
+  /** The project's secondary units `deploy` generated, `<slug>.<name>`, and the timers of its scheduled ones, `<slug>.<name>.timer`. */
   generatedUnits: (slug: string) => Promise<string[]>;
   /** What systemd knows of a unit, wherever it reads it from; null when systemctl did not answer. */
   unitFacts: (slug: string, unit: string) => Promise<UnitFacts | null>;
@@ -37,6 +37,14 @@ export type Host = {
   unitsFolder: string;
   /** Is the secret file in /etc/sitesolide? Its content is never read. */
   secretPresent: (name: string) => Promise<boolean>;
+  /**
+   * The schedules systemd does not read as a time, asked of
+   * `systemd-analyze calendar` one by one, in the order given; null when it
+   * could not be asked. A read: nothing is written.
+   */
+  refusedSchedules: (schedules: string[]) => Promise<string[] | null>;
+  /** How each unit stands, by unit as named, see stabilityCommand in services.ts; null when systemctl did not answer. */
+  standing: (units: string[]) => Promise<Map<string, UnitStanding> | null>;
 
   /** Creates `site-<slug>` when it is missing. */
   ensureAccount: (slug: string) => Promise<"created" | "present">;
@@ -70,9 +78,9 @@ export type Host = {
 
   /** `/srv/sites/<slug>/sitesolide.json`, owned by the deployment account, 0644; the leftovers removed. */
   depositManifest: (slug: string, text: string) => Promise<void>;
-  /** `/etc/systemd/system/<unit>.service`, root 0644. */
+  /** `/etc/systemd/system/<unit>.service`, or the timer's own name, root 0644. */
   installUnit: (unit: string, text: string) => Promise<void>;
-  /** Stopped, disabled and removed, then `daemon-reload`. */
+  /** Stopped, disabled and removed, the timers first, then `daemon-reload`. */
   removeUnits: (units: string[]) => Promise<void>;
   /** `daemon-reload`, then `enable` of the main unit. */
   enable: (slug: string) => Promise<void>;

@@ -6,15 +6,18 @@
  * commands it recognises word for word: the empty connection of
  * bin/deploy-caddy.sh, the reading of the deposited manifests, the lock shared
  * with the gatekeeper, the fingerprints, the list of the blocks in service,
- * and a deposited manifest or a unit, read as `deploy --compare` reads them.
+ * a deposited manifest or a unit, read as `deploy --compare` reads them, the
+ * listing of a project's units, and the schedules and the services' standing
+ * a deployment asks systemd for.
  * **All the rest is refused**, writes included, and recorded: a code path that
  * forgot the dry run mode fails loudly instead of speaking to anything at all,
  * and the test reads the log back to make sure that not a single write was
  * even attempted.
  *
- * The reading of the manifests and the lock are not imitated: the script that
- * the CLI would send really runs, on the simulated VM's tree. It is that
- * script, and not a copy of its output, that the tests put to the test.
+ * The reading of the manifests, the listing of the units and the lock are not
+ * imitated: the script that the CLI would send really runs, on the simulated
+ * VM's tree. It is that script, and not a copy of its output, that the tests
+ * put to the test.
  *
  * The settings a test lays in the VM's folder are named by `SWITCHES`:
  *
@@ -39,7 +42,12 @@
  *   rules as far as the tests need them;
  * - `accounts`: the static accounts the machine carries, one passwd line each,
  *   which the reading of an account answers from; an accepted `useradd` adds
- *   its account there, so that the next reading finds it.
+ *   its account there, so that the next reading finds it;
+ * - `refused-schedules`: the calendar expressions systemd does not read, one
+ *   per line, which the check of a deployment's schedules answers BAD;
+ * - `standings.json`: how the services stand when `deploy` reads them after
+ *   its restart, see `Standing`. Every one active and never restarted
+ *   otherwise.
  *
  * `sitesolide setup`'s scripts, `sh -s <tag>` with the script on standard
  * input, are writes like any other: refused, or accepted and answered from
@@ -57,8 +65,8 @@ import {
   checkScript,
   type Who,
 } from "../../cli/caddy-lock";
-import { MARKER_ABSENT, MARKER_PRESENT } from "../../cli/unit";
-import { GENERATOR_MARK, loopbackStateCommand, MARKER_DONE, unitOriginsCommand } from "../../cli/services";
+import { MARKER_ABSENT, MARKER_PRESENT, unitFileName } from "../../cli/unit";
+import { GENERATOR_MARK, listUnitsCommand, loopbackStateCommand, MARKER_DONE, scheduleCheckCommand, stabilityCommand, unitOriginsCommand } from "../../cli/services";
 import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
 import { backupComponentCommand, BACKUP_COMPONENT_MARKER } from "../../cli/backups";
 import { ownerGeneralCommand, ownerReadCommand, ownerWriteCommand, type EntryView, type PersonView, type Role } from "../../cli/access";
@@ -86,7 +94,18 @@ export const SWITCHES = {
   /** What the steward answers a change of general access, in place of the gatekeeper's work: `{ status, body }`. */
   general: "general.json",
   accounts: "accounts",
+  refusedSchedules: "refused-schedules",
+  standings: "standings.json",
 } as const;
+
+/**
+ * How a unit stands when `deploy` reads it after its restart, as `systemctl
+ * show` would say it; null for a unit systemd leaves out of its answer, which
+ * makes the reading unreadable. `standings.json` lays one map per reading, in
+ * order, the last one answering every reading past it; a unit a map does not
+ * name is active, running, and never restarted.
+ */
+export type Standing = { active: string; sub: string; restarts: number } | null;
 
 /**
  * An account as /etc/passwd carries it, made the way the deploy scripts make
@@ -202,8 +221,12 @@ const READ_BLOCK = new RegExp(
  * of a closed site.
  */
 const READ_FILE = new RegExp(
-  `^if sudo test -f (/srv/sites/[a-z0-9-]+/sitesolide\\.json|/etc/systemd/system/[a-z0-9.-]+\\.service|/etc/caddy/Caddyfile|/etc/caddy/locks/verrous\\.caddy); then echo ${MARKER_PRESENT}; sudo cat \\1; else echo ${MARKER_ABSENT}; fi$`,
+  `^if sudo test -f (/srv/sites/[a-z0-9-]+/sitesolide\\.json|/etc/systemd/system/[a-z0-9.-]+\\.(?:service|timer)|/etc/caddy/Caddyfile|/etc/caddy/locks/verrous\\.caddy); then echo ${MARKER_PRESENT}; sudo cat \\1; else echo ${MARKER_ABSENT}; fi$`,
 );
+/** The schedules a deployment asks systemd to read, each between double quotes, see scheduleCheckCommand. */
+const SCHEDULE = /systemd-analyze calendar "([^"]*)"/g;
+/** How the services stand after the restart, the units last, see stabilityCommand. */
+const STABILITY = new RegExp(`^systemctl show -p Id -p ActiveState -p SubState -p NRestarts ([a-z0-9. -]+) && echo ${MARKER_DONE}$`);
 /** What bin/deploy-caddy.sh reads to tell a first install, before its guard. */
 export const FIRST_INSTALL_FILES = "test -f /etc/caddy/sitesolide.env && test -f /etc/caddy/domaines.map";
 /** The guard of bin/deploy-caddy.sh, which checks that the unit loads the zone variables. */
@@ -372,12 +395,75 @@ if (import.meta.main) {
     const laidFile = join(vm, SWITCHES.systemUnits);
     const laid = existsSync(laidFile) ? (JSON.parse(readFileSync(laidFile, "utf8")) as Record<string, string>) : {};
     for (const unit of units) {
-      const own = `/etc/systemd/system/${unit}.service`;
+      const own = `/etc/systemd/system/${unitFileName(unit)}`;
       const fragment = laid[unit] ?? (existsSync(join(vm, own)) ? own : "");
       const text = fragment !== "" && existsSync(join(vm, fragment)) ? readFileSync(join(vm, fragment), "utf8") : "";
       const generated = text.includes(GENERATOR_MARK) ? "yes" : "no";
       const project = text.includes(`/srv/sites/${origins[2]}/`) ? "yes" : "no";
       process.stdout.write(`UNIT ${unit} ${fragment === "" ? "not-found" : "loaded"} ${generated} ${project} ${fragment === "" ? "-" : fragment}\n`);
+    }
+    process.stdout.write(`${MARKER_DONE}\n`);
+    process.exit(0);
+  }
+  // The secondary units and timers deploy laid for a project, which a
+  // deployment compares with its manifest: the very script the CLI sends,
+  // run on the simulated VM's tree. A reading, hence always answered.
+  const listed = /^sudo sh -c 'for f in \/etc\/systemd\/system\/([a-z0-9-]+)\.\*\.service /.exec(command)?.[1];
+  if (listed !== undefined) {
+    let recognised = false;
+    try {
+      recognised = command === listUnitsCommand(listed);
+    } catch {
+      recognised = false;
+    }
+    if (!recognised) refuse("unexpected listing of the units");
+    record(`LIST-UNITS ${listed}`);
+    const script = command.replace(/^sudo sh -c '/, "").replace(/'$/, "").replaceAll("/etc/systemd/system", join(vm, "etc", "systemd", "system"));
+    const listing = Bun.spawnSync(["sh", "-c", script], { stdout: "inherit", stderr: "inherit" });
+    process.exit(listing.exitCode ?? 1);
+  }
+  // Whether systemd reads each schedule a deployment declares, asked before
+  // anything is written. A reading, hence always answered: every one read,
+  // unless the test lays those systemd refuses.
+  if (command.startsWith("sh -c 'if systemd-analyze calendar ")) {
+    const schedules = [...command.matchAll(SCHEDULE)].map((match) => match[1]!);
+    let recognised = false;
+    try {
+      recognised = command === scheduleCheckCommand(schedules);
+    } catch {
+      recognised = false;
+    }
+    if (!recognised) refuse("unexpected reading of the schedules");
+    record(`SCHEDULES ${schedules.join(" | ")}`);
+    const laid = join(vm, SWITCHES.refusedSchedules);
+    const refusedSchedules = existsSync(laid) ? readFileSync(laid, "utf8").split("\n").filter((line) => line !== "") : [];
+    for (const schedule of schedules) process.stdout.write(`${refusedSchedules.includes(schedule) ? "BAD" : "OK"}\n`);
+    process.stdout.write(`${MARKER_DONE}\n`);
+    process.exit(0);
+  }
+  // How the services stand, read right after their restart and again a few
+  // seconds later. A reading, hence always answered: from what the test lays
+  // for this reading, every unit active and never restarted otherwise.
+  const stability = STABILITY.exec(command);
+  if (stability !== null) {
+    const units = stability[1]!.split(" ").map((argument) => argument.replace(/\.service$/, ""));
+    let recognised = false;
+    try {
+      recognised = command === stabilityCommand(units);
+    } catch {
+      recognised = false;
+    }
+    if (!recognised) refuse("unexpected reading of the services' standing");
+    const log = join(vm, "logs");
+    const rank = existsSync(log) ? readFileSync(log, "utf8").split("\n").filter((line) => line.startsWith("STABILITY ")).length : 0;
+    record(`STABILITY ${units.join(" ")}`);
+    const laid = join(vm, SWITCHES.standings);
+    const readings = existsSync(laid) ? (JSON.parse(readFileSync(laid, "utf8")) as Record<string, Standing>[]) : [];
+    const reading = readings[Math.min(rank, readings.length - 1)] ?? {};
+    for (const unit of units) {
+      const standing = Object.hasOwn(reading, unit) ? reading[unit]! : { active: "active", sub: "running", restarts: 0 };
+      if (standing === null) continue;
+      process.stdout.write(`Id=${unitFileName(unit)}\nActiveState=${standing.active}\nSubState=${standing.sub}\nNRestarts=${standing.restarts}\n\n`);
     }
     process.stdout.write(`${MARKER_DONE}\n`);
     process.exit(0);

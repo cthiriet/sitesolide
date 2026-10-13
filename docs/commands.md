@@ -84,7 +84,19 @@ workstation.
 `~/.config/sitesolide/secrets/`, the few credentials your workstation presents
 to production itself, then runs the command. See [secrets.md](secrets.md).
 
-`sitesolide logs` shows every service of a project, interleaved by time.
+`sitesolide logs` shows every service of a project, interleaved by time, the
+runs of its scheduled services among them, each under its own unit,
+`<slug>.<name>.service`. A run that failed says why there, and a deployment
+that failed because a service fell right after its restart points there too.
+
+`sitesolide status` reads what the machine runs, one line per unit under each
+project. A worker reads as any service, `active` with its memory. A scheduled
+service shows its schedule, when it last ran and how that run ended, and when
+it runs next. Between two runs it is `inactive`, its normal state and no
+outage, or `failed` after a run that failed, until the next one. The main
+unit of a project whose services are all scheduled, its anchor, is `active`
+and holds no memory, since it runs nothing. See
+[manifest.md](manifest.md#services) for the kinds of service.
 
 `deploy --dry-run --compare` runs the build, as `--build` does, then measures
 on the server what this deployment would change there, and changes nothing:

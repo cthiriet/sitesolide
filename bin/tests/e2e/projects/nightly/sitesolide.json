@@ -1,0 +1,14 @@
+{
+  "slug": "sample-nightly",
+  "services": {
+    "report": {
+      "start": "/usr/local/bin/bun run report.ts",
+      "schedule": "daily"
+    },
+    "cleanup": {
+      "start": "/usr/local/bin/bun run report.ts --cleanup",
+      "schedule": "Sun 03:00",
+      "timeout": "30m"
+    }
+  }
+}

@@ -458,7 +458,9 @@ a token never gives.
 A failed deployment carries its own `error.code`, the step that stopped it:
 `install-failed`, `secret-missing`, `edited-by-hand`, `system-unit`, `caddy-busy`,
 `bundle-refused`, `service-failed`, `verify-failed` and a few more, each with a
-message that says what to do.
+message that says what to do. A schedule systemd on the machine does not read
+comes back as `invalid-manifest`, before anything is written; a server or a
+worker that falls within ten seconds of its restart, as `service-failed`.
 
 ## When it goes wrong
 

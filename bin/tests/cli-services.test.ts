@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { generateFragment } from "../cli/fragment";
 import {
+  DEFAULT_TIMEOUT,
+  isAnchored,
   isApp,
+  isHeadless,
   mainPort,
   routesOverlap,
+  scheduledServices,
   servicesOf,
   validate,
   type Manifest,
@@ -21,13 +25,18 @@ import {
   domainConflicts,
   portConflicts,
   readLoopbackState,
+  readScheduleCheck,
+  readStability,
   readUidsAnswer,
   readUnitsAnswer,
   removeUnitsCommand,
+  scheduleCheckCommand,
+  stabilityCommand,
   staleUnits,
   uidsCommand,
+  unstableUnits,
 } from "../cli/services";
-import { generateUnit, generateUnits, unitArgument } from "../cli/unit";
+import { generateUnit, generateUnits, unitArgument, unitFileName, unitNames } from "../cli/unit";
 import { projectPortPairs, projectPortsFile } from "../cli/loopback";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -162,9 +171,9 @@ describe("the services key", () => {
     expect(
       validate(lab({ web: { start: "/x", port: 3050 }, jobs: { start: "/y", port: 3051, internal: true, routes: ["/jobs/*"] } })),
     ).toContainEqual(expect.stringContaining("services.jobs.routes: an internal service"));
-    expect(validate(lab({ jobs: { start: "/y", port: 3051, internal: true } }))).toContainEqual(
-      expect.stringContaining("without publicDir, one public service"),
-    );
+    // Every service internal and no publicDir: a project that serves no page,
+    // whose address says so, see isHeadless.
+    expect(validate(lab({ jobs: { start: "/y", port: 3051, internal: true } }))).toEqual([]);
     expect(validate(lab({ web: { start: "/x", port: 3050, internal: "yes" } }))).toContainEqual(
       expect.stringContaining("services.web.internal: true, or absent"),
     );
@@ -207,6 +216,126 @@ describe("the services key", () => {
   test("a broken entry does not break the reading, only the validation", () => {
     const broken = lab({ web: { start: "/x", port: 3050 }, bad: null });
     expect(servicesOf(broken).map((service) => service.unit)).toEqual(["lab"]);
+  });
+});
+
+describe("workers and scheduled services", () => {
+  /** A front, a queue consumer that listens on nothing, and a sync every quarter of an hour. */
+  const MIXED = lab({
+    sync: { start: "/srv/sites/lab/app/sync", schedule: "*:0/15", timeout: "5m" },
+    web: { start: "/srv/sites/lab/app/web", port: 3050 },
+    queue: { start: "/srv/sites/lab/app/queue", internal: true },
+  });
+
+  test("an internal service without a port is a worker, which listens on nothing", () => {
+    const manifest = lab({ web: { start: "/x", port: 3050 }, queue: { start: "/y", internal: true } });
+    expect(validate(manifest)).toEqual([]);
+    expect(servicesOf(manifest)[1]).toMatchObject({ name: "queue", unit: "lab.queue", kind: "worker", port: null, internal: true, schedule: null, timeout: null });
+    expect(servicesOf(manifest)[0]).toMatchObject({ kind: "server", port: 3050 });
+  });
+
+  test("a service without a port that is not internal is refused: Caddy would have nothing to reach", () => {
+    expect(validate(lab({ web: { start: "/x", port: 3050 }, queue: { start: "/y" } }))).toContainEqual(
+      expect.stringContaining('services.queue.port: required, the loopback port the service listens on; a worker that listens on nothing says "internal": true'),
+    );
+  });
+
+  test("a service with a schedule is scheduled: internal, no port, an hour at most per run unless it says otherwise", () => {
+    expect(validate(MIXED)).toEqual([]);
+    const sync = servicesOf(MIXED).find((service) => service.name === "sync")!;
+    expect(sync).toMatchObject({ kind: "scheduled", port: null, internal: true, schedule: "*:0/15", timeout: "5m" });
+    const plain = lab({ web: { start: "/x", port: 3050 }, sync: { start: "/y", schedule: "hourly" } });
+    expect(servicesOf(plain)[1]).toMatchObject({ kind: "scheduled", schedule: "hourly", timeout: DEFAULT_TIMEOUT });
+    // Saying it is internal changes nothing.
+    expect(validate(lab({ web: { start: "/x", port: 3050 }, sync: { start: "/y", schedule: "daily", internal: true } }))).toEqual([]);
+  });
+
+  test("what a scheduled service may not carry: a port, a backup command, a route", () => {
+    const errors = validate(
+      lab({
+        web: { start: "/x", port: 3050 },
+        sync: { start: "/y", schedule: "hourly", port: 3051, backup: { folder: "db", command: "/z" }, routes: ["/sync/*"] },
+      }),
+    );
+    expect(errors).toContainEqual(expect.stringContaining("services.sync.port: a scheduled service listens on nothing"));
+    expect(errors).toContainEqual(expect.stringContaining("services.sync.backup: a scheduled service keeps no live folder"));
+    expect(errors).toContainEqual(expect.stringContaining("services.sync.routes: an internal service"));
+  });
+
+  test("a timeout belongs to a scheduled service alone, from a second to a day", () => {
+    expect(validate(lab({ web: { start: "/x", port: 3050, timeout: "5m" } }))).toContainEqual(
+      expect.stringContaining("services.web.timeout: only a scheduled service has one"),
+    );
+    for (const timeout of ["90s", "15m", "15min", "2h", "24h"]) {
+      expect(validate(lab({ web: { start: "/x", port: 3050 }, sync: { start: "/y", schedule: "hourly", timeout } }))).toEqual([]);
+    }
+    for (const timeout of ["0s", "25h", "2d", "90", "1.5h", "1 h", "", 60]) {
+      expect(validate(lab({ web: { start: "/x", port: 3050 }, sync: { start: "/y", schedule: "hourly", timeout } }))).toContainEqual(
+        expect.stringContaining("services.sync.timeout: how long one run may take"),
+      );
+    }
+  });
+
+  test("a schedule is written into the timer as it is: one line of what a calendar expression uses, nothing systemd or a shell reads", () => {
+    for (const schedule of ["hourly", "daily", "*:0/15", "Mon..Fri 08:00", "*-*-* 06:30:00 Europe/Paris", "Mon,Wed *-*-* 12:00", "*:00/5"]) {
+      expect(validate(lab({ web: { start: "/x", port: 3050 }, sync: { start: "/y", schedule } }))).toEqual([]);
+    }
+    for (const schedule of ["", " hourly", "hourly ", "hourly\nUser=root", "%H:00", "daily\\", '"daily"', "daily; reboot", "$(reboot)", "`reboot`", "x".repeat(129), 15]) {
+      expect(validate(lab({ web: { start: "/x", port: 3050 }, sync: { start: "/y", schedule } }))).toContainEqual(
+        expect.stringContaining("services.sync.schedule: a systemd calendar expression"),
+      );
+    }
+  });
+
+  test("cpu: a share of one core, the service's own over the project's", () => {
+    const capped = lab({ web: { start: "/x", port: 3050, cpu: "50%" }, queue: { start: "/y", internal: true } }, { cpu: "200%" });
+    expect(validate(capped)).toEqual([]);
+    expect(servicesOf(capped).map((service) => service.cpu)).toEqual(["50%", "200%"]);
+    expect(servicesOf(LAB).map((service) => service.cpu)).toEqual([null, null, null]);
+    for (const cpu of ["50", "0%", "6500%", "half", "50 %", "1.5%"]) {
+      expect(validate(lab({ web: { start: "/x", port: 3050, cpu } }))).toContainEqual(expect.stringContaining("services.web.cpu: a share of one core"));
+      expect(validate({ ...APP, cpu })).toContainEqual(expect.stringContaining("cpu: a share of one core"));
+    }
+    expect(validate({ ...APP, cpu: "6400%" })).toEqual([]);
+    expect(validate({ slug: "notes", publicDir: "dist", cpu: "50%" })).toContainEqual(expect.stringContaining("cpu: without `start`, nothing runs to be limited"));
+  });
+
+  test("the main service is the first that runs for good, whatever the written order", () => {
+    // A project with no scheduled service keeps its order and its names: see
+    // the first test of the services key.
+    expect(servicesOf(MIXED).map((service) => [service.name, service.unit])).toEqual([
+      ["web", "lab"],
+      ["sync", "lab.sync"],
+      ["queue", "lab.queue"],
+    ]);
+    expect(mainPort(MIXED)).toBe(3050);
+    expect(isAnchored(MIXED)).toBe(false);
+    // A worker can be the main one; it has no port to give.
+    const workerFirst = lab({ sync: { start: "/y", schedule: "hourly" }, queue: { start: "/x", internal: true } });
+    expect(servicesOf(workerFirst).map((service) => service.unit)).toEqual(["lab", "lab.sync"]);
+    expect(mainPort(workerFirst)).toBeNull();
+  });
+
+  test("every service scheduled: the project is anchored, and its main unit is none of them", () => {
+    const anchored = lab({ report: { start: "/x", schedule: "daily" }, cleanup: { start: "/y", schedule: "Sun 03:00" } });
+    expect(validate(anchored)).toEqual([]);
+    expect(isAnchored(anchored)).toBe(true);
+    expect(servicesOf(anchored).map((service) => service.unit)).toEqual(["lab.report", "lab.cleanup"]);
+    expect(mainPort(anchored)).toBeNull();
+    expect(scheduledServices(anchored).map((service) => service.name)).toEqual(["report", "cleanup"]);
+    expect(scheduledServices(MIXED).map((service) => service.name)).toEqual(["sync"]);
+    for (const manifest of [LAB, APP, { slug: "notes", publicDir: "dist" } as Manifest]) expect(isAnchored(manifest)).toBe(false);
+  });
+
+  test("no public service and no publicDir: a project that serves no page, which can have no domain", () => {
+    const headless = lab({ sync: { start: "/y", schedule: "hourly" }, queue: { start: "/x", internal: true } });
+    expect(validate(headless)).toEqual([]);
+    expect(isHeadless(headless)).toBe(true);
+    expect(isHeadless(lab({ report: { start: "/x", schedule: "daily" } }))).toBe(true);
+    expect(isHeadless({ ...headless, publicDir: "public" })).toBe(false);
+    for (const manifest of [LAB, MIXED, APP, { slug: "notes", publicDir: "dist" } as Manifest]) expect(isHeadless(manifest)).toBe(false);
+    expect(validate({ ...headless, domain: { name: "example.com" } })).toContainEqual(expect.stringContaining("domain: this project serves no page"));
+    expect(validate({ ...headless, publicDir: "public", domain: { name: "example.com" } })).toEqual([]);
   });
 });
 
@@ -644,5 +773,193 @@ describe("removing a project with several services", () => {
     expect(unit!.command).toBe(
       "sudo systemctl disable --now budget 2>/dev/null || true && sudo rm -f /etc/systemd/system/budget.service && sudo systemctl daemon-reload",
     );
+  });
+});
+
+describe("the units of workers and scheduled services, on the machine", () => {
+  /** The front, a sync every quarter of an hour with its timer, and a queue consumer. */
+  const MIXED = lab({
+    web: { start: "/srv/sites/lab/app/web", port: 3050 },
+    sync: { start: "/srv/sites/lab/app/sync", schedule: "*:0/15" },
+    queue: { start: "/srv/sites/lab/app/queue", internal: true },
+  });
+  const PLACEHOLDERS = { slug: "lab", zone: "test-zone.invalid", contact: "" };
+
+  test("the listing finds the timers deploy laid, by their name with its suffix", () => {
+    expect(listUnitsCommand("lab")).toInclude("/etc/systemd/system/lab.*.timer");
+    const root = mkdtempSync(join(tmpdir(), "sitesolide-timers-"));
+    try {
+      const generated = generateUnits(MIXED, PLACEHOLDERS);
+      for (const { unit, text } of generated) writeFileSync(join(root, unitFileName(unit)), text);
+      // The timer of a schedule since dropped from the manifest, as deploy wrote it.
+      const timer = generated.find(({ unit }) => unit === "lab.sync.timer")!.text;
+      writeFileSync(join(root, "lab.old.timer"), timer.replace("schedule of service sync", "schedule of service old"));
+      // A timer written by hand beside the project.
+      writeFileSync(join(root, "lab.rollup.timer"), "[Unit]\nPartOf=lab.service\n[Timer]\nOnCalendar=daily\n");
+      const script = listUnitsCommand("lab").replace(/^sudo sh -c '/, "").replace(/'$/, "").replaceAll("/etc/systemd/system", root);
+      const read = readUnitsAnswer(Bun.spawnSync(["sh", "-c", script]).stdout.toString(), "lab");
+      expect(read).toEqual({ kind: "read", units: ["lab.queue", "lab.sync", "lab.old.timer", "lab.sync.timer"] });
+      expect(staleUnits(MIXED, read.kind === "read" ? read.units : [])).toEqual(["lab.old.timer"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a schedule dropped takes its timer with it, and a service that becomes a server leaves its timer stale", () => {
+    expect(staleUnits(MIXED, ["lab.sync", "lab.sync.timer", "lab.queue"])).toEqual([]);
+    expect(staleUnits(LAB, ["lab.api", "lab.inference", "lab.sync", "lab.sync.timer"])).toEqual(["lab.sync", "lab.sync.timer"]);
+    const server = lab({ web: { start: "/x", port: 3050 }, sync: { start: "/y", port: 3051, internal: true } });
+    expect(staleUnits(server, ["lab.sync", "lab.sync.timer"])).toEqual(["lab.sync.timer"]);
+  });
+
+  test("removed, the timers go first, so that none starts its service on the way out", () => {
+    expect(removeUnitsCommand(["lab.sync", "lab.sync.timer"])).toBe(
+      "sudo systemctl disable --now lab.sync.timer lab.sync.service 2>/dev/null || true && " +
+        "sudo rm -f /etc/systemd/system/lab.sync.timer /etc/systemd/system/lab.sync.service && sudo systemctl daemon-reload",
+    );
+  });
+
+  test("a timer is asked of systemd by its own name, and judged as one", () => {
+    expect(unitOriginsCommand("lab", ["lab", "lab.sync", "lab.sync.timer"])).toInclude('case "$u" in *.timer) n="$u";; *) n="$u.service";; esac;');
+    const root = mkdtempSync(join(tmpdir(), "sitesolide-origins-"));
+    try {
+      const units = join(root, "units");
+      Bun.spawnSync(["mkdir", "-p", units, join(root, "bin")]);
+      const timer = generateUnits(MIXED, PLACEHOLDERS).find(({ unit }) => unit === "lab.sync.timer")!.text;
+      writeFileSync(join(units, "lab.sync.timer"), timer);
+      writeFileSync(join(root, "vendor.timer"), "[Timer]\nOnCalendar=daily\n");
+      // A systemctl that knows deploy's timer, and a package's under the
+      // name of a second one; it is asked `<name>.service` for a service.
+      writeFileSync(
+        join(root, "bin", "systemctl"),
+        [
+          "#!/bin/sh",
+          "property=$3; unit=$5",
+          `case "$unit" in`,
+          `  lab.sync.timer) state=loaded; file=${units}/lab.sync.timer ;;`,
+          `  lab.nightly.timer) state=loaded; file=${root}/vendor.timer ;;`,
+          "  *) state=not-found; file= ;;",
+          "esac",
+          '[ "$property" = LoadState ] && echo "$state" || echo "$file"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const asked = ["lab.sync", "lab.sync.timer", "lab.nightly.timer"];
+      const script = unitOriginsCommand("lab", asked).replace(/^sudo sh -c '/, "").replace(/'$/, "");
+      const output = Bun.spawnSync(["sh", "-c", script], { env: { PATH: `${join(root, "bin")}:/usr/bin:/bin` } }).stdout.toString();
+      const read = readUnitOrigins(output, asked);
+      if (read.kind !== "read") throw new Error(`unreadable: ${output}`);
+      // The service was asked as lab.sync.service, which this systemctl does not know.
+      expect(read.facts.get("lab.sync")).toEqual({ loadState: "not-found", fragmentPath: "", generated: false, project: false });
+      expect(read.facts.get("lab.sync.timer")).toEqual({ loadState: "loaded", fragmentPath: join(units, "lab.sync.timer"), generated: true, project: false });
+      expect(foreignUnit("lab.sync.timer", "lab", read.facts.get("lab.sync.timer")!, units)).toBeNull();
+      expect(foreignUnit("lab.nightly.timer", "lab", read.facts.get("lab.nightly.timer")!, units)).toBe(
+        `lab.nightly.timer is already a timer of the machine, read from ${join(root, "vendor.timer")}`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("removing the project takes every unit, the timers first", () => {
+    const [unit] = removalActions({ slug: "lab", isApplication: true, secrets: [], units: unitNames(MIXED) });
+    expect(unit!.command).toBe(
+      "sudo systemctl disable --now lab.sync.timer lab lab.sync.service lab.queue.service 2>/dev/null || true && " +
+        "sudo rm -f /etc/systemd/system/lab.sync.timer /etc/systemd/system/lab.service /etc/systemd/system/lab.sync.service /etc/systemd/system/lab.queue.service && " +
+        "sudo systemctl daemon-reload",
+    );
+    // An anchored project: its anchor goes with its services and timers.
+    const anchored = lab({ report: { start: "/x", schedule: "daily" } });
+    const [anchor] = removalActions({ slug: "lab", isApplication: true, secrets: [], units: unitNames(anchored) });
+    expect(anchor!.command).toStartWith("sudo systemctl disable --now lab.report.timer lab lab.report.service 2>/dev/null || true");
+  });
+});
+
+describe("the schedules, read by systemd on the machine", () => {
+  /** What `systemd-analyze calendar` accepts here: these three expressions, nothing else. */
+  function check(schedules: string[]): string {
+    const root = mkdtempSync(join(tmpdir(), "sitesolide-calendar-"));
+    try {
+      writeFileSync(
+        join(root, "systemd-analyze"),
+        ["#!/bin/sh", '[ "$1" = calendar ] || exit 2', 'case "$2" in', '  hourly|"*:0/15"|"Mon..Fri 08:00") exit 0 ;;', "esac", "exit 1", ""].join("\n"),
+        { mode: 0o755 },
+      );
+      const script = scheduleCheckCommand(schedules).replace(/^sh -c '/, "").replace(/'$/, "");
+      return Bun.spawnSync(["sh", "-c", script], { env: { PATH: `${root}:/usr/bin:/bin` }, cwd: root }).stdout.toString();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  test("each expression asked as written, a star and a space included, one answer each and the end marker", () => {
+    expect(scheduleCheckCommand(["hourly", "Mon..Fri 08:00"])).toBe(
+      `sh -c 'if systemd-analyze calendar "hourly" >/dev/null 2>&1; then echo OK; else echo BAD; fi; ` +
+        `if systemd-analyze calendar "Mon..Fri 08:00" >/dev/null 2>&1; then echo OK; else echo BAD; fi; echo ${MARKER_DONE}'`,
+    );
+    const schedules = ["hourly", "*:0/15", "every day", "Mon..Fri 08:00"];
+    expect(readScheduleCheck(check(schedules), schedules)).toEqual(["every day"]);
+    expect(readScheduleCheck(check(["hourly"]), ["hourly"])).toEqual([]);
+  });
+
+  test("an expression validate() refuses is never sent to a shell", () => {
+    for (const schedule of ["daily'; reboot; '", "$(reboot)", 'daily" ; reboot ; "', "daily\nreboot"]) {
+      expect(() => scheduleCheckCommand([schedule])).toThrow(/invalid schedule/);
+    }
+  });
+
+  test("an answer without its marker, or with an answer missing or unknown, is unreadable", () => {
+    expect(readScheduleCheck("", ["hourly"])).toBeNull();
+    expect(readScheduleCheck("OK\n", ["hourly"])).toBeNull();
+    expect(readScheduleCheck(`${MARKER_DONE}\n`, ["hourly"])).toBeNull();
+    expect(readScheduleCheck(`OK\nOK\n${MARKER_DONE}\n`, ["hourly"])).toBeNull();
+    expect(readScheduleCheck(`MAYBE\n${MARKER_DONE}\n`, ["hourly"])).toBeNull();
+    expect(readScheduleCheck(`BAD\nOK\n${MARKER_DONE}\n`, ["daily", "hourly"])).toEqual(["daily"]);
+  });
+});
+
+describe("how the services stand after their restart", () => {
+  const UNITS = ["lab", "lab.queue"];
+
+  /** `systemctl show` as systemd prints it: the service's own properties before the unit's, a blank line between units. */
+  function shown(standings: [id: string, active: string, sub: string, restarts: number][]): string {
+    const blocks = standings.map(([id, active, sub, restarts]) => `NRestarts=${restarts}\nId=${id}\nActiveState=${active}\nSubState=${sub}\n`);
+    return `${blocks.join("\n")}${MARKER_DONE}\n`;
+  }
+
+  test("asked without sudo, the main unit as it always was, a secondary with its type", () => {
+    expect(stabilityCommand(UNITS)).toBe(`systemctl show -p Id -p ActiveState -p SubState -p NRestarts lab lab.queue.service && echo ${MARKER_DONE}`);
+    expect(() => stabilityCommand(["lab; reboot"])).toThrow(/invalid unit/);
+  });
+
+  test("each unit read by its Id, whatever the order systemd prints", () => {
+    const read = readStability(shown([["lab.service", "active", "running", 0], ["lab.queue.service", "active", "running", 3]]), UNITS);
+    expect(read).toEqual(
+      new Map([
+        ["lab", { active: "active", sub: "running", restarts: 0 }],
+        ["lab.queue", { active: "active", sub: "running", restarts: 3 }],
+      ]),
+    );
+  });
+
+  test("a unit missing from the answer, or no marker, is unreadable", () => {
+    expect(readStability(shown([["lab.service", "active", "running", 0]]), UNITS)).toBeNull();
+    expect(readStability(shown([["lab.service", "active", "running", 0], ["lab.queue.service", "active", "running", 0]]).replace(MARKER_DONE, ""), UNITS)).toBeNull();
+    expect(readStability("", UNITS)).toBeNull();
+  });
+
+  test("a service that held is never named; one that fell or was restarted meanwhile is, with what was seen", () => {
+    const before = readStability(shown([["lab.service", "active", "running", 0], ["lab.queue.service", "active", "running", 1]]), UNITS)!;
+    const held = readStability(shown([["lab.service", "active", "running", 0], ["lab.queue.service", "active", "running", 1]]), UNITS)!;
+    expect(unstableUnits(before, held)).toEqual([]);
+    const fell = readStability(shown([["lab.service", "failed", "failed", 0], ["lab.queue.service", "activating", "auto-restart", 4]]), UNITS)!;
+    expect(unstableUnits(before, fell)).toEqual([
+      "lab.service is failed (failed)",
+      "lab.queue.service is activating (auto-restart), restarted 3 time(s) by systemd",
+    ]);
+    // Up again by the second reading, but restarted by systemd in between: it fell all the same.
+    const flapped = readStability(shown([["lab.service", "active", "running", 2], ["lab.queue.service", "active", "running", 1]]), UNITS)!;
+    expect(unstableUnits(before, flapped)).toEqual(["lab.service is active (running), restarted 2 time(s) by systemd"]);
   });
 });

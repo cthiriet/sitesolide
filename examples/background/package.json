@@ -1,0 +1,10 @@
+{
+  "name": "background",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "web": "bun --hot web.ts",
+    "worker": "bun run worker.ts",
+    "tally": "bun run tally.ts"
+  }
+}

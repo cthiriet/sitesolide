@@ -21,6 +21,8 @@ import { reread } from "../src/secrets/log";
 import type { LogEntry } from "../src/secrets/protocol";
 import { createSteward, type StewardHandler } from "../src/secrets/steward";
 import { createSystem, type Command, type System } from "../src/secrets/system";
+import type { Manifest } from "../borrowed/manifest";
+import { generateUnits } from "../borrowed/unit";
 import { memoryAccess, registryOf, writeRegistry, type People } from "./registry-fixtures";
 
 /**
@@ -64,6 +66,8 @@ type Bench = {
   seed: (people: People, creators?: string[]) => void;
   /** The tokens revocations the steward asked for: who, and under whom. */
   revoked: [string, string][];
+  /** Units that stand `active (exited)` rather than running: anchors. */
+  exited: Set<string>;
 };
 
 async function mount(): Promise<Bench> {
@@ -105,6 +109,7 @@ async function mount(): Promise<Bench> {
   const clock = { t: Date.now() };
   const calls: string[][] = [];
   const barrier: Bench["barrier"] = { promise: null };
+  const exited = new Set<string>();
   const real = createSystem({
     sitesDir: sites,
     secretsFolder: secrets,
@@ -127,7 +132,9 @@ async function mount(): Promise<Bench> {
     systemctl: async (arguments_): Promise<Command> => {
       calls.push(arguments_);
       if (arguments_[0] === "restart" && barrier.promise !== null) await barrier.promise;
-      if (arguments_[0] === "show") return { code: 0, output: "LoadState=loaded\nActiveState=active\nSubState=running\nNRestarts=0\nActiveEnterTimestamp=\n" };
+      if (arguments_[0] === "show") {
+        return { code: 0, output: `LoadState=loaded\nActiveState=active\nSubState=${exited.has(arguments_[1]!) ? "exited" : "running"}\nNRestarts=0\nActiveEnterTimestamp=\n` };
+      }
       return { code: 0, output: "" };
     },
   };
@@ -178,6 +185,7 @@ async function mount(): Promise<Bench> {
     privateKey: () => readPrivateKey(readFileSync(join(portalKey, "assertion.key"), "utf8"))!,
     seed: (people, creators = []) => writeRegistry(state, registryOf(people, creators)),
     revoked,
+    exited,
   };
 }
 
@@ -437,6 +445,22 @@ describe("a person's session", () => {
 });
 
 describe("a person's restart", () => {
+  test("a project whose every service is scheduled restarts through its anchor, which stands active and exited when well", async () => {
+    const bench = await mount();
+    const manifest = { slug: "jobs", services: { sync: { start: "/usr/local/bin/bun run sync.ts", schedule: "hourly" } } } as Manifest;
+    mkdirSync(join(bench.root, "sites", "jobs"));
+    writeFileSync(join(bench.root, "sites", "jobs", "sitesolide.json"), JSON.stringify(manifest));
+    writeFileSync(join(bench.root, "units", "jobs.service"), generateUnits(manifest)[0]!.text);
+    bench.exited.add("jobs");
+    bench.seed({ [ALICE]: { jobs: "developer" } });
+    const session = await sessionOf(bench);
+    const response = await bench.call("POST", "/people/restart", { session, slug: "jobs" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ verdict: { kind: "active", state: "active", subState: "exited" } });
+    expect(bench.calls).toContainEqual(["restart", "jobs"]);
+    expect(bench.journal().at(-1)).toMatchObject({ operation: "restart", result: "ok", actor: ALICE, slug: "jobs" });
+  });
+
   test("a developer restarts their project's service; the journal names them", async () => {
     const bench = await mount();
     withAlice(bench);

@@ -8,7 +8,7 @@ import {
   sidebarShortcut,
   downServices,
 } from "../src/lib/sidebar"
-import { discrepancy, secretFile, portalView, secretProject, service, secretService, site } from "./factory"
+import { discrepancy, secretFile, portalView, scheduledService, secretProject, service, secretService, site } from "./factory"
 
 const NOW = 1_800_000_000_000
 const HOUR = 3600_000
@@ -122,6 +122,14 @@ describe("the machine's indicators", () => {
       site({ slug: "d", type: "static", service: null }),
     ]
     expect(downServices(sites, NOW)).toBe(2)
+  })
+
+  /** Between two runs a scheduled service is inactive, which is what it should be: the anchor says the project runs. */
+  test("a project whose every service is scheduled is not down between its runs; its anchor stopped is", () => {
+    const services = [scheduledService(NOW, { unit: "reports.weekly" })]
+    const armed = site({ slug: "reports", service: service({ subState: "exited" }), services })
+    const stopped = site({ slug: "stopped", service: service({ active: "inactive", subState: "dead" }), services })
+    expect(downServices([armed, stopped], NOW)).toBe(1)
   })
 })
 

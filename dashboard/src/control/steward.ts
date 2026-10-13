@@ -613,6 +613,10 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     const target = slug as string;
     const raw = await system.readManifest(target);
     const parsed = raw === null ? undefined : parseManifest(raw).manifest;
+    // Every declared service, as `sitesolide logs` reads them over SSH: a
+    // scheduled service's runs are in its own journal, what each printed and
+    // how it ended. Neither its timer nor the anchor of a project whose every
+    // service is scheduled runs anything to read, and servicesOf leaves both out.
     const units = parsed === undefined ? [target] : servicesOf(parsed).map((service) => unitArgument(service.unit));
     if (units.length === 0) return failure("not-found", `${target} is a static site: it has no service, hence no journal`);
 

@@ -337,7 +337,8 @@ on screen.
 | `MachinePlate`, `Track` | the plate, reserved for the home page: one bordered panel, the server (its zone, cores, memory and disk) then load, memory and disk; `Track` is a 6 px bar with a 1 px tick across it at each threshold, reused for a service's memory |
 | `Track` (dialogs) | waiting for a long answer: the time actually elapsed on its scale, the usual duration ticked when known, never an invented progress bar |
 | `Command` | a command to type in a terminal, copyable |
-| `serviceWord` | the word and tone of a systemd unit, the same on the home page, the Overview and Secrets |
+| `serviceWord` | the word and tone of a systemd unit, the same on the home page, the Overview and Secrets; *Scheduled* for the anchor of a project whose every service is scheduled, `active (exited)` |
+| `scheduledWord`, `runLines` | a scheduled service's word, *Waiting* between two runs and never *Down*, and its last and next runs under it |
 
 shadcn components available in `src/components/ui/`: `alert`, `alert-dialog`,
 `badge`, `button`, `card`, `dialog`, `dropdown-menu`, `input`, `label`,
@@ -418,7 +419,8 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Discrepancy | Refusal, issues; Error, Warning | Alert, Critical |
 | Verdict | All clear, `N errors, N warnings`, Stale data, No data | OK, Healthy |
 | Age | Updated 26s ago, just now | Last sync |
-| Service | Running, Starting, Restarting, Stopping, Down; Static files, No manifest; Unknown | Up, Offline, Dead |
+| Service | Running, Starting, Restarting, Stopping, Down; Static files, No manifest; Unknown; Scheduled, for a project whose every service is | Up, Offline, Dead |
+| Workers and scheduled services | Background; Runs hourly, or the schedule as written; Waiting, Running, Last run failed, Schedule stopped, No timer, Not loaded; Last run 3h ago, Failed 3h ago: exit code 1, Started 2m ago, Last started 5h ago, No run yet, Next run in 42m; Main unit; Runs in the background, serves no page | Idle, Cron, Job, Daemon, Down for a scheduled service between its runs |
 | General access | General access, Public, Restricted, Anyone with the code, Current; Make public, Restrict; in a disagreement, On the server, In sitesolide.json, Keep Public, Apply Restricted; Preview code, Replace the code, Remove the code; Open to anyone, guarded by the app alone (the exempt paths); See changes in Activity | Door, Gate, Portal on, Portal off, Turn on portal, Behind the portal, Private, Password protected, Enable, Disable |
 | People with access | People with access, Add people, Add, Unlock to add, Remove; Can open, Viewer, Developer, Admin; company account, password access, Password access lasts, No expiry, expires in 5d, Expired, Added by; Can't sign in until company sign-in is set up; Copy message; What each role can do, a disclosure from Can open to Admin, (your role), (you); Also open it | Sharing, Share, Guest, Member, Team, Invite, Permissions, ACL, work account, Super admin, Project admin; an Owner row or rung |
 | People | People, May create projects, Let someone create projects, Allow, Unlock to allow, Remove from every project, Remove expired, Domains; Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
@@ -470,7 +472,11 @@ panel, errors first (a disagreement on general access names each side,
 site. Choose one in its Access section"), then the search, the filters (All,
 Issues, Apps, Static, Restricted, each with its count) and the
 inventory, sites in discrepancy at the top: Site, Address, Access, Service,
-Size. The Access column gives the general access in the Access section's
+Size. A project that serves no page says so under its address, "Runs in the
+background, serves no page"; its Service column sums what its running
+services weigh, a scheduled service between two runs weighing nothing, and
+a project whose every service is scheduled reads *Scheduled* with its next
+run, "next run in 5h". The Access column gives the general access in the Access section's
 words, *Restricted* with the paths "Open to anyone, guarded by the app
 alone", *Public*, or *Anyone with the code* over the code itself with its
 copy and open buttons; a disagreement with `sitesolide.json` in red, in the
@@ -585,10 +591,11 @@ the value in a password field and leaves it empty on a change to keep it; a
 removal retypes the name.
 
 **A site's Overview.** Under the title, the state in one sentence, the
-description and the main address; its discrepancies as banners. Then two
-columns: on the left the site on the machine, **Service**, **Addresses**,
-**Storage**; on the right what opens it and what it keeps, **General
-access** and **Secrets**, each with *Manage* to its section, General access's
+description and the main address, "Runs in the background, serves no page"
+beside it for a project that serves none; its discrepancies as banners. Then
+two columns: on the left the site on the machine, **Service**, **Services**,
+**Addresses**, **Storage**; on the right what opens it and what it keeps,
+**General access** and **Secrets**, each with *Manage* to its section, General access's
 after who has access in a few words, "6 people and 1 domain have access ·
 Manage", *See* for whoever only reads who has access, a Viewer or a
 Developer. **General access** names how the site opens and what that does to a
@@ -599,6 +606,22 @@ with its *Manage* or *See*; **Secrets** shows from Developer up. A Developer or 
 Admin finds *Restart* in **Service**'s header, which confirms, waits for the
 steward's verdict and says it in plain words, or shows the steward's refusal
 as it stands.
+
+**Service** is the project's main unit: *Main service* beside others, and a
+worker's says *Port: None*, since it listens on nothing. For a project whose
+every service is scheduled it is *Main unit*, the anchor, *Scheduled* while
+active, with one sentence on what it does and no gauge. **Services** lists
+every process of a project that runs several, or of one whose every service
+is scheduled, the main one first: its name and unit, then what it receives,
+its paths, *All other paths* or *Internal*, its port; *Background* for a
+worker; for a scheduled service its schedule, *Runs hourly* or the
+expression as written, the timer named in the badge's title. Then its memory
+while it runs, and its word: a scheduled service is *Waiting* between two
+runs, *Running* during one, *Last run failed* in attention, *Schedule
+stopped* or *No timer* in error, with its last run ("Last run 3h ago",
+"Failed 3h ago: exit code 1") and its next ("Next run in 42m") under it.
+The column reads *Receives* when every service is a server, *How it runs*
+otherwise.
 
 **A site's Secrets.** The lock in the header, the same on Access, People,
 Tokens, Backups and Connectors: locked, a single *Unlock changes* button with
@@ -796,7 +819,9 @@ chloe@example.com, a Viewer on `calendar`; editor@example.com, Can open on
 `cms`, whom the dashboard refuses with `can-open-only`; stranger@example.com,
 on no list, refused with `no-role`. It seeds an expired password access on
 `library`, and alice's token `alice-ci`, paused on `photos`, where she is a
-Viewer now. Variants:
+Viewer now. Two projects serve no page: `courier`, a worker beside two
+scheduled services, the hourly one's last run failed outside the showcase,
+and `reports`, whose every service is scheduled. Variants:
 `BENCH_PORT`, `BENCH_STALE=1`, `BENCH_NO_STEWARD=1`, `BENCH_NO_PORTAL=1`,
 `BENCH_NO_SSO=1` (no provider: everyone added gets password access),
 `BENCH_NO_EGRESS=1`, `BENCH_NO_BACKUPS=1`, `BENCH_OLD_STEWARD=1`,
@@ -808,6 +833,7 @@ screenshots of the bench, in light and in dark:
 
 - the home page, Activity, People and Tokens; the five sections of a site,
   the Overview of a service in a restart loop and of a locked static site,
+  of `courier` and of `reports`,
   the Secrets of a site with a write-only file and a subdirectory, and of the
   dashboard itself;
 - at 1440 px, at 1024 px with the sidebar expanded, and at 390 px;

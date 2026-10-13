@@ -38,18 +38,20 @@ describe("systemctl's output", () => {
     });
   });
 
-  test("list-units: four columns, the description dropped, a bullet skipped", () => {
+  test("list-units: four columns, the description dropped, a bullet skipped, services and timers only", () => {
     const output = [
       "caddy.service                 loaded active   running Caddy",
       "● cms.service                 loaded failed   failed  cms, deployed by sitesolide",
       "sitesolide-collector.service  loaded inactive dead    Machine state snapshot for the dashboard",
       "not-a-service.socket          loaded active   running Something else",
+      "cms.report.timer              loaded active   waiting Project cms, schedule of service report",
       "",
     ].join("\n");
     expect(readUnitList(output)).toEqual([
       { name: "caddy.service", load: "loaded", active: "active", sub: "running" },
       { name: "cms.service", load: "loaded", active: "failed", sub: "failed" },
       { name: "sitesolide-collector.service", load: "loaded", active: "inactive", sub: "dead" },
+      { name: "cms.report.timer", load: "loaded", active: "active", sub: "waiting" },
     ]);
   });
 });
@@ -159,6 +161,13 @@ describe("units", () => {
     ]);
   });
 
+  test("a worker crashing in a loop is critical, as any service that runs for good", () => {
+    const results = judgeUnits([unit("cms.queue.service", "activating", "auto-restart")], projects);
+    expect(results.map((r) => [r.id, r.severity, r.verdict, r.summary])).toEqual([
+      ["unit:cms.queue.service", "critical", "fail", "cms.queue.service is activating (auto-restart)"],
+    ]);
+  });
+
   test("the monitor never judges itself, nor a unit that is not loaded, nor the rest of the machine", () => {
     const results = judgeUnits(
       [
@@ -170,6 +179,174 @@ describe("units", () => {
       projects,
     );
     expect(results).toEqual([]);
+  });
+});
+
+/**
+ * What `systemctl list-units --type=service,timer --all --plain --no-legend`
+ * prints for projects with scheduled services: services first, then timers,
+ * each type in the order of its names, the descriptions bin/cli/unit.ts writes.
+ */
+describe("scheduled services and their timers", () => {
+  const projects = new Map([
+    ["cms", "cms"],
+    ["news", "news"],
+    ["sitesolide-landing", "test-zone.invalid"],
+  ]);
+  const listing = (...lines: string[]) => readUnitList(`${lines.join("\n")}\n`);
+  const judged = (...lines: string[]) =>
+    judgeUnits(listing(...lines), projects).map((r) => [r.id, r.slug, r.severity, r.verdict, r.summary]);
+
+  test("between two runs: the service at rest and its timer waiting are fine", () => {
+    expect(
+      judged(
+        "cms.queue.service              loaded active   running Project cms, service queue",
+        "cms.report.service             loaded inactive dead    Project cms, service report",
+        "cms.service                    loaded active   running Project cms",
+        "cms.report.timer               loaded active   waiting Project cms, schedule of service report",
+      ),
+    ).toEqual([
+      ["unit:cms.queue.service", "cms", "critical", "ok", "cms.queue.service is active (running)"],
+      ["unit:cms.report.service", "cms", "warning", "ok", "cms.report.service is inactive (dead), between two scheduled runs"],
+      ["unit:cms.report.timer", "cms", "critical", "ok", "cms.report.timer is active (waiting)"],
+      ["unit:cms.service", "cms", "critical", "ok", "cms.service is active (running)"],
+    ]);
+  });
+
+  test("during a run: the service running, its timer running, both fine", () => {
+    expect(
+      judged(
+        "cms.report.service             loaded active   running Project cms, service report",
+        "cms.service                    loaded active   running Project cms",
+        "cms.report.timer               loaded active   running Project cms, schedule of service report",
+      ),
+    ).toEqual([
+      ["unit:cms.report.service", "cms", "warning", "ok", "cms.report.service is active (running)"],
+      ["unit:cms.report.timer", "cms", "critical", "ok", "cms.report.timer is active (running)"],
+      ["unit:cms.service", "cms", "critical", "ok", "cms.service is active (running)"],
+    ]);
+    expect(
+      judged(
+        "cms.report.service             loaded activating start Project cms, service report",
+        "cms.report.timer               loaded active   running Project cms, schedule of service report",
+      )[0],
+    ).toEqual(["unit:cms.report.service", "cms", "warning", "ok", "cms.report.service is activating (start)"]);
+  });
+
+  test("a failed run is a warning until the next one, pointing at the logs", () => {
+    expect(
+      judged(
+        "● cms.report.service           loaded failed   failed  Project cms, service report",
+        "cms.service                    loaded active   running Project cms",
+        "cms.report.timer               loaded active   waiting Project cms, schedule of service report",
+      ),
+    ).toEqual([
+      [
+        "unit:cms.report.service",
+        "cms",
+        "warning",
+        "fail",
+        "cms.report.service is failed (failed): its last scheduled run failed, see sitesolide logs",
+      ],
+      ["unit:cms.report.timer", "cms", "critical", "ok", "cms.report.timer is active (waiting)"],
+      ["unit:cms.service", "cms", "critical", "ok", "cms.service is active (running)"],
+    ]);
+  });
+
+  test("a timer stopped or failed is critical: nothing will start the service again", () => {
+    for (const [active, sub] of [
+      ["inactive", "dead"],
+      ["failed", "failed"],
+    ] as const) {
+      const results = judged(
+        "cms.report.service             loaded inactive dead    Project cms, service report",
+        "cms.service                    loaded active   running Project cms",
+        `cms.report.timer               loaded ${active} ${sub} Project cms, schedule of service report`,
+      );
+      expect(results).toContainEqual([
+        "unit:cms.report.timer",
+        "cms",
+        "critical",
+        "fail",
+        `cms.report.timer is ${active} (${sub}): the schedule stopped, nothing starts cms.report.service any more`,
+      ]);
+      // The service itself is still at rest, not a second alert for one fact.
+      expect(results).toContainEqual([
+        "unit:cms.report.service",
+        "cms",
+        "warning",
+        "ok",
+        "cms.report.service is inactive (dead), between two scheduled runs",
+      ]);
+    }
+  });
+
+  test("a calendar with no date left is elapsed, which is what it said: fine", () => {
+    expect(
+      judged("cms.report.timer               loaded active   elapsed Project cms, schedule of service report"),
+    ).toEqual([["unit:cms.report.timer", "cms", "critical", "ok", "cms.report.timer is active (elapsed)"]]);
+  });
+
+  test("every service scheduled: the anchor stays active (exited), and is fine", () => {
+    expect(
+      judged(
+        "news.digest.service            loaded inactive dead    Project news, service digest",
+        "news.purge.service             loaded failed   failed  Project news, service purge",
+        "news.service                   loaded active   exited  Project news",
+        "news.digest.timer              loaded active   waiting Project news, schedule of service digest",
+        "news.purge.timer               loaded active   waiting Project news, schedule of service purge",
+      ),
+    ).toEqual([
+      ["unit:news.digest.service", "news", "warning", "ok", "news.digest.service is inactive (dead), between two scheduled runs"],
+      ["unit:news.digest.timer", "news", "critical", "ok", "news.digest.timer is active (waiting)"],
+      [
+        "unit:news.purge.service",
+        "news",
+        "warning",
+        "fail",
+        "news.purge.service is failed (failed): its last scheduled run failed, see sitesolide logs",
+      ],
+      ["unit:news.purge.timer", "news", "critical", "ok", "news.purge.timer is active (waiting)"],
+      ["unit:news.service", "news", "critical", "ok", "news.service is active (exited)"],
+    ]);
+    // An anchor that was stopped stops its timers with it: critical, as any main unit.
+    expect(judged("news.service                   loaded inactive dead    Project news")).toEqual([
+      ["unit:news.service", "news", "critical", "fail", "news.service is inactive (dead)"],
+    ]);
+  });
+
+  test("without a loaded timer, a stopped service is a service that runs for good, stopped", () => {
+    expect(
+      judged(
+        "cms.report.service             loaded inactive dead    Project cms, service report",
+        "cms.report.timer               not-found inactive dead cms.report.timer",
+      ),
+    ).toEqual([["unit:cms.report.service", "cms", "critical", "fail", "cms.report.service is inactive (dead)"]]);
+  });
+
+  test("a main unit never has a timer: a timer bearing a slug alone is somebody else's", () => {
+    expect(
+      judged(
+        "cms.service                    loaded inactive dead    Project cms",
+        "cms.timer                      loaded active   waiting Something of the distribution",
+      ),
+    ).toEqual([["unit:cms.service", "cms", "critical", "fail", "cms.service is inactive (dead)"]]);
+  });
+
+  test("the platform's timers, the distribution's and an unknown project's are not judged", () => {
+    expect(
+      judged(
+        "blog.report.service            loaded failed   failed  Project blog, service report",
+        "sitesolide-collector.service   loaded inactive dead    Machine state snapshot for the dashboard",
+        "apt-daily.timer                loaded inactive dead    Daily apt download activities",
+        "blog.report.timer              loaded inactive dead    Project blog, schedule of service report",
+        "sitesolide-backup.timer        loaded inactive dead    Daily backups",
+        "sitesolide-collector.timer     loaded active   waiting Machine state snapshot, every minute",
+        "sitesolide-monitor.timer       loaded active   waiting Monitor, every minute",
+      ),
+    ).toEqual([
+      ["unit:sitesolide-collector.service", null, "warning", "ok", "sitesolide-collector.service is inactive (dead)"],
+    ]);
   });
 });
 

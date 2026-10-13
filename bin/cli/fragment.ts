@@ -224,9 +224,21 @@ function servicesRoutes(manifest: Manifest, files: FileGeneration): string[] {
 
   if (manifest.publicDir !== undefined) {
     lines.push("", "\t# The rest is served straight by Caddy, without waking a service.", ...fileServer(files));
+  } else if (exposed.length === 0) {
+    // Without this line every path would get an empty 200, a page that looks
+    // served and is not. The address still answers, and a 200: every probe
+    // of the machine, deploy-caddy.sh's and the gatekeeper's, asks it to.
+    lines.push(
+      "\t# No public service and no publicDir: the project runs in the background",
+      "\t# and serves no page, which its address says.",
+      `\trespond "${HEADLESS_ANSWER}" 200`,
+    );
   }
   return lines;
 }
+
+/** What the address of a project that serves no page answers, see isHeadless. */
+export const HEADLESS_ANSWER = "This project runs in the background and serves no page.";
 
 /**
  * The zone, as a fragment writes it: a variable Caddy substitutes while reading

@@ -13,7 +13,7 @@
 | `monitor/` | Every minute, Caddy, the sites over HTTPS, units, disk, certificates and backups, and the alerts when one goes down. |
 | `egress/` | The egress proxy: the hosts each project may reach, and the credentials it is lent. |
 | `docs/` | Install guide, concepts, manifest reference, commands, secrets. |
-| `examples/` | Two projects to deploy as they are: a static site and a Bun app. |
+| `examples/` | Three projects to deploy as they are: a static site, a Bun app, and a worker with a scheduled run. |
 
 The screenshots in `docs/assets/screenshots/`, the README's among them, come
 from the dashboard's page bench, in its showcase mode, with fictitious sites:

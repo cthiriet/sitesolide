@@ -199,13 +199,37 @@ describe("ports", () => {
     expect("allocated" in result && result.allocated).toEqual([{ service: null, port: 3010 }]);
   });
 
-  test("services without ports, each its own, next to the ones named", () => {
-    const object = { slug: "new", publicDir: "p", services: { web: { start: "x" }, api: { start: "y", port: 3005, routes: ["/api/*"] }, jobs: { start: "z", internal: true } } };
+  test("public services without ports, each its own, next to the ones named", () => {
+    const object = { slug: "new", publicDir: "p", services: { web: { start: "x" }, api: { start: "y", port: 3005, routes: ["/api/*"] }, admin: { start: "w", routes: ["/admin/*"] } } };
     const result = allocatePorts(object, takenPorts(deposited, "new"), null);
     expect("allocated" in result && result.allocated).toEqual([
       { service: "web", port: 3006 },
-      { service: "jobs", port: 3007 },
+      { service: "admin", port: 3007 },
     ]);
+  });
+
+  test("a worker and a scheduled service listen on nothing: never a port, the manifest's entries as written", () => {
+    const jobs = { start: "z", internal: true };
+    const sync = { start: "s", schedule: "hourly" };
+    const object = { slug: "new", publicDir: "p", services: { web: { start: "x" }, jobs, sync } };
+    const result = allocatePorts(object, takenPorts(deposited, "new"), null);
+    expect(result).toEqual({ object: { ...object, services: { web: { start: "x", port: 3005 }, jobs, sync } }, allocated: [{ service: "web", port: 3005 }] });
+    // An internal service the machine already gave a port to, from an
+    // installer that gave one to any service that named none, keeps it: its
+    // program listens on the PORT it was told, and losing it would cut it from
+    // its siblings. A scheduled service never gets one back.
+    const previous = { slug: "new", publicDir: "p", services: { web: { start: "x", port: 3020 }, jobs: { ...jobs, port: 3021 }, sync: { start: "s", port: 3022 } } } as Manifest;
+    expect(allocatePorts(object, takenPorts(deposited, "new"), previous)).toMatchObject({
+      allocated: [
+        { service: "web", port: 3020 },
+        { service: "jobs", port: 3021 },
+      ],
+    });
+    // Nothing to choose at all: returned as it is.
+    const background = { slug: "new", services: { jobs, sync } };
+    expect(allocatePorts(background, new Set(), null)).toEqual({ object: background, allocated: [] });
+    expect(leavesPorts(background)).toBe(false);
+    expect(leavesPorts(object)).toBe(true);
   });
 
   test("a manifest that names its ports, or a static site, is returned as it is", () => {

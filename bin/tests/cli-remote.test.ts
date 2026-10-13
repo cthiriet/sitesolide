@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { apiAccess, apiOrigin, checkManifest, describeIdentity, projectEntries, readRemote, readRemoteProject, remoteMode, TOKEN_FILE, type Fetch } from "../cli/remote";
+import { apiAccess, apiOrigin, checkManifest, describeIdentity, projectEntries, readRemote, readRemoteProject, remoteMode, serviceWord, TOKEN_FILE, type Fetch } from "../cli/remote";
 import { createFakeVm, type FakeVm } from "./e2e/fake-vm";
 import { CLI } from "./e2e/run";
 
@@ -406,6 +406,28 @@ describe("the pure parts", () => {
     expect(checkManifest(JSON.stringify({ slug: "shop", start: "x", publicDir: "public" })).errors).toEqual([]);
     expect(checkManifest(JSON.stringify({ slug: "shop", publicDir: "p", services: { web: { start: "x" }, api: { start: "y", routes: ["/api/*"] } } })).errors).toEqual([]);
     expect(checkManifest(JSON.stringify({ slug: "Shop", start: "x" })).errors.length).toBeGreaterThan(0);
+  });
+
+  test("only a public service gets a stand-in port: a worker and a scheduled service listen on nothing", () => {
+    const background = { slug: "relay", services: { queue: { start: "x", internal: true }, sync: { start: "y", schedule: "hourly" } } };
+    expect(checkManifest(JSON.stringify(background)).errors).toEqual([]);
+    expect(checkManifest(JSON.stringify({ ...background, services: { ...background.services, web: { start: "z" } } })).errors).toEqual([]);
+    // A port beside a schedule is still the manifest's own mistake, and said.
+    expect(checkManifest(JSON.stringify({ slug: "relay", services: { sync: { start: "y", schedule: "hourly", port: 3001 } } })).errors).toContainEqual(
+      expect.stringContaining("services.sync.port: a scheduled service listens on nothing"),
+    );
+  });
+
+  test("a scheduled service idle between two runs is not down; a failed run is", () => {
+    const server = { name: null, state: "active", subState: "running", port: 3002 };
+    expect(serviceWord([])).toBe("-");
+    expect(serviceWord([server])).toBe("active");
+    expect(serviceWord([server, { name: "sync", state: "inactive", subState: "dead", port: null, kind: "scheduled" }])).toBe("active");
+    expect(serviceWord([server, { name: "sync", state: "failed", subState: "failed", port: null, kind: "scheduled" }])).toBe("active,failed");
+    expect(serviceWord([{ name: "sync", state: "inactive", subState: "dead", port: null, kind: "scheduled" }])).toBe("scheduled");
+    expect(serviceWord([{ ...server, kind: "worker" }, { name: "queue", state: "activating", subState: "auto-restart", port: null, kind: "worker" }])).toBe("active,activating");
+    // A dashboard from before the kinds: every service counts, as before.
+    expect(serviceWord([server, { name: "sync", state: "inactive", subState: "dead", port: null }])).toBe("active,inactive");
   });
 
   test("what leaves: the code minus its exclusions into app/, the public files into public/", () => {

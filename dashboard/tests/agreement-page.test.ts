@@ -6,7 +6,7 @@ import { MAX_RESTART_MS } from "../src/secrets/protocol";
 import { downServices } from "../web/src/lib/sidebar";
 import { PEAK_WARNING_SHARE, serviceLevel } from "../web/src/lib/gauges";
 import { RESTART_SCALE_MS } from "../web/src/lib/secrets";
-import { siteAddresses } from "../web/src/lib/site-card";
+import { serviceRows, siteAddresses } from "../web/src/lib/site-card";
 import { siteAccess, siteAddress, serviceState, type Mismatch } from "../web/src/lib/sites";
 
 /**
@@ -224,5 +224,99 @@ describe("the page and the server say the same thing", () => {
   /** Waiting on a restart promises a verdict within the minute: the steward has to answer before that. */
   test("the waiting track covers the longest restart the relay waits for", () => {
     expect(RESTART_SCALE_MS).toBeGreaterThanOrEqual(MAX_RESTART_MS);
+  });
+});
+
+// --- Workers and scheduled services ----------------------------------------------
+
+/**
+ * The words of a project's services against the discrepancies, on a second
+ * snapshot: a worker running and down; scheduled services idle, running, with
+ * a failed last run, with their timer stopped or missing; a project whose
+ * every service is scheduled, its anchor active and stopped. Between two runs
+ * a scheduled service is inactive: the page must not say Down where the
+ * discrepancies say nothing, nor Waiting where they say the schedule stopped.
+ */
+describe("a project's services, on their rows and in the discrepancies", () => {
+  const at = (seconds: number) => `@${Math.round(NOW / 1000) + seconds}`;
+  const timer = (active = "active", load = "loaded") => ({
+    LoadState: load,
+    ActiveState: active,
+    SubState: active === "active" ? "waiting" : "dead",
+    LastTriggerUSec: at(-3600),
+    NextElapseUSecRealtime: at(900),
+  });
+  const run = (active: string, result: string, status: string) => ({
+    ...unit(active, active === "active" ? "running" : active === "failed" ? "failed" : "dead", repos),
+    Result: result,
+    ExecMainStatus: status,
+    ExecMainStartTimestamp: at(-3600),
+    ExecMainExitTimestamp: active === "active" ? "" : at(-3500),
+  });
+  const services = (scheduled: Record<string, Record<string, unknown>>) =>
+    JSON.stringify({
+      slug: "x",
+      services: { web: { start: "/srv/sites/x/app/web", port: 3050 }, queue: { start: "/srv/sites/x/app/queue", internal: true }, ...scheduled },
+    });
+  const project = (slug: string, scheduled: Record<string, Record<string, unknown>>, units: Record<string, unknown>) => ({
+    ...folder(slug, services(scheduled).replace('"slug":"x"', `"slug":"${slug}"`).replaceAll("/srv/sites/x/", `/srv/sites/${slug}/`), unit("active", "running", repos)),
+    units: units as Record<string, Record<string, string> | null>,
+  });
+  const hourly = { sync: { start: "/srv/sites/x/app/sync", schedule: "hourly" } };
+  const anchoredManifest = (slug: string) => JSON.stringify({ slug, services: { report: { start: `/srv/sites/${slug}/app/report`, schedule: "daily" } } });
+  const anchor = (active: string) => ({ ...unit(active, active === "active" ? "exited" : "dead", repos), MemoryCurrent: "[not set]", MemoryMax: "infinity" });
+
+  const RAW_SERVICES: Raw = {
+    generated: NOW,
+    zone: "test-zone.invalid",
+    folders: [
+      project("idle", hourly, { "idle.queue": unit("active", "running", repos), "idle.sync": run("inactive", "success", "0"), "idle.sync.timer": timer() }),
+      project("running", hourly, { "running.queue": unit("active", "running", repos), "running.sync": run("active", "success", "0"), "running.sync.timer": timer() }),
+      project("failed-run", hourly, { "failed-run.queue": unit("active", "running", repos), "failed-run.sync": run("failed", "exit-code", "1"), "failed-run.sync.timer": timer() }),
+      project("timer-stopped", hourly, { "timer-stopped.queue": unit("active", "running", repos), "timer-stopped.sync": run("inactive", "success", "0"), "timer-stopped.sync.timer": timer("inactive") }),
+      project("timer-missing", hourly, { "timer-missing.queue": unit("active", "running", repos), "timer-missing.sync": run("inactive", "success", "0"), "timer-missing.sync.timer": timer("inactive", "not-found") }),
+      project("worker-down", hourly, { "worker-down.queue": unit("failed", "failed", repos), "worker-down.sync": run("inactive", "success", "0"), "worker-down.sync.timer": timer() }),
+      { ...folder("armed", anchoredManifest("armed"), anchor("active")), units: { "armed.report": run("inactive", "success", "0"), "armed.report.timer": timer() } },
+      { ...folder("disarmed", anchoredManifest("disarmed"), anchor("inactive")), units: { "disarmed.report": run("inactive", "success", "0"), "disarmed.report.timer": timer("inactive") } },
+    ],
+    codes: "{}",
+    domains: null,
+    ports: [3050],
+    blocks: {},
+    machine: null,
+    previous: null,
+  };
+  const snapshot = buildSnapshot(RAW_SERVICES);
+  const about = (slug: string, name: string) =>
+    snapshot.discrepancies.filter((d) => d.slug === slug && d.message.startsWith(`Service ${name}`) && !d.message.includes("memory peak"));
+
+  test("the snapshot covers every case", () => {
+    expect(snapshot.sites.map((site) => site.slug).sort()).toEqual(RAW_SERVICES.folders.map((one) => one.slug).sort());
+  });
+
+  test("each service's tone is the severity of what the discrepancies say of it", () => {
+    let judged = 0;
+    for (const site of snapshot.sites) {
+      const rows = serviceRows(site, NOW);
+      for (const entry of site.services.filter((one) => !one.main)) {
+        const row = rows.find((candidate) => candidate.unit === `${entry.unit}.service`)!;
+        const found = about(site.slug, entry.name!);
+        const severity = found.some((d) => d.severity === "error") ? "error" : found.length > 0 ? "warning" : null;
+        const tone = row.state.tone === "error" ? "error" : row.state.tone === "attention" ? "warning" : null;
+        expect([site.slug, entry.name, tone]).toEqual([site.slug, entry.name, severity]);
+        judged += 1;
+      }
+    }
+    expect(judged).toBe(14);
+  });
+
+  test("the row's word is the main unit's, in error exactly when the discrepancies say the project is stopped", () => {
+    const stopped = (slug: string) =>
+      snapshot.discrepancies.some((d) => d.slug === slug && (/^Service [a-z-]+ \(/.test(d.message) || d.message.startsWith("App project without")));
+    for (const site of snapshot.sites) {
+      expect([site.slug, serviceState(site).tone === "error"]).toEqual([site.slug, stopped(site.slug)]);
+    }
+    expect(serviceState(snapshot.sites.find((site) => site.slug === "armed")!)).toEqual({ tone: "ok", label: "Scheduled" });
+    expect(downServices(snapshot.sites, NOW)).toBe(1);
   });
 });

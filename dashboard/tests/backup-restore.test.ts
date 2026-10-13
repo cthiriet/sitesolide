@@ -27,8 +27,12 @@ afterAll(() => {
  * systemd as the restore sees it: units that stop and start, and a service
  * that dies at start when its data folder holds a file named `broken`, the
  * way a service refuses a database it cannot read.
+ *
+ * `scheduled`: services their timers start, which the main unit's start
+ * leaves inactive. `anchor`: the main unit runs nothing, and stands
+ * `active (exited)` once started.
  */
-function fakeSystemd(dataDir: string, units: string[]) {
+function fakeSystemd(dataDir: string, units: string[], kinds: { scheduled?: string[]; anchor?: boolean } = {}) {
   const state = new Map(units.map((unit) => [unit, "active"]));
   let restarts = 0;
   const calls: string[] = [];
@@ -44,15 +48,19 @@ function fakeSystemd(dataDir: string, units: string[]) {
           restarts++;
           return { code: 0, output: `LoadState=loaded\nActiveState=activating\nSubState=auto-restart\nNRestarts=${restarts}\nActiveEnterTimestamp=\n` };
         }
+        const running = kinds.anchor === true && unit === units[0] ? "exited" : "running";
         return {
           code: 0,
-          output: `LoadState=loaded\nActiveState=${state.get(unit) === "active" ? "active" : "inactive"}\nSubState=${state.get(unit) === "active" ? "running" : "dead"}\nNRestarts=0\nActiveEnterTimestamp=Sun 2026-10-04 13:00:00.000000 UTC\n`,
+          output: `LoadState=loaded\nActiveState=${state.get(unit) === "active" ? "active" : "inactive"}\nSubState=${state.get(unit) === "active" ? running : "dead"}\nNRestarts=0\nActiveEnterTimestamp=Sun 2026-10-04 13:00:00.000000 UTC\n`,
         };
       case "stop":
         for (const name of rest) if (state.has(name)) state.set(name, "inactive");
         return { code: 0, output: "" };
       case "start":
-        for (const name of units) state.set(name, existsSync(join(dataDir, "broken")) ? (name === units[0] ? "looping" : "inactive") : "active");
+        for (const name of units) {
+          if (kinds.scheduled?.includes(name)) state.set(name, "inactive");
+          else state.set(name, existsSync(join(dataDir, "broken")) ? (name === units[0] ? "looping" : "inactive") : "active");
+        }
         return { code: 0, output: "" };
       case "is-active":
         return { code: 0, output: `${state.get(unit) === "looping" ? "activating" : (state.get(unit) ?? "inactive")}\n` };
@@ -263,6 +271,38 @@ describe.concurrent.skipIf(NO_RESTIC)("a restore", () => {
     const result = await restore({ config, now: time.now, wait: time.wait, log: silent, systemctl: systemd.systemctl }, "cms");
     expect(result.state).toBe("ok");
     expect(readFileSync(join(data, "upload.txt"), "utf8")).toBe("the version of two hours ago");
+  });
+
+  test("a scheduled service: its timer stopped first, on its own, and only what runs for good asked active after the start", async () => {
+    const { config, sites, data, snapshot } = await prepared();
+    const manifest = { slug: "cms", publicDir: "public", services: { web: { start: "bun web.ts", port: 3040 }, worker: { start: "bun worker.ts", internal: true }, sync: { start: "bun sync.ts", schedule: "hourly" } } };
+    writeFileSync(join(sites, "cms", "sitesolide.json"), JSON.stringify(manifest));
+    const systemd = fakeSystemd(data, ["cms", "cms.worker.service", "cms.sync.service", "cms.sync.timer"], { scheduled: ["cms.sync.service"] });
+    const time = clock(T);
+    request(config.stateFolder, "cms", snapshot, T);
+    const result = await restore({ config, now: time.now, wait: time.wait, log: silent, systemctl: systemd.systemctl }, "cms");
+    expect(result.state).toBe("ok");
+    expect(readFileSync(join(data, "upload.txt"), "utf8")).toBe("the version of two hours ago");
+    // No run starts on the data being set aside: the timer goes before the services.
+    expect(systemd.calls.filter((call) => call.startsWith("stop"))).toEqual(["stop cms.sync.timer", "stop cms cms.worker.service cms.sync.service"]);
+    // The scheduled service, inactive between two runs, is not asked to be active once started.
+    const afterStart = systemd.calls.slice(systemd.calls.indexOf("start cms"));
+    expect(afterStart.filter((call) => call.startsWith("is-active"))).toEqual(["is-active cms.worker.service", "is-active cms.sync.timer"]);
+    expect(systemd.state.get("cms.sync.timer")).toBe("active");
+  });
+
+  test("every service scheduled: the anchor, active and exited, is a project that runs again", async () => {
+    const { config, sites, data, snapshot } = await prepared();
+    writeFileSync(join(sites, "cms", "sitesolide.json"), JSON.stringify({ slug: "cms", services: { sync: { start: "bun sync.ts", schedule: "hourly" }, report: { start: "bun report.ts", schedule: "daily" } } }));
+    const units = ["cms", "cms.sync.service", "cms.sync.timer", "cms.report.service", "cms.report.timer"];
+    const systemd = fakeSystemd(data, units, { scheduled: ["cms.sync.service", "cms.report.service"], anchor: true });
+    const time = clock(T);
+    request(config.stateFolder, "cms", snapshot, T);
+    const result = await restore({ config, now: time.now, wait: time.wait, log: silent, systemctl: systemd.systemctl }, "cms");
+    expect(result.state).toBe("ok");
+    expect(result.message).toContain("cms is running.");
+    expect(systemd.calls.filter((call) => call.startsWith("stop"))).toEqual(["stop cms.sync.timer cms.report.timer", "stop cms cms.sync.service cms.report.service"]);
+    expect(JSON.parse(readFileSync(join(config.runFolder, "restore", "cms.json"), "utf8"))).toMatchObject({ state: "ok" });
   });
 
   test("a project with no unit, its data swapped all the same", async () => {

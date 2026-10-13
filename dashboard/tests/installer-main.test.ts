@@ -63,6 +63,7 @@ describe("main", () => {
       },
       asProject: async (run) => (run.purpose === "extract" ? spawn(run.command, 60_000, { stdin: run.stdin }) : { code: 1, output: "unexpected" }),
       nft: async () => ({ code: 1, output: "" }),
+      systemdAnalyze: async () => ({ code: 0, output: "" }),
     };
 
     const code = await main(

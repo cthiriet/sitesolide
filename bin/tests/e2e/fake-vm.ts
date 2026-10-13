@@ -26,7 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HOLDER_NAME, LOCK_NAME } from "../../cli/caddy-lock";
-import { addAccount, DEFAULT_ACCESS, readAccounts, SWITCHES, TEST_HOST, type AccessRegistry } from "./fake-ssh";
+import { addAccount, DEFAULT_ACCESS, readAccounts, SWITCHES, TEST_HOST, type AccessRegistry, type Standing } from "./fake-ssh";
 
 export type FakeVm = {
   /** The folder that stands in for the machine. */
@@ -74,6 +74,10 @@ export type FakeVm = {
   owners(): Record<string, string>;
   /** Lays a static account the machine already carries, with a system uid unless one is given. */
   addAccount(name: string, uid?: number): void;
+  /** The calendar expressions systemd refuses to read, as `systemd-analyze calendar` would on the machine. */
+  refuseSchedules(schedules: string[]): void;
+  /** How the services stand at each reading after the restart, in order; see Standing. */
+  setStandings(readings: Record<string, Standing>[]): void;
   /** The static accounts as /etc/passwd lines: those laid, and those an accepted useradd made. */
   accounts(): string[];
   /** The commands received, one per line: CONNECT, READ <pattern>, REFUSED <command>... */
@@ -186,6 +190,12 @@ export function createFakeVm(): FakeVm {
     },
     addAccount(name, uid) {
       addAccount(root, name, uid);
+    },
+    refuseSchedules(schedules) {
+      writeFileSync(join(root, SWITCHES.refusedSchedules), schedules.map((schedule) => `${schedule}\n`).join(""));
+    },
+    setStandings(readings) {
+      writeFileSync(join(root, SWITCHES.standings), JSON.stringify(readings));
     },
     accounts() {
       return readAccounts(root);

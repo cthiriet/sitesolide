@@ -19,11 +19,11 @@
  * The order, and what differs:
  *
  *   1. the manifest, re-validated with `validate()`, then the token's scope;
- *      missing ports chosen here, the door and the preview lock taken from the
- *      machine, as `deploy` does;
+ *      missing ports chosen here, for the public services alone, the door and
+ *      the preview lock taken from the machine, as `deploy` does;
  *   2. the machine read: the block in service, the unit names systemd already
- *      gives to a service of the machine, the ports, the loopback rule, the
- *      portal's readiness, before anything is written;
+ *      gives to a unit of the machine, the schedules systemd reads, the ports,
+ *      the loopback rule, the portal's readiness, before anything is written;
  *   3. the build happened on the client: the archive carries its result;
  *   4. the account and the directories, then the archive extracted as the
  *      project's account into a staging directory, and `install` run there.
@@ -36,7 +36,10 @@
  *   7. the staged trees put in place of the served ones;
  *   8. the manifest, and the loopback's project set;
  *   9. the declared secrets, checked present, then every service restarted;
- *  10. for an app in the open, its block; then the verification.
+ *  10. for an app in the open, its block; then the verification;
+ *  11. the services that run for good read again once STABILITY_WINDOW_MS has
+ *      passed since their restart: one that fell meanwhile fails the
+ *      deployment, as over SSH.
  *
  * **A new project refused leaves nothing behind.** Its account, its tree and
  * its units are created at steps 4 and 5, before the archive is judged and
@@ -56,10 +59,10 @@
  */
 import { generateFragment, decideBlock } from "../../borrowed/fragment";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts, type ProjectAccount } from "../../borrowed/loopback";
-import { isApp, readManifest, servicesOf, setLock, setPortal, type Manifest } from "../../borrowed/manifest";
+import { isApp, readManifest, scheduledServices, servicesOf, setLock, setPortal, type Manifest } from "../../borrowed/manifest";
 import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "../../borrowed/portal-vm";
-import { domainConflicts, foreignUnit, portConflicts, staleUnits } from "../../borrowed/services";
-import { decideUnit, generateUnits, unitArgument } from "../../borrowed/unit";
+import { domainConflicts, foreignUnit, portConflicts, staleUnits, unstableUnits, type UnitStanding } from "../../borrowed/services";
+import { decideUnit, generateUnits, runningUnits, unitArgument, unitFileName, watchedUnits } from "../../borrowed/unit";
 import { compareDirectives, sameDirectives, summariseDivergence } from "../../borrowed/comparison";
 import { isPortalReady, portalHost, fromPortal, answers, describe } from "../gatekeeper/probe";
 import { TIMEOUTS } from "../gatekeeper/transaction";
@@ -67,6 +70,16 @@ import { allocatePorts, decideDoor, scopeRefusals, takenPorts } from "../control
 import type { InstallRequest } from "../control/protocol";
 import { installBlock } from "./caddy";
 import type { Host, Part } from "./host";
+
+/**
+ * How long after their restart the services that run for good must still be
+ * running, and never restarted by systemd meanwhile, for the deployment to
+ * succeed: the window `sitesolide deploy` watches over SSH. A service started
+ * with `Type=simple` is `active` as soon as it is spawned, and one that falls
+ * a second later passed the restart's `is-active`; only a second reading
+ * sees it. The wait overlaps the Caddy step and the verification.
+ */
+export const STABILITY_WINDOW_MS = 10_000;
 
 export type PipelineOptions = {
   zone: string;
@@ -201,6 +214,8 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
   // stop keeps what this run created, see undoCreation.
   let served = false;
   let succeeded = false;
+  // The services that run for good as read right after their restart, see step 11.
+  let stability: Stability | null = null;
   const unlock = () => {
     if (release !== null) {
       release();
@@ -244,9 +259,25 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     if (application) {
       for (const { unit } of generateUnits(manifest)) {
         const facts = await host.unitFacts(slug, unit);
-        if (facts === null) throw new Stop("machine-unreadable", `cannot tell whether systemd already runs a service named ${unit}: nothing was changed`);
+        if (facts === null) throw new Stop("machine-unreadable", `cannot tell whether systemd already runs a unit named ${unitFileName(unit)}: nothing was changed`);
         const foreign = foreignUnit(unit, slug, facts, host.unitsFolder);
         if (foreign !== null) throw new Stop("system-unit", `${foreign}: ${slug} is the name of a service of the machine, which a deployment never replaces; nothing was changed, pick another slug`);
+      }
+    }
+    // validate() only knows a schedule is safe to write: whether it is a
+    // time is systemd's to say, and a timer it cannot read is laid, loaded,
+    // and never starts anything. Asked before anything is written, as
+    // `deploy` asks, see scheduleCheckCommand in services.ts.
+    const scheduled = scheduledServices(manifest);
+    if (scheduled.length > 0) {
+      const refused = await host.refusedSchedules(scheduled.map((service) => service.schedule!));
+      if (refused === null) throw new Stop("machine-unreadable", "cannot ask systemd whether it reads the schedules: nothing was changed");
+      if (refused.length > 0) {
+        const named = scheduled.filter((service) => refused.includes(service.schedule!));
+        throw new Stop(
+          "invalid-manifest",
+          `${named.map((service) => `services.${service.name}.schedule: systemd does not read ${JSON.stringify(service.schedule)} as a time`).join("; ")}; write it as OnCalendar= takes it, such as hourly, daily, *:0/15 or "Mon..Fri 08:00", which systemd-analyze calendar checks: nothing was changed`,
+        );
       }
     }
     // A backup command reaches its service on its port, through the same set.
@@ -316,27 +347,30 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
       // what starts the others at boot.
       const [main] = decisions;
       if (main !== undefined && main.action === "diverged" && decisions.length > 1) {
-        throw handEdited(`/etc/systemd/system/${main.unit}.service`, main.installed, main.generated);
+        throw handEdited(`/etc/systemd/system/${unitFileName(main.unit)}`, main.installed, main.generated);
       }
       let changed = false;
       for (const decision of decisions) {
         if (decision.action === "present") {
-          host.log(`   unchanged  ${decision.unit}.service`);
+          host.log(`   unchanged  ${unitFileName(decision.unit)}`);
           continue;
         }
         if (decision.action === "diverged") {
-          host.log(`   differs    ${decision.unit}.service, edited by hand on the machine: left as it is, so a changed port, memory or env has no effect until the owner deploys with --force`);
+          host.log(`   differs    ${unitFileName(decision.unit)}, edited by hand on the machine: left as it is, so a changed port, memory, schedule or env has no effect until the owner deploys with --force`);
           continue;
         }
         await host.installUnit(decision.unit, decision.generated);
         if (decision.absent) created.units.push(decision.unit);
-        host.log(`   installed  ${decision.unit}.service`);
+        host.log(`   installed  ${unitFileName(decision.unit)}`);
         changed = true;
       }
+      // A service or a schedule dropped from the manifest takes its unit
+      // with it, a timer included: left, it would go on starting a service
+      // that no longer exists, or one that now runs for good.
       const stale = staleUnits(manifest, await host.generatedUnits(slug));
       if (stale.length > 0) {
         await host.removeUnits(stale);
-        for (const unit of stale) host.log(`   removed    ${unit}.service, no longer declared`);
+        for (const unit of stale) host.log(`   removed    ${unitFileName(unit)}, no longer declared`);
       }
       if (changed) await host.enable(slug);
     }
@@ -414,12 +448,17 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
           );
         }
       }
-      const names = units.map(({ unit }) => unitArgument(unit));
-      host.log(units.length > 1 ? "-> services restart" : "-> service restart");
+      // Every unit but the scheduled services, which their timers start:
+      // restarted, one would run at once, outside its schedule, and an idle
+      // one is inactive by design. The main unit's restart reaches a run in
+      // progress through its PartOf, and leaves an idle one idle.
+      const names = runningUnits(manifest).map(unitArgument);
+      host.log(names.length > 1 ? "-> services restart" : "-> service restart");
       const restarted = await host.restart(names);
       if (restarted.code !== 0) {
         throw new Stop("service-failed", `${names.join(", ")} did not come back active (${restarted.output.trim().split("\n").join(", ") || "no answer"}): read sitesolide logs`);
       }
+      stability = await firstReading(host, watchedUnits(manifest));
 
       // --- 10. an open app's block, then the verification ---------------------------
       if (block !== null && !behindPortal) {
@@ -450,6 +489,9 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
       }
       host.log(`   ${url} ${"code" in answer ? answer.code : ""}`);
     }
+
+    // --- 11. the services, a while after their restart -------------------------------
+    if (stability !== null) await secondReading(host, stability);
     succeeded = true;
     return { ok: true, url, allocated };
   } catch (error) {
@@ -465,6 +507,48 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     }
     if (!succeeded && !served) await undoCreation(host, slug, created);
   }
+}
+
+/** The services that run for good, as read right after their restart. */
+type Stability = { units: string[]; at: number; before: Map<string, UnitStanding> };
+
+/**
+ * How the servers and the workers stand right after their restart: the
+ * reading the second one is compared with. Null when there is none to watch,
+ * a project whose every service is scheduled, or when systemctl did not
+ * answer, which is said and fails nothing: the restart's `is-active` passed.
+ */
+async function firstReading(host: Host, units: string[]): Promise<Stability | null> {
+  if (units.length === 0) return null;
+  const at = host.machine.now();
+  const before = await host.standing(units);
+  if (before === null) {
+    host.log("   !! how the services stand could not be read: whether they hold is not checked");
+    return null;
+  }
+  return { units, at, before };
+}
+
+/**
+ * The second reading, once STABILITY_WINDOW_MS has passed since the first:
+ * a unit no longer active, or restarted by systemd meanwhile, fails the
+ * deployment, named with what was seen. Everything is in place by then, as
+ * after a failed verification: the owner reads the logs, fixes, deploys again.
+ */
+async function secondReading(host: Host, stability: Stability): Promise<void> {
+  const remaining = stability.at + STABILITY_WINDOW_MS - host.machine.now();
+  host.log(`-> ${stability.units.length > 1 ? "services" : "service"}, ${STABILITY_WINDOW_MS / 1000} s after the restart`);
+  if (remaining > 0) await host.machine.wait(remaining);
+  const after = await host.standing(stability.units);
+  if (after === null) {
+    host.log("   !! how the services stand could not be read: whether they hold is not checked");
+    return;
+  }
+  const fallen = unstableUnits(stability.before, after);
+  if (fallen.length > 0) {
+    throw new Stop("service-failed", `${fallen.join("; ")}, within ${STABILITY_WINDOW_MS / 1000} s of the restart: the files are in place; read sitesolide logs`);
+  }
+  host.log(`   ${stability.units.map(unitFileName).join(", ")} still running`);
 }
 
 /** What this run created on the machine, as opposed to what it found there. */
@@ -489,7 +573,7 @@ async function undoCreation(host: Host, slug: string, created: Created): Promise
   try {
     if (created.units.length > 0) {
       await host.removeUnits(created.units);
-      for (const unit of created.units) host.log(`   removed    ${unit}.service`);
+      for (const unit of created.units) host.log(`   removed    ${unitFileName(unit)}`);
     }
     if (!(await host.removeTree(slug))) {
       host.log(`   !! /srv/sites/${slug} carries a manifest deposited in the meantime: left as it is${created.account ? `, and site-${slug} with it` : ""}`);
@@ -533,7 +617,8 @@ async function rebuildProjectPorts(host: Host, strict: boolean): Promise<void> {
   for (const [folder, raw] of manifests) {
     const { manifest } = readManifest(raw);
     if (manifest === undefined || !reachesOwnPorts(manifest)) continue;
-    const ports = servicesOf(manifest).map((service) => service.port);
+    // A worker or a scheduled service declares no port, and has none to check.
+    const ports = servicesOf(manifest).flatMap((service) => (service.port === null ? [] : [service.port]));
     if (manifest.slug !== folder || !ports.every((port) => Number.isInteger(port) && port >= 3000 && port <= 3099)) continue;
     projects.push(manifest);
   }

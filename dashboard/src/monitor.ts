@@ -11,7 +11,10 @@
  *
  * Three kinds are left out, a project's unit, the disk and the memory: the
  * dashboard already judges them from the collector's own reading, and two rows
- * for one fact would only make the list longer.
+ * for one fact would only make the list longer. A project's units are all of
+ * them, `unit:<name>.service` and `unit:<name>.timer` alike: a worker down, a
+ * scheduled service's failed run and its timer stopped are judged in
+ * src/state.ts, which reads every unit the manifest generates.
  *
  * The status is read defensively, field by field: the monitor and the
  * dashboard are deployed separately, either may be older than the other, and
@@ -33,7 +36,11 @@ import type { Discrepancy } from "./state";
  */
 export const MONITOR_STALE_MS = 5 * 60 * 1000;
 
-/** Judged elsewhere on this page, from the collector's own reading. */
+/**
+ * Judged elsewhere on this page, from the collector's own reading. `unit`
+ * covers timers and scheduled services too, see scheduleDiscrepancies in
+ * src/state.ts.
+ */
 const ALREADY_SHOWN = new Set(["unit", "disk", "memory"]);
 
 type Problem = { kind: string; severity: string; slug: string | null; summary: string; since: number | null };

@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import type { Manifest } from "../borrowed/manifest";
+import { generateUnits } from "../borrowed/unit";
 import {
   STABLE_WINDOW_MS,
+  isAnchorUnit,
   showArguments,
   readUsTimestamp,
   readShow,
@@ -195,6 +198,36 @@ describe("verdict", () => {
   test("the order of the readings received does not matter", () => {
     const readings = ordered((ms) => (ms >= 1000 ? { state: "failed", subState: "failed" } : {})).reverse();
     expect(verdict(readings).kind).toBe("failure");
+  });
+});
+
+describe("an anchor, the main unit of a project whose every service is scheduled", () => {
+  const exited = (ms: number): Partial<ServiceReading> => (ms < 500 ? { state: "activating", subState: "start" } : { subState: "exited" });
+
+  test("active and exited is its running", () => {
+    expect(verdict(ordered(exited), { anchor: true })).toEqual({ kind: "active", state: "active", subState: "exited", restarts: 0 });
+    // Any other unit exited has stopped running its program.
+    expect(verdict(ordered(exited)).kind).toBe("failure");
+  });
+
+  test("a program running is no anchor's, and an anchor stopped within the window is a failure", () => {
+    expect(verdict(ordered(() => ({})), { anchor: true }).kind).toBe("failure");
+    expect(verdict(ordered((ms) => (ms >= 6000 ? { state: "inactive", subState: "dead" } : { subState: "exited" })), { anchor: true }).kind).toBe("failure");
+    expect(verdict(ordered(() => ({ state: "failed", subState: "failed" })), { anchor: true }).kind).toBe("failure");
+  });
+
+  test("recognised from its unit: a oneshot that remains after its exit, whatever the comments say", () => {
+    const anchored = { slug: "jobs", services: { sync: { start: "/usr/local/bin/bun run sync.ts", schedule: "hourly" } } } as Manifest;
+    const [anchor, service, timer] = generateUnits(anchored);
+    expect(isAnchorUnit(anchor!.text)).toBe(true);
+    expect(isAnchorUnit(service!.text)).toBe(false);
+    expect(isAnchorUnit(timer!.text)).toBe(false);
+    const server = { slug: "shop", start: "/usr/local/bin/bun run server.ts", port: 3040 } as Manifest;
+    expect(isAnchorUnit(generateUnits(server)[0]!.text)).toBe(false);
+    expect(isAnchorUnit("[Service]\nType=oneshot\nRemainAfterExit=true\n")).toBe(true);
+    expect(isAnchorUnit("[Service]\nType=oneshot\n# RemainAfterExit=yes\n")).toBe(false);
+    expect(isAnchorUnit("[Service]\nType=oneshot\nRemainAfterExit=yes\nRemainAfterExit=no\n")).toBe(false);
+    expect(isAnchorUnit("[Unit]\nType=oneshot\nRemainAfterExit=yes\n")).toBe(false);
   });
 });
 

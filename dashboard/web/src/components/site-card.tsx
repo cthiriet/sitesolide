@@ -1,5 +1,5 @@
 import { useId, type ReactNode } from "react"
-import { FileCode2, Globe, KeyRound, Lock, ShieldCheck, ShieldOff, ShieldX, type LucideIcon } from "lucide-react"
+import { CalendarClock, Cog, FileCode2, Globe, KeyRound, Lock, ShieldCheck, ShieldOff, ShieldX, type LucideIcon } from "lucide-react"
 import { Track } from "@/components/gauge"
 import { ExternalLink } from "@/components/link"
 import { Banner, Panel, Status } from "@/components/page"
@@ -154,7 +154,7 @@ export function ServicePanel({ site, now, action }: { site: Site; now: number; a
 
   return (
     <Panel
-      title={site.services.length > 1 ? "Main service" : "Service"}
+      title={card.title}
       full
       actions={
         card.unit === null && action === undefined ? undefined : (
@@ -172,21 +172,39 @@ export function ServicePanel({ site, now, action }: { site: Site; now: number; a
           </Status>
           {card.systemd !== null && <span className="text-xs text-muted-foreground">{card.systemd}</span>}
         </div>
-        {card.gauge !== null ? (
-          <MemoryGauge gauge={card.gauge} />
-        ) : card.unit === null ? (
-          <p className="text-muted-foreground">No systemd unit is loaded for this app: nothing answers behind Caddy.</p>
-        ) : (
-          <p className="text-muted-foreground">The service isn't running, so it has no memory in use.</p>
-        )}
+        {card.gauge !== null ? <MemoryGauge gauge={card.gauge} /> : <p className="text-muted-foreground">{card.note}</p>}
       </div>
       <FactList facts={card.facts} className="border-t" />
     </Panel>
   )
 }
 
-/** What reaches a service, as a badge: its paths, the rest of the site, or the project alone. */
+/**
+ * What reaches a service, or what starts it, as a badge: its paths, the rest
+ * of the site, the project alone; nothing for a worker; its timer for a
+ * scheduled service, its schedule in words or as written.
+ */
 function ReachBadges({ reach }: { reach: Reach }) {
+  if (reach.kind === "background") {
+    return (
+      <Badge variant="secondary" className="rounded-md" title="A worker: it runs for good, in the background, and listens on nothing">
+        <Cog aria-hidden="true" />
+        Background
+      </Badge>
+    )
+  }
+  if (reach.kind === "scheduled") {
+    return (
+      <Badge
+        variant="secondary"
+        className={cn("rounded-md", reach.words === null && "font-mono")}
+        title={`Started by its timer, ${reach.timer}, at the times its schedule names; nothing runs between two runs`}
+      >
+        <CalendarClock aria-hidden="true" />
+        {reach.words ?? reach.expression}
+      </Badge>
+    )
+  }
   if (reach.kind === "internal") {
     return (
       <Badge variant="secondary" className="rounded-md" title="Called by the project's other services, never by visitors">
@@ -242,13 +260,25 @@ function MemoryLine({ row }: { row: ServiceRow }) {
   )
 }
 
-function StateLine({ row, className }: { row: ServiceRow; className?: string }) {
+/**
+ * The word, then what it adds: the restarts, and for a scheduled service its
+ * last run and its next. A failed run takes the warning's tone.
+ */
+function StateLine({ row, end = false }: { row: ServiceRow; end?: boolean }) {
+  const last = row.runs?.last ?? null
+  const next = row.runs?.next ?? null
   return (
-    <span className={cn("grid justify-items-start gap-0.5", className)}>
+    <span className={cn("grid gap-0.5", end ? "justify-items-end text-right" : "justify-items-start")}>
       <Status tone={row.state.tone} className={row.state.tone === "ok" ? undefined : "font-medium"}>
         {row.state.label}
       </Status>
       {row.restarts !== null && <span className="text-xs text-attention-text tabular-nums">{row.restarts}</span>}
+      {last !== null && (
+        <span className={cn("text-xs tabular-nums", last.tone === "attention" ? "text-attention-text" : "text-muted-foreground")}>
+          {last.text}
+        </span>
+      )}
+      {next !== null && <span className="text-xs text-muted-foreground tabular-nums">{next}</span>}
     </span>
   )
 }
@@ -257,21 +287,36 @@ const SERVICES_HEAD = "h-10 px-3 text-xs font-medium text-muted-foreground"
 const SERVICES_CELL = "px-3 py-3 align-top whitespace-normal"
 
 /**
+ * The second column's heading: what a server receives, or, beside a worker or
+ * a scheduled service, which receive nothing, how each one runs.
+ */
+function reachHeading(rows: readonly ServiceRow[]): string {
+  return rows.every((row) => row.kind === "server") ? "Receives" : "How it runs"
+}
+
+/** The panel's sentence, naming only the kinds the project has. */
+function servicesDescription(rows: readonly ServiceRow[]): string {
+  const parts: string[] = []
+  if (rows.some((row) => row.kind === "server")) {
+    parts.push("Caddy sends each request to the service that claims its path. An internal service is only called by the others.")
+  }
+  if (rows.some((row) => row.kind === "worker")) parts.push("A worker runs in the background and listens on nothing.")
+  if (rows.some((row) => row.kind === "scheduled")) parts.push("A scheduled service runs at the times its schedule names, and nothing between two runs.")
+  return parts.join(" ")
+}
+
+/**
  * The processes of a project that runs several: what each one is, what
  * reaches it, what it weighs and how it runs. A table where there is room, a
  * card per service below that. Nothing for a single service, which the
- * Service panel already describes whole.
+ * Service panel already describes whole, unless it is scheduled: the Service
+ * panel then describes the project's anchor.
  */
-export function ServicesPanel({ site }: { site: Site }) {
-  const rows = serviceRows(site)
+export function ServicesPanel({ site, now }: { site: Site; now: number }) {
+  const rows = serviceRows(site, now)
   if (rows.length === 0) return null
   return (
-    <Panel
-      title="Services"
-      count={rows.length}
-      full
-      description="Caddy sends each request to the service that claims its path. An internal service is only called by the others."
-    >
+    <Panel title="Services" count={rows.length} full description={servicesDescription(rows)}>
       <div className="@container">
         <div className="hidden @xl:block">
           <Table>
@@ -279,7 +324,7 @@ export function ServicesPanel({ site }: { site: Site }) {
             <TableHeader className="bg-muted">
               <TableRow className="hover:bg-transparent">
                 <TableHead className={cn(SERVICES_HEAD, "pl-4")}>Service</TableHead>
-                <TableHead className={SERVICES_HEAD}>Receives</TableHead>
+                <TableHead className={SERVICES_HEAD}>{reachHeading(rows)}</TableHead>
                 <TableHead className={SERVICES_HEAD}>Memory</TableHead>
                 <TableHead className={cn(SERVICES_HEAD, "pr-4")}>Status</TableHead>
               </TableRow>
@@ -319,7 +364,7 @@ export function ServicesPanel({ site }: { site: Site }) {
                   <span className="font-medium">{row.name}</span>
                   <Terminal>{row.unit}</Terminal>
                 </span>
-                <StateLine row={row} className="justify-items-end" />
+                <StateLine row={row} end />
               </div>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <ReachBadges reach={row.reach} />

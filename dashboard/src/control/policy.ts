@@ -222,9 +222,31 @@ export function takenPorts(deposited: ReadonlyMap<string, string>, slug: string)
 export type Allocation = { object: Record<string, unknown>; allocated: { service: string | null; port: number }[] } | { refusal: string };
 
 /**
- * Gives a port to every service whose manifest names none: the one it had on
- * the machine if that is still free, the lowest free one of the services' range
- * otherwise. A manifest that names its ports is returned as it is.
+ * Does this entry of `services` want a port the machine chooses? A public
+ * service that names none does. An internal one without a port is a worker,
+ * which listens on nothing, and a scheduled service never listens: a port
+ * handed to either would be held for nothing, one less for the machine's other
+ * projects, and would turn the worker into a server, told a `PORT` it never
+ * opens. Read as written: validate() judges the rest.
+ *
+ * One exception, `kept`: an internal service the machine already gave a port
+ * to, before workers existed, when this function handed one to every service
+ * that named none. Its manifest never wrote that port, its program listens on
+ * the `PORT` it is told, and taking it away at the next deployment would cut
+ * it from its siblings without a word. It keeps it, as the machine says.
+ */
+function wantsPort(service: unknown, kept = false): boolean {
+  if (typeof service !== "object" || service === null || Array.isArray(service)) return false;
+  const entry = service as Record<string, unknown>;
+  if ("port" in entry || "schedule" in entry) return false;
+  return entry.internal !== true || kept;
+}
+
+/**
+ * Gives a port to every public service whose manifest names none: the one it
+ * had on the machine if that is still free, the lowest free one of the
+ * services' range otherwise. A manifest that names its ports is returned as
+ * it is, and so are its workers and its scheduled services, see wantsPort.
  *
  * Works on the parsed object, before `validate()`, which would refuse a
  * missing port. The ports chosen are written into the manifest deposited on the
@@ -255,7 +277,7 @@ export function allocatePorts(object: Record<string, unknown>, taken: ReadonlySe
     }
     const next: Record<string, unknown> = {};
     for (const [name, service] of entries) {
-      if (typeof service !== "object" || service === null || Array.isArray(service) || "port" in service) {
+      if (!wantsPort(service, previousPorts.has(name))) {
         next[name] = service;
         continue;
       }
@@ -263,7 +285,7 @@ export function allocatePorts(object: Record<string, unknown>, taken: ReadonlySe
       if (port === null) return { refusal: `no free port between ${SERVICE_PORTS.first} and ${SERVICE_PORTS.last} on the machine for services.${name}` };
       used.add(port);
       allocated.push({ service: name, port });
-      next[name] = { ...service, port };
+      next[name] = { ...(service as Record<string, unknown>), port };
     }
     return { object: allocated.length === 0 ? object : { ...object, services: next }, allocated };
   }
@@ -280,9 +302,7 @@ export function allocatePorts(object: Record<string, unknown>, taken: ReadonlySe
 /** True when the manifest leaves a port for the machine to choose. */
 export function leavesPorts(object: Record<string, unknown>): boolean {
   if (typeof object.services === "object" && object.services !== null && !Array.isArray(object.services)) {
-    return Object.values(object.services as Record<string, unknown>).some(
-      (service) => typeof service === "object" && service !== null && !Array.isArray(service) && !("port" in service),
-    );
+    return Object.values(object.services as Record<string, unknown>).some((service) => wantsPort(service));
   }
   return typeof object.start === "string" && object.start.length > 0 && !("port" in object);
 }

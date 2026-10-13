@@ -139,7 +139,7 @@ function ServiceCell({ site, now }: { site: Site; now: number }) {
           <span className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">{summary.cpu}</span>
         )}
       </span>
-      {summary.kind === "active" && (
+      {summary.kind === "active" && summary.memory !== null && (
         <span className="flex items-center gap-2 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
           <MemoryBar summary={summary} />
           {summary.memory}
@@ -147,6 +147,9 @@ function ServiceCell({ site, now }: { site: Site; now: number }) {
       )}
       {summary.kind === "active" && summary.services !== null && (
         <span className="text-xs whitespace-nowrap text-muted-foreground">{summary.services}</span>
+      )}
+      {summary.kind === "active" && summary.next !== null && (
+        <span className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">{summary.next}</span>
       )}
       {summary.kind === "stopped" && summary.restarts !== null && (
         <span className="text-xs text-attention-text tabular-nums">{summary.restarts}</span>
@@ -244,7 +247,7 @@ function SiteEntry({ site, severity, now }: RowProps) {
           <span className="text-foreground">
             <AccessWord site={site} large />
           </span>
-          {summary.kind === "active" && (
+          {summary.kind === "active" && summary.memory !== null && (
             <span className="flex items-center gap-1.5 whitespace-nowrap">
               <MemoryBar summary={summary} className="w-8" />
               {summary.memory}
@@ -253,6 +256,7 @@ function SiteEntry({ site, severity, now }: RowProps) {
           {summary.kind === "active" && summary.services !== null && (
             <span className="whitespace-nowrap">{summary.services}</span>
           )}
+          {summary.kind === "active" && summary.next !== null && <span className="whitespace-nowrap">{summary.next}</span>}
           {summary.kind === "stopped" && summary.restarts !== null && (
             <span className="text-attention-text">{summary.restarts}</span>
           )}

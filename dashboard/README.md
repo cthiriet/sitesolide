@@ -135,9 +135,33 @@ else takes its place as the reason it was refused, shown as a warning. That
 module then turns what is down
 into discrepancies: a site that does not answer over HTTPS, a certificate about
 to expire, a failed backup sit among the home page's Issues, linked to their
-site. A project's unit, the disk and the memory are left out, the page judging
-them already; a status older than five minutes shows as "Monitor silent",
-never as the present. No monitor installed, no field, nothing shown.
+site. A project's units, the disk and the memory are left out, the page judging
+them already, a worker, a scheduled service and its timer included; a status
+older than five minutes shows as "Monitor silent", never as the present. No monitor installed, no field, nothing shown.
+
+## A project's services
+
+A project may run several processes, `services` in its manifest: servers on
+their port, workers that run for good and listen on nothing, scheduled
+services that a timer starts at the times their `schedule` names. The
+collector reads every unit the manifest generates, by the name
+`bin/cli/unit.ts` gives it (`unitNames`), never by rank: `<slug>` the main
+one, the first service that runs for good, `<slug>.<name>` each other,
+and `<slug>.<name>.timer` the timer of a scheduled one, keyed apart from its
+service. A scheduled service is read with how its last run ended (`Result`,
+`ExecMainStatus`, its start and exit), its timer with whether it is armed and
+when it last and next fires. When every service is scheduled, the main unit
+is an anchor that runs nothing and stays `active (exited)` to keep the
+timers armed: the page reads it *Scheduled*.
+
+`src/state.ts` judges them as they run. Between two runs a scheduled
+service is inactive, which is its normal state, never *Down*; a failed last
+run is a warning naming the service, when and how ("Service sync: last run
+failed 2 h ago (exit code 1)"); a timer that is not active is an error, the
+schedule having stopped; a worker that is not active is an error, as any
+service. A project with services, none public, and no `publicDir` serves no
+page: its address answers a line saying so, and the page says it beside the
+address rather than present it as a site.
 
 ## The password
 
@@ -1891,7 +1915,9 @@ stranger@example.com, whom the registry does not name, refused `no-role`.
 maya@example.com may create projects. People and a domain can open `cms` and
 `calendar`, and five password accesses are carried over, the one on
 `library` expired. `BENCH_NO_SSO=1` runs a portal with no provider, where
-everyone added gets password access.
+everyone added gets password access. `courier` and `reports` serve no page:
+a worker beside two scheduled services, the hourly one's last run failed, and
+a project whose every service is scheduled.
 The same page stands for the provider's forced sign-in when a person
 unlocks, and the bench's steward judges a person's secrets and general access
 by role before its own fake operations, and her own tokens on the *Tokens*
@@ -1905,8 +1931,10 @@ Viewer now.
 bun run check   # tests, type checking, then the page's own tests
 ```
 
-What is covered: the state judgement and every discrepancy it reports, the
-session and its rate limiting, the password draw against a fixed byte sequence,
+What is covered: the state judgement and every discrepancy it reports,
+workers and scheduled services included, the collector reading every unit a
+manifest generates by name against a fake `systemctl`, the session and its
+rate limiting, the password draw against a fixed byte sequence,
 the secrets scope and its three guard rails, the steward's protocol on a real
 Unix socket, the gatekeeper's transaction including its rollbacks, and the
 gatekeeper in front of a real Caddy started on a free port with `admin off`.

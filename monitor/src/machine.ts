@@ -128,8 +128,12 @@ export function createMachine(config: Config, options: MachineOptions = { system
     },
 
     async units() {
+      // Services and timers in one listing, one moment of systemd's: a
+      // scheduled service is told apart by its timer, and two listings could
+      // straddle a deployment that adds or removes one. `--type` has taken a
+      // comma-separated list for longer than any systemd this runs on.
       const execution = await spawn(
-        [options.systemctl, "list-units", "--type=service", "--all", "--plain", "--no-legend", "--no-pager"],
+        [options.systemctl, "list-units", "--type=service,timer", "--all", "--plain", "--no-legend", "--no-pager"],
         SYSTEMCTL_TIMEOUT_MS,
       );
       if (execution.code !== 0) return { error: `systemctl list-units: ${firstLine(execution)}` };

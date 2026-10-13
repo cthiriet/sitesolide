@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { generateFragment, HEADLESS_ANSWER } from "../../cli/fragment";
 import { readManifest } from "../../cli/manifest";
-import { generateUnit } from "../../cli/unit";
+import { generateUnit, generateUnits, unitFileName } from "../../cli/unit";
 import { SWITCHES } from "./fake-ssh";
 import { createFakeVm } from "./fake-vm";
 import { REPO, run, TESTS_ROOT } from "./run";
@@ -381,6 +382,199 @@ describe("a project with several services", () => {
     } finally {
       vm.cleanup();
     }
+  });
+});
+
+describe("a project that runs in the background", () => {
+  /**
+   * projects/background: a digest every quarter of an hour, written first,
+   * and a queue consumer that listens on nothing. No public service and no
+   * publicDir: it serves no page. projects/nightly: every service scheduled,
+   * its main unit an anchor.
+   */
+
+  test("the dry run shows every unit under its own name, the timer included, the worker as the main one", async () => {
+    const r = await run("projects/background", ["deploy", "--dry-run"]);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("project sample-bg, 1 worker, 1 scheduled");
+    for (const file of ["sample-bg.service", "sample-bg.digest.service", "sample-bg.digest.timer"]) {
+      expect(r.output).toContain(`--- ${file} ---`);
+      expect(r.output).toContain(`[dry-run] read /etc/systemd/system/${file}, install it if missing`);
+    }
+    expect(r.output).not.toContain("sample-bg.digest.timer.service");
+    // The worker keeps the slug, and wants the timer, never the scheduled service.
+    expect(r.output).toContain("ExecStart=/usr/local/bin/bun run consumer.ts\nRestart=always\nRestartSec=2\nRestartSteps=8");
+    expect(r.output).toContain("Wants=sample-bg.digest.timer\n");
+    expect(r.output).toContain("OnCalendar=*:0/15\n");
+    expect(r.output).toContain("RuntimeMaxSec=5m\n");
+    expect(r.output).toContain("CPUQuota=50%\n");
+    expect(r.output).not.toContain("Environment=PORT=");
+  });
+
+  test("its address says it serves no page, and the verify expects that line", async () => {
+    const r = await run("projects/background", ["deploy", "--dry-run"]);
+    expect(r.output).toContain(`respond "${HEADLESS_ANSWER}" 200`);
+    expect(r.output).not.toContain("reverse_proxy");
+    expect(r.output).toContain("[dry-run] verify https://sample-bg.test-zone.invalid/, which answers that the project serves no page");
+    // Its services listen on nothing: no port of its own to reach.
+    expect(r.output).not.toContain("rebuild /etc/sitesolide-loopback-projects.nft");
+  });
+
+  test("the restart never names the scheduled service, its timer starts it; the worker is watched for ten seconds", async () => {
+    const r = await run("projects/background", ["deploy", "--dry-run"]);
+    expect(r.output).toContain(
+      "sudo systemctl reset-failed sample-bg sample-bg.digest.timer 2>/dev/null; sudo systemctl restart sample-bg sample-bg.digest.timer && systemctl is-active sample-bg sample-bg.digest.timer",
+    );
+    expect(r.output).not.toMatch(/systemctl restart [^\n]*sample-bg\.digest\.service/);
+    const restart = r.output.indexOf("systemctl restart sample-bg");
+    const first = r.output.indexOf("[dry-run] read the state of sample-bg right after the restart");
+    const caddy = r.output.indexOf("bin/deploy-caddy.sh sample-bg.caddy");
+    const check = r.output.indexOf("verify https://");
+    const second = r.output.indexOf("[dry-run] 10 s after the restart, read it again: sample-bg must still be active, never restarted by systemd meanwhile");
+    expect(restart).toBeGreaterThan(-1);
+    expect(first).toBeGreaterThan(restart);
+    expect(caddy).toBeGreaterThan(first);
+    expect(check).toBeGreaterThan(caddy);
+    expect(second).toBeGreaterThan(check);
+  });
+
+  test("under --json, what it runs is counted by kind, its kind word unchanged", async () => {
+    const r = await run("projects/background", ["deploy", "--dry-run", "--json"]);
+    const last = JSON.parse(r.output.trim().split("\n").at(-1)!);
+    expect(last).toMatchObject({ type: "result", kind: "services", runs: { servers: 0, workers: 1, scheduled: 1 }, port: null, headless: true });
+    // A project that serves a page says nothing of the kind.
+    const served = await run("projects/multi-service", ["deploy", "--dry-run", "--json"]);
+    const result = JSON.parse(served.output.trim().split("\n").at(-1)!);
+    expect(result).toMatchObject({ kind: "services", runs: { servers: 3, workers: 0, scheduled: 0 } });
+    expect(result).not.toHaveProperty("headless");
+  });
+
+  test("systemd is asked to read each schedule before anything is written, in a dry run too", async () => {
+    const vm = createFakeVm();
+    try {
+      const r = await run("projects/background", ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(0);
+      expect(r.output).toContain("systemd reads every schedule: digest (*:0/15)");
+      expect(vm.logs()).toContain("SCHEDULES *:0/15");
+      expect(r.output.indexOf("systemd reads every schedule")).toBeLessThan(r.output.indexOf("system user and directories"));
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("a schedule systemd cannot read stops everything, naming the service and the syntax", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.refuseSchedules(["*:0/15"]);
+      const r = await run("projects/background", ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(1);
+      expect(r.error).toContain("systemd does not read the schedule of a scheduled service");
+      expect(r.error).toContain('services.digest.schedule: "*:0/15"');
+      expect(r.error).toContain("man systemd.time, section CALENDAR EVENTS");
+      expect(r.output).not.toContain("system user and directories");
+      expect(vm.logs().filter((line) => line.startsWith("REFUSED"))).toEqual([]);
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("the units' names are checked against systemd, the timer's included", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.systemUnit("sample-bg.digest.timer", "/lib/systemd/system/sample-bg.digest.timer", "[Timer]\nOnCalendar=daily\n");
+      const r = await run("projects/background", ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(1);
+      expect(r.error).toContain("sample-bg is already the name of a service of the server");
+      expect(r.error).toContain("sample-bg.digest.timer is already a timer of the machine, read from /lib/systemd/system/sample-bg.digest.timer");
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("for real, the services are read right after their restart, and a reading that does not read is said and stops nothing", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      // No --dry-run: the run goes past the restart, as far as the Caddy
+      // step, which the simulated machine cannot carry.
+      await run("projects/background", ["deploy"], { vm });
+      const logs = vm.logs();
+      const restart = logs.findIndex((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart sample-bg sample-bg.digest.timer"));
+      expect(restart).toBeGreaterThan(-1);
+      expect(logs.indexOf("STABILITY sample-bg")).toBeGreaterThan(restart);
+      expect(logs.find((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart"))).not.toContain("sample-bg.digest.service");
+    } finally {
+      vm.cleanup();
+    }
+    const unreadable = createFakeVm();
+    try {
+      unreadable.acceptWrites();
+      unreadable.setStandings([{ "sample-bg": null }]);
+      const r = await run("projects/background", ["deploy"], { vm: unreadable });
+      expect(r.output).toContain("!! how the services stand could not be read after their restart: whether they hold is not checked");
+      // The deployment goes on to its Caddy step: stopping before it would
+      // leave the new code behind the old block.
+      expect(r.output).toContain("Caddy fragment");
+    } finally {
+      unreadable.cleanup();
+    }
+  }, 30_000);
+
+  test("every service scheduled: an anchor stands for the project, its timers restarted, nothing to watch", async () => {
+    const r = await run("projects/nightly", ["deploy", "--dry-run"]);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("project sample-nightly, 2 scheduled");
+    for (const file of ["sample-nightly.service", "sample-nightly.report.service", "sample-nightly.report.timer", "sample-nightly.cleanup.service", "sample-nightly.cleanup.timer"]) {
+      expect(r.output).toContain(`--- ${file} ---`);
+    }
+    expect(r.output).toContain("Type=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n");
+    expect(r.output).toContain("Wants=sample-nightly.report.timer sample-nightly.cleanup.timer\n");
+    expect(r.output).toContain(
+      "sudo systemctl restart sample-nightly sample-nightly.report.timer sample-nightly.cleanup.timer && systemctl is-active sample-nightly sample-nightly.report.timer sample-nightly.cleanup.timer",
+    );
+    expect(r.output).not.toContain("right after the restart");
+    expect(r.output).toContain(`respond "${HEADLESS_ANSWER}" 200`);
+  });
+
+  test("compared with the server, the anchor and the timers are units like any other", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      const raw = readFileSync(join(TESTS_ROOT, "projects/nightly/sitesolide.json"), "utf8");
+      const manifest = readManifest(raw).manifest!;
+      vm.writeManifest("sample-nightly", raw);
+      vm.writeBlock("sample-nightly", generateFragment(manifest)!);
+      const units = generateUnits(manifest, { slug: "sample-nightly", zone: "test-zone.invalid", contact: "sample@test-zone.invalid" });
+      // Every unit in place but one timer, and the timer of a schedule since dropped.
+      for (const { unit, text } of units) {
+        if (unit !== "sample-nightly.cleanup.timer") vm.writeFile(`/etc/systemd/system/${unitFileName(unit)}`, text);
+      }
+      const report = units.find(({ unit }) => unit === "sample-nightly.report.timer")!.text;
+      vm.writeFile("/etc/systemd/system/sample-nightly.old.timer", report.replace("service report", "service old"));
+      const r = await run("projects/nightly", ["deploy", "--dry-run", "--compare", "--json"], { vm });
+      expect(r.code).toBe(0);
+      const last = JSON.parse(r.output.trim().split("\n").at(-1)!);
+      expect(last).toMatchObject({
+        type: "result",
+        compared: true,
+        changes: ["/etc/systemd/system/sample-nightly.cleanup.timer", "/etc/systemd/system/sample-nightly.old.timer, no longer declared"],
+        kept: [],
+      });
+      expect(vm.logs()).toContain("FILE /etc/systemd/system/sample-nightly.report.timer");
+      expect(vm.logs()).toContain("LIST-UNITS sample-nightly");
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("removed, the timers go first, with every unit the manifest generates", async () => {
+    const r = await run("projects/nightly", ["remove", "--confirm", "sample-nightly", "--dry-run"]);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain(
+      "sudo systemctl disable --now sample-nightly.report.timer sample-nightly.cleanup.timer sample-nightly sample-nightly.report.service sample-nightly.cleanup.service 2>/dev/null || true",
+    );
+    expect(r.output).toContain("/etc/systemd/system/sample-nightly.report.timer");
+    expect(r.output).not.toContain("sample-nightly.report.timer.service");
   });
 });
 

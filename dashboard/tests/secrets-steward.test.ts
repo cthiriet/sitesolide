@@ -17,6 +17,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildFragment } from "../borrowed/locks";
+import type { Manifest } from "../borrowed/manifest";
+import { generateUnits } from "../borrowed/unit";
 import { TOLERATED_FAILURES, INITIAL_BACKOFF_MS, MAXIMUM_BACKOFF_MS } from "../src/auth";
 import { portalModifiable } from "../src/gatekeeper/rules";
 import type {
@@ -2789,6 +2791,30 @@ describe("POST /restart", () => {
     expect(response.status).toBe(403);
     expect((await errorOf(response)).message).toContain("EnvironmentFile");
     expect(bench.systemctlCalls).toEqual([]);
+  });
+
+  test("a project whose every service is scheduled: its runs read the files anew, nothing waits for a restart, and none is made", async () => {
+    const bench = await mount();
+    const token = await unlock(bench);
+    const manifest = { slug: "jobs", services: { sync: { start: "/usr/local/bin/bun run sync.ts", schedule: "hourly" } }, secrets: ["jobs.env"] } as Manifest;
+    mkdirSync(join(bench.sites, "jobs"));
+    writeFileSync(join(bench.sites, "jobs", "sitesolide.json"), JSON.stringify(manifest));
+    // The anchor, started an hour ago; both files are newer.
+    writeFileSync(join(bench.units, "jobs.service"), generateUnits(manifest)[0]!.text);
+    writeFileSync(join(bench.secrets, "jobs.env"), "KEY=1\n", { mode: 0o600 });
+    writeFileSync(join(bench.secrets, "jobs-key"), "a key\n", { mode: 0o400 });
+    const jobs = (await projects(bench)).find((project) => project.slug === "jobs")!;
+    expect(jobs.files.map((file) => [file.name, file.restartPending])).toEqual([
+      ["jobs.env", false],
+      ["jobs-key", false],
+    ]);
+    const response = await bench.call("POST", "/restart", { token, slug: "jobs" });
+    expect(response.status).toBe(403);
+    const { message } = await errorOf(response);
+    expect(message).toContain("every service of jobs is scheduled");
+    expect(message).toContain("the next run applies the change");
+    expect(message).not.toContain("reads none");
+    expect(bench.systemctlCalls.filter((call) => call[0] !== "show")).toEqual([]);
   });
 
   test("a missing unit, a static site, an unknown site are refused", async () => {

@@ -10,7 +10,9 @@ import {
   loopbackRule,
   LOOPBACK_TABLE,
   PROJECT_PORTS_SET,
+  projectPortPairs,
   projectPortsFile,
+  reachesOwnPorts,
 } from "../cli/loopback";
 import { servicesOf, type Manifest } from "../cli/manifest";
 import { PORTAL_PORT } from "../cli/portal";
@@ -258,7 +260,7 @@ describe("the loopback rule", () => {
     const api = readFileSync(join(REPO_ROOT, "api", "deploy", "sitesolide-api.service"), "utf8");
     const apiPort = api.match(/^Environment=PORT=(\d+)$/m)?.[1];
     if (apiPort !== undefined) ports.push(Number(apiPort));
-    for (const manifest of knownManifests()) ports.push(...servicesOf(manifest).map((service) => service.port));
+    for (const manifest of knownManifests()) ports.push(...servicesOf(manifest).flatMap((service) => (service.port === null ? [] : [service.port])));
     for (const port of ports) {
       expect(port).toBeGreaterThanOrEqual(SERVICE_PORTS.first);
       expect(port).toBeLessThanOrEqual(SERVICE_PORTS.last);
@@ -478,5 +480,31 @@ describe("the project set", () => {
     for (const uid of [0, -1, Number.NaN, 1.5, 65534]) {
       expect(() => projectPortsFile([{ manifest: SEVERAL, uid }])).toThrow(/uid/);
     }
+  });
+
+  test("a worker or a scheduled service has no port to open: its siblings' ports are the project's pairs", () => {
+    const mixed: Manifest = {
+      slug: "relay",
+      services: {
+        web: { start: "/srv/sites/relay/app/web", port: 3060 },
+        queue: { start: "/srv/sites/relay/app/queue", internal: true },
+        sync: { start: "/srv/sites/relay/app/sync", schedule: "hourly" },
+      },
+    };
+    expect(reachesOwnPorts(mixed)).toBe(true);
+    expect(projectPortPairs([{ manifest: mixed, uid: PROJECT }])).toEqual([`3060 . ${PROJECT}`]);
+  });
+
+  test("a project whose services all listen on nothing reaches no port of its own, and stays out of the set", () => {
+    const background: Manifest = {
+      slug: "relay",
+      services: {
+        queue: { start: "/srv/sites/relay/app/queue", internal: true },
+        sync: { start: "/srv/sites/relay/app/sync", schedule: "hourly" },
+      },
+    };
+    expect(reachesOwnPorts(background)).toBe(false);
+    expect(projectPortPairs([{ manifest: background, uid: PROJECT }])).toEqual([]);
+    expect(reachesOwnPorts(SEVERAL)).toBe(true);
   });
 });

@@ -27,13 +27,26 @@ An app:
 }
 ```
 
-`start` is what decides: a project that declares one is an app and gets a
-systemd unit and a Caddy block; a project without one is a folder Caddy serves
-directly, and costs nothing at rest.
+A job that runs every night, and serves no page:
+
+```json
+{
+  "slug": "nightly",
+  "services": {
+    "sync": { "start": "/usr/local/bin/bun run sync.ts", "schedule": "daily" }
+  }
+}
+```
+
+`start` is what decides: a project that declares one, or `services`, is an
+app and gets a systemd unit and a Caddy block; a project without either is a
+folder Caddy serves directly, and costs nothing at rest.
 
 The language does not matter. `start` is whatever runs your server, as long as
 it listens on `port`: `/usr/bin/node server.js`, the `uvicorn` of a virtualenv
-under `/srv/sites/<slug>/app/.venv`, a Go binary built on your workstation.
+under `/srv/sites/<slug>/app/.venv`, a Go binary built on your workstation. A
+process that listens on nothing, a worker, or one that runs at set times, a
+scheduled service, is declared under [`services`](#services).
 
 ## Every key
 
@@ -89,7 +102,8 @@ only point inside the repository that holds it, links resolved: a `source` of
 
 The directory whose contents Caddy serves directly, relative to the project.
 `public`, `dist`, `build/public`, whatever your build produces. A project with
-no `start` must have one; there would be nothing to serve otherwise.
+neither `start` nor `services` must have one; there would be nothing to serve
+otherwise.
 
 These files never wake the service, which is why a static site costs no memory.
 
@@ -148,12 +162,23 @@ Serve something at `/` that answers 200. An app without `routes` receives `/`
 itself, even beside a `publicDir` holding an `index.html`, and must answer it;
 with `routes`, or for a static site, `/` comes from `publicDir`, which then
 needs its `index.html`. A redirect does not count either: `/` itself must
-answer.
+answer. A project that serves no page answers a line of its own there, see
+[A project that serves no page](#a-project-that-serves-no-page).
+
+**And it has to keep running.** A process that starts and falls at once looks
+started to systemd for that instant. `deploy` reads every service that runs
+for good, servers and workers, right after their restart and again once ten
+seconds have passed, and fails, naming each, when one is no longer active or
+was restarted by systemd meanwhile: `sitesolide logs` says why. The wait runs
+beside the Caddy step and the check over HTTPS, and adds ten seconds to a
+deployment at most.
 
 ### `port`
 
 The loopback port the service listens on, between 3000 and 3099. Caddy
-reverse-proxies to it, and the unit hands it to the service as `PORT`.
+reverse-proxies to it, and the unit hands it to the service as `PORT`. A
+worker and a scheduled service listen on nothing, declare none and are given
+none, see [`services`](#services).
 
 Leave it out and `deploy` picks one: the lowest the machine's other projects
 leave free, or the one the machine already gives this project. It writes it
@@ -171,7 +196,7 @@ deployed yet or not.
 That range is not arbitrary: a nftables rule reserves it to Caddy and root, so
 no service can reach another one. Outside it, a service would be reachable by
 every other project on the machine. A project of several processes declares a
-port per service, see [`services`](#services).
+port for each service that listens, see [`services`](#services).
 
 ### `routes`
 
@@ -193,44 +218,65 @@ the deployment, see [`start`](#start).
 
 ### `services`
 
-Several processes instead of one `start`: a web front, the API it calls, a
-worker behind it. Each entry names a service and takes `start` and `port`, like
-a single service, and optionally `routes`, `internal`, `memory`, `env` and
-`backup`.
+Several processes instead of one `start`, or a process that is not a web
+server: a web front, the API it calls, a worker behind them, a digest sent
+every morning. Each entry names a service and takes `start`, and optionally
+`port`, `routes`, `internal`, `memory`, `cpu`, `env`, `backup`, `schedule` and
+`timeout`.
+
+What an entry declares makes it one of three kinds:
+
+| Kind | Declares | Runs |
+|---|---|---|
+| server | `port` | for good, listening on its port, for Caddy, or for its siblings alone when `internal` |
+| worker | `"internal": true`, and no `port` | for good, listening on nothing: a queue's consumer, a bot holding a connection, an agent |
+| scheduled | `schedule` | at the times it names, each run to its end; between two runs nothing runs |
 
 ```json
 "services": {
   "web":    { "start": "/srv/sites/lab/app/.venv/bin/python -m lab.web --port 3050", "port": 3050 },
   "api":    { "start": "/srv/sites/lab/app/.venv/bin/python -m lab.api --port 3051", "port": 3051, "routes": ["/v1/*"] },
-  "worker": { "start": "/srv/sites/lab/app/.venv/bin/python -m lab.worker --port 3052", "port": 3052, "internal": true, "memory": "1G" }
+  "worker": { "start": "/srv/sites/lab/app/.venv/bin/python -m lab.worker", "internal": true, "memory": "1G", "cpu": "50%" },
+  "digest": { "start": "/srv/sites/lab/app/.venv/bin/python -m lab.digest", "schedule": "Mon..Fri 08:00", "timeout": "15m" }
 }
 ```
 
-- **Units.** The first service keeps the project's unit, `<slug>.service`; the
-  others are `<slug>.<name>.service`, so a name starts with a letter and is
-  never a systemd unit type such as `socket` or `timer`. They start with the first one and follow
-  it when it stops or restarts, so restarting the project from the dashboard
-  restarts all of them.
+- **Units.** The first service that runs for good, a server or a worker, keeps
+  the project's unit, `<slug>.service`; the others are
+  `<slug>.<name>.service`, so a name starts with a letter and is never a
+  systemd unit type such as `socket` or `timer`. They start with the main one
+  and follow it when it stops or restarts, so restarting the project from the
+  dashboard restarts all of them; a scheduled service follows it its own way,
+  see [Scheduled services](#scheduled-services).
 - **Routes.** A service with `routes` gets those paths. The one without takes
   every other path, or, next to a `publicDir`, every path that is not a file
   there. Two services whose routes could match the same request are refused,
-  and without a `publicDir` exactly one public service must take the rest.
+  and without a `publicDir` exactly one public service must take the rest,
+  when there is one: a project with none serves no page, see
+  [A project that serves no page](#a-project-that-serves-no-page).
 - **`internal`.** Caddy never reaches the service; only the project's other
-  services do.
-- **Ports.** Between 3000 and 3099, one per service. The loopback rule lets each
+  services do. A worker says it, and a scheduled service is internal whether
+  it says it or not: neither takes `routes`.
+- **Ports.** Between 3000 and 3099, one per server; a worker and a scheduled
+  service declare none, and are given no `PORT`. The loopback rule lets each
   project reach its own ports and nobody else's, so a service calls its
-  siblings on `127.0.0.1:<port>`, and a neighbour cannot. A rule laid before
-  this existed has no room for that: `deploy` refuses before pushing anything,
-  and says to lay the current one with `bin/deploy-loopback.sh close`.
-- **`memory` and `env`.** A service's own, added to the project's; its `env`
-  wins over the project's on a shared name. `PORT` is each service's own.
+  siblings on `127.0.0.1:<port>`, a worker as a server does, and a neighbour
+  cannot. A rule laid before this existed has no room for that: `deploy`
+  refuses before pushing anything, and says to lay the current one with
+  `bin/deploy-loopback.sh close`.
+- **`memory`, `cpu` and `env`.** A service's own `memory` and `cpu` replace
+  the project's; its `env` is added to the project's, and wins on a shared
+  name. `PORT` is each server's own.
 - **`backup`.** A service that keeps a server database in the data folder,
   PostgreSQL or MongoDB, declares the folder it keeps live and the command
   that saves it consistently: see [A service's backup command](#a-services-backup-command).
+  Never a scheduled service, which keeps nothing live between its runs.
 
 `start`, `port` and `routes` are then refused at the top level. `install`,
 `secrets`, `network`, `egress`, `connectors`, `exclude` and the directories
-stay the project's, shared by every service.
+stay the project's, shared by every service. A worker or a scheduled service
+is declared under `services` even alone: the single `start` is always a
+server.
 
 A Python project installs its virtualenv on the machine with `install`. Tell
 `uv` to use the system's Python: one it downloads lives under the deployment
@@ -240,6 +286,145 @@ would point at nothing.
 ```json
 "install": "/usr/local/bin/uv sync --frozen --no-dev --compile-bytecode --python-preference only-system"
 ```
+
+#### Workers
+
+A worker runs for good and listens on nothing. Its unit is a server's, with
+three differences, all for the sites that share the machine with it:
+
+- **It comes back, more and more slowly.** systemd restarts it however long it
+  keeps failing, 2 seconds after the first failure, then longer after each
+  further one, up to 5 minutes; a deployment or a restart starts the count
+  again. A worker that dies at once on an outside
+  API's error would otherwise call that API, and pay for it, every two
+  seconds. The monitor reports one crashing in a loop, as it does any
+  project's unit.
+- **It yields the processor to the sites.** `CPUWeight=20`, against 100 for
+  every site, gives a busy site five times the worker's share when the
+  processor is contended, and changes nothing when it is not.
+- **It is bounded.** `TasksMax=512` caps its processes and threads together,
+  against a pool that grows without end.
+
+systemd stops it with SIGTERM, at a deployment, a restart from the dashboard
+or a stop, and kills it if it is still there a minute and a half later. A
+worker that handles SIGTERM finishes the step in progress and exits cleanly,
+as [examples/background/worker.ts](../examples/background/worker.ts) does. One
+that falls within ten seconds of a deployment fails it, see [`start`](#start).
+
+#### Scheduled services
+
+```json
+"digest": { "start": "/srv/sites/lab/app/.venv/bin/python -m lab.digest", "schedule": "Mon..Fri 08:00", "timeout": "15m" }
+```
+
+A timer of its own, `<slug>.<name>.timer`, starts the service at the times its
+`schedule` names; each run goes to its end, and between two runs nothing runs
+and nothing is spent.
+
+**`schedule`** is a systemd calendar expression, what a timer's `OnCalendar=`
+takes:
+
+| `schedule` | Runs |
+|---|---|
+| `hourly` | at the top of every hour |
+| `daily` | every day at midnight |
+| `*:0/15` | every quarter of an hour, at :00, :15, :30 and :45 |
+| `Mon..Fri 08:00` | on weekdays at eight in the morning |
+| `*-*-* 06:30 Europe/Paris` | every day at half past six, Paris time, through its changes of hour |
+
+The times are the machine's, UTC on most cloud images, unless the
+expression names a time zone. The manifest only checks that the expression is
+safe to write into the timer: one line, no `%`, no backslash. Whether it is a
+time is systemd's to say, so `deploy` asks `systemd-analyze calendar` on the
+machine before anything is written, a dry run included, and stops on a
+schedule systemd does not read, naming it. On a workstation that has systemd,
+`systemd-analyze calendar "Mon..Fri 08:00"` prints the next time it names.
+
+**`timeout`** is how long one run may take before systemd stops it: `90s`,
+`15m`, `2h`, a day at most, an hour when absent. A run that hung would
+otherwise hold its unit for good, and the timer, which never starts a service
+still running, would skip every run after it. A run stopped for its time
+counts as failed.
+
+- **A missed time runs at boot.** A time that passed while the machine was
+  down runs once, as soon as it is back (`Persistent=true`).
+- **A run never overlaps the previous one.** A time that comes while the
+  previous run is still going is skipped; the next one runs as usual.
+- **A run starts on time.** systemd does not shift it to group it with others
+  (`AccuracySec=1s`).
+- **A failed run is not retried.** The service is `inactive` after a run that
+  succeeded, `active` during one, and `failed` after one that failed, until
+  the next: the time its schedule names next runs it again. The monitor
+  reports a failed run as a warning until a run succeeds, and a timer that
+  stopped as an outage: see [monitor/README.md](../monitor/README.md).
+- **A deployment runs nothing.** It lays the timer and restarts it, and the
+  first run is the next time the schedule names. A deployment, or a restart
+  from the dashboard, restarts a run in progress, on the new code, and never
+  starts one that was not going: systemd passes a restart on to the units that
+  hang on the main one as a try-restart.
+- **The walls of its siblings.** The same account, data folder, secrets,
+  network, `env`, `memory` and `cpu`, and the same lower share of the
+  processor and bound on tasks as a worker. No `port`, no `routes`, no
+  `backup`: the hourly snapshot copies its data as files.
+
+`sitesolide status` shows its schedule, when it last ran and how that ended,
+and when it runs next; `sitesolide logs` shows its runs beside the project's
+other services.
+
+**A project whose every service is scheduled** has no service that runs for
+good to be known by. Its main unit, `<slug>.service`, is then an anchor: it
+runs nothing, as the project's account and with no network, stays active once
+started, and wants the timers, so that they start at boot and after a
+deployment, and its restart restarts them. The dashboard, the steward and the
+monitor find the project by that unit, as they find any other.
+
+#### A project that serves no page
+
+A project whose services are all internal, workers, scheduled services or
+internal servers, and that has no `publicDir`, serves no page. Its address
+still answers, a 200 with one line:
+
+```text
+This project runs in the background and serves no page.
+```
+
+rather than an empty page that looks served and is not. The address is kept
+on purpose: the deployment's check over HTTPS, the Caddy step and the
+gatekeeper ask every project's address, and the portal and a preview code
+close it as they close any other. `domain` is refused on such a project: a
+domain would be certified only to answer that line.
+
+#### What fits on the machine, and what does not
+
+A background service shares the machine with every site: its processor, its
+memory, its disk and its one address. The walls of its unit keep it from
+reading the sites, not from slowing them down.
+
+**What fits** is light work, mostly spent waiting on someone else's API: a
+queue's consumer, a bot holding a connection to a chat, an agent calling a
+model, a sync that pulls a few hundred records every quarter of an hour, a
+report sent each morning through a mail provider. It keeps what it needs in
+its data folder, SQLite above all, which the hourly snapshot copies
+consistently.
+
+**What does not belong on the machine that serves the sites:**
+
+- **A headless browser.** Chromium sandboxes itself with user namespaces and
+  a setuid helper, which the unit's confinement refuses
+  (`RestrictNamespaces`, `NoNewPrivileges`): it fails to start, or runs with
+  its own sandbox turned off, rendering pages from anywhere on the machine
+  that serves every site. It also takes hundreds of megabytes and a core per
+  page.
+- **Heavy computing**: video encoding, a model run on the processor, large
+  builds. The lower share of the processor lets the sites go first when they
+  compete, but a job that keeps every core busy for an hour still slows every
+  site for that hour, and `cpu` only makes the job last longer.
+- **Mass email sent from the machine itself.** The machine has one address,
+  every site's. Mail sent in bulk from it puts that address on blocklists,
+  and the hosting provider acts on abuse complaints against the machine, not
+  against one project: every site pays for one project's newsletter. A mail
+  provider's API, reached through `egress`, keeps that reputation off the
+  machine.
 
 ### `env`
 
@@ -305,6 +490,22 @@ The deploy refuses to run if it finds one on disk that you have not excluded.
 
 The memory ceiling, as systemd's `MemoryMax` takes it: `256M`, `1G`. Defaults to
 256M. A bare number would be read as bytes, so it is refused.
+
+### `cpu`
+
+The processor ceiling, as systemd's `CPUQuota` takes it: a share of one core,
+`50%` for half of one, `200%` for two whole cores.
+
+```json
+"cpu": "50%"
+```
+
+None by default: a service takes what the processor has free. At the top
+level it is every service's; a service's own, under `services`, replaces it.
+A worker and a scheduled service already yield the processor to the sites
+when it is contended, see [Workers](#workers); `cpu` caps a service even when
+it is not, for work that would otherwise take every core for as long as it
+lasts. Refused on a static site, where nothing runs.
 
 ### `network`
 
@@ -407,7 +608,8 @@ The project's own domain, once it has one.
 `active` is written by `sitesolide domain --activate`, not by hand: that command
 also rebuilds the domain table, and without that step the certificate would
 never be authorised. A domain under the served zone is refused, the wildcard
-already covers it.
+already covers it, and so is a domain for a project that serves no page, see
+[A project that serves no page](#a-project-that-serves-no-page).
 
 The domain is the site's address once it is active: its aliases, and the
 `www` of a second level domain, which the table adds by itself, answer with a

@@ -12,11 +12,15 @@ import { sameDirectives } from "./comparison";
 import { egressUnitLines } from "./egress";
 import {
   commandErrors,
+  isAnchored,
+  isValidCpu,
   isValidDescription,
   isValidEnvName,
   isValidEnvValue,
+  isValidSchedule,
   isValidSecretName,
   isValidSlug,
+  isValidTimeout,
   servedContact,
   servedZone,
   servicesOf,
@@ -46,10 +50,33 @@ export function projectPaths(slug: string, sitesRoot = "/srv/sites"): ProjectPat
  * A unit as systemctl and journalctl must be given it. The main unit is the
  * slug, which has no dot, and systemd adds `.service` itself. A secondary unit,
  * `<slug>.<name>`, gets it written out: systemd reads what follows the last dot
- * as a type, and the suffix removes any doubt about which unit is meant.
+ * as a type, and the suffix removes any doubt about which unit is meant. A
+ * timer is named with its suffix already, `<slug>.<name>.timer`, see
+ * timerUnit, and goes as it is.
  */
 export function unitArgument(unit: string): string {
+  if (isTimerUnit(unit)) return unit;
   return unit.includes(".") ? `${unit}.service` : unit;
+}
+
+/**
+ * Units are named without `.service`, as they always were, and a timer with
+ * its `.timer`: a scheduled service and its timer share `<slug>.<name>`, and
+ * the suffix keeps them apart. No service is named `timer` (UNIT_TYPES in
+ * manifest.ts), so no service unit ends that way.
+ */
+export function isTimerUnit(unit: string): boolean {
+  return unit.endsWith(".timer");
+}
+
+/** The timer that starts a scheduled service, `<slug>.<name>.timer`. */
+export function timerUnit(service: ServiceView): string {
+  return `${service.unit}.timer`;
+}
+
+/** The file a unit lives in, its name and type: `<unit>.service`, or the timer's own name. */
+export function unitFileName(unit: string): string {
+  return isTimerUnit(unit) ? unit : `${unit}.service`;
 }
 
 /** The project's system user, with no shell, created by `init`. */
@@ -111,6 +138,10 @@ function assertWritable(manifest: Manifest, service: ServiceView): void {
   const refused = (what: string) => new Error(`${what} is not what validate() accepts, it is never written into a unit`);
   if (manifest.description !== undefined && !isValidDescription(manifest.description)) throw refused("description");
   if (typeof service.start !== "string" || commandErrors(service.start, "start").length > 0) throw refused(`the start of ${service.unit}`);
+  if (service.cpu !== null && !isValidCpu(service.cpu)) throw refused(`the cpu of ${service.unit}`);
+  if (service.kind === "scheduled" && (!isValidSchedule(service.schedule) || !isValidTimeout(service.timeout))) {
+    throw refused(`the schedule of ${service.unit}`);
+  }
   for (const [name, value] of Object.entries(service.env)) {
     if (!isValidEnvName(name) || !isValidEnvValue(value)) throw refused(`env ${JSON.stringify(name)}`);
   }
@@ -128,7 +159,8 @@ function assertWritable(manifest: Manifest, service: ServiceView): void {
 export function treeVariables(manifest: Manifest, service: ServiceView, sitesRoot = "/srv/sites"): [string, string][] {
   const paths = projectPaths(manifest.slug, sitesRoot);
   return [
-    ["PORT", String(service.port)],
+    // A worker and a scheduled service listen on nothing, and are told no port.
+    ...(service.port === null ? [] : [["PORT", String(service.port)] as [string, string]]),
     ["DATA_DIR", paths.dataDir],
     ["PUBLIC_DIR", paths.publicDir],
   ];
@@ -144,7 +176,10 @@ export function declaredVariables(service: ServiceView, placeholders: Record<str
   return Object.entries(service.env).map(([key, value]) => [key, substitute(value, placeholders)]);
 }
 
-/** A generated unit: its name without `.service`, and its text. */
+/**
+ * A generated unit: its name, without `.service` for a service and with
+ * `.timer` for a timer (see unitFileName), and its text.
+ */
 export type GeneratedUnit = { unit: string; text: string };
 
 function defaultPlaceholders(manifest: Manifest): Record<string, string> {
@@ -153,7 +188,8 @@ function defaultPlaceholders(manifest: Manifest): Record<string, string> {
 
 /**
  * The unit of the project's main service: the only one of a project with a
- * single `start`, the first of its `services` otherwise.
+ * single `start`, the first that runs for good of its `services` otherwise,
+ * or its anchor when every one of them is scheduled.
  */
 export function generateUnit(manifest: Manifest, placeholders = defaultPlaceholders(manifest)): string {
   const [main] = generateUnits(manifest, placeholders);
@@ -168,22 +204,147 @@ export function generateUnit(manifest: Manifest, placeholders = defaultPlacehold
  * them, and they are `PartOf=` it, so stopping or restarting it does the same
  * to them. That is what lets the dashboard and the steward, which know a
  * project by its main unit alone, restart all of it when a secret changes.
+ *
+ * A scheduled service is the exception: the main unit wants its timer, never
+ * the service itself, which would run at every start of the project. The
+ * timer starts it at the times it names. Both are `PartOf=` the main unit,
+ * whose restart restarts the timer and a run in progress, never one that is
+ * not: systemd propagates it as a try-restart. When every service is
+ * scheduled, the main unit is an anchor, see isAnchored.
  */
 export function generateUnits(manifest: Manifest, placeholders = defaultPlaceholders(manifest)): GeneratedUnit[] {
   const services = servicesOf(manifest);
-  const main = services[0];
-  if (main === undefined) return [];
-  const others = services.slice(1).map((service) => service.unit);
-  return services.map((service, rank) => ({
-    unit: service.unit,
-    text: renderUnit(manifest, service, rank === 0 ? { others } : { main: main.unit }, placeholders),
-  }));
+  if (services.length === 0) return [];
+  const anchored = isAnchored(manifest);
+  const main = anchored ? null : services[0]!;
+  const others = anchored ? services : services.slice(1);
+  const mainUnit = manifest.slug;
+  const wanted = others.map((service) => (service.kind === "scheduled" ? timerUnit(service) : `${service.unit}.service`));
+  const after = others.filter((service) => service.kind !== "scheduled").map((service) => `${service.unit}.service`);
+
+  const units: GeneratedUnit[] = [
+    main === null
+      ? { unit: mainUnit, text: renderAnchor(manifest, wanted) }
+      : { unit: main.unit, text: renderUnit(manifest, main, { wanted, after }, placeholders) },
+  ];
+  for (const service of others) {
+    units.push({ unit: service.unit, text: renderUnit(manifest, service, { main: mainUnit }, placeholders) });
+    if (service.kind === "scheduled") units.push({ unit: timerUnit(service), text: renderTimer(manifest, service, mainUnit) });
+  }
+  return units;
+}
+
+/**
+ * The names of every unit the project's manifest generates, the main one
+ * first, as generateUnits names them, without writing a line of them: what
+ * the listings on the machine are compared with.
+ */
+export function unitNames(manifest: Manifest): string[] {
+  const services = servicesOf(manifest);
+  if (services.length === 0) return [];
+  const names = isAnchored(manifest) ? [manifest.slug] : [];
+  for (const service of services) {
+    names.push(service.unit);
+    if (service.kind === "scheduled") names.push(timerUnit(service));
+  }
+  return names;
+}
+
+/** The units `deploy` restarts and expects active: every one but the scheduled services, which their timers start. */
+export function runningUnits(manifest: Manifest): string[] {
+  const scheduled = scheduledUnits(manifest);
+  return unitNames(manifest).filter((unit) => !scheduled.has(unit));
+}
+
+/**
+ * The units that run a program for good, the servers and the workers: those
+ * `deploy` watches for a while after their restart, see stabilityCommand in
+ * services.ts. Not the anchor, which runs nothing, nor a timer.
+ */
+export function watchedUnits(manifest: Manifest): string[] {
+  return servicesOf(manifest).filter((service) => service.kind !== "scheduled").map((service) => service.unit);
+}
+
+function scheduledUnits(manifest: Manifest): Set<string> {
+  return new Set(servicesOf(manifest).filter((service) => service.kind === "scheduled").map((service) => service.unit));
+}
+
+/**
+ * The main unit of a project whose every service is scheduled: it runs
+ * nothing, as the project's account and with no network, and stays active
+ * once started. It wants the timers, so that they start at boot and after a
+ * deployment, and their `PartOf=` makes its restart theirs.
+ */
+function renderAnchor(manifest: Manifest, wanted: string[]): string {
+  if (manifest.description !== undefined && !isValidDescription(manifest.description)) {
+    throw new Error("description is not what validate() accepts, it is never written into a unit");
+  }
+  const slug = manifest.slug;
+  const account = systemUser(slug);
+  const description = escapeSpecifiers(manifest.description ?? `Project ${slug}`);
+  return [
+    `# Anchor of project ${slug}, generated by bin/sitesolide.ts from its`,
+    "# sitesolide.json. Do not edit by hand: the next deployment overwrites it.",
+    "#",
+    "# Every service of this project is scheduled: this unit runs nothing. It",
+    "# stands for the project, wants its timers so that they start at boot,",
+    "# and stays active, as the main unit of any project does.",
+    "",
+    "[Unit]",
+    `Description=${description}`,
+    `Wants=${wanted.join(" ")}`,
+    "",
+    "[Service]",
+    "Type=oneshot",
+    "RemainAfterExit=yes",
+    "ExecStart=/bin/true",
+    `User=${account}`,
+    `Group=${account}`,
+    `WorkingDirectory=${projectPaths(slug).app}`,
+    "NoNewPrivileges=true",
+    "PrivateTmp=true",
+    "PrivateNetwork=true",
+    "ProtectSystem=strict",
+    "ProtectHome=true",
+    "",
+    "[Install]",
+    "WantedBy=multi-user.target",
+    "",
+  ].join("\n");
+}
+
+/**
+ * The timer of a scheduled service: it starts the service of the same name at
+ * the times its `schedule` names. `Persistent` runs at boot a time missed
+ * while the machine was down; `AccuracySec` keeps systemd from delaying a run
+ * by up to a minute to group it with others, which a server has no reason to
+ * do. A timer never starts a service still running: a time that falls during
+ * a run that outlasts its interval is skipped, never doubled.
+ */
+function renderTimer(manifest: Manifest, service: ServiceView, mainUnit: string): string {
+  if (!isValidSchedule(service.schedule)) throw new Error(`the schedule of ${service.unit} is not what validate() accepts, it is never written into a timer`);
+  const description = escapeSpecifiers(manifest.description ?? `Project ${manifest.slug}`);
+  return [
+    `# Timer of project ${manifest.slug}, generated by bin/sitesolide.ts from its`,
+    "# sitesolide.json. Do not edit by hand: the next deployment overwrites it.",
+    "",
+    "[Unit]",
+    `Description=${description}, schedule of service ${service.name}`,
+    "# Started by the project's main unit, and stopped or restarted with it.",
+    `PartOf=${mainUnit}.service`,
+    "",
+    "[Timer]",
+    `OnCalendar=${escapeSpecifiers(service.schedule)}`,
+    "Persistent=true",
+    "AccuracySec=1s",
+    "",
+  ].join("\n");
 }
 
 function renderUnit(
   manifest: Manifest,
   service: ServiceView,
-  place: { others: string[] } | { main: string },
+  place: { wanted: string[]; after: string[] } | { main: string },
   placeholders: Record<string, string>,
 ): string {
   assertWritable(manifest, service);
@@ -214,23 +375,31 @@ function renderUnit(
 
   if ("main" in place) {
     lines.push(
-      "# Started by the project's main unit, and stopped or restarted with it.",
+      service.kind === "scheduled"
+        ? "# Started by its timer, and stopped or restarted with the project's main unit."
+        : "# Started by the project's main unit, and stopped or restarted with it.",
       `PartOf=${place.main}.service`,
     );
-  } else if (place.others.length > 0) {
-    const others = place.others.map((unit) => `${unit}.service`).join(" ");
+  } else if (place.wanted.length > 0) {
     lines.push(
       "# The project's other services start before this one, and follow it when",
       "# it stops or restarts: see their PartOf.",
-      `Wants=${others}`,
-      `After=${others}`,
+      `Wants=${place.wanted.join(" ")}`,
+      ...(place.after.length > 0 ? [`After=${place.after.join(" ")}`] : []),
+    );
+  }
+  if (service.kind === "worker") {
+    lines.push(
+      "# A worker is restarted however long it keeps failing: the monitor says",
+      "# so, and the delay between two attempts grows instead.",
+      "StartLimitIntervalSec=0",
     );
   }
 
   lines.push(
     "",
     "[Service]",
-    "Type=simple",
+    service.kind === "scheduled" ? "Type=exec" : "Type=simple",
     `User=${account}`,
     `Group=${account}`,
     `WorkingDirectory=${paths.app}`,
@@ -269,8 +438,7 @@ function renderUnit(
   lines.push(
     "",
     `ExecStart=${escapeSpecifiers(service.start)}`,
-    "Restart=always",
-    "RestartSec=2",
+    ...restartLines(service),
     "",
     "# What the service writes belongs to it alone.",
     "UMask=0077",
@@ -325,6 +493,7 @@ function renderUnit(
     "RestrictRealtime=true",
     "LockPersonality=true",
     `MemoryMax=${service.memory}`,
+    ...resourceLines(service),
     "",
   );
 
@@ -359,12 +528,48 @@ function renderUnit(
   if ("main" in place) {
     // Never enabled on its own: the main unit wants it, at boot as after a
     // deployment, and a second way of starting it would outlive a removal.
-    lines.push("# No [Install]: started by the project's main unit.", "");
+    lines.push(service.kind === "scheduled" ? "# No [Install]: started by its timer." : "# No [Install]: started by the project's main unit.", "");
   } else {
     lines.push("[Install]", "WantedBy=multi-user.target", "");
   }
 
   return lines.join("\n");
+}
+
+/**
+ * How a service comes back. A server as it always did, two seconds after it
+ * stopped. A worker too, but each restart systemd makes on its own waits
+ * longer, up to five minutes: a worker that dies at once on an outside API's
+ * error would otherwise call it, and pay for it, every two seconds. The count
+ * behind the delay starts again at every start asked of systemd, a deployment
+ * or a restart from the dashboard, not after a while running fine. A scheduled run is
+ * never restarted: the next time its timer names runs it again, and
+ * RuntimeMaxSec stops a run that outlasts its timeout.
+ */
+function restartLines(service: ServiceView): string[] {
+  switch (service.kind) {
+    case "server":
+      return ["Restart=always", "RestartSec=2"];
+    case "worker":
+      return ["Restart=always", "RestartSec=2", "RestartSteps=8", "RestartMaxDelaySec=5min"];
+    case "scheduled":
+      return ["Restart=no", `RuntimeMaxSec=${service.timeout}`];
+  }
+}
+
+/**
+ * The processor, beside the memory. A server keeps the machine's defaults, so
+ * that the unit of every site in service stays as it is; a worker and a
+ * scheduled run work in the background, and yield to the sites when the
+ * processor is contended: CPUWeight 20 against the default 100 gives a busy
+ * site five times their share. TasksMax bounds the processes and threads, a
+ * runaway pool or a browser's children. `cpu` caps any of them, CPUQuota
+ * being a share of one core.
+ */
+function resourceLines(service: ServiceView): string[] {
+  const lines = service.kind === "server" ? [] : ["CPUWeight=20", "TasksMax=512"];
+  if (service.cpu !== null) lines.push(`CPUQuota=${service.cpu}`);
+  return lines;
 }
 
 // --- a project's program, run outside its service --------------------------------

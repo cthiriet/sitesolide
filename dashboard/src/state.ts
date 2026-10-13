@@ -19,10 +19,21 @@
  * `dashboard/`, and an import climbing higher makes the service fail on the VM
  * after a deployment that otherwise succeeded.
  */
-import { isApp, isProtected, mainPort, PORTAL_SLUG, servicesOf, type Manifest } from "../borrowed/manifest";
+import {
+  isApp,
+  isHeadless,
+  isProtected,
+  mainPort,
+  PORTAL_SLUG,
+  servicesOf,
+  type Manifest,
+  type ServiceKind,
+  type ServiceView,
+} from "../borrowed/manifest";
 import { fragmentIsProtected, fragmentPassesIdentity } from "../borrowed/portal";
 import { isValidCode, previewHost } from "../borrowed/locks";
-import { monitorDiscrepancies } from "./monitor";
+import { timerUnit } from "../borrowed/unit";
+import { duration, monitorDiscrepancies } from "./monitor";
 
 /**
  * The landing is not served from `/srv/sites/landing` but from the bare
@@ -83,11 +94,18 @@ export type RawFolder = {
   manifest: string | null;
   unit: RawUnit | null;
   /**
-   * The project's other units, `<slug>.<name>`, for a project declaring
-   * several `services`: the main one is `unit`. Optional, and it stays so: a
-   * reading dropped by a collector older than services does not carry it, and
-   * the dashboard must open all the same in the minute that follows a
-   * deployment.
+   * The project's other units, by name, for a project declaring `services`:
+   * `<slug>.<name>` for a service, `<slug>.<name>.timer` for the timer of a
+   * scheduled one, the suffix keeping the two apart. The main one is `unit`,
+   * which for a project whose every service is scheduled is its anchor:
+   * every service is then here. A scheduled service's reading carries how its
+   * last run ended, a timer's when it fires; see the collector.
+   *
+   * Optional, and it stays so: a reading dropped by a collector older than
+   * services does not carry it, and the dashboard must open all the same in
+   * the minute that follows a deployment. A name missing from it was not read,
+   * by a collector older than scheduled services, which is not a unit missing
+   * from the machine: null says that.
    */
   units?: Record<string, RawUnit | null>;
   /** Size of the directory in bytes. */
@@ -234,16 +252,31 @@ export type Site = {
   type: "static" | "app" | "no-manifest";
   /** Its address under the zone: the preview, except for the landing. */
   address: string;
+  /**
+   * The project serves no page: services, none of them public, and no
+   * `publicDir`, see isHeadless in bin/cli/manifest.ts. Its address answers a
+   * line saying it runs in the background, which the page says beside it
+   * rather than present it as a page.
+   */
+  headless: boolean;
   domain: Domain | null;
   lock: Lock;
   portal: Portal;
   port: number | null;
   /** A port declared and actually listening on the loopback interface. */
   listening: boolean | null;
+  /**
+   * The project's main unit, the one named after it: its main service, or the
+   * anchor of a project whose every service is scheduled, which runs nothing
+   * and stays active (exited) to keep their timers armed. Judged the same way
+   * either way: not active, the project is stopped.
+   */
   service: Service | null;
   /**
    * Every process of an app, the main one first: the one above for a single
    * `start`, one per entry of `services` otherwise. Empty for a static site.
+   * The anchor is not among them, being no service of the manifest's: when
+   * every one is scheduled, none is `main`.
    */
   services: SiteService[];
   bytes: number | null;
@@ -258,13 +291,63 @@ export type SiteService = {
   name: string | null;
   /** The systemd unit, without `.service`. */
   unit: string;
+  /**
+   * What it is, see ServiceKind in bin/cli/manifest.ts: a server listens on
+   * its port, a worker runs for good and listens on nothing, a scheduled
+   * service runs at the times its schedule names and nothing between them.
+   */
+  kind: ServiceKind;
+  /** The one the project is known by, whose unit carries its name. None is, when every service is scheduled. */
+  main: boolean;
   port: number | null;
   listening: boolean | null;
   /** The paths Caddy sends it, null when it takes every path no other service claims. */
   routes: string[] | null;
-  /** Reached by the project's other services alone, never by Caddy. */
+  /** Reached by the project's other services alone, never by Caddy: an internal server, a worker, a scheduled service. */
   internal: boolean;
   service: Service | null;
+  /** When it runs and how it ran, for a scheduled service alone. */
+  schedule: Schedule | null;
+};
+
+/**
+ * A scheduled service's timer and runs. Between two runs its unit is
+ * inactive, which is its normal state: what says it still runs is its timer,
+ * active (waiting), and what says it runs well is how its last run ended.
+ */
+export type Schedule = {
+  /** The calendar expression, as the manifest writes it: `hourly`, `*:0/15`. */
+  expression: string;
+  /** How long one run may take before systemd stops it. */
+  timeout: string;
+  /** Its timer, as systemctl takes it: `<slug>.<name>.timer`. */
+  timer: string;
+  /**
+   * Its timer's state, or null when the collector did not read it, one older
+   * than scheduled services: unknown, and judged as nothing.
+   */
+  timerState: TimerState | null;
+  /** When the timer last started the service, in epoch milliseconds: what is known of a run after a reboot. */
+  lastTrigger: number | null;
+  /** When it starts it next, null when the timer is not active. */
+  next: number | null;
+  /** The last run that ended, null while one runs or before the first. */
+  lastRun: Run | null;
+};
+
+export type TimerState = { loaded: boolean; active: string; subState: string };
+
+/** How a scheduled run ended, from its unit's Result and ExecMainStatus. */
+export type Run = {
+  /** When it ended, or started, or was last triggered, whichever systemd still knows; null when none. */
+  at: number | null;
+  ok: boolean;
+  /** systemd's word for how it ended: `success`, `exit-code`, `signal`, `timeout`, `oom-kill`; null when not read. */
+  result: string | null;
+  /** The exit code, or the number of the signal that ended it. */
+  status: number | null;
+  /** How it failed, in a few words: "exit code 1", "stopped after its timeout of 1h". Null for a run that went well. */
+  failure: string | null;
 };
 
 export type Discrepancy = {
@@ -360,6 +443,92 @@ function readService(
     since: readTimestamp(unit, "ActiveEnterTimestamp"),
     cpuTotal: cpu === null ? null : Math.round(cpu / 1_000_000),
     cpuShare: computeCpuShare(cpu, cpuBefore, windowMs),
+  };
+}
+
+/** A unit in one of these states is running, or about to run, or about to stop: a run in progress. */
+const RUNNING_STATES = new Set(["active", "activating", "deactivating", "reloading"]);
+
+/**
+ * How a run failed, in the words of a person reading the page. systemd's
+ * Result says the way, ExecMainStatus the code or the signal, and a run
+ * stopped by RuntimeMaxSec ends in `timeout`.
+ */
+function failureOf(result: string | null, status: number | null, timeout: string): string {
+  switch (result) {
+    case "exit-code":
+      return status === null ? "it exited with an error" : `exit code ${status}`;
+    case "signal":
+    case "core-dump":
+      return status === null ? "killed by a signal" : `killed by signal ${status}`;
+    case "timeout":
+      return `stopped after its timeout of ${timeout}`;
+    case "oom-kill":
+      return "killed for lack of memory";
+    case null:
+      return "failed";
+    default:
+      return result;
+  }
+}
+
+/**
+ * The last run of a scheduled service that ended, from its unit's reading.
+ *
+ * None while a run is in progress: systemd resets Result as a run starts, so
+ * the previous one's is gone, and the page says it is running instead. None
+ * either before the first run since the unit was loaded, a reboot included:
+ * the timer's last trigger then still says when it last ran, not how.
+ */
+function readRun(unit: RawUnit | null, lastTrigger: number | null, timeout: string): Run | null {
+  if (unit === null || unit.LoadState !== "loaded") return null;
+  const active = unit.ActiveState ?? "unknown";
+  if (RUNNING_STATES.has(active)) return null;
+
+  const result = unit.Result ?? null;
+  const started = readTimestamp(unit, "ExecMainStartTimestamp");
+  const ended = readTimestamp(unit, "ExecMainExitTimestamp");
+  const ok = active !== "failed" && (result === null || result === "success");
+  // Nothing ran: a failure that never got to start the program, such as a
+  // missing account, still says so through `failed`.
+  if (ok && started === null && ended === null) return null;
+  const status = readNumber(unit, "ExecMainStatus");
+  return {
+    at: ended ?? started ?? lastTrigger,
+    ok,
+    result,
+    status,
+    failure: ok ? null : failureOf(result, status, timeout),
+  };
+}
+
+/**
+ * A scheduled service's timer and runs. `units` is what the collector read
+ * beside the main unit: the timer missing from it was not read, which is not
+ * a timer missing from the machine.
+ */
+function readSchedule(view: ServiceView, units: RawFolder["units"]): Schedule {
+  const timer = timerUnit(view);
+  const timeout = view.timeout ?? "";
+  const rawTimer = units?.[timer];
+  const timerState: TimerState | null =
+    rawTimer === undefined
+      ? null
+      : {
+          loaded: rawTimer !== null && rawTimer.LoadState === "loaded",
+          active: rawTimer?.ActiveState ?? "unknown",
+          subState: rawTimer?.SubState ?? "unknown",
+        };
+  const armed = timerState !== null && timerState.loaded && timerState.active === "active";
+  const lastTrigger = rawTimer == null ? null : readTimestamp(rawTimer, "LastTriggerUSec");
+  return {
+    expression: view.schedule ?? "",
+    timeout,
+    timer,
+    timerState,
+    lastTrigger,
+    next: armed && rawTimer != null ? readTimestamp(rawTimer, "NextElapseUSecRealtime") : null,
+    lastRun: readRun(units?.[view.unit] ?? null, lastTrigger, timeout),
   };
 }
 
@@ -492,26 +661,31 @@ export function buildSnapshot(raw: Raw): Snapshot {
           : "no-manifest";
 
     // The main service's: the only one of a single `start`, the first of
-    // `services`, whose unit carries the project's name.
+    // `services` that runs for good, whose unit carries the project's name.
+    // None for a worker, which listens on nothing, nor for an anchor.
     const port = manifest === null ? null : mainPort(manifest);
     const domain = readDomain(manifest, table);
 
-    // The main service is the one read above; the others come from the units
-    // the collector read beside it, their CPU counters keyed by unit name, which
-    // a slug never matches since it carries no dot.
-    const services: SiteService[] = (manifest === null || !app ? [] : servicesOf(manifest)).map((view, rank) => {
+    // The main service is the one read above, its unit named after the
+    // project; when every service is scheduled, what was read above is the
+    // anchor, and none of them is the main one. The others come from the
+    // units the collector read beside it, their CPU counters keyed by unit
+    // name, which a slug never matches since it carries no dot.
+    const views = manifest === null || !app ? [] : servicesOf(manifest);
+    const services: SiteService[] = views.map((view) => {
+      const main = view.unit === manifest!.slug;
       const servicePort = typeof view.port === "number" ? view.port : null;
       return {
         name: view.name,
-        unit: rank === 0 ? unitOf(slug) : view.unit,
+        unit: main ? unitOf(slug) : view.unit,
+        kind: view.kind,
+        main,
         port: servicePort,
         listening: servicePort === null ? null : raw.ports.includes(servicePort),
         routes: Array.isArray(view.routes) ? view.routes : null,
         internal: view.internal,
-        service:
-          rank === 0
-            ? service
-            : readService(view.unit, folder.units?.[view.unit] ?? null, raw.previous?.cpu[view.unit], windowMs),
+        service: main ? service : readService(view.unit, folder.units?.[view.unit] ?? null, raw.previous?.cpu[view.unit], windowMs),
+        schedule: view.kind === "scheduled" ? readSchedule(view, folder.units) : null,
       };
     });
 
@@ -520,6 +694,7 @@ export function buildSnapshot(raw: Raw): Snapshot {
       description: typeof manifest?.description === "string" ? manifest.description : null,
       type,
       address: addressOf(slug, raw.zone),
+      headless: manifest !== null && app && isHeadless(manifest),
       domain,
       lock: readLock(slug, manifest, codes, raw.zone),
       portal: readPortal(manifest, raw.blocks[slug]),
@@ -539,6 +714,36 @@ export function buildSnapshot(raw: Raw): Snapshot {
   discrepancies.sort((a, b) => rank[a.severity] - rank[b.severity] || (a.slug ?? "").localeCompare(b.slug ?? ""));
 
   return { generated: raw.generated, zone: raw.zone, sites, discrepancies, machine: raw.machine };
+}
+
+/**
+ * A scheduled service, judged by its timer and its last run rather than by
+ * its unit's state: inactive between two runs is what it should be.
+ *
+ * A timer that is not active is an error, as a fallen service is: the
+ * schedule stopped, and nothing runs any more while the page would otherwise
+ * show a quiet service. A run that failed is a warning, named with when and
+ * how: the next run may go well, and the service is not down for it. The
+ * monitor reports both too; src/monitor.ts leaves them to this function.
+ */
+function scheduleDiscrepancies(slug: string, name: string | null, schedule: Schedule, generated: number): Discrepancy[] {
+  const { timerState, lastRun } = schedule;
+  if (timerState !== null && !timerState.loaded) {
+    return [{ slug, severity: "error", message: `Service ${name}: no loaded timer (${schedule.timer}), it never runs` }];
+  }
+  const found: Discrepancy[] = [];
+  if (timerState !== null && timerState.active !== "active") {
+    found.push({
+      slug,
+      severity: "error",
+      message: `Service ${name}: its schedule is stopped, ${schedule.timer} is ${timerState.active} (${timerState.subState})`,
+    });
+  }
+  if (lastRun !== null && !lastRun.ok) {
+    const when = lastRun.at === null ? "" : ` ${duration(Math.max(0, generated - lastRun.at))} ago`;
+    found.push({ slug, severity: "warning", message: `Service ${name}: last run failed${when} (${lastRun.failure})` });
+  }
+  return found;
 }
 
 /**
@@ -616,12 +821,17 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       }
     }
 
+    // The main unit, the project's main service or the anchor of a project
+    // whose every service is scheduled: either way, not active, the project is
+    // stopped, timers included.
     if (site.type === "app") {
       if (site.service === null) {
         discrepancies.push({
           slug,
           severity: "error",
-          message: "App project without a loaded unit: nothing answers behind Caddy",
+          message: site.headless
+            ? "App project without a loaded unit: none of its services runs"
+            : "App project without a loaded unit: nothing answers behind Caddy",
         });
       } else if (site.service.active !== "active") {
         discrepancies.push({
@@ -640,16 +850,19 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       }
     }
 
-    // The project's other services, each judged like the main one and named,
-    // since the main one's word says nothing of the process it calls.
-    for (const other of site.services.slice(1)) {
+    // The project's other services, each judged and named, since the main
+    // one's word says nothing of the process it calls.
+    for (const other of site.services.filter((entry) => !entry.main)) {
       if (other.service === null) {
         discrepancies.push({
           slug,
           severity: "error",
           message: `Service ${other.name}: no loaded unit (${other.unit}.service)`,
         });
+      } else if (other.schedule !== null) {
+        discrepancies.push(...scheduleDiscrepancies(slug, other.name, other.schedule, raw.generated));
       } else if (other.service.active !== "active") {
+        // A server or a worker runs for good: not active, it is down.
         discrepancies.push({
           slug,
           severity: "error",
@@ -665,15 +878,18 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       }
     }
 
-    const measured = site.services.length > 0 ? site.services : [{ name: null, service: site.service }];
-    for (const { name, service: measuredService } of measured) {
+    const measured = site.services.length > 0 ? site.services : [{ name: null, main: true, service: site.service }];
+    for (const { name, main, service: measuredService } of measured) {
       const peak = measuredService?.peak ?? null;
       const limit = measuredService?.limit ?? null;
       if (peak !== null && limit !== null && limit > 0 && peak >= limit * WORRYING_PEAK_SHARE) {
+        // Unnamed for the one service of a project; named as soon as there is
+        // another, or when it is not the main one, beside an anchor.
+        const unnamed = name === null || (main && site.services.length === 1);
         discrepancies.push({
           slug,
           severity: "warning",
-          message: `${name === null || site.services.length === 1 ? "Memory" : `Service ${name}: memory`} peak at ${Math.round((peak / limit) * 100)}% of the limit`,
+          message: `${unnamed ? "Memory" : `Service ${name}: memory`} peak at ${Math.round((peak / limit) * 100)}% of the limit`,
         });
       }
     }

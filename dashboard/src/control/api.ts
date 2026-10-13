@@ -25,7 +25,7 @@
  */
 import type { RandomSource } from "../sessions";
 import { read } from "../read";
-import type { Site } from "../state";
+import type { Schedule, Site } from "../state";
 import { readManifest } from "../../borrowed/manifest";
 import { reach, type ControlSteward, type Reached } from "./client";
 import { clientAddress, type Limiter } from "./limiter";
@@ -45,6 +45,7 @@ import {
   type InstallerResult,
   type ProjectAccess,
   type ProjectStatus,
+  type ScheduleStatus,
 } from "./protocol";
 import type { Spool } from "./spool";
 import type { ControlStore, DeploymentRow } from "./store";
@@ -230,15 +231,30 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       services: site.services.map((service) => ({
         name: service.name,
         unit: service.unit,
+        kind: service.kind,
         port: service.port,
         state: service.service?.active ?? "unknown",
         subState: service.service?.subState ?? "unknown",
         restarts: service.service?.restarts ?? null,
         since: service.service?.since ?? null,
         memory: service.service?.memory ?? null,
+        schedule: service.schedule === null ? null : scheduleStatus(service.schedule),
       })),
       deployedAt: site.deployed,
       snapshotAge: age,
+    };
+  }
+
+  /** A scheduled service's timer and last run, as the snapshot reads them. */
+  function scheduleStatus(schedule: Schedule): ScheduleStatus {
+    const timer = schedule.timerState;
+    return {
+      expression: schedule.expression,
+      timer: schedule.timer,
+      timerState: timer === null ? "unknown" : timer.loaded ? timer.active : "not-found",
+      timerSubState: timer === null ? "unknown" : timer.subState,
+      next: schedule.next,
+      lastRun: schedule.lastRun === null ? null : { at: schedule.lastRun.at, ok: schedule.lastRun.ok, failure: schedule.lastRun.failure },
     };
   }
 

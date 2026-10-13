@@ -7,10 +7,10 @@
  * Nothing is judged anew here: the discrepancies come from `src/state.ts`, and
  * the memory thresholds from lib/gauges.ts.
  */
-import { duration, size, sizeOutOf } from "./format"
+import { ago, duration, fromNow, size, sizeOutOf } from "./format"
 import { serviceLevel, type Level } from "./gauges"
 import type { Tone } from "./tones"
-import type { Site } from "./types"
+import type { Site, SiteService } from "./types"
 import type { Severity } from "./verdict"
 
 export const TYPE_LABELS: Record<Site["type"], string> = {
@@ -28,14 +28,19 @@ export type Address = {
   note: { text: string; warn: boolean } | null
 }
 
+/** What the address of a project that serves no page answers, said beside it. */
+export const HEADLESS_NOTE = "Runs in the background, serves no page"
+
 /**
  * The main link is the client's domain when it is active AND routed, the only
  * case where it really answers; otherwise the preview address, which always
- * answers.
+ * answers. A project that serves no page has no domain, the manifest refuses
+ * one: its address answers a line saying so, and the note says it first.
  */
-export function siteAddress(site: Pick<Site, "address" | "domain">): Address {
+export function siteAddress(site: Pick<Site, "address" | "domain" | "headless">): Address {
   const domain = site.domain
   const preversion = { href: `https://${site.address}`, text: site.address }
+  if (site.headless && domain === null) return { ...preversion, note: { text: HEADLESS_NOTE, warn: false } }
   if (domain === null) return { ...preversion, note: null }
   if (domain.active && domain.route) {
     return { href: `https://${domain.name}`, text: domain.name, note: { text: site.address, warn: false } }
@@ -96,9 +101,15 @@ export type ServiceState = { tone: Tone; label: string }
  * `src/state.ts`; the word only says in what way it is not running.
  * `auto-restart` is systemd restarting a service that went down, in a loop if
  * it goes down every time.
+ *
+ * `active (exited)` is the anchor's state, the main unit of a project whose
+ * every service is scheduled (isAnchored in bin/cli/manifest.ts): a oneshot
+ * that runs nothing and stays active to keep their timers armed. No other
+ * unit of a project exits and stays active, so the word says what the
+ * project does, Scheduled, on Secrets as on its row.
  */
 export function serviceWord(active: string, subState: string): ServiceState {
-  if (active === "active") return { tone: "ok", label: "Running" }
+  if (active === "active") return subState === "exited" ? { tone: "ok", label: "Scheduled" } : { tone: "ok", label: "Running" }
   if (subState === "auto-restart") return { tone: "error", label: "Restarting" }
   if (active === "activating") return { tone: "error", label: "Starting" }
   if (active === "deactivating") return { tone: "error", label: "Stopping" }
@@ -116,14 +127,89 @@ export function serviceState(site: Pick<Site, "type" | "service">): ServiceState
   return serviceWord(service.active, service.subState)
 }
 
+// --- Workers and scheduled services ------------------------------------------------
+
+/**
+ * Is every service of the project scheduled? Its main unit is then an anchor,
+ * which runs nothing, and none of its services is the main one.
+ */
+export function isAnchoredSite(site: Pick<Site, "services">): boolean {
+  return site.services.length > 0 && site.services.every((entry) => !entry.main)
+}
+
+/** systemd's shorthands for a calendar expression, which read as words. */
+const SCHEDULE_SHORTHANDS = new Set(["minutely", "hourly", "daily", "weekly", "monthly", "quarterly", "semiannually", "yearly", "annually"])
+
+/**
+ * "Runs hourly" for one of systemd's shorthands; null for any other
+ * expression, `*:0/15` or `Mon..Fri 08:00`, which the page shows as written
+ * rather than translate it into words that might say something else.
+ */
+export function scheduleWords(expression: string): string | null {
+  const word = expression.trim().toLowerCase()
+  return SCHEDULE_SHORTHANDS.has(word) ? `Runs ${word}` : null
+}
+
+/** A unit in one of these states is running a program, about to, or about to stop. */
+const RUNNING_STATES = new Set(["active", "activating", "deactivating", "reloading"])
+
+/**
+ * A scheduled service's word and tone. Inactive between two runs is its
+ * normal state, Waiting, never Down; what puts it in error is its timer, not
+ * active, since nothing runs any more. A failed last run is a warning, as in
+ * the discrepancies of `src/state.ts`: the next run may go well.
+ */
+export function scheduledWord(entry: Pick<SiteService, "service" | "schedule">): ServiceState {
+  const { service, schedule } = entry
+  if (service === null) return { tone: "error", label: "Not loaded" }
+  const timer = schedule?.timerState ?? null
+  if (timer !== null && !timer.loaded) return { tone: "error", label: "No timer" }
+  if (timer !== null && timer.active !== "active") return { tone: "error", label: "Schedule stopped" }
+  if (RUNNING_STATES.has(service.active)) return { tone: "ok", label: "Running" }
+  if (schedule?.lastRun?.ok === false) return { tone: "attention", label: "Last run failed" }
+  return { tone: "ok", label: "Waiting" }
+}
+
+/** A line under a scheduled service's word, and its tone. */
+export type RunLine = { text: string; tone: Tone }
+
+/**
+ * When a scheduled service last ran and how, and when it runs next: "Last
+ * run 3h ago", "Failed 3h ago: exit code 1" under its word, which already
+ * says it was the last run, "Started 2m ago" while it runs, "Next run in
+ * 42m". After a reboot systemd no longer knows how the last run ended, only
+ * when its timer started it. No next run while the timer is stopped: the
+ * word already says it.
+ */
+export function runLines(entry: Pick<SiteService, "service" | "schedule">, now: number): { last: RunLine | null; next: string | null } {
+  const { service, schedule } = entry
+  if (schedule === null) return { last: null, next: null }
+  const next = schedule.next === null ? null : schedule.next <= now ? "Next run due now" : `Next run ${fromNow(schedule.next - now)}`
+  const run = schedule.lastRun
+  let last: RunLine | null
+  if (service !== null && RUNNING_STATES.has(service.active)) {
+    last = service.since === null ? null : { text: `Started ${ago(now - service.since)}`, tone: "neutral" }
+  } else if (run !== null && !run.ok) {
+    const when = run.at === null ? "" : ` ${ago(now - run.at)}`
+    last = { text: `Failed${when}: ${run.failure ?? "no reason given"}`, tone: "attention" }
+  } else if (run !== null && run.at !== null) {
+    last = { text: `Last run ${ago(now - run.at)}`, tone: "neutral" }
+  } else if (schedule.lastTrigger !== null) {
+    last = { text: `Last started ${ago(now - schedule.lastTrigger)}`, tone: "neutral" }
+  } else {
+    last = { text: "No run yet", tone: "neutral" }
+  }
+  return { last, next }
+}
+
 export type ServiceSummary =
   | { kind: "static" }
   | { kind: "none" }
   | { kind: "stopped"; state: string; restarts: string | null }
   | {
       kind: "active"
-      /** "61 of 256 MB", or the memory alone with no ceiling. */
-      memory: string
+      /** "61 of 256 MB", or the memory alone with no ceiling; null while nothing of the project runs, between two scheduled runs. */
+      memory: string | null
       /** Memory over ceiling, capped at one hundred for the bar. */
       percent: number | null
       level: Level
@@ -134,6 +220,8 @@ export type ServiceSummary =
       restarts: string | null
       /** "3 services" for a project running several, whose figures above are then their sum. */
       services: string | null
+      /** "next run in 12m", for a project whose every service is scheduled: the soonest of their runs. */
+      next: string | null
     }
 
 /** A share of a core: "3%", and "<1%" rather than a zero that would read as a sleeping service. */
@@ -168,13 +256,24 @@ export function serviceSummaryOf(site: Pick<Site, "type" | "service"> & Partial<
   const restarts = restartsLabel(service.restarts)
   if (service.active !== "active") return { kind: "stopped", state: service.active, restarts }
 
-  // A project of several services weighs what all of them weigh: the main
-  // one's figures alone would show a fraction of it. A figure one of them
-  // lacks makes the sum unknown rather than wrong.
-  const all = (site.services ?? []).length > 1 ? site.services!.map((entry) => entry.service) : [service]
+  // A project of several services weighs what all of its running ones weigh:
+  // the main one's figures alone would show a fraction of it. A figure one of
+  // them lacks makes the sum unknown rather than wrong. A scheduled service
+  // between two runs weighs nothing and holds no memory to measure, and the
+  // anchor of a project whose every service is scheduled runs nothing:
+  // neither is counted, rather than blank the sum for want of their figures.
+  const entries = site.services ?? []
+  const anchored = isAnchoredSite({ services: entries })
+  const counted = [
+    ...(anchored ? [] : [service]),
+    ...entries
+      .filter((entry) => !entry.main && (entry.kind !== "scheduled" || entry.service?.active === "active"))
+      .map((entry) => entry.service),
+  ]
   const sum = (pick: (entry: NonNullable<Site["service"]>) => number | null): number | null => {
+    if (counted.length === 0) return null
     let total = 0
-    for (const entry of all) {
+    for (const entry of counted) {
       const value = entry === null ? null : pick(entry)
       if (value === null) return null
       total += value
@@ -185,15 +284,22 @@ export function serviceSummaryOf(site: Pick<Site, "type" | "service"> & Partial<
   const peak = sum((entry) => entry.peak)
   const limit = sum((entry) => entry.limit)
   const cpuShare = sum((entry) => entry.cpuShare)
+  const soonest = anchored
+    ? entries.reduce<number | null>((first, entry) => {
+        const next = entry.schedule?.next ?? null
+        return next !== null && (first === null || next < first) ? next : first
+      }, null)
+    : null
   return {
     kind: "active",
-    memory: limit === null ? size(memory) : sizeOutOf(memory, limit),
+    memory: counted.length === 0 ? null : limit === null ? size(memory) : sizeOutOf(memory, limit),
     percent: memoryShare(memory, limit),
     level: serviceLevel(memory, peak, limit),
     cpu: cpuShare === null ? null : `${computeCpuShare(cpuShare)} CPU`,
     since: service.since === null ? null : `up ${duration(now - service.since)}`,
     restarts,
-    services: all.length > 1 ? `${all.length} services` : null,
+    services: entries.length > 1 ? `${entries.length} services` : null,
+    next: soonest === null ? null : soonest <= now ? "next run due now" : `next run ${fromNow(soonest - now)}`,
   }
 }
 

@@ -14,7 +14,9 @@
  *   in the temporary directory and an `state.json` rewritten every thirty
  *   seconds in the `Raw` format of `src/state.ts`: a dozen sites, static and
  *   app, a service that loops, a preview lock, sites behind the portal,
- *   discrepancies of both severities;
+ *   discrepancies of both severities; two projects that serve no page,
+ *   `courier`, a worker beside two scheduled services whose hourly one's
+ *   last run failed, and `reports`, whose every service is scheduled;
  * - a fake steward on a Unix socket, which follows `src/secrets/protocol.ts`
  *   and the real one's guard rails: every deployed site and its portal,
  *   variable files, one out of management, one missing, one pending restart,
@@ -144,12 +146,18 @@ type FakeUnit = {
   subState?: string;
   memory: number;
   peak: number;
-  limit: number;
+  /** Null for no ceiling, an anchor's. */
+  limit: number | null;
   restarts?: number;
   sinceMs: number;
   /** Share of a core over the last minute, as a percentage. */
   cpu: number;
+  /** A scheduled service's last run: how it ended, how long ago, and how long it took. */
+  run?: { result: string; status: number; endedMs: number; tookMs: number };
 };
+
+/** A scheduled service's timer: when it last fired, when it fires next. */
+type FakeTimer = { active?: string; subState?: string; lastMs: number; nextMs: number };
 
 type FakeFolder = {
   slug: string;
@@ -157,10 +165,15 @@ type FakeFolder = {
   unit: FakeUnit | null;
   /** The other units of a project declaring several services, by unit name. */
   units?: Record<string, FakeUnit>;
+  /** The timers of its scheduled services, `<slug>.<name>.timer`. */
+  timers?: Record<string, FakeTimer>;
   bytes: number;
   deployedMs: number;
   portal?: boolean;
 };
+
+/** A scheduled service between two runs: no process, so no memory, no processor. */
+const IDLE = { active: "inactive", subState: "dead", memory: 0, peak: 0, sinceMs: 0, cpu: 0 };
 
 const FOLDERS: FakeFolder[] = [
   {
@@ -322,6 +335,51 @@ const FOLDERS: FakeFolder[] = [
     },
     bytes: 1.1 * GB,
     deployedMs: 2 * HOUR,
+  },
+  {
+    // Runs in the background and serves no page: a worker holding the queue,
+    // its main service, and two scheduled jobs, the hourly one failing
+    // outside the showcase.
+    slug: "courier",
+    manifest: {
+      slug: "courier",
+      description: "Order emails and the morning digest",
+      services: {
+        queue: { start: "bun run worker.ts", internal: true },
+        digest: { start: "bun run digest.ts", schedule: "Mon..Fri 08:00", timeout: "15m" },
+        cleanup: { start: "bun run cleanup.ts", schedule: "hourly" },
+      },
+      secrets: ["courier.env"],
+    },
+    unit: { memory: 52 * MB, peak: 58 * MB, limit: 256 * MB, sinceMs: 4 * DAY, cpu: 0.4 },
+    units: {
+      "courier.digest": { ...IDLE, limit: 256 * MB, run: { result: "success", status: 0, endedMs: 5 * HOUR, tookMs: 47_000 } },
+      "courier.cleanup": SHOWCASE
+        ? { ...IDLE, limit: 256 * MB, run: { result: "success", status: 0, endedMs: 22 * MINUTE, tookMs: 3_000 } }
+        : { ...IDLE, active: "failed", subState: "failed", limit: 256 * MB, run: { result: "exit-code", status: 1, endedMs: 22 * MINUTE, tookMs: 3_000 } },
+    },
+    timers: {
+      "courier.digest.timer": { lastMs: 5 * HOUR + 47_000, nextMs: 19 * HOUR },
+      "courier.cleanup.timer": { lastMs: 22 * MINUTE + 3_000, nextMs: 38 * MINUTE },
+    },
+    bytes: 21 * MB,
+    deployedMs: 4 * DAY,
+  },
+  {
+    // Every service scheduled: the main unit is an anchor, active (exited).
+    slug: "reports",
+    manifest: {
+      slug: "reports",
+      description: "Weekly sales report, by email",
+      services: { weekly: { start: "bun run report.ts", schedule: "Mon 07:00", timeout: "30m" } },
+    },
+    unit: { subState: "exited", memory: 0, peak: 0, limit: null, sinceMs: 4 * DAY, cpu: 0 },
+    units: {
+      "reports.weekly": { ...IDLE, limit: 256 * MB, run: { result: "success", status: 0, endedMs: 2 * DAY, tookMs: 95_000 } },
+    },
+    timers: { "reports.weekly.timer": { lastMs: 2 * DAY + 95_000, nextMs: 5 * DAY } },
+    bytes: 5 * MB,
+    deployedMs: 4 * DAY,
   },
   {
     slug: "roster",
@@ -549,18 +607,36 @@ function reading(now: number) {
     const { before, now: nsec } = counters(fake);
     cpu[key] = before;
     const active = fake.active ?? "active";
+    const at = (ms: number) => `@${Math.floor((generatedAt - ms) / 1000)}`;
     return {
       LoadState: "loaded",
       ActiveState: active,
       SubState: fake.subState ?? "running",
       MemoryCurrent: active === "active" ? String(fake.memory) : "[not set]",
       MemoryPeak: String(fake.peak),
-      MemoryMax: String(fake.limit),
+      MemoryMax: fake.limit === null ? "infinity" : String(fake.limit),
       NRestarts: String(fake.restarts ?? 0),
-      ActiveEnterTimestamp: active === "active" ? `@${Math.floor((generatedAt - fake.sinceMs) / 1000)}` : "@0",
+      ActiveEnterTimestamp: active === "active" ? at(fake.sinceMs) : "@0",
       CPUUsageNSec: active === "active" ? String(nsec) : "[not set]",
+      ...(fake.run === undefined
+        ? {}
+        : {
+            Result: fake.run.result,
+            ExecMainStatus: String(fake.run.status),
+            ExecMainStartTimestamp: at(fake.run.endedMs + fake.run.tookMs),
+            ExecMainExitTimestamp: at(fake.run.endedMs),
+          }),
     };
   };
+
+  // What systemctl show would return for a fake timer.
+  const rawTimer = (fake: FakeTimer): Record<string, string> => ({
+    LoadState: "loaded",
+    ActiveState: fake.active ?? "active",
+    SubState: fake.subState ?? "waiting",
+    LastTriggerUSec: `@${Math.floor((generatedAt - fake.lastMs) / 1000)}`,
+    NextElapseUSecRealtime: `@${Math.floor((generatedAt + fake.nextMs) / 1000)}`,
+  });
 
   const folders = FOLDERS.map((d) => {
     blocks[d.slug] = `# ${d.slug}\n${d.portal === true ? kept(d.slug) : ""}`;
@@ -568,7 +644,10 @@ function reading(now: number) {
     const units =
       d.units === undefined
         ? undefined
-        : Object.fromEntries(Object.entries(d.units).map(([name, fake]) => [name, raw(name, fake)]));
+        : {
+            ...Object.fromEntries(Object.entries(d.units).map(([name, fake]) => [name, raw(name, fake)])),
+            ...Object.fromEntries(Object.entries(d.timers ?? {}).map(([name, fake]) => [name, rawTimer(fake)])),
+          };
     return {
       slug: d.slug,
       manifest: d.manifest === null ? null : JSON.stringify(d.manifest),
@@ -774,6 +853,16 @@ const FILES: Record<string, FakeFile[]> = {
       variables: new Map([["MAIL_KEY", "mk_bench00000000"]]),
       modifiedAt: start - 26 * MINUTE,
       previous: { variables: new Map([["MAIL_KEY", "mk_benchold"]]), content: "" },
+    }),
+  ],
+  courier: [
+    file("courier", {
+      name: "courier.env",
+      variables: new Map([
+        ["QUEUE_URL", "redis://bench-fake-queue"],
+        ["SMTP_PASSWORD", "bench-courier-smtp"],
+      ]),
+      modifiedAt: start - 4 * DAY,
     }),
   ],
   "example.com": [

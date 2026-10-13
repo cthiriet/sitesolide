@@ -173,7 +173,7 @@ A project the machine already carries keeps the port it has there. The port is
 written into the local `sitesolide.json`, with a message: commit it, and every
 later deploy, from any workstation, keeps it. A dry run says which port it
 would take and writes nothing. A project of several `services` declares its
-ports itself, since its services name each other's in their `env`.
+servers' ports itself, since its services name each other's in their `env`.
 
 **A dry run runs nothing of the folder.** The manifest's `build` is the
 folder's own code, and a dry run is what an agent tries first, on a folder it
@@ -184,6 +184,49 @@ tool never does. Likewise, a name inference would put into a command, a folder
 under `cmd/` or a server file, is declined unless it is made of letters,
 digits, dots, dashes and underscores, and a manifest outside your sites
 repository may only point `source` inside its own repository.
+
+## Background work
+
+`detect` infers web servers and static sites. A process that is not one, "a
+bot that stays connected", "something that runs every hour", is written by
+hand under `services`, never as the top-level `start`, which is always a
+server:
+
+```json
+"services": {
+  "web":    { "start": "/usr/local/bin/bun run web.ts", "port": 3041 },
+  "worker": { "start": "/usr/local/bin/bun run worker.ts", "internal": true },
+  "report": { "start": "/usr/local/bin/bun run report.ts", "schedule": "Mon..Fri 08:00", "timeout": "15m" }
+}
+```
+
+- **A worker**, `"internal": true` and no `port`, runs for good and listens
+  on nothing. systemd restarts it when it falls, waiting longer each time, up
+  to 5 minutes. Write it to exit cleanly on SIGTERM.
+- **A scheduled service** has a `schedule` in systemd's calendar syntax,
+  `hourly`, `daily`, `*:0/15`, `Mon..Fri 08:00`, `*-*-* 06:30 Europe/Paris`,
+  and runs to its end at those times; `timeout`, `1h` by default and a day at
+  most, stops a run that hangs. No `port`, `routes` nor `backup`. A deployment
+  does not run it: the first run is the next time the schedule names.
+- **`cpu`**, `50%` for half a core, caps a service, or every service at the
+  top level. Workers and scheduled services already yield the processor to
+  the sites.
+- **A project of workers and scheduled services alone**, without
+  `publicDir`, serves no page: its address answers a line saying so, and
+  `domain` is refused.
+
+`deploy` asks systemd on the machine whether it reads each schedule, before
+anything is written and in a dry run too, and stops on one it does not:
+fix the expression, never drop the schedule to get past it. After the restart
+it watches every server and worker for ten seconds, and fails, naming each,
+when one fell: read `logs`. `status` shows a scheduled service's last and
+next run, and its runs are in `logs`.
+
+Some work does not belong on the machine that serves every site: a headless
+browser, whose sandbox the unit's confinement refuses; heavy computing, which
+slows every site while it runs; mass email from the machine's own address,
+whose reputation every site shares. Say so to the user before writing one,
+see [manifest.md](manifest.md#what-fits-on-the-machine-and-what-does-not).
 
 ## The CLI with `--json`
 
@@ -221,9 +264,9 @@ What `result` carries:
 
 | Command | Fields |
 |---|---|
-| `deploy` | `slug`, `kind` (`static`, `service`, `services`), `dryRun`, `port`, `portChosen` (`kept`, `free`) when chosen, `portal`, `inferred` when the manifest was, `manifestWritten`, `url`, `status` (HTTP, null in a dry run); with `--compare`, `compared`, `changes` (what would change on the server, empty when nothing would) and `kept` (units edited on the machine, which deploy leaves) |
+| `deploy` | `slug`, `kind` (`static`, `service`, `services`), `runs` for an app (`servers`, `workers`, `scheduled`, how many of each), `dryRun`, `port` (null when the main service listens on nothing), `portChosen` (`kept`, `free`) when chosen, `portal`, `inferred` when the manifest was, `manifestWritten`, `url`, `status` (HTTP, null in a dry run), `headless` (true for a project that serves no page); with `--compare`, `compared`, `changes` (what would change on the server, empty when nothing would) and `kept` (units edited on the machine, which deploy leaves) |
 | `detect` | `kind`, `manifest`, `reasons`, `notes`, `written` |
-| `status` | `projects` (each with its `services`), `ports`, `memory`, in megabytes |
+| `status` | `projects` (each with its `services`), `ports`, `memory`, in megabytes; a scheduled service between two runs reads `waiting`, and carries `schedule`, `lastRun`, `lastResult` and `nextRun` |
 | `logs` | `slug`, `units`, `entries` |
 | `lock --status` | `slug`, `lock`: `wanted`, `installed`, `withoutCode`, `withCode`, `domain` |
 | `lock`, `unlock` | `slug`, `access` (`code` or `public`), `code` and `url` (null once Public), `manifestWritten`; in a dry run `dryRun` alone |

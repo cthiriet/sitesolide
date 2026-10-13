@@ -11,6 +11,7 @@ import type {
   Service,
   ServiceView,
   Site,
+  SiteService,
 } from "../src/lib/types"
 
 export function service(partial: Partial<Service> = {}): Service {
@@ -36,6 +37,7 @@ export function site(partial: Partial<Site> = {}): Site {
     description: null,
     type: "app",
     address: "calendar.test-zone.invalid",
+    headless: false,
     domain: null,
     lock: { closed: false, code: null, url: null },
     portal: { wanted: false, installed: false, exemptions: [] },
@@ -48,6 +50,49 @@ export function site(partial: Partial<Site> = {}): Site {
     secrets: [],
     ...partial,
   }
+}
+
+/** One process of a project: a public server taking every path left, unless the test says otherwise. */
+export function siteService(partial: Partial<SiteService> = {}): SiteService {
+  return {
+    name: "web",
+    unit: "calendar",
+    kind: "server",
+    main: false,
+    port: null,
+    listening: null,
+    routes: null,
+    internal: false,
+    service: service(),
+    schedule: null,
+    ...partial,
+  }
+}
+
+/**
+ * A scheduled service as the snapshot carries it: its timer active
+ * (waiting), its last run a success an hour before `now`, its next one in a
+ * quarter of an hour.
+ */
+export function scheduledService(now: number, partial: Partial<SiteService> = {}, schedule: Partial<NonNullable<SiteService["schedule"]>> = {}): SiteService {
+  return siteService({
+    name: "sync",
+    unit: "calendar.sync",
+    kind: "scheduled",
+    internal: true,
+    service: service({ unit: "calendar.sync", active: "inactive", subState: "dead", memory: null, cpuShare: null }),
+    schedule: {
+      expression: "hourly",
+      timeout: "1h",
+      timer: "calendar.sync.timer",
+      timerState: { loaded: true, active: "active", subState: "waiting" },
+      lastTrigger: now - 3600_000,
+      next: now + 15 * 60_000,
+      lastRun: { at: now - 3600_000 + 30_000, ok: true, result: "success", status: 0, failure: null },
+      ...schedule,
+    },
+    ...partial,
+  })
 }
 
 export function discrepancy(severity: Discrepancy["severity"], slug: string | null = "calendar", message = "m"): Discrepancy {

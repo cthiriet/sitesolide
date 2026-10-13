@@ -40,9 +40,9 @@ import { join } from "node:path";
 import type { Machine } from "../gatekeeper/machine";
 import { readAccount, readBounded, writeAtomically } from "../secrets/system";
 import { LOOPBACK_TABLE, PROJECT_PORTS_SET } from "../../borrowed/loopback";
-import { isValidSlug } from "../../borrowed/manifest";
-import { GENERATOR_MARK, MARKER_DONE, readCurrentPairs } from "../../borrowed/services";
-import { systemdRunArguments, systemUser, unitArgument, type ProjectRun } from "../../borrowed/unit";
+import { isValidSchedule, isValidSlug } from "../../borrowed/manifest";
+import { GENERATOR_MARK, MARKER_DONE, readCurrentPairs, readStability } from "../../borrowed/services";
+import { isTimerUnit, systemdRunArguments, systemUser, unitArgument, unitFileName, type ProjectRun } from "../../borrowed/unit";
 import { BUNDLE_NAME, DEPLOYMENT_ID_SHAPE, MAX_BUNDLE_BYTES } from "../control/protocol";
 import type { ExtractOutcome } from "./extract";
 import type { Execution, Host, Part } from "./host";
@@ -60,6 +60,8 @@ export type Commands = {
   userdel: (account: string) => Promise<Execution>;
   asProject: (run: ProjectRun) => Promise<Execution>;
   nft: (arguments_: string[], timeoutMs: number) => Promise<Execution>;
+  /** `systemd-analyze`, for `calendar` alone: a reading of a schedule, which needs no manager. */
+  systemdAnalyze: (arguments_: string[], timeoutMs: number) => Promise<Execution>;
 };
 
 export type HostConfig = {
@@ -122,7 +124,7 @@ export async function spawn(command: string[], timeoutMs: number, options: { std
   }
 }
 
-export function realCommands(paths: { systemctl: string; useradd: string; userdel: string; systemdRun: string; nft: string }): Commands {
+export function realCommands(paths: { systemctl: string; useradd: string; userdel: string; systemdRun: string; nft: string; systemdAnalyze: string }): Commands {
   return {
     systemctl: (arguments_, timeoutMs) => spawn([paths.systemctl, ...arguments_], timeoutMs),
     useradd: (account) => spawn([paths.useradd, "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", account], 30_000),
@@ -131,6 +133,7 @@ export function realCommands(paths: { systemctl: string; useradd: string; userde
     userdel: (account) => spawn([paths.userdel, account], 30_000),
     asProject: (run) => spawn(systemdRunArguments(run, paths.systemdRun), (run.timeoutS + 30) * 1000, { stdin: run.stdin }),
     nft: (arguments_, timeoutMs) => spawn([paths.nft, ...arguments_], timeoutMs),
+    systemdAnalyze: (arguments_, timeoutMs) => spawn([paths.systemdAnalyze, ...arguments_], timeoutMs),
   };
 }
 
@@ -192,7 +195,7 @@ export function createHost(config: HostConfig): Host {
     },
 
     async readUnit(unit) {
-      const examination = readBounded(join(config.unitsFolder, `${unit}.service`), 256 * 1024);
+      const examination = readBounded(join(config.unitsFolder, unitFileName(unit)), 256 * 1024);
       return examination.kind === "present" && examination.bytes !== null ? decoder.decode(examination.bytes) : null;
     },
 
@@ -200,8 +203,10 @@ export function createHost(config: HostConfig): Host {
       if (!isValidSlug(slug)) throw new Error("invalid slug");
       const units: string[] = [];
       for (const name of readdirSync(config.unitsFolder)) {
-        if (!name.startsWith(`${slug}.`) || !name.endsWith(".service")) continue;
-        const unit = name.slice(0, -".service".length);
+        if (!name.startsWith(`${slug}.`) || !(name.endsWith(".service") || name.endsWith(".timer"))) continue;
+        // A service by its name without `.service`, a timer by its own, as
+        // listUnitsCommand of bin/cli/services.ts prints them.
+        const unit = isTimerUnit(name) ? name : name.slice(0, -".service".length);
         if (!/^[a-z0-9.-]+$/.test(unit) || unit === slug) continue;
         const examination = readBounded(join(config.unitsFolder, name), 256 * 1024);
         if (examination.kind !== "present" || examination.bytes === null) continue;
@@ -217,7 +222,7 @@ export function createHost(config: HostConfig): Host {
 
     async unitFacts(slug, unit) {
       if (!isValidSlug(slug) || (unit !== slug && !(unit.startsWith(`${slug}.`) && /^[a-z0-9.-]+$/.test(unit)))) throw new Error("invalid unit");
-      const shown = await config.commands.systemctl(["show", "-p", "LoadState", "-p", "FragmentPath", `${unit}.service`], 10_000);
+      const shown = await config.commands.systemctl(["show", "-p", "LoadState", "-p", "FragmentPath", unitFileName(unit)], 10_000);
       if (shown.code !== 0) return null;
       const fields = new Map(shown.output.split("\n").flatMap((line) => (line.includes("=") ? [[line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1).trim()] as const] : [])));
       const loadState = fields.get("LoadState");
@@ -233,6 +238,33 @@ export function createHost(config: HostConfig): Host {
         // Unreadable: neither mark nor project, so foreign unless absent.
       }
       return { loadState, fragmentPath, generated: text.includes(GENERATOR_MARK), project: text.includes(`/srv/sites/${slug}/`) };
+    },
+
+    async refusedSchedules(schedules) {
+      const refused: string[] = [];
+      for (const schedule of schedules) {
+        // validate() has judged it already; the second barrier, as
+        // scheduleCheckCommand has: nothing it refuses reaches a command.
+        if (!isValidSchedule(schedule)) throw new Error(`invalid schedule: ${schedule}`);
+        // One argument, never a shell: the expression reaches systemd as written.
+        // It exits 1 on an expression it cannot parse; any other failure, a
+        // program missing or stopped for its time, says nothing of the schedule.
+        const read = await config.commands.systemdAnalyze(["calendar", schedule], 10_000);
+        if (read.code === 1) refused.push(schedule);
+        else if (read.code !== 0) return null;
+      }
+      return refused;
+    },
+
+    async standing(units) {
+      for (const unit of units) {
+        if (!/^[a-z0-9][a-z0-9.-]*$/.test(unit)) throw new Error("invalid unit");
+      }
+      const shown = await config.commands.systemctl(["show", "-p", "Id", "-p", "ActiveState", "-p", "SubState", "-p", "NRestarts", ...units.map(unitArgument)], 10_000);
+      if (shown.code !== 0) return null;
+      // The marker readStability expects after a complete answer, which a
+      // command that exited 0 has given.
+      return readStability(`${shown.output}\n${MARKER_DONE}\n`, units);
     },
 
     async secretPresent(name) {
@@ -433,13 +465,16 @@ export function createHost(config: HostConfig): Host {
     },
 
     async installUnit(unit, text) {
-      writeAtomically(config.unitsFolder, `${unit}.service`, encoder.encode(text), { owner: null, mode: 0o644 });
+      writeAtomically(config.unitsFolder, unitFileName(unit), encoder.encode(text), { owner: null, mode: 0o644 });
     },
 
     async removeUnits(units) {
-      const names = units.map(unitArgument);
-      await config.commands.systemctl(["disable", "--now", ...names], 60_000);
-      for (const unit of units) rmSync(join(config.unitsFolder, `${unit}.service`), { force: true });
+      // The timers first, as removeUnitsCommand of bin/cli/services.ts
+      // orders them: none starts its service between that service's stop and
+      // its removal.
+      const ordered = [...units.filter(isTimerUnit), ...units.filter((unit) => !isTimerUnit(unit))];
+      await config.commands.systemctl(["disable", "--now", ...ordered.map(unitArgument)], 60_000);
+      for (const unit of ordered) rmSync(join(config.unitsFolder, unitFileName(unit)), { force: true });
       await config.commands.systemctl(["daemon-reload"], 60_000);
     },
 

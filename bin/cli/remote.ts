@@ -42,8 +42,8 @@ import { dirname, join, resolve } from "node:path";
 import { bundle, excludedBy, type BundleEntry } from "./bundle";
 import { configPath, defaultPaths, expandHome, projectsRepo, readConfigFile } from "./config";
 import { hintForFailure } from "./hints";
-import { hasServices, isApp, mainPort, missingExclusions, NEVER_SENT, parserComplaint, readManifest, type Manifest } from "./manifest";
-import { eventFor, formatEvent, type OutputEvent } from "./output";
+import { hasServices, isApp, mainPort, missingExclusions, NEVER_SENT, parserComplaint, readManifest, servicesOf, type Manifest } from "./manifest";
+import { eventFor, formatEvent, runsOf, type OutputEvent } from "./output";
 import { share, SHARE_OPTIONS, type AccessState, type AccessTransport, type EntryAnswer, type Reading } from "./access";
 import { sourceRefusal } from "./source";
 
@@ -230,6 +230,10 @@ export type RemoteProject = { folder: string; code: string; manifest: Manifest; 
  * The manifest as the API will judge it: `validate()` of the CLI, except that
  * a missing port is not an error, the machine choosing one. Missing ports are
  * filled with stand-ins for the check alone; the text sent is the file's.
+ *
+ * Only a public service gets one. An internal service without a port is a
+ * worker, which listens on nothing, and a scheduled one may not have a port
+ * at all: a stand-in would make the first a server and the second refused.
  */
 export function checkManifest(raw: string): { manifest?: Manifest; errors: string[] } {
   let object: unknown;
@@ -244,7 +248,8 @@ export function checkManifest(raw: string): { manifest?: Manifest; errors: strin
     const services: Record<string, unknown> = {};
     let next = 3000;
     for (const [name, service] of Object.entries(filled.services as Record<string, unknown>)) {
-      const standIn = typeof service === "object" && service !== null && !Array.isArray(service) && !("port" in service);
+      const standIn =
+        typeof service === "object" && service !== null && !Array.isArray(service) && !("port" in service) && !("schedule" in service) && (service as { internal?: unknown }).internal !== true;
       services[name] = standIn ? { ...service, port: next++ } : service;
     }
     filled.services = services;
@@ -507,6 +512,7 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies): Promise
       output.succeeded("deploy", {
         slug: project.manifest.slug,
         kind: isApp(project.manifest) ? (hasServices(project.manifest) ? "services" : "service") : "static",
+        ...(isApp(project.manifest) ? { runs: runsOf(servicesOf(project.manifest)) } : {}),
         dryRun: false,
         port: main?.port ?? mainPort(project.manifest),
         ...(view.allocated.length > 0 ? { portChosen: "free" } : {}),
@@ -528,6 +534,16 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies): Promise
   }
 }
 
+/** One service of a project, as the control API reports it. */
+type ServiceState = {
+  name: string | null;
+  state: string;
+  subState: string;
+  port: number | null;
+  /** Absent from a dashboard from before workers and scheduled services: every service was a server then. */
+  kind?: "server" | "worker" | "scheduled";
+};
+
 type ProjectStatus = {
   slug: string;
   access: string;
@@ -537,8 +553,22 @@ type ProjectStatus = {
   /** Absent from a dashboard from before it: read from `portal` then. */
   general?: "public" | "restricted" | "code" | null;
   portal: { wanted: boolean; installed: boolean } | null;
-  services: { name: string | null; state: string; subState: string; port: number | null }[];
+  services: ServiceState[];
 };
+
+/**
+ * The SERVICE column of a project: `active` when everything that should run
+ * does, the states that differ otherwise. A scheduled service is inactive
+ * between two runs and active during one, neither of which says anything is
+ * wrong: only a failed run counts. A project whose every service is
+ * scheduled, none failed, reads `scheduled`.
+ */
+export function serviceWord(services: readonly ServiceState[]): string {
+  if (services.length === 0) return "-";
+  const counted = services.filter((service) => service.kind !== "scheduled" || service.state === "failed");
+  if (counted.length === 0) return "scheduled";
+  return counted.every((service) => service.state === "active") ? "active" : counted.map((service) => service.state).join(",");
+}
 
 /** Who may open the site, in the words of the dashboard's Access section. */
 export function generalWord(project: Pick<ProjectStatus, "general" | "portal" | "deployed">): string {
@@ -558,7 +588,7 @@ async function status(remote: Remote, dependencies: RemoteDependencies): Promise
   output.say("");
   output.say(`${"PROJECT".padEnd(22)} ${"TYPE".padEnd(7)} ${"SERVICE".padEnd(10)} ${"GENERAL ACCESS".padEnd(21)} ADDRESS`);
   for (const project of answer.body.projects) {
-    const service = project.services.length === 0 ? "-" : project.services.every((entry) => entry.state === "active") ? "active" : project.services.map((entry) => entry.state).join(",");
+    const service = serviceWord(project.services);
     output.say(`${project.slug.padEnd(22)} ${(project.type ?? (project.deployed ? "?" : "-")).padEnd(7)} ${service.padEnd(10)} ${generalWord(project).padEnd(21)} ${project.url ?? "not deployed"}`);
   }
   output.succeeded("status", { api: remote.api, identity: who.body.identity, projects: answer.body.projects });

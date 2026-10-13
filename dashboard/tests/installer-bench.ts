@@ -1,10 +1,13 @@
 /**
  * The installer's bench, shared by its tests: a throwaway tree standing in for
  * the machine, the real host mounted on it, and only what needs root or a
- * machine simulated: `systemctl`, `useradd`, `userdel`, `systemd-run`'s
- * confinement, `nft`, and Caddy, whose model is the gatekeeper tests' own: it
- * serves the block of its last reload, and a site answers the portal's 401
- * when that block carries the guard.
+ * machine simulated: `systemctl`, `systemd-analyze`, `useradd`, `userdel`,
+ * `systemd-run`'s confinement, `nft`, and Caddy, whose model is the gatekeeper
+ * tests' own: it serves the block of its last reload, and a site answers the
+ * portal's 401 when that block carries the guard.
+ *
+ * Time is the machine's clock moved forward by its waits: the ten seconds a
+ * deployment watches its services after their restart take none.
  *
  * The extraction is the real one, `installer.ts --extract` in a child
  * process, fed the archive through a descriptor as on the machine; `install`
@@ -32,6 +35,10 @@ export type BenchOptions = {
   restartFails?: boolean;
   /** Units systemd reads from elsewhere than the bench's units folder, a package's own: unit -> file. */
   systemUnits?: Record<string, string>;
+  /** The schedules `systemd-analyze calendar` refuses. */
+  refusedSchedules?: string[];
+  /** How a unit stands from the second reading after the restart on, by unit as deploy names it; every other one runs. */
+  falls?: Record<string, { active: string; sub: string; restarts: number }>;
   probe?: (host: string, path: string, bench: Bench) => ProbeResponse | null;
 };
 
@@ -46,6 +53,10 @@ export type Bench = {
   events: string[];
   /** What Caddy serves: the block of each site at the last reload. */
   served: Map<string, string | null>;
+  /** How far the machine's waits moved its clock. */
+  elapsed: number;
+  /** How many times the units' standing was read. */
+  readings: number;
   options: BenchOptions;
   cleanup: () => void;
 };
@@ -62,6 +73,8 @@ export function createBench(options: BenchOptions = {}): Bench {
     run: join(root, "run"),
     events: [],
     served: new Map(),
+    elapsed: 0,
+    readings: 0,
     options,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
@@ -74,8 +87,11 @@ export function machineOf(bench: Bench): Machine {
   const blockPath = (slug: string) => join(bench.blocks, `${slug}.caddy`);
   const manifestPath = (slug: string) => join(bench.sites, slug, "sitesolide.json");
   return {
-    now: () => Date.now(),
-    wait: async () => {},
+    now: () => Date.now() + bench.elapsed,
+    async wait(ms) {
+      bench.elapsed += ms;
+      bench.events.push(`wait ${ms}`);
+    },
     log: (line) => bench.events.push(`log ${line}`),
     async takeLock() {
       if (bench.options.lockHeld) return { kind: "held", who: "deploy", since: Date.now() };
@@ -129,9 +145,12 @@ export function commandsOf(bench: Bench): Commands {
     async systemctl(arguments_) {
       // What systemd knows of a unit: the file the bench's units folder
       // carries, a package's own unit the test laid, or nothing.
+      if (arguments_[0] === "show" && arguments_.includes("NRestarts")) return standing(bench, arguments_.filter((argument, i) => i > 0 && argument !== "-p" && arguments_[i - 1] !== "-p"));
       if (arguments_[0] === "show") {
-        const unit = arguments_.at(-1)!.replace(/\.service$/, "");
-        const own = join(bench.units, `${unit}.service`);
+        // A service asked for as `<unit>.service`, a timer by its own name.
+        const name = arguments_.at(-1)!;
+        const unit = name.replace(/\.service$/, "");
+        const own = join(bench.units, name);
         const fragment = bench.options.systemUnits?.[unit] ?? (existsSync(own) ? own : "");
         return { code: 0, output: `LoadState=${fragment === "" ? "not-found" : "loaded"}\nFragmentPath=${fragment}\n` };
       }
@@ -162,7 +181,30 @@ export function commandsOf(bench: Bench): Commands {
     async nft() {
       return { code: 1, output: "Error: No such file or directory" };
     },
+    async systemdAnalyze(arguments_) {
+      bench.events.push(`systemd-analyze ${arguments_.join(" ")}`);
+      const refused = arguments_[0] === "calendar" && (bench.options.refusedSchedules ?? []).includes(arguments_[1]!);
+      return refused ? { code: 1, output: `Failed to parse calendar specification '${arguments_[1]}': Invalid argument` } : { code: 0, output: "  Original form: x\n" };
+    },
   };
+}
+
+/**
+ * `systemctl show -p Id -p ActiveState -p SubState -p NRestarts`, one block
+ * per unit as systemd separates them: every unit running at the first
+ * reading, and from the second on as `falls` says.
+ */
+function standing(bench: Bench, names: string[]) {
+  bench.readings++;
+  bench.events.push(`standing ${names.join(" ")}`);
+  const blocks = names.map((name) => {
+    const id = name.includes(".") ? name : `${name}.service`;
+    const unit = id.replace(/\.service$/, "");
+    const fell = bench.readings > 1 ? bench.options.falls?.[unit] : undefined;
+    const now = fell ?? { active: "active", sub: "running", restarts: 0 };
+    return `Id=${id}\nActiveState=${now.active}\nSubState=${now.sub}\nNRestarts=${now.restarts}\n`;
+  });
+  return { code: 0, output: blocks.join("\n") };
 }
 
 export function hostOf(bench: Bench, log: (line: string) => void = (line) => bench.events.push(`log ${line}`)) {

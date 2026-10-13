@@ -57,6 +57,14 @@ anything), suspend a chosen command long enough to send a signal (`pause`), or
 make the gatekeeper act on the first write (`onFirstAccepted`). The CLI's zone
 then points at a `.invalid` name, so that the final verification reaches nobody.
 
+Two of the reads a deployment makes are answered from what the test lays,
+and otherwise as a healthy machine would: whether systemd reads each schedule
+a project declares (`refuseSchedules`), asked before anything is written, and
+how the services stand right after their restart (`setStandings`), every one
+active and never restarted by default. The second reading, ten seconds after
+the restart, comes after the verify, which a simulated machine never passes:
+the decisions it takes are tried in `bin/tests/cli-services.test.ts`.
+
 The fake machine also carries static accounts. `bin/deploy-monitor.sh` reads
 whether the account its unit runs as exists before making it, and the fake ssh
 answers from the accounts the test lays (`addAccount`) and from those an
@@ -131,6 +139,8 @@ with the binary itself. `help.test.ts` holds `help` and
 | `projects/portal-mixed` | a project behind the portal, with an exempted path |
 | `projects/multi-service` | several services: a front, an API under `/v1`, an internal worker |
 | `projects/sourced` | a manifest alone, whose code lives in another folder, named by `source` |
+| `projects/background` | no page: a worker that listens on nothing, and a scheduled service with its timer |
+| `projects/nightly` | every service scheduled, the main unit an anchor that runs nothing |
 
 ## The rejections
 

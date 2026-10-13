@@ -267,6 +267,20 @@ describe("the journal", () => {
     expect(s.calls).toContain("journal cms,cms.api.service 50 -");
   });
 
+  test("a scheduled service's runs are read with the rest, and a project whose every service is scheduled has its journals too", async () => {
+    const s = setup();
+    const { secret } = await newToken(s);
+    mkdirSync(join(s.root, "sites", "cms"));
+    const sync = { start: "z", schedule: "hourly" };
+    writeFileSync(join(s.root, "sites", "cms", "sitesolide.json"), JSON.stringify({ slug: "cms", services: { jobs: { start: "y", internal: true }, sync } }));
+    expect((await call(s, "POST", "/control/logs", { bearer: secret, slug: "cms", lines: 50, cursor: null })).status).toBe(200);
+    expect(s.calls).toContain("journal cms,cms.sync.service 50 -");
+    // Every service scheduled: the anchor and the timers run nothing to read.
+    writeFileSync(join(s.root, "sites", "cms", "sitesolide.json"), JSON.stringify({ slug: "cms", services: { sync, report: { ...sync, schedule: "daily" } } }));
+    expect((await call(s, "POST", "/control/logs", { bearer: secret, slug: "cms", lines: 50, cursor: null })).status).toBe(200);
+    expect(s.calls).toContain("journal cms.sync.service,cms.report.service 50 -");
+  });
+
   test("a static site has none, and a slug not granted is refused", async () => {
     const s = setup();
     const { secret } = await newToken(s);

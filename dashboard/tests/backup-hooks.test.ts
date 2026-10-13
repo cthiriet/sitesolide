@@ -725,3 +725,28 @@ describe("a backup command's unit", () => {
     expect(projectHooks({ ...vaultProject, manifest: { ...manifest, slug: "other" } }, place.path)).toEqual({ error: "its sitesolide.json names another slug, so its backup commands cannot be run safely" });
   });
 });
+
+describe("a worker's backup command", () => {
+  test("is told no port, as its unit is not: it listens on nothing, the rest of its environment as its service has it", () => {
+    const manifest = {
+      slug: "vault",
+      publicDir: "public",
+      services: {
+        web: { start: "/usr/local/bin/bun run web.ts", port: 3040 },
+        indexer: { start: "/usr/local/bin/bun run indexer.ts", internal: true, backup: { folder: "index", command: "/usr/local/bin/bun run snapshot.ts" } },
+      },
+    } as Manifest;
+    const config = configFrom({ SITESOLIDE_ZONE: "test-zone.invalid" }, { bun: "/usr/local/bin/bun", script: "/usr/local/lib/sitesolide/backup.js" });
+    const project = { folder: "vault", account: "site-vault", owner: { uid: 1042, gid: 1042 }, dataDir: "/srv/sites/vault/data", manifest };
+    const place = staging(config, "vault");
+    const found = projectHooks(project, place.path);
+    if ("error" in found) throw new Error(found.error);
+    expect(found.hooks.map((hook) => hook.service.kind)).toEqual(["worker"]);
+    const job = hookJob(config, project, found.hooks[0]!, 600_000, place.cacheDirectory);
+    expect(job.environment!.map(([name]) => name)).toEqual(["DATA_DIR", "PUBLIC_DIR", "BACKUP_DIR"]);
+    const unit = generateUnits(manifest, { slug: "vault", zone: "test-zone.invalid", contact: "" }).find((generated) => generated.unit === "vault.indexer")!.text;
+    expect(unit).not.toContain("Environment=PORT=");
+    const given = childCommand(job, config, "a1b2c3d4").filter((argument) => argument.startsWith("--setenv=") && !argument.includes("BACKUP_EXPECTED_UID"));
+    expect(given).toEqual(["--setenv=DATA_DIR=/srv/sites/vault/data", "--setenv=PUBLIC_DIR=/srv/sites/vault/public", "--setenv=BACKUP_DIR=/var/cache/sitesolide-backup/vault/hooks/vault.indexer"]);
+  });
+});

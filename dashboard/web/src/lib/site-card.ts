@@ -14,14 +14,19 @@ import {
   serviceState,
   serviceWord,
   computeCpuShare,
+  isAnchoredSite,
   memoryShare,
   restartsLabel,
+  runLines,
+  scheduleWords,
+  scheduledWord,
   type Access,
   type Mismatch,
+  type RunLine,
   type ServiceState,
 } from "./sites"
 import type { Tone } from "./tones"
-import type { Discrepancy, Site } from "./types"
+import type { Discrepancy, Site, SiteService } from "./types"
 import { countBySeverity, sortDiscrepancies } from "./verdict"
 
 function plural(count: number, word: string): string {
@@ -92,6 +97,8 @@ export type ServiceCard =
   | { kind: "no-manifest" }
   | {
       kind: "app"
+      /** "Service", "Main service" beside others, "Main unit" for the anchor of a project whose every service is scheduled. */
+      title: string
       state: ServiceState
       /** The systemd unit, or null when none is loaded. */
       unit: string | null
@@ -99,6 +106,8 @@ export type ServiceCard =
       systemd: string | null
       /** Null when the service is not running: no current memory to measure. */
       gauge: ServiceGauge | null
+      /** What the panel says in place of the gauge, why there is none. */
+      note: string | null
       facts: Fact[]
     }
 
@@ -120,16 +129,24 @@ function serviceGaugeOf(memory: number | null, peak: number | null, limit: numbe
 }
 
 /**
- * What reaches a service: the paths it claims, every path no other service
- * claims, or nobody from outside, only the project's other services.
+ * What reaches a service, or what starts it: the paths it claims, every path
+ * no other service claims, only the project's other services; nothing for a
+ * worker, which runs in the background; its timer for a scheduled service, at
+ * the times its schedule names, in words when systemd has some for them.
  */
-export type Reach = { kind: "paths"; paths: string[] } | { kind: "rest" } | { kind: "internal" }
+export type Reach =
+  | { kind: "paths"; paths: string[] }
+  | { kind: "rest" }
+  | { kind: "internal" }
+  | { kind: "background" }
+  | { kind: "scheduled"; words: string | null; expression: string; timer: string }
 
-/** One line of the Services panel: a process of a project that runs several. */
+/** One line of the Services panel: a process of a project that runs several, or of one whose every service is scheduled. */
 export type ServiceRow = {
   name: string
   /** The unit as systemctl takes it. */
   unit: string
+  kind: SiteService["kind"]
   reach: Reach
   port: string | null
   /** False when the port is declared and nothing listens on it. */
@@ -141,44 +158,75 @@ export type ServiceRow = {
   memoryPercent: number | null
   memoryLevel: Level
   restarts: string | null
+  /** A scheduled service's last run and next one, under its word; null for any other. */
+  runs: { last: RunLine | null; next: string | null } | null
+}
+
+function reachOf(entry: SiteService): Reach {
+  if (entry.schedule !== null) {
+    const { expression, timer } = entry.schedule
+    return { kind: "scheduled", words: scheduleWords(expression), expression, timer }
+  }
+  if (entry.kind === "worker") return { kind: "background" }
+  if (entry.internal) return { kind: "internal" }
+  return entry.routes === null ? { kind: "rest" } : { kind: "paths", paths: entry.routes }
 }
 
 /**
  * The rows of the Services panel, the main service first. Empty for a project
- * with a single service, which the Service panel already describes whole.
+ * with a single service, which the Service panel already describes whole;
+ * never for a project whose every service is scheduled, whose Service panel
+ * describes its anchor and none of them.
+ *
+ * A scheduled service's word is its own, see scheduledWord: between two runs
+ * it is Waiting, never Down.
  */
-export function serviceRows(site: Pick<Site, "services">): ServiceRow[] {
-  if (site.services.length < 2) return []
+export function serviceRows(site: Pick<Site, "services">, now: number): ServiceRow[] {
+  if (site.services.length < 2 && !isAnchoredSite(site)) return []
   return site.services.map((entry) => {
     const service = entry.service
     const running = service !== null && service.active === "active"
-    const reach: Reach = entry.internal
-      ? { kind: "internal" }
-      : entry.routes === null
-        ? { kind: "rest" }
-        : { kind: "paths", paths: entry.routes }
+    const state: ServiceState =
+      entry.kind === "scheduled"
+        ? scheduledWord(entry)
+        : service === null
+          ? { tone: "error", label: "Not loaded" }
+          : serviceWord(service.active, service.subState)
     return {
       name: entry.name ?? entry.unit,
       unit: `${entry.unit}.service`,
-      reach,
+      kind: entry.kind,
+      reach: reachOf(entry),
       port: entry.port === null ? null : String(entry.port),
       listening: entry.listening,
-      state: service === null ? { tone: "error", label: "Not loaded" } : serviceWord(service.active, service.subState),
+      state,
       memory: !running ? null : service.limit === null ? size(service.memory) : sizeOutOf(service.memory, service.limit),
       memoryPercent: running ? memoryShare(service.memory, service.limit) : null,
       memoryLevel: running ? serviceLevel(service.memory, service.peak, service.limit) : "normal",
       restarts: restartsLabel(service?.restarts ?? null),
+      runs: entry.kind === "scheduled" ? runLines(entry, now) : null,
     }
   })
+}
+
+/** The panel's title: what the main unit stands for beside the project's other services. */
+function serviceTitle(site: Pick<Site, "services">): string {
+  if (isAnchoredSite(site)) return "Main unit"
+  return site.services.length > 1 ? "Main service" : "Service"
 }
 
 /**
  * A site's service for its card. An app shows its memory gauge when it is
  * running, and its facts in every case: since when, CPU, restarts, port. A peak
  * stays useful on a service that is down, which may have died of its memory.
+ *
+ * A project whose every service is scheduled shows its anchor: active, it
+ * keeps their timers armed, and the Services panel shows them. A worker,
+ * main service of a project that serves no page, says it has no port rather
+ * than leave the fact out.
  */
 export function serviceCard(
-  site: Pick<Site, "type" | "service" | "port" | "listening">,
+  site: Pick<Site, "type" | "service" | "port" | "listening" | "services" | "headless">,
   now: number,
   timeZone?: string,
 ): ServiceCard {
@@ -189,6 +237,32 @@ export function serviceCard(
   const state = serviceState(site)
   const facts: Fact[] = []
   const active = service?.active === "active"
+  const anchored = isAnchoredSite(site)
+
+  if (anchored) {
+    if (service !== null && active) {
+      facts.push(
+        service.since === null
+          ? fact("Up", ABSENT)
+          : fact("Up", duration(now - service.since), `since ${dateTime(service.since, timeZone)}`),
+      )
+    }
+    return {
+      kind: "app",
+      title: serviceTitle(site),
+      state,
+      unit: service === null ? null : `${service.unit}.service`,
+      systemd: service === null ? null : `${service.active} (${service.subState})`,
+      gauge: null,
+      note:
+        service === null
+          ? "No systemd unit is loaded for this project: none of its services runs."
+          : active
+            ? "Every service of this project runs on a schedule, listed below. This unit runs nothing: it keeps their timers armed, at boot and after each deployment."
+            : "This unit isn't active, so the timers of the project's services are stopped and none of them runs.",
+      facts,
+    }
+  }
 
   if (service !== null && active) {
     facts.push(
@@ -226,14 +300,28 @@ export function serviceCard(
         ? fact("Port", String(site.port), "Nothing listens on it", "error")
         : fact("Port", String(site.port), "Listening on the loopback interface"),
     )
+  } else if (site.services.find((entry) => entry.main)?.kind === "worker") {
+    facts.push(fact("Port", "None", "A worker: it runs in the background and listens on nothing"))
   }
 
+  const gauge = service === null || !active ? null : serviceGaugeOf(service.memory, service.peak, service.limit)
   return {
     kind: "app",
+    title: serviceTitle(site),
     state,
     unit: service === null ? null : `${service.unit}.service`,
     systemd: service === null ? null : `${service.active} (${service.subState})`,
-    gauge: service === null || !active ? null : serviceGaugeOf(service.memory, service.peak, service.limit),
+    gauge,
+    note:
+      gauge !== null
+        ? null
+        : service === null
+          ? site.headless
+            ? "No systemd unit is loaded for this app: none of its services runs."
+            : "No systemd unit is loaded for this app: nothing answers behind Caddy."
+          : active
+            ? "systemd reports no memory for it."
+            : "The service isn't running, so it has no memory in use.",
     facts,
   }
 }
@@ -253,9 +341,11 @@ export type AddressRow = {
 /**
  * A site's addresses: its domain and its aliases if it declares one, then the
  * address under the zone, which always answers. A domain only answers once
- * routed; active or not only says what the manifest asks for.
+ * routed; active or not only says what the manifest asks for. The address of
+ * a project that serves no page answers a line saying it runs in the
+ * background, and says so.
  */
-export function siteAddresses(site: Pick<Site, "slug" | "address" | "domain">): AddressRow[] {
+export function siteAddresses(site: Pick<Site, "slug" | "address" | "domain" | "headless">): AddressRow[] {
   const lines: AddressRow[] = []
   const domain = site.domain
   if (domain !== null) {
@@ -286,7 +376,11 @@ export function siteAddresses(site: Pick<Site, "slug" | "address" | "domain">): 
     href: `https://${site.address}`,
     role: main ? "main" : "preversion",
     state: null,
-    detail: main ? "Main address" : "Preview address, always served",
+    detail: site.headless
+      ? "Serves no page: it answers that the project runs in the background"
+      : main
+        ? "Main address"
+        : "Preview address, always served",
   })
   return lines
 }
@@ -322,7 +416,7 @@ const ANOMALY_DETAILS: Record<Mismatch, string> = {
  * who never touch the machine, Restricted reads Applied or Not applied; the
  * owner and Admins read where it is applied, the live Caddy block.
  */
-export function readAccess(site: Pick<Site, "type" | "portal" | "lock">, plain = false): AccessReading {
+export function readAccess(site: Pick<Site, "type" | "portal" | "lock" | "headless">, plain = false): AccessReading {
   const access = siteAccess(site)
   const { portal, lock } = site
   const checks: Check[] = []
@@ -366,8 +460,9 @@ export function readAccess(site: Pick<Site, "type" | "portal" | "lock">, plain =
         access,
         title: "Public",
         tone: "neutral",
-        detail:
-          site.type === "app"
+        detail: site.headless
+          ? "Anyone with the address reads that the project runs in the background: it serves no page."
+          : site.type === "app"
             ? "Anyone with the address can open the site: the app handles its own sign-in, if any."
             : "Anyone with the address can open the site.",
         checks,

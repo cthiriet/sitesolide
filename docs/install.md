@@ -112,8 +112,9 @@ cd your-project && sitesolide deploy
 
 A folder without `sitesolide.json` gets one inferred from what it holds:
 `sitesolide detect` shows it, `sitesolide deploy --yes` writes it and deploys.
-The repository's `examples/static-site` and `examples/bun-app` deploy as they
-are. Each answers at `https://<slug>.example.com`.
+The repository's `examples/static-site`, `examples/bun-app` and
+`examples/background` deploy as they are. Each answers at
+`https://<slug>.example.com`.
 
 To put it on its own domain, add it to the manifest, point its DNS at the
 machine, and:

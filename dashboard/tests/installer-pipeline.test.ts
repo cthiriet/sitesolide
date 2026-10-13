@@ -2,12 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { bundle, entryBlocks, header } from "../borrowed/bundle";
-import { generateFragment } from "../borrowed/fragment";
+import { generateFragment, HEADLESS_ANSWER } from "../borrowed/fragment";
 import { readManifest, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected } from "../borrowed/portal";
 import { generateUnits } from "../borrowed/unit";
 import type { InstallRequest, Scope } from "../src/control/protocol";
-import { finalManifest, replaceable, runPipeline, type Outcome } from "../src/installer/pipeline";
+import { finalManifest, replaceable, runPipeline, STABILITY_WINDOW_MS, type Outcome } from "../src/installer/pipeline";
 import { createBench as newBench, file, hostOf, stageBundle as stage, ZONE, type Bench, type BenchOptions } from "./installer-bench";
 
 /**
@@ -464,6 +464,192 @@ describe("a redeployment", () => {
     for (let port = 3002; port < 3026; port++) if (port !== 3022) deposit(bench, { slug: `p${port}`, start: "x", port } as Manifest);
     const chosen = await run(bench, request(APP));
     expect(chosen).toMatchObject({ ok: true, allocated: [{ service: null, port: 3027 }] });
+  });
+});
+
+describe("workers, scheduled services and anchors", () => {
+  const BACKGROUND = {
+    slug: "shop",
+    publicDir: "public",
+    services: {
+      web: { start: "/usr/local/bin/bun run web.ts" },
+      jobs: { start: "/usr/local/bin/bun run jobs.ts", internal: true },
+      sync: { start: "/usr/local/bin/bun run sync.ts", schedule: "*:0/15", timeout: "5m" },
+    },
+  };
+  const ANCHORED = { slug: "shop", services: { sync: { start: "/usr/local/bin/bun run sync.ts", schedule: "hourly" } } };
+  const SYNC_FILES = [file("app/sync.ts", "await sync()")];
+  const units = (bench: Bench) => readdirSync(bench.units).sort();
+
+  test("a port for the public service alone, every unit laid, the timer restarted and never its service", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request(BACKGROUND));
+    expect(outcome).toEqual({ ok: true, url: `https://shop.${ZONE}/`, allocated: [{ service: "web", port: 3002 }] });
+    const manifest = deposited(bench);
+    expect(manifest.services!.jobs!.port).toBeUndefined();
+    expect(manifest.services!.sync!.port).toBeUndefined();
+    expect(units(bench)).toEqual(["shop.jobs.service", "shop.service", "shop.sync.service", "shop.sync.timer"]);
+    expect(readFileSync(join(bench.units, "shop.sync.timer"), "utf8")).toContain("OnCalendar=*:0/15");
+    expect(readFileSync(join(bench.units, "shop.service"), "utf8")).toContain("Wants=shop.jobs.service shop.sync.timer");
+    // Asked of systemd before anything is written.
+    expect(order(bench, "systemd-analyze calendar *:0/15", "useradd site-shop")).toBe(true);
+    // The scheduled service is started by its timer alone: a restart would run it outside its schedule.
+    expect(bench.events).toContain("systemctl restart shop shop.jobs.service shop.sync.timer");
+    expect(bench.events).toContain("systemctl is-active shop shop.jobs.service shop.sync.timer");
+    expect(bench.events).toContain("log    installed  shop.sync.timer");
+  });
+
+  test("the servers and the workers are read again once the window has passed, after the verification", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    expect((await run(bench, request(BACKGROUND))).ok).toBe(true);
+    // Never the scheduled service nor its timer: idle is their state.
+    expect(bench.events.filter((event) => event.startsWith("standing"))).toEqual(["standing shop shop.jobs.service", "standing shop shop.jobs.service"]);
+    const waited = bench.events.find((event) => event.startsWith("wait "));
+    expect(Number(waited!.slice("wait ".length))).toBeGreaterThan(0);
+    expect(Number(waited!.slice("wait ".length))).toBeLessThanOrEqual(STABILITY_WINDOW_MS);
+    expect(order(bench, "log -> verify", waited!)).toBe(true);
+    expect(bench.events).toContain("log    shop.service, shop.jobs.service still running");
+  });
+
+  test("a worker that falls within the window fails the deployment, named with what was seen", async () => {
+    const bench = createBench({ falls: { "shop.jobs": { active: "activating", sub: "auto-restart", restarts: 2 } } });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request(BACKGROUND));
+    expect(outcome).toMatchObject({ ok: false, code: "service-failed" });
+    expect(outcome.ok === false && outcome.message).toContain("shop.jobs.service is activating (auto-restart), restarted 2 time(s) by systemd");
+    expect(outcome.ok === false && outcome.message).toContain("read sitesolide logs");
+    expect(outcome.ok === false && outcome.message).not.toContain("shop.service is");
+    // Everything is in place, as after a failed verification.
+    expect(existsSync(join(bench.sites, "shop", "sitesolide.json"))).toBe(true);
+  });
+
+  test("a service that stopped within the window fails it too", async () => {
+    const bench = createBench({ falls: { shop: { active: "failed", sub: "failed", restarts: 0 } } });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request(APP));
+    expect(outcome).toMatchObject({ ok: false, code: "service-failed" });
+    expect(outcome.ok === false && outcome.message).toContain("shop.service is failed (failed)");
+  });
+
+  test("a schedule systemd does not read is refused before any account, directory or unit", async () => {
+    const bench = createBench({ refusedSchedules: ["every hour"] });
+    stageBundle(bench, APP_FILES);
+    const manifest = { ...BACKGROUND, services: { ...BACKGROUND.services, sync: { ...BACKGROUND.services.sync, schedule: "every hour" } } };
+    const outcome = await run(bench, request(manifest));
+    expect(outcome).toMatchObject({ ok: false, code: "invalid-manifest" });
+    expect(outcome.ok === false && outcome.message).toContain('services.sync.schedule: systemd does not read "every hour" as a time');
+    expect(outcome.ok === false && outcome.message).toContain("nothing was changed");
+    expect(readdirSync(bench.sites)).toEqual([]);
+    expect(readdirSync(bench.units)).toEqual([]);
+    expect(bench.events.some((event) => event.startsWith("useradd"))).toBe(false);
+  });
+
+  test("every service scheduled: the anchor stands for the project, its address says it serves no page", async () => {
+    const bench = createBench();
+    stageBundle(bench, SYNC_FILES);
+    const outcome = await run(bench, request(ANCHORED, PUBLIC));
+    expect(outcome).toEqual({ ok: true, url: `https://shop.${ZONE}/`, allocated: [] });
+    expect(units(bench)).toEqual(["shop.service", "shop.sync.service", "shop.sync.timer"]);
+    const anchor = readFileSync(join(bench.units, "shop.service"), "utf8");
+    expect(anchor).toContain("Type=oneshot");
+    expect(anchor).toContain("Wants=shop.sync.timer");
+    expect(readFileSync(join(bench.blocks, "shop.caddy"), "utf8")).toContain(HEADLESS_ANSWER);
+    expect(bench.events).toContain("systemctl restart shop shop.sync.timer");
+    expect(bench.events).toContain("systemctl enable shop");
+    // Nothing runs for good: nothing to watch, and nothing waited for.
+    expect(bench.events.some((event) => event.startsWith("standing") || event.startsWith("wait"))).toBe(false);
+  });
+
+  test("a worker alone: the main unit, no port, watched like a server, its address saying it serves no page", async () => {
+    const bench = createBench();
+    stageBundle(bench, [file("app/bot.ts", "await listen()")]);
+    const outcome = await run(bench, request({ slug: "shop", services: { bot: { start: "/usr/local/bin/bun run bot.ts", internal: true } } }, PUBLIC));
+    expect(outcome).toEqual({ ok: true, url: `https://shop.${ZONE}/`, allocated: [] });
+    expect(units(bench)).toEqual(["shop.service"]);
+    const unit = readFileSync(join(bench.units, "shop.service"), "utf8");
+    expect(unit).toContain("RestartSteps=8");
+    expect(unit).not.toContain("Environment=PORT=");
+    expect(readFileSync(join(bench.blocks, "shop.caddy"), "utf8")).toContain(HEADLESS_ANSWER);
+    expect(bench.events.filter((event) => event.startsWith("standing"))).toEqual(["standing shop", "standing shop"]);
+  });
+
+  test("an anchored project behind the portal: its address answers the portal's 401", async () => {
+    const bench = createBench();
+    stageBundle(bench, SYNC_FILES);
+    const outcome = await run(bench, request(ANCHORED));
+    expect(outcome.ok).toBe(true);
+    expect(deposited(bench).portal).toBe(true);
+    expect(fragmentIsProtected(readFileSync(join(bench.blocks, "shop.caddy"), "utf8"))).toBe(true);
+  });
+
+  test("a schedule dropped takes its timer with it, the timer stopped first", async () => {
+    const bench = createBench();
+    const previous = { ...BACKGROUND, portal: true, services: { ...BACKGROUND.services, web: { ...BACKGROUND.services.web, port: 3040 } } } as Manifest;
+    deposit(bench, previous);
+    for (const { unit, text } of generateUnits(previous)) writeFileSync(join(bench.units, unit.endsWith(".timer") ? unit : `${unit}.service`), text);
+    stageBundle(bench, APP_FILES);
+    // The scheduled service becomes a worker: its unit stays, rewritten, its timer goes.
+    const next = { ...BACKGROUND, services: { web: BACKGROUND.services.web, jobs: BACKGROUND.services.jobs, sync: { start: "/usr/local/bin/bun run sync.ts", internal: true } } };
+    const outcome = await run(bench, request(next));
+    expect(outcome).toMatchObject({ ok: true, allocated: [{ service: "web", port: 3040 }] });
+    expect(units(bench)).toEqual(["shop.jobs.service", "shop.service", "shop.sync.service"]);
+    expect(readFileSync(join(bench.units, "shop.sync.service"), "utf8")).toContain("Restart=always");
+    expect(bench.events).toContain("systemctl disable --now shop.sync.timer");
+    expect(bench.events).toContain("log    removed    shop.sync.timer, no longer declared");
+    expect(bench.events).toContain("systemctl restart shop shop.jobs.service shop.sync.service");
+
+    // Dropped whole: the timer before its service, in the one command.
+    const again = createBench();
+    deposit(again, previous);
+    for (const { unit, text } of generateUnits(previous)) writeFileSync(join(again.units, unit.endsWith(".timer") ? unit : `${unit}.service`), text);
+    stageBundle(again, APP_FILES);
+    expect((await run(again, request({ ...BACKGROUND, services: { web: BACKGROUND.services.web, jobs: BACKGROUND.services.jobs } }))).ok).toBe(true);
+    expect(again.events).toContain("systemctl disable --now shop.sync.timer shop.sync.service");
+    expect(units(again)).toEqual(["shop.jobs.service", "shop.service"]);
+  });
+
+  test("a timer edited by hand on the machine stays, and says so", async () => {
+    const bench = createBench();
+    const previous = { ...ANCHORED, portal: true } as Manifest;
+    deposit(bench, previous);
+    for (const { unit, text } of generateUnits(previous)) writeFileSync(join(bench.units, unit.endsWith(".timer") ? unit : `${unit}.service`), text);
+    writeFileSync(join(bench.units, "shop.sync.timer"), `${readFileSync(join(bench.units, "shop.sync.timer"), "utf8")}RandomizedDelaySec=5min\n`);
+    stageBundle(bench, SYNC_FILES);
+    const outcome = await run(bench, request({ ...ANCHORED, services: { sync: { ...ANCHORED.services.sync, schedule: "daily" } } }));
+    expect(outcome.ok).toBe(true);
+    expect(bench.events.some((event) => event.startsWith("log    differs    shop.sync.timer, edited by hand on the machine"))).toBe(true);
+    expect(readFileSync(join(bench.units, "shop.sync.timer"), "utf8")).toContain("RandomizedDelaySec=5min");
+  });
+
+  test("a timer name systemd gives to a package's unit: refused before any account", async () => {
+    const bench = createBench({ systemUnits: { "shop.sync.timer": "/lib/systemd/system/shop.sync.timer" } });
+    stageBundle(bench, SYNC_FILES);
+    const outcome = await run(bench, request(ANCHORED));
+    expect(outcome).toMatchObject({ ok: false, code: "system-unit" });
+    expect(outcome.ok === false && outcome.message).toContain("shop.sync.timer is already a timer of the machine");
+    expect(bench.events.some((event) => event.startsWith("useradd"))).toBe(false);
+  });
+
+  test("refused once its units were laid, a new project's timers go too, before its services", async () => {
+    const bench = createBench({ lockHeld: true });
+    stageBundle(bench, SYNC_FILES);
+    expect(await run(bench, request(ANCHORED))).toMatchObject({ ok: false, code: "caddy-busy" });
+    expect(bench.events).toContain("systemctl disable --now shop.sync.timer shop shop.sync.service");
+    expect(readdirSync(bench.units)).toEqual([]);
+    expect(bench.events).toContain("log    removed    shop.sync.timer");
+  });
+
+  test("a worker beside a backup command: the loopback's set names the server's port alone", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const manifest = { ...BACKGROUND, services: { ...BACKGROUND.services, web: { ...BACKGROUND.services.web, backup: { folder: "index", command: "/usr/local/bin/bun run snapshot.ts" } } } };
+    expect((await run(bench, request(manifest))).ok).toBe(true);
+    const uid = /^site-shop:x:(\d+):/m.exec(readFileSync(join(bench.root, "passwd"), "utf8"))![1];
+    const set = readFileSync(join(bench.root, "projects.nft"), "utf8");
+    expect(set).toContain(`{ 3002 . ${uid} }`);
+    expect(set.match(/ \. /g)?.length).toBe(1);
   });
 });
 
