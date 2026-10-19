@@ -1,12 +1,25 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Server, Socket } from "bun";
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EGRESS_PROXY_PORT, egressUnitLines, parseEgressEntry, type HostPattern } from "../../bin/cli/egress";
 import { DATA_DIR } from "../src/config";
 import type { Caller } from "../src/proc-net";
 import { DEFAULT_LIMITS, startProxy, type Limits, type Proxy, type ProxyOptions } from "../src/proxy";
-import { certificate, lateReader, OPENSSL, rawExchange, recordingAudit, stubLookup, stubRoute } from "./helpers";
+import {
+  BLOCK,
+  certificate,
+  identifyByPort,
+  lateReader,
+  OPENSSL,
+  OVERSHOOT,
+  pump,
+  rawExchange,
+  recordingAudit,
+  stubLookup,
+  stubRoute,
+  type Flood,
+} from "./helpers";
 
 /**
  * The proxy on a random port, in front of real local servers: a TLS one that
@@ -35,6 +48,8 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
   let egress: HostPattern[] | null = [];
   const recorded = recordingAudit();
   const seen: { host: string | null; path: string; connection: string | null }[] = [];
+  /** The character codes of each X-Name the plain origin received. */
+  const names: number[][] = [];
   let lookup: ReturnType<typeof stubLookup>;
   let route: ReturnType<typeof stubRoute>;
   /** What the test says the machine's interfaces carry. */
@@ -57,6 +72,8 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
       hostname: "127.0.0.1",
       port: 0,
       fetch(req) {
+        const name = req.headers.get("x-name");
+        if (name !== null) names.push([...name].map((each) => each.charCodeAt(0)));
         seen.push({ host: req.headers.get("host"), path: new URL(req.url).pathname + new URL(req.url).search, connection: req.headers.get("connection") });
         return new Response("plain origin");
       },
@@ -311,6 +328,15 @@ describe.skipIf(OPENSSL === null)("the egress proxy", () => {
     expect(seen).toEqual([{ host: PLAIN, path: "/hello?x=1", connection: "close" }]);
   });
 
+  test("a header's bytes past ASCII reach the origin as the client sent them", async () => {
+    allow(PLAIN);
+    names.length = 0;
+    // Bytes, one character each: TextDecoder("latin1") is windows-1252.
+    const request = Uint8Array.from(`GET http://${PLAIN}/name HTTP/1.1\r\nHost: ${PLAIN}\r\nX-Name: café \u0080ÿ\r\n\r\n`, (each) => each.charCodeAt(0));
+    expect(await rawExchange(proxy.port, request, 1000)).toContain("plain origin");
+    expect(names).toEqual([[0x63, 0x61, 0x66, 0xe9, 0x20, 0x80, 0xff]]);
+  });
+
   test("a second request on a forwarded connection still reaches only the judged address", async () => {
     allow(PLAIN);
     seen.length = 0;
@@ -372,67 +398,6 @@ async function rawClient(port: number) {
     },
   });
   return { socket, closed: closed.promise, text: () => new TextDecoder().decode(Bun.concatArrayBuffers(chunks)) };
-}
-
-/** An identification by the client's port, as the kernel's would be, the table filled by the test. */
-function identifyByPort(owners: Map<number, Caller>) {
-  return async (peer: { remotePort: number }): Promise<Caller> => {
-    // The test learns its client's port once connected, which may come a
-    // moment after the proxy asks.
-    for (let i = 0; i < 200 && !owners.has(peer.remotePort); i++) await Bun.sleep(2);
-    return owners.get(peer.remotePort) ?? { kind: "unknown", reason: "no owner in the test" };
-  };
-}
-
-/** What a flooding end writes at a time: big enough to fill every buffer on the way quickly. */
-const BLOCK = new Uint8Array(1024 * 1024).fill(9);
-
-/**
- * The most a socket's kernel receive buffer grows to: on Linux the third field
- * of net.ipv4.tcp_rmem, 6 MiB by default; on macOS net.inet.tcp.autorcvbufmax,
- * 4 MiB by default. Read from the machine running the tests, never assumed:
- * a constant that fits one is either too loose or too tight on the other.
- */
-function receiveBufferMax(): number {
-  const value =
-    process.platform === "darwin"
-      ? Bun.spawnSync(["sysctl", "-n", "net.inet.tcp.autorcvbufmax"]).stdout.toString()
-      : readFileSync("/proc/sys/net/ipv4/tcp_rmem", "utf8").trim().split(/\s+/)[2];
-  const bytes = Number(value?.trim());
-  if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new Error(`the kernel's receive buffer maximum does not read: ${JSON.stringify(value)}`);
-  return bytes;
-}
-
-/**
- * How far past a mark or a budget the socket being read when it is crossed may
- * still go, as DEFAULT_LIMITS in src/proxy.ts works it out: its pause lands
- * once its kernel receive buffer is drained, plus the one read of up to 512 KiB
- * Bun hands over. The tests' allowances follow from it: a guess of 4 MiB sat
- * under the 4.5 MiB macOS allows, and failed one release run in a few.
- */
-const OVERSHOOT = receiveBufferMax() + 512 * 1024;
-
-/**
- * One end of a tunnel that writes as fast as the other lets it and reads
- * nothing: what makes the proxy hold bytes for it in both directions.
- */
-type Flood = { socket: Socket<undefined> | null; written: number; on: boolean };
-
-/**
- * Writes until the socket takes no more. A short write turns a paused Bun
- * socket's reading back on (see `keepPaused` in src/proxy.ts): resume() then
- * pause() puts it back, or this end would read after all.
- */
-function pump(flood: Flood): void {
-  while (flood.on && flood.socket !== null) {
-    const written = flood.socket.write(BLOCK);
-    if (written > 0) flood.written += written;
-    if (written < BLOCK.length) {
-      flood.socket.resume();
-      flood.socket.pause();
-      return;
-    }
-  }
 }
 
 /** An origin that floods whoever connects, and reads nothing. `flood` is the latest tunnel's. */

@@ -41,11 +41,12 @@ export const EGRESS_PROXY_PORT = 3128;
 
 /**
  * The connectors, plain HTTP on the loopback, and the read-only routes the
- * dashboard calls. A second port rather than the first one: CONNECT needs a
- * raw TCP listener, and a connector is an HTTP request with a body and a
- * streamed answer, which Bun.serve parses and streams for us. Writing a second
- * HTTP implementation into a security component to save one port would be the
- * wrong trade.
+ * dashboard calls. A second port rather than the first one: on 3128 the proxy
+ * pipes bytes it never reads, on 3129 it reads every request and every answer
+ * to rewrite them, and two ports keep a tunnel from ever being read as a
+ * connector call. Both are raw listeners counted against one admission,
+ * egress/src/admission.ts: Bun.serve, which the connectors first ran on, held
+ * whatever one project opened or left unread.
  */
 export const CONNECTORS_PORT = 3129;
 

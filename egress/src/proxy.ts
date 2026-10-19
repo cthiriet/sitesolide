@@ -23,10 +23,12 @@
  *
  * Every refusal is answered with a status and a sentence the developer can
  * read in their client's error, and counted for the audit, and the socket
- * lingers long enough for the client to read it (see linger()).
+ * lingers long enough for the client to read it (see createLingering() in
+ * sockets.ts).
  */
 import type { Socket, TCPSocketListener } from "bun";
 import type { HostPattern } from "../../bin/cli/egress";
+import { createAdmission, type Admission, type AdmissionLimits, type Member } from "./admission";
 import type { Audit } from "./audit";
 import {
   connectDestination,
@@ -34,18 +36,22 @@ import {
   forwardDestination,
   forwardedHead,
   headEnd,
+  latin1Bytes,
+  latin1Text,
   parseHead,
   refusal,
   type Destination,
 } from "./decide";
 import type { Caller, Peer } from "./proc-net";
 import { machineAddresses, resolveChecked, type Lookup, type OwnAddresses } from "./resolve";
+import { concat, copy, createLingering, pause, resume, side, write, type Side } from "./sockets";
 
-export type Limits = {
-  /** Open client connections, all projects together. */
-  maxConnections: number;
-  /** Open connections per project, counted from the moment the caller is known, head or no head. */
-  maxPerProject: number;
+/**
+ * The admission's limits, maxConnections and maxPerProject counted from the
+ * moment the caller is known, head or no head, are those of both ports: see
+ * admission.ts.
+ */
+export type Limits = AdmissionLimits & {
   /** The biggest head accepted. */
   headBytes: number;
   /** Time left to the head to arrive whole. */
@@ -56,13 +62,9 @@ export type Limits = {
   lookupTimeoutMs: number;
   /** Bytes held for a side that cannot take them yet, before reading the other pauses. */
   bufferBytes: number;
-  /** Bytes held for all of one project's connections, before every one of them stops reading. */
-  projectBufferBytes: number;
-  /** Bytes held for every connection, before the whole proxy stops reading. */
-  totalBufferBytes: number;
   /** Bytes a client may send before its tunnel opens, kept until it does. */
   pendingBytes: number;
-  /** How long a refused connection is still read, and dropped, once answered: see linger(). */
+  /** How long a refused connection is still read, and dropped, once answered: see createLingering(). */
   lingerMs: number;
   /** How much it may send in that time before the socket is cut. */
   lingerBytes: number;
@@ -99,6 +101,14 @@ export type Limits = {
  * bounds, and for the collector. Bytes sent before a tunnel opens count the
  * same, and are capped per connection by pendingBytes. A refused connection
  * that lingers holds nothing: what it still sends is dropped as it is read.
+ *
+ * Every figure above holds for both ports together: the connectors' port is
+ * admitted and budgeted with this one (admission.ts), its connections among
+ * the 1024, its heads, a request's or an answer's, one at a time per
+ * connection and 16 KiB at most. A connector call holds a TLS connection
+ * besides, whose buffers nothing here counts: 28 KiB each with the system's
+ * authorities, measured on Bun 1.3.11, 7 MiB for the 256 calls connectors.ts
+ * allows at once, which brings the worst case to 100 MiB.
  */
 export const DEFAULT_LIMITS: Limits = {
   maxConnections: 1024,
@@ -136,44 +146,29 @@ export type ProxyOptions = {
   log?: (line: string) => void;
 };
 
-type Side = {
-  socket: Socket<unknown> | null;
-  /** Bytes waiting for this side to drain. */
-  queue: Uint8Array[];
-  queued: number;
-  /** Its peer is gone: the connection closes once this queue is written. */
-  ending: boolean;
-  /** Told to stop reading: what Bun's own flag cannot be trusted to say, see write(). */
-  paused: boolean;
-};
-
-/** What one project holds of the proxy: its connections, the bytes waiting in them, and whether they read. */
-type Share = { slug: string; connections: Set<Connection>; held: number; blocked: boolean };
-
-type Connection = {
+type Connection = Member & {
   phase: "head" | "deciding" | "open" | "closed";
   head: Uint8Array;
   caller: Promise<Caller>;
-  /** The caller's project, once the kernel named one and its share had room. */
-  share: Share | null;
   client: Side;
   upstream: Side;
   lastActivity: number;
   headTimer: ReturnType<typeof setTimeout> | null;
   /** The number of the current connection attempt, see connect(). */
   attempt: number;
-  /** Refused and answered, its client still read for a moment: see linger(). */
-  linger: { dropped: number; timer: ReturnType<typeof setTimeout> } | null;
 };
 
 export type Proxy = {
   port: number;
   stop: () => void;
+  /** Connections to this port. */
   open: () => number;
-  /** Bytes waiting in the proxy for a side that has not taken them yet. */
+  /** Bytes waiting in the proxy for a side that has not taken them yet, both ports together. */
   buffered: () => number;
-  /** Refused connections still read before they close, apart from `open`: see linger(). */
+  /** Refused connections still read before they close, apart from `open`: see createLingering(). */
   lingering: () => number;
+  /** What the connectors' port counts its connections against too: see admission.ts. */
+  admission: Admission;
 };
 
 /**
@@ -184,25 +179,6 @@ function isClosed(connection: Connection): boolean {
   return connection.phase === "closed";
 }
 
-/**
- * A copy of what a read delivered, to keep it beyond the callback: its memory
- * may be reused by the next read. Not `slice`, which on the Buffer a socket
- * hands over is a view, not a copy.
- */
-function copy(view: Uint8Array): Uint8Array {
-  const kept = new Uint8Array(view.length);
-  kept.set(view);
-  return kept;
-}
-
-function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
-  const joined = new Uint8Array(a.length + b.length);
-  joined.set(a, 0);
-  joined.set(b, a.length);
-  return joined;
-}
-
-const decoder = new TextDecoder("latin1");
 const encoder = new TextEncoder();
 
 export function startProxy(options: ProxyOptions): Proxy {
@@ -210,51 +186,14 @@ export function startProxy(options: ProxyOptions): Proxy {
   const log = options.log ?? ((line: string) => console.log(line));
   const route = options.route ?? ((address: string, port: number) => ({ hostname: address, port }));
   const ownAddresses = options.ownAddresses ?? machineAddresses();
+  /** This port's connections; the admission counts both ports'. */
   const connections = new Set<Connection>();
-  /** Refused connections still read once answered, counted apart: see linger(). */
-  const lingering = new Set<Connection>();
-  const shares = new Map<string, Share>();
-  /** Bytes waiting in every queue; past totalBufferBytes, `saturated` until half has drained. */
-  let held = 0;
-  let saturated = false;
-
-  function pause(side: Side): void {
-    side.paused = true;
-    // resume() first: after a short write Bun may be reading a socket it
-    // still counts as paused, and on which a lone pause() does nothing.
-    side.socket?.resume();
-    side.socket?.pause();
-  }
-
-  function resume(side: Side): void {
-    side.paused = false;
-    side.socket?.resume();
-  }
-
-  /**
-   * Writes to a side and keeps it from reading if it was paused. Bun 1.3.11
-   * turns a socket's reading back on whenever a write to it comes up short
-   * (uSockets' us_socket_write asks for readable and writable both, whatever
-   * pause() said) and still counts it as paused, so that the next pause()
-   * does nothing. A tunnel whose two ends both send and neither reads, each
-   * end being written to while it should not be read, was read without
-   * limit: gigabytes held in seconds. resume() then pause() puts the polling
-   * and the flag back in step.
-   */
-  function write(side: Side, chunk: Uint8Array): number {
-    const socket = side.socket!;
-    const written = Math.max(socket.write(chunk), 0);
-    if (written < chunk.length && side.paused) {
-      socket.resume();
-      socket.pause();
-    }
-    return written;
-  }
+  const admission = createAdmission(limits);
+  /** Refused connections still read once answered, counted apart. */
+  const lingering = createLingering(limits);
 
   /** May this connection's sides read, as far as the budgets go? */
-  function mayRead(connection: Connection): boolean {
-    return !saturated && !(connection.share?.blocked ?? false);
-  }
+  const mayRead = (connection: Connection) => admission.mayRead(connection);
 
   /** A tunnel's sides stop reading, but one whose peer is gone, which is read to see it close (see sideClosed). */
   function stopReading(connection: Connection): void {
@@ -276,40 +215,11 @@ export function startProxy(options: ProxyOptions): Proxy {
   }
 
   /**
-   * Counts bytes that start or stop waiting, and stops or restarts reading
-   * where a budget is crossed: a whole project past projectBufferBytes, the
-   * whole proxy past totalBufferBytes, until half has drained. See
-   * DEFAULT_LIMITS for why the mark of each direction is not enough.
+   * Counts bytes that start or stop waiting; the admission stops or restarts
+   * reading where a budget is crossed, a whole project past
+   * projectBufferBytes, the whole proxy past totalBufferBytes.
    */
-  function account(connection: Connection, bytes: number): void {
-    held += bytes;
-    const share = connection.share;
-    if (share !== null) share.held += bytes;
-    if (bytes > 0) overBudget(share);
-    else if (bytes < 0) underBudget(share);
-  }
-
-  function overBudget(share: Share | null): void {
-    if (share !== null && !share.blocked && share.held > limits.projectBufferBytes) {
-      share.blocked = true;
-      for (const each of share.connections) stopReading(each);
-    }
-    if (!saturated && held > limits.totalBufferBytes) {
-      saturated = true;
-      for (const each of connections) stopReading(each);
-    }
-  }
-
-  function underBudget(share: Share | null): void {
-    if (share !== null && share.blocked && share.held <= limits.projectBufferBytes / 2) {
-      share.blocked = false;
-      for (const each of share.connections) startReading(each);
-    }
-    if (saturated && held <= limits.totalBufferBytes / 2) {
-      saturated = false;
-      for (const each of connections) startReading(each);
-    }
-  }
+  const account = (connection: Connection, bytes: number) => admission.account(connection, bytes);
 
   /** Bytes for a side that cannot take them now. */
   function enqueue(connection: Connection, to: Side, chunk: Uint8Array): void {
@@ -405,11 +315,7 @@ export function startProxy(options: ProxyOptions): Proxy {
     connection.phase = "closed";
     if (connection.headTimer !== null) clearTimeout(connection.headTimer);
     connections.delete(connection);
-    const share = connection.share;
-    if (share !== null) {
-      share.connections.delete(connection);
-      if (share.connections.size === 0) shares.delete(share.slug);
-    }
+    admission.leave(connection);
     const released = connection.client.queued + connection.upstream.queued;
     for (const side of [connection.client, connection.upstream]) {
       side.queue = [];
@@ -418,76 +324,11 @@ export function startProxy(options: ProxyOptions): Proxy {
     account(connection, -released);
     connection.upstream.socket?.end();
     if (answer === null) connection.client.socket?.end();
-    else linger(connection, answer);
+    else if (connection.client.socket !== null) lingering.start(connection.client.socket, answer);
   }
 
   function refuse(connection: Connection, status: number, message: string): void {
     close(connection, refusal(status, message));
-  }
-
-  /**
-   * A refused client answered, then read and ignored for a moment before its
-   * socket closes: a lingering close, as nginx and Apache do it.
-   *
-   * A refusal often comes while the client is still sending: a body behind
-   * its head, a head too large. Closed with those bytes unread, or receiving
-   * more once closed, a socket answers with a reset, and a reset makes the
-   * client's kernel throw away what it received and had not read yet: the
-   * answer itself. The client saw "connection reset" instead of the sentence
-   * that says why, 2 attempts in 40 on a loaded machine. So the answer goes,
-   * a FIN behind it, and what still arrives is read and dropped until the
-   * client closes its side, which it does once it has read the answer: for
-   * lingerMs and lingerBytes at most, past which the socket is cut, the
-   * client having had its chance.
-   *
-   * shutdown(), not end(): in Bun 1.3.11 end() on a server socket closes the
-   * descriptor at once, unread bytes and all, which is the reset this
-   * avoids. shutdown() without an argument is shutdown(SHUT_WR), the socket
-   * reads on; shutdown(true), whatever its documentation says, closes the
-   * reading side. Both measured on this Bun, which the tests hold to.
-   *
-   * Lingering sockets hold no byte and leave the connections' count at
-   * once; they are bounded apart, by maxConnections, past which a refusal
-   * closes at once as it used to.
-   */
-  function linger(connection: Connection, answer: string): void {
-    const socket = connection.client.socket;
-    if (socket === null) return;
-    socket.write(answer);
-    if (lingering.size >= limits.maxConnections) {
-      socket.end();
-      return;
-    }
-    lingering.add(connection);
-    connection.linger = { dropped: 0, timer: setTimeout(() => cut(connection), limits.lingerMs) };
-    // Paused while its head was judged, perhaps: what it sends is read now,
-    // to be dropped, and nothing is written to it any more, so the quirk
-    // write() works around cannot turn that back. Resumed before the
-    // shutdown, never after: Bun 1.3.11 closes a socket shut down while
-    // paused, at once, which is the very reset this avoids.
-    socket.resume();
-    socket.shutdown();
-  }
-
-  /** What a lingering client still sends, dropped; past lingerBytes, the socket is cut. */
-  function drop(connection: Connection, bytes: number): void {
-    if (connection.linger === null) return;
-    connection.linger.dropped += bytes;
-    if (connection.linger.dropped > limits.lingerBytes) cut(connection);
-  }
-
-  /** The linger is over: the client closed its side, or ran out of time or of bytes. */
-  function unlinger(connection: Connection): void {
-    if (connection.linger === null) return;
-    clearTimeout(connection.linger.timer);
-    connection.linger = null;
-    lingering.delete(connection);
-  }
-
-  function cut(connection: Connection): void {
-    const socket = connection.client.socket;
-    unlinger(connection);
-    socket?.terminate();
   }
 
   /**
@@ -501,17 +342,12 @@ export function startProxy(options: ProxyOptions): Proxy {
    */
   function admit(connection: Connection, caller: Caller): void {
     if (isClosed(connection) || caller.kind !== "project") return;
-    const share = shares.get(caller.slug) ?? { slug: caller.slug, connections: new Set<Connection>(), held: 0, blocked: false };
-    if (share.connections.size >= limits.maxPerProject) {
-      options.audit.denied({ target: caller.slug, destination: null, reason: "too many connections" });
-      return refuse(connection, 503, `egress: ${caller.slug} already holds ${share.connections.size} connections through the proxy`);
-    }
-    shares.set(caller.slug, share);
-    share.connections.add(connection);
-    connection.share = share;
     // What it sent before the kernel answered counts for its project too.
-    share.held += connection.client.queued + connection.upstream.queued;
-    overBudget(share);
+    const full = admission.join(connection, caller.slug, connection.client.queued + connection.upstream.queued);
+    if (full !== null) {
+      options.audit.denied({ target: caller.slug, destination: null, reason: "too many connections" });
+      return refuse(connection, 503, `egress: ${caller.slug} already holds ${full} connections through the proxy`);
+    }
   }
 
   /** Is this socket the connection's upstream, and not an attempt given up on? */
@@ -586,7 +422,7 @@ export function startProxy(options: ProxyOptions): Proxy {
   }
 
   async function handle(connection: Connection): Promise<void> {
-    const text = decoder.decode(connection.head);
+    const text = latin1Text(connection.head);
     connection.head = new Uint8Array(0);
     const head = parseHead(text);
     if (head === null) return refuse(connection, 400, "egress: not an HTTP request");
@@ -646,7 +482,7 @@ export function startProxy(options: ProxyOptions): Proxy {
       send(connection, connection.client, connection.upstream, encoder.encode("HTTP/1.1 200 Connection Established\r\n\r\n"));
     } else {
       // The rewritten head goes before what the client sent behind its own.
-      const rewritten = encoder.encode(forwardedHead(head, forward));
+      const rewritten = latin1Bytes(forwardedHead(head, forward));
       connection.upstream.queue.unshift(rewritten);
       connection.upstream.queued += rewritten.length;
       account(connection, rewritten.length);
@@ -676,17 +512,18 @@ export function startProxy(options: ProxyOptions): Proxy {
             .then(() => options.identify(peer))
             .catch((): Caller => ({ kind: "unknown", reason: "identification failed" })),
           share: null,
-          client: { socket: socket as unknown as Socket<unknown>, queue: [], queued: 0, ending: false, paused: false },
-          upstream: { socket: null, queue: [], queued: 0, ending: false, paused: false },
+          stopReading: () => stopReading(connection),
+          startReading: () => startReading(connection),
+          client: side(socket as unknown as Socket<unknown>),
+          upstream: side(null),
           lastActivity: Date.now(),
           headTimer: null,
           attempt: 0,
-          linger: null,
         };
         socket.data = connection;
-        if (connections.size >= limits.maxConnections) {
+        if (!admission.enter(connection)) {
           connection.phase = "closed";
-          linger(connection, refusal(503, "egress: the proxy holds too many connections, try again in a moment"));
+          lingering.start(socket as unknown as Socket<unknown>, refusal(503, "egress: the proxy holds too many connections, try again in a moment"));
           return;
         }
         connections.add(connection);
@@ -739,8 +576,8 @@ export function startProxy(options: ProxyOptions): Proxy {
             send(connection, connection.upstream, connection.client, chunk);
             return;
           case "closed":
-            // Refused and answered: dropped, see linger().
-            drop(connection, chunk.length);
+            // Refused and answered: dropped, see createLingering().
+            lingering.drop(socket as unknown as Socket<unknown>, chunk.length);
             return;
         }
       },
@@ -753,7 +590,7 @@ export function startProxy(options: ProxyOptions): Proxy {
       close(socket) {
         const connection = socket.data;
         if (connection === undefined) return;
-        unlinger(connection);
+        lingering.end(socket as unknown as Socket<unknown>);
         connection.client.socket = null;
         sideClosed(connection, connection.client, connection.upstream);
       },
@@ -777,12 +614,13 @@ export function startProxy(options: ProxyOptions): Proxy {
   return {
     port: listener.port,
     open: () => connections.size,
-    buffered: () => held,
-    lingering: () => lingering.size,
+    buffered: () => admission.held(),
+    lingering: () => lingering.size(),
+    admission,
     stop() {
       clearInterval(sweep);
       for (const connection of connections) close(connection);
-      for (const connection of lingering) cut(connection);
+      lingering.stop();
       listener.stop(true);
     },
   };

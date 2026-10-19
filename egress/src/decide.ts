@@ -27,6 +27,30 @@ export function headEnd(bytes: Uint8Array): number {
   return -1;
 }
 
+/**
+ * A head's bytes as text, one character per byte, and back. A header value
+ * may carry bytes past ASCII, and they reach the other side as they came:
+ * not through TextDecoder("latin1"), which the Encoding standard makes
+ * windows-1252 (0x80 read as the euro sign, past what a header may hold),
+ * nor through TextEncoder, whose UTF-8 turned every such byte into two.
+ */
+export function latin1Text(bytes: Uint8Array): string {
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 8192) text += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  return text;
+}
+
+/** The bytes of a head written as latin1Text reads it; a character past one byte is a fault, never cut to one. */
+export function latin1Bytes(text: string): Uint8Array {
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code > 0xff) throw new Error("a head character past one byte");
+    bytes[i] = code;
+  }
+  return bytes;
+}
+
 const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
 /**

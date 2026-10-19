@@ -53,11 +53,15 @@ egress proxy
 
 **Two ports**, 3128 and 3129, outside the 3000-3099 range the loopback rule
 closes (see [concepts](../docs/concepts.md#the-loopback-rule)): inside it, the
-projects could not reach the proxy at all. CONNECT needs a raw TCP listener,
-`Bun.listen` in [src/proxy.ts](src/proxy.ts); a connector is an HTTP exchange
-with a body and an answer that may stream for minutes, which `Bun.serve`
-parses and streams in [src/connectors.ts](src/connectors.ts). A second port is
-cheaper than a second HTTP implementation inside a security component.
+projects could not reach the proxy at all. On 3128 the proxy pipes bytes it
+never reads ([src/proxy.ts](src/proxy.ts)); on 3129 it reads every request and
+every answer to rewrite them ([src/connectors.ts](src/connectors.ts)), and two
+ports keep a tunnel from ever being read as a connector call. Both are raw
+`Bun.listen` listeners counted against one admission
+([src/admission.ts](src/admission.ts)): one count of connections per project
+and for the whole proxy, one budget for the bytes waiting for a slow end,
+whichever port a connection came to. What they bound, descriptors and memory,
+is the process's.
 
 **Nobody else listens on them.** Outside the range, the loopback rule no
 longer keeps a project off them, and it judges who connects, never who
@@ -136,6 +140,27 @@ connector's base path, removes the credential headers the app sent
 (`Authorization`, `Cookie`, `X-Api-Key` and the connector's own header among
 them) and the headers that would describe the machine, sets the connector's
 header, and streams the answer back.
+
+**One call per connection, read as it streams.** The proxy speaks HTTP/1.1
+itself on both sides, [src/http1.ts](src/http1.ts), rather than through
+`Bun.serve` and `fetch`, which held whatever they were given (see
+[Threat model](#threat-model)). The answer says `Connection: close`, and so
+does the request sent upstream: every call opens a TLS connection of its own,
+a handshake the pooled connections of `fetch` used to save. A request whose
+body could be read two ways, a `Content-Length` beside a `Transfer-Encoding`,
+a chunk size ended by a bare line feed, is refused; a chunked body goes up in
+chunks of the proxy's own, one per read of the data it read, and nothing
+after the body is passed on, so that no second request reaches the upstream
+behind the first, outside the connector's path. An answer goes back as the
+upstream framed it, compressed if it was: the app's client decodes it, and the
+proxy never holds an answer many times larger than what the upstream sent.
+`Expect: 100-continue` is answered by the proxy once the upstream is
+connected, interim answers such as `103` are dropped, and HTTP/1.0 is refused
+with a 505. `TRACE`, whose answer echoes the request and the credential the
+proxy added to it, is refused with a 405, as are `TRACK` and `CONNECT`; a
+`GET` or a `HEAD` goes up without a body, whatever the app sent, as `fetch`
+sent it. A header value passes byte for byte, bytes past ASCII included, both
+ways.
 
 The two files live in `/etc/sitesolide-egress/`, `root:sitesolide-egress 0640`
 in a `0750 root:sitesolide-egress` folder: the proxy reads them and can neither
@@ -219,18 +244,36 @@ any caller.
   The proxy connects to the address it judged and checks the certificate
   against the connector's host name before it writes a byte of the request:
   a valid certificate for any other name is refused, and the credential never
-  leaves. Bun makes that check; the tests prove it, with an authority of their
-  own signing a certificate for another name. Not `checkServerIdentity`, which
-  Bun 1.3 calls only once the request is written.
+  leaves. Bun 1.3 checks the chain and reports it when the handshake ends,
+  and checks no name at all, measured: the proxy checks the name there, with
+  `node:tls`'s `checkServerIdentity` on the certificate presented, and writes
+  the request only once both hold. The tests prove it, with an authority of
+  their own signing a certificate for another name.
 - A project passing itself off as another: the uid comes from the kernel.
 - A project answering in the proxy's place: its unit refuses it 3128 and 3129,
   so it cannot wait there for the proxy to restart.
 - A connector's request body past its bound, whether it announces its length
-  or comes in chunks, which carry none and which `Bun.serve`'s own limit lets
-  through: it is counted as it streams, and the call refused 413 past 10 MiB.
-- An answer read for nobody: a call whose app hangs up aborts its upstream
-  request, which Bun's fetch would otherwise read to its end, an endless
-  stream of events among them, into the memory every project's egress shares.
+  or comes in chunks, which carry none: it is counted as it streams, and the
+  call refused 413 past 10 MiB.
+- An answer read for nobody: a call whose app hangs up closes its upstream
+  connection, which would otherwise be read to its end, an endless stream of
+  events among them, into the memory every project's egress shares.
+- One project taking the proxy down for every other, by either port. Its
+  connections are counted from the moment the kernel names it, before any
+  head, both ports together, and refused past 128; the proxy's past 1024.
+  Every byte waiting for a slow end, in a tunnel, in a connector's answer to
+  an app that reads slowly, in a connector's body to an upstream that does,
+  counts against the project's budget and the proxy's: past one, the
+  connections it covers stop reading and a new connector call is refused 503,
+  until half has drained. A connector call keeps its place among its
+  project's 32 until the last byte of its answer, not only until its headers.
+  All three were measured open while the connectors ran on `Bun.serve` and
+  `fetch`: 3000 idle connections from one caller held, after which another
+  project's CONNECT went unanswered once descriptors ran short; one answer of
+  300 MiB read slowly that added 1.6 GiB to the proxy; 32 bodies of 10 MiB to
+  a slow upstream, past the unit's 256 MiB.
+- A second request smuggled behind a connector call, outside the connector's
+  path: see [Connectors](#connectors).
 - A manifest granting itself a credential; a credential sitting in a
   repository, an environment file or the app's memory.
 
@@ -252,10 +295,12 @@ any caller.
   headers, a debugging endpoint or a verbose error page, hands the credential
   back to the app: the proxy cannot tell an echo from data.
 - **A few projects slowing every other.** Past 32 MiB waiting in the whole
-  proxy, no tunnel is read until half has drained: several projects each
-  holding their 8 MiB of unread bytes slow down everyone's tunnels. That is
-  the trade made against the proxy being killed for memory, which would cut
-  them all.
+  proxy, no tunnel and no connector call is read, and no new call accepted,
+  until half has drained: several projects each holding their 8 MiB of unread
+  bytes slow down everyone's. Eight projects holding their 128 connections
+  fill the proxy's 1024, and eight holding their 32 connector calls fill its
+  256. That is the trade made against the proxy being killed for memory or
+  for descriptors, which would cut them all.
 - **The proxy itself.** It holds every connector's credential and reaches
   every listed host. It runs as its own account, with no capability, a
   read-only system, the secrets and Caddy hidden; a compromise yields those
@@ -268,44 +313,33 @@ any caller.
   whose project is gone. No token creates a project under that slug while the
   grant stands; the owner's own deployment over SSH may, and it is then lent
   the credential. Withdraw it before the slug is reused.
-- **Too many connections to the connectors' port.** It counts no connections,
-  unlike the CONNECT port: a project opening thousands of them, slow to send
-  their heads, can use up the proxy's file descriptors, and with them the
-  CONNECT port of every other project. The 32 calls waiting per project bound
-  the calls under way, not the sockets.
-- **A slow reader of a connector's answer.** The answer streams through
-  `Bun.serve` with no pause on the proxy's side: an app that reads it slowly
-  has the proxy hold what the upstream already sent, without the byte budgets
-  the tunnels keep.
-- **Every project's bodies at once.** 32 calls per project, each with a body
-  of up to 10 MiB, add up past the unit's 256 MiB well before the projects
-  run out of calls: the bodies stream rather than wait whole, but nothing
-  budgets them across the proxy as the tunnels' bytes are.
 - **Root**, on the machine.
 
 ## Limits
 
 | What | Value |
 |---|---|
-| Open connections, all projects | 1024, then 503 |
-| Open connections per project, counted once the kernel names the caller, before its head | 128, then 503 |
-| Request head | 16 KiB, 10 s to arrive |
-| Idle tunnel | closed after 10 min with no byte delivered either way; a byte sent to a side already gone does not count |
-| Connection, resolution | 10 s, 5 s |
-| Bytes waiting for one side of a tunnel | 64 KiB, then the other side is no longer read |
-| Bytes waiting in all of one project's connections | 8 MiB, then none of them is read until half has drained |
-| Bytes waiting in the whole proxy | 32 MiB, then no connection is read until half has drained |
-| Bytes sent before a tunnel opens | 2 MiB per connection, then 400 |
-| A refused connection, once answered | read and dropped until the client closes, 1 s and 64 KiB at most, then cut; 1024 at a time, then closed at once |
-| Connector request body | 10 MiB, streamed through, not held, counted as it streams, a body in chunks included: then 413, `body too large` in the audit |
-| Connector calls waiting for an answer, per project | 32, then 503 |
-| Connector answer headers | 30 s; the body then streams as long as it needs, and stops when the app hangs up, the upstream request aborted |
+| Open connections, all projects, both ports together | 1024, then 503 |
+| Open connections per project, both ports together, counted once the kernel names the caller, before its head | 128, then 503 |
+| Request head, on either port; a connector's answer head | 16 KiB, 10 s to arrive; an answer head past it is a 502 |
+| Idle tunnel or connector call | closed after 10 min with no byte delivered either way; a byte sent to a side already gone does not count |
+| Connection (for a connector, its TLS handshake included), resolution | 10 s, 5 s; an attempt given up on, past its delay or with its call, is closed at once |
+| Bytes waiting for one side of a tunnel or a call | 64 KiB, then the other side is no longer read |
+| Bytes waiting in all of one project's connections, both ports | 8 MiB, then none of them is read, and no new connector call accepted (503), until half has drained |
+| Bytes waiting in the whole proxy, both ports | 32 MiB, then no connection is read, and no new connector call accepted (503), until half has drained |
+| Bytes sent before a tunnel opens, or before a connector call is judged | 2 MiB per connection, then 400 |
+| A refused connection, once answered | read and dropped until the client closes, 1 s and 64 KiB at most, then cut; 1024 at a time per port, then closed at once |
+| Connector request body | 10 MiB, announced or counted as it streams, a body in chunks included: then 413, `body too large` in the audit; it goes up under the byte budgets above, never held whole |
+| Connector calls under way, from their judgement to their answer's last byte | 32 per project, 256 for the proxy, then 503 |
+| Connector answer head | 30 s from the first connection attempt, then 504; the body then streams as long as it needs, and stops when the app hangs up, the upstream connection closed |
 | Refused pairs held between two audit writes | 10 000, the rest only counted |
 
 **Memory.** The unit gives the proxy 256 MiB, and the byte limits above keep
-what it holds for slow readers under 100 MiB in the worst case, for every
-project together: the arithmetic is next to the constants, in
-[src/proxy.ts](src/proxy.ts). The mark of one direction alone could not: a
+what it holds for slow readers to about 100 MiB in the worst case, for every
+project and both ports together: the arithmetic is next to the constants, in
+[src/proxy.ts](src/proxy.ts). A connector call also holds a TLS connection,
+whose buffers no byte budget counts: 28 KiB each with the system's
+authorities, measured on Bun 1.3.11, 7 MiB for the 256 calls the proxy allows. The mark of one direction alone could not: a
 pause lands only once Bun has drained the kernel's receive buffer, up to
 6.5 MiB a direction, which is why each project's bytes and the proxy's are
 counted as well. A paused socket must also stay paused: Bun 1.3 starts
@@ -446,6 +480,19 @@ closed whichever end goes first,
 the per-project limit counted before any head, a connector forwarded with its
 header set and the app's removed, an ungranted or unrequested connector
 refused, a connector's host presenting a valid certificate for another name
-refused before the request is written, a chunked body past the bound refused
-413 rather than held, an upstream let go when its caller hangs up, and the
-dashboard's read-only routes.
+refused before the request is written, and one from an authority not trusted,
+an attempt whose handshake never ends closed when it is given up on, `TRACE`
+refused, a `GET`'s body never forwarded, header bytes past ASCII passed as
+they came, a chunked body past the bound refused 413 rather than held, an
+upstream let go when its caller hangs up, and the dashboard's read-only
+routes. On the connectors' port, with a raw upstream of
+the test's own: its connections counted per project and for the proxy, against
+the CONNECT port's admission too, an answer read slowly or not at all no longer
+read from the upstream, a project's budget and the proxy's refusing the next
+call, bodies to an upstream that reads nothing held to the budget, a call's
+place kept until its answer's last byte, the calls under way capped for the
+proxy, a request smuggled behind a body or a body that reads two ways refused,
+a body of one-byte chunks held to about what the budgets count,
+`Expect: 100-continue`, `HEAD`, interim answers, and an upstream that answers
+wrong. Each of those bounds was first shown failing on the `Bun.serve`
+connectors, then holding on these.

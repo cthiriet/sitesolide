@@ -9,9 +9,11 @@
  * server, refusing any address it does not know. A route forgotten in a test
  * lands on a closed local port, never on the address itself.
  */
+import type { Socket } from "bun";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "../src/config";
+import type { Caller } from "../src/proc-net";
 import type { Lookup } from "../src/resolve";
 
 export const OPENSSL = Bun.which("openssl");
@@ -227,4 +229,70 @@ export function recordingAudit() {
       recent: () => [],
     },
   };
+}
+
+/** An identification by the client's port, as the kernel's would be, the table filled by the test. */
+export function identifyByPort(owners: Map<number, Caller>) {
+  return async (peer: { remotePort: number }): Promise<Caller> => {
+    // The test learns its client's port once connected, which may come a
+    // moment after the proxy asks.
+    for (let i = 0; i < 200 && !owners.has(peer.remotePort); i++) await Bun.sleep(2);
+    return owners.get(peer.remotePort) ?? { kind: "unknown", reason: "no owner in the test" };
+  };
+}
+
+/** What a flooding end writes at a time: big enough to fill every buffer on the way quickly. */
+export const BLOCK = new Uint8Array(1024 * 1024).fill(9);
+
+/**
+ * The most a socket's kernel receive buffer grows to: on Linux the third field
+ * of net.ipv4.tcp_rmem, 6 MiB by default; on macOS net.inet.tcp.autorcvbufmax,
+ * 4 MiB by default. Read from the machine running the tests, never assumed:
+ * a constant that fits one is either too loose or too tight on the other.
+ */
+function receiveBufferMax(): number {
+  const value =
+    process.platform === "darwin"
+      ? Bun.spawnSync(["sysctl", "-n", "net.inet.tcp.autorcvbufmax"]).stdout.toString()
+      : readFileSync("/proc/sys/net/ipv4/tcp_rmem", "utf8").trim().split(/\s+/)[2];
+  const bytes = Number(value?.trim());
+  if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new Error(`the kernel's receive buffer maximum does not read: ${JSON.stringify(value)}`);
+  return bytes;
+}
+
+/**
+ * How far past a mark or a budget the socket being read when it is crossed may
+ * still go, as DEFAULT_LIMITS in src/proxy.ts works it out: its pause lands
+ * once its kernel receive buffer is drained, plus the one read of up to 512 KiB
+ * Bun hands over. The tests' allowances follow from it: a guess of 4 MiB sat
+ * under the 4.5 MiB macOS allows, and failed one release run in a few.
+ */
+export const OVERSHOOT = receiveBufferMax() + 512 * 1024;
+
+/**
+ * One end of a connection that writes as fast as the other lets it and reads
+ * nothing: what makes the proxy hold bytes for it. `limit`, when set, is the
+ * most it writes in all.
+ */
+export type Flood = { socket: Socket<undefined> | null; written: number; on: boolean; limit?: number };
+
+/**
+ * Writes until the socket takes no more, or until the flood's limit. A short
+ * write turns a paused Bun socket's reading back on (see `write` in
+ * src/sockets.ts): resume() then pause() puts it back, or this end would read
+ * after all.
+ */
+export function pump(flood: Flood): void {
+  while (flood.on && flood.socket !== null) {
+    const left = (flood.limit ?? Infinity) - flood.written;
+    if (left <= 0) return;
+    const block = left < BLOCK.length ? BLOCK.subarray(0, left) : BLOCK;
+    const written = flood.socket.write(block);
+    if (written > 0) flood.written += written;
+    if (written < block.length) {
+      flood.socket.resume();
+      flood.socket.pause();
+      return;
+    }
+  }
 }

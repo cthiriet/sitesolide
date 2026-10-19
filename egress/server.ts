@@ -81,10 +81,13 @@ const connectors = startConnectors({
   ownAddresses,
   audit,
   dashboardAccount: DASHBOARD_ACCOUNT,
+  // One count of connections and of bytes for both ports: what it bounds,
+  // descriptors and memory, is the process's. See src/admission.ts.
+  admission: proxy.admission,
   // How many of the machine's own addresses it refuses: null says the
   // interfaces could not be read, and that every egress is refused for it.
-  // `buffered`, the bytes waiting for a slow reader, against the budgets of
-  // src/proxy.ts.
+  // `buffered`, the bytes waiting for a slow reader on both ports, against
+  // the budgets of src/proxy.ts.
   status: () => ({ started, openTunnels: proxy.open(), buffered: proxy.buffered(), ownAddresses: ownAddresses()?.size ?? null }),
 });
 
@@ -120,7 +123,7 @@ function shutDown(signal: string): void {
   clearInterval(flusher);
   clearInterval(pruner);
   proxy.stop();
-  connectors.stop(true);
+  connectors.stop();
   try {
     audit.flush();
   } finally {

@@ -117,6 +117,47 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## One project holds its share of the egress proxy
+
+**One project could take the egress proxy down for every other.** The
+connectors' port counted no connections, read an answer as fast as its
+upstream sent it whether the app read it or not, and read a body as fast as
+the app sent it whatever the upstream took: thousands of idle connections from
+one project, one large answer read slowly, or 32 bodies to a slow upstream,
+ran the proxy out of descriptors or of memory, and every project's egress and
+connectors with it. The connectors' port now runs on the same raw listener as
+the CONNECT port, counts its connections with it, and streams both ways under
+the same byte budgets. A review of the rewrite closed what it brought or kept:
+a body in one-byte chunks cost the heap twenty times what the budgets counted,
+an upstream connection given up on stayed open, a `TRACE` went up with the
+credential the proxy adds and came back echoed, a `GET` or a `HEAD` carried a
+body an upstream could read as a second request, and a header byte past ASCII
+was sent twice encoded, on both ports.
+
+**What `sitesolide upgrade` brings**: the egress proxy alone, the steward
+restarted after it as always. Nothing else moves, and nothing on the machine
+changes form: the connectors, the grants and the audit are read as they were.
+
+**What changes for you.** Nothing, unless an app calls a connector:
+
+- **A connector call is one connection**, answered `Connection: close`, with a
+  TLS connection of its own upstream, whose certificate is checked against the
+  connector's host name. A project's connections count against its 128 on
+  both ports together. A call is refused 503 past its project's 32 under way,
+  counted until the last byte of its answer and no longer its headers, past
+  the proxy's 256, or while its project or the proxy holds too many bytes
+  nobody has read; an answer whose head does not come within 30 s is a 504,
+  no longer a 502.
+- **An answer reaches the app as the upstream sent it**, compressed only if
+  the app's own client asked with `Accept-Encoding`, as Bun's `fetch` does and
+  decodes.
+- **Refused**: HTTP/1.0, 505; a request with both `Content-Length` and
+  `Transfer-Encoding`, 400; `TRACE`, `TRACK` and `CONNECT`, 405. A `GET` or a
+  `HEAD` goes up without a body.
+
+**Going back.** `sitesolide upgrade` with the previous binary puts the previous
+proxy back; nothing it reads changed.
+
 ## What a project, a token or a cloned folder could reach
 
 A review of the whole platform found ways past its boundaries, and this
