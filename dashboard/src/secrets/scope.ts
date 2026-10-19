@@ -362,7 +362,12 @@ export function readSites(entries: ProjectEntry[], present: readonly string[]): 
 
   const folders = [...sites.keys()];
   for (const name of order) {
-    const possible = candidates(name, folders);
+    // The machine's own files are the dashboard's, never a site's their name
+    // happens to prefix: a project deployed over SSH as dashboard-backup took
+    // the backups' keys and passphrase into its Secrets section, where its
+    // Admins read and rewrote them. A token may not create such a name
+    // (decideSlug); the owner's deployment of a cloned repository could.
+    const possible = ROOT_FILES.includes(name) ? candidates(name, folders).filter((folder) => folder === "dashboard") : candidates(name, folders);
     const fromManifest = (declaring.get(name) ?? []).filter((folder) => possible.includes(folder));
 
     let folder: string | undefined;
@@ -589,8 +594,10 @@ export function folderReason(info: FolderInfo, uidRoot: number | null, path: str
  *
  * The previous version keeps the uid of the file it was replacing. A site
  * deleted then recreated under the same name receives another account, and
- * therefore another uid: without this check, restoring would give it its
- * predecessor's key.
+ * often another uid: without this check, restoring would give it its
+ * predecessor's key. Not always: `useradd --system` gives the account removed
+ * last its uid back, which is why the steward also drops a name's previous
+ * version when it creates the file (steward.ts, `createFresh`).
  */
 export function previousReason(info: FileInfo, expected: Owner | null, account: string): string | null {
   if (info.link || !info.regular || info.links > 1) return "the previous version is not a plain file";

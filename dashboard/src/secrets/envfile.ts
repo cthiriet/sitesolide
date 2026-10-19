@@ -36,7 +36,11 @@
  *      form of the generated units, the service starts with NOT ONE variable
  *      from the file, valid lines included. The log reports it for UTF-8
  *      (`invalid UTF-8 value for key`), and says nothing at all for the null
- *      byte.
+ *      byte. What systemd calls invalid UTF-8 is wider than what a decoder
+ *      refuses: its `utf8_is_valid` also refuses the Unicode noncharacters,
+ *      U+FDD0 to U+FDEF and the last two code points of every plane
+ *      (`unichar_is_valid` in src/basic/utf8.c), in a key or a value, never in
+ *      a comment, which it does not check. Read, not measured.
  *  10. A comment ending with `\` is not continued (o08).
  *
  * The round trip of `encodeValue` on 31 trap values is identical byte for
@@ -223,6 +227,9 @@ export function parseEnv(text: string): EnvParse {
 
     const value = decodeValue(raw.slice(equal + 1));
     if (typeof value !== "string") return refusal(value.reason);
+    // Valid UTF-8 to the decoder, invalid to systemd, which then reads none
+    // of the file (rule 9).
+    if (hasNoncharacter(value)) return refusal("a Unicode noncharacter in the value, systemd would ignore all of the file");
 
     seen.add(key);
     document.lines.push({ kind: "assignment", key, value, raw });
@@ -331,8 +338,21 @@ export function checkValue(value: string): string | null {
   // A lone surrogate half would be encoded as U+FFFD: what was written would
   // not be what was typed in.
   if (!value.isWellFormed()) return "the value is not valid Unicode";
+  // Written, it would make systemd drop every variable of the file at the
+  // next start, those of the other lines included (rule 9).
+  if (hasNoncharacter(value)) return "the value holds a Unicode noncharacter, which systemd refuses";
   if (encoder.encode(value).length > MAX_VALUE_BYTES) return "the value is larger than 8 KiB";
   return null;
+}
+
+/**
+ * U+FDD0 to U+FDEF, and U+xxFFFE and U+xxFFFF in every plane: the code points
+ * systemd's `unichar_is_valid` refuses beyond what a strict decoder does.
+ */
+const NONCHARACTER = /[\uFDD0-\uFDEF\uFFFE\uFFFF\u{1FFFE}\u{1FFFF}\u{2FFFE}\u{2FFFF}\u{3FFFE}\u{3FFFF}\u{4FFFE}\u{4FFFF}\u{5FFFE}\u{5FFFF}\u{6FFFE}\u{6FFFF}\u{7FFFE}\u{7FFFF}\u{8FFFE}\u{8FFFF}\u{9FFFE}\u{9FFFF}\u{AFFFE}\u{AFFFF}\u{BFFFE}\u{BFFFF}\u{CFFFE}\u{CFFFF}\u{DFFFE}\u{DFFFF}\u{EFFFE}\u{EFFFF}\u{FFFFE}\u{FFFFF}\u{10FFFE}\u{10FFFF}]/u;
+
+function hasNoncharacter(value: string): boolean {
+  return NONCHARACTER.test(value);
 }
 
 // --- Writing -----------------------------------------------------------------

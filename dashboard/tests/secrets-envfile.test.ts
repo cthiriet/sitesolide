@@ -139,6 +139,19 @@ describe("parsing: what makes the file unmanaged", () => {
     const parsed = parseEnvBytes(new TextEncoder().encode("A='cafe \u00e9'\n"));
     expect(parsed.ok && envValue(parsed.document, "A")).toBe("cafe \u00e9");
   });
+
+  test("a Unicode noncharacter in a value is refused, as systemd refuses the whole file for it", () => {
+    // Valid UTF-8 for TextDecoder, but systemd's utf8_is_valid also refuses
+    // U+FDD0 to U+FDEF and the last two code points of every plane
+    // (unichar_is_valid): the file is then read for none of its variables.
+    for (const value of ["\ufdd0", "\ufdef", "\ufffe", "\uffff", "\u{1fffe}", "\u{10ffff}"]) {
+      const parsed = parseEnvBytes(new TextEncoder().encode(`OTHER=1\nA='x${value}'\n`));
+      expect(parsed.ok ? "accepted" : parsed.line).toBe(2);
+    }
+    // Their neighbours are ordinary characters, and a comment is not read.
+    expect(parseEnv("A='\ufdcf\ufdf0\ufffd\u{1fffd}'\n").ok).toBe(true);
+    expect(parseEnv("# \uffff\nA=1\n").ok).toBe(true);
+  });
 });
 
 describe("rewriting", () => {
@@ -320,6 +333,14 @@ describe("key and value rules", () => {
     // The bound is in bytes: 4096 two-byte characters make exactly 8 KiB.
     expect(checkValue("\u00e9".repeat(MAX_VALUE_BYTES / 2))).toBeNull();
     expect(checkValue("\u00e9".repeat(MAX_VALUE_BYTES / 2 + 1))).not.toBeNull();
+  });
+
+  test("a value with a Unicode noncharacter is refused: systemd would drop every variable of the file", () => {
+    for (const value of ["\ufdd0", "a\ufdefb", "\ufffe", "x\uffff", "\u{1fffe}", "\u{10ffff}"]) {
+      expect(checkValue(value)).not.toBeNull();
+      expect(() => set({ lines: [] }, "A", value)).toThrow();
+    }
+    expect(checkValue("\ufdcf\ufdf0\ufffd\u{1f600}")).toBeNull();
   });
 
   test("no reason quotes the value", () => {

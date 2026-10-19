@@ -2682,6 +2682,31 @@ describe("owners checked", () => {
     expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(current);
   });
 
+  test("a file created here starts with no previous version, even one left by an earlier site whose uid its account was given again", async () => {
+    // `useradd --system` hands out the highest free uid below the lowest in
+    // use: an account removed last comes back on the same uid, and the uid no
+    // longer tells the earlier site's previous version from this one's. The
+    // earlier file was removed by hand, its previous version stayed.
+    const PREDECESSOR = "API_KEY=predecessor-secret-value\n";
+    const bench = await underChecks();
+    const token = await unlock(bench);
+    for (const [name, create] of [
+      ["cms-webhook.env", () => bench.call("POST", "/file", { token, slug: "cms", file: "cms-webhook.env" })],
+      ["calendar.env", () => bench.current().secretsForToken!.change(new Request("http://steward/control/secrets"), { slug: "calendar", file: "calendar.env", set: [], remove: [] }, { actor: "token:0123456789ab", member: null, token: "0123456789ab" }, async () => null)],
+    ] as const) {
+      mkdirSync(join(bench.state, "precedents"), { recursive: true, mode: 0o700 });
+      writeFileSync(join(bench.state, "precedents", name), PREDECESSOR, { mode: 0o600 });
+      expect((await create()).status).toBeLessThan(300);
+      expect(readFileSync(join(bench.secrets, name), "utf8")).toBe("");
+
+      const slug = name.slice(0, name.indexOf(name.startsWith("cms") ? "-" : "."));
+      const restored = await bench.call("POST", "/restore", { token, slug, file: name });
+      expect(readFileSync(join(bench.secrets, name), "utf8")).toBe("");
+      expect(restored.status).toBe(404);
+      expect((await fileSeen(bench, slug, name)).previous).toBe(false);
+    }
+  });
+
   test("with checks on, a gatekeeper result owned by root passes, one writable by others does not", async () => {
     const bench = await underChecks();
     const token = await unlock(bench);
@@ -3651,6 +3676,18 @@ describe("a token's secrets, handed over by the control routes", () => {
     const ops = bench.current().secretsForToken!;
     const refused = await ops.change(request(), { slug: "cms", file: "cms.env", set: [["LATE", "x"]], remove: [] }, TOKEN, async () => Response.json({ error: "unauthenticated", message: "this token was revoked" }, { status: 401 }));
     expect(refused.status).toBe(401);
+    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+  });
+
+  test("a value systemd would refuse, a Unicode noncharacter, never lands: the unit would read none of the file's variables", async () => {
+    const bench = await mount();
+    const ops = bench.current().secretsForToken!;
+    const refused = await ops.change(request(), { slug: "cms", file: "cms.env", set: [["BROKEN", "x\uffff"]], remove: [] }, TOKEN, still);
+    expect(refused.status).toBe(400);
+    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+    // Nor through a person's route.
+    const token = await unlock(bench);
+    expect((await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "BROKEN", value: "\ufdd0" })).status).toBe(400);
     expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
   });
 });

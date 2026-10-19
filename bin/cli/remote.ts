@@ -1156,9 +1156,19 @@ export function valueRefusal(value: string): string | null {
   if (value.includes("\n") || value.includes("\r")) return "the value must fit on one line";
   if (value.includes("\0")) return "the value contains a null byte";
   if (!value.isWellFormed()) return "the value is not valid Unicode";
+  if (NONCHARACTER.test(value)) return "the value holds a Unicode noncharacter, which systemd refuses";
   if (new TextEncoder().encode(value).length > MAX_VALUE_BYTES) return "the value is larger than 8 KiB";
   return null;
 }
+
+/**
+ * U+FDD0 to U+FDEF, and U+xxFFFE and U+xxFFFF in every plane: systemd refuses
+ * them in a variables file, and drops every variable of the file with them.
+ * The steward's own list (dashboard/src/secrets/envfile.ts), which the tests
+ * hold side by side with this one.
+ */
+const NONCHARACTER =
+  /[\uFDD0-\uFDEF\uFFFE\uFFFF\u{1FFFE}\u{1FFFF}\u{2FFFE}\u{2FFFF}\u{3FFFE}\u{3FFFF}\u{4FFFE}\u{4FFFF}\u{5FFFE}\u{5FFFF}\u{6FFFE}\u{6FFFF}\u{7FFFE}\u{7FFFF}\u{8FFFE}\u{8FFFF}\u{9FFFE}\u{9FFFF}\u{AFFFE}\u{AFFFF}\u{BFFFE}\u{BFFFF}\u{CFFFE}\u{CFFFF}\u{DFFFE}\u{DFFFF}\u{EFFFE}\u{EFFFF}\u{FFFFE}\u{FFFFF}\u{10FFFE}\u{10FFFF}]/u;
 
 /** A value refused here, before it travels: never quoted. */
 function refusedValue(reason: string): Failure {
@@ -1166,7 +1176,7 @@ function refusedValue(reason: string): Failure {
     error: "invalid",
     message: `${reason}: nothing was sent`,
     details: [
-      "the machine takes a value on one line, without a null byte, in valid Unicode, 8 KiB at most",
+      "the machine takes a value on one line, without a null byte, in valid Unicode with no noncharacter, 8 KiB at most",
       "a key or a certificate of several lines goes in a file read whole, from the dashboard's Secrets section",
     ],
   };

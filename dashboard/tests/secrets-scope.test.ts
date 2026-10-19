@@ -91,6 +91,26 @@ describe("the sites", () => {
     expect(filesOf(sites, "builder")).toEqual(["builder.env"]);
   });
 
+  test("the machine's own files are the dashboard's alone, whatever site their name prefixes", () => {
+    // A project the owner deployed over SSH under the name dashboard-backup,
+    // a cloned repository's, took the backups' keys and passphrase into its
+    // Secrets section by the prefix alone, declared or not: its Admins read
+    // and rewrote them there.
+    for (const slug of ["dashboard-backup", "dashboard-monitor"]) {
+      for (const declared of [[], [`${slug}.env`]]) {
+        const sites = sitesFrom(
+          [
+            { folder: "dashboard", manifest: manifest("dashboard", ["dashboard.env"]) },
+            { folder: slug, manifest: manifest(slug, declared) },
+          ],
+          ["dashboard.env", "dashboard-monitor.env", "dashboard-backup.env"],
+        );
+        expect({ slug, declared, files: filesOf(sites, slug) }).toEqual({ slug, declared, files: [] });
+        expect(filesOf(sites, "dashboard").sort()).toEqual(["dashboard-backup.env", "dashboard-monitor.env", "dashboard.env"]);
+      }
+    }
+  });
+
   test("a manifest that is unreadable or names another slug declares nothing, but the site stays", () => {
     const sites = sitesFrom([
       { folder: "cms", manifest: "{not json" },

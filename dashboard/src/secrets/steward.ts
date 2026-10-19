@@ -911,6 +911,21 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     await system.writeSecret(c.declaration.name, bytes, permissions);
   }
 
+  /**
+   * Creates a missing file, empty and with no previous version. What
+   * precedents/ still holds under its name is an earlier file's, removed by
+   * hand or with its site, and the uid `previousReason` compares does not
+   * tell them apart: `useradd --system` hands out the highest free uid below
+   * the lowest in use, so a site removed and then created again under the same
+   * name, by whoever holds the right to create it, gets its predecessor's uid,
+   * and a restore would hand it its predecessor's secrets. Removed first: a
+   * stop between the two leaves neither.
+   */
+  async function createFresh(name: string, permissions: Permissions): Promise<boolean> {
+    await system.removePrevious(name);
+    return system.createEmptySecret(name, permissions);
+  }
+
   /** The serialised document, or null if it goes beyond what a managed file may weigh. */
   function boundedBytes(document: EnvDocument): Uint8Array | null {
     const bytes = encoder.encode(serialise(document));
@@ -1372,7 +1387,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       return refuse("create", body, { error: "not-found", message }, null, who);
     }
 
-    const created = await system.createEmptySecret(declaration.name, expectedPermissions(declaration, account ?? null));
+    const created = await createFresh(declaration.name, expectedPermissions(declaration, account ?? null));
     if (!created) {
       return refuse("create", body, { error: "already-present", message: `${declaration.name} already exists` }, null, who);
     }
@@ -1467,7 +1482,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       if (account === null) {
         return refuse("create", body, { error: "not-found", message: `account ${c.declaration.expected.owner} does not exist, deploy the site first` }, null, who);
       }
-      created = await system.createEmptySecret(name, expectedPermissions(c.declaration, account ?? null));
+      created = await createFresh(name, expectedPermissions(c.declaration, account ?? null));
       if (created) await writeLog("create", "ok", body, null, null, who);
       // Created here or, in a race, by someone else a moment before: read as it stands.
       state = await examineTarget(c);
