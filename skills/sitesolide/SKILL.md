@@ -116,7 +116,8 @@ Every error carries a `hint`: follow it. The usual ones:
   site at once. Everything goes through the CLI or the tools.
 - Never retry a refusal with `--force` or a workaround on your own.
 - Never remove a project, lock or unlock a preview, switch a domain, destroy a
-  machine, upgrade it (`sitesolide upgrade`; `--dry-run` only reads) or replace
+  machine, upgrade it (`sitesolide upgrade`; `--dry-run` only reads), rewrite
+  every app's units (`sitesolide refresh`; `--dry-run` only reads) or replace
   DNS records with `setup --dns-replace` unless the user asked for exactly
   that: those are their commands, not tools.
 - Never retry `setup` in a loop on a refused connection: most likely fail2ban

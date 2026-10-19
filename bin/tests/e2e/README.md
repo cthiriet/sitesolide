@@ -98,6 +98,21 @@ is `bin/tests/cli-upgrade.test.ts`'s, against the model machine of
 deployment's rsync in a dry run, the only command the fake accepts that is not
 a recognised read, and the deposited manifest read back.
 
+## Refresh
+
+`refresh.test.ts` runs `sitesolide refresh` in front of the same fake
+machine, the manifests and the units laid in its tree: a unit of the previous
+generation written, systemd reloaded and the service restarted, and nothing
+else sent; a current unit, one edited by hand, a manifest that does not read,
+none of them touching anything; `--all` in order, stopping at the first
+project that fails; `--dry-run`; `--json`; a token refused. Its units are kept:
+with `keepUnits`, an accepted write of a unit lays the text that came on
+standard input in the tree, as the machine would, so that a second run reads
+it back and finds it current. Every other accepted write still runs nothing.
+A refresh that restarts a service goes on to the HTTPS check, which a zone
+that resolves nowhere fails, as a deployment's does; the decisions, and the
+summary a run that gets past it ends with, are `bin/tests/cli-refresh.test.ts`'s.
+
 ## Agents
 
 `agents.test.ts` drives the CLI as an agent does: `--json`, whose standard

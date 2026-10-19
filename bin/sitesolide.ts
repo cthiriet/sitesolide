@@ -4,6 +4,7 @@
  *
  *   sitesolide setup <user@host>    install the machine itself, see bin/cli/setup.ts
  *   sitesolide upgrade [--dry-run]  bring its components to this release, see bin/cli/upgrade.ts
+ *   sitesolide refresh <slug>|--all a project's units from the manifest on the machine, see bin/cli/refresh.ts
  *   sitesolide detect [--write]     the manifest a folder without one implies
  *   sitesolide deploy [--dry-run]   prepare, build, push, install, verify
  *   sitesolide status               what the VM actually carries
@@ -191,6 +192,7 @@ import {
   projectPaths,
   decideUnit,
   generateUnits,
+  type GeneratedUnit,
   readUnitAnswer,
   sandboxedInstallCommand,
   type UnitRead,
@@ -211,7 +213,25 @@ import {
   releaseScript,
   HELD_VARIABLE,
   type Execution,
+  type Who,
 } from "./cli/caddy-lock";
+import {
+  changedMeanwhile,
+  emptyReport,
+  foreignUnits,
+  notDeployed,
+  parseRefreshArguments,
+  planUnits,
+  readDeposited,
+  refusedManifest,
+  stoppedAt,
+  stoppedDetails,
+  summaryFields,
+  summaryLines,
+  type ProjectPlan,
+  type ProjectReport,
+  type RefreshOptions,
+} from "./cli/refresh";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts, type ProjectAccount } from "./cli/loopback";
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { machine } from "./cli/machine";
@@ -342,13 +362,27 @@ function finalEvent(event: OutputEvent): void {
   emit(event);
 }
 
+/**
+ * While `refresh` works on a project, what a stop adds to it: the project
+ * named before the message, and after the details what the run wrote for it,
+ * what it did before it, and the projects it leaves. A stop there is a `die`
+ * of one of deploy's own steps, the restart, the verify, the lock, worded for
+ * deploy; this is how each one says where the run stood without being
+ * written for refresh. Used once, then cleared: see refreshProject.
+ */
+let stopContext: { prefix: string; details: () => string[] } | null = null;
+
 function die(message: string, details: string[] = []): never {
+  const context = stopContext;
+  stopContext = null;
+  const said = context === null ? message : `${context.prefix}${message}`;
+  const saidDetails = context === null ? details : [...details, ...context.details()];
   if (jsonOutput) {
-    finalEvent({ type: "error", message, details: details.filter((line) => line.trim() !== ""), hint: hintFor(message) });
+    finalEvent({ type: "error", message: said, details: saidDetails.filter((line) => line.trim() !== ""), hint: hintFor(said) });
     process.exit(1);
   }
-  console.error(`!! ${message}`);
-  for (const line of details) console.error(`   ${line}`);
+  console.error(`!! ${said}`);
+  for (const line of saidDetails) console.error(`   ${line}`);
   process.exit(1);
 }
 
@@ -449,7 +483,9 @@ function finish(command: string): void {
 
 /**
  * The lock shared with the gatekeeper, as long as this process holds it: the
- * holder line and the machine that carries it. One take per process only.
+ * holder line and the machine that carries it. `deploy` and `remove` take it
+ * once; `refresh` once for each project it writes the units of, and gives it
+ * back before the next.
  */
 let heldLock: { line: string; server: string } | null = null;
 
@@ -504,7 +540,7 @@ export function releaseCaddyLock(): void {
  *
  * In a dry run, nothing is taken: taking it is a write on the VM.
  */
-async function takeCaddyLock(config: Config, executor: Executor, after: string): Promise<void> {
+async function takeCaddyLock(config: Config, executor: Executor, after: string, who: Who = "deploy"): Promise<void> {
   if (heldLock !== null) return;
   if (executor.simulated) {
     say("   [dry-run] take the Caddy lock shared with the dashboard's gatekeeper");
@@ -512,7 +548,7 @@ async function takeCaddyLock(config: Config, executor: Executor, after: string):
   }
   armRelease();
   step("Caddy lock, shared with the dashboard's gatekeeper");
-  const acquisition = await takeLock("deploy", process.pid, (command) => executor.execute(config, command));
+  const acquisition = await takeLock(who, process.pid, (command) => executor.execute(config, command));
   if (acquisition.kind === "rejects") die(acquisition.message, [...acquisition.details, after]);
   heldLock = { line: acquisition.line, server: config.server };
   for (const announcement of acquisition.announcements) say(`   ${announcement}`);
@@ -1155,20 +1191,7 @@ async function deploy(
       await installAsProject(manifest, config, executor);
     }
 
-    // Every unit named, rather than the main one alone and its PartOf: a
-    // service that was never started would not be restarted by it, and
-    // is-active must answer for each of them. reset-failed first: a release
-    // that crash-looped past the start limit left its unit refusing any
-    // start, the restart of the fix that follows included, until it is reset.
-    //
-    // Never a scheduled service: restarted, it would run there and then, and
-    // is-active would find it inactive once its run ended. Its timer is
-    // restarted instead, and starts it at the times its schedule names.
-    const running = runningUnits(manifest);
-    const units = running.map(unitArgument).join(" ");
-    step(running.length > 1 ? "services restart" : "service restart");
-    await executor.ssh(config, `sudo systemctl reset-failed ${units} 2>/dev/null; sudo systemctl restart ${units} && systemctl is-active ${units}`);
-    stability = await readStandings(watchedUnits(manifest), config, executor);
+    stability = await restartServices(manifest, config, executor);
 
     if (!behindPortal) await installFragment(manifest, config, executor);
   }
@@ -1635,13 +1658,22 @@ async function depositText(
  * index.html. It is the one failure an app that works can still hit, one that
  * answers only its routes, so it says so plainly, with what to do, as
  * docs/manifest.md does under `start`.
+ *
+ * What it learns, the address and its answer, goes to `record`: the run's
+ * result for deploy, the project's own entry for refresh, which checks
+ * several.
  */
-async function verify(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
+async function verify(
+  manifest: Manifest,
+  config: Config,
+  executor: Executor,
+  record: (fields: Record<string, unknown>) => void = note,
+): Promise<void> {
   const address = `https://${manifest.slug}.${config.zone}/`;
   // `headless`: the address answers a line saying the project serves no
   // page, and its 200 is that line, see isHeadless.
   const headless = isHeadless(manifest);
-  note({ url: address, status: null, ...(headless ? { headless } : {}) });
+  record({ url: address, status: null, ...(headless ? { headless } : {}) });
   if (executor.simulated) {
     say(`   [dry-run] verify ${address}${headless ? ", which answers that the project serves no page" : ""}`);
     return;
@@ -1660,7 +1692,7 @@ async function verify(manifest: Manifest, config: Config, executor: Executor): P
     die(`${address} unreachable: ${(err as Error).message}`);
   }
   say(`   ${address} ${code}`);
-  note({ status: code });
+  record({ status: code });
 
   // A protected site that answers 200 to a stranger is not a success: it is the
   // worst possible state, a site its owner believes closed. Only the portal's
@@ -1691,6 +1723,29 @@ async function verify(manifest: Manifest, config: Config, executor: Executor): P
     ]);
   }
   if (code !== 200) die(`unexpected response: ${code}`);
+}
+
+/**
+ * Restarts the project's services and reads how they stand right after, for
+ * checkStability: what `deploy` does once its code is in place, and `refresh`
+ * once its units are.
+ *
+ * Every unit named, rather than the main one alone and its PartOf: a service
+ * that was never started would not be restarted by it, and is-active must
+ * answer for each of them. reset-failed first: a release that crash-looped
+ * past the start limit left its unit refusing any start, the restart of the
+ * fix that follows included, until it is reset.
+ *
+ * Never a scheduled service: restarted, it would run there and then, and
+ * is-active would find it inactive once its run ended. Its timer is restarted
+ * instead, and starts it at the times its schedule names.
+ */
+async function restartServices(manifest: Manifest, config: Config, executor: Executor): Promise<Standings | null> {
+  const running = runningUnits(manifest);
+  const units = running.map(unitArgument).join(" ");
+  step(running.length > 1 ? "services restart" : "service restart");
+  await executor.ssh(config, `sudo systemctl reset-failed ${units} 2>/dev/null; sudo systemctl restart ${units} && systemctl is-active ${units}`);
+  return readStandings(watchedUnits(manifest), config, executor);
 }
 
 /**
@@ -2994,6 +3049,178 @@ async function remove(
   for (const line of leftToDo(slug, project.folder)) say(`   ${line}`);
 }
 
+// --- refresh -----------------------------------------------------------------
+
+/**
+ * `sitesolide refresh <slug>` or `--all`: a deployed project's units generated
+ * again from the manifest the machine carries, and nothing else sent. What it
+ * decides is bin/cli/refresh.ts's; the steps are deploy's own, reused as they
+ * are: the reading of a unit, its deposit, the restart, the verify and the
+ * check ten seconds later.
+ *
+ * Each project is read and decided before anything is taken for it. One with
+ * a unit to write takes the Caddy lock, the one deploy holds from its first
+ * deposit to the end of its restart, reads its manifest and its units again
+ * under it, and writes only if nothing changed since: a deployment or the
+ * gatekeeper that ran meanwhile stops it there. A project with nothing to
+ * write takes nothing, and the second run of a refresh changes nothing on the
+ * machine. The landing's folder, which bears the zone's name, is left alone:
+ * its unit is not one deploy writes.
+ *
+ * `--all` stops at the first project whose restart or check fails: what the
+ * run did before it, and what it never reached, go into the refusal through
+ * stopContext.
+ */
+async function refresh(options: RefreshOptions, config: Config, executor: Executor): Promise<void> {
+  const all = options.target.all;
+  const pattern = options.target.all ? "*" : options.target.slug;
+  say(
+    `-> refresh of ${config.server}, zone ${config.zone}: ${all ? "every project's units" : `the units of ${pattern}`}, generated again from the manifest the server carries; no code is sent${executor.simulated ? "; dry run, nothing is changed" : ""}`,
+  );
+  note({ dryRun: executor.simulated, all });
+  const reading = readDepositedManifests(await executor.read(config, readManifestsCommand(pattern)));
+  if (reading.kind === "unreadable") die("cannot read the manifests on the server", [reading.reason, "nothing was changed"]);
+  if (!all && !reading.manifests.has(pattern)) {
+    die(notDeployed(pattern), [`no ${depositedManifestPath(pattern)}`, "nothing was changed"]);
+  }
+
+  const folders = [...reading.manifests.keys()].filter((folder) => folder !== config.zone).sort();
+  const reports: ProjectReport[] = [];
+  for (const [index, folder] of folders.entries()) {
+    reports.push(await refreshProject(folder, reading.manifests.get(folder)!, { all, reports, notReached: folders.slice(index + 1) }, config, executor));
+  }
+
+  const [first = "", ...rest] = summaryLines(reports, executor.simulated);
+  say("");
+  say(`-> ${first}`);
+  for (const line of rest) say(`   ${line}`);
+  note({ projects: reports, ...summaryFields(reports) });
+}
+
+/** The run a project belongs to: one project or all of them, those done before it, and those after it. */
+type RefreshRun = { all: boolean; reports: readonly ProjectReport[]; notReached: readonly string[] };
+
+/** A project refused, nothing changed for it: the run stops on it when it was the one asked for, and goes on otherwise. */
+function refuseProject(run: RefreshRun, message: string, details: string[]): void {
+  if (run.all) warn(message, details);
+  else die(message, details);
+}
+
+/** One project of a refresh: decided, then, when a unit is to be written, written under the lock, restarted and checked. */
+async function refreshProject(folder: string, raw: string, run: RefreshRun, config: Config, executor: Executor): Promise<ProjectReport> {
+  const deposited = readDeposited(folder, raw);
+  if (deposited.kind === "refused") {
+    refuseProject(run, refusedManifest(folder), deposited.reasons);
+    return { ...emptyReport(folder, "refused"), reasons: deposited.reasons };
+  }
+  const { manifest } = deposited;
+  const slug = manifest.slug;
+  if (deposited.kind === "static") {
+    say(`-> ${slug}, static: no unit to refresh`);
+    return emptyReport(slug, "static");
+  }
+
+  step(`${slug}, ${describeRuns(true, runsOf(servicesOf(manifest)))}`);
+  const units = generateUnits(manifest);
+  const progress = { written: [] as string[], restarted: false };
+  stopContext = { prefix: stoppedAt(slug), details: () => stoppedDetails({ slug, ...progress }, run.reports, run.notReached) };
+  try {
+    const plan = planUnits(units, await readInstalledUnits(units, config, executor));
+    sayPlan(plan);
+    const paths = (list: readonly { path: string }[]): string[] => list.map((unit) => unit.path);
+    const report: ProjectReport = { ...emptyReport(slug, plan.state), write: paths(plan.write), current: paths(plan.current), kept: paths(plan.kept) };
+    if (plan.state !== "outdated") return report;
+
+    // A name systemd gives to a unit deploy did not write: deploy refuses it
+    // before anything is laid, `--force` or not, and so does this.
+    const names = unitNames(manifest);
+    const origins = readUnitOrigins(await executor.read(config, unitOriginsCommand(slug, names)), names);
+    if (origins.kind === "unreadable") {
+      die(`cannot tell whether systemd already runs a service named ${slug}`, [
+        "the server answered nothing readable",
+        "nothing was written: a unit is never laid over a service the reading could not see",
+      ]);
+    }
+    const foreign = names.flatMap((unit) => foreignUnit(unit, slug, origins.facts.get(unit)!) ?? []);
+    if (foreign.length > 0) {
+      stopContext = null;
+      refuseProject(run, foreignUnits(slug), foreign);
+      return { ...report, state: "refused", write: [], reasons: foreign };
+    }
+
+    await takeCaddyLock(config, executor, "run sitesolide refresh again in a moment", "refresh");
+    if (!executor.simulated) {
+      // What decides is read under the lock: a deployment that deposited its
+      // manifest, or laid its units, since the first reading would see them
+      // replaced by what the previous manifest generates.
+      const again = readDepositedManifests(await executor.read(config, readManifestsCommand(slug)));
+      if (again.kind === "unreadable") die("cannot read the manifests on the server", [again.reason]);
+      const installed = await readInstalledUnits(units, config, executor);
+      if (again.manifests.get(slug) !== raw || installed.some((text, i) => text !== plan.units[i]!.installed)) {
+        die(changedMeanwhile(slug), ["a deployment, or the dashboard, changed it since it was read"]);
+      }
+    }
+
+    for (const unit of plan.write) {
+      showFile(unitFileName(unit.unit), unit.text);
+      step(plan.write.length > 1 ? `install ${unitFileName(unit.unit)}` : "install the unit");
+      await depositText(executor, config, unit.text, unit.path, "root:root", "644");
+      if (!executor.simulated) progress.written.push(unit.path);
+    }
+    // As deploy after laying a unit: the main one alone is enabled, it wants the others.
+    await executor.ssh(config, `sudo systemctl daemon-reload && sudo systemctl enable ${slug}`);
+    // A restart that fails has stopped the services already: it counts.
+    progress.restarted = !executor.simulated;
+    const standings = await restartServices(manifest, config, executor);
+    releaseCaddyLock();
+    await verify(manifest, config, executor, (fields) => {
+      if (typeof fields.url === "string") report.url = fields.url;
+      if (typeof fields.status === "number") report.status = fields.status;
+    });
+    if (standings !== null) await checkStability(standings, config, executor);
+    return { ...report, state: executor.simulated ? "outdated" : "refreshed" };
+  } finally {
+    stopContext = null;
+  }
+}
+
+/** What the machine has of each unit, in order, "" for one it does not have; a reading that fails stops everything. */
+async function readInstalledUnits(units: readonly GeneratedUnit[], config: Config, executor: Executor): Promise<string[]> {
+  const installed: string[] = [];
+  for (const { unit } of units) {
+    const path = unitPath(unit);
+    const reading = await readRemoteFile(config, executor, path);
+    if (reading.kind === "unreadable") {
+      die(`cannot tell whether ${path} is there`, [
+        "the server answered neither an absence nor a unit file",
+        "nothing was written: a unit is never replaced on a reading that failed",
+      ]);
+    }
+    installed.push(reading.kind === "present" ? reading.content : "");
+  }
+  return installed;
+}
+
+/** Each unit and what refresh does with it, worded as deploy words its own. */
+function sayPlan(plan: ProjectPlan): void {
+  for (const unit of plan.units) {
+    if (unit.action === "present") say(`   unchanged  ${unit.path}`);
+    else if (unit.action === "diverged") say(`   differs    ${unit.path}, edited by hand: left as it is`);
+    else {
+      const why = unit.installed === "" ? "missing" : "written by an earlier release";
+      say(plan.mainKept ? `   outdated   ${unit.path}, ${why}: left, with the main unit` : `   to write   ${unit.path}, ${why}`);
+    }
+  }
+  if (plan.mainKept) {
+    say(`   ${plan.units[0]!.path} was edited by hand, and starts the project's other units: none of them is written`);
+  }
+  if (plan.kept.length > 0) {
+    say("   a unit edited by hand may carry a directive the manifest cannot express: refresh never");
+    say("   replaces it. Read it; sitesolide deploy --force, in the project's folder, switches it");
+    say("   to the generated one, and sends that folder's code with it.");
+  }
+}
+
 // --- a folder without a manifest, an app without a port ----------------------
 
 /** How the human output names what a folder was recognised as. */
@@ -3254,6 +3481,9 @@ function usage(zone: string | null): string {
     "     --dry-run                    check every step, change nothing",
     "  sitesolide upgrade              bring every installed component to this release's code, resumable",
     "     --dry-run                    list each component, up to date, out of date or missing, change nothing",
+    "  sitesolide refresh <slug>       its units generated again from the manifest on the server, no code sent",
+    "     --all                        every project, one at a time, stopping at the first that fails",
+    "     --dry-run                    show the units it would write, change nothing",
     "  sitesolide init                 write ~/.config/sitesolide/config.json",
     "     --server <user@host> --zone <dns.zone> --email <you@example.com>",
     "     --contact <you@example.com>   shown on the page that asks for a preview code",
@@ -3459,8 +3689,11 @@ if (import.meta.main) {
 
   // The scripts of bin/ read the projects folder from the environment: set
   // here, it goes down to every sub-process without being repeated at each
-  // call, and keeps the precedence it already has in mergeConfig.
+  // call, and keeps the precedence it already has in mergeConfig. The
+  // contact too: the units deploy and refresh generate replace `{contact}`
+  // with it, as when setup and upgrade run deploy with it in the environment.
   process.env.SITESOLIDE_ZONE = config.zone;
+  process.env.SITESOLIDE_CONTACT = config.contact ?? "";
 
 
   switch (command) {
@@ -3527,6 +3760,14 @@ if (import.meta.main) {
       } else {
         await showDomain(project, config, executor);
       }
+      break;
+    }
+    case "refresh": {
+      // Every project's units, or one's, from the manifests on the server: no
+      // folder is read, and nothing of it is sent. See bin/cli/refresh.ts.
+      const parsed = parseRefreshArguments(arguments_.slice(1));
+      if ("message" in parsed) die(parsed.message, parsed.details);
+      await refresh(parsed, config, executor);
       break;
     }
     case "remove": {

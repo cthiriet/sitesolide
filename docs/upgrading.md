@@ -106,6 +106,9 @@ skipped, and it resumes at the one that failed.
 
 - **Each site.** A site is redeployed by `sitesolide deploy` in its folder,
   when you next deploy it; upgrade only brings the platform's own components.
+  The units a release generates reach the apps already deployed without their
+  code through `sitesolide refresh --all`, see
+  [commands.md](commands.md#refreshing-the-apps-units).
 - **The loopback rule.** Setup lays it; a release that changes it says so in
   its notes, and `bin/deploy-loopback.sh close` lays it again, from a checkout
   or from the kit the binary unpacked into `~/.cache/sitesolide/<version>-<hash>/`.
@@ -134,6 +137,15 @@ dashboard and the portal, deployed as projects, whose units take the filter
 then. Every other app takes it at its next deployment. A unit 0.6 or an
 earlier release wrote is the generator's own and is replaced without
 `--force`; one edited by hand stays as it is, and says so.
+
+**Every app at once, without sending its code**: `sitesolide refresh --all`,
+after the upgrade, gives every app on the machine the filter, and the port
+rules too to an app last deployed before 0.6.0. It writes each project's
+units again from the manifest its last deployment left on the machine,
+restarts its services and checks them as deploy does, one project at a time,
+and stops at the first that does not hold. `sitesolide refresh --all
+--dry-run` first lists the units it would write; see
+[commands.md](commands.md#refreshing-the-apps-units).
 
 **What changes for you.** Nothing for a server in Bun, Node, Python or Go.
 Each was deployed under the filter on a Debian 13 machine on x86_64, Bun

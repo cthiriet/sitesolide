@@ -50,6 +50,8 @@ export type FakeVm = {
   lock(): string | null;
   /** The writes succeed without executing anything, except those that contain a refused pattern. */
   acceptWrites(refused?: string[]): void;
+  /** An accepted write of a systemd unit lays its text in the tree, where the next reading finds it. */
+  keepUnits(): void;
   /** The command recorded by this line will wait for `resume()`. */
   pause(line: string): void;
   resume(): void;
@@ -150,6 +152,9 @@ export function createFakeVm(): FakeVm {
     acceptWrites(refused = []) {
       writeFileSync(join(root, SWITCHES.accept), "");
       writeFileSync(join(root, SWITCHES.refuse), refused.map((pattern) => `${pattern}\n`).join(""));
+    },
+    keepUnits() {
+      writeFileSync(join(root, SWITCHES.keepUnits), "");
     },
     pause(line) {
       writeFileSync(join(root, SWITCHES.pause), line);

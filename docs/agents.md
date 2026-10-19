@@ -23,7 +23,7 @@ as yours would.
 | give the people you named access to a project, by email or `@domain`, with a role, and read who has access | give access to anyone you did not name, or make a site Public, which is its general access, the dashboard's |
 | list the machines sitesolide created at a cloud provider | destroy one, unless you asked for that machine to be destroyed |
 | check a machine with `setup --dry-run`, and install it when you asked | replace DNS records that point elsewhere (`setup --dns-replace`), unless you decided it |
-| list what a new release would change with `upgrade --dry-run`, and upgrade when you asked | redeploy a component by hand, or force over a file edited on the machine |
+| list what a new release would change with `upgrade --dry-run` and `refresh --all --dry-run`, and run them when you asked | redeploy a component by hand, or force over a file edited on the machine |
 | list everyone with access, and who may create projects, with `people` | grant or take back the right to create projects, unless you asked for that person: it lets them into the dashboard |
 | with a token, restart a project's service | read or guess a secret, a provider's token included: no route hands a value back |
 | with a token minted with *Manage secrets*, list a project's secret files and variable names, set a variable to a value it generated itself, a random key, and remove the ones you named | set a value read from the conversation, or put one on a command line |
@@ -321,12 +321,20 @@ What `result` carries:
 | `machine destroy` | `provider`, `name`, `removed`, `kept`, `dns` |
 | `setup` | `dryRun`, `server`, `zone`, `steps` (each `step`, `status`, `detail`); after a real run also `dashboard`, `portal`, `configuration`, `ran`, `already`, `skipped`, `passwords`, `next` |
 | `upgrade` | `dryRun`, `server`, `zone`, `release`, `components` (each `component`, `title`, `state`: `up-to-date`, `out-of-date`, `missing`, `upgraded`, `failed`, `detail`, `run`), `upgraded`, `upToDate`, `outOfDate`, `missing`, `next` (the `setup` command that installs what is missing) |
+| `refresh` | `dryRun`, `all`, `projects` (each `slug`, `state`: `refreshed`, `outdated` in a dry run, `current`, `kept`, `refused`, `static`; `write`, `current`, `kept`, the unit files by what was done with them; `reasons`, why it was refused; `url`, `status`), and the slugs by state: `refreshed`, `outdated`, `current`, `kept`, `refused`, `static` |
 
 **`upgrade` changes the machine in service.** `--dry-run` only reads it, and
 says what would run; the run itself redeploys live components, the dashboard,
 the portal, Caddy's configuration, and is the user's decision, never an
 agent's own. It never reads a secret nor draws a password. A component it
 reports `missing` is `setup`'s to install, on the same decision.
+
+**`refresh` restarts the apps in service.** `--dry-run` only reads the
+manifests and the units on the machine; the run writes each project's units
+again, without its code, and restarts its services, one project at a time,
+stopping at the first that does not hold. It is the user's decision, after an
+upgrade whose notes say the generated units changed. A unit edited by hand is
+`kept`, never replaced: switching it is `deploy --force`, the owner's.
 
 **`setup` never puts a password in an event.** The dashboard's and the
 portal's, when a run draws them, go to standard error once, for the person at
@@ -367,8 +375,8 @@ by each command.
 | `share` | `folder`, `who`, `role`, `expires`, `remove` | **yes**, who may open the app and its data, and from Viewer up who sees or changes the project in the dashboard |
 | `lock_status` | `folder` | no |
 
-`setup` and `upgrade` are not tools: they change the machine itself, and run
-through the CLI, when the user asked. Neither is `people`: the right to create
+`setup`, `upgrade` and `refresh` are not tools: they change the machine
+itself, or every app on it, and run through the CLI, when the user asked. Neither is `people`: the right to create
 projects lets someone into the dashboard, which is the owner's to give, over
 their SSH. Nor are `secrets` and `restart`: a tool that set a secret would take
 its value from the conversation, and the conversation would keep it. `folder` is an absolute path.

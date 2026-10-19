@@ -61,6 +61,17 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^upgrade stopped at [a-z0-9-]+: .*no longer matches the manifest/, "do not re-run with --force on your own: a file on the server was edited by hand; show the differing lines in `details` to the owner, who decides"],
   [/^upgrade stopped at /, "read `details`: they name the component, the end of what its script printed and the command that shows more; fix that cause, then run `sitesolide upgrade` again, which resumes at that component; never change the machine by hand to get past a check"],
 
+  // --- refresh: a project's units, generated again from the manifest on the server
+  [/^usage: sitesolide refresh/, "name one deployed project, `sitesolide refresh <slug>`, or every one with `--all`, and nothing else; `sitesolide refresh --all --dry-run` shows what would be written, changing nothing"],
+  [/'s manifest on the server does not read: nothing was changed for it$/, "nothing was changed for that project: the manifest its last deployment left on the server is refused by this release, `details` say why; the owner deploys it again from its folder with `sitesolide deploy`, which writes a current one; never edit the manifest on the server by hand"],
+  [/'s units are named like a service of the server that deploy did not write/, "nothing was changed for that project: a unit of its name belongs to something else on the server, `details` say which; tell the owner, and never remove, rename or mask anything on the server to make room"],
+  [/ is not deployed on the server$/, "check the slug: `sitesolide status` lists the projects the server carries; refresh only rewrites the units of a project already deployed, which `sitesolide deploy` does from its folder"],
+  [/^refresh stopped at [a-z0-9-]+: .* changed on the server during this refresh/, "a deployment or the dashboard changed the project while refresh ran, and nothing was written for it: run the same command again, once"],
+  [/^refresh stopped at [a-z0-9-]+: .*try again in a moment/, LOCK_BUSY],
+  [/^refresh stopped at [a-z0-9-]+: cannot take the Caddy lock/, "the lock could not be taken, nothing was written for that project: run the same command again; if it fails twice, check that `ssh <server> true` connects without a prompt"],
+  [/^refresh stopped at [a-z0-9-]+: (cannot tell whether|cannot read|read refused)/, READ_FAILED],
+  [/^refresh stopped at /, "`details` say what was written for the project named, and whether its services run under it now: read `sitesolide logs --json` in that project's folder to see why it failed, and tell the owner, since the port rules or the system-call filter of the new units may refuse something the service does; the projects after it were not touched; never run refresh again in a loop, nor edit a unit on the server by hand"],
+
   // --- the project folder and its manifest
   [/^no sitesolide\.json in .*: inferred one shown above/, "review the manifest shown in the `inferred` event, then run `sitesolide deploy --yes` to write it and deploy, or `sitesolide detect --write` to write it without deploying"],
   [/already exists on the server, and this folder has no sitesolide\.json/, "pick another name with --slug <name>; never deploy over a project you did not create"],

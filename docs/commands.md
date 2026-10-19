@@ -1,8 +1,8 @@
 # Commands
 
 Every command runs from a project's folder, the one holding its
-`sitesolide.json`, except `setup`, `upgrade`, `init`, `machine`, `people`,
-`help` and `--version`. This is what `sitesolide --help` prints.
+`sitesolide.json`, except `setup`, `upgrade`, `refresh`, `init`, `machine`,
+`people`, `help` and `--version`. This is what `sitesolide --help` prints.
 
 ```text
 sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a no-op once done
@@ -18,6 +18,9 @@ sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a 
    --dry-run                    check every step, change nothing
 sitesolide upgrade              bring every installed component to this release's code, resumable
    --dry-run                    list each component, up to date, out of date or missing, change nothing
+sitesolide refresh <slug>       its units generated again from the manifest on the server, no code sent
+   --all                        every project, one at a time, stopping at the first that fails
+   --dry-run                    show the units it would write, change nothing
 sitesolide help                 this list, with or without a configuration; --help after any command
 sitesolide --version            the release this binary was built from, dev from a checkout
 sitesolide init                 write ~/.config/sitesolide/config.json
@@ -76,6 +79,9 @@ any time: see [setup.md](setup.md). `sitesolide upgrade` is its other half,
 for a machine in service: it brings the components setup installed to the
 code of the binary or the checkout it runs from, and redeploys only those
 that differ, see [Upgrading the machine](#upgrading-the-machine).
+`sitesolide refresh` gives the apps already deployed the units this release
+generates, without sending their code, see
+[Refreshing the apps' units](#refreshing-the-apps-units).
 `SITESOLIDE_CONFIG_DIR` points every command at another configuration folder
 than `~/.config/sitesolide`, for a second installation driven from the same
 workstation.
@@ -161,6 +167,82 @@ command that shows more; the same command again resumes there. A second run
 right after a successful one finds everything up to date and changes nothing.
 It never reads nor rotates a secret, and never touches Caddy but through
 `bin/deploy-caddy.sh` and `systemctl`. See [upgrading.md](upgrading.md).
+
+## Refreshing the apps' units
+
+A project's protections live in its systemd unit, generated from its
+manifest: the ports it may listen on, the system calls it may make. A unit
+is written by `sitesolide deploy`, which also sends the folder's code, and
+`upgrade` never touches a project's unit: after a release that changes what
+the units carry, every app keeps the previous one until it is deployed
+again, and an app whose code on the workstation is not what runs in
+production cannot be, without shipping that code. `sitesolide refresh`
+writes the units alone, from the manifest the last deployment left on the
+machine, over the owner's SSH, from any folder:
+
+```console
+$ sitesolide refresh --all --dry-run
+-> refresh of deploy@203.0.113.10, zone example.com: every project's units, generated again from the manifest the server carries; no code is sent; dry run, nothing is changed
+-> blog, static: no unit to refresh
+-> notes, service
+   unchanged  /etc/systemd/system/notes.service
+-> shop, 2 services
+   to write   /etc/systemd/system/shop.service, written by an earlier release
+   unchanged  /etc/systemd/system/shop.api.service
+...
+-> would be refreshed: shop
+   already current: notes
+   static, no unit to refresh: blog
+
+$ sitesolide refresh --all
+```
+
+Run it after an upgrade whose notes say the generated units changed, to give
+every app the new protections without redeploying its code; `refresh <slug>`
+does one project.
+
+Each project's manifest is read on the machine,
+`/srv/sites/<slug>/sitesolide.json`, and validated as deploy validates one; one
+that does not read, or that this release refuses, refuses its project, saying
+why, and nothing is changed for it. Its units are generated as deploy
+generates them, the zone and the contact from the configuration, and each
+one is decided as deploy decides it without `--force`: a current unit is left
+alone, a missing one or one an earlier release wrote is written, root's,
+0644, and one edited by hand is kept and reported, never replaced: `refresh`
+has no `--force`, and `sitesolide deploy --force` in the project's folder is
+what switches such a unit. A main unit edited by hand, in a project of
+several services, keeps all of them, as deploy refuses that case. No unit is
+ever removed, a service no longer declared included.
+
+When a unit is to be written, the project takes the Caddy lock, the one
+deploy holds from its first deposit to the end of its restart, and reads its
+manifest and units again under it: a deployment or the dashboard that changed
+them meanwhile stops the run there, nothing written. Then `daemon-reload`,
+and the project's services restarted and checked exactly as deploy does it:
+every unit but a scheduled service, which its timer starts; each active; the
+site over HTTPS; every service that runs for good still active ten seconds
+later, never restarted by systemd meanwhile. A project with nothing to write
+takes no lock and restarts nothing, and a second run right after the first
+changes nothing on the machine. A static project has nothing to refresh.
+
+`--all` takes the projects one at a time, in the order of their names, and
+stops at the first whose restart or check fails: one site down at most, its
+units written and its services restarted under them, the projects after it
+left as they are. The refusal names the project, what was written for it, what
+the run did before it and what it never reached. A service that held under
+its earlier unit and falls under the new one hit one of its protections: its
+journal, `sitesolide logs` in its folder, says which. The run ends with a
+summary: refreshed, already current, kept (edited by hand), refused, static.
+`--dry-run` reads the manifests and the units, and prints for each project the
+units it would write, with their text, and touches nothing.
+
+With `--json`, the `result` carries `dryRun`, `all`, `projects` (each `slug`,
+`state`: `refreshed`, `outdated` in a dry run, `current`, `kept`, `refused` or
+`static`; `write`, the units written or that a dry run would write;
+`current`; `kept`; `reasons`, why it was refused; `url` and `status`, what
+the site answered), and the slugs by state: `refreshed`, `outdated`,
+`current`, `kept`, `refused`, `static`. It is the owner's command, like
+`upgrade`: refused with a token (`needs-ssh`), and not an MCP tool.
 
 ## Access to a project
 
@@ -383,9 +465,9 @@ root@<ipv4> --zone <your zone> --email <you>`, once port 22 answers.
 `--json` prints one JSON event per line on standard output, nothing else, and
 ends with a `result` or an `error` carrying a `hint`. `sitesolide mcp` serves
 `detect`, `deploy`, `status`, `logs`, `share` (and `access`, its read alone)
-and `lock --status` as tools to an MCP client; `setup` and `upgrade`, which
-change the machine itself, are not tools. Both are described in
-[agents.md](agents.md).
+and `lock --status` as tools to an MCP client; `setup`, `upgrade` and
+`refresh`, which change the machine itself or every app on it, are not tools.
+Both are described in [agents.md](agents.md).
 
 ## With a token
 

@@ -47,7 +47,11 @@
  *   per line, which the check of a deployment's schedules answers BAD;
  * - `standings.json`: how the services stand when `deploy` reads them after
  *   its restart, see `Standing`. Every one active and never restarted
- *   otherwise.
+ *   otherwise;
+ * - `keep-units`: an accepted write of a systemd unit, `sudo install ...
+ *   /dev/stdin /etc/systemd/system/<unit>`, lays what came on standard input
+ *   in the VM's tree, as the machine would, so that the next reading of that
+ *   unit finds it. Every other accepted write still runs nothing.
  *
  * `sitesolide setup`'s scripts, `sh -s <tag>` with the script on standard
  * input, are writes like any other: refused, or accepted and answered from
@@ -99,6 +103,7 @@ export const SWITCHES = {
   standings: "standings.json",
   /** The secret files /etc/sitesolide carries, `{ name: owner }`: see secretOwnersCommand in bin/cli/secrets.ts. */
   secretFiles: "secret-files.json",
+  keepUnits: "keep-units",
 } as const;
 
 /**
@@ -247,6 +252,8 @@ const ACCOUNT_READING = /^SYSTEMD_NSS_DYNAMIC_BYPASS=1 getent passwd ([a-z][a-z0
 const USERADD = /\buseradd .* ([a-z][a-z0-9-]*)$/;
 /** A script of `sitesolide setup` or `upgrade`, on standard input, named by its tag: see bin/cli/harden.ts. */
 const SETUP_SCRIPT = /^(sudo -n )?sh -s (setup|upgrade):[a-z0-9-]+:[a-z]+$/;
+/** A unit written as deploy and refresh write one, its text on standard input: see depositText in bin/sitesolide.ts. */
+const UNIT_WRITE = /^sudo install -m 644 -o root -g root \/dev\/stdin (\/etc\/systemd\/system\/[a-z0-9.-]+\.(?:service|timer))$/;
 
 if (import.meta.main) {
   const vm = process.env.FAKE_VM ?? "";
@@ -695,7 +702,11 @@ if (import.meta.main) {
       // `sitesolide setup` sends its scripts on standard input to `sh -s
       // <tag>`: read and dropped, never recorded, since one of them carries
       // the Cloudflare token. The tag on the command line says which it was.
-      if (command.includes("/dev/stdin") || SETUP_SCRIPT.test(command)) await Bun.stdin.text();
+      const unitWritten = UNIT_WRITE.exec(command)?.[1];
+      if (unitWritten !== undefined && existsSync(join(vm, SWITCHES.keepUnits))) {
+        mkdirSync(dirname(join(vm, unitWritten)), { recursive: true });
+        writeFileSync(join(vm, unitWritten), await Bun.stdin.text());
+      } else if (command.includes("/dev/stdin") || SETUP_SCRIPT.test(command)) await Bun.stdin.text();
       // A script handed to `sh -s` on standard input, an install's: recorded,
       // so that a test sees it travelled there and not in the arguments.
       if (command.includes('"/bin/sh" "-s"')) record(`STDIN ${(await Bun.stdin.text()).trimEnd()}`);
