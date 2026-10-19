@@ -29,14 +29,16 @@ ConditionPathExists=/usr/local/lib/sitesolide/backup.js
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/bun /usr/local/lib/sitesolide/backup.js run
-# The zone names the landing's folder in /srv/sites; without it the landing
-# would not be recognised as a project, and its data would not be saved.
-EnvironmentFile=/etc/caddy/sitesolide.env
 # The bucket and the passphrase of its repository, managed from the dashboard's
 # Secrets section, under the dashboard site. Absent: local snapshots only.
 # Read by PID 1 as root before the process starts: the file stays root's,
 # 0600, and is re-read at every run, so a change applies at the next one.
 EnvironmentFile=-/etc/sitesolide/dashboard-backup.env
+# The zone names the landing's folder in /srv/sites; without it the landing
+# would not be recognised as a project, and its data would not be saved. Read
+# after the file above, and the later file wins: a SITESOLIDE_ZONE written
+# there from the Secrets page never names a project the landing.
+EnvironmentFile=/etc/caddy/sitesolide.env
 
 # A run must never dispute the disk or the processor with a site answering a
 # visitor; the copies it starts get the same treatment from runner.ts.

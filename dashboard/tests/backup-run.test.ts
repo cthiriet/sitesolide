@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MACHINE_FOLDER, snapshotName, type SnapshotKind } from "../borrowed/backups";
-import { configFrom, isolationRefusal, type BackupConfig } from "../src/backup/config";
+import { configFrom, isolationRefusal, pathsFrom, type BackupConfig } from "../src/backup/config";
 import { openDatabase, readAudit, readDoomed, readSetting, readSnapshots } from "../src/backup/database";
 import { takeLock } from "../src/backup/lock";
 import { listing } from "../src/backup/main";
@@ -688,6 +688,19 @@ describe("the bucket's settings", () => {
     expect(isolationRefusal("none", 501, "a0b1c2")).toBeNull();
     expect(isolationRefusal("none", 0, undefined)).toBeNull();
     expect(isolationRefusal("systemd", 0, "a0b1c2")).toBeNull();
+  });
+
+  test("the download child, a DynamicUser, takes none of the programs or folders of dashboard-backup.env", () => {
+    // The download child runs under systemd as a dynamic, non-root account,
+    // and reads dashboard-backup.env, which the Secrets page writes. A
+    // BACKUP_ISOLATION=none and a BACKUP_RESTIC beside it there must not have
+    // this child, the one holding the network and the bucket's keys, run that
+    // program: INVOCATION_ID is set for every unit, root or dynamic, so it is
+    // "under systemd" that decides, never the uid. The workstation's tests run
+    // outside systemd, with no INVOCATION_ID, and keep their overrides.
+    const smuggled = { BACKUP_ISOLATION: "none", BACKUP_RESTIC: "/tmp/evil", INVOCATION_ID: "a0b1c2", SITES_DIR: "/tmp/elsewhere" };
+    expect(pathsFrom(smuggled)).toEqual({});
+    expect(pathsFrom({ BACKUP_ISOLATION: "none", BACKUP_RESTIC: "/tmp/restic" })).toEqual({ BACKUP_ISOLATION: "none", BACKUP_RESTIC: "/tmp/restic" });
   });
 
   test("refuse what would leak or weaken, and name the bucket's repository beside the old objects", () => {

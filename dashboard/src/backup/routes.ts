@@ -57,6 +57,8 @@ export const NOT_INSTALLED_REASON = "backups are not set up on this server: run 
 export const DASHBOARD_REASON = DASHBOARD_REFUSAL;
 export const PORTAL_REASON = PORTAL_REFUSAL;
 export const RUNNING_REASON = "a restore of this site is in progress";
+/** The requester the owner's route records: the holder of the dashboard's password, as every component's audit names them. */
+export const OWNER_ACTOR = "owner";
 /** The audit entries a page reads at once. */
 export const AUDIT_ENTRIES = 50;
 const SHOW_TIMEOUT_MS = 5000;
@@ -207,6 +209,13 @@ export function createBackupRoutes(dependencies: BackupRouteDependencies): Backu
     async restore(req) {
       const body = await dependencies.bodyWithToken(req, ["slug", "snapshot", "confirmation", "actor"]);
       if (body instanceof Response) return body;
+      // The token this route takes is the owner's unlock, the dashboard's
+      // password: whoever restores here is the owner. A person restores
+      // through their own session (src/people/actions.ts), which names them
+      // with the email this steward verified. Any other name in the body is
+      // the dashboard's to say, and the audit is not: a dashboard that caught
+      // the owner's unlock would restore under a person's name.
+      if (body.actor !== OWNER_ACTOR) return fail("invalid", "this route restores for the owner: a person restores from their own session");
       return dependencies.underLock(req, body, () => start(req, body));
     },
 

@@ -14,7 +14,8 @@
  * The retention, the disk reserve and the bucket are the only settings an
  * installation may want to change; they live here, in one place, and the unit
  * or /etc/sitesolide/dashboard-backup.env sets them. The paths of restic and
- * of its repository move for the tests alone.
+ * of its repository move for the tests alone: with BACKUP_ISOLATION=none, and
+ * never under systemd (pathsFrom).
  */
 import { BACKUP_FOLDER, RESTIC_KEY, RESTIC_REPOSITORY } from "../../borrowed/backups";
 import { MACHINE_SOURCES, MACHINE_VIEW, type MachineSource } from "./machine";
@@ -113,6 +114,39 @@ export function isolationRefusal(isolation: Isolation, uid: number | null, invoc
   return null;
 }
 
+/**
+ * The variables that move root's programs and folders, or none at all.
+ *
+ * Under systemd they are never read. The units read
+ * /etc/sitesolide/dashboard-backup.env, which the dashboard's Secrets page
+ * writes, and the steward reserves none of these names there: a
+ * BACKUP_RESTIC, a BACKUP_CHOOM or a SYSTEMCTL in it would have root run any
+ * program at all on the next run or restore, a SITES_DIR, a
+ * BACKUP_REPOSITORY or a BACKUP_STATE_FOLDER have it read and write where the
+ * page said. Whoever holds the dashboard's password, or a dashboard that
+ * caught it once, is not root on the machine. They move the workstation's
+ * tests' tree alone, with BACKUP_ISOLATION=none, which isolationRefusal keeps
+ * from root under systemd.
+ */
+export function pathsFrom(env: Environment): Environment {
+  const isolation = env.BACKUP_ISOLATION ?? "systemd";
+  // "Under systemd" is INVOCATION_ID, not the uid. PID 1 sets it for every
+  // unit it starts, root or a dynamic account alike. isolationRefusal watches
+  // for root alone, which is right for the run and the restore, both root; but
+  // the download child runs as a DynamicUser (runner.ts), reads
+  // dashboard-backup.env the same way, and is the one child that holds the
+  // network and the bucket's keys. Keyed on the uid, this let a
+  // BACKUP_ISOLATION=none written into that file from the Secrets page turn the
+  // overrides back on for it, BACKUP_RESTIC among them: any program at all, run
+  // where it can reach the bucket and the outside. The workstation's tests run
+  // outside systemd, with no INVOCATION_ID, and keep their tree's overrides.
+  if (isolation !== "none" || (env.INVOCATION_ID ?? "") !== "") return {};
+  return env;
+}
+
+/** Where a run writes its status, and its audit and index: also where it says it could not start. */
+export const STATE_FOLDER = "/var/lib/sitesolide-backup";
+
 function countFrom(raw: string, name: string): number {
   if (!/^[0-9]+$/.test(raw)) throw new Error(`${name} must be a whole number`);
   return Number(raw);
@@ -131,23 +165,26 @@ export function configFrom(env: Environment, entry: { bun: string; script: strin
   if (isolation !== "systemd" && isolation !== "none") throw new Error("BACKUP_ISOLATION must be systemd or none");
   const refused = isolationRefusal(isolation, process.getuid?.() ?? null, env.INVOCATION_ID);
   if (refused !== null) throw new Error(refused);
+  // The machine's own programs and folders under systemd, whatever the file
+  // the Secrets page writes says: see pathsFrom.
+  const own = pathsFrom(env);
   return {
-    sitesDir: env.SITES_DIR ?? "/srv/sites",
-    backupFolder: env.BACKUP_FOLDER ?? BACKUP_FOLDER,
-    repository: env.BACKUP_REPOSITORY ?? RESTIC_REPOSITORY,
-    repositoryKey: env.BACKUP_REPOSITORY_KEY ?? RESTIC_KEY,
-    restic: env.BACKUP_RESTIC ?? "/usr/bin/restic",
-    choom: env.BACKUP_CHOOM ?? "/usr/bin/choom",
-    resticCache: env.BACKUP_RESTIC_CACHE ?? "/var/cache/sitesolide-restic",
-    gzip: env.BACKUP_GZIP ?? "/usr/bin/gzip",
-    stateFolder: env.BACKUP_STATE_FOLDER ?? "/var/lib/sitesolide-backup",
-    runFolder: env.BACKUP_RUN_FOLDER ?? "/run/sitesolide-backup",
-    stagingFolder: env.BACKUP_STAGING_FOLDER ?? "/var/cache/sitesolide-backup",
-    accountsFile: env.ACCOUNTS_FILE ?? "/etc/passwd",
-    unitsFolder: env.UNITS_FOLDER ?? "/etc/systemd/system",
+    sitesDir: own.SITES_DIR ?? "/srv/sites",
+    backupFolder: own.BACKUP_FOLDER ?? BACKUP_FOLDER,
+    repository: own.BACKUP_REPOSITORY ?? RESTIC_REPOSITORY,
+    repositoryKey: own.BACKUP_REPOSITORY_KEY ?? RESTIC_KEY,
+    restic: own.BACKUP_RESTIC ?? "/usr/bin/restic",
+    choom: own.BACKUP_CHOOM ?? "/usr/bin/choom",
+    resticCache: own.BACKUP_RESTIC_CACHE ?? "/var/cache/sitesolide-restic",
+    gzip: own.BACKUP_GZIP ?? "/usr/bin/gzip",
+    stateFolder: own.BACKUP_STATE_FOLDER ?? STATE_FOLDER,
+    runFolder: own.BACKUP_RUN_FOLDER ?? "/run/sitesolide-backup",
+    stagingFolder: own.BACKUP_STAGING_FOLDER ?? "/var/cache/sitesolide-backup",
+    accountsFile: own.ACCOUNTS_FILE ?? "/etc/passwd",
+    unitsFolder: own.UNITS_FOLDER ?? "/etc/systemd/system",
     // Absolute paths: under a minimal PATH, nothing to look for.
-    systemctl: env.SYSTEMCTL ?? "/usr/bin/systemctl",
-    systemdRun: env.SYSTEMD_RUN ?? "/usr/bin/systemd-run",
+    systemctl: own.SYSTEMCTL ?? "/usr/bin/systemctl",
+    systemdRun: own.SYSTEMD_RUN ?? "/usr/bin/systemd-run",
     bun: entry.bun,
     script: entry.script,
     isolation,
@@ -157,7 +194,7 @@ export function configFrom(env: Environment, entry: { bun: string; script: strin
     reserveBytes: countFrom(env.BACKUP_DISK_RESERVE ?? String(DEFAULT_RESERVE_BYTES), "BACKUP_DISK_RESERVE"),
     childTimeoutMs: countFrom(env.BACKUP_CHILD_TIMEOUT_MS ?? String(DEFAULT_CHILD_TIMEOUT_MS), "BACKUP_CHILD_TIMEOUT_MS"),
     offsite: offsiteFrom(env),
-    offsiteFile: env.BACKUP_OFFSITE_FILE ?? OFFSITE_FILE,
+    offsiteFile: own.BACKUP_OFFSITE_FILE ?? OFFSITE_FILE,
     machine: isolation === "systemd" ? { dataDir: MACHINE_VIEW, sources: MACHINE_SOURCES } : testMachine(env.BACKUP_MACHINE_DIR ?? null),
     // No default: the landing's folder bears the zone's name, and an invented
     // zone would leave the landing's data out of every snapshot.

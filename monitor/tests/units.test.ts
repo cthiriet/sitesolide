@@ -100,7 +100,10 @@ describe("the monitor's unit", () => {
 
   test("the zone required, the alerting optional, nothing else from /etc/sitesolide", () => {
     const files = service.filter((line) => line.startsWith("EnvironmentFile="));
-    expect(files).toEqual(["EnvironmentFile=/etc/caddy/sitesolide.env", "EnvironmentFile=-/etc/sitesolide/dashboard-monitor.env"]);
+    // The zone file last, the later file winning: dashboard-monitor.env is
+    // written from the Secrets page, and a SITESOLIDE_ZONE there would point
+    // every probe at a zone of its choosing.
+    expect(files).toEqual(["EnvironmentFile=-/etc/sitesolide/dashboard-monitor.env", "EnvironmentFile=/etc/caddy/sitesolide.env"]);
   });
 
   test("bounded in time, below the timer's minute", () => {

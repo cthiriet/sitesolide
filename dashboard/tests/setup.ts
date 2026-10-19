@@ -34,3 +34,11 @@ process.env.SITESOLIDE_ZONE = "test-zone.invalid";
 for (const variable of ["PASSWORD_HASH", "PUBLIC_URL", "STATE_FILE"]) {
   delete process.env[variable];
 }
+
+/**
+ * Nor is a test run by systemd, whatever the terminal it starts from: a Linux
+ * desktop's terminal runs in a user unit, and hands its INVOCATION_ID down.
+ * The backups read it as "under systemd", and then take none of the tree the
+ * tests point them at (src/backup/config.ts, pathsFrom).
+ */
+delete process.env.INVOCATION_ID;

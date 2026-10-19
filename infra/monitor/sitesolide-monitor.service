@@ -59,11 +59,6 @@ StateDirectory=sitesolide-monitor
 StateDirectoryMode=0700
 UMask=0077
 
-# The zone, which names every host to probe. The file Caddy is given, so the
-# two can never disagree on what is served. Without it the run stops and says
-# so, and the heartbeat's silence reports it.
-EnvironmentFile=/etc/caddy/sitesolide.env
-
 # The alerting addresses, HEARTBEAT_URL, ALERT_WEBHOOK_URL and
 # ALERT_WEBHOOK_FORMAT, set from the dashboard's Secrets, file
 # dashboard-monitor.env of the dashboard site, root:root 0600. PID 1 reads it
@@ -77,6 +72,13 @@ EnvironmentFile=/etc/caddy/sitesolide.env
 # (bin/cli/unit.ts). The account cannot read the 0600 files there anyway; it
 # can list their names, which the monitor does not do.
 EnvironmentFile=-/etc/sitesolide/dashboard-monitor.env
+
+# The zone, which names every host to probe. The file Caddy is given, so the
+# two can never disagree on what is served. Without it the run stops and says
+# so, and the heartbeat's silence reports it. Read after the alerting's file,
+# the later file winning: a SITESOLIDE_ZONE written from the Secrets page
+# never points the probes elsewhere.
+EnvironmentFile=/etc/caddy/sitesolide.env
 
 # A run takes a few seconds; the probes stop at 25 whatever happens, and the
 # heartbeat must leave before this kills the run. The timer starts no second

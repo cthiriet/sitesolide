@@ -221,6 +221,15 @@ describe("a restore asked of the steward", () => {
     expect(systemctlCalls.filter((args) => args[0] === "start")).toEqual([]);
   });
 
+  test("names the owner, whose unlock it takes, never a person the dashboard names: the audit is not the dashboard's to write", async () => {
+    // A dashboard that caught the owner's unlock would otherwise restore under
+    // a person's name, and the audit would say that person did it.
+    const response = await call("POST", "/backups/restore", await restoreBody({ actor: "alice@test-zone.invalid" }));
+    expect(response.status).toBe(400);
+    expect(existsSync(join(paths.backupState, "requests", "cms.json"))).toBe(false);
+    expect(systemctlCalls.filter((args) => args[0] === "start")).toEqual([]);
+  });
+
   test("writes the request for the one-shot, root's alone, and starts it without waiting", async () => {
     const response = await call("POST", "/backups/restore", await restoreBody());
     expect(response.status).toBe(202);

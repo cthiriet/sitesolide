@@ -25,7 +25,7 @@ import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { isBackupFolder, SERVICE_COMMANDS_FEATURE, type Listing, type ListedSnapshot } from "../../borrowed/backups";
 import { copyMain, discardMain, downloadMain, extractMain, hookMain, measureMain } from "./child";
-import { configFrom, type Environment } from "./config";
+import { configFrom, pathsFrom, STATE_FOLDER, type Environment } from "./config";
 import { decryptStream } from "./crypto";
 import { DATABASE_NAME, openForReading, readSnapshots } from "./database";
 import { readRestoreLaunch } from "./request";
@@ -214,7 +214,8 @@ export async function main(argv: string[], env: Environment): Promise<number> {
         console.error(`backup: the run did not start: ${reason}`);
         try {
           // The contract's shape and nothing more: the reason is in the journal.
-          writeStatus(env.BACKUP_STATE_FOLDER ?? "/var/lib/sitesolide-backup", { startedAt: at, finishedAt: at, ok: false, projects: {} });
+          // In the component's own folder under systemd, never one that file names.
+          writeStatus(pathsFrom(env).BACKUP_STATE_FOLDER ?? STATE_FOLDER, { startedAt: at, finishedAt: at, ok: false, projects: {} });
         } catch (failure) {
           console.error(`backup: the status file could not be written: ${(failure as Error).message}`);
         }

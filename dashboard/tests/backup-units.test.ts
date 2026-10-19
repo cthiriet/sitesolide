@@ -50,8 +50,11 @@ describe("sitesolide-backup.service", () => {
     expect(values(text, "ConditionPathExists", "Unit")).toEqual(["/usr/local/lib/sitesolide/backup.js"]);
   });
 
-  test("reads the zone, and the bucket's settings only if the file is there", () => {
-    expect(values(text, "EnvironmentFile")).toEqual(["/etc/caddy/sitesolide.env", "-/etc/sitesolide/dashboard-backup.env"]);
+  test("reads the bucket's settings only if the file is there, and the zone after them, which they never override", () => {
+    // The later file wins. dashboard-backup.env is written from the Secrets
+    // page: a SITESOLIDE_ZONE there named a project the landing, whose
+    // restore was then handed to site-landing.
+    expect(values(text, "EnvironmentFile")).toEqual(["-/etc/sitesolide/dashboard-backup.env", "/etc/caddy/sitesolide.env"]);
   });
 
   test("sees no project's secrets, though PID 1 hands it the bucket's settings from among them", () => {
@@ -145,7 +148,7 @@ describe("sitesolide-restore@.service", () => {
     expect(values(text, "RestrictAddressFamilies")).toEqual(["AF_UNIX"]);
     expect(values(text, "IPAddressDeny")).toEqual(["any"]);
     // The settings still reach it, read by PID 1 before the walls.
-    expect(values(text, "EnvironmentFile")).toContain("-/etc/sitesolide/dashboard-backup.env");
+    expect(values(text, "EnvironmentFile")).toEqual(["-/etc/sitesolide/dashboard-backup.env", "/etc/caddy/sitesolide.env"]);
   });
 
   test("two capabilities, the ones a folder swap and a chown need", () => {

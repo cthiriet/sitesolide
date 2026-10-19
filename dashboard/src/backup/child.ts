@@ -24,6 +24,7 @@ import { dirname, join, relative, sep } from "node:path";
 import type { Subprocess } from "bun";
 import { isBackupFolder, readSnapshotName } from "../../borrowed/backups";
 import { isDataFolder } from "../../borrowed/manifest";
+import { pathsFrom } from "./config";
 import { CopyError, MAX_ENTRIES, copyBudget, copyData, measureCopy, measureData, type LiveFolder } from "./copy";
 import { extractData } from "./extract";
 import { bucketRepository, objectKey, offsiteFrom, openLegacyBucket, redact } from "./offsite";
@@ -205,7 +206,11 @@ export async function downloadMain(args: string[], env: ChildEnvironment): Promi
   }
   if (legacy) return downloadLegacy(folder!, name!, setting);
 
-  const settings: ResticSettings = { restic: env.BACKUP_RESTIC ?? "/usr/bin/restic", choom: "/usr/bin/choom", isolation: "none", resticCache: tmpdir(), temporary: tmpdir() };
+  // Under systemd, the machine's restic: PID 1 hands this unit the file the
+  // dashboard's Secrets page writes, whose BACKUP_RESTIC would override the
+  // one root set, and this child holds the network and the bucket's keys.
+  // The workstation's tests name theirs (pathsFrom).
+  const settings: ResticSettings = { restic: pathsFrom(env).BACKUP_RESTIC ?? "/usr/bin/restic", choom: "/usr/bin/choom", isolation: "none", resticCache: tmpdir(), temporary: tmpdir() };
   const repository = bucketRepository(setting);
   const deadline = Date.now() + DOWNLOAD_RESTIC_MS;
   const listed = await listSnapshots(settings, repository, deadline, ["--no-cache"]);
