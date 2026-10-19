@@ -270,6 +270,44 @@ describe("a person's own tokens, in words", () => {
   })
 })
 
+describe("what a token did through the steward, in words", () => {
+  // As the dashboard normalizes the steward's journal (src/audit/normalize.ts, `fromJournal`):
+  // the token as actor, its person, when it is someone's, in the detail.
+  const byToken = (action: string, detail: Record<string, unknown>, member: string | null = "alice@example.com") =>
+    row({ id: "steward:1.0", source: "steward", actor: "token:a11ce0c1ab12", action, target: "cms", site: "cms", detail: member === null ? detail : { ...detail, member } })
+
+  test("a secret set, removed, a file created, a restart: the same words as the owner's own", () => {
+    expect(auditWords(byToken("secrets.set", { result: "ok", file: "cms.env", variable: "API_KEY" }))).toEqual({ summary: "Set API_KEY", note: null, tone: "neutral" })
+    expect(auditWords(byToken("secrets.remove", { result: "ok", file: "cms.env", variable: "OLD_KEY" })).summary).toBe("Removed OLD_KEY")
+    expect(auditWords(byToken("secrets.create", { result: "ok", file: "cms.env" })).summary).toBe("Created cms.env")
+    expect(auditWords(byToken("service.restart", { result: "ok", note: "active, active/running, 0 restarts" })).summary).toBe("Restarted")
+    expect(auditWords(byToken("service.restart", { result: "failure", note: "looping" }))).toEqual({ summary: "Tried to restart", note: "Failed: crash loop", tone: "error" })
+  })
+
+  test("a refusal says what was tried and why, never a name the steward did not accept", () => {
+    expect(auditWords(byToken("secrets.set", { result: "rejects", file: "cms.env", note: "no secrets permission" }))).toEqual({
+      summary: "Tried to set",
+      note: "Refused: no secrets permission",
+      tone: "attention",
+    })
+    expect(auditWords(byToken("secrets.read", { result: "rejects", note: "role viewer" })).summary).toBe("Tried to read")
+  })
+
+  test("a listing refused reads as a listing, never as a value read", () => {
+    expect(auditWords(byToken("secrets.list", { result: "rejects", note: "no secrets permission" }))).toEqual({
+      summary: "Tried to list the secrets",
+      note: "Refused: no secrets permission",
+      tone: "attention",
+    })
+    expect(auditWords(byToken("secrets.list", { result: "rejects", note: "role viewer" })).summary).not.toContain("read")
+  })
+
+  test("by a person's token, the person; by the owner's own, a token", () => {
+    expect(actorLabel(byToken("secrets.set", { result: "ok", variable: "API_KEY" }))).toBe("alice@example.com (token)")
+    expect(actorLabel(byToken("secrets.set", { result: "ok", variable: "API_KEY" }, null))).toBe("A token")
+  })
+})
+
 describe("the detail, as text", () => {
   test("keys in words, nested objects flattened, lists joined, nothing left as an object", () => {
     expect(

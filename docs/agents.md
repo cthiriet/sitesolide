@@ -25,9 +25,18 @@ as yours would.
 | check a machine with `setup --dry-run`, and install it when you asked | replace DNS records that point elsewhere (`setup --dns-replace`), unless you decided it |
 | list what a new release would change with `upgrade --dry-run`, and upgrade when you asked | redeploy a component by hand, or force over a file edited on the machine |
 | list everyone with access, and who may create projects, with `people` | grant or take back the right to create projects, unless you asked for that person: it lets them into the dashboard |
-| | read, set or guess a secret, a provider's token included |
+| with a token, restart a project's service | read or guess a secret, a provider's token included: no route hands a value back |
+| with a token minted with *Manage secrets*, list a project's secret files and variable names, set a variable to a value it generated itself, a random key, and remove the ones you named | set a value read from the conversation, or put one on a command line |
 
-Secrets are set in the dashboard's *Secrets* section, by you. A deploy that
+Secrets are set in the dashboard's *Secrets* section, by you, or, with a token
+minted with *Manage secrets*, by you running `sitesolide secrets set NAME`,
+which asks for the value without echoing it. An agent pipes to `sitesolide
+secrets set NAME --stdin` only a value it generates itself, `openssl rand -hex
+32 | sitesolide secrets set SESSION_SECRET --stdin --json`, never one read
+from the conversation, which would keep it; `NAME=value` or a value as an
+argument is refused before anything is sent, so is a name that looks like a
+value, and under `--json` `set` never prompts. There is no MCP tool for it,
+on purpose. A deploy that
 needs one the machine lacks stops and names the page where to create it; the
 agent tells you, and runs the deploy again once you have. Nothing an agent
 writes into the repository or the manifest ever carries a secret value: the
@@ -103,6 +112,35 @@ The refusals, each carrying its `hint`:
 | `not-available` | with a token, the dashboard or its steward does not carry access yet | tell the owner of the machine, who runs `sitesolide upgrade` |
 | `unauthenticated` | the token is missing, expired or revoked | ask the owner for one; never guess or borrow a token |
 | `failure` | something broke on the machine | tell the owner of the machine, with the message; never retry in a loop |
+
+## Secrets and restarts with a token
+
+With a token minted with *Manage secrets*, `sitesolide secrets --json` lists
+the project's secret files and their variable names, never a value, and
+whether a restart is pending; a token without it is refused. Such a token
+changes `<slug>.env` alone, once the deployed `sitesolide.json` declares it:
+`secrets set NAME --stdin` and `secrets remove NAME...`, `--restart` to apply
+the change. `sitesolide restart --json` restarts the service, for any token
+that deploys the project, and ends in an `error` unless the service holds.
+Every refusal the steward decides is journaled under the token, 60 an hour.
+See [access.md](access.md#secrets-with-a-token).
+
+The refusals of their own, each carrying its `hint`:
+
+| Code | What it means | What to do |
+|---|---|---|
+| `value-in-arguments` | a value, or `NAME=value`, on the command line: refused before anything is sent, never quoted | the user runs `sitesolide secrets set NAME` and types it; pipe to `--stdin` only a value you generated; if a real value was on the line, tell the user to change it |
+| `needs-stdin` | `set` under `--json`, or without a terminal, and no `--stdin` | the same: nothing prompts there |
+| `stdin-is-terminal` | `--stdin` while standard input is a terminal, where the value would show as it is typed: nothing read, nothing sent | pipe a value you generated; or the user drops `--stdin` and types the value at the prompt |
+| `looks-like-value` | a name over 64 characters, or starting like a service's key (`sk_`, `rk_`, `pk_live`, `whsec_`, `ghp_`, `gho_`, `github_pat_`, `xox`, `AKIA`, `sst_`, `glpat-`): refused before anything is sent, never quoted | tell the user it may be in the shell's history and to change it at its source; then the variable's real name |
+| `out-of-scope` | a token without *Manage secrets*, listing included, a file other than `<slug>.env`, one the deployed manifest does not declare, `PASSWORD_HASH`, a person's role below Developer; an owner's token without public sites on a project not Restricted or one it could not deploy as it stands | ask the user; never another token or file |
+| `invalid` | a name the machine keeps for itself or the unit sets, an empty value; a value on several lines, with a null byte, not valid Unicode or over 8 KiB, refused before it is sent; at the prompt, a control key or a pasted block of several lines | fix what the message names |
+| `unmanaged` | the file was written by hand in a form the dashboard does not rewrite: nothing changed | tell the owner of the machine |
+| `busy` | a deployment of the project runs, the token's previous restart is still under way, or the machine is busy with other changes | wait, then run the same command once |
+| `too-many-attempts` | the token's hour used up: 120 changes, 30 restarts, 60 refused requests | wait the seconds `details` names; never retry in a loop |
+| `unconfirmed` | the change was sent and no answer came: it may be written | run `sitesolide secrets --json`, then the same command once; never in a loop |
+| `restart-failed` | the service did not hold after its restart; a change made with it is written | read `logs`, fix the cause, then `sitesolide restart` once |
+| `not-available` | the dashboard or its steward does not carry secrets by token yet | tell the owner of the machine, who runs `sitesolide upgrade` |
 
 ## Zero configuration
 
@@ -272,6 +310,8 @@ What `result` carries:
 | `lock`, `unlock` | `slug`, `access` (`code` or `public`), `code` and `url` (null once Public), `manifestWritten`; in a dry run `dryRun` alone |
 | `domain` | `slug`, `domain`: `name`, `aliases`, `active`, `table`, `dns`, `https` |
 | `remove` | `slug`, `dryRun` |
+| `secrets`, with a token | listing: `slug`, `secrets` (`slug`, `service`, and `files`, each `name`, `kind`, `state`, `reason`, `variables`, `passwords`, `restartPending`, `writable`, never a value); `set` and `remove`: `action`, `slug`, `file`, `created`, `set`, `removed`, `absent`, `restart` (null, or `{ verdict }`) |
+| `restart`, with a token | `slug`, `verdict` (`kind`, `state`, `subState`, `restarts`): a `kind` other than `active` ends in an `error` instead |
 | `share` | `slug`, `url`, `general` (`public`, `restricted`, `code`, or null for a project not deployed), `entries` (each `who`, `kind`, `role`, `by`, `createdAt`, `updatedAt`, `password`), `signIn` (`configured`, `allowedDomains`), `message` (null until signing in with a company account is set up), `changed`, and after a change `changes` (each `who`, `change`: `add`, `role`, `none` or `remove`, `role`, and `password` for password access just given) |
 | `people` | listing: `people` (each `who`, `roles` by project, `create`, `passwords`, `admin`), `domains` (each `slug`, `domain`), `signIn`, `changed: false`; `--may-create` and `--no-create`: `email`, `create`, `roles`, `change` (`create`, `none`), `changed` |
 | `machine create` | `provider`, `created` (false when an earlier run had), `machine`, `resources` (each `kind`, `name`, `id`, `reused`), `next`, the `setup` command to run |
@@ -328,7 +368,8 @@ by each command.
 `setup` and `upgrade` are not tools: they change the machine itself, and run
 through the CLI, when the user asked. Neither is `people`: the right to create
 projects lets someone into the dashboard, which is the owner's to give, over
-their SSH. `folder` is an absolute path.
+their SSH. Nor are `secrets` and `restart`: a tool that set a secret would take
+its value from the conversation, and the conversation would keep it. `folder` is an absolute path.
 `deploy`'s description says first that it changes the live server, and `share`'s that it gives real people access: leave
 both on "ask" in your client rather than allowing them once and for all, so
 that every real deploy, and every person let in, is yours to approve.

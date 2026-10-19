@@ -17,10 +17,19 @@
  * Every creation and revocation goes into the audit, actor `owner`. A
  * person's own tokens answer at the same addresses through
  * src/people/relay.ts, and the steward journals them under their email.
+ *
+ * **Token activity** joins what the dashboard keeps, the tokens' creations
+ * and deployments, to what tokens did through the steward, their secret
+ * changes, restarts and access changes, which only its journal holds: read
+ * here as the Activity page reads it, the latest entries, and kept to the
+ * lines a token wrote (`tokenWork`).
  */
 import type { SessionReader } from "../routes";
 import { isAcceptableOrigin, type Session } from "../sessions";
+import type { Steward } from "../secrets/client";
 import type { Tokens } from "../secrets/tokens";
+import { fromJournal, isAfter } from "../audit/normalize";
+import type { AuditRow } from "../audit/protocol";
 import { reach, type ControlSteward } from "./client";
 import type { Scope, TeamPageResponse, TokenView } from "./protocol";
 import type { ControlStore } from "./store";
@@ -32,6 +41,8 @@ export type TeamDependencies = {
   /** The unlock tokens of the Secrets section, shared: one unlock opens both. */
   tokens: Tokens;
   store: ControlStore;
+  /** The steward's journal, where a token's secret changes and restarts are written. */
+  journal: Pick<Steward, "readLog">;
 };
 
 type Handler = (req: Request) => Promise<Response>;
@@ -62,12 +73,52 @@ async function readBody(req: Request): Promise<Record<string, unknown> | null> {
   }
 }
 
+/**
+ * The journal's latest entries read for Token activity. The journal mixes
+ * every operation, the owner's and people's: five times the rows shown, to
+ * find a token's among them, in one call and half the steward's page cap
+ * (MAX_PAGE_ENTRIES, src/secrets/log.ts). A steward that predates pages
+ * hands over its latest fifty.
+ */
+export const WORK_ENTRIES = 250;
+
+/** The steward's rows Token activity shows at most, as many as the dashboard's own audit. */
+export const WORK_ROWS = 50;
+
+const TOKEN_ACTOR = "token:";
+
+/**
+ * The journal's lines a token wrote, newest first, in the Activity page's
+ * shape: the actor `token:<id>` and `keep` accepting that id. `site` is left
+ * null, the snapshot not read here: every such line names its project in
+ * `target`, the steward refusing a malformed slug before journaling.
+ */
+export function tokenWork(entries: readonly unknown[], keep: (id: string) => boolean, limit: number = WORK_ROWS): AuditRow[] {
+  return fromJournal(entries)
+    .filter(({ row }) => row.actor.startsWith(TOKEN_ACTOR) && keep(row.actor.slice(TOKEN_ACTOR.length)))
+    .sort((a, b) => (isAfter(a.position, b.position) ? 1 : isAfter(b.position, a.position) ? -1 : 0))
+    .slice(0, limit)
+    .map(({ row }) => ({ ...row, site: null }));
+}
+
+/**
+ * The journal's latest entries, for `tokenWork`. A steward that does not
+ * answer, or answers something that does not read, leaves Token activity
+ * with the dashboard's own rows: the Tokens page never fails for it, and
+ * Activity says what went wrong with that source.
+ */
+export async function readJournal(journal: Pick<Steward, "readLog">): Promise<unknown[]> {
+  const reached = await reach(() => journal.readLog(null, { limit: WORK_ENTRIES, before: null }));
+  if (reached.kind !== "received" || reached.status !== 200 || !Array.isArray(reached.body.entries)) return [];
+  return reached.body.entries;
+}
+
 /** What the page says when the steward does not carry the control routes yet. */
 export const NOT_AVAILABLE_REASON =
   "The steward on this machine does not have the control API yet: run sitesolide upgrade, then sitesolide setup again for this machine, without --minimal if the installer is missing.";
 
 export function createTeamRoutes(dependencies: TeamDependencies, clock: () => number = Date.now): TeamRoutes {
-  const { session, publicUrl, steward, tokens, store } = dependencies;
+  const { session, publicUrl, steward, tokens, store, journal } = dependencies;
 
   async function check(req: Request, writing: boolean): Promise<Session | Response> {
     if (writing && !isAcceptableOrigin(req.headers.get("origin"), publicUrl)) return json({ error: "origin-refused" }, 403);
@@ -86,16 +137,18 @@ export function createTeamRoutes(dependencies: TeamDependencies, clock: () => nu
     async team(req) {
       const open = await check(req, false);
       if (open instanceof Response) return open;
-      const reached = await reach(() => steward.listTokens());
+      // The owner reads every token's lines, those of a token since purged too.
+      const [reached, entries] = await Promise.all([reach(() => steward.listTokens()), readJournal(journal)]);
+      const work = tokenWork(entries, () => true);
       const deployments = store.recent(20).map(({ manifest: _manifest, ...row }) => row);
       const audit = store.listAudit(50).filter((entry) => entry.action.startsWith("token.") || entry.action.startsWith("deploy."));
       const until = tokens.read(open.hash)?.expiresAt ?? null;
       if (reached.kind === "unavailable") {
-        return json({ available: false, reason: NOT_AVAILABLE_REASON, member: null, tokens: [], until, deployments, audit } satisfies TeamPageResponse);
+        return json({ available: false, reason: NOT_AVAILABLE_REASON, member: null, tokens: [], until, deployments, audit, work } satisfies TeamPageResponse);
       }
       if (reached.kind !== "received" || reached.status !== 200) return relayRefusal(reached);
       if (!Array.isArray(reached.body.tokens)) return error(502, "failure", "The server sent an unreadable answer.");
-      return json({ available: true, reason: null, member: null, tokens: reached.body.tokens as TokenView[], until, deployments, audit } satisfies TeamPageResponse);
+      return json({ available: true, reason: null, member: null, tokens: reached.body.tokens as TokenView[], until, deployments, audit, work } satisfies TeamPageResponse);
     },
 
     async createToken(req) {

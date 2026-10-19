@@ -70,6 +70,7 @@ import { isDashboardPerson, opensASite, recordCreation as creationRecorded, righ
 import type { AccessEvent } from "../access/steward";
 import type { LeavingToken } from "../access/protocol";
 import type { MemberRights } from "./tokens";
+import type { Who } from "./actions";
 import { attemptWait, countAttempt, EMPTY_UNLOCKS, failed, grant, isUnlocked, revokeMember, revokeSession, unlockedUntil, type UnlockBook } from "./unlocks";
 import { dropMember, dropSession, encodeBook, findSession, openMemberSession, readBook, spendNonce, type SessionBook } from "./sessions";
 import type { MembersSystem } from "./system";
@@ -117,6 +118,23 @@ export type RestartRefusal = {
   detail: string;
 };
 
+/**
+ * A token's request refused by the control routes (src/control/steward.ts)
+ * before it reached the secrets: the token as actor, `token:<id>`, the person
+ * it belongs to, null for the owner's own, and why in a few words, never a
+ * value nor a name the request carried. A listing refused is journaled as a
+ * `list`, which reads no value. Bounded per token by the control routes, not
+ * by the minute below: one token's flood never hides a person's refusal.
+ */
+export type TokenRefusal = {
+  operation: "list" | "set" | "remove" | "restart";
+  result: "rejects";
+  actor: string;
+  member: string | null;
+  slug: string;
+  detail: string;
+};
+
 /** Every event the journal's refusals take, bounded per minute: a person's, a restart's, an access change's. */
 export type JournalRefusal = MemberEvent | RestartRefusal | AccessEvent;
 
@@ -134,7 +152,7 @@ export type MemberRoutesDependencies = {
    * lock and observation. `allowed` is asked again once its turn has come: a
    * person removed while the restart waited behind another does not restart.
    */
-  restart: (req: Request, slug: string, actor: string, allowed: () => Promise<boolean>) => Promise<Response>;
+  restart: (req: Request, slug: string, who: Who, allowed: () => Promise<boolean>) => Promise<Response>;
   /**
    * Someone who no longer signs in: every token of theirs revoked, journaled
    * under `actor` (src/control/steward.ts, `revokeMember`), which judges
@@ -435,7 +453,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
       if (again instanceof Response) return false;
       return mayRestart(Object.hasOwn(again.identity.roles, slug) ? again.identity.roles[slug]! : null);
     };
-    return dependencies.restart(req, slug, email, allowed);
+    return dependencies.restart(req, slug, { actor: email, member: email }, allowed);
   }
 
   // --- a person's own unlock -----------------------------------------------------------

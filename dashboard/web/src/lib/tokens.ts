@@ -1,7 +1,7 @@
 /**
  * What the Tokens page decides: a token's state, its scope said in words, the
- * form's own checks, the login command, a deployment's tone and an audit line.
- * Pure: the clock arrives as a parameter.
+ * form's own checks, the login command, a deployment's tone, an audit line,
+ * and Token activity. Pure: the clock arrives as a parameter.
  *
  * The rules of who may deploy what are not here: the steward judges a token's
  * request and the page shows its refusal. The form only refuses what it can
@@ -9,9 +9,10 @@
  * to learn a field is missing.
  */
 import { isPlatform } from "./access"
+import { actorLabel, auditWords } from "./audit"
 import { duration } from "./format"
 import type { Tone } from "./tones"
-import type { AuditEntry, DeploymentState, Role, Roles, Scope, Site, TokenView } from "./types"
+import type { AuditEntry, AuditRow, DeploymentState, Role, Roles, Scope, Site, TokenView } from "./types"
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -55,6 +56,8 @@ export function scopeSummary(scope: Scope): string[] {
   if (scope.public) parts.push("Can deploy public sites")
   if (scope.domain) parts.push("Can declare a domain")
   if (scope.outbound) parts.push("Can use outbound network")
+  // Absent from a scope minted before the permission: none.
+  if (scope.secrets === true) parts.push("Can manage secrets")
   return parts
 }
 
@@ -67,7 +70,10 @@ export type ScopeLine = { text: string; paused: boolean }
  * The create right while they hold it; each option while they are Admin of
  * every project the token still deploys: "Can create projects (paused: no
  * longer allowed)", "Can use outbound network (paused: not Admin of cms
- * now)". `rights` null: the owner's own, or rights not known.
+ * now)". Managing secrets while it still deploys a project or may create
+ * one, the steward judging the role on each project at every request: "Can
+ * manage secrets (paused: no project to deploy now)". `rights` null: the
+ * owner's own, or rights not known.
  */
 export function scopeLines(token: Pick<TokenView, "owned" | "scope" | "member">, rights: { roles: Readonly<Record<string, Role | "visitor">>; create: boolean } | null): ScopeLine[] {
   const words = scopeSummary(token.scope)
@@ -77,9 +83,10 @@ export function scopeLines(token: Pick<TokenView, "owned" | "scope" | "member">,
   const reached = [...new Set([...token.scope.slugs, ...token.owned])].filter(deploys).sort()
   const create = token.scope.create && rights.create
   const notAdmin = reached.filter((slug) => roleOf(slug) !== "admin")
-  const optionPause = reached.length === 0 && !create ? "paused: no project to deploy now" : notAdmin.length > 0 ? `paused: not Admin of ${notAdmin.join(", ")} now` : null
+  const nothing = reached.length === 0 && !create ? "paused: no project to deploy now" : null
+  const optionPause = nothing ?? (notAdmin.length > 0 ? `paused: not Admin of ${notAdmin.join(", ")} now` : null)
   return words.map((text) => {
-    const pause = text === "Can create projects" ? (rights.create ? null : "paused: no longer allowed") : optionPause
+    const pause = text === "Can create projects" ? (rights.create ? null : "paused: no longer allowed") : text === "Can manage secrets" ? nothing : optionPause
     return pause === null ? { text, paused: false } : { text: `${text} (${pause})`, paused: true }
   })
 }
@@ -244,9 +251,25 @@ export function auditLine(entry: Pick<AuditEntry, "actor" | "action" | "target" 
   }
 }
 
+/**
+ * What the dialog sends of its permissions: `secrets` only when ticked, so
+ * that a token without it is minted by a steward that predates the
+ * permission, which refuses any field it does not know.
+ */
+export function requestScope(choices: Omit<Scope, "slugs">, slugs: readonly string[]): Scope {
+  const { secrets, ...rest } = choices
+  return { ...rest, slugs: [...slugs], ...(secrets === true ? { secrets: true } : {}) }
+}
+
+/** What an older steward says of a scope carrying a field it does not know: `secrets`, the only one the dialog may add. */
+const UNEXPECTED_SCOPE_FIELD = "unexpected field in the scope"
+
+export const STEWARD_PREDATES_SECRETS = "The server's steward predates this permission: run sitesolide upgrade."
+
 /** The refusal of a creation, under the field it concerns when the steward's message names one. */
 export function tokenRefusal(status: number, body: { error?: string; message?: string } | null): { field: TokenField | null; message: string } {
   const message = body?.message ?? (status === 0 ? "Can't reach the dashboard." : `Refused (${status}).`)
+  if (status === 400 && message === UNEXPECTED_SCOPE_FIELD) return { field: null, message: STEWARD_PREDATES_SECRETS }
   if (status === 400) {
     if (message.startsWith("label")) return { field: "label", message: "One line of text, 64 characters at most." }
     if (message.startsWith("scope.slugs")) return { field: "slugs", message: message.replace(/^scope\.slugs: /, "") }
@@ -256,6 +279,58 @@ export function tokenRefusal(status: number, body: { error?: string; message?: s
     return { field: message.startsWith("scope.slugs") ? "slugs" : null, message: message.replace(/scope\.[a-z]+: /g, "") }
   }
   return { field: null, message }
+}
+
+// --- Token activity ---------------------------------------------------------------
+
+/**
+ * One line of Token activity. `meta`, for what tokens did through the
+ * steward alone: which token, which project, and how it ended.
+ */
+export type ActivityLine = { key: string; at: number; text: string; tone: Tone; meta: string | null }
+
+/** Lines Token activity shows, as many as each of its two sources hands over. */
+export const ACTIVITY_LINES = 50
+
+/**
+ * Who a line by a token names, as the Tokens page knows its tokens: its
+ * label, a person's followed by their email for the owner, who sees every
+ * token; one this page does not list, as Activity says it,
+ * "alice@example.com (token)". `viewer`: who reads the page.
+ */
+export function tokenActor(row: AuditRow, tokens: readonly Pick<TokenView, "id" | "label" | "member">[], viewer: "owner" | "person"): string {
+  const id = row.actor.startsWith("token:") ? row.actor.slice("token:".length) : null
+  const token = id === null ? undefined : tokens.find((candidate) => candidate.id === id)
+  if (token === undefined) return actorLabel(row)
+  return viewer === "owner" && token.member !== null ? `${token.label} (${token.member})` : token.label
+}
+
+/**
+ * Token activity: the dashboard's audit of tokens and deployments, and what
+ * tokens did through the steward, secret changes, restarts and access
+ * changes, merged newest first. The steward's rows in the Activity page's
+ * words ("Set API_KEY", "Restarted"), the token by its label, the project
+ * beside it, since this list has no column for it.
+ */
+export function tokenActivity(
+  audit: readonly AuditEntry[],
+  work: readonly AuditRow[],
+  tokens: readonly Pick<TokenView, "id" | "label" | "member">[],
+  viewer: "owner" | "person",
+  limit: number = ACTIVITY_LINES,
+): ActivityLine[] {
+  const when = (at: string) => {
+    const ms = Date.parse(at)
+    return Number.isFinite(ms) ? ms : 0
+  }
+  const own = audit.map((entry): ActivityLine => ({ key: `dashboard:${entry.id}`, at: when(entry.at), text: auditLine(entry), tone: "neutral", meta: null }))
+  const done = work.map((row): ActivityLine => {
+    const words = auditWords(row)
+    const meta = [tokenActor(row, tokens, viewer), row.site ?? row.target, words.note].filter((part): part is string => part !== null && part !== "").join(" · ")
+    return { key: row.id, at: when(row.at), text: words.summary, tone: words.tone, meta }
+  })
+  // A stable sort: two lines of one millisecond keep the order their source gave them.
+  return [...own, ...done].sort((a, b) => b.at - a.at).slice(0, limit)
 }
 
 // --- a person's own tokens ----------------------------------------------------------

@@ -852,6 +852,14 @@ describe("sitesolide secrets points to the dashboard", () => {
     expect(r.all).not.toContain("[dry-run]");
   });
 
+  test("restart over SSH points to the dashboard too, and restarts nothing", async () => {
+    const r = await run("projects/api-with-secret", ["restart", "--dry-run"]);
+    expect(r.code).toBe(1);
+    expect(r.error).toContain("a service is restarted from the dashboard: Restart service, in the project's Overview at https://dashboard.");
+    expect(r.all).not.toContain("[dry-run]");
+    expect(r.all).not.toContain("systemctl");
+  });
+
   test("the usage no longer offers it, and says where the secrets live", async () => {
     const r = await run(".", ["--dry-run"]);
     expect(r.code).toBe(1);

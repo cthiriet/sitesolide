@@ -12,7 +12,7 @@ import { CreateTokenDialog, RevokeTokenDialog } from "@/components/token-dialogs
 import { readPeople, readTokens, revokeToken } from "@/lib/api"
 import { isPerson } from "@/lib/identity"
 import { ago, dateTime } from "@/lib/format"
-import { auditLine, deploymentLabel, deploymentTone, isLive, liveReach, madeByLine, scopeLines, tokenHolders, tokenProjects, tokenStatus } from "@/lib/tokens"
+import { deploymentLabel, deploymentTone, isLive, liveReach, madeByLine, scopeLines, tokenActivity, tokenHolders, tokenProjects, tokenStatus } from "@/lib/tokens"
 import type { AccessRole, Roles, TeamPageResponse, TokenView } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -29,6 +29,11 @@ import { cn } from "@/lib/utils"
  * makes one for themselves or for a person of People. A person sees theirs
  * alone, those the owner made for them included, mints them under their own
  * unlock, a forced sign-in at their provider, and never beyond their roles.
+ *
+ * Token activity is what the dashboard recorded, creations and deployments,
+ * and what tokens did through the steward, secret changes and restarts above
+ * all, in one list, newest first: the server sends the second already kept
+ * to the tokens this page shows a person.
  */
 
 type Loaded = { state: "loading" } | { state: "failed" } | { state: "ready"; list: TeamPageResponse }
@@ -178,6 +183,7 @@ export function TokensPage() {
   const person = list?.member ?? null
   const rightsOf = (token: TokenView): { roles: Readonly<Record<string, AccessRole>>; create: boolean } | null =>
     token.member === null ? null : person !== null ? { roles: person.roles, create: person.create } : (people.get(token.member) ?? null)
+  const activity = list === null ? [] : tokenActivity(list.audit, list.work, list.tokens, person === null ? "owner" : "person")
 
   return (
     <>
@@ -267,14 +273,26 @@ export function TokensPage() {
                 </InternalLink>
               }
             >
-              {list.audit.length === 0 ? (
+              {activity.length === 0 ? (
                 <EmptyState compact title="Nothing yet" />
               ) : (
                 <ul className="divide-y divide-divider">
-                  {list.audit.map((entry) => (
-                    <li key={entry.id} className="flex flex-wrap items-baseline gap-x-3 px-4 py-2.5">
-                      <span className="min-w-0 flex-1 wrap-anywhere">{auditLine(entry)}</span>
-                      <span className="text-xs text-muted-foreground tabular-nums">{ago(serverNow - Date.parse(entry.at))}</span>
+                  {activity.map((line) => (
+                    <li key={line.key} className="grid gap-0.5 px-4 py-2.5">
+                      <div className="flex flex-wrap items-baseline gap-x-3">
+                        <span className="min-w-0 flex-1 wrap-anywhere">
+                          {/* Its tone when it went wrong, as in Activity: a refusal, a restart that did not come back. */}
+                          {line.tone === "attention" || line.tone === "error" ? (
+                            <Status tone={line.tone} className="whitespace-normal">
+                              {line.text}
+                            </Status>
+                          ) : (
+                            line.text
+                          )}
+                        </span>
+                        <span className="text-xs text-muted-foreground tabular-nums">{ago(serverNow - line.at)}</span>
+                      </div>
+                      {line.meta !== null && <span className="text-xs text-muted-foreground wrap-anywhere">{line.meta}</span>}
                     </li>
                   ))}
                 </ul>

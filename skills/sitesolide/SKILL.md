@@ -78,10 +78,12 @@ Every error carries a `hint`: follow it. The usual ones:
   login`. Never guess a server or a zone.
 - **A secret is missing on the server.** The deploy stopped before restarting
   anything. Tell the user to create the file and its values in the dashboard's
-  *Secrets* section, at the address the error gives, then deploy again. Never
-  put a secret value in the repository, in `sitesolide.json`, or in `env`: the
-  validation refuses names that look like secrets, and a secret in git is a
-  secret to change.
+  *Secrets* section, at the address the error gives, then deploy again. With a
+  token that may manage secrets, they may instead run `sitesolide secrets set
+  NAME` in their own terminal, which asks for the value without echoing it.
+  Never put a secret value in the repository, in `sitesolide.json`, or in
+  `env`: the validation refuses names that look like secrets, and a secret in
+  git is a secret to change.
 - **The service fails at the restart, or the site answers 500 or 502.** Read
   `logs` (`sitesolide logs --json --lines 100`): each entry has its unit,
   priority and message. Priority 3 and below are errors. Fix the code, deploy
@@ -122,7 +124,14 @@ Every error carries a `hint`: follow it. The usual ones:
 - Never give access to anyone the user did not name, nor a role they did not
   name, and never make a site Public: general access is theirs, from the
   dashboard.
-- Never read, print or guess a secret, nor ask the user to paste one.
+- Never read, print or guess a secret, nor ask the user to paste one. `sitesolide
+  secrets set NAME --stdin` is for the user to run, or for a value you
+  generate yourself and pipe, a random key (`openssl rand -hex 32 |
+  sitesolide secrets set SESSION_SECRET --stdin --json`); never for a value
+  from the conversation, and never with the value as an argument. A name
+  that looks like a value is refused `looks-like-value`, never quoted: tell
+  the user it may be in the shell's history and to change it at its source.
+  There is no MCP tool for it, on purpose.
 
 ## Status and other reads
 
@@ -134,6 +143,17 @@ outage. Its runs are in `logs`, beside the other services. `access`
 with access, with their roles. `lock_status`
 (`sitesolide lock --status --json`) says whether a preview is closed behind an
 access code, without revealing the code.
+
+With a token minted with *Manage secrets*, `sitesolide secrets --json` lists
+the project's secret files and their variable names, never a value, and
+whether a restart is pending, and such a token sets and removes the variables
+of `<slug>.env` (`secrets set NAME --stdin`, `secrets remove NAME...`,
+`--restart` to apply them); a token without it is refused. `unconfirmed`
+means a change was sent and no answer came: check with `sitesolide secrets
+--json`, then run the same command once more, never in a loop. `sitesolide
+restart --json`, for any token that deploys the project, restarts the service
+and ends in an `error` unless it holds: read `logs` then. Over the owner's
+SSH, both point to the dashboard.
 
 The full reference: `docs/agents.md` in the sitesolide repository, and
 `docs/manifest.md` for every key of `sitesolide.json`.

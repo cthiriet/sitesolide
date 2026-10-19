@@ -113,12 +113,16 @@ export function bearerOf(header: string | null): string | null {
  * A scope as the page sends it, or the refusal. Every flag must be a boolean:
  * a missing one is not taken for false, it is a page out of step with this
  * file, and the owner would grant something other than what they saw.
+ *
+ * `secrets` alone may be missing, and reads false, for one release: it is
+ * what every page and CLI from before the flag sends, and false grants less
+ * than the owner saw, never more. Sent, it must be a boolean.
  */
 export function readScope(value: unknown, zone: string): Scope | Refusal {
   if (!isObject(value)) return { refusal: "scope must be an object" };
-  const allowed = ["slugs", "create", "outbound", "domain", "public"];
+  const allowed = ["slugs", "create", "outbound", "domain", "public", "secrets"];
   if (Object.keys(value).some((key) => !allowed.includes(key))) return { refusal: "unexpected field in the scope" };
-  const { slugs, create, outbound, domain } = value;
+  const { slugs, create, outbound, domain, secrets } = value;
   const isPublic = value.public;
   if (!Array.isArray(slugs)) return { refusal: "scope.slugs must be a list of slugs" };
   if (slugs.length > MAX_GRANTED) return { refusal: `a token may be granted ${MAX_GRANTED} projects at most` };
@@ -132,12 +136,14 @@ export function readScope(value: unknown, zone: string): Scope | Refusal {
   for (const [name, flag] of Object.entries({ create, outbound, domain, public: isPublic })) {
     if (typeof flag !== "boolean") return { refusal: `scope.${name} must be true or false` };
   }
+  if (secrets !== undefined && typeof secrets !== "boolean") return { refusal: "scope.secrets must be true or false" };
   return {
     slugs: seen.sort(),
     create: create as boolean,
     outbound: outbound as boolean,
     domain: domain as boolean,
     public: isPublic as boolean,
+    secrets: secrets === true,
   };
 }
 
@@ -177,6 +183,12 @@ export function readTokenRequest(body: Record<string, unknown>, now: number, zon
 
 // --- the registry -------------------------------------------------------------------
 
+/**
+ * A scope as the registry keeps it. `secrets` may be missing, on a token
+ * minted before the flag: `readTeam` reads it false, and the next save writes
+ * it. No version for it: a steward rolled back reads the file as it is, the
+ * extra key ignored, as its own `isScope` does.
+ */
 function isScope(value: unknown): value is Scope {
   if (!isObject(value)) return false;
   return (
@@ -185,7 +197,8 @@ function isScope(value: unknown): value is Scope {
     typeof value.create === "boolean" &&
     typeof value.outbound === "boolean" &&
     typeof value.domain === "boolean" &&
-    typeof value.public === "boolean"
+    typeof value.public === "boolean" &&
+    (value.secrets === undefined || typeof value.secrets === "boolean")
   );
 }
 
@@ -235,11 +248,15 @@ export function readTeam(text: string | null): Team | { unreadable: string } {
     }
     owners[slug] = id;
   }
-  return { version: object.version === 2 ? 2 : 1, tokens: object.tokens as TokenRecord[], owners };
+  // A token minted before the `secrets` flag manages no secret: read false here,
+  // written so at the next save.
+  const tokens = (object.tokens as TokenRecord[]).map((record) => ({ ...record, scope: { ...record.scope, secrets: record.scope.secrets === true } }));
+  return { version: object.version === 2 ? 2 : 1, tokens, owners };
 }
 
 export function encodeTeam(team: Team): string {
-  return `${JSON.stringify({ version: team.version, tokens: team.tokens, owners: team.owners }, null, 2)}\n`;
+  const tokens = team.tokens.map((record) => ({ ...record, scope: { ...record.scope, secrets: record.scope.secrets === true } }));
+  return `${JSON.stringify({ version: team.version, tokens, owners: team.owners }, null, 2)}\n`;
 }
 
 /** Since when a token is dead, revoked or expired; null while it is live. */

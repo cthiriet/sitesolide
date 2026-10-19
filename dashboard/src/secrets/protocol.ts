@@ -151,6 +151,9 @@ export type Operation =
   | "unlock"
   | "lock"
   | "read"
+  // A token's listing of a project's files and variable names, which reads no
+  // value: journaled when refused, so that Activity never says "read" for it.
+  | "list"
   | "set"
   | "remove"
   | "create"

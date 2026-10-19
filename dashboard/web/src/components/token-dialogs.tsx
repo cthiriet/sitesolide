@@ -31,6 +31,7 @@ import {
   neededOptions,
   noProjectText,
   optionsAllowed,
+  requestScope,
   tokenRefusal,
   validateTokenForm,
   type TokenErrors,
@@ -56,7 +57,10 @@ import { cn } from "@/lib/utils"
  * projects only with the right the owner granted them; and the options only
  * for projects they are an Admin of. An option a project chosen cannot be
  * deployed without is ticked, and says which: a token without it would be
- * refused there at its first deployment. The steward judges it all again.
+ * refused there at its first deployment. Managing secrets is not one of
+ * them: a Developer already changes a project's secrets, and every project a
+ * person's token offers is one they deploy, so it is never taken away. The
+ * steward judges it all again.
  */
 
 const COPY_WARNING = "You haven't copied the token. It can't be shown again."
@@ -169,7 +173,7 @@ export function CreateTokenDialog({
   // Whose token, for the owner: `owner`, their own, or a person's email.
   const [holder, setHolder] = useState("owner")
   const [expiry, setExpiry] = useState<number | null>(DEFAULT_EXPIRY_DAYS)
-  const [scope, setScope] = useState<Omit<Scope, "slugs">>({ create: false, outbound: false, domain: false, public: false })
+  const [scope, setScope] = useState<Omit<Scope, "slugs">>({ create: false, outbound: false, domain: false, public: false, secrets: false })
   const [chosen, setChosen] = useState<string[]>([])
   // The person the token will be made for: the one minting their own, or the one the owner chose.
   const target = person ?? (holder === "owner" ? null : (holders.find((one) => one.email === holder) ?? null))
@@ -181,6 +185,7 @@ export function CreateTokenDialog({
   const options = target === null || optionsAllowed(target.roles, chosen, scope.create)
   const needed = options ? neededOptions(projects, chosen, target !== null) : NO_OPTION
   // A person's options fall as soon as their choice no longer allows them; one a project needs is on.
+  // Managing secrets stays as ticked: a Developer may already.
   const effective = options
     ? { ...scope, public: scope.public || needed.public.length > 0, domain: scope.domain || needed.domain.length > 0 }
     : { ...scope, outbound: false, domain: false, public: false }
@@ -223,7 +228,7 @@ export function CreateTokenDialog({
     setInProgress(true)
     try {
       // A person minting their own sends no holder: the token is theirs, the steward says so.
-      const { status, body } = await createToken({ label: label.trim(), ...(person === null ? { holder } : {}), expiresAt: expiryFrom(expiry, now), scope: { ...effective, slugs } })
+      const { status, body } = await createToken({ label: label.trim(), ...(person === null ? { holder } : {}), expiresAt: expiryFrom(expiry, now), scope: requestScope(effective, slugs) })
       if (status === 401) {
         onClose()
         return onSessionExpired()
@@ -298,7 +303,7 @@ export function CreateTokenDialog({
                       if (next === null) return
                       setHolder(next)
                       setChosen([])
-                      setScope({ create: false, outbound: false, domain: false, public: false })
+                      setScope({ create: false, outbound: false, domain: false, public: false, secrets: false })
                       setErrors({})
                     }}
                   >
@@ -377,7 +382,7 @@ export function CreateTokenDialog({
               <p id={`${projectsId}-options`} className="mb-2 text-xs text-pretty text-muted-foreground">
                 {options
                   ? "Off unless you tick them. One a chosen project needs is ticked for you."
-                  : `Only when ${person !== null ? "you are" : "they are"} an Admin of every project chosen.`}
+                  : `Public sites, outbound network and a domain only when ${person !== null ? "you are" : "they are"} an Admin of every project chosen.`}
               </p>
               <div className="divide-y divide-input rounded-lg border border-input p-1">
                 <Choice
@@ -402,6 +407,10 @@ export function CreateTokenDialog({
                   title="Declare a domain"
                 >
                   A domain of its own in sitesolide.json. Switching to it stays {person === null ? "yours" : "the owner's"}.
+                </Choice>
+                {/* Never disabled: every project offered to a person's token is one where they may change secrets. */}
+                <Choice checked={effective.secrets === true} onChange={(next) => setScope({ ...scope, secrets: next })} title="Manage secrets">
+                  Lists each project's secret files and variable names, sets and removes the variables of its .env. Never reads a value back.
                 </Choice>
               </div>
             </fieldset>

@@ -61,7 +61,9 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
   personal, scoped, revocable token, never stronger than its holder's roles;
   only the owner holds SSH.
 - **Secrets on the server**, never in git, set from the dashboard, which restarts
-  the service in one click.
+  the service in one click, or with a token that may manage secrets,
+  `sitesolide secrets set API_KEY`, the value typed at a prompt and never
+  read back.
 - **Backups.** Every project's data snapshotted hourly into restic, SQLite
   copied consistently, optionally to an encrypted bucket, restored from the
   dashboard.

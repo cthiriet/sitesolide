@@ -44,6 +44,7 @@ import {
   MAX_QUEUED,
   MAX_IN_FLIGHT,
   createSteward,
+  type StewardHandler,
   type StewardOptions,
 } from "../src/secrets/steward";
 import { createSystem, isTemporary, readAccount, readGroup, type Command, type SystemConfig, type System } from "../src/secrets/system";
@@ -166,6 +167,8 @@ type Bench = {
   limit: { reached: boolean };
   simultaneousShows: { current: number; max: number };
   renderedTexts: string[];
+  /** The steward in service, for what the control routes hand it: a token's secrets. */
+  current: () => StewardHandler;
 };
 
 async function mount(options: Mount = {}): Promise<Bench> {
@@ -344,6 +347,7 @@ async function mount(options: Mount = {}): Promise<Bench> {
     restartSteward() {
       handler = newPassword();
     },
+    current: () => handler,
     async owner(method, path, body) {
       return handler.owner(new Request(`http://steward${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
     },
@@ -3592,5 +3596,61 @@ describe("integration: dashboard/steward.ts on a socket", () => {
     expect(await child.exited).toBe(1);
     expect(await child.stderr.text()).toContain("the socket needs a folder of its own");
     expect(statSync(root).mode & 0o777).toBe(0o700);
+  });
+});
+
+describe("a token's secrets, handed over by the control routes", () => {
+  /** An owner's own token, as src/control/steward.ts names it once judged. */
+  const TOKEN = { actor: "token:0123456789ab", member: null, token: "0123456789ab" };
+  const still = async () => null;
+  const request = () => new Request("http://steward/control/secrets", { method: "PATCH" });
+
+  test("an owner's token is answered as a Developer is: every file write-only, no size, no previous version; writable on <slug>.env alone", async () => {
+    const bench = await mount();
+    const ops = bench.current().secretsForToken!;
+    const changed = await ops.change(request(), { slug: "cms", file: "cms.env", set: [["NEW_KEY", SECRET_ALNUM]], remove: [] }, TOKEN, still);
+    expect(changed.status).toBe(200);
+    const answer = (await changed.json()) as { file: FileView & { writable: boolean } };
+    // A previous version is kept, the file is readable by the owner: a token is told neither.
+    expect(answer.file).toMatchObject({ name: "cms.env", readable: false, previous: false, bytes: null, writable: true });
+    expect(JSON.stringify(answer)).not.toContain(SECRET_ALNUM);
+    expect(log(bench).at(-1)).toMatchObject({ operation: "set", result: "ok", actor: TOKEN.actor, member: null, slug: "cms", file: "cms.env", variable: "NEW_KEY" });
+
+    const listed = (await (await ops.list("cms", TOKEN)).json()) as { secrets: { files: (FileView & { writable: boolean })[] } };
+    expect(listed.secrets.files.map((file) => [file.name, file.readable, file.previous, file.bytes, file.writable])).toEqual([
+      ["cms.env", false, false, null, true],
+      ["cms-webhook.env", false, false, null, false],
+    ]);
+    const text = JSON.stringify(listed);
+    for (const value of [SECRET_SID, SECRET_TOKEN, SECRET_ALNUM]) expect(text).not.toContain(value);
+    // The owner's own page still sees what the owner sees.
+    expect(await fileSeen(bench, "cms", "cms.env")).toMatchObject({ readable: true, previous: true });
+  });
+
+  test("the machine's own projects and files are refused to a token, the owner's own included, whatever reached them", async () => {
+    const bench = await mount();
+    const ops = bench.current().secretsForToken!;
+    // The landing's folder, the zone, is no slug: the control routes refuse it before it comes here.
+    for (const slug of ["dashboard", "portal"]) {
+      expect(await errorOf(await ops.list(slug, TOKEN))).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("belongs to the platform") });
+    }
+    const hash = readFileSync(join(bench.secrets, "dashboard.env"), "utf8");
+    const write = await ops.change(request(), { slug: "dashboard", file: "dashboard.env", set: [["STEWARD_SOCKET", "/tmp/elsewhere.sock"]], remove: [] }, TOKEN, still);
+    expect(write.status).toBe(403);
+    expect(await errorOf(write)).toMatchObject({ error: "out-of-scope", message: "dashboard belongs to the platform, which stays the owner's" });
+    expect(readFileSync(join(bench.secrets, "dashboard.env"), "utf8")).toBe(hash);
+    expect(log(bench).at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: TOKEN.actor, slug: "dashboard", file: null });
+    // Nor its restart.
+    const restarted = await ops.restart(request(), "portal", TOKEN, still);
+    expect(await errorOf(restarted)).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("belongs to the platform") });
+    expect(bench.systemctlCalls.some((call) => call[0] === "restart")).toBe(false);
+  });
+
+  test("a refusal under the lock comes back as it stands, and nothing is written", async () => {
+    const bench = await mount();
+    const ops = bench.current().secretsForToken!;
+    const refused = await ops.change(request(), { slug: "cms", file: "cms.env", set: [["LATE", "x"]], remove: [] }, TOKEN, async () => Response.json({ error: "unauthenticated", message: "this token was revoked" }, { status: 401 }));
+    expect(refused.status).toBe(401);
+    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
   });
 });

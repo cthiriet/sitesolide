@@ -23,7 +23,9 @@
  * **A person's own tokens** answer at the Tokens page's addresses too: their
  * tokens alone, minted under their unlock within their roles, revoked
  * without it. The steward judges and journals each (src/control/steward.ts);
- * the dashboard adds what it keeps itself, the deployments of those tokens.
+ * the dashboard adds what it keeps itself, the deployments of those tokens,
+ * and what those tokens did through the steward, read from its journal and
+ * kept to their ids.
  */
 import { tokenHash } from "../sessions";
 import { isAcceptableOrigin } from "../sessions";
@@ -33,6 +35,7 @@ import type { Tokens } from "../secrets/tokens";
 import type { BackupSteward } from "../backup/client";
 import type { ControlStore } from "../control/store";
 import type { TeamPageResponse, TokenView } from "../control/protocol";
+import { readJournal, tokenWork } from "../control/team";
 import type { MembersSteward } from "./client";
 import type { Identity, IdentityResolver, Resolved } from "./identity";
 import { may, type Power } from "./powers";
@@ -47,6 +50,7 @@ export type MemberRelayDependencies = {
   steward: Pick<MembersSteward, "act" | "lock">;
   /** The members' unlock tokens, by session hash: never the owner's store. */
   tokens: Tokens;
+  /** The steward's journal: a site's history in its Secrets section, and what a person's tokens did there. */
   secrets: Pick<Steward, "readLog">;
   backups: Pick<BackupSteward, "readBackups" | "readBackupAudit">;
   /** The deployments and the audit the dashboard keeps, for a member's Tokens page: those of their own tokens. */
@@ -269,11 +273,16 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
     async team(req) {
       const open = await member(req, false);
       if (open instanceof Response) return open;
-      const received = await reach(() => steward.act("POST", "/tokens/person/list", { session: open.token }), null, [open.token]);
+      // The journal is read beside the list, and kept to the ids the list names
+      // once both are in: never a line of another person's token.
+      const [received, entries] = await Promise.all([
+        reach(() => steward.act("POST", "/tokens/person/list", { session: open.token }), null, [open.token]),
+        readJournal(dependencies.secrets),
+      ]);
       const until = tokens.read(open.session.hash)?.expiresAt ?? null;
       const self = { email: open.identity.email, roles: open.identity.roles, create: open.identity.create };
       if (received.kind === "received" && received.status === 404 && received.body?.message === "no such route") {
-        const page: TeamPageResponse = { available: false, reason: TOKENS_OUTDATED, member: self, tokens: [], until, deployments: [], audit: [] };
+        const page: TeamPageResponse = { available: false, reason: TOKENS_OUTDATED, member: self, tokens: [], until, deployments: [], audit: [], work: [] };
         return json(page);
       }
       if (received.kind !== "received" || received.status !== 200) return answer(open, received);
@@ -291,6 +300,7 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
         .listAudit(500, "deploy.")
         .filter((entry) => entry.actor.startsWith("token:") && ids.has(entry.actor.slice("token:".length)))
         .slice(0, 50);
+      const work = tokenWork(entries, (id) => ids.has(id));
       const page: TeamPageResponse = {
         available: true,
         reason: null,
@@ -299,6 +309,7 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
         until,
         deployments,
         audit,
+        work,
       };
       return json(page);
     },

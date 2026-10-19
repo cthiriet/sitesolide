@@ -300,7 +300,7 @@ beforeAll(async () => {
         return arguments_[0] === "is-active" ? { code: 3, output: "inactive\n" } : { code: 0, output: "" };
       },
     },
-    { zone: ZONE, isUnlocked: steward.isUnlocked, uidRoot: null, members: steward.memberAuthority!, access: steward.accessForToken },
+    { zone: ZONE, isUnlocked: steward.isUnlocked, uidRoot: null, members: steward.memberAuthority!, access: steward.accessForToken, secrets: steward.secretsForToken },
   );
   const socket = join(root, "steward.sock");
   socketServer = Bun.serve({ unix: socket, fetch: (req) => (isControlPath(new URL(req.url).pathname) ? control(req) : steward(req)) });
@@ -653,6 +653,43 @@ describe("a person's own tokens, end to end", () => {
     const all = (await (await control(new Request("http://steward/team/tokens"))).json()) as { tokens: { member: string | null; revokedAt: number | null }[] };
     expect(all.tokens.filter((one) => one.member === carol).every((one) => one.revokedAt !== null)).toBe(true);
     expect(installs).toEqual([]);
+  });
+
+  test("a token with Manage secrets, through the dashboard's own routes: names alone, a change and its restart, the person's role judged by the steward once lowered", async () => {
+    const erin = "erin@acme.test";
+    const value = "a-value-set-by-a-token-7d1e";
+    await give(erin, { blog: "developer" });
+    const { browser } = await signInAs(erin);
+    await unlockAs(browser, erin, "/team/");
+    const created = await browser.api("/api/tokens", { method: "POST", body: { label: "agent", expiresAt: null, scope: { slugs: ["blog"], create: false, outbound: false, domain: false, public: false, secrets: true } } });
+    expect(created.status).toBe(201);
+    const { token, secret } = (await created.json()) as { token: { id: string }; secret: string };
+
+    const listed = await api("/api/v1/projects/blog/secrets", secret);
+    expect(listed.status).toBe(200);
+    const text = await listed.text();
+    expect(JSON.parse(text)).toMatchObject({ secrets: { slug: "blog", files: [{ name: "blog.env", variables: expect.arrayContaining(["API_KEY"]), readable: false, writable: true }] } });
+    expect(text).not.toContain(SECRET_VALUE);
+
+    const before = restarts.length;
+    const changed = await api("/api/v1/projects/blog/secrets/blog.env", secret, { method: "PATCH", body: { set: { TOKEN_KEY: value }, restart: true } });
+    const answer = await changed.text();
+    expect(changed.status).toBe(200);
+    expect(JSON.parse(answer)).toMatchObject({ set: ["TOKEN_KEY"], restart: { verdict: { kind: "active" } } });
+    expect(answer).not.toContain(value);
+    expect(readFileSync(join(root, "secrets", "blog.env"), "utf8")).toContain(`TOKEN_KEY=${value}`);
+    expect(restarts.slice(before)).toEqual(["blog"]);
+
+    // Lowered to Viewer: the steward's refusal naming the role, never an unknown project.
+    await give(erin, { blog: "viewer" });
+    const refused = await api("/api/v1/projects/blog/secrets/blog.env", secret, { method: "PATCH", body: { remove: ["TOKEN_KEY"] } });
+    expect(refused.status).toBe(403);
+    expect(((await refused.json()) as { message: string }).message).toBe(`${erin} is a Viewer on blog: changing its secrets takes a Developer or an Admin`);
+    const journal = readFileSync(join(root, "state", "journal.jsonl"), "utf8");
+    expect(journal).toContain(`"actor":"token:${token.id}"`);
+    expect(journal).not.toContain(value);
+    expect(readFileSync(join(root, "secrets", "blog.env"), "utf8")).toContain("TOKEN_KEY=");
+    await takeOff(erin);
   });
 
   test("a Viewer everywhere has no Tokens page of their own to mint from", async () => {

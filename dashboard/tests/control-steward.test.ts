@@ -74,7 +74,7 @@ function call(s: Setup, method: string, path: string, body?: unknown): Promise<R
   );
 }
 
-const SCOPE = { slugs: ["cms"], create: true, outbound: false, domain: false, public: false };
+const SCOPE = { slugs: ["cms"], create: true, outbound: false, domain: false, public: false, secrets: false };
 
 async function newToken(s: Setup, scope = SCOPE): Promise<{ token: TokenView; secret: string }> {
   const response = await call(s, "POST", "/tokens/create", { token: UNLOCK, label: "Ada", holder: "owner", expiresAt: null, scope });
@@ -198,7 +198,7 @@ describe("starting the installer", () => {
     const { secret } = await newToken(s);
     expect((await call(s, "POST", "/control/deploy", { bearer: secret, deployment: DEPLOYMENT, slug: "shop", manifest: JSON.stringify({ slug: "cms" }) })).status).toBe(400);
     expect((await call(s, "POST", "/control/deploy", { bearer: secret, deployment: "../x", slug: "shop", manifest })).status).toBe(400);
-    const none = await newToken(s, { slugs: [], create: false, outbound: false, domain: false, public: false });
+    const none = await newToken(s, { slugs: [], create: false, outbound: false, domain: false, public: false, secrets: false });
     expect((await call(s, "POST", "/control/deploy", { bearer: none.secret, deployment: DEPLOYMENT, slug: "shop", manifest })).status).toBe(403);
     expect(s.calls.filter((line) => line.startsWith("start"))).toEqual([]);
   });

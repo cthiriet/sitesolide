@@ -36,14 +36,14 @@ import { createMemberRelay } from "./src/people/relay";
 import { createPortalAuditRoute, localPortalAudit } from "./src/portal-audit";
 import { localAccessSteward } from "./src/access/client";
 import { createAccessRoutes } from "./src/access/routes";
-import { DEFAULT_TIMEOUTS, localSteward } from "./src/secrets/client";
+import { localSteward } from "./src/secrets/client";
 import { createTokens } from "./src/secrets/tokens";
 import { createSecretsRoutes } from "./src/secrets/routes";
 import { localConnectorsSteward, localEgress } from "./src/connectors/client";
 import { createConnectorsRoutes } from "./src/connectors/relay";
 import { join } from "node:path";
 import { openDatabase } from "./src/database";
-import { createApiRoutes, failure } from "./src/control/api";
+import { createApiRoutes, failure, secretsRoutes, STEWARD_IDLE_S } from "./src/control/api";
 import { localControlSteward } from "./src/control/client";
 import { createLimiter } from "./src/control/limiter";
 import { SPOOL_NAME } from "./src/control/protocol";
@@ -132,7 +132,16 @@ const api = createApiRoutes({
   publicUrl: PUBLIC_URL,
   zone: ZONE,
 });
-const team = createTeamRoutes({ session: ownerReader, publicUrl: PUBLIC_URL, steward: controlSteward, tokens: unlockTokens, store: controlStore });
+// Token activity reads the steward's journal too: a token's secret changes and
+// restarts are written there, never in dashboard.db.
+const team = createTeamRoutes({
+  session: ownerReader,
+  publicUrl: PUBLIC_URL,
+  steward: controlSteward,
+  tokens: unlockTokens,
+  store: controlStore,
+  journal: localSteward(STEWARD_SOCKET),
+});
 setInterval(() => void tracker.tick(), 3_000);
 
 // The people who sign in: with the portal's provider, the steward opens their
@@ -217,7 +226,7 @@ const audit = createAuditRoutes({
  * therefore everything waiting behind, unlocking included. Bun caps this
  * setting at 255 seconds.
  */
-const LONG_IDLE_S = Math.min(255, Math.ceil(DEFAULT_TIMEOUTS.longMs / 1000) + 5);
+const LONG_IDLE_S = STEWARD_IDLE_S;
 
 function long(
   req: Request,
@@ -365,6 +374,10 @@ const server = Bun.serve({
       PUT: (req) => api.putProjectAccess(req, req.params.slug),
       DELETE: (req) => api.removeProjectAccess(req, req.params.slug),
     },
+    // A token's secrets and restart. A change waits its turn under the
+    // steward's lock, and a restart is observed for eight seconds: the long
+    // delay, as for the Secrets page, twice for a change with its restart.
+    ...secretsRoutes(api),
     "/api/v1/*": () => failure("not-found", "no such route: see docs/access.md for the control API's routes"),
     // The backups go through the steward too: it reads them as root, and starts
     // a restore under the same lock and the same unlocking as the secrets.

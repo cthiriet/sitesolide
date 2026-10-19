@@ -16,7 +16,8 @@ neither is root:
   sends a project to the dashboard over HTTPS. The machine installs it the way
   it installs the owner's, and the holder never holds root. The same works for
   an agent in a sandbox with no SSH key: a token in its environment is all it
-  needs.
+  needs. A token minted with *Manage secrets* also sets the variables of its
+  projects, never reading one back.
 
 In the dashboard, each of them has one place: a site's *Access* section for
 who may open that site and who may do what on it, the *People* page for
@@ -30,7 +31,7 @@ tokens.
 | Is | someone, by email, with a role on each of their projects | a key, `sst_...`, held by a person or an agent |
 | Signs in | to a restricted site, with their company account or their password access; to the dashboard, with their company account, from Viewer up or with the right to create projects | nowhere: the CLI and the control API present it |
 | Sees | in the dashboard, the projects they are Viewer, Developer or Admin of | the projects it may deploy, through `sitesolide status` |
-| Does | by role, see below: from opening a site to looking after all of the project | deploys, reads logs, gives Can open on what it deploys |
+| Does | by role, see below: from opening a site to looking after all of the project | deploys, reads logs, restarts the service, gives Can open on what it deploys; with *Manage secrets*, lists variable names and sets and removes variables, never reading one back |
 | Lasts | until they are removed; half a day per sign-in to the dashboard, an unlock ten minutes; password access until its expiry | until it expires or is revoked; a person's own, also until that person no longer signs in to the dashboard |
 | In the audit | their email | `token:<id>`, and the person's email for their own |
 
@@ -148,7 +149,9 @@ another person's. Restricting a site, giving Can open to a company account or
 to one of the company's listed domains, removing someone, lowering them and
 restarting a service never wait for an unlock. A whole domain does while the
 company's domains are not listed on the server, `OIDC_ALLOWED_DOMAINS` empty:
-anyone the provider vouches for would then come in.
+anyone the provider vouches for would then come in. A token minted with
+*Manage secrets* sets variables without one: minting it took the unlock, and
+that permission is the opt-in, see [Secrets with a token](#secrets-with-a-token).
 
 ## Your own tokens
 
@@ -163,6 +166,8 @@ stronger than its person**:
 | creating projects | the create right the owner granted them; each project it creates makes them its Admin |
 | deploying public sites, declaring a domain, outbound network | Admin of every project the token reaches; with creating alone, what it creates is theirs to administer |
 | giving Can open, `sitesolide share` | Admin of that project |
+| managing secrets, `sitesolide secrets` | Developer or Admin there |
+| restarting the service, `sitesolide restart` | Developer or Admin there, as for deploying it |
 
 A Viewer everywhere, without the create right, mints nothing, and sees no
 *Tokens* page.
@@ -170,18 +175,21 @@ A Viewer everywhere, without the create right, mints nothing, and sees no
 - **Minted under their own unlock**, the forced sign-in at the provider that
   every secret write asks for: *Unlock to create*, then *New token*. The
   dialog offers the projects where they are Developer or Admin, creating
-  projects only with the right, and the options only for projects they
-  administer. The token carries their email, whatever is sent, and is shown
+  projects only with the right, *Manage secrets*, and the options only for
+  projects they administer. The token carries their email, whatever is sent, and is shown
   once, as the owner's are. Its row on *Tokens* names each project with
   their role there today, "calendar (Admin)", or "cms (paused: Viewer now)"
-  where it no longer deploys.
+  where it no longer deploys, and *Can manage secrets* when it may, "Can
+  manage secrets (paused: no project to deploy now)" once it reaches none.
 - **Narrowed live.** The server reads the access registry at every use of the
   token, not only when it was minted: a role lowered to Viewer or Can open
   stops that project's deployments at the next request, the create right taken
   back stops new projects, and the options hold only while the person is Admin
   of every project the token reaches; one lowered turns them off for the whole
-  token, and the person mints another for what they still administer. The
-  installer reads the registry once more when it starts.
+  token, and the person mints another for what they still administer.
+  *Manage secrets* holds project by project, wherever they are Developer or
+  Admin at that request. The installer reads the registry once more when it
+  starts.
 - **An existing project keeps its general access.** A deployed site's general
   access, Public, Restricted or Anyone with the code, is chosen by its Admin or
   the owner, never by a deployment: a Developer's token deploys a public project as it stands, and
@@ -202,7 +210,9 @@ A Viewer everywhere, without the create right, mints nothing, and sees no
 Everything is audited under the person: the server journals `token.create`
 and `token.revoke` under their email, and `project.create` for a project
 their token created; the dashboard's deployments, under `token:<id>`, name the
-person in their detail.
+person in their detail, and so do the secrets their token set or removed and
+the restarts it made, which the steward journals under `token:<id>` with the
+person beside it. The *Tokens* page's *Token activity* lists both.
 
 ## What you get from the owner
 
@@ -214,7 +224,7 @@ person in their detail.
 
 A token the owner creates deploys only what they allowed when creating it: the
 existing projects they granted, and, if they allowed it, new projects, which
-are then yours. Everything is **private by default**: a project you create
+are then yours. It sets secrets only if they ticked *Manage secrets*. Everything is **private by default**: a project you create
 is Restricted, unless your token may deploy public sites.
 
 ## Sign in
@@ -233,8 +243,9 @@ belongs to and what it may do. It keeps the token in
 from standard input instead of a prompt.
 
 A workstation with no `server` in its configuration uses the dashboard for
-`deploy`, `status`, `logs` and `share`. Every other command (`lock`, `domain`,
-`remove`, `run`, `people`) needs the owner's SSH access and says so.
+`deploy`, `status`, `logs`, `share`, `secrets` and `restart`. Every other
+command (`lock`, `domain`, `remove`, `run`, `people`) needs the owner's SSH
+access and says so.
 
 ### In an agent's sandbox
 
@@ -319,9 +330,11 @@ no space or quote, secret names that are plain file names. See
 [docs/manifest.md](manifest.md).
 
 **Secrets** live on the machine and nowhere else. A project that declares
-`<slug>.env` deploys only once the owner, or the project's Developer or Admin,
-has created the file in the dashboard's *Secrets* section; the deployment says
-so and stops before the restart.
+`<slug>.env` deploys only once the file exists: the owner, or the project's
+Developer or Admin, creates it in the dashboard's *Secrets* section, or a token
+that may manage secrets with `sitesolide secrets set`, see [Secrets with a
+token](#secrets-with-a-token). Until then the deployment says so and stops
+before the restart.
 
 **`install` runs on the machine** as the project's account, with the network
 but not the loopback, a throwaway `HOME`, and fifteen minutes at most. The
@@ -343,6 +356,164 @@ is refused, and nothing is sent: a dry run reads the machine over the owner's
 SSH access, which a token does not carry. Review `sitesolide.json` instead; the
 machine judges it before anything is built or uploaded. Every other option a
 command does not take with a token is refused the same way.
+
+## Secrets with a token
+
+A token minted with *Manage secrets* lists the secret files of the projects it
+reaches, with their variable names, and sets and removes the variables of
+`<slug>.env`. **It never reads a value back**: no route returns one, nor a
+file's size, nor its previous version, whoever holds the token, an Admin's
+own or the owner's included. From the project's folder:
+
+```bash
+sitesolide secrets                         # its files and variable names
+sitesolide secrets set API_KEY             # the value typed at a prompt that does not echo it
+sitesolide secrets set API_KEY --stdin < key.txt
+sitesolide secrets remove OLD_KEY LEGACY_URL --restart
+sitesolide restart                         # restart, then say whether the service holds
+```
+
+```console
+$ sitesolide secrets
+-> secrets of notes, through https://dashboard.example.com
+   service: active, running
+   notes.env: API_KEY, SMTP_URL
+      restart pending: changed since the service started, sitesolide restart applies it
+   notes-signing.key: a file read whole, set from the dashboard's Secrets section
+   a value is never read back: sitesolide secrets set NAME writes one
+```
+
+**The value never goes on the command line**, where the shell's history and
+every user's process list would keep it. `secrets set NAME` asks for it at a
+prompt that does not echo it, or, with `--stdin`, reads all of standard input,
+one trailing line break dropped; `--stdin` is refused while standard input is
+a terminal, where the value would show as it is typed (`stdin-is-terminal`):
+pipe it, or drop `--stdin` to be prompted. At the prompt, Backspace, Ctrl-U
+and Ctrl-W edit the value; an escape sequence, an arrow key among them, any
+other control key, or a paste of several lines is refused, what remains of
+the paste drained, and nothing is sent. `NAME=value`, or anything after the
+name, is refused before a request leaves, and so is a name that looks like a
+value, over 64 characters or starting like a service's key (`sk_`, `ghp_`,
+`AKIA` and their kind, `looks-like-value`); neither refusal quotes it, and a
+value typed there may be in the shell's history, to be changed at its
+source. The value is checked before it leaves by the steward's own rules,
+one line, no null byte, valid Unicode, 8 KiB at most, so that a refused one
+was never sent; an empty one is refused too: an unset variable piped by
+mistake would empty the secret in service. Under `--json` nothing prompts,
+and `set` needs `--stdin`. A change sent whose answer never came, the
+connection cut, is `unconfirmed`: it may be written; `sitesolide secrets
+--json` lists the names, and the same command run once more writes it again,
+harmlessly.
+
+| A token with *Manage secrets* may | It may not |
+|---|---|
+| list its projects' secret files, their variable names, and whether a restart is pending | read a value, a file's size or its previous version |
+| set, replace and remove the variables of `<slug>.env`, when the deployed `sitesolide.json` declares it | touch any other file: another `.env`, a file read whole, a file of the platform's projects; those are the dashboard's *Secrets* section |
+| create `<slug>.env` when the deployed manifest declares it and it is missing | create or change a `<slug>.env` the deployed manifest does not declare |
+| restart the service, with `--restart` or `sitesolide restart` | change a password hash, `PASSWORD_HASH`, which the owner alone changes |
+| | set a variable the deployment or the unit already sets, `PORT` among them, or one that changes how the runtime behaves, `LD_PRELOAD` or `HTTPS_PROXY`: refused to anyone, from the dashboard too |
+
+- **One change, one write, all or nothing.** Every name and value is judged
+  before anything is written; the file keeps its previous version, which the
+  owner or an Admin restores from *Secrets*. Fifty names a change at most; a
+  value on one line, with no null byte, valid Unicode, 8 KiB at most; the file
+  256 KiB at most. A change that would grow the file past that is refused
+  whole, which tells whoever holds the token, roughly, how large the file
+  already is: the one thing it learns of what it cannot read.
+- **A set never says whether the value changed**: it is always written and
+  journaled. A name to remove that the file does not carry comes back in
+  `absent`, nothing done for it.
+- **Listing needs *Manage secrets* too**: a token without it is refused, and
+  the refusal is journaled, as "Tried to list the secrets", never as a value
+  read.
+- **Restarting** takes no permission of its own: any token that deploys the
+  project restarts it, a person's own while they are Developer or Admin there.
+  It is refused `busy` while a deployment of the project runs, which restarts
+  it at its end, asked again once the restart's turn has come, and
+  `not-found` for a static site. A token restarts one service at a time: a
+  second restart while its first runs is `busy`. Restarts of one project wait
+  for each other, never for anyone's change of secrets. The service is
+  watched for eight seconds: `active`, `looping` or `failure`, and
+  `sitesolide restart` exits non-zero unless it holds.
+- **Bounds, per token and per hour**: 120 for changes, each variable name set
+  or removed costing one, a request one at least, `{}` included, and a file it
+  created one more; 30 restarts; and 60 refused requests, counted before the
+  refusal is journaled. Past any of them, `too-many-attempts` and the seconds
+  to wait, and a refusal past its bound is journaled no more. One token writes
+  210 lines of the steward's journal an hour at most, and the journal keeps
+  its latest 500 lines at least: a stolen token cannot push what it did in
+  the last hour out of it by itself.
+- **No unlock.** A person's change in the dashboard asks for their unlock; a
+  token's does not. Minting it took the unlock, and *Manage secrets* is what its
+  maker opted into: whoever holds the token sets values until it expires or is
+  revoked, within the bounds above, every change in sight on *Token activity*.
+- **An owner's token without the public permission** changes the secrets of a
+  project only when it could deploy that project as the machine carries it,
+  no path exempted from the portal, no domain or outbound network it could
+  not declare itself, and the project is Restricted, the portal in place in
+  front of it: a stolen one changes nothing of a project in the open, nor of
+  one it could not deploy. What the people given access to a restricted
+  project reach, the values it changes still drive. It still lists and
+  restarts. A person's own token follows their role instead, as for a
+  deployment.
+- **A person's own token** needs them Developer or Admin of the project at each
+  request: lowered to Viewer, it is refused, the message naming their role. A
+  token revoked, or its person lowered, while the change waited its turn
+  writes nothing.
+
+Every change is journaled by the steward, one line per variable, its name and
+never its value, under `token:<id>` and, for a person's own token, their
+email: the project's *Activity* reads "Set API_KEY" by "alice@example.com
+(token)", and the *Tokens* page's *Token activity* lists it beside the token's
+deployments. So is every refusal the steward decides, within the bound above:
+a person lowered, a token without *Manage secrets*, a file other than
+`<slug>.env`. The dashboard refuses a malformed body alone before asking it.
+*Token activity* reads the journal's latest 250 lines: on a busy machine they
+cover a short while, and an older change is on the project's *Activity*
+until the journal drops it.
+
+**For an agent**: `sitesolide secrets set NAME --stdin` is for the user to run,
+or for a value the agent generates itself and pipes, a random session key; never
+a value read from the conversation, which the conversation then keeps. There is
+no MCP tool for it.
+
+### Over HTTPS, without the CLI
+
+The value stays out of every command line, and out of the shell's history:
+`IFS= read -rs` takes it without echo, its spaces and backslashes kept as
+typed, `printf`, a shell builtin, hands it to `jq` on its standard input, and
+`curl` sends the body from its own.
+
+```bash
+API=https://dashboard.<zone>
+AUTH="Authorization: Bearer $SITESOLIDE_TOKEN"
+
+# the files and variable names, never a value
+curl -s -H "$AUTH" $API/api/v1/projects/<slug>/secrets
+
+# one variable set, then the service restarted
+IFS= read -rs VALUE
+printf '%s' "$VALUE" | jq -Rs '{set: {API_KEY: .}, restart: true}' |
+  curl -s -H "$AUTH" -X PATCH -H 'Content-Type: application/json' --data-binary @- \
+    $API/api/v1/projects/<slug>/secrets/<slug>.env
+unset VALUE
+# -> 200 { "file": { "name": "<slug>.env", "variables": ["API_KEY", ...], "writable": true, ... },
+#          "created": false, "set": ["API_KEY"], "removed": [], "absent": [],
+#          "restart": { "verdict": { "kind": "active", "state": "active", "subState": "running", "restarts": 0 } } }
+
+# names alone carry no secret: they go on the line
+curl -s -H "$AUTH" -X PATCH -H 'Content-Type: application/json' \
+  -d '{"remove": ["OLD_KEY"]}' $API/api/v1/projects/<slug>/secrets/<slug>.env
+
+curl -s -H "$AUTH" -X POST $API/api/v1/projects/<slug>/restart
+```
+
+`-H "$AUTH"` puts the token among curl's arguments, as everywhere on this page;
+on a machine others share, `-H @file` reads the header from a file instead.
+When a change asks for a restart and the restart is refused, `busy` or past
+its bound, the write stands with its own status, and `restart` says why. A
+change with a restart may take two of the steward's long waits, the write's
+then the restart's: the dashboard keeps the connection open for both.
 
 ## Giving access to what you deployed
 
@@ -435,20 +606,24 @@ curl -s -H "$AUTH" -X PUT -H 'Content-Type: application/json' \
 | `GET /api/v1/projects/<slug>/access` | `{ access }`: `slug`, `host`, `url`, `general` (`access`: `public`, `restricted` or `code`, `modifiable`, `reason`; null for a project not deployed), `entries` (each `who`, `kind`: `person`, `domain` or `password`, `role`, `by`, `createdAt`, `updatedAt`, and `password`, `{ expiresAt, expired }` for password access, null otherwise), and `signIn` (`configured`, and `allowedDomains`, the only domains your token may give) |
 | `PUT /api/v1/projects/<slug>/access` `{ who, role }` | gives `who`, an email or a `@domain`, Can open: `role` is `visitor`, its default, and any other is refused; `{ entry, change, access }`, `change` being `add` (201) or `none` for someone who already had it |
 | `DELETE /api/v1/projects/<slug>/access` `{ who }` | takes a Can open entry off; `{ entry, change: "remove", access }` |
+| `GET /api/v1/projects/<slug>/secrets` | needs *Manage secrets*. `{ secrets }`: `slug`, `service` (`unit`, `state`, `subState`, `startedAt`; null without one), and `files`, each `name`, `kind` (`variables` or `content`), `state` (`managed`, `absent` or `unmanaged`, then with a `reason`), `expected` (its owner and mode), `variables` and `passwords` (names), `modifiedAt`, `restartPending`, and `writable`, true for a declared `<slug>.env` alone; `readable` is false, `bytes` null and `previous` false, whatever the token |
+| `PATCH /api/v1/projects/<slug>/secrets/<slug>.env` `{ set, remove, restart }` | needs *Manage secrets*. `set`, an object of names and values, `remove`, a list of names, `restart`, true to restart once written: each optional, `{}` alone creates the file; 50 names at most, none in both, 512 KiB at most. One write, all or nothing: 200, or 201 when it created the file, `{ file, created, set, removed, absent, restart }`, `restart` being null, `{ verdict }`, or `{ error, message, wait }` for a restart refused, `wait` there for `too-many-attempts` alone, the write's status kept |
+| `POST /api/v1/projects/<slug>/restart` | any token that deploys the project. Restarts its service and watches it eight seconds: 200 `{ verdict: { kind, state, subState, restarts } }`, `kind` being `active`, `looping` or `failure`, 200 even when it did not come back |
 
 | Code | Status | What to do |
 |---|---|---|
 | `unauthenticated` | 401 | the token is missing, unknown, expired or revoked, or its person no longer signs in to the dashboard: ask the owner, or mint another if it is your own |
-| `too-many-attempts` | 429 | too many wrong tokens from your address: wait `wait` seconds; or, creating a project, your changes of access for this hour used up: try again later |
-| `out-of-scope` | 403 | the token may not do this: outside its scope, its person's role no longer allows it, or, for access, a role above Can open, someone who would need password access, a domain outside the company's, an entry above Can open to take off; the message says whom to ask |
+| `too-many-attempts` | 429 | too many wrong tokens from your address: wait `wait` seconds; or, creating a project, your changes of access for this hour used up: try again later; or the token's hour of secrets, restarts or refusals used up, 120 changes, 30 restarts and 60 refused requests: wait `wait` seconds |
+| `out-of-scope` | 403 | the token may not do this: outside its scope, its person's role no longer allows it, or, for access, a role above Can open, someone who would need password access, a domain outside the company's, an entry above Can open to take off; for secrets, a token without *Manage secrets*, a file other than `<slug>.env`, a `<slug>.env` the deployed manifest does not declare, `PASSWORD_HASH`, or, with an owner's token that does not deploy public sites, a project not Restricted on the machine or one it could not deploy as it stands; the message says whom to ask |
 | `reserved` | 403 | the slug belongs to the platform, or, for a new project, starts with the name of one of its projects and a dash (`dashboard-*`, `portal-*`), which names the platform's own files: pick another |
 | `invalid-manifest` | 422 | fix every point of `details` |
-| `invalid` | 400 | the request itself is malformed: `who` neither an email nor a `@domain`, a domain given more than Can open, or a domain while signing in with a company account is not set up |
-| `not-found` | 404 | no such deployment or project for this token, a project not deployed yet, or, taking someone off, someone with no access |
-| `busy` | 409 | a deployment of this project is already running, or, when the archive arrives, three deployments already run on the machine: send it again in a minute, the deployment waits for it until its 15 minutes are up |
-| `too-large` | 413 | exclude dependencies and caches |
+| `invalid` | 400 | the request itself is malformed: `who` neither an email nor a `@domain`, a domain given more than Can open, or a domain while signing in with a company account is not set up; for secrets, an unexpected field, a name that is not a variable's or one the machine keeps for itself, a value over one line, with a null byte, not valid Unicode or over 8 KiB, a name both set and removed, over 50 names, or a file that would pass 256 KiB; the message names a variable only when it has a variable name's shape, and never quotes a value |
+| `not-found` | 404 | no such deployment or project for this token, a project not deployed yet, or, taking someone off, someone with no access; a static site, which has no service to restart; a `<slug>.env` missing when the change only removes |
+| `busy` | 409 | a deployment of this project is already running, or, when the archive arrives, three deployments already run on the machine: send it again in a minute, the deployment waits for it until its 15 minutes are up; for secrets and restarts, a deployment of the project running, which restarts it at its end, the token's previous restart still under way, or the machine busy with other changes: ask again in a moment |
+| `unmanaged` | 409 | the secret file is there, in a form the dashboard does not rewrite, written by hand: nothing was changed; the owner fixes it from *Secrets* |
+| `too-large` | 413 | exclude dependencies and caches; a change of secrets over 512 KiB: split it |
 | `expired` | 410 | the archive arrived after 15 minutes: start again |
-| `not-available` | 503 | the machine does not carry the control API yet, or predates the access registry: tell the owner, who runs `sitesolide upgrade`; or, creating a project, the access log is full: ask the owner |
+| `not-available` | 503 | the machine does not carry the control API yet, or predates the access registry or secrets by token: tell the owner, who runs `sitesolide upgrade`; or, creating a project, the access log is full: ask the owner |
 | `failure` | 500, 502 | something broke on the machine, an access registry that does not read among others: the message says where the owner should look |
 
 `locked` never comes back from this API: it is the dashboard's answer to a
@@ -484,6 +659,13 @@ worker that falls within ten seconds of its restart, as `service-failed`.
   them until older changes age out, while removing and lowering someone still
   work: ask the owner, who still changes access from their workstation with
   `sitesolide share` and `sitesolide people`.
+- **`out-of-scope` on `secrets`**: the token was minted without *Manage
+  secrets*, the file is not `<slug>.env`, or the deployed `sitesolide.json` does
+  not declare it: add `"secrets": ["<slug>.env"]`, deploy, then set. Mint a
+  token with the permission, or ask the owner; never try another token.
+- **`unmanaged` on `secrets set`**: someone wrote the file by hand, `export`
+  lines or quotes the dashboard does not read. Nothing was changed: the owner
+  rewrites it from *Secrets*.
 - **A warning that the portal still decides from its own tables**: the machine
   is halfway through an upgrade. What you give is kept, and opens the site
   once the owner has run `sitesolide upgrade`, which deploys the portal.

@@ -26,8 +26,9 @@
  * and docs/agents.md.
  *
  * A workstation with no `server`, but a dashboard address and a token, is a
- * team member's: `deploy`, `status`, `logs` and `share` then go through the
- * dashboard's control API, and nothing below runs. See bin/cli/remote.ts.
+ * team member's: `deploy`, `status`, `logs`, `share`, `secrets` and `restart`
+ * then go through the dashboard's control API, and nothing below runs. See
+ * bin/cli/remote.ts.
  *
  * The interface is in English, options and messages alike: a CLI is a technical
  * identifier, like the manifest keys.
@@ -2277,6 +2278,20 @@ function pointToDashboard(config: Config): never {
 }
 
 /**
+ * `sitesolide restart` over SSH points to the dashboard too: its *Restart
+ * service* restarts under the steward's lock and says whether the service
+ * holds, which a `systemctl restart` typed here would not. Only a token's
+ * workstation restarts from the CLI, through the dashboard's API, the same
+ * steward answering.
+ */
+function restartFromDashboard(config: Config): never {
+  die(`a service is restarted from the dashboard: Restart service, in the project's Overview at ${dashboardAddress(config.zone)}`, [
+    "the steward restarts it, then watches it for a few seconds and says whether it holds",
+    "a change of secrets waits for that restart: the Secrets section offers it too",
+  ]);
+}
+
+/**
  * Loads a secret from the workstation's vault and runs the command. The file is
  * sourced by bash, never read by this process: nothing of its contents goes
  * through the CLI, is shown or is logged.
@@ -3156,7 +3171,7 @@ function usage(zone: string | null): string {
     "  sitesolide run -- <command>     load the secret from the vault and run",
     "  sitesolide mcp                  serve these commands to an agent, over MCP on stdio",
     "  sitesolide login --url <https://dashboard.zone>",
-    "                                  a person with a token: deploy without SSH",
+    "                                  a person with a token: deploy, set secrets and restart without SSH",
     "     --token-stdin                read the token from standard input",
     "  sitesolide machine create|list|destroy --provider hetzner",
     "                                  a VM ordered by API, before setup: sitesolide machine lists the options",
@@ -3368,6 +3383,8 @@ if (import.meta.main) {
       process.exit(await people(arguments_, dashboardAddress(config.zone), sshPeople((remote, input) => executor.execute(config, remote, input)), remoteOutput));
     case "secrets":
       pointToDashboard(config);
+    case "restart":
+      restartFromDashboard(config);
     case "lock": {
       const which = arguments_.includes("--status")
         ? "state"

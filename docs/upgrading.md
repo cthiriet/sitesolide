@@ -117,6 +117,63 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## Secrets with a token
+
+A token may now manage secrets. Minted with *Manage secrets*, it lists its
+projects' secret files and variable names, and sets and removes the variables
+of `<slug>.env`, never reading one back; any token that deploys a project
+also restarts it. From a workstation with a token, `sitesolide secrets`,
+`secrets set`, `secrets remove` and `sitesolide restart` do it, see
+[access.md](access.md#secrets-with-a-token).
+
+**What `sitesolide upgrade` brings**, in its usual order: the steward, which
+judges the new routes and keeps each token's hourly bounds; the dashboard,
+with the routes, *Manage secrets* in the *New token* dialog, and *Token
+activity* reading the steward's journal; the installer, whose refusal of a
+missing secret now names `sitesolide secrets set`. The backups, the egress
+proxy, the collector, the gatekeeper, the shared service, the portal, the
+monitor, the Caddyfile and Caddy's drop-in do not move. No file on the
+machine changes form: `team.json` keeps its version, and a token minted
+before reads as without the permission.
+
+**A dashboard ahead of its steward**, deployed alone or with the steward's
+step failed, answers the new routes `not-available`, saying to run
+`sitesolide upgrade`, and refuses to mint a token with *Manage secrets*, the
+dialog saying the server's steward predates the permission. Running upgrade
+to the end mends both.
+
+**What changes for you.** One thing right away: **every token already minted
+restarts the services of the projects it deploys**, a person's own while they
+are Developer or Admin there, 30 times an hour at most, each restart in the
+journal under the token. No permission is ticked for it: a token that deploys
+code already restarts the service at each deployment. Revoke a token whose
+holder should not restart. Secrets wait for someone to mint a token with
+*Manage secrets*: every token already minted, yours and everyone's, lists and
+manages none. Then:
+
+- whoever holds that token sets variables without an unlock: ticking the box
+  is that decision. Mint it for the projects that need it, with an expiry;
+- an owner's token that does not deploy public sites changes the secrets of
+  the Restricted projects it could deploy as they stand alone;
+- the *Tokens* page's *Token activity* lists, beside deployments, the secrets
+  a token set or removed and the restarts it made, and so does each project's
+  *Activity*;
+- over your SSH, `sitesolide secrets` and `sitesolide restart` point to the
+  dashboard, as `secrets` did.
+
+**Whoever works with a token installs the new CLI** too, from the same
+`install.sh` as step 1 above: the commands are the CLI's, and the binary
+they have predates them. A previous CLI refuses them before anything is
+sent: `sitesolide secrets` as a command that needs the owner's SSH, and
+`sitesolide restart` as a command it does not know, a usage error. An agent
+without the CLI calls the routes over HTTPS
+([access.md](access.md#over-https-without-the-cli)).
+
+**Going back.** `sitesolide upgrade` with the previous binary. The previous
+steward reads `team.json` as it stands, the new key ignored, and knows no
+secrets route, which the dashboard answers `not-available`. The values tokens
+set stay in the files, and their lines in the journal.
+
 ## A token's project reads its own secret files alone
 
 The installer now refuses, before anything is written, a deployment by token

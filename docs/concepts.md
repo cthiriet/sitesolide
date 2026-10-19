@@ -167,6 +167,13 @@ never wait for either: closing someone out must not wait for a password. A
 whole domain waits while the company's domains are not listed, since anyone
 the provider vouches for would then come in.
 The steward never hands a Developer a value, whatever the dashboard relays.
+**A token minted with *Manage secrets* writes without an unlock**, and that is
+the opt-in: minting it took its maker's unlock, and ticking the permission is
+the decision to let whoever holds the token set the variables of `<slug>.env`
+until it expires or is revoked. It never reads a value back, whoever made it,
+and the steward bounds it per hour, 120 changes, 30 restarts and 60 refused
+requests, every change and every refusal within the bound journaled under
+the token.
 
 **A person's own tokens are never stronger than the person.** A Developer
 mints a token that deploys their project, an Admin one that may also deploy
@@ -176,8 +183,13 @@ Admin of what it creates. The steward reads the registry at every use of such
 a token, and again when the installer starts: a role lowered to Viewer stops
 that project's deployments at the next request, and someone who no longer
 signs in to the dashboard takes their tokens with them. A token gives Can open
-alone, to the company's people and domains, never password access. See
-[dashboard/README.md](../dashboard/README.md#a-persons-own-tokens).
+alone, to the company's people and domains, never password access. A
+Developer's token may also manage secrets, *Manage secrets* in the dialog: it
+lists variable names and sets and removes the variables of `<slug>.env`, on
+each project while they are Developer or Admin there, and any token that
+deploys a project restarts it. See
+[dashboard/README.md](../dashboard/README.md#a-persons-own-tokens) and
+[access.md](access.md#secrets-with-a-token).
 
 **Everything that reloads Caddy shares one lock**, `/run/sitesolide-gatekeeper/caddy.lock`.
 The CLI, the deploy scripts and the gatekeeper all take it. Without it, a site
@@ -384,7 +396,9 @@ rows written before the access registry), `anonymous` before anyone is known,
 or `system`. The steward writes a person's email as it verified it, never as
 a request names it. A deployment by a person's own token is recorded under
 `token:<id>`, the person's email in its detail's `member` field, a name
-the rows keep. Nothing gathers
+the rows keep; so is a variable a token sets or removes, or a restart it
+makes, in the steward's journal, the `member` field empty for an owner's
+token. Nothing gathers
 these tables on the machine: the dashboard's *Activity* page reads each
 through the road it already takes to that component, and merges them, newest
 first. How long each keeps its rows is in
@@ -429,12 +443,13 @@ rotates by line count: a refusal stays in the journal.
 | `backup.restore` | steward | a person's email | slug | a restore refused by role before it reached the backups |
 | `member.invite`, `member.role`, `member.remove`, `member.signin`, `member.signin_failed`, `member.signout` | steward | as they were written | as they were written | written before the access registry only: the dashboard's people of then, their roles and sign-ins |
 | `secrets.unlock`, `secrets.lock` | steward | `owner`, or a person's email | none, or the person's email | changes unlocked, or the password or the forced sign-in refused, and locked again |
-| `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner`, or a person's email | slug | a variable read, set or removed, by its name; a person's refused by role, with that role |
-| `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner`, or a person's email | slug | a secret file created, put back to its previous version, or replaced |
+| `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner`, a person's email, or `token:<id>` | slug | a variable read, set or removed, by its name; a person's refused by role, with that role; a token's set or removed through the API, the person in `member` for their own, its refusals with their reason, `no secrets permission` among them, 60 an hour at most |
+| `secrets.list` | steward | `token:<id>` | slug | a token's listing of a project's files and names refused, with its reason; a listing reads no value, and one that goes through is not journaled |
+| `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner`, a person's email, or `token:<id>` | slug | a secret file created, put back to its previous version, or replaced; a token only creates `<slug>.env` |
 | `secrets.password` | steward | `owner` | slug | a password hash changed |
 | `access.general` | steward | `owner`, or an Admin's email | slug | a site's general access chosen, Public, Restricted or Anyone with the code, `off`, `on` or `code` in the detail; listed as `door.update` before, the rows themselves unchanged |
 | `access.code` | steward | `owner`, or an Admin's email | slug | a site that opens with a code given a new one; never the code, which no row holds |
-| `service.restart` | steward | `owner`, or a person's email | slug | a service restarted from *Secrets*, or by a Developer or an Admin, with its verdict; a person's refused restart, with their role |
+| `service.restart` | steward | `owner`, a person's email, or `token:<id>` | slug | a service restarted from *Secrets*, by a Developer or an Admin, or by a token through the API, with its verdict; a person's refused restart, with their role |
 
 The steward's rows say how each operation ended, `ok`, `rejects` or `failure`,
 in their detail's `result`. Their source is the steward's journal, which has

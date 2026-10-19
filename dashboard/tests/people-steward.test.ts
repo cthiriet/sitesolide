@@ -533,6 +533,30 @@ describe("a person's restart", () => {
     expect(await refused.json()).toMatchObject({ message: `${ALICE} may no longer restart blog` });
     expect(bench.calls.filter((call) => call[0] === "restart")).toEqual([["restart", "shop"]]);
   });
+
+  test("a person's restart still journals their email as actor and member, never a token, whether it runs or is refused once its turn came", async () => {
+    const bench = await mount();
+    bench.seed({ [ALICE]: { blog: "developer" }, [BOB]: { shop: "admin" } });
+    const alice = await sessionOf(bench);
+    const bob = await sessionOf(bench, BOB);
+    expect((await bench.call("POST", "/people/restart", { session: alice, slug: "blog" })).status).toBe(200);
+    expect(bench.journal().at(-1)).toEqual(expect.objectContaining({ operation: "restart", result: "ok", actor: ALICE, member: ALICE, slug: "blog" }));
+    let release = () => {};
+    bench.barrier.promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = bench.call("POST", "/people/restart", { session: bob, slug: "shop" });
+    await Bun.sleep(20);
+    const second = bench.call("POST", "/people/restart", { session: alice, slug: "blog" });
+    await Bun.sleep(20);
+    bench.seed({ [BOB]: { shop: "admin" } });
+    bench.barrier.promise = null;
+    release();
+    await first;
+    expect((await second).status).toBe(403);
+    expect(bench.journal().at(-1)).toEqual(expect.objectContaining({ operation: "restart", result: "rejects", actor: ALICE, member: ALICE, slug: "blog", detail: "no longer allowed" }));
+    expect(bench.journal().some((line) => line.actor.startsWith("token:"))).toBe(false);
+  });
 });
 
 describe("the journal", () => {

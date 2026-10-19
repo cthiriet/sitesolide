@@ -21,12 +21,24 @@
  * to people inside the company's domains or to one of those domains, and
  * removes Can open entries.
  *
+ * **So are secrets and restarts.** A token with the `secrets` permission
+ * lists its projects' files and variable names, and sets and removes the
+ * variables of `<slug>.env`; any token that deploys a project restarts it.
+ * The dashboard refuses early a malformed body alone, so that a value it
+ * cannot read never travels further; the token, its person's role, its
+ * project, its flag and the file are the steward's to judge, which journals
+ * its refusals within the token's hourly bound. The dashboard builds every
+ * answer from the fields it knows: a steward's answer is never relayed as it
+ * stands, nor a value ever sent back, logged or recorded in dashboard.db.
+ *
  * Nothing here logs a bearer, and no response carries one.
  */
 import type { RandomSource } from "../sessions";
 import { read } from "../read";
 import type { Schedule, Site } from "../state";
 import { readManifest } from "../../borrowed/manifest";
+import { DEFAULT_TIMEOUTS } from "../secrets/client";
+import type { ServiceView, Verdict } from "../secrets/protocol";
 import { reach, type ControlSteward, type Reached } from "./client";
 import { clientAddress, type Limiter } from "./limiter";
 import { allocatePorts, decideManifest } from "./policy";
@@ -37,6 +49,7 @@ import {
   MAX_AWAITING_PER_TOKEN,
   MAX_MANIFEST_BYTES,
   MAX_RUNNING,
+  MAX_SECRETS_BODY_BYTES,
   UPLOAD_WINDOW_MS,
   type ControlErrorCode,
   type ControlFailure,
@@ -44,9 +57,15 @@ import {
   type Identity,
   type InstallerResult,
   type ProjectAccess,
+  type ProjectSecrets,
   type ProjectStatus,
+  type RestartOutcome,
   type ScheduleStatus,
+  type SecretsChangeResponse,
+  type StewardSecretsChange,
+  type TokenFileView,
 } from "./protocol";
+import { readSecretsChange } from "./secrets";
 import type { Spool } from "./spool";
 import type { ControlStore, DeploymentRow } from "./store";
 import { bearerOf, isTokenShape } from "./tokens";
@@ -78,6 +97,9 @@ export type ApiRoutes = {
   projectAccess: (req: Request, slug: string) => Promise<Response>;
   putProjectAccess: (req: Request, slug: string) => Promise<Response>;
   removeProjectAccess: (req: Request, slug: string) => Promise<Response>;
+  projectSecrets: (req: Request, slug: string) => Promise<Response>;
+  changeProjectSecrets: (req: Request, slug: string, file: string) => Promise<Response>;
+  restartProject: (req: Request, slug: string) => Promise<Response>;
 };
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -117,6 +139,95 @@ function relayed(reached: Reached): Response {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const secretsUnavailable = () => failure("not-available", "this machine's steward does not carry secrets by token yet: the owner must run sitesolide upgrade");
+
+/**
+ * A steward's message with no value of the request in it: the steward quotes
+ * none, and this is the second lock. A value as short as a word is checked
+ * too: a false match only costs the message, never the code.
+ */
+function scrubbed(message: string, values: readonly string[]): string {
+  return values.some((value) => value.length >= 4 && message.includes(value)) ? "the steward refused the change; its message is withheld: see the project's Activity" : message;
+}
+
+/**
+ * The steward's answer to a secrets route or a restart, in the API's codes:
+ * an older steward is `not-available`, saying to upgrade; its queue of writes
+ * full, or its requests in flight, a 503 that breaks nothing, is `busy`, to
+ * be asked again; the hourly bound keeps its `wait`. The rest as `relayed`.
+ */
+function relayedWork(reached: Reached, values: readonly string[] = []): Response {
+  if (reached.kind === "unavailable") return secretsUnavailable();
+  if (reached.kind !== "received") return relayed(reached);
+  const { body, status } = reached;
+  if (status === 503 && body.error === "failure") return failure("busy", "the server is busy with other changes: try again in a moment");
+  const message = scrubbed(String(body.message), values);
+  if (body.error === "too-many-attempts" && typeof body.wait === "number" && Number.isInteger(body.wait) && body.wait > 0) {
+    return failure("too-many-attempts", message, { wait: body.wait });
+  }
+  return relayed({ ...reached, body: { ...body, message } });
+}
+
+const strings = (value: unknown): string[] | null => (Array.isArray(value) && value.every((one) => typeof one === "string") ? [...(value as string[])] : null);
+
+/** A service as a token reads it, from the fields known alone. */
+function serviceOf(value: unknown): ServiceView | null {
+  if (!isObject(value) || typeof value.unit !== "string" || typeof value.state !== "string" || typeof value.subState !== "string") return null;
+  return { unit: value.unit, state: value.state, subState: value.subState, startedAt: typeof value.startedAt === "number" ? value.startedAt : null };
+}
+
+/**
+ * A file as a token reads it, from the fields known alone: write-only
+ * whatever the steward says, no value, no size, no previous version.
+ */
+function tokenFile(value: unknown): TokenFileView | null {
+  if (!isObject(value)) return null;
+  const { name, kind, state, reason, expected, modifiedAt } = value;
+  const variables = strings(value.variables);
+  const passwords = strings(value.passwords);
+  if (typeof name !== "string" || (kind !== "variables" && kind !== "content") || (state !== "managed" && state !== "absent" && state !== "unmanaged")) return null;
+  if (typeof expected !== "string" || variables === null || passwords === null) return null;
+  return {
+    name,
+    kind,
+    state,
+    reason: typeof reason === "string" ? reason : null,
+    expected,
+    readable: false,
+    variables,
+    passwords,
+    bytes: null,
+    modifiedAt: typeof modifiedAt === "number" ? modifiedAt : null,
+    previous: false,
+    restartPending: value.restartPending === true,
+    writable: value.writable === true,
+  };
+}
+
+function projectSecretsOf(value: unknown): ProjectSecrets | null {
+  if (!isObject(value) || typeof value.slug !== "string" || !Array.isArray(value.files)) return null;
+  const files = value.files.map(tokenFile);
+  if (files.some((file) => file === null)) return null;
+  return { slug: value.slug, service: serviceOf(value.service), files: files as TokenFileView[] };
+}
+
+function changeOf(body: Record<string, unknown>): StewardSecretsChange | null {
+  const file = tokenFile(body.file);
+  const set = strings(body.set);
+  const removed = strings(body.removed);
+  const absent = strings(body.absent);
+  if (file === null || set === null || removed === null || absent === null || typeof body.created !== "boolean") return null;
+  return { file, created: body.created, set, removed, absent };
+}
+
+const VERDICTS: readonly string[] = ["active", "looping", "failure", "scheduled"];
+
+function verdictOf(value: unknown): Verdict | null {
+  if (!isObject(value) || typeof value.kind !== "string" || !VERDICTS.includes(value.kind)) return null;
+  if (typeof value.state !== "string" || typeof value.subState !== "string" || typeof value.restarts !== "number") return null;
+  return { kind: value.kind as Verdict["kind"], state: value.state, subState: value.subState, restarts: value.restarts };
 }
 
 /** A JSON body, bounded, or null. Read piece by piece: a chunked body has no length to trust. */
@@ -300,6 +411,17 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
     const listed = await reach(() => steward.accessList(auth.bearer, slug), [auth.bearer]);
     const access = listed.kind === "received" && listed.status === 200 ? projectAccess(listed.body) : null;
     return json({ entry: reached.body.entry, change: reached.body.change, access }, reached.status);
+  }
+
+  /** The restart a change asked for: its verdict, or its refusal in the API's codes. */
+  async function restartOf(bearer: string, slug: string): Promise<RestartOutcome> {
+    const reached = await reach(() => steward.restart(bearer, slug), [bearer]);
+    if (reached.kind === "received" && reached.status === 200) {
+      const verdict = verdictOf(reached.body.verdict);
+      if (verdict !== null) return { verdict };
+    }
+    const refusal = (await (reached.kind === "received" && reached.status === 200 ? unreadable() : relayedWork(reached)).json()) as ControlFailure;
+    return { error: refusal.error, message: refusal.message, ...(refusal.wait === undefined ? {} : { wait: refusal.wait }) };
   }
 
   /** The deployment, if this token created it; any other id reads as unknown. */
@@ -517,5 +639,108 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
      */
     putProjectAccess: (req, slug) => change(req, slug, true),
     removeProjectAccess: (req, slug) => change(req, slug, false),
+
+    /**
+     * The project's secret files and variable names: never a value, a size
+     * nor a previous version. Neither the project nor the flag is judged
+     * here: the identity is narrowed to its person's roles, and a person
+     * lowered since would read "unknown project" instead of the steward's
+     * refusal naming their role, which the steward journals.
+     */
+    async projectSecrets(req, slug) {
+      const auth = await authenticated(req);
+      if (auth instanceof Response) return auth;
+      const reached = await reach(() => steward.secretsList(auth.bearer, slug), [auth.bearer]);
+      if (reached.kind !== "received" || reached.status !== 200) return relayedWork(reached);
+      const secrets = projectSecretsOf(reached.body.secrets);
+      return secrets === null ? unreadable() : json({ secrets });
+    },
+
+    /**
+     * Variables of `<slug>.env` set and removed in one write, all or nothing,
+     * the file created when its manifest declares it; then, with `restart`,
+     * the service restarted, whose refusal leaves the write's status as it
+     * is. The body is judged here first, every name's shape and every value,
+     * so that a malformed one never reaches the machine; the rest, the file
+     * included, is the steward's (`projectSecrets`).
+     */
+    async changeProjectSecrets(req, slug, file) {
+      const auth = await authenticated(req);
+      if (auth instanceof Response) return auth;
+      const { bearer } = auth;
+      const body = await readJson(req, MAX_SECRETS_BODY_BYTES);
+      if (body === "too-large") return failure("too-large", `a change of secrets is ${MAX_SECRETS_BODY_BYTES / 1024} KiB at most: split it`);
+      if (body === null) return failure("invalid", 'send a JSON object: { "set": { "NAME": "value" }, "remove": ["NAME"], "restart": true }, each field optional');
+      // Its names are not repeated: a value sent in a field's place would be.
+      if (Object.keys(body).some((key) => key !== "set" && key !== "remove" && key !== "restart")) return failure("invalid", "unexpected field: send set, remove and restart alone");
+      if (body.restart !== undefined && typeof body.restart !== "boolean") return failure("invalid", "restart must be true or false");
+      const change = readSecretsChange(body.set, body.remove);
+      if ("refusal" in change) return failure("invalid", change.refusal);
+      const values = change.set.map(([, value]) => value);
+      // Object.fromEntries defines each name as the object's own: `__proto__` stays a variable.
+      const reached = await reach(() => steward.secretsChange({ bearer, slug, file, set: Object.fromEntries(change.set), remove: change.remove }), [bearer]);
+      if (reached.kind !== "received" || (reached.status !== 200 && reached.status !== 201)) return relayedWork(reached, values);
+      const changed = changeOf(reached.body);
+      if (changed === null) return unreadable();
+      const restart = body.restart === true ? await restartOf(bearer, slug) : null;
+      const answer: SecretsChangeResponse = { ...changed, restart };
+      return json(answer, reached.status);
+    },
+
+    /** The project's service restarted and observed: 200 with its verdict, even when it did not come back. The steward judges the rest (`projectSecrets`). */
+    async restartProject(req, slug) {
+      const auth = await authenticated(req);
+      if (auth instanceof Response) return auth;
+      const reached = await reach(() => steward.restart(auth.bearer, slug), [auth.bearer]);
+      if (reached.kind !== "received" || reached.status !== 200) return relayedWork(reached);
+      const verdict = verdictOf(reached.body.verdict);
+      return verdict === null ? unreadable() : json({ verdict });
+    },
+  };
+}
+
+/** Bun's ceiling on how long a connection may stay silent, in seconds. */
+const MAX_IDLE_S = 255;
+
+/**
+ * One call to the steward that waits its turn under its lock, the longest
+ * action there included, and five seconds more to answer. Bun cuts a
+ * connection silent for ten seconds, handler in progress included: the
+ * routes that wait on the steward set this delay of their own.
+ */
+export const STEWARD_IDLE_S = Math.min(MAX_IDLE_S, Math.ceil(DEFAULT_TIMEOUTS.longMs / 1000) + 5);
+
+/**
+ * A change of secrets with `restart`: the write, then the restart, two calls
+ * in a row, each up to the long delay. With one call's delay, a connection
+ * would be cut once the write was made and before the restart's verdict, and
+ * the client would read a failure for a change the machine had made.
+ */
+export const SECRETS_CHANGE_IDLE_S = Math.min(MAX_IDLE_S, Math.ceil((2 * DEFAULT_TIMEOUTS.longMs) / 1000) + 5);
+
+type Timed = { timeout: (req: Request, seconds: number) => void };
+
+/**
+ * A token's secrets and restart, as dashboard/server.ts mounts them: each
+ * route with the idle delay its steward calls need, which the tests mount as
+ * they stand.
+ */
+export function secretsRoutes(api: Pick<ApiRoutes, "projectSecrets" | "changeProjectSecrets" | "restartProject">) {
+  return {
+    "/api/v1/projects/:slug/secrets": {
+      GET: (req: Bun.BunRequest<"/api/v1/projects/:slug/secrets">) => api.projectSecrets(req, req.params.slug),
+    },
+    "/api/v1/projects/:slug/secrets/:file": {
+      PATCH: (req: Bun.BunRequest<"/api/v1/projects/:slug/secrets/:file">, server: Timed) => {
+        server.timeout(req, SECRETS_CHANGE_IDLE_S);
+        return api.changeProjectSecrets(req, req.params.slug, req.params.file);
+      },
+    },
+    "/api/v1/projects/:slug/restart": {
+      POST: (req: Bun.BunRequest<"/api/v1/projects/:slug/restart">, server: Timed) => {
+        server.timeout(req, STEWARD_IDLE_S);
+        return api.restartProject(req, req.params.slug);
+      },
+    },
   };
 }

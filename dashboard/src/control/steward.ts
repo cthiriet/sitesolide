@@ -54,25 +54,43 @@
  * projection. The journal names the token, never an actor the dashboard
  * would choose.
  *
+ * **A token's secrets and restart are judged here too**, the token, its
+ * person's role and its `secrets` flag, then handed to the secrets routes'
+ * own code (src/secrets/steward.ts, `secretsForToken`), with the token as
+ * the requester, under their lock, or the project's own turn for a restart,
+ * where this judgement is made again once the turn has come. Each token is
+ * bounded per hour, in memory: what it may push through the journal, its
+ * changes, its restarts and its refusals each, and how often it cuts a
+ * service.
+ *
  * The order of the checks is the order of the risk, as in src/secrets/steward.ts:
  * shape of the body, token, slug, state of the machine, writing.
  */
 import type { RandomSource } from "../sessions";
 import { isValidSlug, servicesOf, readManifest as parseManifest } from "../../borrowed/manifest";
+import { portalFromManifest } from "../../borrowed/portal-vm";
 import { unitArgument } from "../../borrowed/unit";
-import type { MemberEvent, MemberPrincipal } from "../people/steward";
+import type { MemberEvent, MemberPrincipal, TokenRefusal } from "../people/steward";
+import type { Who } from "../people/actions";
+import { may, powerRefusal, roleDetail, type Power } from "../people/powers";
+import type { Role } from "../people/protocol";
 import type { AccessRoutes } from "../access/steward";
 import type { LeavingToken } from "../access/protocol";
 import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../people/tokens";
+import { readSecretsChange, type TokenSecretsChange } from "./secrets";
 import { CREATION_MAX_AGE_MS, encodeCreations, MAX_PENDING, readCreations, type PendingCreation } from "./creations";
 import { MAX_CONTROL_FILE_BYTES, type ControlSystem } from "./system";
-import { decideSlug, reservedReason, type SlugDecision } from "./policy";
+import { decideManifest, decideSlug, reservedReason, type SlugDecision } from "./policy";
 import {
   CONTROL_STATUSES,
   DEPLOYMENT_ID_SHAPE,
   INSTALLER_PREFIX,
   MAX_JOURNAL_LINES,
   MAX_MANIFEST_BYTES,
+  MAX_SECRETS_BODY_BYTES,
+  TOKEN_REFUSALS_PER_HOUR,
+  TOKEN_RESTARTS_PER_HOUR,
+  TOKEN_SECRET_CHANGES_PER_HOUR,
   type ControlErrorCode,
   type ControlFailure,
   type CreatedTokenResponse,
@@ -161,6 +179,35 @@ export type ControlStewardOptions = {
   access?: AccessRoutes["forToken"] | null;
   /** A project removed from the machine: its people with access dropped. Absent, a steward without the registry. */
   forgetAccess?: AccessRoutes["forgetProject"] | null;
+  /**
+   * A token's secrets and restart (src/secrets/steward.ts), the token judged
+   * here first. Absent, the routes do not exist, as on a steward that
+   * predates them, and the dashboard says to upgrade.
+   */
+  secrets?: SecretsForToken | null;
+  /** The hourly bounds per token, lower in the tests. */
+  secretChangesPerHour?: number;
+  restartsPerHour?: number;
+  refusalsPerHour?: number;
+};
+
+/**
+ * What this steward asks the secrets routes for a token's secrets and
+ * restart. `still` is asked once the turn has come, the secrets' lock for a
+ * change, the project's own turn for a restart: the token, its person's role
+ * and its flag judged again, nothing done on a refusal.
+ */
+export type SecretsForToken = {
+  /** One project's files as a token lists them, never a value: `SecretsListResponse`. */
+  list: (slug: string, who: Who) => Promise<Response>;
+  /** A change of `<slug>.env`, all or nothing: `StewardSecretsChange`, 201 when the file was created. */
+  change: (req: Request, change: TokenSecretsChange, who: Who, still: () => Promise<Response | null>) => Promise<Response>;
+  /** The project's service restarted and observed: `TokenRestartResponse`. */
+  restart: (req: Request, slug: string, who: Who, still: () => Promise<Response | null>) => Promise<Response>;
+  /** A refusal decided here, into the journal: bounded per token here, before it is asked. */
+  refuse: (event: TokenRefusal) => Promise<void>;
+  /** Is the project restricted as its general access reads: the portal asked for and its protected block in service? */
+  restricted: (slug: string) => Promise<boolean>;
 };
 
 type Handler = (req: Request) => Promise<Response>;
@@ -189,8 +236,17 @@ export type ControlHandler = Handler & {
 /** Who a bearer is, narrowed to their person's rights for a person's token. */
 type Holder = { identity: Identity; rights: MemberRights | null };
 
-/** The biggest body: a deployment request, its manifest included. */
+/** The biggest body but a change of secrets: a deployment request, its manifest included. */
 export const MAX_CONTROL_BODY_BYTES = MAX_MANIFEST_BYTES + 4 * 1024;
+
+/**
+ * A change of secrets as the dashboard relays it: the API's own bound, and
+ * room for the bearer, the slug and the file it adds. The steward's socket
+ * admits it (dashboard/steward.ts, `maxRequestBodySize`).
+ */
+export const MAX_SECRETS_CHANGE_BODY_BYTES = MAX_SECRETS_BODY_BYTES + 4 * 1024;
+
+const HOUR_MS = 3_600_000;
 
 const CURSOR_SHAPE = /^[A-Za-z0-9=;_-]{1,512}$/;
 
@@ -209,8 +265,8 @@ function isObject(value: unknown): value is Body {
 }
 
 /** The body, bounded in size and in time, an object with the expected fields and those alone. */
-async function readBody(req: Request, fields: string[], timeoutMs: number): Promise<Body | Response> {
-  if (Number(req.headers.get("content-length") ?? "0") > MAX_CONTROL_BODY_BYTES) return failure("invalid", "request body too large");
+async function readBody(req: Request, fields: string[], timeoutMs: number, max = MAX_CONTROL_BODY_BYTES): Promise<Body | Response> {
+  if (Number(req.headers.get("content-length") ?? "0") > max) return failure("invalid", "request body too large");
   if (req.body === null) return failure("invalid", "the request body must be a JSON object");
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -228,7 +284,7 @@ async function readBody(req: Request, fields: string[], timeoutMs: number): Prom
       }
       if (read.done) break;
       total += read.value.byteLength;
-      if (total > MAX_CONTROL_BODY_BYTES) {
+      if (total > max) {
         reader.cancel().catch(() => undefined);
         return failure("invalid", "request body too large");
       }
@@ -310,9 +366,11 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   /**
    * The bearer's holder, or the refusal. A person's token is narrowed to
    * their rights as the registry reads now, and refused once they no longer
-   * sign in. The last use moves forward at most once an hour.
+   * sign in. The last use moves forward at most once an hour; `touching`
+   * false for a judgement made again under the secrets' lock, which must
+   * never wait on this file's queue while it holds that lock.
    */
-  async function identify(bearer: unknown): Promise<Holder | Response> {
+  async function identify(bearer: unknown, touching = true): Promise<Holder | Response> {
     const registry = await team();
     if (registry instanceof Response) return registry;
     const now = system.now();
@@ -331,7 +389,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       }
       holder = { identity: narrowIdentity(result.identity, rights), rights };
     }
-    const touched = touch(registry, result.identity.id, now);
+    const touched = touching ? touch(registry, result.identity.id, now) : null;
     if (touched !== null) {
       // Out of the request's path: a registry that cannot be written does not
       // refuse a valid token, it only leaves its date behind.
@@ -662,6 +720,230 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   const accessList = (req: Request) => accessRoute(req, [], (holder, slug) => options.access!.list(slug, granterOf(holder)));
   const accessGrant = (req: Request) => accessRoute(req, ["who", "role"], (holder, slug, body) => options.access!.grant(slug, body.who, body.role, granterOf(holder)));
   const accessRemove = (req: Request) => accessRoute(req, ["who"], (holder, slug, body) => options.access!.remove(slug, body.who, granterOf(holder)));
+
+  // --- a token's secrets and restart -----------------------------------------------
+
+  const secrets = options.secrets ?? null;
+  const secretChangesPerHour = options.secretChangesPerHour ?? TOKEN_SECRET_CHANGES_PER_HOUR;
+  const restartsPerHour = options.restartsPerHour ?? TOKEN_RESTARTS_PER_HOUR;
+  const refusalsPerHour = options.refusalsPerHour ?? TOKEN_REFUSALS_PER_HOUR;
+
+  /** What a token asks for, and the power each takes of its person's role. */
+  type Work = "list" | "write" | "restart";
+  const POWERS: Record<Work, Power> = { list: "secrets.list", write: "secrets.write", restart: "restart" };
+  type WorkOperation = TokenRefusal["operation"];
+
+  /** The requester the secrets routes act for: the token, and the person it belongs to. */
+  const whoOf = (holder: Holder): Who => ({ actor: `token:${holder.identity.id}`, member: holder.identity.member, token: holder.identity.id });
+
+  function roleOn(rights: MemberRights, slug: string): Role | null {
+    return Object.hasOwn(rights.roles, slug) ? rights.roles[slug]! : null;
+  }
+
+  /** The slug a token names, or the refusal: a platform project reads as unknown, as any other it does not reach. */
+  function tokenSlug(slug: unknown): string | Response {
+    if (typeof slug !== "string" || !isValidSlug(slug)) return failure("invalid", "slug: lowercase letters, digits and dashes");
+    if (reservedReason(slug, options.zone) !== null) return failure("not-found", `no project ${slug} for this token`);
+    return slug;
+  }
+
+  const deploying = (slug: string) => failure("busy", `a deployment of ${slug} is running, and restarts it once done: wait for it to finish`);
+
+  /**
+   * May an owner's token without `public` change this project's secrets?
+   * Those of a project it could deploy as the machine carries it alone, its
+   * deposited manifest judged as a deployment of it would be
+   * (src/control/policy.ts, `decideManifest`), and restricted as its general
+   * access reads it, the portal asked for and its protected block in
+   * service. The manifest's `portal` alone was not enough: paths exempted
+   * from the portal are public, and so is a site whose protected block is
+   * not in place. A manifest missing, unreadable or refused is not.
+   */
+  async function privateTokenWrites(identity: Identity, slug: string): Promise<boolean> {
+    const raw = await system.readManifest(slug);
+    if (raw === null) return false;
+    const { manifest, errors } = parseManifest(raw);
+    if (manifest === undefined || errors.length > 0) return false;
+    const door = portalFromManifest(raw, slug);
+    if (door.kind !== "read" || !door.portal) return false;
+    if (decideManifest(manifest, identity.scope, door.portal, options.zone).kind !== "allowed") return false;
+    return secrets !== null && (await secrets.restricted(slug));
+  }
+
+  /**
+   * A refusal of this token's, journaled once its hour allows it: each costs
+   * one of `TOKEN_REFUSALS_PER_HOUR`, charged before the line is written, and
+   * past them the answer is `too-many-attempts`, journaled no more. Without
+   * this bound, a stolen token would push its own changes out of the journal
+   * within the hour, twenty refusals a minute, and spend nothing of its hour.
+   * `quiet`: judged again once the turn has come, journaled once already.
+   */
+  async function refusal(holder: Holder, slug: string, operation: WorkOperation, detail: string, refused: Response, quiet: boolean): Promise<Response> {
+    if (quiet) return refused;
+    const bounded = withinHour(`refusals:${holder.identity.id}`, 1, refusalsPerHour, "refused requests");
+    if (bounded !== null) return bounded;
+    await secrets?.refuse({ operation, result: "rejects", actor: `token:${holder.identity.id}`, member: holder.identity.member, slug, detail });
+    return refused;
+  }
+
+  /**
+   * May this holder do this work on this project now? In the order of the
+   * risk: a person's role first, whatever the token's scope says, as for a
+   * deployment (`judgeSlug`); then the project among those the token
+   * reaches, any other reading as unknown and never journaled, a guess
+   * learning nothing; the project on the machine; then the `secrets` flag,
+   * which a restart does not need: any token that deploys a project may
+   * restart it. An owner's token without `public` changes the secrets of a
+   * project it could deploy as it stands and that is restricted
+   * (`privateTokenWrites`): it changes nothing of a project it could not
+   * deploy, nor of one in the open. A person's token answers to the role
+   * instead, as for a deployment. Each refusal journaled is charged to the
+   * token's hour (`refusal`).
+   */
+  async function judgeWork(holder: Holder, slug: string, work: Work, operation: WorkOperation, quiet = false): Promise<Response | null> {
+    const { identity, rights } = holder;
+    if (rights !== null) {
+      const role = roleOn(rights, slug);
+      if (!may(role, POWERS[work])) return refusal(holder, slug, operation, roleDetail(role), failure("out-of-scope", powerRefusal(rights.email, role, slug, POWERS[work])), quiet);
+    }
+    if (!identity.owned.includes(slug) && !identity.scope.slugs.includes(slug)) return failure("not-found", `no project ${slug} for this token`);
+    if (!(await system.projectExists(slug))) return failure("not-found", `${slug} is not deployed on this machine`);
+    if (work === "restart") return null;
+    if (identity.scope.secrets !== true) {
+      const another = rights === null ? "ask the owner of the machine for one that may manage secrets" : "mint one with Manage secrets from the dashboard's Tokens page";
+      return refusal(holder, slug, operation, "no secrets permission", failure("out-of-scope", `this token may not manage secrets: ${another}`), quiet);
+    }
+    if (work === "write" && rights === null && !identity.scope.public && !(await privateTokenWrites(identity, slug))) {
+      const message = `${slug} is not restricted on the machine as this token could deploy it, and this token, which deploys private sites only, changes the secrets of those alone: ask the owner of the machine`;
+      return refusal(holder, slug, operation, "not restricted", failure("out-of-scope", message), quiet);
+    }
+    return null;
+  }
+
+  /** What each token used of its hour, by bound: in memory, a restart of the steward forgets it. */
+  const spent = new Map<string, number[]>();
+
+  function recentOf(key: string): number[] {
+    const now = system.now();
+    const recent = (spent.get(key) ?? []).filter((at) => now - at < HOUR_MS && at <= now);
+    if (recent.length === 0) spent.delete(key);
+    else spent.set(key, recent);
+    return recent;
+  }
+
+  function spend(key: string, cost: number): void {
+    spent.set(key, [...(spent.get(key) ?? []), ...Array<number>(cost).fill(system.now())]);
+    // A map that keeps only the tokens seen this hour.
+    if (spent.size > 10_000) for (const old of [...spent.keys()].slice(0, 1_000)) spent.delete(old);
+  }
+
+  /**
+   * `cost` more of this token's hour, or the refusal with the seconds until
+   * enough of it ages out. Counted before the work, whatever comes of it: a
+   * refused change is a journal line too.
+   */
+  function withinHour(key: string, cost: number, limit: number, what: string): Response | null {
+    const recent = recentOf(key);
+    if (recent.length + cost > limit) {
+      const index = Math.min(recent.length - 1, recent.length + cost - limit - 1);
+      const wait = index < 0 ? HOUR_MS / 1000 : Math.max(1, Math.ceil((recent[index]! + HOUR_MS - system.now()) / 1000));
+      const body: ControlFailure = { error: "too-many-attempts", message: `${limit} ${what} per hour at most for a token: try again in ${wait} s`, wait };
+      return Response.json(body, { status: CONTROL_STATUSES["too-many-attempts"] });
+    }
+    spend(key, cost);
+    return null;
+  }
+
+  async function secretsList(req: Request): Promise<Response> {
+    const body = await readBody(req, ["bearer", "slug"], bodyTimeoutMs);
+    if (body instanceof Response) return body;
+    const holder = await identify(body.bearer);
+    if (holder instanceof Response) return holder;
+    const slug = tokenSlug(body.slug);
+    if (slug instanceof Response) return slug;
+    const refused = await judgeWork(holder, slug, "list", "list");
+    if (refused !== null) return refused;
+    return secrets!.list(slug, whoOf(holder));
+  }
+
+  /**
+   * A change of `<slug>.env`: the body read first, every name's shape and
+   * every value judged before the token is, so that nothing malformed goes
+   * further; then the token, and the change handed over with a `still`
+   * judged again once the secrets' lock is taken.
+   */
+  async function secretsChange(req: Request): Promise<Response> {
+    const body = await readBody(req, ["bearer", "slug", "file", "set", "remove"], bodyTimeoutMs, MAX_SECRETS_CHANGE_BODY_BYTES);
+    if (body instanceof Response) return body;
+    const change = readSecretsChange(body.set, body.remove);
+    if ("refusal" in change) return failure("invalid", change.refusal);
+    if (typeof body.file !== "string") return failure("invalid", "file: the name of the project's .env file");
+    const holder = await identify(body.bearer);
+    if (holder instanceof Response) return holder;
+    const slug = tokenSlug(body.slug);
+    if (slug instanceof Response) return slug;
+    const operation = change.set.length === 0 && change.remove.length > 0 ? "remove" : "set";
+    const refused = await judgeWork(holder, slug, "write", operation);
+    if (refused !== null) return refused;
+    // The file asked for is never quoted nor journaled: a value pasted in its place would stay.
+    if (body.file !== `${slug}.env`) return refusal(holder, slug, operation, "out-of-scope", failure("out-of-scope", `a token manages ${slug}.env alone`), false);
+    const names = change.set.length + change.remove.length;
+    const key = `secrets:${holder.identity.id}`;
+    const bounded = withinHour(key, Math.max(1, names), secretChangesPerHour, "variable names set or removed");
+    if (bounded !== null) return bounded;
+    const still = async (): Promise<Response | null> => {
+      const again = await identify(body.bearer, false);
+      if (again instanceof Response) return again;
+      return judgeWork(again, slug, "write", operation, true);
+    };
+    const answer = await secrets!.change(req, { slug, file: body.file, set: change.set, remove: change.remove }, whoOf(holder), still);
+    // A file created alongside names is one line more in the journal: counted once known.
+    if (answer.status === 201 && names > 0) spend(key, 1);
+    return answer;
+  }
+
+  /**
+   * The tokens with a restart under way. One at a time each: a restart holds
+   * a request of this socket, of `maxInFlight`, for up to some 43 seconds,
+   * and a token that fired them side by side on every project it deploys
+   * would hold them all.
+   */
+  const restarting = new Set<string>();
+
+  /**
+   * A restart, for any token that may deploy the project, a person's while
+   * they hold `restart` there: never while its installer runs, which
+   * restarts it at its own end, asked again once the project's turn has
+   * come, a deployment started meanwhile included.
+   */
+  async function restartRoute(req: Request): Promise<Response> {
+    const body = await readBody(req, ["bearer", "slug"], bodyTimeoutMs);
+    if (body instanceof Response) return body;
+    const holder = await identify(body.bearer);
+    if (holder instanceof Response) return holder;
+    const slug = tokenSlug(body.slug);
+    if (slug instanceof Response) return slug;
+    const refused = await judgeWork(holder, slug, "restart", "restart");
+    if (refused !== null) return refused;
+    if (await isActive(installerUnit(slug))) return deploying(slug);
+    const id = holder.identity.id;
+    if (restarting.has(id)) return failure("busy", "this token's previous restart is still under way: wait for its verdict, then ask again");
+    const bounded = withinHour(`restart:${id}`, 1, restartsPerHour, "restarts");
+    if (bounded !== null) return bounded;
+    const still = async (): Promise<Response | null> => {
+      const again = await identify(body.bearer, false);
+      if (again instanceof Response) return again;
+      const judged = await judgeWork(again, slug, "restart", "restart", true);
+      if (judged !== null) return judged;
+      return (await isActive(installerUnit(slug))) ? deploying(slug) : null;
+    };
+    restarting.add(id);
+    try {
+      return await secrets!.restart(req, slug, whoOf(holder), still);
+    } finally {
+      restarting.delete(id);
+    }
+  }
 
   // --- a person's own tokens ------------------------------------------------------
 
@@ -1068,6 +1350,13 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     "/control/logs": { POST: logs },
     "/control/access/list": { POST: accessList },
     "/control/access": { PUT: accessGrant, DELETE: accessRemove },
+    ...(secrets === null
+      ? {}
+      : {
+          "/control/secrets/list": { POST: secretsList },
+          "/control/secrets": { PATCH: secretsChange },
+          "/control/restart": { POST: restartRoute },
+        }),
     // The names before `/tokens/`, which a dashboard deployed before this
     // steward still calls: kept one release.
     "/team/tokens": { GET: listTokens, POST: newToken },

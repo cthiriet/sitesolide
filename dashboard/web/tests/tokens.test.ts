@@ -19,12 +19,17 @@ import {
   scopeLines,
   liveReach,
   madeByLine,
+  requestScope,
+  STEWARD_PREDATES_SECRETS,
+  tokenActivity,
+  tokenActor,
   tokenRefusal,
   tokenStatus,
   validateTokenForm,
   tokenHolders,
   tokenProjects,
 } from "../src/lib/tokens"
+import type { AuditEntry, AuditRow } from "../src/lib/types"
 import { site } from "./factory"
 
 const NOW = 1_800_000_000_000
@@ -44,12 +49,15 @@ describe("a token's state", () => {
 
   test("the scope in words, only what is on", () => {
     expect(scopeSummary(SCOPE)).toEqual([])
-    expect(scopeSummary({ ...SCOPE, public: true, create: true, outbound: true, domain: true })).toEqual([
+    expect(scopeSummary({ ...SCOPE, public: true, create: true, outbound: true, domain: true, secrets: true })).toEqual([
       "Can create projects",
       "Can deploy public sites",
       "Can declare a domain",
       "Can use outbound network",
+      "Can manage secrets",
     ])
+    // A token minted before the permission carries no `secrets`: it manages none.
+    expect(scopeSummary({ ...SCOPE, secrets: false })).toEqual([])
   })
 
   test("the projects it reaches, created first, each once", () => {
@@ -83,6 +91,19 @@ describe("the form", () => {
     expect(tokenRefusal(400, { error: "invalid", message: "holder: owner, for a token of your own, or the email of a person of People" }).field).toBeNull()
     expect(tokenRefusal(503, { error: "not-available", message: "run sitesolide upgrade" })).toEqual({ field: null, message: "run sitesolide upgrade" })
     expect(tokenRefusal(0, null).message).toBe("Can't reach the dashboard.")
+  })
+
+  test("Manage secrets ticked against a steward that predates it: what to run, not the steward's words", () => {
+    expect(tokenRefusal(400, { error: "invalid", message: "unexpected field in the scope" })).toEqual({ field: null, message: STEWARD_PREDATES_SECRETS })
+    expect(STEWARD_PREDATES_SECRETS).toBe("The server's steward predates this permission: run sitesolide upgrade.")
+  })
+
+  test("the permission is sent only when ticked: an older steward still mints a token without it", () => {
+    const choices = { create: false, outbound: true, domain: false, public: false }
+    expect(requestScope({ ...choices, secrets: false }, ["cms"])).toEqual({ ...choices, slugs: ["cms"] })
+    expect(Object.hasOwn(requestScope({ ...choices, secrets: false }, ["cms"]), "secrets")).toBe(false)
+    expect(requestScope(choices, [])).toEqual({ ...choices, slugs: [] })
+    expect(requestScope({ ...choices, secrets: true }, ["cms", "shop"])).toEqual({ ...choices, secrets: true, slugs: ["cms", "shop"] })
   })
 })
 
@@ -257,5 +278,78 @@ describe("a person's token, what it may still do", () => {
       { text: "Can create projects", paused: false },
       { text: "Can use outbound network", paused: false },
     ])
+    expect(scopeLines({ ...token, member: null, scope: { ...token.scope, secrets: true } }, null)).toContainEqual({ text: "Can manage secrets", paused: false })
+  })
+
+  test("managing secrets, paused only while it deploys no project and may create none", () => {
+    const secrets = { ...token, scope: { ...token.scope, secrets: true } }
+    // A Developer manages a project's secrets already: not Admin of cms holds back the options, never this one.
+    expect(scopeLines(secrets, { roles: { cms: "developer", calendar: "admin" }, create: true })).toContainEqual({ text: "Can manage secrets", paused: false })
+    // A Viewer on both now, it still may create projects: the steward keeps it on.
+    expect(scopeLines(secrets, { roles: { cms: "viewer", calendar: "viewer" }, create: true })).toContainEqual({ text: "Can manage secrets", paused: false })
+    expect(scopeLines(secrets, { roles: { cms: "viewer" }, create: false })).toContainEqual({ text: "Can manage secrets (paused: no project to deploy now)", paused: true })
+  })
+})
+
+describe("Token activity", () => {
+  const AT = "2026-10-04T12:00:00.000Z"
+  const ms = Date.parse(AT)
+  const tokens = [
+    { id: "aaaaaaaaaaaa", label: "Release agent", member: null },
+    { id: "bbbbbbbbbbbb", label: "alice-ci", member: "alice@example.com" },
+  ]
+  const entry = (id: number, at: number, partial: Partial<AuditEntry>): AuditEntry => ({ id, at: new Date(at).toISOString(), actor: "owner", action: "token.create", target: null, detail: null, ...partial })
+  const work = (at: number, partial: Partial<AuditRow>): AuditRow => ({
+    id: `steward:${at}.0`,
+    source: "steward",
+    at: new Date(at).toISOString(),
+    actor: "token:aaaaaaaaaaaa",
+    action: "secrets.set",
+    target: "cms",
+    site: null,
+    detail: { result: "ok", file: "cms.env", variable: "API_KEY" },
+    ...partial,
+  })
+
+  test("a token is named by its label; a person's with their email for the owner; one not listed as Activity names it", () => {
+    expect(tokenActor(work(ms, {}), tokens, "owner")).toBe("Release agent")
+    const hers = work(ms, { actor: "token:bbbbbbbbbbbb", detail: { result: "ok", variable: "API_KEY", member: "alice@example.com" } })
+    expect(tokenActor(hers, tokens, "owner")).toBe("alice-ci (alice@example.com)")
+    expect(tokenActor(hers, tokens, "person")).toBe("alice-ci")
+    expect(tokenActor({ ...hers, actor: "token:cccccccccccc" }, tokens, "owner")).toBe("alice@example.com (token)")
+    expect(tokenActor(work(ms, { actor: "token:cccccccccccc" }), tokens, "owner")).toBe("A token")
+  })
+
+  test("the dashboard's lines and the steward's, merged newest first, the steward's in Activity's words", () => {
+    const lines = tokenActivity(
+      [
+        entry(2, ms - 1000, { actor: "token:aaaaaaaaaaaa", action: "deploy.success", target: "cms", detail: { email: "owner" } }),
+        entry(1, ms - 5000, { detail: { email: "alice@example.com", label: "alice-ci" } }),
+      ],
+      [
+        work(ms, { action: "service.restart", detail: { result: "ok", note: "active, active/running, 0 restarts" } }),
+        work(ms - 2000, {}),
+        work(ms - 3000, { actor: "token:bbbbbbbbbbbb", target: "shop", detail: { result: "rejects", file: "shop.env", note: "no secrets permission", member: "alice@example.com" } }),
+      ],
+      tokens,
+      "owner",
+    )
+    expect(lines.map(({ text, tone, meta }) => ({ text, tone, meta }))).toEqual([
+      { text: "Restarted", tone: "neutral", meta: "Release agent · cms · Active, active/running, 0 restarts" },
+      { text: "owner deployed cms", tone: "neutral", meta: null },
+      { text: "Set API_KEY", tone: "neutral", meta: "Release agent · cms" },
+      { text: "Tried to set", tone: "attention", meta: "alice-ci (alice@example.com) · shop · Refused: no secrets permission" },
+      { text: "You created a token for alice@example.com (alice-ci)", tone: "neutral", meta: null },
+    ])
+    expect(new Set(lines.map((line) => line.key)).size).toBe(lines.length)
+  })
+
+  test("the latest lines alone, and nothing when neither source has any", () => {
+    const many = Array.from({ length: 40 }, (_, index) => work(ms - index, { id: `steward:${ms - index}.0` }))
+    const older = Array.from({ length: 40 }, (_, index) => entry(index + 1, ms - 100 - index, {}))
+    const lines = tokenActivity(older, many, tokens, "owner")
+    expect(lines).toHaveLength(50)
+    expect(lines.slice(0, 40).every((line) => line.text === "Set API_KEY")).toBe(true)
+    expect(tokenActivity([], [], tokens, "person")).toEqual([])
   })
 })

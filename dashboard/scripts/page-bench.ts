@@ -24,7 +24,9 @@
  *   write-only, with no size, public key readable), every `PASSWORD_HASH`
  *   (builder.env's included) that changes only through `/password` and is never
  *   restored, `dashboard.env` and `portal.env` which carry nothing but their
- *   hash, one log per site, and an unlocking by the same password;
+ *   hash, one log per site, lines written by tokens through the control API
+ *   among them, for the Tokens page's Token activity, and an unlocking by the
+ *   same password;
  * - a simulated gatekeeper behind `/portal`, which takes six seconds: it
  *   restricts `wheels` or `bookshop` and makes them public again, always
  *   fails on `photos` and restores, refuses `roster` because Caddy's
@@ -957,6 +959,12 @@ const log: LogRow[] = [
   { a: start - 24 * MINUTE, operation: "set", result: "rejects", slug: "roster", file: "roster.env", variable: null, detail: "invalid" },
   // The action whose backup remained on `library`: the gatekeeper wrote nothing of its result.
   { a: start - 3 * HOUR, operation: "portal", result: "failure", slug: "library", file: null, variable: null, detail: "off, failed" },
+  // What tokens did through the control API, for the Tokens page's Token activity: the
+  // owner's Release agent, which may manage secrets, set a variable of calendar.env and
+  // restarted calendar; alice-ci, which may not, was refused on cms.
+  { a: start - 2 * HOUR, operation: "set", result: "ok", actor: "token:0f1e2d3c4b5a", member: null, slug: "calendar", file: "calendar.env", variable: "API_KEY", detail: null },
+  { a: start - 2 * HOUR + MINUTE, operation: "restart", result: "ok", actor: "token:0f1e2d3c4b5a", member: null, slug: "calendar", file: null, variable: null, detail: "active, active/running, 0 restarts" },
+  { a: start - 90 * MINUTE, operation: "set", result: "rejects", actor: "token:a11ce0c1ab12", member: "alice@example.com", slug: "cms", file: null, variable: null, detail: "no secrets permission" },
 ];
 
 if (SHOWCASE) {
@@ -1119,7 +1127,8 @@ type BenchToken = {
   expiresAt: number | null;
   revokedAt: number | null;
   lastUsedAt: number | null;
-  scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean };
+  /** `secrets` absent: a token minted before the permission, which manages none. */
+  scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean; secrets?: boolean };
   owned: string[];
   /** The person it belongs to, null for the owner's own. */
   member: string | null;
@@ -1130,8 +1139,8 @@ type BenchToken = {
 const teamTokens: BenchToken[] = [
   // Made by the owner for Alice: narrowed to her roles, revoked with her.
   { id: "a1b2c3d4e5f6", label: "Alice's laptop", email: "alice@example.com", createdAt: start - 12 * DAY, expiresAt: start + 78 * DAY, revokedAt: null, lastUsedAt: start - 3 * HOUR, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false }, owned: ["notes"], member: "alice@example.com", by: "owner" },
-  // The owner's own, for an agent of theirs.
-  { id: "0f1e2d3c4b5a", label: "Release agent", email: "owner", createdAt: start - 40 * DAY, expiresAt: start + 4 * DAY, revokedAt: null, lastUsedAt: start - DAY, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: true }, owned: [], member: null, by: "owner" },
+  // The owner's own, for an agent of theirs, which may manage its project's secrets.
+  { id: "0f1e2d3c4b5a", label: "Release agent", email: "owner", createdAt: start - 40 * DAY, expiresAt: start + 4 * DAY, revokedAt: null, lastUsedAt: start - DAY, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: true, secrets: true }, owned: [], member: null, by: "owner" },
   { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com", createdAt: start - 90 * DAY, expiresAt: null, revokedAt: start - 20 * DAY, lastUsedAt: start - 21 * DAY, scope: { slugs: [], create: true, outbound: false, domain: false, public: false }, owned: ["mockups"], member: null, by: "owner" },
   // A person's own, minted from her Tokens page: a Developer on cms, an Admin on calendar.
   { id: "c0ffee123456", label: "Alice's agent", email: "alice@example.com", createdAt: start - 2 * DAY, expiresAt: start + 88 * DAY, revokedAt: null, lastUsedAt: start - 5 * HOUR, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: false }, owned: [], member: "alice@example.com", by: "alice@example.com" },
@@ -1273,10 +1282,10 @@ const memberRoutes = createMemberRoutes({
     return Object.keys(body).every((key) => fields.includes(key)) ? body : refusal(400, "invalid", "unexpected field in the request body");
   },
   journal: benchJournal,
-  restart: async (_req, slug, actor, allowed) => {
+  restart: async (_req, slug, who, allowed) => {
     await Bun.sleep(1500);
-    if (!(await allowed())) return refusal(403, "out-of-scope", `${actor} may no longer restart ${slug}`);
-    record({ operation: "restart", result: "ok", actor, member: actor, slug, file: null, variable: null, detail: "active, active/running, 0 restarts" });
+    if (!(await allowed())) return refusal(403, "out-of-scope", `${who.actor} may no longer restart ${slug}`);
+    record({ operation: "restart", result: "ok", actor: who.actor, member: who.member, slug, file: null, variable: null, detail: "active, active/running, 0 restarts" });
     return Response.json({ verdict: { kind: "active", state: "active", subState: "running", restarts: 0 } });
   },
 });

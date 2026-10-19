@@ -424,7 +424,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | General access | General access, Public, Restricted, Anyone with the code, Current; Make public, Restrict; in a disagreement, On the server, In sitesolide.json, Keep Public, Apply Restricted; Preview code, Replace the code, Remove the code; Open to anyone, guarded by the app alone (the exempt paths); See changes in Activity | Door, Gate, Portal on, Portal off, Turn on portal, Behind the portal, Private, Password protected, Enable, Disable |
 | People with access | People with access, Add people, Add, Unlock to add, Remove; Can open, Viewer, Developer, Admin; company account, password access, Password access lasts, No expiry, expires in 5d, Expired, Added by; Can't sign in until company sign-in is set up; Copy message; What each role can do, a disclosure from Can open to Admin, (your role), (you); Also open it | Sharing, Share, Guest, Member, Team, Invite, Permissions, ACL, work account, Super admin, Project admin; an Owner row or rung |
 | People | People, May create projects, Let someone create projects, Allow, Unlock to allow, Remove from every project, Remove expired, Domains; Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
-| Tokens | Tokens, New token, Unlock to create, Create token, Name, Whose token, Mine, For someone in People, Projects it may deploy, New projects, Permissions, Needed by cms, Expires; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network, Can create projects (paused: no longer allowed); calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only |
+| Tokens | Tokens, New token, Unlock to create, Create token, Name, Whose token, Mine, For someone in People, Projects it may deploy, New projects, Permissions, Manage secrets, Needed by cms, Expires; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network, Can manage secrets, Can create projects (paused: no longer allowed), Can manage secrets (paused: no project to deploy now); calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only, Write secrets, Secrets access |
 | The lock | Unlock changes, Lock, Changes unlocked, 9 min left; in its dialog, Unlock, Sign in again; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked |
 | Secrets | Restart pending, Unmanaged, Missing, Write-only, Restart service, Restore previous, Add variable, Create file, Replace, Reveal | Vault, Decrypt, Edit file |
 | Passwords | Change password, Dashboard password, Generate a strong one, Set my own, New password, Copy password | Set hash, Regenerate |
@@ -538,16 +538,26 @@ you*, *Made by you for alice@example.com*, *Made by alice@example.com*; a
 person reads *Made by you* or *Made by the owner for you*), its state
 (*Active*, *Expires in 5d* in attention, *Expired*, *Revoked*), what it may
 do beyond deploying, only what is on (*Can create projects*, *Can deploy
-public sites*, *Can declare a domain*, *Can use outbound network*), a
-person's greyed and said paused while they no longer hold it, "Can create
-projects (paused: no longer allowed)", "Can use outbound network (paused: not
-Admin of cms now)", the
+public sites*, *Can declare a domain*, *Can use outbound network*, *Can
+manage secrets*), a person's greyed and said paused while they no longer
+hold it, "Can create projects (paused: no longer allowed)", "Can use
+outbound network (paused: not Admin of cms now)", "Can manage secrets
+(paused: no project to deploy now)", the
 projects it reaches, a person's with their role there today, "calendar
 (Admin)", "cms (paused: Viewer now)", "photos (paused: no role now)", the
 owner's own with those it created, "notes (created)", when it was created,
 last used and until when, and *Revoke*, which needs no unlock. *New token*
 once unlocked, *Unlock to create* before. Then **Recent deployments** and
 **Token activity**, with an *All activity* link, side by side in a wide body.
+Token activity holds the tokens' creations and deployments, and what tokens
+did through the steward, secret changes, restarts and access changes, newest
+first: those in Activity's words, "Set API_KEY", "Restarted", "Tried to
+list the secrets" for a listing refused, never "Tried to read", which says a
+value, in attention or error when refused or failed, over a line naming the
+token by its label,
+a person's followed by their email for the owner, then the project and how
+it ended: "Release agent · calendar", "alice-ci (alice@example.com) · cms ·
+Refused: no secrets permission".
 The owner sees every token; a person sees their own alone, and mints them
 under their own unlock, never beyond their roles; a person who is a Viewer
 everywhere reads "Tokens are for Developers and Admins. You're a Viewer on
@@ -563,8 +573,16 @@ server but the platform's, a person's only those where they are a Developer
 or an Admin, each with that role; and below them *New projects*, the create
 right, for a person only while they hold it. Then *Permissions*, all off at
 first, one line each on when it is needed: *Deploy public sites*, *Use
-outbound network*, *Declare a domain*; a person's only when they are an
-Admin of every project chosen. One a project chosen cannot be deployed
+outbound network*, *Declare a domain*, the three of a person's only when
+they are an Admin of every project chosen, the note saying so, "Public
+sites, outbound network and a domain only when you are an Admin of every
+project chosen."; and *Manage secrets*, "Lists each project's secret files
+and variable names, sets and removes the variables of its .env. Never reads
+a value back.", never greyed for a person, a Developer changing a project's
+secrets already, and sent only when ticked, so that a steward from before
+it still mints the rest; ticked against one, the dialog says "The server's
+steward predates this permission: run sitesolide upgrade." One a project
+chosen cannot be deployed
 without is ticked for you and says which, "Needed by bookshop and wheels":
 a public project for the owner's own, exempted paths, a declared domain.
 Then *Expires*. The token is then shown once, with *Copy message*.

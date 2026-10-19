@@ -129,6 +129,12 @@ describe("the hints", () => {
     expect(hint).not.toContain("--force");
   });
 
+  test("busy names a token's previous restart as well as a deployment, and asks once", () => {
+    expect(hintForFailure("busy", "this token's previous restart is still under way: wait for its verdict, then ask again")).toContain("previous restart is still under way");
+    expect(REMOTE_HINTS.busy).toContain("a deployment of this project is already running");
+    expect(REMOTE_HINTS.busy).toContain("never retry in a loop");
+  });
+
   test("every refusal of share and people has its code's hint, whichever way they run, and so has every code the API's access answers", () => {
     const source = readFileSync(join(import.meta.dir, "..", "cli", "access.ts"), "utf8");
     const codes = new Set([...source.matchAll(/error: "([a-z-]+)"/g)].map((match) => match[1]!));
@@ -142,6 +148,32 @@ describe("the hints", () => {
     expect([...codes].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
     expect(hintForFailure("steward-outdated", "the steward on the server has no owner's socket")).toContain("sitesolide upgrade");
     expect(hintForFailure("locked", "giving Admin needs the dashboard's unlock")).toContain("unlock");
+  });
+
+  test("every refusal of a token's run has its code's hint, the secrets routes' and the CLI's own among them", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "cli", "remote.ts"), "utf8");
+    const codes = new Set([...source.matchAll(/error: "([a-z-]+)"/g)].map((match) => match[1]!));
+    // Enough to be sure the scan reads the file.
+    for (const code of ["value-in-arguments", "needs-stdin", "cancelled", "restart-failed", "needs-ssh", "unknown-option", "stdin-is-terminal", "looks-like-value", "unconfirmed"]) expect(codes.has(code)).toBe(true);
+    // What the API answers on its secrets and restart routes (docs/access.md), `unmanaged` the one they add.
+    for (const code of ["unauthenticated", "too-many-attempts", "out-of-scope", "invalid", "not-found", "busy", "too-large", "unmanaged", "not-available", "failure"]) codes.add(code);
+    expect([...codes].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
+  });
+
+  test("a secret's value comes from the user, or from what an agent generates itself, never from the conversation nor a command line", () => {
+    for (const code of ["value-in-arguments", "needs-stdin", "secret-missing", "stdin-is-terminal", "looks-like-value"]) {
+      expect(REMOTE_HINTS[code]).toContain("never a value read from the conversation");
+      expect(REMOTE_HINTS[code]).toContain("sitesolide secrets set NAME");
+    }
+    // A key typed where the name goes: the user is told to change it, as for one on the line.
+    expect(REMOTE_HINTS["looks-like-value"]).toContain("shell's history");
+    // A change whose answer never came: checked, then made again once, never in a loop.
+    expect(hintForFailure("unconfirmed", "the change of shop.env was sent and its answer never came: it may have been written")).toContain("sitesolide secrets --json");
+    expect(REMOTE_HINTS.unconfirmed).toContain("never retry in a loop");
+    expect(REMOTE_HINTS["secret-missing"]).toContain("never put secret values in the repository");
+    expect(REMOTE_HINTS["needs-ssh"]).toContain("secrets, restart and login");
+    expect(hintForFailure("restart-failed", "the service of shop did not hold after its restart")).toContain("never restart in a loop");
+    expect(hintForFailure("unmanaged", "shop.env is not managed here")).toContain("tell the owner");
   });
 
   test("the codes of what is gone have no hint left: members and the portal's own sharing", () => {

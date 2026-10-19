@@ -7,7 +7,10 @@ API keys, tokens, password hashes: what must never enter git.
 files from it with `EnvironmentFile=` when the service starts. The dashboard
 manages every file there, from its *Secrets* section: you read a value, set or
 remove a variable, create a declared file that is missing, restore the
-previous version, and restart the service with a verdict.
+previous version, and restart the service with a verdict. A token minted with
+*Manage secrets* sets and removes the variables of `<slug>.env` from a
+workstation or an agent's sandbox, `sitesolide secrets set NAME`, and never
+reads one back: see [access.md](access.md#secrets-with-a-token).
 
 The backups keep a copy, so that a lost machine does not take its secrets
 along: every hour, `/etc/sitesolide` goes into the server's restic repository
@@ -32,6 +35,7 @@ dashboard already knows the file belongs to the site.
 | The owner, with the dashboard's password | read, write, create, restore, change a password hash | the same: `dashboard.env`, `portal.env`, `dashboard-monitor.env` |
 | An Admin of the project | read, write, create, restore | nothing |
 | A Developer of the project | write without reading back: set, replace or remove a variable, replace a file read whole, create a declared file. No value, no size, no previous version ever comes back to them | nothing |
+| A token with *Manage secrets*, a person's token bounded by the person's role, whoever minted it | list the files and variable names; set, replace and remove the variables of `<slug>.env` alone, and create it, when the deployed manifest declares it. Never a value, a size or a previous version back, whoever holds it, and no unlock asked | nothing |
 | A Viewer, or someone who can only open the site | nothing: the Secrets section is not theirs | nothing |
 
 The steward decides every one of these, as root, on its own access registry:

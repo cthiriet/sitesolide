@@ -18,6 +18,7 @@ export const OPERATIONS: Operation[] = [
   "unlock",
   "lock",
   "read",
+  "list",
   "set",
   "remove",
   "create",

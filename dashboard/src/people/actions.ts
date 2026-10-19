@@ -44,9 +44,13 @@ export type Routes = Record<string, Record<string, Handler>>;
 /**
  * Who the steward acts for: the email it verified, as the journal writes it.
  * `readsBack`: a member whose role reads values back, an Admin; a
- * Developer's answers show every file write-only.
+ * Developer's answers show every file write-only. `token`: the id of the
+ * token the control routes judged (src/control/steward.ts), `actor` then
+ * `token:<id>` and `member` the person it belongs to, null for the owner's
+ * own. A token is held to what a person is held to, the owner's own
+ * included: never the machine's files, never a value read back.
  */
-export type Who = { actor: string; member: string | null; readsBack?: boolean };
+export type Who = { actor: string; member: string | null; readsBack?: boolean; token?: string };
 
 /** The owner's operations, taken with the member as `who`. They run under the steward's lock. */
 export type MemberOps = {

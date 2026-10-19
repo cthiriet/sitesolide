@@ -463,7 +463,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
         if (missing.length > 0) {
           throw new Stop(
             "secret-missing",
-            `/etc/sitesolide/${missing.join(", /etc/sitesolide/")} missing: the owner of the machine creates it in the Secrets section of https://dashboard.${zone}/ for ${slug}, then deploy again; the files are in place, the service was not restarted`,
+            `/etc/sitesolide/${missing.join(", /etc/sitesolide/")} missing: the owner of the machine creates it in the Secrets section of https://dashboard.${zone}/ for ${slug}, or a token that may manage secrets creates it with sitesolide secrets set, then deploy again; the files are in place, the service was not restarted`,
           );
         }
       }

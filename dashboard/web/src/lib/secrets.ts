@@ -436,6 +436,7 @@ const OPERATION_NAMES: Record<Operation, string> = {
   unlock: "Unlock changes",
   lock: "Lock changes",
   read: "Read",
+  list: "List secrets",
   set: "Set",
   remove: "Remove",
   create: "Create",
@@ -512,6 +513,7 @@ export function operationPlace(entry: LogEntry): { project: string | null; file:
     case "remove":
     case "password":
       return { project: clean(entry.slug), file: clean(entry.file) }
+    case "list":
     case "create":
     case "restore":
     case "replace":

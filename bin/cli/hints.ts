@@ -120,6 +120,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   // --- secrets: never in the repository
   [/^secret missing on the server/, "ask the owner to create this file and its variables in the dashboard's Secrets section (the address is in `details`), then run deploy again; never put secret values in the repository or in sitesolide.json"],
   [/^secrets are managed in the Secrets section/, "secrets are set in the dashboard's Secrets section, at the address in the message; there is nothing to run here"],
+  [/^a service is restarted from the dashboard/, "the owner restarts it with Restart service, in the project's Overview on the dashboard at the address in the message; there is nothing to run here, and never a systemctl restart by hand over SSH"],
   [/^no secret declared in the manifest/, "`sitesolide run` only loads declared secrets: declare `secrets` in sitesolide.json if the command needs one"],
   [/^usage: sitesolide run/, "pass the command after a double dash: sitesolide run -- <command>"],
   [/^missing from the vault/, "only the owner can put that file in the workstation's vault, at the path in the message; never write a secret yourself"],
@@ -158,7 +159,8 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
  * pattern of HINTS reads them; a code this table lacks falls back to them.
  * `share` and `people` report by code whichever way they run, over the
  * owner's SSH too: bin/tests/cli-hints.test.ts fails on a code of
- * bin/cli/access.ts this table lacks. So does `machine`, which talks to a cloud provider's API rather
+ * bin/cli/access.ts this table lacks, and on one of bin/cli/remote.ts, whose
+ * `secrets` and `restart` add their own. So does `machine`, which talks to a cloud provider's API rather
  * than to the dashboard: bin/tests/cli-machine.test.ts fails on a code of
  * bin/cli/machine.ts or bin/cli/providers/ this table lacks.
  */
@@ -166,22 +168,37 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   // --- refused before a request leaves
   "no-dry-run": "review sitesolide.json with the user, then run `sitesolide deploy` without --dry-run once they agree: the machine judges the manifest before anything is built or uploaded",
   "unknown-option": "run the command without that option; `details` lists the ones it takes with a token",
-  "needs-ssh": "this command is the owner's: ask the owner of the machine to run it; with a token, only deploy, status, logs, share and login run",
+  "needs-ssh": "this command is the owner's: ask the owner of the machine to run it; with a token, only deploy, status, logs, share, secrets, restart and login run",
+  "value-in-arguments":
+    "never put a secret's value on a command line: the user runs `sitesolide secrets set NAME` in their terminal and types it at the prompt; a value you generate yourself, a random key, you may pipe to `sitesolide secrets set NAME --stdin`; never a value read from the conversation; if a real value was on that line, tell the user to change it at its source",
+  "needs-stdin":
+    "nothing prompts here: ask the user to run `sitesolide secrets set NAME` in their own terminal and type the value; a value you generate yourself, a random key, you may pipe to `sitesolide secrets set NAME --stdin`; never a value read from the conversation",
+  "stdin-is-terminal":
+    "standard input is a terminal, where a value would show as it is typed: a value you generate yourself, a random key, you pipe to `sitesolide secrets set NAME --stdin`; otherwise the user runs `sitesolide secrets set NAME` without --stdin in their own terminal and types the value at the prompt, which does not echo it; never a value read from the conversation",
+  "looks-like-value":
+    "what stands where the variable's name goes looks like a secret's value: if it was one, tell the user it may now be in the shell's history and has to be changed at its source; then run `sitesolide secrets set NAME` with the variable's real name, the user typing the value at the prompt, or a value you generate yourself piped to --stdin; never a value read from the conversation; a variable really named so is set by the user from the dashboard's Secrets section",
+  cancelled: "nothing was sent: run the same command again once the value is at hand",
   usage: "run one of the commands `details` lists",
   // --- the control API
   unauthenticated: "the token is missing, unknown, expired or revoked: ask the owner of the machine for one, then run `sitesolide login`; never guess a token or borrow another one",
   "too-many-attempts": "wait the seconds `details` names, then run the same command once; never retry in a loop",
-  "out-of-scope": "this may not be done by whoever asks: change what the message names (in sitesolide.json for a deployment, in the command for access), or ask the owner of the machine, who may widen the token or do it themselves; never pick another slug, role or token to get around it",
+  "out-of-scope": "this may not be done by whoever asks: change what the message names (in sitesolide.json for a deployment, in the command for access), or ask the owner of the machine, who may widen the token or do it themselves; never pick another slug, role or token to get around it, nor another file for a secret",
   reserved: "the slug belongs to the platform: pick another one in sitesolide.json",
   "invalid-manifest": "fix every point of `details` in sitesolide.json (docs/manifest.md), then deploy again",
   invalid: "fix what the message names, then run the same command again",
   "not-found": "nothing by that name: check the slug in sitesolide.json, and the address or @domain in the command (`sitesolide share` lists who has access); with a token, `sitesolide status` lists the projects it reaches",
-  busy: "a deployment of this project is already running: wait for it to finish, then deploy again",
+  busy: "a deployment of this project is already running, the token's previous restart is still under way, or the machine is busy with other changes: wait for it to finish, then run the same command again once; never retry in a loop",
+  unmanaged:
+    "the file on the machine was written by hand, in a form the dashboard does not rewrite, and nothing was changed: tell the owner of the machine, who fixes it from the dashboard's Secrets section; never work around it",
+  "restart-failed":
+    "the service did not hold after its restart: read `sitesolide logs --json` to see why, fix the cause, a value the user sets again with `sitesolide secrets set NAME` or the code deployed again, then run `sitesolide restart` once; a change of secrets made with it is already written; never restart in a loop",
   "too-large": "exclude dependencies, caches and build leftovers in sitesolide.json: the machine installs the dependencies itself",
   expired: "the archive arrived too late: run `sitesolide deploy` again",
-  "not-available": "the machine does not carry what this needs yet, the control API or the access registry: tell the owner of the machine, with the message, which names what to update; nothing more can be done from here until then",
+  "not-available": "the machine does not carry what this needs yet, the control API, the access registry or secrets by token: tell the owner of the machine, with the message, which names what to update; nothing more can be done from here until then",
   failure: "something broke on the machine: tell the owner of the machine, with the message; do not retry in a loop",
   unreachable: "the dashboard did not answer: check the network and the address (`sitesolide login --url`), then run the same command again",
+  unconfirmed:
+    "the change was sent and its answer never came, so it may be written: run `sitesolide secrets --json` to read the file's names, then run the same set or remove once more, which is harmless; never retry in a loop; if the dashboard stays unreachable, check the network and the address (`sitesolide login --url`)",
   unreadable: "the address answered with something that is not the control API: check it with `sitesolide login --url https://dashboard.<zone>`",
   // --- access, with a token or over the owner's SSH
   "ssh-failed": "a command over SSH failed, nothing was changed: run the same command again; if it fails twice, check that `ssh <server> true` connects without a prompt (load the key with ssh-add)",
@@ -194,7 +211,8 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "no-portal": "the project is not restricted: its general access is the dashboard's Access section",
   // --- a deployment that failed on the machine
   "install-failed": "run the install command from the message in the project folder, fix what it reports, then deploy again",
-  "secret-missing": "ask the owner of the machine to create that file in the dashboard's Secrets section, then deploy again; never put secret values in the repository or in sitesolide.json",
+  "secret-missing":
+    "the file is created in the dashboard's Secrets section, by the owner or the project's Developer or Admin; for <slug>.env, a token that may manage secrets creates it with `sitesolide secrets set NAME`, which the user runs and types the value into, or with --stdin for a value you generate yourself; then deploy again; never put secret values in the repository, in sitesolide.json or on a command line, and never a value read from the conversation",
   "secret-taken":
     "the project would read a secret file that is not its own: pick another slug in sitesolide.json, or tell the owner of the machine, who looks at the file the message names; never declare another file, and never move, rename or delete one on the machine",
   "edited-by-hand": "do not re-run with --force, a token has none: tell the owner of the machine, who reads the file and decides",

@@ -5,7 +5,7 @@ levels. **The machine**: *Sites*, the home page, with the state of the machine,
 the discrepancies between what the repositories ask for and what the machine
 does, the only part of the dashboard that teaches you something, and the list
 of sites; *Activity*, the audit of the whole machine, every component's in one
-log; *Tokens*, the tokens that deploy without SSH; *People*, everyone with
+log; *Tokens*, the tokens that deploy without SSH, and what they did; *People*, everyone with
 access to a project, their roles, and who may create projects; *Connectors*,
 the credentials the egress proxy lends to projects. **A site**: *Overview*,
 *Audience*, *Secrets*, *Access* and *Backups*, everything that concerns that
@@ -28,7 +28,9 @@ relays to a component that judges for itself what it accepts:
   [Access by token](#access-by-token);
 - **the secret files of every deployed project** in `/etc/sitesolide`, and the
   restart of its service, the *Secrets* section. The steward, a root daemon,
-  decides;
+  decides; a token with *Manage secrets* sets the variables of its
+  `<slug>.env` through the control API, never reading one, see [Secrets by
+  token](#secrets-by-token);
 - **a project's general access, Public, Restricted or Anyone with the code,
   and a new code**, in its *Access* section, the only buttons in the dashboard
   that reload Caddy. The steward asks the gatekeeper, a root one-shot that
@@ -397,7 +399,10 @@ roles or password access. Without an unlock, it can give Can open to the
 company's people and domains, restrict a site, and take anyone's access away,
 through the steward, which records each under the owner's name (see the [threat model of access](#threat-model)). It never touches Caddy itself, the
 gatekeeper refuses everything its own rules refuse, and restores. It cannot
-rewrite the hash that unlocks the secrets, which belongs to root.
+rewrite the hash that unlocks the secrets, which belongs to root. It also sees
+the values a token with *Manage secrets* sets as they pass, and can set them
+with that token, within its scope: no more than the token, which already
+deploys the code that reads them ([Secrets by token](#secrets-by-token)).
 
 ## Connectors
 
@@ -481,7 +486,7 @@ below it:
 |---|---|---|
 | **Can open** (`visitor`) | opens the site when its general access is restricted, and sees nothing in the dashboard | none |
 | **Viewer** | also sees the project in the dashboard: its state, audience and activity | none |
-| **Developer** | also restarts its service; lists its secret files, names and metadata; sets, replaces and removes a variable, replaces a file read whole, creates a declared file, and never reads a value back; deploys it with a token of their own | to write, to mint a token |
+| **Developer** | also restarts its service; lists its secret files, names and metadata; sets, replaces and removes a variable, replaces a file read whole, creates a declared file, and never reads a value back; deploys it with a token of their own, which may also restart it and, minted with *Manage secrets*, set and remove the variables of its `<slug>.env` | to write, to mint a token; none for a token's change, minting it took one |
 | **Admin** | everything of the project: what a Developer does, reads a value or a file back, restores a file's previous version, chooses its general access, Public, Restricted or Anyone with the code, reads its code and draws a new one, gives and takes away access to it, a role at most their own, lists and restores its backups; a token of theirs may also deploy it in the open, declare a domain and reach outside hosts | to read, write, restore, make a site public, give it a code or a new one, give a role above Can open or password access, mint a token |
 
 Who may hold which role is the steward's to decide, alone
@@ -841,6 +846,7 @@ token is never stronger than the person**:
 | a slug | a Developer or an Admin role on it (`deploy`) |
 | `create` | the person's create right |
 | `public`, `domain`, `outbound` | Admin of every slug of the token (`deploy.public`, `deploy.domain`, `deploy.outbound`); with `create` alone, the projects it creates being theirs to administer |
+| `secrets` | a Developer or an Admin role on every slug when minted (`secrets.write`); then, at each request, `secrets.list` or `secrets.write` on the project asked, so that one project lowered does not take it off the others; kept while the token reaches a project or may create one |
 
 ```
 page, Tokens, New token                      the person's session, unlocked
@@ -1038,6 +1044,7 @@ reading, giving Can open, removing, is what the owner's session allows.
 | owner's | `POST /general` `{ slug, access, renew? }` | root's general access, `sitesolide lock` and `unlock`: no unlock, no retyping, the owner's bound over SSH, journaled under `owner`; the code in the answer |
 | dashboard's | `POST /general` `{ token?, slug, access, renew?, confirmation }`, `POST /portal` | the owner's session's general access; `/portal`, `{ active }`, the route before the code, still answers in its shape |
 | dashboard's | `POST /control/access/list` `{ bearer, slug }`, `PUT` and `DELETE /control/access` `{ bearer, slug, who, role? }` | a token's, see [Access by token](#access-by-token) |
+| dashboard's | `POST /control/secrets/list` `{ bearer, slug }`, `PATCH /control/secrets` `{ bearer, slug, file, set, remove }`, `POST /control/restart` `{ bearer, slug }` | a token's, see [Secrets by token](#secrets-by-token) |
 | dashboard's | `GET /tokens/list`, `POST /tokens/create` `{ token, label, holder, expiresAt, scope }`, `POST /tokens/revoke` | the owner's: every token, one made for themselves (`holder: owner`) or for a person of People, minted within that person's roles |
 | dashboard's | `POST /tokens/person/list`, `/tokens/person/create`, `/tokens/person/revoke` | a person's own tokens, see [A person's own tokens](#a-persons-own-tokens) |
 | owner's | `DELETE /tokens/project` `{ slug }` | a project removed: the name its token owned free again, and its people with access dropped, once the machine no longer carries it |
@@ -1062,7 +1069,8 @@ the same eight seconds of observation, without its check that the unit reads
 a managed file: a person restarts a service to restart it. Their role is
 asked again once the lock is taken: removed while it waited, nothing
 restarts. A static site has no service; the dashboard is never anyone's but
-the owner's.
+the owner's. A token's restart is the same code, journaled under
+`token:<id>`, the person beside it for their own token.
 
 ### Threat model
 
@@ -1070,7 +1078,7 @@ the owner's.
 |---|---|
 | A compromised dashboard | It cannot raise anyone above Can open, nor give the create right: the registry is root's, and that takes the owner's unlock or an Admin's, which takes a forced sign-in the portal signs. It cannot forge an assertion: the private key is the portal's alone. Every write and every secret read is judged by the steward on its own registry, by role, and it never reads a value a person's role does not reach. It acts for the people whose sessions pass through it while it is compromised, within their roles, and during a person's unlock within what that unlock opens, their projects' secrets for an Admin. Without any unlock it can give Can open to the company's people and listed domains, restrict a site, and remove anyone, as it could open sites to them and remove people before: only through the steward, under the owner's name or a session's, every change in the steward's journal. Password access, which lets someone from outside the company in, takes an unlock, as a role above Can open does. It sees a password access's password once, as it carries it to the page; never a hash nor an identifier, since the steward hands out views. It can no longer name a person or a token as the author of a change it made: the steward writes the actor it verified, and the portal records no change of access at all. It mints a person's token only during that person's unlock, within their roles, and every use of it is narrowed to their roles by the steward. During an owner's unlock it can do what an unlock allows, roles included, as it can already create a token. |
 | A compromised portal | As before, it opens every restricted site, can sign an assertion for anyone, a forced sign-in's included, and act as anyone who signs in to the dashboard, within their roles, their unlock included. It cannot change the registry, root's, nor the projection, which root writes and it only reads: it gives nobody a role. It records no change of access any more, so it can no longer write one under anyone's name. |
-| A stolen token | Can open alone, on the projects it reaches, a person's own only where the person is Admin now, to the company's people and domains; never password access for someone outside them, never a role above Can open; it removes Can open entries alone. Every change is in the steward's journal under `token:<id>`. See [Access by token](#access-by-token). |
+| A stolen token | Can open alone, on the projects it reaches, a person's own only where the person is Admin now, to the company's people and domains; never password access for someone outside them, never a role above Can open; it removes Can open entries alone. Every change is in the steward's journal under `token:<id>`. See [Access by token](#access-by-token). Minted with *Manage secrets*, it also sets and removes the variables of `<slug>.env` there, never reading one back, within its hourly bounds: see [Secrets by token](#secrets-by-token). |
 | A stolen person's token | Within the person's roles at each request, not as minted: lowered, they narrow it; no longer signing in, it is revoked and refused. Revoked from the person's *Tokens* page or the owner's, no unlock. Every deployment under `token:<id>`, the person named. |
 | A person above their roles | The steward refuses the scope before the token exists, every reason journaled; and should the registry move after, it narrows the token at every use and the installer at its start. |
 | A stolen session cookie | Half a day at most, within that person's roles, and without their unlock, which needs a forced sign-in at the provider: what reads or writes a secret, makes a site public, restores or raises someone above Can open stays closed. Removing them closes it at the next request. |
@@ -1479,7 +1487,7 @@ installer.js       root, one-shot, one project: the pipeline of `sitesolide depl
 |---|---|---|---|
 | The CLI | the holder | the project's folder, the token | nothing on the machine directly |
 | `server.ts` | `site-dashboard` | its database, the snapshot | `data/control/<id>/bundle.tar.gz`, `deployments` and `audit` in `dashboard.db` |
-| The steward | root, the socket | `team.json`, the installer's results, the journal | `team.json`, `installs/<slug>.json` |
+| The steward | root, the socket | `team.json`, the installer's results, the journal | `team.json`, `installs/<slug>.json`, and `/etc/sitesolide/<slug>.env` for a token that manages secrets |
 | The installer | root, one-shot | the request, the staged archive's descriptor, the manifests | `/srv/sites/<slug>`, its units, its block, `/etc/passwd` through `useradd`, and `userdel` for a new project it refused |
 | The extractor | `site-<slug>`, transient unit | the archive on stdin | the staging directory, nothing else |
 | `install` | `site-<slug>`, transient unit | the staged `app/` | the staged `app/`, mounted at its final path |
@@ -1490,8 +1498,9 @@ would let it deploy code into any project, at any time, without the password.
 Held by root, a token is judged where the decision is enforced. The dashboard
 still checks the shape of what it receives, refuses early what the steward
 would refuse (a manifest that does not validate, a scope it reads in the
-identity the steward returns), and keeps what is its own: the deployments it
-was asked for and the audit.
+identity the steward returns; for a token's secrets, a malformed body alone,
+the steward journaling the rest), and keeps what is its own: the deployments
+it was asked for and the audit.
 
 **Root never parses an archive.** The extraction is the project's own account,
 in a unit that sees nothing of `/srv` but the staging directory, with no
@@ -1537,7 +1546,11 @@ differ, both on purpose:
 - **One per person**: whose it is, the owner's or a person's from *People*, a
   label, an optional expiry, and a scope, all off by default: existing slugs it may deploy; whether it may create projects,
   deploy public sites, use outbound network (`network: outbound` or `egress`),
-  declare a domain. The owner's belong to the owner; a person who signs in to
+  declare a domain, manage secrets (see [Secrets by token](#secrets-by-token)).
+  *Manage secrets* is offered to a person as to the owner, never forced off
+  for a Developer; a token's row then reads *Can manage secrets*, and a
+  dashboard newer than its steward refuses to mint one with the box ticked,
+  saying to run `sitesolide upgrade`. The owner's belong to the owner; a person who signs in to
   the dashboard mints their own, narrowed to their roles at every use: see
   [A person's own tokens](#a-persons-own-tokens).
 - **Ownership**: a project a token creates is recorded as its own at the start
@@ -1648,11 +1661,152 @@ registry answers these routes `no such route`, which the API turns into
 `not-available`, saying to run `sitesolide upgrade`; a steward that does not
 answer, into `failure`, 502.
 
+### Secrets by token
+
+A token minted with *Manage secrets* lists its projects' secret files and
+variable names, and sets and removes the variables of `<slug>.env`; any
+token that deploys a project restarts it. `sitesolide secrets`, `secrets
+set`, `secrets remove` and `restart` in its folder, or the routes under them:
+`GET /api/v1/projects/<slug>/secrets`, `PATCH
+/api/v1/projects/<slug>/secrets/<slug>.env` with `{ set, remove, restart }`,
+and `POST /api/v1/projects/<slug>/restart`. The holder's side is in
+[docs/access.md](../docs/access.md#secrets-with-a-token).
+
+```
+sitesolide secrets set API_KEY (a person, an agent)   Authorization: Bearer sst_...
+   |  HTTPS, PATCH dashboard.<zone>/api/v1/projects/<slug>/secrets/<slug>.env
+   v
+server.ts          the body judged whole: its fields, every name's shape, every value;
+   |               nothing else, the token's reach, role, flag and file being the steward's
+   |  PATCH /control/secrets { bearer, slug, file, set, remove }   on the steward's socket
+   v
+steward.js         src/control/steward.ts: the body again, the bearer, the person's role,
+   |               the project it reaches, the flag, the file, the hourly bounds; under the
+   |               secrets' lock, all of it once more, then src/secrets/steward.ts writes
+   |-- writes      /etc/sitesolide/<slug>.env, once, its previous version kept
+   `-- journals    create, set, remove, one line per name, under token:<id>
+      then, with `restart: true`, POST /control/restart { bearer, slug }
+```
+
+The dashboard refuses a malformed body alone, and builds every answer from
+the fields it knows; the steward judges and writes, and journals its
+refusals. The dashboard leaves to it a token without the flag, a file
+other than `<slug>.env` and a project its narrowed identity no longer
+names: refused early, none of those would reach the journal, and a person
+lowered to Viewer would read "no project" instead of the refusal naming
+their role. In order:
+
+1. **The body.** `set` is an object read with `Object.entries` into pairs,
+   never assigned into one, `"__proto__"` being a valid variable name;
+   `remove` a list; each optional, `{}` alone creating the file. Every name's
+   shape and every value (`checkValue`: one line, no null byte, valid
+   Unicode, 8 KiB) are judged before the token is: fifty names at most, none
+   in both lists (src/control/secrets.ts). The dashboard judged the same
+   first, so that nothing malformed reaches the machine, and refuses a body
+   past 512 KiB as `too-large`. A refusal names a variable only when it has a
+   variable name's shape, and never quotes a value. Not journaled: no token
+   is known yet.
+2. **The bearer**: unknown, expired, revoked, or its person no longer signing
+   in, `unauthenticated`.
+3. **A person's role first**, as for a deployment: `secrets.list` to list,
+   `secrets.write` to change, `restart` to restart, a Developer's each; below,
+   `out-of-scope` naming the role, a refusal journaled with it.
+4. **The project among those the token reaches**, narrowed: any other reads
+   `not-found`, not journaled, a guess learning nothing; then the machine must
+   carry it.
+5. **The `secrets` flag**, to list and to change; without it `out-of-scope`,
+   journaled `no secrets permission`, a listing as `list`, which Activity
+   reads "Tried to list the secrets", never as a value read. A restart does
+   not need it.
+6. **An owner's token without `public`** changes the secrets of a project
+   only when it could deploy the deposited manifest as it stands
+   (src/control/policy.ts, `decideManifest`: no path exempted from the
+   portal, no domain or outbound network outside its scope, nothing else its
+   scope refuses) and the project is restricted as its general access reads
+   it, the portal asked for and its protected block in service
+   (`secretsForToken.restricted`); otherwise `out-of-scope`, journaled `not
+   restricted`. The manifest's `portal` alone would say "restricted" for a
+   site with public exempted paths, or one whose protected block is not in
+   place.
+   It still lists and restarts. A person's token answers to the role instead.
+7. **The file**: `<slug>.env` alone, any other refused, its name never
+   quoted nor journaled, a value pasted in its place would stay.
+8. **A restart** is refused `busy` while `sitesolide-installer@<slug>` runs,
+   which restarts the service at its end, and while the same token's
+   previous restart is under way.
+9. **The hourly bounds**, per token and in memory, a restart of the steward
+   forgetting them: 120 for changes, a name set or removed costing one, a
+   request one at least, `{}` included, and a file it created one more; 30
+   restarts; 60 refusals, charged by 3, 5, 6 and 7 before the line is
+   written. Past any of them, `too-many-attempts` with `wait`, and a refusal
+   past its bound journaled no more. A change and a restart are counted
+   before the work, refused or not: a refused change is a journal line too.
+   One token thus writes 210 journal lines an hour at most, and the journal
+   keeps its latest 500 at least (src/secrets/log.ts): a stolen token cannot
+   push its last hour out by itself. Its refusals spend its own bound, never
+   the people's per minute, which one token would otherwise fill for
+   everyone.
+10. **Once its turn has come**, under the secrets' lock for a change, in the
+    project's own turn for a restart, the bearer, the registry and
+    `team.json` are read anew, without counting a use, and 3 to 6 judged
+    again, and for a restart the installer of 8: a token revoked, a person lowered, or a
+    deployment started while the request waited, and nothing is written or
+    restarted; a restart refused then is journaled, `busy` or `no longer
+    allowed`.
+11. **The write** (src/secrets/steward.ts, `changeVariablesTask`): the
+    platform's projects and the files kept for root refused
+    (`machineRefusal`, an owner's token now included); the deployed manifest
+    an app's that declares `<slug>.env` (src/secrets/scope.ts,
+    `tokenFileRefusal`): present but undeclared, refused, absent and
+    undeclared, never created, a refusal judged after the hourly bound, so it
+    spends the request's cost; every name against the unit's own variables,
+    the reserved ones and `PASSWORD_HASH`, all before anything is written;
+    `<slug>.env` created when missing, unless the request only removes,
+    `not-found` then; a file in a form the steward does not rewrite refused
+    `unmanaged`, 409, untouched; the change applied, the 256 KiB cap
+    measured, one write keeping the previous version, one journal line per
+    name. A set is always written and journaled, whether the value changed
+    or not; a name to remove that the file lacks comes back in `absent`,
+    nothing journaled.
+
+**A token's restart never takes the secrets' lock.** It waits for the
+restarts of the same project alone (`tokenRestartTurn`): `reset-failed`, a
+`restart` that waits up to 30 seconds for a unit ignoring SIGTERM, and eight
+seconds of observation would hold that lock some 43 seconds, so that thirty
+restarts an hour would queue everyone's writes, door changes and restores,
+then refuse them `busy`. A write needs nothing of a restart: the file is
+replaced whole by a rename, and the service starts on one version or the
+other. A person's restart and the owner's keep their place under the lock.
+
+**Every token reads what a Developer reads**, an Admin's own and the owner's
+included: no value, no size, no previous version, and `writable` on a
+declared `<slug>.env` alone. The dashboard withholds a steward's message that
+would quote a value sent, records nothing in `dashboard.db`, and never logs
+the body. **No unlock**: minting the token took it, and *Manage secrets* is
+the opt-in. *Token activity*, on *Tokens*, reads the steward's journal for
+the rows of `token:<id>`, a person their own tokens' alone, beside the
+deployments of `dashboard.db`; the project's *Activity* shows the same rows,
+"Set API_KEY" by "alice@example.com (token)". It reads the journal's latest
+250 lines: on a busy machine they cover a short while, and the project's
+*Activity* reads further back, until the journal drops the line.
+
+A restart with the change is a second call to the steward once the write
+succeeded: refused, `busy` or past its bound, it leaves the write and its
+status as they are, and the answer's `restart` says why. The route keeps
+the connection open for both calls (src/control/api.ts,
+`SECRETS_CHANGE_IDLE_S`, twice the long delay): with one call's, the
+connection would be cut once the write was made, and the client would read
+a failure for a change the machine had made. A steward from before these routes
+answers `no such route`, which the API turns into `not-available`, saying to
+run `sitesolide upgrade`; its queue of writes full, or a restart's turn, a
+503, into `busy`, to be asked again.
+
 ### Threat model
 
 | Threat | What stops it |
 |---|---|
-| A stolen token | Its scope: the projects granted and its own, private sites unless allowed. Every deployment is in the audit with the token's id and email. Of access, Can open alone, to the company's people and domains, never password access for someone outside them, and the removal of Can open entries, every change in the steward's journal under `token:<id>`. Revoking takes one click and no password; an expiry ends it anyway. |
+| A stolen token | Its scope: the projects granted and its own, private sites unless allowed. Every deployment is in the audit with the token's id and email. Of access, Can open alone, to the company's people and domains, never password access for someone outside them, and the removal of Can open entries, every change in the steward's journal under `token:<id>`. It restarts the projects it deploys, 30 times an hour at most, one at a time, never holding the secrets' lock. Revoking takes one click and no password; an expiry ends it anyway. |
+| A stolen token with *Manage secrets* | An accepted risk, the permission being the opt-in, and bounded: it writes without an unlock, but never reads a value, a size or a previous version back; `<slug>.env` alone, declared by the deployed manifest, never `PASSWORD_HASH`, a variable the unit sets, a reserved one (`LD_PRELOAD`, `HTTPS_PROXY`), another file or a platform project's; an owner's token without `public` only on a project restricted on the machine that it could deploy as it stands; 120 changes an hour. Every change is a line of the steward's journal under `token:<id>`, on *Token activity*, and the file keeps its previous version, which the owner or an Admin restores. Its refusals are journaled too, 60 an hour, then refused `too-many-attempts` unjournaled: one token writes 210 lines an hour at most, and the journal keeps its latest 500 at least, so a stolen token cannot push its last hour out by itself. *Token activity* reads the latest 250 lines, a short while on a busy machine; the project's *Activity* goes further back. The 256 KiB cap tells it roughly how large the file is, nothing of its values. The default expiry stays 90 days. |
 | A malicious archive | Read by the project's account in a confined unit, never by root; links, devices, `..`, absolute paths and duplicates refused, data and entries capped while reading; nothing served changes until the whole archive extracted. |
 | A malicious manifest | Re-validated on the machine with the CLI's `validate()`, then the scope; the unit and block are generated from it by the same generators as over SSH. Every string that lands in a block or a unit is judged for it: header values with no `"`, `\`, `{`, `}`, `$` or backtick, since Caddy fills `{$NAME}` and `{env.NAME}` from its own environment, the Cloudflare token included; routes and exemptions that are plain paths; a `start` with no `+`, `!` or other prefix systemd reads, `+` and `!` meaning root; environment values with no space or quote, which would set a second variable; secret names that are plain file names; a `%` escaped. The generators refuse the same again rather than write it. Unknown keys refused, secrets limited to its own file, memory capped. |
 | Path traversal | The tar reader's refusals, the extraction's `O_EXCL` and `O_NOFOLLOW`, the unit that sees only the staging directory; on root's side, slugs and deployment ids checked against their shape before they enter a path. |
@@ -1660,7 +1814,7 @@ answer, into `failure`, 502.
 | A token reaching another project | The slug decision on the steward, again on the installer; secrets limited to `<slug>.env`; `install` runs without the loopback, where the other projects listen, and the extraction without any network. |
 | A token naming its project after a file not its own | The unit reads every declared file as root, whoever owns it, and the slug names the file: `dashboard-backup` would read the backups' keys, `cms-smtp` cms's own `cms-smtp.env`. The installer refuses, before anything is written, `secret-taken`, a file kept for root, a declared file there that is not a plain file of `site-<slug>`, one there before that account exists, and any file another site holds that the new project would take by its name, declared or not (src/installer/claims.ts, the attachment of src/secrets/scope.ts); it checks the declared files again right before the restart. The steward refuses a new slug starting with a platform project's name and a dash, `dashboard-*`, `reserved`, keeping those names free for the files the platform lays later. |
 | A replayed request | The installer refuses a request older than ten minutes or for another slug, and writes nothing for it. |
-| A compromised dashboard | It sees the bearers that pass and can use them within their scope, a person's within the person's roles, and read deployment logs; it cannot mint a token without the password or a person's own unlock, nor deploy without one, nor hand root a file it could not read, nor name a token as the actor of a change of access it made itself: the steward journals the token it judged. |
+| A compromised dashboard | It sees the bearers that pass and can use them within their scope, a person's within the person's roles, and read deployment logs; it cannot mint a token without the password or a person's own unlock, nor deploy without one, nor hand root a file it could not read, nor name a token as the actor of a change of access it made itself: the steward journals the token it judged. It sees the values a token's change of secrets carries as it relays them, as it sees the code that token deploys, which runs with those values anyway: no escalation beyond the token. It reads none back: the steward answers names alone. |
 | A token giving access too widely | It gives Can open alone, on the projects it may deploy, a person's own only where the person is Admin now, to the company's people and domains alone, never password access to someone outside them, never public; it removes Can open entries alone. The steward judges it and writes, every change is in its journal under `token:<id>`, and the owner or an Admin takes it back from *Access*. |
 | A compromised project | Its service's unit binds `app/`, `public/` and `data/` alone, so it never sees the staging directory its next deployment is extracted into; once in place, the trees are handed to the deployment account and bound read-only, as over SSH. |
 
@@ -1822,6 +1976,53 @@ cd dashboard && sitesolide deploy   # 2. the reserved slugs judged first
    names `"slug": "dashboard"` gets `reserved`, 403, "pick another slug".
    Roll back: deploy the previous commit of `dashboard/`; no table changed.
 
+### Upgrading: secrets by token
+
+A token may now manage secrets ([Secrets by token](#secrets-by-token)).
+One thing changes at once: every token already minted restarts the services
+of the projects it deploys, 30 times an hour, a person's own while they are
+Developer or Admin there, journaled under the token; no box is ticked for it,
+a deployment restarting the service anyway. Secrets wait for someone to mint
+a token with *Manage secrets*: every token minted before lists and manages
+none. No file changes form:
+`team.json` keeps `version: 2`, a scope without `secrets` reads false, and
+the next save writes `secrets: false`; a steward rolled back reads it as it
+stands, the extra key ignored.
+
+```bash
+bin/test.sh                         # 0. on the workstation
+sitesolide upgrade                  # 1. the steward, the dashboard, the installer
+```
+
+0. **The workstation.** Pull, then `bin/test.sh`. The CLI brings `sitesolide
+   secrets`, `secrets set`, `secrets remove` and `restart` for a token; over
+   the owner's SSH both still point to the dashboard. Whoever works with a
+   token installs the new binary too: a previous one refuses `secrets` as
+   needing the owner's SSH and `restart` as a usage error.
+1. **The machine.** `sitesolide upgrade` redeploys, in its usual order, the
+   steward, with the three routes and the hourly bounds; the dashboard, with
+   the API's routes, *Manage secrets* in the *New token* dialog and *Token
+   activity* reading the journal; the installer, whose `secret-missing` now
+   names `sitesolide secrets set`. Should the versions meet otherwise, the
+   dashboard deployed alone or the steward's step failed, a new dashboard
+   answers the routes `not-available`, saying to upgrade, and refuses to mint
+   a token with the box ticked: "The server's steward predates this
+   permission: run sitesolide upgrade." An old dashboard in front of the new
+   steward offers none of the routes, which the CLI says as `not-available`.
+   Check, with a token minted with *Manage secrets* for a project that
+   declares `<slug>.env` and whose restart costs nothing, from a workstation
+   with no server: `sitesolide secrets` lists its names; `openssl rand -hex
+   16 | sitesolide secrets set UPGRADE_CHECK --stdin` sets one, which the
+   project's *Activity* and *Token activity* show under the token; then
+   `sitesolide secrets remove UPGRADE_CHECK --restart` takes it out and
+   restarts the service. A token without the permission is refused
+   `out-of-scope`, and still restarts.
+
+**Rolling back**: `sitesolide upgrade` with the previous binary. The
+previous steward ignores the new key and knows no secrets route, which the
+previous dashboard does not offer either; the values tokens set stay in the
+files, and their lines in the journal.
+
 ## Deployment, in this order
 
 ```bash
@@ -1875,6 +2076,7 @@ ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
 | `steward.ts`, `src/secrets/`, `src/connectors/` (steward side), `bin/cli/connectors.ts`, `infra/steward/`, `portal/src/sharing.ts` | `bin/deploy-steward.sh` |
 | `gatekeeper.ts`, `src/gatekeeper/`, `infra/gatekeeper/`, `bin/cli/fragment.ts`, `bin/cli/portal.ts` | `bin/deploy-gatekeeper.sh` |
 | `src/control/steward.ts`, `src/control/system.ts`, `src/control/tokens.ts`, `src/control/policy.ts` | `bin/deploy-steward.sh` |
+| `src/control/secrets.ts`, which both read | `bin/deploy-steward.sh` and `sitesolide deploy` |
 | `src/access/` (but its web routes, `routes.ts` and `client.ts`), `src/people/steward.ts`, `sessions.ts`, `system.ts`, `actions.ts`, `powers.ts`, `unlocks.ts`, `tokens.ts`, `portal.ts`, `infra/steward/sitesolide-portal-relay.*`, `portal/src/assertion.ts`, `portal/src/access.ts` | `bin/deploy-steward.sh`; the last two `sitesolide deploy` in `portal/` too |
 | `installer.ts`, `src/installer/`, `src/control/policy.ts`, `src/people/tokens.ts`, `src/access/registry.ts`, `src/people/powers.ts`, `infra/installer/`, `bin/cli/` generators | `bin/deploy-installer.sh` |
 | `backup.ts`, `src/backup/` (but its steward routes), `infra/backup/` | `bin/deploy-backup.sh install` |
@@ -2015,6 +2217,39 @@ person's general access kept (tests/control-policy.test.ts); and the whole
 road through the real `server.ts`, a person minting on the *Tokens* page
 after a forced sign-in, refused above their roles, deploying, narrowed and
 then removed (tests/people-flow.test.ts).
+
+For secrets by token (tests/control-secrets.test.ts): the real steward and
+the real control steward wired as `steward.ts` wires them, on a throwaway
+tree, `systemctl` simulated: an owner's token listing names alone, writable
+on `<slug>.env` alone; a change set, replaced and removed in one write, one
+previous version, each name journaled under `token:<id>`, the value searched
+for and found nowhere, the answer, the journal, the access log, the previous
+version's name, the console; `__proto__` set as a variable; a declared file
+created, `{}` alone included, an undeclared one never; the permission
+missing, another project, the platform's, a person lowered to Viewer, a
+token revoked or a person lowered while the change waited; every refused
+name, value, file and size refusing the whole change; `unmanaged`; `absent`;
+fifty names a request, 120 names and 30 restarts an hour; 60 refusals an
+hour, past which nothing more is journaled, a stolen token's changes kept in
+the journal through an hour of refused requests, and a person's refusal
+journaled beside a token's flood; an owner's token without `public`, refused
+on a project with paths exempted from the portal or whose protected block is
+not in place; a restart by any token that deploys, `busy` during a
+deployment and when one started while it waited its turn, a static site, a
+change of secrets going through while a token's restart hangs, one restart at
+a time per token; a refused listing journaled as `list`; a `team.json` from
+before. Then the API in front of that real steward: a person lowered to
+Viewer reading the refusal naming their role, journaled, and the routes'
+idle delays as server.ts mounts them. Then the API on a real port against a
+simulated steward: the known fields alone, the body judged before the
+steward is asked, the token's reach, flag and file left to it, a restart
+after the write, the steward's refusals in the API's codes, a 503 `busy` for
+a write and a restart, an older steward `not-available`, and a value never
+in the answer, `dashboard.db` or the console. Through the real `server.ts`
+(tests/people-flow.test.ts), a person's token with *Manage secrets* lists,
+sets with a restart, and is refused by role once lowered. The CLI's side,
+`sitesolide secrets` and `restart` with a token, a value never taken from the
+command line nor printed, is bin/tests/cli-remote.test.ts.
 
 For the secret files a token's project reads (tests/installer-pipeline.test.ts):
 a new project named `dashboard-backup` or `dashboard-monitor` declaring its

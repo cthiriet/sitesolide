@@ -14,6 +14,7 @@
  * | a project in `slugs` | a Developer or an Admin there (`deploy`) |
  * | `create` | the create right, which the owner grants per person |
  * | `public`, `domain`, `outbound` | an Admin of every project of the token; with `create`, what they create makes them its Admin |
+ * | `secrets` | a Developer or an Admin of every project chosen (`secrets.write`), judged again on each project at every request |
  *
  * A Viewer everywhere, without the create right, holds no token. `public` is
  * what makes a site public: a new project in the open, paths exempted from
@@ -83,15 +84,25 @@ export function mintRefusals(scope: Scope, rights: MemberRights): string[] {
       if (may(role, "deploy") && !may(role, power)) refusals.push(`scope.${option}: ${powerRefusal(email, role, slug, power)}`);
     }
   }
+  // Managing secrets is a Developer's already, as deploying is: refused where
+  // the role does not change secrets, said once per project.
+  if (scope.secrets) {
+    for (const slug of scope.slugs) {
+      const role = roleOn(rights, slug);
+      if (may(role, "deploy") && !may(role, "secrets.write")) refusals.push(`scope.secrets: ${powerRefusal(email, role, slug, "secrets.write")}`);
+    }
+  }
   return refusals;
 }
 
 /**
  * A person's token as it stands now: its projects, granted or created, kept
  * where they may still deploy; `create` while they hold the right; each
- * option while they are Admin of every project it still reaches. `member`
- * names them, so that every reader of the identity knows whose rights bound
- * it.
+ * option while they are Admin of every project it still reaches. `secrets`
+ * while it reaches a project or may create one: the role on each project is
+ * judged at each request (src/control/steward.ts), as for a deployment, so
+ * that one project lowered does not take it off the others. `member` names
+ * them, so that every reader of the identity knows whose rights bound it.
  */
 export function narrowIdentity(identity: Identity, rights: MemberRights): Identity {
   const deploys = (slug: string) => may(roleOn(rights, slug), "deploy");
@@ -110,6 +121,7 @@ export function narrowIdentity(identity: Identity, rights: MemberRights): Identi
       public: identity.scope.public && holds("deploy.public"),
       domain: identity.scope.domain && holds("deploy.domain"),
       outbound: identity.scope.outbound && holds("deploy.outbound"),
+      secrets: identity.scope.secrets === true && (reached.length > 0 || create),
     },
   };
 }
@@ -154,9 +166,15 @@ export function installScope(scope: Scope, rights: MemberRights | null, slug: st
   };
 }
 
-/** A scope in a few words, for the journal: `alpha, beta; create, outbound`. Never more than a line. */
+/** A scope in a few words, for the journal: `alpha, beta; create, outbound, secrets`. Never more than a line. */
 export function scopeText(scope: Scope): string {
-  const options = [scope.create ? "create" : null, scope.public ? "public" : null, scope.domain ? "domain" : null, scope.outbound ? "outbound" : null].filter(
+  const options = [
+    scope.create ? "create" : null,
+    scope.public ? "public" : null,
+    scope.domain ? "domain" : null,
+    scope.outbound ? "outbound" : null,
+    scope.secrets === true ? "secrets" : null,
+  ].filter(
     (part): part is string => part !== null,
   );
   const projects = scope.slugs.length === 0 ? "no project" : scope.slugs.join(", ");

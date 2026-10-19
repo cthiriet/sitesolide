@@ -29,7 +29,7 @@ import {
 
 const ZONE = "test-zone.invalid";
 const NOW = 1_800_000_000_000;
-const SCOPE = { slugs: ["cms"], create: true, outbound: false, domain: false, public: false };
+const SCOPE = { slugs: ["cms"], create: true, outbound: false, domain: false, public: false, secrets: false };
 
 /** A random source that counts up: every draw differs, and the test is repeatable. */
 function counter(): (bytes: number) => Uint8Array {
@@ -105,6 +105,7 @@ describe("what the owner asks for", () => {
       outbound: false,
       domain: false,
       public: false,
+      secrets: false,
     });
     const refused = [
       null,
@@ -325,5 +326,51 @@ describe("the tokens from before every token belonged to someone", () => {
   test("a registry begun on this code has nothing to migrate", () => {
     expect(EMPTY_TEAM.version).toBe(2);
     expect(migrateTeam(EMPTY_TEAM, () => true).team).toBe(EMPTY_TEAM);
+  });
+});
+
+describe("the secrets permission", () => {
+  const OLD = { slugs: ["cms"], create: false, outbound: false, domain: false, public: false };
+
+  test("a scope without it reads false: what every page and CLI from before sends, and less than the owner saw", () => {
+    expect(readScope(OLD, ZONE)).toEqual({ ...OLD, secrets: false });
+    expect(readScope({ ...OLD, secrets: true }, ZONE)).toEqual({ ...OLD, secrets: true });
+    expect(readScope({ ...OLD, secrets: false }, ZONE)).toEqual({ ...OLD, secrets: false });
+  });
+
+  test("sent, it must be true or false: nothing else is taken for either", () => {
+    for (const secrets of ["true", 1, null, {}, []]) {
+      expect(readScope({ ...OLD, secrets }, ZONE)).toEqual({ refusal: "scope.secrets must be true or false" });
+    }
+    const request = readTokenRequest({ label: "agent", email: "owner", expiresAt: null, scope: { ...OLD, secrets: "yes" } }, NOW, ZONE);
+    expect(request).toEqual({ refusal: "scope.secrets must be true or false" });
+  });
+
+  test("a registry from before reads, its tokens kept and none of them managing secrets; written back with the flag false", async () => {
+    const made = await createToken(EMPTY_TEAM, { label: "ci", email: "owner", expiresAt: null, scope: { ...SCOPE, secrets: true } }, NOW, counter());
+    if ("refusal" in made) throw new Error(made.refusal);
+    // The file as a steward from before the flag wrote it: no `secrets` key at all.
+    const before = JSON.parse(encodeTeam(made.team)) as { version: number; tokens: { scope: Record<string, unknown> }[]; owners: Record<string, string> };
+    for (const token of before.tokens) delete token.scope.secrets;
+    const text = JSON.stringify(before);
+    expect(text).not.toContain("secrets");
+    const read = readTeam(text);
+    if ("unreadable" in read) throw new Error(read.unreadable);
+    expect(read.tokens.map((record) => record.id)).toEqual([made.view.id]);
+    expect(read.tokens[0]!.scope.secrets).toBe(false);
+    expect(viewOf(read, read.tokens[0]!).scope.secrets).toBe(false);
+    const written = JSON.parse(encodeTeam(read)) as typeof before;
+    expect(written.tokens[0]!.scope.secrets).toBe(false);
+    // A flag of another type is no registry this steward reads.
+    before.tokens[0]!.scope.secrets = "yes";
+    expect(readTeam(JSON.stringify(before))).toHaveProperty("unreadable");
+  });
+
+  test("a token minted with it keeps it in the file and in its identity", async () => {
+    const { team, secret } = await teamWith({ ...SCOPE, secrets: true });
+    const read = readTeam(encodeTeam(team));
+    if ("unreadable" in read) throw new Error(read.unreadable);
+    const authenticated = await authenticate(read, secret, NOW);
+    expect(authenticated.kind === "accepted" && authenticated.identity.scope.secrets).toBe(true);
   });
 });

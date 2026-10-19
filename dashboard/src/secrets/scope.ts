@@ -445,6 +445,28 @@ export function checkFile(
   return { declaration: found, path };
 }
 
+/**
+ * Why a token may not change this file, or null. A token manages
+ * `<slug>.env` alone, the file a token's project may declare
+ * (src/control/policy.ts, `scopeRefusals`), and only while the manifest
+ * deployed on the machine declares it: an app's, naming this folder, listing
+ * it in `secrets`. A `<slug>.env` present but declared by nothing is refused,
+ * and never created: no unit reads it, and a hand-made service may.
+ *
+ * The file asked for is never quoted: a value pasted in its place would be
+ * sent back.
+ */
+export function tokenFileRefusal(site: Site, file: unknown): Refusal | null {
+  const own = `${site.folder}.env`;
+  if (file !== own) return outOfScope(`a token manages ${own} alone`);
+  const { manifest } = site;
+  const declared = manifest !== null && manifest.slug === site.folder && isApp(manifest) && Array.isArray(manifest.secrets) && manifest.secrets.includes(own);
+  if (!declared) {
+    return outOfScope(`the sitesolide.json deployed for ${site.folder} does not declare ${own}: add "secrets": ["${own}"] to it and deploy, then set its variables`);
+  }
+  return null;
+}
+
 /** The reason for refusing a chosen password, or null. None of them quotes it. */
 export function newPasswordReason(password: string): string | null {
   if (!password.isWellFormed()) return "the new password is not valid Unicode";

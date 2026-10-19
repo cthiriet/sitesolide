@@ -39,7 +39,7 @@ import { MAX_CONTENT_BODY_BYTES, createSteward } from "./src/secrets/steward";
 import { createSystem, readGroup } from "./src/secrets/system";
 import { createConnectorStore } from "./src/connectors/store";
 import { EGRESS_ACCOUNT, EGRESS_CONFIG_DIR } from "./borrowed/connectors";
-import { createControlSteward, isControlPath } from "./src/control/steward";
+import { createControlSteward, isControlPath, MAX_SECRETS_CHANGE_BODY_BYTES } from "./src/control/steward";
 import { createControlSystem } from "./src/control/system";
 import { INSTALLER_RUN_FOLDER } from "./src/control/protocol";
 import { CODES_FILE as LOCK_CODES_FILE, FRAGMENT_NAME, LOCKS_DIR } from "./borrowed/locks";
@@ -240,8 +240,8 @@ if (keys !== null) {
 // the start of the installer. They share the socket and its permissions, and
 // ask the secrets routes whether a token is the live unlock, the members
 // routes who a person is and what they may do now, for a person's own
-// tokens, and the access routes for a token's changes of access. See
-// src/control/steward.ts.
+// tokens, the access routes for a token's changes of access, and the secrets
+// routes for a token's secrets and restart. See src/control/steward.ts.
 const control = createControlSteward(
   createControlSystem({
     stateFolder: STATE_FOLDER,
@@ -258,6 +258,7 @@ const control = createControlSteward(
     members: handler.memberAuthority ?? undefined,
     access: handler.accessForToken,
     forgetAccess: handler.forgetProjectAccess,
+    secrets: handler.secretsForToken,
   },
 );
 revokeMemberTokens = control.revokeMember;
@@ -344,9 +345,10 @@ const server = openSocket(SOCKET, gid, (path) =>
     // stack, and the handler already catches everything.
     development: false,
     error: () => Response.json({ error: "failure", message: "unexpected error" }, { status: 500 }),
-    // The biggest body, that of a replacement of content. Each route bounds its
-    // own lower down.
-    maxRequestBodySize: MAX_CONTENT_BODY_BYTES,
+    // The biggest body, that of a replacement of content, or a token's change
+    // of secrets with the bearer around it. Each route bounds its own lower
+    // down.
+    maxRequestBodySize: Math.max(MAX_CONTENT_BODY_BYTES, MAX_SECRETS_CHANGE_BODY_BYTES),
   }),
 );
 

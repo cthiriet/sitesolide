@@ -8,7 +8,8 @@
  * route. That answer, and that one only, reads as `unavailable`: the API says
  * the machine does not carry it yet, the Tokens page says which script to run.
  */
-import type { CreateTokenRequest, DeployRequest, LogsRequest } from "./protocol";
+import { DEFAULT_TIMEOUTS } from "../secrets/client";
+import type { CreateTokenRequest, DeployRequest, LogsRequest, SecretsChangeRequest } from "./protocol";
 
 export type ControlSteward = {
   listTokens: () => Promise<Response>;
@@ -24,22 +25,33 @@ export type ControlSteward = {
   /** Someone given Can open, or taken off, by a token: the steward judges both. */
   accessPut: (requested: { bearer: string; slug: string; who: unknown; role: unknown }) => Promise<Response>;
   accessRemove: (requested: { bearer: string; slug: string; who: unknown }) => Promise<Response>;
+  /** A project's secret files and variable names, as a token reads them. */
+  secretsList: (bearer: string, slug: string) => Promise<Response>;
+  /** A change of `<slug>.env` by a token, all or nothing. */
+  secretsChange: (requested: SecretsChangeRequest) => Promise<Response>;
+  /** A project's service restarted for a token, and its verdict. */
+  restart: (bearer: string, slug: string) => Promise<Response>;
 };
 
 /**
  * Every control route answers within seconds: the installer is started without
- * waiting for it, and the journal is read with its own delay.
+ * waiting for it, and the journal is read with its own delay. But a change of
+ * secrets and a restart: they wait their turn under the secrets' lock, behind
+ * a restart observed for eight seconds or a gatekeeper's ninety, and a restart
+ * is observed itself, so they take the secrets routes' long delay
+ * (`longMs`): cut sooner, the API would answer a 502 for a change the steward
+ * still makes.
  */
 export const CONTROL_TIMEOUT_MS = 20_000;
 
 /** `redirect: "error"`: a redirect would send the bearer to the address it names. */
-export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_MS): ControlSteward {
-  function call(method: string, path: string, requested?: object): Promise<Response> {
+export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_MS, longMs = DEFAULT_TIMEOUTS.longMs): ControlSteward {
+  function call(method: string, path: string, requested?: object, limitMs = timeoutMs): Promise<Response> {
     return fetch(`http://steward${path}`, {
       method,
       unix: socket,
       redirect: "error",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(limitMs),
       ...(requested === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(requested) }),
     });
   }
@@ -55,6 +67,9 @@ export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_
     accessList: (bearer, slug) => call("POST", "/control/access/list", { bearer, slug }),
     accessPut: (requested) => call("PUT", "/control/access", requested),
     accessRemove: (requested) => call("DELETE", "/control/access", requested),
+    secretsList: (bearer, slug) => call("POST", "/control/secrets/list", { bearer, slug }),
+    secretsChange: (requested) => call("PATCH", "/control/secrets", requested, longMs),
+    restart: (bearer, slug) => call("POST", "/control/restart", { bearer, slug }, longMs),
   };
 }
 

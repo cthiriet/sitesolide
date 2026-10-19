@@ -82,6 +82,7 @@ import {
   checkContent,
   checkFile,
   checkSite,
+  tokenFileRefusal,
   type Declaration,
   type FileInfo,
   type Owner,
@@ -127,7 +128,9 @@ import { createMemberRoutes, type KeyState } from "../people/steward";
 import type { MembersSystem } from "../people/system";
 import { OWNER_ACTOR, type Roles } from "../people/protocol";
 import { createMemberActions, type Who } from "../people/actions";
-import type { MemberAuthority } from "../control/steward";
+import type { MemberAuthority, SecretsForToken } from "../control/steward";
+import type { ProjectSecrets, SecretsListResponse, StewardSecretsChange, TokenFileView } from "../control/protocol";
+import { isVariableName, variableRefusal, type TokenSecretsChange } from "../control/secrets";
 import { machineRefusal, may } from "../people/powers";
 import { portalReading, type PortalAdmin } from "../people/portal";
 import { createAccessRoutes, createAccessStore, type AccessRoutes, type AccessStore } from "../access/steward";
@@ -233,6 +236,14 @@ export type StewardHandler = Handler & {
   memberAuthority: MemberAuthority | null;
   /** A token's changes of access, the token judged by the control routes. */
   accessForToken: AccessRoutes["forToken"] | null;
+  /**
+   * A token's secrets and restart, the token judged by the control routes:
+   * the listing, a change of `<slug>.env`, a restart, the journal's refusals,
+   * which those routes bound per token, and whether a project is restricted
+   * as its general access reads. This steward's own code, with the token as
+   * `who`.
+   */
+  secretsForToken: SecretsForToken | null;
 };
 
 /**
@@ -382,6 +393,17 @@ type Body = Record<string, unknown>;
 
 /** The dashboard's password: whoever unlocked with it. */
 const OWNER: Who = { actor: OWNER_ACTOR, member: null };
+
+/**
+ * Is this requester held to a person's bounds, the machine's own projects and
+ * files refused and nothing read back unless their role reads it? A person,
+ * and any token, the owner's own included: a token is a key on a laptop or in
+ * an agent, not the owner's password, and what it may do is what a
+ * Developer may.
+ */
+function restricted(who: Who): boolean {
+  return who.member !== null || who.token !== undefined;
+}
 
 /** What the log can carry of a request: a well-formed name, never the raw text of a field. */
 function safeName(value: unknown, shape: RegExp, max: number): string | null {
@@ -669,16 +691,17 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
-   * The site and the file a request names, within the scope. For a member,
-   * never the machine's own: a platform project, or a file kept for root,
-   * whatever role a hand-edited registry would claim (src/people/powers.ts).
+   * The site and the file a request names, within the scope. For a member or
+   * a token, never the machine's own: a platform project, or a file kept for
+   * root, whatever role a hand-edited registry would claim
+   * (src/people/powers.ts).
    */
   async function target(operation: Operation, body: Body, who: Who = OWNER): Promise<Target | Response> {
     const found = checkSite(await sites(), body.slug);
     if ("refusal" in found) return refuse(operation, body, found.refusal, null, who);
     const file = checkFile(found.site, body.file, secretsFolder);
     if ("refusal" in file) return refuse(operation, body, file.refusal, null, who);
-    if (who.member !== null) {
+    if (restricted(who)) {
       const machine = machineRefusal(found.site.folder, file.declaration, memberZone);
       if (machine !== null) return refuse(operation, body, { error: "out-of-scope", message: machine }, null, who);
     }
@@ -847,15 +870,22 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     };
   }
 
+  /** A file as someone who never reads it back sees it: no size, no previous version, write-only. */
+  const writeOnly = (file: FileView): FileView => ({ ...file, readable: false, previous: false, bytes: null });
+
   /**
-   * The file's view after a write. To a member who may not read it back, as
-   * the listing shows it: no size, no previous version, write-only.
+   * The file's view after a write. To a member who may not read it back, or
+   * any token, as the listing shows it: no size, no previous version,
+   * write-only.
    */
-  async function fileResponse(c: Target, who: Who = OWNER): Promise<Response> {
+  async function fileAfter(c: Target, who: Who): Promise<FileView> {
     const service = await readService(c.site);
-    let file = await fileView(c, service);
-    if (who.member !== null && who.readsBack !== true) file = { ...file, readable: false, previous: false, bytes: null };
-    const body: FileResponse = { file };
+    const file = await fileView(c, service);
+    return restricted(who) && who.readsBack !== true ? writeOnly(file) : file;
+  }
+
+  async function fileResponse(c: Target, who: Who = OWNER): Promise<Response> {
+    const body: FileResponse = { file: await fileAfter(c, who) };
     return Response.json(body);
   }
 
@@ -1038,9 +1068,45 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       const site = all.get(slug);
       if (site === undefined || !may(role, "secrets.list") || machineRefusal(slug, null, memberZone) !== null) continue;
       const view = await projectView(site, site.files.filter((declaration) => machineRefusal(slug, declaration, memberZone) === null));
-      views.push(may(role, "secrets.read") ? view : { ...view, files: view.files.map((file) => ({ ...file, readable: false, previous: false, bytes: null })) });
+      views.push(may(role, "secrets.read") ? view : { ...view, files: view.files.map(writeOnly) });
     }
     return views;
+  }
+
+  /**
+   * One project's files as a token lists them, the control routes having
+   * judged the token, its role and its flag: a Developer's listing, every
+   * file write-only whatever the role, never a platform project nor a file
+   * kept for root, and `writable` on the one file a token changes. No portal:
+   * a token reads general access through its own route.
+   */
+  async function tokenProject(slug: string, who: Who): Promise<Response> {
+    const found = checkSite(await sites(), slug);
+    if ("refusal" in found) return error("not-found", `${slug} is not a site deployed on this machine`);
+    const { site } = found;
+    const machine = machineRefusal(site.folder, null, memberZone);
+    if (machine !== null) {
+      await writeLog("list", "rejects", { slug }, "out-of-scope", null, who);
+      return error("out-of-scope", machine);
+    }
+    const declarations = site.files.filter((declaration) => machineRefusal(site.folder, declaration, memberZone) === null);
+    const service = await readService(site);
+    const files: TokenFileView[] = [];
+    for (const declaration of declarations) {
+      const path = pathUnder(secretsFolder, declaration.name) ?? declaration.name;
+      let file: FileView;
+      try {
+        file = await fileView({ site, declaration, path }, service);
+      } catch (e) {
+        // An unreadable file does not bring the whole list down.
+        console.error(`projects: ${declaration.name} unreadable (${errorName(e)})`);
+        file = unreadableView(declaration);
+      }
+      files.push({ ...writeOnly(file), writable: tokenFileRefusal(site, declaration.name) === null });
+    }
+    const secrets: ProjectSecrets = { slug: site.folder, service: service.view, files };
+    const body: SecretsListResponse = { secrets };
+    return Response.json(body);
   }
 
   /** The journal and a window of the access log as one history, read one request at a time and kept by none (log.ts). */
@@ -1315,6 +1381,122 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
+   * A token's change of `<slug>.env`, under the lock, the token judged by the
+   * control routes and judged again once the turn came. All or nothing: every
+   * name and every value judged first, and the whole file measured, before
+   * anything is created or written; then one write, one previous version, and
+   * one journal line per name, under `token:<id>`.
+   *
+   * The file is created when its project's manifest declares it and it is
+   * missing, unless the request only removes. A name removed that the file
+   * does not carry is said in `absent`, and nothing is journaled for it. A set
+   * is always written and journaled: the answer never says whether a value
+   * changed, which would tell whoever holds the token what the file holds.
+   *
+   * The file a request names is never journaled nor quoted until it is the one
+   * a token manages, and a name is never journaled when the request is
+   * refused but for `PASSWORD_HASH`: a value pasted in its place would stay.
+   */
+  async function changeVariablesTask(change: TokenSecretsChange, who: Who): Promise<Response> {
+    const removing = change.set.length === 0 && change.remove.length > 0;
+    const operation: Operation = removing ? "remove" : "set";
+    const asked: Body = { slug: change.slug };
+    const found = checkSite(await sites(), change.slug);
+    if ("refusal" in found) return refuse(operation, asked, found.refusal, null, who);
+    const machine = machineRefusal(found.site.folder, null, memberZone);
+    if (machine !== null) return refuse(operation, asked, { error: "out-of-scope", message: machine }, null, who);
+    const foreignFile = tokenFileRefusal(found.site, change.file);
+    if (foreignFile !== null) return refuse(operation, asked, foreignFile, null, who);
+
+    const body: Body = { slug: change.slug, file: change.file };
+    const c = await target(operation, body, who);
+    if (c instanceof Response) return c;
+    const name = c.declaration.name;
+
+    const keysOfUnit = await setKeys(c.site);
+    for (const [variable, value] of change.set) {
+      if (!isVariableName(variable)) return refuse("set", body, { error: "invalid", message: "set: a name is not a variable name" }, null, who);
+      const password = passwordRefusal(c, variable);
+      if (password !== null) return refuse("set", body, password, variable, who);
+      const hashOnly = outsideHashRefusal(name, variable);
+      if (hashOnly !== null) return refuse("set", body, hashOnly, null, who);
+      const keyReason = checkKey(variable, keysOfUnit);
+      if (keyReason !== null) return refuse("set", body, { error: "invalid", message: variableRefusal("set", variable, keyReason) }, null, who);
+      const valueReason = checkValue(value);
+      if (valueReason !== null) return refuse("set", body, { error: "invalid", message: variableRefusal("set", variable, valueReason) }, null, who);
+    }
+    for (const variable of change.remove) {
+      if (!isVariableName(variable)) return refuse("remove", body, { error: "invalid", message: "remove: a name is not a variable name" }, null, who);
+      const password = passwordRefusal(c, variable);
+      if (password !== null) return refuse("remove", body, password, variable, who);
+    }
+
+    /** The change applied to a document: what is set, what is removed, what was not there to remove. */
+    const apply = (document: EnvDocument) => {
+      let next = document;
+      const written: string[] = [];
+      const removed: string[] = [];
+      const absent: string[] = [];
+      for (const [variable, value] of change.set) {
+        next = set(next, variable, value);
+        written.push(variable);
+      }
+      for (const variable of change.remove) {
+        if (envValue(next, variable) === null) {
+          absent.push(variable);
+          continue;
+        }
+        next = remove(next, variable);
+        removed.push(variable);
+      }
+      return { document: next, written, removed, absent };
+    };
+    const tooBigRefused = async () => {
+      await writeLog(operation, "rejects", body, "invalid", null, who);
+      return tooBig();
+    };
+
+    let state = await examineTarget(c);
+    let created = false;
+    if (state.kind === "absent") {
+      if (removing) return refuse("remove", body, { error: "not-found", message: `${name} does not exist: there is nothing to remove` }, null, who);
+      // Measured before the file is created: a file created, then the change
+      // refused, would not be all or nothing.
+      if (boundedBytes(apply({ lines: [] }).document) === null) return tooBigRefused();
+      const account = await realAccount(c.declaration);
+      if (account === null) {
+        return refuse("create", body, { error: "not-found", message: `account ${c.declaration.expected.owner} does not exist, deploy the site first` }, null, who);
+      }
+      created = await system.createEmptySecret(name, expectedPermissions(c.declaration, account ?? null));
+      if (created) await writeLog("create", "ok", body, null, null, who);
+      // Created here or, in a race, by someone else a moment before: read as it stands.
+      state = await examineTarget(c);
+    }
+    if (state.kind === "absent") return refuse(operation, body, { error: "not-found", message: `${name} could not be created` }, null, who);
+    if (state.kind === "unmanaged") {
+      return refuse(operation, body, { error: "unmanaged", message: `${name} is not managed here: ${state.reason}` }, null, who);
+    }
+
+    const { managed } = state;
+    const applied = apply(managed.document!);
+    if (applied.written.length + applied.removed.length > 0) {
+      const bytes = boundedBytes(applied.document);
+      if (bytes === null) return tooBigRefused();
+      await writeKeepingPrevious(c, managed, bytes);
+      for (const variable of applied.written) await writeLog("set", "ok", body, null, variable, who);
+      for (const variable of applied.removed) await writeLog("remove", "ok", body, null, variable, who);
+    }
+    const answer: StewardSecretsChange = {
+      file: { ...(await fileAfter(c, who)), writable: true },
+      created,
+      set: applied.written,
+      removed: applied.removed,
+      absent: applied.absent,
+    };
+    return Response.json(answer, { status: created ? 201 : 200 });
+  }
+
+  /**
    * Swaps the file and its previous version: restoring twice comes back to the
    * starting point. Never automatic, see PLAN-SECRETS.md: the previous version
    * may be the key that leaked.
@@ -1586,7 +1768,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     const found = checkSite(await sites(), body.slug);
     if ("refusal" in found) return refuse(operation, body, found.refusal, null, who);
     const { site } = found;
-    if (who.member !== null) {
+    if (restricted(who)) {
       const machine = machineRefusal(site.folder, null, memberZone);
       if (machine !== null) return refuse(operation, body, { error: "out-of-scope", message: machine }, null, who);
     }
@@ -1758,16 +1940,35 @@ export function createSteward(system: System, options: StewardOptions): StewardH
    * does not ask whether the unit reads a managed file: a member restarts a
    * service to restart it, not to apply a secret. The platform's own projects
    * are never a member's, and the dashboard's restart would cut the relay that
-   * carries the verdict: both are refused.
+   * carries the verdict: both are refused. A token's restart is the same
+   * code (`restartFor`).
    */
-  async function memberRestart(req: Request, slug: string, actor: string, allowed: () => Promise<boolean>): Promise<Response> {
+  function memberRestart(req: Request, slug: string, who: Who, allowed: () => Promise<boolean>): Promise<Response> {
+    return restartFor(req, slug, who, async () => ((await allowed()) ? null : error("out-of-scope", `${who.actor} may no longer restart ${slug}`)));
+  }
+
+  /**
+   * A person's restart or a token's, in `turn`: the lock for a person, the
+   * project's own turn for a token (`tokenRestartTurn`). `still` says, once
+   * the turn has come, whether they may still restart it, and its refusal
+   * goes back as it stands, journaled: `busy` for a deployment of the
+   * project started meanwhile, "no longer allowed" otherwise. The journal
+   * names `who`: the person, or the token and the person it belongs to.
+   */
+  async function restartFor(
+    req: Request,
+    slug: string,
+    who: Who,
+    still: () => Promise<Response | null>,
+    turn: <T>(task: () => Promise<T>) => Promise<T> | null = exclusive,
+  ): Promise<Response> {
     const body: Body = { slug };
-    const who = { actor, member: actor };
-    const taken = exclusive(async () => {
+    const taken = turn(async () => {
       if (req.signal.aborted) return abandoned();
-      if (!(await allowed())) {
-        await writeLog("restart", "rejects", body, "no longer allowed", null, who);
-        return error("out-of-scope", `${actor} may no longer restart ${slug}`);
+      const refusal = await still();
+      if (refusal !== null) {
+        await writeLog("restart", "rejects", body, refusal.status === 409 ? "busy" : "no longer allowed", null, who);
+        return refusal;
       }
       const found = checkSite(await sites(), slug);
       if ("refusal" in found) {
@@ -1776,6 +1977,12 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       }
       const { site } = found;
       if (site.folder === DASHBOARD_SLUG) return error("out-of-scope", "the dashboard is the owner's to restart");
+      // The second lock, whatever a hand-edited registry or team.json claims.
+      const machine = machineRefusal(site.folder, null, memberZone);
+      if (machine !== null) {
+        await writeLog("restart", "rejects", body, "out-of-scope", null, who);
+        return error("out-of-scope", machine);
+      }
       const unit = unitOf(site.folder);
       const text = site.isStatic ? null : await system.readUnit(unit);
       if (text === null) {
@@ -1907,6 +2114,54 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           maxContentBytes: MAX_CONTENT_BODY_BYTES,
         });
 
+  // --- A token's secrets and restart ------------------------------------------------
+
+  // The token, its role and its flag are judged by src/control/steward.ts;
+  // these are the operations above with the token as `who`, held to a
+  // person's bounds (`restricted`). Its refusals are bounded per token there,
+  // charged before they come here: through the people's bound per minute,
+  // shared with everyone, a token refused twenty times a minute kept every
+  // other refusal of that minute, a lowered person's included, out of the
+  // journal, and spent nothing of its own hour.
+
+  /**
+   * Is this project restricted on the machine, as its general access reads:
+   * the portal asked for by its manifest and its protected block in service.
+   * A manifest asking for it alone leaves the site in the open.
+   */
+  async function restrictedForToken(slug: string): Promise<boolean> {
+    const found = checkSite(await sites(), slug);
+    if ("refusal" in found) return false;
+    const portal = await portalView(found.site, null);
+    return portal.requested && portal.installed;
+  }
+
+  // A token's restart waits for the restarts of the same project alone, never
+  // under `exclusive`: a unit ignoring SIGTERM held it some 43 seconds a
+  // restart, `reset-failed`, `restart` and the observation, and thirty
+  // restarts an hour by a token then queued everyone's writes, door changes
+  // and restores, past four of them refused `busy`. A write needs nothing of
+  // a restart: the file is replaced whole by a rename, so the service starts
+  // with the version before or the version after. A person's restart keeps
+  // its place under the lock, as the Secrets section's.
+  const tokenRestartTurns = new Map<string, <T>(task: () => Promise<T>) => Promise<T> | null>();
+  function tokenRestartTurn(slug: string): <T>(task: () => Promise<T>) => Promise<T> | null {
+    let turn = tokenRestartTurns.get(slug);
+    if (turn === undefined) {
+      turn = createLock(options.maxQueued ?? MAX_QUEUED);
+      tokenRestartTurns.set(slug, turn);
+    }
+    return turn;
+  }
+
+  const secretsForToken: SecretsForToken = {
+    list: (slug, who) => tokenProject(slug, who),
+    change: (req, change, who, still) => underLockWith(req, still, () => changeVariablesTask(change, who)),
+    restart: (req, slug, who, still) => restartFor(req, slug, who, still, tokenRestartTurn(slug)),
+    refuse: (event) => journalEvent(event),
+    restricted: restrictedForToken,
+  };
+
   // --- Routing -----------------------------------------------------------------
 
   // The connectors of the egress proxy, written under the same unlock and the
@@ -1994,6 +2249,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
             journalRefusal: members.journalRefusal,
           },
     accessForToken: access?.forToken ?? null,
+    secretsForToken,
   });
 }
 

@@ -133,6 +133,7 @@ export const STEWARD_ACTIONS: Readonly<Record<string, string>> = {
   unlock: "secrets.unlock",
   lock: "secrets.lock",
   read: "secrets.read",
+  list: "secrets.list",
   set: "secrets.set",
   remove: "secrets.remove",
   create: "secrets.create",

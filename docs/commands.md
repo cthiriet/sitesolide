@@ -58,7 +58,7 @@ sitesolide remove --confirm <slug>
 sitesolide run -- <command>     load the secret from the vault and run
 sitesolide mcp                  serve these commands to an agent, over MCP on stdio
 sitesolide login --url <https://dashboard.zone>
-                                a person with a token: deploy without SSH
+                                a person with a token: deploy, set secrets and restart without SSH
    --token-stdin                read the token from standard input
 sitesolide machine create|list|destroy --provider hetzner
                                 a VM ordered by API, before setup: sitesolide machine lists the options
@@ -380,8 +380,15 @@ sitesolide logs [--follow]                        the journal of this folder's p
 sitesolide share                                  this folder's project's general access and people with access
    <email|@domain>...                             give them Can open: people inside the company's domains, or one of them
    --remove <email|@domain>...                    take their Can open away
+sitesolide secrets                                this folder's project's secret files and variable names, never a value
+sitesolide secrets set <NAME>                     set a variable of <slug>.env, typed at a prompt that does not echo it
+   --stdin                                        the value from standard input, one trailing line break dropped
+sitesolide secrets remove <NAME>...               take variables out of <slug>.env
+   --restart                                      with set or remove: then restart the service, and say whether it holds
+sitesolide restart                                restart this folder's project's service, and say whether it holds
 
 --json, on every one of them: one JSON event per line, see docs/agents.md
+a secret's value never goes on the command line: with --json, secrets set needs --stdin
 SITESOLIDE_API and SITESOLIDE_TOKEN in the environment win over the files.
 ```
 
@@ -398,6 +405,54 @@ then a gzip-compressed tar holding `app/` and `public/`, exactly what rsync
 would have sent, and follows the machine's log until the end; it exits
 non-zero when the deployment fails. A manifest with a `start` and no `port`
 gets one chosen on the machine.
+
+`secrets` lists the secret files of the project in the folder, with their
+variable names and whether a restart is pending, and never a value: no route
+reads one back. `secrets set NAME` and `secrets remove NAME...` change
+`<slug>.env`, the one file a token changes, and only when the deployed
+`sitesolide.json` declares it; `set` creates the file when it is missing. All
+three, the listing included, need a token minted with *Manage secrets*.
+
+The value never comes from the command line, where the shell's history and
+the process list would keep it: `set` asks for it at a prompt that does not
+echo it, or reads all of standard input with `--stdin`, one trailing line
+break dropped. `--stdin` reads a pipe: when standard input is the terminal,
+where the value would show as it is typed, it is refused, and leaving it out
+gives the prompt. At the prompt, Backspace, Ctrl-U and Ctrl-W edit the value,
+Enter ends it and Ctrl-C abandons it; an arrow key, Tab or any other control
+key is refused, and so is a paste of several lines, whose rest is read and
+dropped rather than left for the shell to run. Under `--json` nothing
+prompts, so `set` needs `--stdin`.
+
+What the machine would refuse is refused before a request leaves, and the
+refusal never quotes what was typed: `NAME=value`, or anything after the
+name; a name that looks like a value, over 64 characters or starting as a
+service's key does (`sk_`, `ghp_`, `xox`, `AKIA`, `sst_` and the like), with a
+reminder that the shell's history now holds it (a variable really named so is
+set from the dashboard); a value on several lines, with a null byte, not valid
+Unicode, or over 8 KiB, which belongs in a file read whole, from the
+dashboard. An empty value is refused too: an unset variable piped by mistake
+would empty the secret in service; `remove` takes a variable out.
+
+When the connection drops once a change has left, the run says it may have
+been written, rather than that the dashboard is unreachable: `sitesolide
+secrets` shows the names, and the same command run again makes the same
+change once more, harmlessly.
+
+```bash
+sitesolide secrets                              # files and variable names
+sitesolide secrets set API_KEY                  # typed at the prompt, no echo
+openssl rand -hex 32 | sitesolide secrets set SESSION_SECRET --stdin --restart
+sitesolide secrets remove OLD_KEY LEGACY_URL
+sitesolide restart
+```
+
+`--restart` restarts the service once the change is written. `restart`, which
+any token that deploys the project may run, restarts its service and watches
+it for eight seconds: it exits non-zero unless the service holds. Over the
+owner's SSH, both point to the dashboard instead: *Secrets* manages the files
+there, and *Restart service*, in a project's *Overview*, restarts it. See
+[access.md](access.md#secrets-with-a-token).
 
 Any other option is refused before a request leaves, `deploy --dry-run` first:
 a dry run reads the machine over the owner's SSH access, which a token does

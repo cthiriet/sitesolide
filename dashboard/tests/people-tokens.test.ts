@@ -12,7 +12,7 @@ import { registryOf } from "./registry-fixtures";
  */
 
 const T = 1_800_000_000_000;
-const NONE: Scope = { slugs: [], create: false, outbound: false, domain: false, public: false };
+const NONE: Scope = { slugs: [], create: false, outbound: false, domain: false, public: false, secrets: false };
 const scope = (part: Partial<Scope>): Scope => ({ ...NONE, ...part });
 
 /** Ada: a Developer on alpha, an Admin on beta, a Viewer on gamma, and may not create projects. */
@@ -86,7 +86,7 @@ describe("narrowed live", () => {
 
   test("a role lowered to Developer turns the options off for the whole token, the narrower reading", () => {
     const narrowed = narrowIdentity(minted, { ...creator, roles: { alpha: "developer", beta: "admin", omega: "admin" } });
-    expect(narrowed.scope).toEqual({ slugs: ["alpha", "beta"], create: true, outbound: false, domain: false, public: false });
+    expect(narrowed.scope).toEqual({ slugs: ["alpha", "beta"], create: true, outbound: false, domain: false, public: false, secrets: false });
   });
 
   test("the create right taken back stops creating; a token left with nothing keeps no option", () => {
@@ -169,5 +169,34 @@ describe("the access registry's side", () => {
     expect(rolesText({})).toBe("no project");
     expect(scopeText(scope({ slugs: ["alpha"] }))).toBe("alpha");
     expect(scopeText(scope({ create: true, outbound: true }))).toBe("no project; create, outbound");
+    expect(scopeText(scope({ slugs: ["alpha"], secrets: true }))).toBe("alpha; secrets");
+    expect(scopeText(scope({ slugs: ["alpha"], public: true, secrets: true }))).toBe("alpha; public, secrets");
+  });
+});
+
+describe("managing secrets", () => {
+  test("a Developer may mint it, as an Admin may: changing secrets is theirs already", () => {
+    expect(mintRefusals(scope({ slugs: ["alpha"], secrets: true }), ADA)).toEqual([]);
+    expect(mintRefusals(scope({ slugs: ["alpha", "beta"], secrets: true }), ADA)).toEqual([]);
+    // A project they only view is refused once, for deploying it.
+    expect(mintRefusals(scope({ slugs: ["gamma"], secrets: true }), ADA)).toEqual(["scope.slugs: ada@acme.test is a Viewer on gamma: deploying it takes a Developer or an Admin"]);
+  });
+
+  test("kept while the token reaches a project or may create one, whatever the role on each, which every request judges; off when it reaches none", () => {
+    const minted: Identity = { id: "aaaaaaaaaaaa", label: "agent", email: "ada@acme.test", expiresAt: null, scope: scope({ slugs: ["alpha", "beta"], secrets: true }), owned: [], member: "ada@acme.test" };
+    expect(narrowIdentity(minted, ADA).scope.secrets).toBe(true);
+    // One project lowered to Viewer: the other is still reached, the flag stays.
+    expect(narrowIdentity(minted, { ...ADA, roles: { alpha: "viewer", beta: "admin" } }).scope).toMatchObject({ slugs: ["beta"], secrets: true });
+    // Nothing reached any more, and no creating: off.
+    expect(narrowIdentity(minted, { ...ADA, roles: { alpha: "viewer", beta: "viewer" } }).scope).toMatchObject({ slugs: [], secrets: false });
+    // Nothing reached but the create right: what it creates, it may manage.
+    const creating: Identity = { ...minted, scope: scope({ create: true, secrets: true }) };
+    expect(narrowIdentity(creating, { ...ADA, create: true }).scope.secrets).toBe(true);
+    expect(narrowIdentity(creating, { ...ADA, create: false }).scope.secrets).toBe(false);
+    // Never granted: never on.
+    expect(narrowIdentity({ ...minted, scope: scope({ slugs: ["alpha"] }) }, ADA).scope.secrets).toBe(false);
+    // A scope from before the flag reads as without it.
+    const { secrets: _secrets, ...before } = scope({ slugs: ["alpha"] });
+    expect(narrowIdentity({ ...minted, scope: before }, ADA).scope.secrets).toBe(false);
   });
 });

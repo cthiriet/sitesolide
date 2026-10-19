@@ -148,6 +148,7 @@ describe("each source's rows, in one shape", () => {
       "dashboard.signout",
       "guest.create",
       "guest.revoke",
+      "list",
       "lock",
       "member.invite",
       "member.remove",
@@ -171,6 +172,13 @@ describe("each source's rows, in one shape", () => {
       "token.revoke",
       "unlock",
     ]);
+    // A token's listing refused is a listing, never a value read.
+    expect(fromJournal([{ a: T, operation: "list", result: "rejects", actor: "token:a11ce0c1ab12", member: null, slug: "cms", file: null, variable: null, detail: "no secrets permission" }])[0]?.row).toMatchObject({
+      actor: "token:a11ce0c1ab12",
+      action: "secrets.list",
+      target: "cms",
+      detail: { result: "rejects", note: "no secrets permission" },
+    });
     expect(fromJournal([{ a: T, operation: "constructor", result: "ok", slug: null, file: null, variable: null, detail: null }])).toEqual([]);
     expect(fromJournal([{ a: "now", operation: "set" }, null, 4])).toEqual([]);
   });
