@@ -166,7 +166,7 @@ the dashboard.
 `--skip-dns` leaves Cloudflare's API alone: setup prints the records to create,
 `<zone>` and `*.<zone>`, A and AAAA, DNS only, and waits for them, thirty
 minutes at most, before Caddy. Caddy still needs a DNS module for the wildcard
-certificate, which [install.md](install.md#another-host-another-dns) describes:
+certificate, which [install.md](install.md#another-dns-provider) describes:
 replace `cloudflare` in the Caddyfile's `(tls-zone)` snippet with your
 provider's module, add it with `caddy add-package`, and lay
 `/etc/caddy/cloudflare.env`, root:caddy 0640, with the variables that module
