@@ -88,6 +88,12 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
 
 An agent starts with [llms.txt](llms.txt).
 
+## Security
+
+Report a vulnerability privately, never in a public issue: see
+[SECURITY.md](SECURITY.md), which also says what is in scope and what the
+design does not protect.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Contributions welcome, see
