@@ -91,6 +91,43 @@ export async function relay(call: () => Promise<Response>): Promise<Response> {
 export type SessionReader = (req: Request, now: number) => Promise<Session | null>;
 
 /**
+ * The most of a sign-in's body that is read: a password of PASSWORD_MAX
+ * characters, each escaped as `\uXXXX`, fits five times over.
+ */
+export const SIGN_IN_MAX_BYTES = 8 * 1024;
+
+/**
+ * The sign-in's body, parsed, or why not. Read piece by piece and given up
+ * past SIGN_IN_MAX_BYTES, never held whole: it is the one body read before
+ * there is a session, by anyone who sets the Origin header, which a script
+ * outside a browser does. Read whole by `req.json()`, which Bun lets reach
+ * 128 MB, a hundred megabytes of it are past the service's MemoryMax of
+ * 128M: each such attempt would have the service killed, and the owner's
+ * dashboard gone for as long as someone kept sending them.
+ */
+async function readSignInBody(req: Request): Promise<{ body: unknown } | "too-large" | "unreadable"> {
+  const announced = Number(req.headers.get("content-length") ?? 0);
+  if (!Number.isFinite(announced) || announced > SIGN_IN_MAX_BYTES) return "too-large";
+  if (req.body === null) return "unreadable";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (let part = await reader.read(); !part.done; part = await reader.read()) {
+      bytes += part.value.byteLength;
+      if (bytes > SIGN_IN_MAX_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return "too-large";
+      }
+      chunks.push(part.value);
+    }
+    return { body: JSON.parse(new TextDecoder().decode(Bun.concatArrayBuffers(chunks))) };
+  } catch {
+    return "unreadable";
+  }
+}
+
+/**
  * The request's session, or null. An expired session is closed rather than left
  * lying about: the purge at sign-in only happens when somebody signs in.
  *
@@ -182,14 +219,11 @@ export function createRoutes(store: Store, options: Options, clock: () => number
         return Response.json({ error: "origin-refused" }, { status: 403 });
       }
 
-      let body: unknown;
-      try {
-        body = await req.json();
-      } catch {
-        return Response.json({ error: "unreadable-body" }, { status: 400 });
-      }
+      const read = await readSignInBody(req);
+      if (read === "too-large") return Response.json({ error: "too-large" }, { status: 413 });
+      if (read === "unreadable") return Response.json({ error: "unreadable-body" }, { status: 400 });
 
-      const submitted = (body as { password?: unknown } | null)?.password;
+      const submitted = (read.body as { password?: unknown } | null)?.password;
       if (!isAcceptableSubmission(submitted)) {
         return Response.json({ error: "no-password" }, { status: 400 });
       }

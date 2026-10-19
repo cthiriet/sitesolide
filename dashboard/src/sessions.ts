@@ -5,12 +5,14 @@
  *
  * ## No anti-CSRF token, and that is a decision
  *
- * Four requests change something: signing in, signing out, and since 15
- * September 2026 the creation and the revocation of a guest access. All of
- * them demand the dashboard's exact Origin, and the cookie is SameSite=Strict.
- * A third-party page therefore obtains nothing: Strict holds the cookie back
- * outside the site, and the Origin refuses what comes from another subdomain
- * of the zone, which the browser holds to be the same site.
+ * Every request that changes something demands the dashboard's exact Origin,
+ * and the cookie is SameSite=Strict. A third-party page therefore obtains
+ * nothing: Strict holds the cookie back outside the site, and the Origin
+ * refuses what comes from another subdomain of the zone, which the browser
+ * holds to be the same site. Neither stops a sibling's page that frames the
+ * dashboard and has the visitor click inside the frame, the clicks then coming
+ * from the dashboard's own origin: the page refuses to be framed instead,
+ * `frame-ancestors 'none'` in its manifest's headers (sitesolide.json).
  *
  * A token drawn at random and kept in the session row would add nothing that
  * these two checks do not cover: it is exactly the protection the portal gives

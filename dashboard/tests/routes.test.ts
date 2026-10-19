@@ -110,6 +110,47 @@ describe("sign-in", () => {
     expect(store.attempts.failures).toBe(0);
   });
 
+  test("a body far larger than any password is refused without being read whole", async () => {
+    // The one body read before there is a session, by anyone who sets the
+    // Origin header, which a script outside a browser does: read whole, a
+    // hundred megabytes of it get the service killed under its 128M.
+    const MIB = 1024 * 1024;
+    let pulled = 0;
+    const padding = new TextEncoder().encode("a".repeat(MIB));
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled === 0) {
+          const head = new TextEncoder().encode('{"password":"');
+          pulled += head.byteLength;
+          controller.enqueue(head);
+        } else if (pulled < 64 * MIB) {
+          pulled += padding.byteLength;
+          controller.enqueue(padding);
+        } else {
+          controller.enqueue(new TextEncoder().encode('"}'));
+          controller.close();
+        }
+      },
+    });
+    const flooding = new Request(`${PUBLIC_URL}/api/signin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: PUBLIC_URL },
+      body: stream,
+    });
+    const response = await routes.signIn(flooding);
+    expect(response.status).toBe(413);
+    expect(pulled).toBeLessThan(4 * MIB);
+    expect(store.attempts.failures).toBe(0);
+
+    // Announced too long, it is not read at all.
+    const announced = new Request(`${PUBLIC_URL}/api/signin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: PUBLIC_URL, "Content-Length": String(64 * MIB) },
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    expect((await routes.signIn(announced)).status).toBe(413);
+  });
+
   test("a wrong password is refused and counted", async () => {
     const response = await routes.signIn(signIn({ password: "wrong" }));
     expect(response.status).toBe(401);
@@ -149,10 +190,10 @@ describe("sign-in", () => {
 
   test("an attempt that throws does not block the queue", async () => {
     const fragile = createStore();
-    let premier = true;
+    let first = true;
     fragile.readAttempts = () => {
-      if (premier) {
-        premier = false;
+      if (first) {
+        first = false;
         throw new Error("database unavailable");
       }
       return { failures: 0, lastAt: 0 };

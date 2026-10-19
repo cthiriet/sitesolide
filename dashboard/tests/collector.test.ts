@@ -280,3 +280,36 @@ describe("the files the collector writes as root into directories it does not ow
     expect(lstatSync(join(DASHBOARD_DATA, "state.json")).isFile()).toBe(true);
   });
 });
+
+describe("the previous snapshot, read back as root from the dashboard's directory", () => {
+  const STATE = join(DASHBOARD_DATA, "state.json");
+
+  test("one the collector wrote is read back for the processor rates", async () => {
+    writeFileSync(STATE, JSON.stringify({ generated: 1234, folders: [{ slug: "shop", unit: { CPUUsageNSec: "42" } }] }));
+    expect((await collect()).previous).toEqual({ generated: 1234, cpu: { shop: 42 } });
+  });
+
+  test("a symbolic link in its place is not followed: what it points to never reaches the snapshot", async () => {
+    // A file of root's, of the shape the collector reads its counters from:
+    // through the link, root copied its date and its keys into a reading
+    // site-dashboard reads.
+    const elsewhere = join(ETC, "elsewhere.json");
+    writeFileSync(elsewhere, JSON.stringify({ generated: 1234, folders: [{ slug: "copied-through-the-link", unit: { CPUUsageNSec: "7" } }] }));
+    symlinkSync(elsewhere, STATE);
+    const raw = await collect();
+    expect(raw.previous).toBeNull();
+    expect(lstatSync(STATE).isFile()).toBe(true);
+    expect(readFileSync(elsewhere, "utf8")).toContain("copied-through-the-link");
+  });
+
+  test("a named pipe in its place neither hangs the collector nor stops the snapshot", async () => {
+    // A pipe nobody writes into held root's collector on its open until the
+    // unit's timeout, at every pass, and nothing was ever written again: the
+    // snapshot, nor analytics' host table.
+    expect(Bun.spawnSync(["mkfifo", STATE]).exitCode).toBe(0);
+    const raw = await collect();
+    expect(raw.previous).toBeNull();
+    expect(lstatSync(STATE).isFile()).toBe(true);
+    expect(lstatSync(join(ANALYTICS_DATA, "hotes.json")).isFile()).toBe(true);
+  }, 30_000);
+});

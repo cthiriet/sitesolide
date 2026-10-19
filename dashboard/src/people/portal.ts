@@ -37,16 +37,46 @@ export function relayedPortal(socket: string): PortalAdmin {
 export type PortalReading = "steward" | "portal" | "unreadable" | "unknown";
 
 /**
+ * The most of the portal's answer the steward reads. The answer is two
+ * fields, a few dozen bytes; a portal broken into answers what it likes, and
+ * three seconds on the loopback carry gigabytes, which `response.json()`
+ * would hold whole before parsing them: the steward, root, under its own
+ * MemoryMax, would be killed at the next Access page anyone opened, every
+ * unlock on the machine with it.
+ */
+export const MAX_ANSWER_BYTES = 64 * 1024;
+
+/** The answer's text read piece by piece, or null past the bound: the rest is never pulled. */
+async function boundedText(response: Response): Promise<string | null> {
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  for (let part = await reader.read(); !part.done; part = await reader.read()) {
+    bytes += part.value.byteLength;
+    if (bytes > MAX_ANSWER_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(part.value);
+  }
+  return new TextDecoder().decode(Bun.concatArrayBuffers(chunks));
+}
+
+/**
  * The portal's word, or `unknown` when it cannot be asked: no relay, a
  * portal down, or one from before the registry, which answers no such route
- * and reads its own tables still.
+ * and reads its own tables still. An answer past MAX_ANSWER_BYTES is no
+ * answer of the portal's either.
  */
 export async function portalReading(portal: PortalAdmin | null): Promise<{ reading: PortalReading; writtenAt: number | null }> {
   if (portal === null) return { reading: "unknown", writtenAt: null };
   try {
     const response = await portal.access();
     if (response.status === 404) return { reading: "portal", writtenAt: null };
-    const body: unknown = await response.json();
+    const text = await boundedText(response);
+    if (text === null) return { reading: "unknown", writtenAt: null };
+    const body: unknown = JSON.parse(text);
     if (response.status !== 200 || typeof body !== "object" || body === null) return { reading: "unknown", writtenAt: null };
     const { reading, writtenAt } = body as Record<string, unknown>;
     const known = reading === "steward" || reading === "portal" || reading === "unreadable" ? reading : "unknown";

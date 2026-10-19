@@ -380,6 +380,26 @@ async function readMachine(): Promise<RawMachine | null> {
 }
 
 /**
+ * The previous snapshot holds the audience snapshot it copied, AUDIENCE_MAX_BYTES
+ * at most, and the machine's reading beside it, a few hundred kilobytes.
+ */
+const STATE_MAX_BYTES = 32 * 1024 * 1024;
+
+/** The previous snapshot's text, or null: absent, not a plain file, or past the cap. */
+function readPrevious(): string | null {
+  let examination: Examination;
+  try {
+    examination = readBounded(STATE_FILE, STATE_MAX_BYTES);
+  } catch {
+    return null;
+  }
+  if (examination.kind === "absent") return null;
+  const { info } = examination;
+  if (info.link || !info.regular || info.links > 1 || examination.bytes === null) return null;
+  return new TextDecoder().decode(examination.bytes);
+}
+
+/**
  * What must be kept from the previous reading to compute a CPU rate: its date
  * and each unit's counter. The file that is about to be replaced is the only
  * place where that state lives, which saves the collector from holding one of
@@ -388,9 +408,18 @@ async function readMachine(): Promise<RawMachine | null> {
  *
  * A file that is missing, truncated or from an earlier version returns null,
  * and the rates are then displayed as blanks instead of lying.
+ *
+ * Read as root from the dashboard's own data directory, which site-dashboard
+ * owns: the same door as the audience snapshot's, and read the same way. A
+ * symbolic link there had root parse whatever file it pointed to and copy its
+ * date and its keys into the reading; a named pipe held the collector on its
+ * open until the unit's timeout, at every pass, so that neither the snapshot
+ * nor analytics' host table was ever written again. So the file is opened
+ * without following a link, only if it is a regular file with a single name,
+ * within a cap past which the rates simply start again from blank.
  */
 async function previousReading(): Promise<Raw["previous"]> {
-  const content = await text(STATE_FILE);
+  const content = readPrevious();
   if (content === null) return null;
 
   try {
