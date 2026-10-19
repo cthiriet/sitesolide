@@ -340,8 +340,10 @@ describe.skipIf(OPENSSL === null)("the connectors", () => {
       },
     });
     const response = await fetch(`${base()}/connectors/chat/size`, { method: "PUT", body, duplex: "half" } as RequestInit);
-    expect(response.status).toBe(413);
-    expect(((await response.json()) as { message: string }).message).toBe(`connectors: the request body is over ${MAX_BODY_BYTES} bytes`);
+    // Status and message together: a refusal of another kind names itself
+    // in the failure, as a 400 seen once on the release runner did not.
+    const answer = { status: response.status, message: ((await response.json()) as { message: string }).message };
+    expect(answer).toEqual({ status: 413, message: `connectors: the request body is over ${MAX_BODY_BYTES} bytes` });
   });
 
   test("one project cannot hold more than its share of calls waiting for an upstream", async () => {
