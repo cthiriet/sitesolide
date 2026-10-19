@@ -79,6 +79,15 @@ cannot read another one's files even if Unix permissions would have allowed it.
 An app that declares no secret has `/etc/sitesolide` made inaccessible, which
 hides even the names of the files.
 
+Its system calls are those of systemd's `@system-service` set, what a Bun,
+Node, Python or Go server needs: none that mounts, loads a kernel module,
+reboots, swaps, sets the clock or traces another process. Any other fails with
+`EPERM`, as a call the account may not make, rather than killing the process.
+A program that needs one more call gets it from a drop-in on the machine,
+`/etc/systemd/system/<slug>.service.d/syscalls.conf` holding `[Service]` and
+`SystemCallFilter=ptrace`, say: systemd adds it to the set, and a deployment,
+which reads the unit's own file alone, leaves the drop-in where it is.
+
 Services cannot reach each other over the loopback either, except those of one
 project, see [the loopback rule](#the-loopback-rule).
 

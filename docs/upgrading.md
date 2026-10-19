@@ -117,6 +117,40 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## Every app filters its system calls
+
+**An app could make any system call its account was allowed.** The
+platform's own services ran under systemd's `@system-service` filter; the
+units generated for projects did not, so a compromised app reached every
+call of the kernel, the ones that trace a process, mount or load a module
+included, and any flaw of the kernel behind them. Every generated service
+unit now carries `SystemCallArchitectures=native`,
+`SystemCallFilter=@system-service` and `SystemCallErrorNumber=EPERM`: a call
+outside the set fails with `EPERM`, the process goes on.
+
+**What `sitesolide upgrade` brings**: the installer, with the new generator,
+so that a deployment by token writes the same unit as one by SSH; and the
+dashboard and the portal, deployed as projects, whose units take the filter
+then. Every other app takes it at its next deployment. A unit 0.6 or an
+earlier release wrote is the generator's own and is replaced without
+`--force`; one edited by hand stays as it is, and says so.
+
+**What changes for you.** Nothing for a server in Bun, Node, Python or Go.
+Each was deployed under the filter on a Debian 13 machine on x86_64, Bun
+1.3.14 and 1.4.3, Node 20, Python 3.13 and Go 1.24, serving, writing its
+data, starting a child process, a thread or a worker. One call was refused:
+Node asks for memory protection keys as it starts (`pkey_alloc`), which
+systemd's default action would have answered by killing it, and which
+`EPERM` turns into a Node that goes on without them. A program that needs a
+call outside the set, a profiler that traces, gets `EPERM` and says so in its
+own error; give it that call in a drop-in, see
+[Isolation](concepts.md#isolation).
+
+**Going back.** A drop-in holding `[Service]` and an empty
+`SystemCallFilter=` lifts the filter from one unit. The previous release's
+`deploy` reads a unit with the filter as edited by hand and leaves it, unless
+run with `--force`.
+
 ## One project holds its share of the egress proxy
 
 **One project could take the egress proxy down for every other.** The

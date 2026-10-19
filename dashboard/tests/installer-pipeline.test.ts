@@ -5,7 +5,7 @@ import { bundle, entryBlocks, header } from "../borrowed/bundle";
 import { generateFragment, HEADLESS_ANSWER } from "../borrowed/fragment";
 import { readManifest, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected } from "../borrowed/portal";
-import { generateUnits, withoutBindLines } from "../borrowed/unit";
+import { earlierGenerations, generateUnits } from "../borrowed/unit";
 import type { InstallRequest, Scope } from "../src/control/protocol";
 import { finalManifest, replaceable, runPipeline, STABILITY_WINDOW_MS, type Outcome } from "../src/installer/pipeline";
 import { createBench as newBench, file, hostOf, OWN_UID, stageBundle as stage, ZONE, type Bench, type BenchOptions } from "./installer-bench";
@@ -613,18 +613,35 @@ describe("workers, scheduled services and anchors", () => {
     expect(units(again)).toEqual(["shop.jobs.service", "shop.service"]);
   });
 
-  test("a unit the release before the bind lines wrote is replaced, the manifest changed or not: it was never edited by hand", async () => {
-    for (const next of [{ ...APP, port: 3040, portal: true }, { ...APP, port: 3040, portal: true, memory: "512M" }]) {
-      const bench = createBench();
-      const previous = { ...APP, port: 3040, portal: true } as Manifest;
-      deposit(bench, previous);
-      for (const { unit, text } of generateUnits(previous)) writeFileSync(join(bench.units, `${unit}.service`), withoutBindLines(text));
-      stageBundle(bench, APP_FILES);
-      const outcome = await run(bench, request(next));
-      expect(outcome).toMatchObject({ ok: true });
-      expect(bench.events.some((event) => event.includes("differs"))).toBe(false);
-      expect(readFileSync(join(bench.units, "shop.service"), "utf8")).toContain("\nSocketBindAllow=tcp:3040\n");
+  test("a unit an earlier release wrote, before the system-call filter or the bind lines, is replaced, the manifest changed or not: it was never edited by hand", async () => {
+    for (const generation of [0, 1]) {
+      for (const next of [{ ...APP, port: 3040, portal: true }, { ...APP, port: 3040, portal: true, memory: "512M" }]) {
+        const bench = createBench();
+        const previous = { ...APP, port: 3040, portal: true } as Manifest;
+        deposit(bench, previous);
+        for (const { unit, text } of generateUnits(previous)) writeFileSync(join(bench.units, `${unit}.service`), earlierGenerations(text)[generation]!);
+        stageBundle(bench, APP_FILES);
+        const outcome = await run(bench, request(next));
+        expect(outcome).toMatchObject({ ok: true });
+        expect(bench.events.some((event) => event.includes("differs"))).toBe(false);
+        const laid = readFileSync(join(bench.units, "shop.service"), "utf8");
+        expect(laid).toContain("\nSocketBindAllow=tcp:3040\n");
+        expect(laid).toContain("\nSystemCallFilter=@system-service\n");
+      }
     }
+  });
+
+  test("a unit whose filter was taken off by hand stays, and says so", async () => {
+    const bench = createBench();
+    const previous = { ...APP, port: 3040, portal: true } as Manifest;
+    deposit(bench, previous);
+    const [main] = generateUnits(previous);
+    const edited = main!.text.replace("SystemCallFilter=@system-service\n", "");
+    writeFileSync(join(bench.units, "shop.service"), edited);
+    stageBundle(bench, APP_FILES);
+    await run(bench, request(previous));
+    expect(bench.events.some((event) => event.includes("differs") && event.includes("shop.service"))).toBe(true);
+    expect(readFileSync(join(bench.units, "shop.service"), "utf8")).toBe(edited);
   });
 
   test("a timer edited by hand on the machine stays, and says so", async () => {

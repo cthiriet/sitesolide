@@ -24,6 +24,7 @@ import {
   unitNames,
   watchedUnits,
   withoutBindLines,
+  withoutSyscallLines,
 } from "../cli/unit";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -53,6 +54,9 @@ const CONFINEMENT = [
   "RestrictSUIDSGID=true",
   "RestrictRealtime=true",
   "LockPersonality=true",
+  "SystemCallArchitectures=native",
+  "SystemCallFilter=@system-service",
+  "SystemCallErrorNumber=EPERM",
   "UMask=0077",
 ];
 
@@ -586,10 +590,10 @@ describe("the units of servers, as they were before workers existed", () => {
    * with the generator of the release before them; a change here is a change
    * to every unit on every machine, to be made on purpose.
    *
-   * The bind lines are the one such change since, and decideUnit and the
-   * installer replace a unit that lacks them alone: the fingerprints are those
-   * of the text without them, which is what every machine carries until each
-   * project's next deployment.
+   * The bind lines and the system-call filter are the only such changes
+   * since, and decideUnit and the installer replace a unit that lacks them
+   * alone: the fingerprints are those of the text without either, which is
+   * what a machine carries until each project's next deployment.
    */
   const FINGERPRINTS: Record<string, Record<string, string>> = {
     "bun-mixed": { "sample-bun": "add7fdc8d713e6954cf1e1456d63ff2a5a97b8f49c80149a9eac2a450900ca46" },
@@ -603,8 +607,27 @@ describe("the units of servers, as they were before workers existed", () => {
   test.each(Object.keys(FINGERPRINTS))("projects/%s generates the same units, to the byte", (fixture) => {
     const { manifest } = readManifest(readFileSync(join(REPO_ROOT, "bin", "tests", "e2e", "projects", fixture, "sitesolide.json"), "utf8"));
     const generated = generateUnits(manifest!, { slug: manifest!.slug, zone: "test-zone.invalid", contact: "sample@test-zone.invalid" });
-    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutBindLines(text)).digest("hex")]));
+    const fingerprints = Object.fromEntries(
+      generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutBindLines(withoutSyscallLines(text))).digest("hex")]),
+    );
     expect(fingerprints).toEqual(FINGERPRINTS[fixture]!);
+  });
+
+  /** The same units as 0.6 wrote them, with the bind lines: taken with the generator of v0.6.1. */
+  const FINGERPRINTS_06: Record<string, Record<string, string>> = {
+    "bun-mixed": { "sample-bun": "a313ca46ef19bc85bcc16e984acd26825319a4e7a9ce8e1b0d3aaed22e231490" },
+    "multi-service": {
+      "sample-lab": "f8803f356470b6d7f6dddebca9f3f3d1d9a4b89d4db39e00093a92ce7fe0cfef",
+      "sample-lab.api": "e2d055b78c3c2723734bc3a51fc0ef4077a0fd41a8bbcc212dedc30f83cffce0",
+      "sample-lab.worker": "e77575a31050a4656084c79771fb7b7bf0e980306fd1e95c5475700cdd34033f",
+    },
+  };
+
+  test.each(Object.keys(FINGERPRINTS_06))("projects/%s, without the system-call filter, is what 0.6 generated, to the byte", (fixture) => {
+    const { manifest } = readManifest(readFileSync(join(REPO_ROOT, "bin", "tests", "e2e", "projects", fixture, "sitesolide.json"), "utf8"));
+    const generated = generateUnits(manifest!, { slug: manifest!.slug, zone: "test-zone.invalid", contact: "sample@test-zone.invalid" });
+    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutSyscallLines(text)).digest("hex")]));
+    expect(fingerprints).toEqual(FINGERPRINTS_06[fixture]!);
   });
 });
 
@@ -652,14 +675,95 @@ describe("the ports a service may listen on", () => {
     }
   });
 
-  test("a unit the previous release generated, without them, is the generator's own and replaced without --force", () => {
+  test("a unit a release before them generated is the generator's own and replaced without --force", () => {
     const generated = generateUnit(APP);
     const previous = generated
       .split("\n")
-      .filter((line) => !line.startsWith("SocketBind"))
+      .filter((line) => !line.startsWith("SocketBind") && !line.startsWith("SystemCall"))
       .join("\n");
     expect(decideUnit({ installed: previous, generated, replace: false })).toBe("install");
     // One edited by hand besides still stops the deployment.
     expect(decideUnit({ installed: `${previous}\nLimitNOFILE=4096\n`, generated, replace: false })).toBe("diverged");
+  });
+});
+
+describe("the system calls a service may make", () => {
+  /**
+   * Every service runs under systemd's `@system-service` set, as the
+   * platform's own services do: no mount, module, reboot, swap, clock or
+   * tracing. A call outside it fails with EPERM rather than killing the
+   * process, so that a runtime probing for one goes on without it.
+   */
+  const LAB: Manifest = {
+    slug: "lab",
+    services: {
+      web: { start: "/srv/sites/lab/app/web", port: 3050 },
+      queue: { start: "/srv/sites/lab/app/queue", internal: true },
+      sync: { start: "/srv/sites/lab/app/sync", schedule: "hourly" },
+    },
+  } as Manifest;
+  const PLACEHOLDERS = { slug: "lab", zone: "test-zone.invalid", contact: "" };
+  const FILTER = ["SystemCallArchitectures=native", "SystemCallFilter=@system-service", "SystemCallErrorNumber=EPERM"];
+
+  test("a server, a worker and a scheduled service each carry the filter, once", () => {
+    const units = generateUnits(LAB, PLACEHOLDERS).filter(({ unit }) => !isTimerUnit(unit));
+    expect(units.map(({ unit }) => unit)).toEqual(["lab", "lab.queue", "lab.sync"]);
+    for (const { text } of units) {
+      for (const line of FILTER) expect(text.split("\n").filter((written) => written === line)).toEqual([line]);
+    }
+  });
+
+  test("network outbound, egress or secrets change nothing to it", () => {
+    for (const manifest of [
+      { ...APP, network: "outbound" },
+      { ...APP, egress: ["api.example.com"] },
+      { ...APP, secrets: ["budget.env"] },
+    ] as Manifest[]) {
+      for (const line of FILTER) expect(generateUnit(manifest)).toInclude(`\n${line}\n`);
+    }
+  });
+
+  test("an anchor and a timer, which run no program of the project's, carry none of it", () => {
+    const anchored: Manifest = { slug: "jobs", services: { nightly: { start: "/srv/sites/jobs/app/run", schedule: "daily" } } } as Manifest;
+    const units = Object.fromEntries(generateUnits(anchored, { ...PLACEHOLDERS, slug: "jobs" }).map(({ unit, text }) => [unit, text]));
+    expect(units["jobs"]!).not.toInclude("SystemCall");
+    expect(units["jobs.nightly.timer"]!).not.toInclude("SystemCall");
+    expect(units["jobs.nightly"]!).toInclude("\nSystemCallFilter=@system-service\n");
+  });
+
+  test("withoutSyscallLines takes off the block and nothing else", () => {
+    const generated = generateUnit(APP);
+    const before = withoutSyscallLines(generated);
+    expect(before).not.toInclude("SystemCall");
+    expect(before).not.toInclude("# The system calls of a service");
+    expect(before.split("\n").length).toBe(generated.split("\n").length - 5);
+    expect(withoutSyscallLines(before)).toBe(before);
+  });
+
+  test("a unit 0.6 generated, with the bind lines and without the filter, is replaced without --force", () => {
+    const generated = generateUnit(APP);
+    expect(decideUnit({ installed: withoutSyscallLines(generated), generated, replace: false })).toBe("install");
+  });
+
+  test("a unit from before 0.6, without either, is replaced without --force", () => {
+    const generated = generateUnit(APP);
+    expect(decideUnit({ installed: withoutBindLines(withoutSyscallLines(generated)), generated, replace: false })).toBe("install");
+  });
+
+  test("a unit edited by hand still stops the deployment, filter or not", () => {
+    const generated = generateUnit(APP);
+    expect(decideUnit({ installed: `${withoutSyscallLines(generated)}\nLimitNOFILE=4096\n`, generated, replace: false })).toBe("diverged");
+    // Its filter taken off by hand, the bind lines kept, is no release's.
+    const unfiltered = generated
+      .split("\n")
+      .filter((line) => line !== "SystemCallFilter=@system-service")
+      .join("\n");
+    expect(decideUnit({ installed: unfiltered, generated, replace: false })).toBe("diverged");
+    expect(decideUnit({ installed: unfiltered, generated, replace: true })).toBe("install");
+  });
+
+  test("a unit already carrying it is present, and nothing is laid", () => {
+    const generated = generateUnit(APP);
+    expect(decideUnit({ installed: generated, generated, replace: false })).toBe("present");
   });
 });

@@ -69,10 +69,10 @@ proving them:
 
 - **One kernel.** Every project runs on the same kernel, confined by a system
   account and systemd's directives, with no container and no user namespace.
-  A kernel exploit, or an escape from systemd's confinement, gets root on the
-  machine and every project on it.
-- **No system call filter on a project's units** (`SystemCallFilter=`); the
-  backup units have one.
+  Its system calls are filtered to systemd's `@system-service` set, which
+  narrows the kernel it reaches without closing it: files, sockets, processes
+  and memory remain. A kernel exploit through what is left, or an escape from
+  systemd's confinement, gets root on the machine and every project on it.
 - **The owner's SSH account has passwordless sudo.** Whoever holds its key
   holds the machine; that is what "only the owner holds SSH" means.
 - **A preview code is about 30 bits, and nothing limits the attempts.** It

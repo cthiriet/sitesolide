@@ -518,6 +518,7 @@ function renderUnit(
     "RestrictSUIDSGID=true",
     "RestrictRealtime=true",
     "LockPersonality=true",
+    ...syscallLines(),
     `MemoryMax=${service.memory}`,
     ...resourceLines(service),
     "",
@@ -621,6 +622,66 @@ export function withoutBindLines(text: string): string {
     if (lines[i + 1] === "") i++;
   }
   return kept.join("\n");
+}
+
+/**
+ * The system calls a service may make: systemd's `@system-service` set, the
+ * one the platform's own services run under (infra/), which a Bun, Node,
+ * Python or Go server needs, and none of the calls that change the machine
+ * rather than the process: mounting, loading a module, rebooting, swapping,
+ * setting the clock, tracing another process, raw I/O. A kernel flaw reached
+ * through one of those is out of a project's reach.
+ *
+ * A call outside the set fails with EPERM, as one the account may not make,
+ * rather than killing the process as systemd would by default: a runtime that
+ * probes for a call goes on without it, and a program that needs one says so
+ * in its own error instead of dying with status=31/SYS and restarting every
+ * two seconds. Measured on 19 October 2026 on a Debian 13 machine on x86_64,
+ * Bun 1.3.14 and 1.4.3, Node 20, Python 3.13, Go 1.24: Node calls pkey_alloc
+ * as it starts, for V8's memory protection keys, and the default action
+ * killed it there, as it did not on arm64; with EPERM it serves. `native` closes the 32-bit
+ * entry points of an x86_64 kernel, which the filter would otherwise judge by
+ * other numbers.
+ *
+ * Every unit generated before carries none of these lines, and is still the
+ * generator's own: see earlierGenerations.
+ */
+function syscallLines(): string[] {
+  return [
+    "# The system calls of a service, and none that changes the machine: no",
+    "# mount, module, reboot, swap, clock or tracing. Any other fails with EPERM.",
+    "SystemCallArchitectures=native",
+    "SystemCallFilter=@system-service",
+    "SystemCallErrorNumber=EPERM",
+  ];
+}
+
+/** A generated unit as the generator wrote it before syscallLines: the units of 0.6. */
+export function withoutSyscallLines(text: string): string {
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i] !== "# The system calls of a service, and none that changes the machine: no") {
+      kept.push(lines[i]!);
+      continue;
+    }
+    // The block syscallLines writes: its comment, then its lines.
+    if (lines[i + 1]?.startsWith("# ")) i++;
+    while (lines[i + 1]?.startsWith("SystemCall")) i++;
+  }
+  return kept.join("\n");
+}
+
+/**
+ * What earlier releases generated where this one generates `text`, newest
+ * first: without the system-call filter, as 0.6 wrote it, then without the
+ * bind lines either, as every release before. A unit in service that reads
+ * as one of them was never edited by hand, and is replaced at the project's
+ * next deployment without `--force`, by `deploy` and by the installer alike.
+ */
+export function earlierGenerations(text: string): string[] {
+  const beforeFilter = withoutSyscallLines(text);
+  return [beforeFilter, withoutBindLines(beforeFilter)];
 }
 
 /**
@@ -842,13 +903,14 @@ export type UnitAction = "install" | "present" | "diverged";
  * hand-written unit would be declared divergent at every deployment for its
  * comments alone, while running exactly the same service. See comparison.ts.
  *
- * A unit the release before the bind lines generated is the generator's own,
- * not one edited by hand: installed, so that every project takes them at its
- * next deployment. See bindLines.
+ * A unit an earlier release generated, before the bind lines or before the
+ * system-call filter, is the generator's own, not one edited by hand:
+ * installed, so that every project takes them at its next deployment. See
+ * earlierGenerations.
  */
 export function decideUnit(state: UnitState): UnitAction {
   if (state.installed.trim() === "") return "install";
   if (sameDirectives(state.installed, state.generated)) return "present";
-  if (sameDirectives(state.installed, withoutBindLines(state.generated))) return "install";
+  if (earlierGenerations(state.generated).some((earlier) => sameDirectives(state.installed, earlier))) return "install";
   return state.replace ? "install" : "diverged";
 }
