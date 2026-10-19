@@ -294,7 +294,7 @@ beforeAll(async () => {
   writeFileSync(join(units, INSTALLER_TEMPLATE), "[Service]\n");
   control = createControlSteward(
     {
-      ...createControlSystem({ stateFolder: state, sitesDir: sites, unitsFolder: units, installerFolder: folder("installer"), systemctl: "/bin/false", journalctl: "/bin/false" }),
+      ...createControlSystem({ stateFolder: state, sitesDir: sites, unitsFolder: units, installerFolder: folder("installer"), systemctl: "/bin/false", journalctl: "/bin/false", backups: null, connectors: null }),
       systemctl: async (arguments_) => {
         if (arguments_[0] === "start") installs.push(arguments_.at(-1)!);
         return arguments_[0] === "is-active" ? { code: 3, output: "inactive\n" } : { code: 0, output: "" };

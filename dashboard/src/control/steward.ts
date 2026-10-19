@@ -30,7 +30,9 @@
  * project, the token still owns the name, and nobody has access to the
  * project yet. Otherwise nobody is made Admin; a creation not settled within
  * a day is dropped, and the project, if there is one, is the owner's to
- * give. One undone, nothing laid, gives its name back.
+ * give. One undone, nothing laid, gives its name back. No token creates a
+ * name under which the machine still keeps a removed project's snapshots or
+ * connector grants (`judgeDeployment`): its creator would be their Admin.
  * The tokens from before every token belonged to someone are made someone's
  * once (`migrateTokens`), and the live tokens of anyone the registry gives no
  * rights are revoked every 30 seconds (`sweepTokens`), so that a person given
@@ -80,7 +82,7 @@ import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, sco
 import { readSecretsChange, type TokenSecretsChange } from "./secrets";
 import { CREATION_MAX_AGE_MS, encodeCreations, MAX_PENDING, readCreations, type PendingCreation } from "./creations";
 import { MAX_CONTROL_FILE_BYTES, type ControlSystem } from "./system";
-import { decideManifest, decideSlug, reservedReason, type SlugDecision } from "./policy";
+import { decideManifest, decideSlug, leftoversReason, reservedReason, type Leftovers, type SlugDecision } from "./policy";
 import {
   CONTROL_STATUSES,
   DEPLOYMENT_ID_SHAPE,
@@ -433,6 +435,43 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return { exists: await system.projectExists(slug), owner: registry.owners[slug] ?? null };
   }
 
+  /**
+   * A deployment's slug judged as `judgeSlug` does, then, for a creation,
+   * on what the machine still keeps under that name: a removed project's
+   * snapshots and connector grants, which the project created again would
+   * be handed (src/control/policy.ts, `leftoversReason`). Any token, a
+   * person's or the owner's own: a person is made Admin of what their token
+   * creates, and a grant is lent to whatever code runs under the slug. A
+   * project on the machine is deployed again and never asked; the owner's
+   * SSH deploy does not come here.
+   *
+   * Asked of the deployment itself, in the tokens' queue, right before the
+   * request is written and the installer started: a name the machine does
+   * not carry gains no snapshot until a run finds its folder, the new
+   * project's then, and no grant, which the Connectors page gives to a
+   * deployed site alone. So the installer does not ask again; it could not
+   * open the index besides, SQLite in WAL under its read-only /var/lib. One
+   * gap stays, the owner's own doing: an index made again from a repository
+   * that holds more, its database deleted by hand or a bucket attached from
+   * another machine, lists again at its next run what it finds. What does
+   * not read refuses the creation: an index or a grants file that cannot be
+   * read must never pass for one that holds nothing.
+   */
+  async function judgeDeployment(holder: Holder, slug: unknown, state: { exists: boolean; owner: string | null }): Promise<SlugDecision | Response> {
+    const decision = judgeSlug(holder, slug, state);
+    if (decision.kind === "refused" || !decision.creating) return decision;
+    const target = slug as string;
+    let left: Leftovers;
+    try {
+      left = await system.leftovers(target);
+    } catch (e) {
+      console.error(`control: what the machine keeps under ${target} does not read (${e instanceof Error ? e.message : errorName(e)}): its creation refused`);
+      return failure("failure", `what a removed project may have left under ${target}, backups or connector grants, cannot be read on the machine, and no token creates it meanwhile: the owner must read the steward's log`);
+    }
+    const reason = leftoversReason(target, left);
+    return reason === null ? decision : { kind: "refused", error: "reserved", message: reason };
+  }
+
   // --- the registry ------------------------------------------------------------
 
   async function listTokens(): Promise<Response> {
@@ -522,7 +561,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (holder instanceof Response) return holder;
     const state = await slugState(String(body.slug ?? ""));
     if (state instanceof Response) return state;
-    const decision = judgeSlug(holder, body.slug, state);
+    const decision = await judgeDeployment(holder, body.slug, state);
+    if (decision instanceof Response) return decision;
     if (decision.kind === "refused") return failure(decision.error, decision.message);
     return Response.json({ creating: decision.creating });
   }
@@ -556,7 +596,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return serially(async () => {
       const state = await slugState(String(slug ?? ""));
       if (state instanceof Response) return state;
-      const decision = judgeSlug(holder, slug, state);
+      const decision = await judgeDeployment(holder, slug, state);
+      if (decision instanceof Response) return decision;
       if (decision.kind === "refused") return failure(decision.error, decision.message);
       const target = slug as string;
 
@@ -1101,7 +1142,9 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   /**
    * A project removed from the machine by `sitesolide remove`, over the
    * owner's SSH: the token that created it no longer owns its name, so that
-   * another token may create a project of that name later. Only once the
+   * another token may create a project of that name later, once the machine
+   * keeps none of its snapshots and none of its connector grants, neither
+   * of which releasing the name withdraws (`judgeDeployment`). Only once the
    * machine no longer carries it: a removal stopped half way keeps the
    * ownership, and running it again finishes both. Journaled under `owner`,
    * the token in the detail. On the owner's socket alone: a compromised

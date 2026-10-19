@@ -47,6 +47,8 @@ function setup(options: { template?: boolean } = {}): Setup {
     installerFolder: join(root, "installer"),
     systemctl: "/bin/false",
     journalctl: "/bin/false",
+    backups: null,
+    connectors: null,
   });
   const system: ControlSystem = {
     ...real,
@@ -318,7 +320,7 @@ describe("the routes under their names before", () => {
     for (const folder of ["state", "sites", "units", "installer"]) mkdirSync(join(root, folder));
     const forgotten: [string, string][] = [];
     const handler = createControlSteward(
-      createControlSystem({ stateFolder: join(root, "state"), sitesDir: join(root, "sites"), unitsFolder: join(root, "units"), installerFolder: join(root, "installer"), systemctl: "/bin/false", journalctl: "/bin/false" }),
+      createControlSystem({ stateFolder: join(root, "state"), sitesDir: join(root, "sites"), unitsFolder: join(root, "units"), installerFolder: join(root, "installer"), systemctl: "/bin/false", journalctl: "/bin/false", backups: null, connectors: null }),
       {
         zone: ZONE,
         isUnlocked: async () => false,

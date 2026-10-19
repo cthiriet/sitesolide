@@ -89,6 +89,8 @@ function bench(): Bench {
     installerFolder: join(root, "installer"),
     systemctl: "/bin/false",
     journalctl: "/bin/false",
+    backups: null,
+    connectors: null,
   });
   const system: ControlSystem = {
     ...real,
@@ -468,7 +470,7 @@ describe("ownership of what a person's token creates", () => {
     const restarted = bench();
     // The same tree, a new handler: as a restart leaves it.
     const handler = createControlSteward(
-      { ...createControlSystem({ stateFolder: join(b.root, "state"), sitesDir: join(b.root, "sites"), unitsFolder: join(b.root, "units"), installerFolder: join(b.root, "installer"), systemctl: "/bin/false", journalctl: "/bin/false" }) },
+      { ...createControlSystem({ stateFolder: join(b.root, "state"), sitesDir: join(b.root, "sites"), unitsFolder: join(b.root, "units"), installerFolder: join(b.root, "installer"), systemctl: "/bin/false", journalctl: "/bin/false", backups: null, connectors: null }) },
       { zone: ZONE, isUnlocked: async () => false, uidRoot: null, members: restarted.members },
     );
     restarted.registry.value = b.registry.value;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Manifest } from "../borrowed/manifest";
-import { allocatePorts, decideDoor, decideManifest, decideSlug, leavesPorts, memoryBytes, reservedReason, scopeRefusals, takenPorts } from "../src/control/policy";
+import { allocatePorts, decideDoor, decideManifest, decideSlug, leavesPorts, leftoversReason, memoryBytes, reservedReason, scopeRefusals, takenPorts } from "../src/control/policy";
 import type { Identity, Scope } from "../src/control/protocol";
 
 const ZONE = "test-zone.invalid";
@@ -99,6 +99,20 @@ describe("decideSlug", () => {
     for (const slug of ["", "Shop", "../etc", "a.b", 42, null]) {
       expect(decideSlug(identity({ create: true }), slug, machine(false))).toMatchObject({ kind: "refused", error: "invalid" });
     }
+  });
+});
+
+describe("leftoversReason", () => {
+  test("nothing left: no reason; each kind counted, with its own remedy and the owner's SSH deploy", () => {
+    expect(leftoversReason("shop", { snapshots: 0, grants: 0 })).toBeNull();
+    expect(leftoversReason("shop", { snapshots: 3, grants: 0 })).toBe(
+      "the machine still keeps 3 backup snapshots of a project once named shop, which a project created under that name would be handed: no token creates it. " +
+        "Pick another slug, or ask the owner of the machine, who may deploy shop themselves over SSH, or forget the snapshots first",
+    );
+    expect(leftoversReason("shop", { snapshots: 0, grants: 2 })).toBe(
+      "the machine still keeps 2 connector grants of a project once named shop, which a project created under that name would be handed: no token creates it. " +
+        "Pick another slug, or ask the owner of the machine, who may deploy shop themselves over SSH, or withdraw the grants on the dashboard's Connectors page first",
+    );
   });
 });
 

@@ -65,6 +65,8 @@ beforeAll(async () => {
     installerFolder: join(root, "installer"),
     systemctl: "/bin/false",
     journalctl: "/bin/false",
+    backups: null,
+    connectors: null,
   });
   const system: ControlSystem = {
     ...real,

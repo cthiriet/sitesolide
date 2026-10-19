@@ -82,7 +82,7 @@ async function wire(registry: Registry, sites: string[]) {
     authorize: members.authorize,
     leave: members.leave,
   });
-  const real = createControlSystem({ stateFolder: join(root, "state"), sitesDir: join(root, "sites"), unitsFolder: join(root, "units"), installerFolder: join(root, "installer"), systemctl: "/bin/false", journalctl: "/bin/false" });
+  const real = createControlSystem({ stateFolder: join(root, "state"), sitesDir: join(root, "sites"), unitsFolder: join(root, "units"), installerFolder: join(root, "installer"), systemctl: "/bin/false", journalctl: "/bin/false", backups: null, connectors: null });
   control = createControlSteward(
     {
       ...real,

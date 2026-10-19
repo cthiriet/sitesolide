@@ -132,6 +132,8 @@ function bench(options: { access?: boolean; full?: () => boolean; changesPerHour
     installerFolder: join(root, "installer"),
     systemctl: "/bin/false",
     journalctl: "/bin/false",
+    backups: null,
+    connectors: null,
   });
   const system: ControlSystem = { ...real, systemctl: async () => ({ code: 0, output: "" }), journal: async () => ({ code: 0, output: "" }) };
   const handler = createControlSteward(system, {

@@ -187,7 +187,8 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   unauthenticated: "the token is missing, unknown, expired or revoked: ask the owner of the machine for one, then run `sitesolide login`; never guess a token or borrow another one",
   "too-many-attempts": "wait the seconds `details` names, then run the same command once; never retry in a loop",
   "out-of-scope": "this may not be done by whoever asks: change what the message names (in sitesolide.json for a deployment, in the command for access), or ask the owner of the machine, who may widen the token or do it themselves; never pick another slug, role or token to get around it, nor another file for a secret",
-  reserved: "the slug belongs to the platform: pick another one in sitesolide.json",
+  reserved:
+    "the slug belongs to the platform, or a removed project left its backups or a connector's grant under it: pick another one in sitesolide.json; only the owner of the machine frees such a name, never a token",
   "invalid-manifest": "fix every point of `details` in sitesolide.json (docs/manifest.md), then deploy again",
   invalid: "fix what the message names, then run the same command again",
   "not-found": "nothing by that name: check the slug in sitesolide.json, and the address or @domain in the command (`sitesolide share` lists who has access); with a token, `sitesolide status` lists the projects it reaches",

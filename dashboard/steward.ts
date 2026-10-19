@@ -250,6 +250,10 @@ const control = createControlSteward(
     installerFolder: INSTALLER_FOLDER,
     systemctl: SYSTEMCTL,
     journalctl: JOURNALCTL,
+    // What a removed project left under its name, read where the Backups
+    // section and the Connectors page read it: no token creates that name.
+    backups,
+    connectors,
   }),
   {
     zone: process.env.SITESOLIDE_ZONE ?? "",

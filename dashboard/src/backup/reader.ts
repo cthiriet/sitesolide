@@ -42,6 +42,16 @@ export type BackupReader = {
   local: (folder: string) => IndexedSnapshot[];
   status: () => RunStatus | null;
   offsite: (folder: string) => IndexedSnapshot[];
+  /**
+   * How many snapshots of a folder the index holds, in either repository, a
+   * snapshot in both counted once: what its Backups section would list and
+   * its restore accept. 0 before any run made the index; null when the index
+   * is there and does not read, which `local` and `offsite` show as empty.
+   * The steward asks before a token creates a project of that name
+   * (src/control/system.ts, `leftovers`), and an empty answer there would
+   * hand a removed project's data to whoever created it again.
+   */
+  held: (folder: string) => number | null;
   settings: () => Settings;
   /** Newest first; `before`, an id, for the entries older than it. */
   audit: (folder: string | null, limit: number, before?: number | null) => AuditEntry[];
@@ -120,6 +130,21 @@ export function createBackupReader(config: BackupReaderConfig): BackupReader {
       return file === null || file.bytes === null ? null : readStatus(new TextDecoder().decode(file.bytes));
     },
     offsite: (folder) => withDatabase([], (db) => readSnapshots(db, "offsite", folder)),
+    held: (folder) => {
+      // Not `withDatabase`, whose fallback reads as no snapshot at all: here,
+      // an index that does not read must never pass for an empty one.
+      try {
+        const db = openForReading(database);
+        if (db === null) return 0;
+        try {
+          return new Set([...readSnapshots(db, "local", folder), ...readSnapshots(db, "offsite", folder)].map((snapshot) => snapshot.name)).size;
+        } finally {
+          db.close();
+        }
+      } catch {
+        return null;
+      }
+    },
     settings: () =>
       withDatabase<Settings>(NO_SETTINGS, (db) => {
         const retention = readSetting(db, "retention");

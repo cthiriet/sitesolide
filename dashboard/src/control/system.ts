@@ -1,8 +1,9 @@
 /**
  * The steward's inputs and outputs for the control API, and nothing else: the
  * team registry, the request it leaves for the installer, the installer's
- * results, the journal of a project. An interface, so that the tests mount the
- * steward's control routes on a throwaway tree with a simulated `systemctl`.
+ * results, the journal of a project, and what a removed project left under
+ * its name. An interface, so that the tests mount the steward's control
+ * routes on a throwaway tree with a simulated `systemctl`.
  *
  * Kept apart from src/secrets/system.ts, whose interface the secrets routes
  * own; the two careful primitives, the bounded read and the atomic write, are
@@ -11,14 +12,18 @@
  * Every file here is root's: the registry and the requests live in the
  * steward's own state directory, 0700, and the installer's results in its
  * runtime directory, 0700. Nothing is written where the dashboard could have
- * laid a link.
+ * laid a link. The backups' index and the connectors' files are only read,
+ * through the readers the steward's pages already use, with their checks.
  */
 import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readBounded, writeAtomically, type Command, type Examination } from "../secrets/system";
 import { DEPLOYMENT_ID_SHAPE, INSTALLER_TEMPLATE } from "./protocol";
 import { CREATIONS_NAME } from "./creations";
+import type { Leftovers } from "./policy";
 import { isValidSlug } from "../../borrowed/manifest";
+import type { BackupReader } from "../backup/reader";
+import type { ConnectorStore } from "../connectors/store";
 
 export type ControlSystemConfig = {
   /** /var/lib/sitesolide-steward */
@@ -33,6 +38,16 @@ export type ControlSystemConfig = {
   systemctl: string;
   /** /usr/bin/journalctl */
   journalctl: string;
+  /**
+   * The backups' index and the connectors' files, as the steward reads them
+   * for its own pages (dashboard/steward.ts): what a removed project left
+   * under its name, which a token may not create (`leftovers`). Null where
+   * that component is not part of this steward, the tests that need neither;
+   * the machine's steward always carries both, read as absent while the
+   * component is not installed.
+   */
+  backups: BackupReader | null;
+  connectors: ConnectorStore | null;
 };
 
 export type ControlSystem = {
@@ -49,6 +64,13 @@ export type ControlSystem = {
   projectExists: (slug: string) => Promise<boolean>;
   /** The deposited manifest's text, null when there is none. */
   readManifest: (slug: string) => Promise<string | null>;
+  /**
+   * What the machine keeps under this name whether or not it carries the
+   * project: snapshots in the backups' index, connector grants. Throws when
+   * either is there and does not read: what cannot be read is never taken
+   * for nothing left (src/control/policy.ts, `leftoversReason`).
+   */
+  leftovers: (slug: string) => Promise<Leftovers>;
   /** Is the installer's template in place? Without it, nothing can start. */
   installerInstalled: () => Promise<boolean>;
   readResult: (deployment: string) => Promise<Examination>;
@@ -136,6 +158,19 @@ export function createControlSystem(config: ControlSystemConfig): ControlSystem 
       } catch {
         return null;
       }
+    },
+
+    async leftovers(slug) {
+      if (!isValidSlug(slug)) throw new Error("not a slug");
+      // The backups' folder is the project's slug, as /srv/sites names it.
+      const snapshots = config.backups === null ? 0 : config.backups.held(slug);
+      if (snapshots === null) throw new Error("the backups' index does not read");
+      let grants = 0;
+      const reading = config.connectors === null ? ({ kind: "absent" } as const) : config.connectors.read();
+      // Absent: the egress proxy is not installed, and nothing is lent.
+      if (reading.kind === "unmanaged") throw new Error(`the connectors' files do not read: ${reading.reason}`);
+      if (reading.kind === "managed") grants = reading.grants.grants.filter((grant) => grant.slug === slug).length;
+      return { snapshots, grants };
     },
 
     async installerInstalled() {

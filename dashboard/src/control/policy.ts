@@ -20,6 +20,15 @@
  * to whoever wrote it. The slug names that file, so the installer checks it
  * is the project's own on the machine (src/installer/claims.ts).
  *
+ * **Nor what a removed project left under its name.** `sitesolide remove`
+ * releases the name for any token to create again, and its creator is made
+ * Admin of what it creates; but the backups' snapshots and the connectors'
+ * grants are keyed by the slug alone, and stay. The project created again
+ * would list its predecessor's snapshots and restore them into its own data
+ * folder, and be lent the credential the owner granted to the one removed.
+ * So no token creates a name under which the machine still keeps either
+ * (`leftoversReason`); the owner, deploying over SSH, still may.
+ *
  * Pure.
  */
 import {
@@ -100,6 +109,48 @@ export function decideSlug(identity: Identity, slug: unknown, machine: { exists:
   }
   if (own || granted || identity.scope.create) return { kind: "allowed", creating: true };
   return refused("out-of-scope", `your token may not create projects: ask the owner of the machine to grant ${slug}, or to allow creating projects`);
+}
+
+/**
+ * What the machine still keeps under a name its project no longer carries:
+ * the snapshots of that folder the backups' index holds, in the server's
+ * repository or the bucket's, each counted once, and the connector grants
+ * made to that slug. Counts alone: nothing of what they hold.
+ */
+export type Leftovers = { snapshots: number; grants: number };
+
+const counted = (count: number, what: string) => `${count} ${what}${count === 1 ? "" : "s"}`;
+
+/**
+ * Why a token may not create this slug, after decideSlug allowed the
+ * creation, or null when nothing was left under it. A project created again
+ * under a removed one's name inherits both, whoever creates it: its Admin
+ * restores the snapshots, the restore matching nothing but the folder and the
+ * time (src/backup/restore.ts), and the egress proxy lends a grant to the
+ * slug that asks (egress/src/connectors.ts, `isGranted`). Neither is
+ * withdrawn by the removal, and retention never forgets a folder's newest
+ * snapshot. A project the machine carries is a deployment, never a creation,
+ * and is not asked.
+ *
+ * The answer names how many of each, never a connector, a value nor a
+ * snapshot's name, and what the owner may do: deploy it over SSH, which
+ * stays the way to bring a removed project back, or clear what was left
+ * first.
+ */
+export function leftoversReason(slug: string, left: Leftovers): string | null {
+  const kept: string[] = [];
+  const clear: string[] = [];
+  if (left.snapshots > 0) kept.push(counted(left.snapshots, "backup snapshot"));
+  if (left.grants > 0) {
+    kept.push(counted(left.grants, "connector grant"));
+    clear.push(`withdraw the grant${left.grants === 1 ? "" : "s"} on the dashboard's Connectors page`);
+  }
+  if (left.snapshots > 0) clear.push(`forget the snapshot${left.snapshots === 1 ? "" : "s"}`);
+  if (kept.length === 0) return null;
+  return (
+    `the machine still keeps ${kept.join(" and ")} of a project once named ${slug}, which a project created under that name would be handed: no token creates it. ` +
+    `Pick another slug, or ask the owner of the machine, who may deploy ${slug} themselves over SSH, or ${clear.join(" and ")} first`
+  );
 }
 
 /** `256M` in bytes. `validate()` has already checked the shape. */
