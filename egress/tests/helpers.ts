@@ -100,11 +100,19 @@ export function authority(leaves: string[][]): { ca: string; leaves: { cert: str
 export function recordingTlsServer(tls: { cert: string; key: string }) {
   const received: string[] = [];
   let handshakes = 0;
+  let connections = 0;
   const listener = Bun.listen({
     hostname: "127.0.0.1",
     port: 0,
     tls,
     socket: {
+      // A connection the proxy opened, whatever became of its handshake: a
+      // client that refuses the certificate's name may abort the handshake
+      // before the server counts it as done (Bun 1.4 on Linux does, 1.3 on
+      // macOS completes it and the proxy refuses after).
+      open() {
+        connections++;
+      },
       handshake() {
         handshakes++;
       },
@@ -115,7 +123,7 @@ export function recordingTlsServer(tls: { cert: string; key: string }) {
       },
     },
   });
-  return { port: listener.port, received, handshakes: () => handshakes, stop: () => listener.stop(true) };
+  return { port: listener.port, received, handshakes: () => handshakes, connections: () => connections, stop: () => listener.stop(true) };
 }
 
 /** A resolver that knows only the names a test gives it. */

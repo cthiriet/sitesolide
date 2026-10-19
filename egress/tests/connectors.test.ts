@@ -508,9 +508,9 @@ describe.skipIf(OPENSSL === null)("the certificate of a connector's host", () =>
     const response = await fetch(`http://127.0.0.1:${server.port}/connectors/api/v1/x`);
     expect(response.status).toBe(502);
     expect(await response.json()).toMatchObject({ message: "connectors: api: the connection failed" });
-    // The proxy did reach it, and stopped at the certificate: a handshake,
+    // The proxy did reach it, and stopped at the certificate: a connection,
     // then not one byte of the request.
-    expect(impostor.handshakes()).toBeGreaterThan(0);
+    expect(impostor.connections()).toBeGreaterThan(0);
     expect(impostor.received).toEqual([]);
   });
 
@@ -536,7 +536,7 @@ describe.skipIf(OPENSSL === null)("the certificate of a connector's host", () =>
       try {
         const response = await fetch(`http://127.0.0.1:${lone.port}/connectors/api/v1/x`);
         expect(response.status).toBe(502);
-        expect(stranger.handshakes()).toBeGreaterThan(0);
+        expect(stranger.connections()).toBeGreaterThan(0);
         expect(stranger.received).toEqual([]);
       } finally {
         lone.stop();
