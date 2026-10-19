@@ -57,6 +57,35 @@ export type ConnectorsOptions = {
 export const MAX_BODY_BYTES = 10 * 1024 * 1024;
 
 /**
+ * A request body held to `max` bytes as it streams through, failing past it.
+ *
+ * Bun.serve's maxRequestBodySize refuses a Content-Length above the limit,
+ * not a body sent in chunks, which carries none: one went through whole, 50
+ * MiB past a limit of 10, measured on Bun 1.3.11. And Bun's fetch reads the
+ * body it uploads as fast as the app sends it, whatever the upstream takes:
+ * an endless chunked body to any upstream slower than the loopback, that is
+ * every one of them, was held in the proxy without bound.
+ */
+function capped(body: ReadableStream<Uint8Array>, max: number): { stream: ReadableStream<Uint8Array>; exceeded: () => boolean } {
+  let total = 0;
+  let exceeded = false;
+  const stream = body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        total += chunk.byteLength;
+        if (total > max) {
+          exceeded = true;
+          controller.error(new Error("request body too large"));
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    }),
+  );
+  return { stream, exceeded: () => exceeded };
+}
+
+/**
  * Connector calls a project may have waiting for their upstream at once. One
  * project looping on a slow API must not take every other project's share of
  * the proxy with it.
@@ -192,7 +221,8 @@ export function startConnectors(options: ConnectorsOptions): Server<undefined> {
       const headers = upstreamHeaders(req.headers, connector.header, connector.value, host);
       // The body streams through rather than being held: a stream is read
       // once, so a call with a body tries the first address alone.
-      const body = req.method === "GET" || req.method === "HEAD" ? null : req.body;
+      const limited = req.method === "GET" || req.method === "HEAD" || req.body === null ? null : capped(req.body, MAX_BODY_BYTES);
+      const body = limited?.stream ?? null;
       const addresses = body === null ? resolution.addresses : resolution.addresses.slice(0, 1);
 
       let lastError = "no address answered";
@@ -210,12 +240,18 @@ export function startConnectors(options: ConnectorsOptions): Server<undefined> {
           // "the certificate of a connector's host" in the tests. Never move
           // this check into tls.checkServerIdentity: Bun 1.3 calls it once the
           // request, credential included, has already been written.
+          //
+          // The caller's own signal too, which Bun aborts when the app hangs
+          // up: Bun's fetch reads its upstream as fast as it comes, whether
+          // anyone reads the body or not, and an answer whose caller is gone
+          // would otherwise be read and kept to its end, a stream of events
+          // for ever, for nobody, in the memory every project's egress shares.
           const response = await fetch(`https://${urlHost(target.hostname)}:${target.port}${path}${url.search}`, {
             method: req.method,
             headers,
             body,
             redirect: "manual",
-            signal: abort.signal,
+            signal: AbortSignal.any([abort.signal, req.signal]),
             tls: { serverName: base.host, ...(options.ca === undefined ? {} : { ca: options.ca }) },
           });
           clearTimeout(timer);
@@ -223,6 +259,11 @@ export function startConnectors(options: ConnectorsOptions): Server<undefined> {
           return new Response(response.body, { status: response.status, statusText: response.statusText, headers: downstreamHeaders(response.headers, name) });
         } catch (error) {
           clearTimeout(timer);
+          // Gone: nobody is left to try the next address for.
+          if (req.signal.aborted) break;
+          if (limited?.exceeded() === true) {
+            return denied(413, "body too large", `connectors: the request body is over ${MAX_BODY_BYTES} bytes`, slug);
+          }
           lastError = error instanceof Error && error.name === "AbortError" ? "no answer in time" : "the connection failed";
         }
       }

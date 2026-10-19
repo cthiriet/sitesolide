@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Server } from "bun";
+import type { Server, TCPSocketListener } from "bun";
 import { EMPTY_CONNECTORS, EMPTY_GRANTS, putConnector, serializeConnectors, serializeGrants, setGrant } from "../../bin/cli/connectors";
 import { DATA_DIR } from "../src/config";
-import { connectorPath, MAX_IN_FLIGHT_PER_PROJECT, startConnectors, upstreamHeaders } from "../src/connectors";
+import { connectorPath, MAX_BODY_BYTES, MAX_IN_FLIGHT_PER_PROJECT, startConnectors, upstreamHeaders } from "../src/connectors";
 import { createPolicy } from "../src/policy";
 import type { Caller } from "../src/proc-net";
 import { authority, certificate, OPENSSL, recordingAudit, recordingTlsServer, stubLookup, stubRoute } from "./helpers";
@@ -159,6 +159,25 @@ describe.skipIf(OPENSSL === null)("the connectors", () => {
     const size = 3 * 1024 * 1024;
     const response = await fetch(`${base()}/connectors/chat/size`, { method: "PUT", body: new Uint8Array(size).fill(5) });
     expect(await response.json()).toEqual({ received: size });
+  });
+
+  test("a body sent in chunks is held to the same limit as one that announces its length", async () => {
+    caller = { kind: "project", slug: "shop", account: "site-shop" };
+    // Bun.serve's maxRequestBodySize refuses a Content-Length above it, and
+    // let a chunked body of any size through, to an upstream slower than the
+    // loopback: the proxy held what it could not send yet, without bound.
+    const total = MAX_BODY_BYTES + 1024 * 1024;
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= total) return controller.close();
+        controller.enqueue(new Uint8Array(1024 * 1024).fill(5));
+        sent += 1024 * 1024;
+      },
+    });
+    const response = await fetch(`${base()}/connectors/chat/size`, { method: "PUT", body, duplex: "half" } as RequestInit);
+    expect(response.status).toBe(413);
+    expect(((await response.json()) as { message: string }).message).toBe(`connectors: the request body is over ${MAX_BODY_BYTES} bytes`);
   });
 
   test("one project cannot hold more than its share of calls waiting for an upstream", async () => {
@@ -348,6 +367,109 @@ describe.skipIf(OPENSSL === null)("the certificate of a connector's host", () =>
     expect(response.status).toBe(502);
     expect(genuine.received.slice(before).join("")).not.toContain("twin-test-value");
     expect(impostor.received.join("") + genuine.received.join("")).not.toContain(TWIN_VALUE);
+  });
+});
+
+/**
+ * An answer that never ends, a stream of events, and a caller that hangs up
+ * in the middle of it. Bun's fetch reads its upstream as fast as it arrives
+ * whether anyone reads the body or not: an upstream the proxy forgets to let
+ * go of is read, and kept in memory, for nobody, until it ends, or for ever.
+ * One project hanging up on such streams in a loop, or a client that times
+ * out and retries, would take the memory every project's egress shares.
+ */
+describe.skipIf(OPENSSL === null)("a connector's answer once its caller is gone", () => {
+  const FEED = "feed.test-zone.invalid";
+  const FEED_ADDRESS = "203.0.114.50";
+  const streams = { opened: 0, closed: 0 };
+  let upstream: TCPSocketListener<{ timer: ReturnType<typeof setInterval> | null }>;
+  let server: Server<undefined>;
+  let root: string;
+
+  beforeAll(() => {
+    const tls = certificate([FEED]);
+    // A server that answers with an endless chunked stream, one event every
+    // 10 ms, and counts the connections the proxy closes.
+    upstream = Bun.listen<{ timer: ReturnType<typeof setInterval> | null }>({
+      hostname: "127.0.0.1",
+      port: 0,
+      tls,
+      socket: {
+        data(socket) {
+          // Set here rather than in open(), which a TLS socket may not have
+          // seen yet when its first bytes are delivered.
+          if (socket.data?.timer) return;
+          streams.opened++;
+          socket.write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n");
+          const event = "data: tick\n\n";
+          const frame = `${event.length.toString(16)}\r\n${event}\r\n`;
+          socket.data = { timer: setInterval(() => socket.write(frame), 10) };
+        },
+        close(socket) {
+          if (socket.data?.timer) clearInterval(socket.data.timer);
+          streams.closed++;
+        },
+      },
+    });
+
+    root = mkdtempSync(join(DATA_DIR, "streams-"));
+    const sites = join(root, "sites");
+    const config = join(root, "config");
+    mkdirSync(join(sites, "shop"), { recursive: true });
+    mkdirSync(config, { recursive: true });
+    writeFileSync(join(sites, "shop", "sitesolide.json"), JSON.stringify({ slug: "shop", port: 3040, start: "/x", connectors: ["feed"] }));
+    const now = "2026-10-04T12:00:00.000Z";
+    const put = putConnector(EMPTY_CONNECTORS, { name: "feed", baseUrl: `https://${FEED}`, header: "Authorization", value: VALUE }, now, "owner");
+    if ("error" in put) throw new Error(put.error);
+    const granted = setGrant(EMPTY_GRANTS, put.file, "shop", "feed", true, now, "owner");
+    if ("error" in granted) throw new Error(granted.error);
+    writeFileSync(join(config, "connectors.json"), serializeConnectors(put.file));
+    writeFileSync(join(config, "grants.json"), serializeGrants(granted.file));
+
+    server = startConnectors({
+      hostname: "127.0.0.1",
+      port: 0,
+      identify: () => ({ kind: "project", slug: "shop", account: "site-shop" }),
+      policy: createPolicy(sites, config),
+      lookup: stubLookup({ [FEED]: [FEED_ADDRESS] }),
+      ownAddresses: () => new Set<string>(),
+      audit: recordingAudit().audit,
+      dashboardAccount: "site-dashboard",
+      route: stubRoute({ [`${FEED_ADDRESS}:443`]: upstream.port }),
+      ca: tls.cert,
+    });
+  });
+
+  afterAll(() => {
+    server?.stop(true);
+    upstream?.stop(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("the caller hangs up: the proxy lets go of the upstream, rather than reading it for nobody", async () => {
+    const { promise: streaming, resolve } = Promise.withResolvers<void>();
+    let received = "";
+    const client = await Bun.connect({
+      hostname: "127.0.0.1",
+      port: server.port!,
+      socket: {
+        data(_socket, chunk) {
+          received += new TextDecoder().decode(chunk);
+          if (received.includes("tick")) resolve();
+        },
+        close() {},
+        error() {},
+      },
+    });
+    client.write("GET /connectors/feed/events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    await Promise.race([streaming, Bun.sleep(3000)]);
+    expect(received).toContain("tick");
+    expect(streams).toEqual({ opened: 1, closed: 0 });
+
+    client.terminate();
+    const deadline = Date.now() + 2000;
+    while (streams.closed === 0 && Date.now() < deadline) await Bun.sleep(25);
+    expect(streams.closed).toBe(1);
   });
 });
 
