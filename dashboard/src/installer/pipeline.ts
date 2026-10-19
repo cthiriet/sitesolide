@@ -61,7 +61,7 @@
  */
 import { generateFragment, decideBlock } from "../../borrowed/fragment";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts, type ProjectAccount } from "../../borrowed/loopback";
-import { isApp, readManifest, scheduledServices, servicesOf, setLock, setPortal, type Manifest } from "../../borrowed/manifest";
+import { domainHosts, isApp, readManifest, scheduledServices, servicesOf, setDomainActive, setLock, setPortal, type Manifest } from "../../borrowed/manifest";
 import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "../../borrowed/portal-vm";
 import { domainConflicts, foreignUnit, portConflicts, staleUnits, unstableUnits, type UnitStanding } from "../../borrowed/services";
 import { decideUnit, generateUnits, runningUnits, unitArgument, unitFileName, watchedUnits, withoutBindLines } from "../../borrowed/unit";
@@ -178,6 +178,19 @@ export function finalManifest(
   let text = `${JSON.stringify(allocation.object, null, 2)}\n`;
   text = setPortal(text, door.portal);
   text = setLock(text, previous?.lock === true);
+  // So is a domain's switch: `sitesolide domain --activate` sets
+  // `domain.active` after checking the DNS and that a closed site's domain
+  // closes with it, and the table api/ certifies and routes from reads that
+  // field at its next regeneration, whoever runs it. A token may declare a
+  // domain, never switch it on or off (docs/access.md): the machine's value
+  // stands, and only for names it already covered, so that a new name or a
+  // new alias never rides an earlier activation.
+  if (asked.manifest.domain !== undefined) {
+    const before = previous?.domain;
+    const covered = before !== undefined && typeof before.name === "string" ? new Set(attempt(() => domainHosts(before), [])) : new Set<string>();
+    const active = before?.active === true && domainHosts(asked.manifest.domain).every((host) => covered.has(host));
+    text = setDomainActive(text, active);
+  }
   const final = readManifest(text);
   if (final.manifest === undefined || final.errors.length > 0) {
     throw new Stop("invalid-manifest", `sitesolide.json is refused once the machine's portal and lock are applied: ${final.errors.join("; ")}`);

@@ -796,6 +796,20 @@ describe("finalManifest and replaceable, pure", () => {
     expect(() => finalManifest(request(APP), new Map([["shop", "{"]]))).toThrow("does not read");
   });
 
+  test("a domain's switch is the machine's, never the token's: active only as the owner left it, for the same names", () => {
+    const DOMAIN_SCOPE: Scope = { ...PRIVATE, domain: true };
+    const domainOf = (text: string) => readManifest(text).manifest!.domain;
+    const machine = (domain: object) => new Map([["shop", `${JSON.stringify({ ...APP, port: 3040, portal: true, domain })}\n`]]);
+    // A new project switches nothing on.
+    expect(domainOf(finalManifest(request({ ...APP, domain: { name: "shop.example", active: true } }, DOMAIN_SCOPE), new Map()).text)).toEqual({ name: "shop.example", active: false });
+    // Inactive on the machine: the token cannot switch it on.
+    expect(domainOf(finalManifest(request({ ...APP, port: 3040, domain: { name: "shop.example", active: true } }, DOMAIN_SCOPE), machine({ name: "shop.example", active: false })).text)?.active).toBe(false);
+    // Active on the machine: the token cannot switch it off, nor carry the switch to another name or a new alias.
+    expect(domainOf(finalManifest(request({ ...APP, port: 3040, domain: { name: "shop.example" } }, DOMAIN_SCOPE), machine({ name: "shop.example", active: true })).text)?.active).toBe(true);
+    expect(domainOf(finalManifest(request({ ...APP, port: 3040, domain: { name: "other.example", active: true } }, DOMAIN_SCOPE), machine({ name: "shop.example", active: true })).text)?.active).toBe(false);
+    expect(domainOf(finalManifest(request({ ...APP, port: 3040, domain: { name: "shop.example", aliases: ["new.example"], active: true } }, DOMAIN_SCOPE), machine({ name: "shop.example", active: true })).text)?.active).toBe(false);
+  });
+
   test("a file is replaceable when absent, identical, or the previous manifest's own", () => {
     expect(replaceable(null, "a b", null)).toBe(true);
     expect(replaceable("x 1\n", "x 1", null)).toBe(true);
