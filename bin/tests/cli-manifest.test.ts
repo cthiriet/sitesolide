@@ -93,9 +93,17 @@ describe("validation", () => {
       expect({ slug, errors: validate({ ...APP, slug }) }).toEqual({ slug, errors: [expect.stringContaining("a name the machine already uses")] });
     }
     // A name that merely starts like one is a project like any other.
-    for (const slug of ["caddy-notes", "my-ssh", "crontab-ui", "systemd", "sitesolide", "wwwx"]) {
+    for (const slug of ["caddy-notes", "my-ssh", "crontab-ui", "systemd", "sitesolide", "wwwx", "public-notes"]) {
       expect(validate({ ...APP, slug })).toEqual([]);
     }
+  });
+
+  test("refuses public, whose folder a host with an empty first label would serve whole", () => {
+    // `Host: .<zone>` matches the wildcard block with an empty slug label:
+    // its root, /srv/sites//public, cleans to /srv/sites/public, which would
+    // be the root folder of a project named public, its manifest and code
+    // served past any lock.
+    expect(validate({ ...APP, slug: "public" })).toEqual([expect.stringContaining("a name the machine already uses")]);
   });
 
   test("demands a port as soon as a start is declared", () => {

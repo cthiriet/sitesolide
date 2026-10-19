@@ -193,13 +193,18 @@ export function isValidSlug(slug: string): boolean {
  * unitOriginsCommand in services.ts.
  *
  * `www` is not a unit: the landing's block serves `www.<zone>`, and a project
- * of that name would never be reached. The platform's own projects, the
+ * of that name would never be reached. Nor is `public`: the wildcard block
+ * roots a host at `/srv/sites/<first label>/public`, and a host whose first
+ * label is empty, `.<zone>`, still matches it, rooted at `/srv/sites//public`,
+ * which is `/srv/sites/public`: a project of that name would have its
+ * manifest and its code served from there, past its portal or its lock. The platform's own projects, the
  * dashboard, the portal and analytics, are not here: their owner deploys them
  * with this very validation. A token may not, see RESERVED_SLUGS in
  * dashboard/src/control/policy.ts.
  */
 export const SYSTEM_NAMES: readonly string[] = [
   "www",
+  "public",
   "caddy",
   "ssh",
   "sshd",
@@ -851,7 +856,7 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     // Its snapshots would mix with those of the machine's own state.
     errors.push(`slug: ${MACHINE_FOLDER} is reserved for the backups of the machine's own state: pick another`);
   } else if (isSystemName(manifest.slug)) {
-    errors.push(`slug: ${manifest.slug} is a name the machine already uses, a system service or the landing's www: pick another`);
+    errors.push(`slug: ${manifest.slug} is a name the machine already uses, a system service, the landing's www or the folder name public: pick another`);
   }
 
   if (manifest.description !== undefined) {

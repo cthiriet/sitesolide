@@ -551,6 +551,23 @@ describe("workers, scheduled services and their timers", () => {
     expect(() => generateUnits(broken({ schedule: "daily", timeout: "infinity" }), PLACEHOLDERS)).toThrow(/never written/);
     expect(() => generateUnits(broken({ internal: true, cpu: "50%\nUser=root" }), PLACEHOLDERS)).toThrow(/never written/);
   });
+
+  test("a slug, a service name or a memory validate() refuses is never written into a unit, even past validate()", () => {
+    // The same second barrier as above, for the three fields that still name
+    // or bound the unit itself and reach it unescaped: a `\n` in any of them
+    // adds a directive systemd obeys as root, `User=root` the worst of them.
+    // The anchor and the secondary units embed the slug and the service names
+    // too, so a project of scheduled services alone must refuse them as well.
+    const unit = { slug: "lab", start: "/usr/local/bin/bun x", port: 3050 } as Manifest;
+    expect(() => generateUnits({ ...unit, slug: "lab\nUser=root" }, PLACEHOLDERS)).toThrow(/never written/);
+    expect(() => generateUnits({ ...unit, memory: "256M\nUser=root" }, PLACEHOLDERS)).toThrow(/never written/);
+    const named = (name: string, extra: Record<string, unknown> = {}): Manifest => ({ slug: "lab", services: { [name]: { start: "/x", port: 3050, ...extra } } } as Manifest);
+    expect(() => generateUnits(named("web\nUser=root"), PLACEHOLDERS)).toThrow(/never written/);
+    expect(() => generateUnits(named("web", { memory: "256M\nExecStartPre=+/bin/sh" }), PLACEHOLDERS)).toThrow(/never written/);
+    // All scheduled: the anchor's Wants= would otherwise carry the bad name.
+    const anchored: Manifest = { slug: "lab", services: { "sync\nUser=root": { start: "/x", schedule: "daily" } } } as Manifest;
+    expect(() => generateUnits(anchored, PLACEHOLDERS)).toThrow(/never written/);
+  });
 });
 
 describe("the units of servers, as they were before workers existed", () => {

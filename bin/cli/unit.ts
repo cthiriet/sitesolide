@@ -17,8 +17,10 @@ import {
   isValidDescription,
   isValidEnvName,
   isValidEnvValue,
+  isValidMemory,
   isValidSchedule,
   isValidSecretName,
+  isValidServiceName,
   isValidSlug,
   isValidTimeout,
   servedContact,
@@ -151,6 +153,27 @@ function assertWritable(manifest: Manifest, service: ServiceView): void {
 }
 
 /**
+ * The same barrier as assertWritable, for the fields that name or bound the
+ * unit itself rather than its command: the slug, which becomes the unit's
+ * name, its account `site-<slug>` and its `/srv/sites/<slug>` folder; a
+ * service name, which becomes `<slug>.<name>` and sits in the anchor's
+ * `Wants=`; and the memory, written to `MemoryMax=` unescaped. A newline in
+ * any of them would add a directive PID 1 obeys as root, `User=root` the worst
+ * of them. It runs before anything is rendered, because the anchor and the
+ * secondary units embed the slug and the names before assertWritable is
+ * reached; it refuses only what validate() refuses, and throws rather than
+ * write.
+ */
+function assertNamesWritable(manifest: Manifest, services: ServiceView[]): void {
+  const refused = (what: string) => new Error(`${what} is not what validate() accepts, it is never written into a unit`);
+  if (!isValidSlug(manifest.slug)) throw refused("the slug");
+  for (const service of services) {
+    if (service.name !== null && !isValidServiceName(service.name)) throw refused(`the name of a service`);
+    if (!isValidMemory(service.memory)) throw refused(service.name === null ? "the memory" : "the memory of a service");
+  }
+}
+
+/**
  * What a service is told of its tree: its port, its data folder and its
  * public folder, as its unit sets them, `PORT`, `DATA_DIR` and `PUBLIC_DIR`.
  * The backup component hands the same to a service's backup command
@@ -215,6 +238,7 @@ export function generateUnit(manifest: Manifest, placeholders = defaultPlacehold
 export function generateUnits(manifest: Manifest, placeholders = defaultPlaceholders(manifest)): GeneratedUnit[] {
   const services = servicesOf(manifest);
   if (services.length === 0) return [];
+  assertNamesWritable(manifest, services);
   const anchored = isAnchored(manifest);
   const main = anchored ? null : services[0]!;
   const others = anchored ? services : services.slice(1);

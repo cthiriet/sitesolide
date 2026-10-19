@@ -270,6 +270,17 @@ describe("routes", () => {
   test("an exemption validate() refuses is never written into the portal's matcher", () => {
     expect(() => generateFragment({ ...MIXED, portal: true, portalExempt: ["/hook {$A}"] })).toThrow("never written into a Caddy block");
   });
+
+  test("a slug or a service name validate() refuses is never written into a Caddy block, even past validate()", () => {
+    // The same second barrier as the routes and the headers: the slug names
+    // the block, its snippet and its address, and a service name names a
+    // matcher; a `\n`, a brace or a space in either opens a block of the
+    // attacker's choosing, which could serve or proxy another host. validate()
+    // refuses both, and so must the generator reached without it.
+    expect(() => generateFragment({ ...MIXED, slug: 'a\n}\nevil.example.com {\n\trespond "x" 200' })).toThrow("never written into a Caddy block");
+    const services = { "web\n}\nevil.example.com {": { start: "/bin/web", port: 3040 } };
+    expect(() => generateFragment({ slug: "budget", publicDir: "public", services } as Manifest)).toThrow("never written into a Caddy block");
+  });
 });
 
 describe("portal", () => {
