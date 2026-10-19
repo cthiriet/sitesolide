@@ -64,7 +64,7 @@ import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts
 import { isApp, readManifest, scheduledServices, servicesOf, setLock, setPortal, type Manifest } from "../../borrowed/manifest";
 import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "../../borrowed/portal-vm";
 import { domainConflicts, foreignUnit, portConflicts, staleUnits, unstableUnits, type UnitStanding } from "../../borrowed/services";
-import { decideUnit, generateUnits, runningUnits, unitArgument, unitFileName, watchedUnits } from "../../borrowed/unit";
+import { decideUnit, generateUnits, runningUnits, unitArgument, unitFileName, watchedUnits, withoutBindLines } from "../../borrowed/unit";
 import { compareDirectives, sameDirectives, summariseDivergence } from "../../borrowed/comparison";
 import { isPortalReady, portalHost, fromPortal, answers, describe } from "../gatekeeper/probe";
 import { TIMEOUTS } from "../gatekeeper/transaction";
@@ -346,7 +346,10 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
         const onDisk = await host.readUnit(unit);
         const installed = onDisk ?? "";
         const before = previousUnits.find((candidate) => candidate.unit === unit)?.text ?? null;
-        const replace = replaceable(installed, generated, before);
+        // A unit the release before the bind lines generated, from this
+        // manifest or the previous one, is the generator's own too.
+        const replace =
+          replaceable(installed, generated, before) || replaceable(installed, withoutBindLines(generated), before === null ? null : withoutBindLines(before));
         decisions.push({ unit, generated, installed, absent: onDisk === null, action: decideUnit({ installed, generated, replace }) });
       }
       // As `deploy` does: a unit edited by hand stays, and says so; the main

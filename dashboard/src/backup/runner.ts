@@ -63,6 +63,7 @@
  */
 import { existsSync } from "node:fs";
 import type { BackupConfig } from "./config";
+import { DENIED_BINDS } from "../../borrowed/unit";
 import { offsiteEnvironment, type Offsite } from "./offsite";
 
 export type ChildMode = "copy" | "extract" | "measure" | "download" | "hook" | "discard";
@@ -166,11 +167,14 @@ export function confinement(job: Job): string[] {
     // forged database has nowhere to send what it would read. A download
     // reads the bucket, and nothing else of the machine. A backup command
     // reaches its service on the loopback, as its service may, and the
-    // machine's loopback rule keeps it to the project's own ports.
+    // machine's loopback rule keeps it to the project's own ports. It listens
+    // on none of the machine's ports, its service's included, which its
+    // service holds: run every hour, it would otherwise wait there for the
+    // portal or a neighbour to restart (bindLines, bin/cli/unit.ts).
     ...(download
       ? ["DynamicUser=yes", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"]
       : job.loopback === true
-        ? ["IPAddressDeny=any", "IPAddressAllow=localhost"]
+        ? ["IPAddressDeny=any", "IPAddressAllow=localhost", ...DENIED_BINDS.map((ports) => `SocketBindDeny=${ports}`)]
         : ["IPAddressDeny=any"]),
     "IOSchedulingClass=idle",
     `RuntimeMaxSec=${Math.max(1, Math.ceil(job.timeoutMs / 1000))}`,

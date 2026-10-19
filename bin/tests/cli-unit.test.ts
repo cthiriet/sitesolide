@@ -23,6 +23,7 @@ import {
   unitFileName,
   unitNames,
   watchedUnits,
+  withoutBindLines,
 } from "../cli/unit";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -345,6 +346,12 @@ describe("install over SSH, in the service's walls", () => {
       '"-p" "BindPaths=/srv/sites/budget/app:/srv/sites/budget/app" "-p" "ReadWritePaths=/srv/sites/budget/app"',
       '"-p" "InaccessiblePaths=-/etc/sitesolide"',
       '"-p" "IPAddressDeny=localhost"',
+      // The loopback refused, but a port of the machine could still be held
+      // for the install's fifteen minutes: the portal's, which then could
+      // not start again.
+      '"-p" "SocketBindDeny=2019"',
+      '"-p" "SocketBindDeny=3000-3099"',
+      '"-p" "SocketBindDeny=3128-3129"',
       '"-p" "WorkingDirectory=/srv/sites/budget/app"',
       '"-p" "RuntimeMaxSec=900"',
       '"--expand-environment=no"',
@@ -578,6 +585,11 @@ describe("the units of servers, as they were before workers existed", () => {
    * without --force. The fingerprints below were taken from the e2e fixtures
    * with the generator of the release before them; a change here is a change
    * to every unit on every machine, to be made on purpose.
+   *
+   * The bind lines are the one such change since, and decideUnit and the
+   * installer replace a unit that lacks them alone: the fingerprints are those
+   * of the text without them, which is what every machine carries until each
+   * project's next deployment.
    */
   const FINGERPRINTS: Record<string, Record<string, string>> = {
     "bun-mixed": { "sample-bun": "add7fdc8d713e6954cf1e1456d63ff2a5a97b8f49c80149a9eac2a450900ca46" },
@@ -591,7 +603,63 @@ describe("the units of servers, as they were before workers existed", () => {
   test.each(Object.keys(FINGERPRINTS))("projects/%s generates the same units, to the byte", (fixture) => {
     const { manifest } = readManifest(readFileSync(join(REPO_ROOT, "bin", "tests", "e2e", "projects", fixture, "sitesolide.json"), "utf8"));
     const generated = generateUnits(manifest!, { slug: manifest!.slug, zone: "test-zone.invalid", contact: "sample@test-zone.invalid" });
-    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(text).digest("hex")]));
+    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutBindLines(text)).digest("hex")]));
     expect(fingerprints).toEqual(FINGERPRINTS[fixture]!);
+  });
+});
+
+describe("the ports a service may listen on", () => {
+  /**
+   * A project's account may bind any free port of the loopback, and the
+   * loopback rule only judges who connects, never who answers: Caddy, which
+   * may reach every port from 3000 to 3099, connects to whoever listens there.
+   * A compromised app that waits for the portal's port to come free, during an
+   * upgrade, answered every forward_auth with the identity of its choosing and
+   * received the owner's password typed on a sign-in page; on the egress
+   * proxy's ports, every project's outgoing requests and connectors' bodies;
+   * on a neighbour's port while it restarts, that site's visitors.
+   */
+  const LAB: Manifest = {
+    slug: "lab",
+    services: {
+      web: { start: "/srv/sites/lab/app/web", port: 3050 },
+      queue: { start: "/srv/sites/lab/app/queue", internal: true },
+      sync: { start: "/srv/sites/lab/app/sync", schedule: "hourly" },
+    },
+  } as Manifest;
+  const PLACEHOLDERS = { slug: "lab", zone: "test-zone.invalid", contact: "" };
+  const units = Object.fromEntries(generateUnits(LAB, PLACEHOLDERS).map(({ unit, text }) => [unit, text]));
+  const DENIED = ["SocketBindDeny=2019", "SocketBindDeny=3000-3099", "SocketBindDeny=3128-3129"];
+
+  test("a server listens on its own port, and on none of the machine's others", () => {
+    const web = units["lab"]!;
+    expect(web).toInclude("\nSocketBindAllow=tcp:3050\n");
+    for (const line of DENIED) expect(web).toInclude(`\n${line}\n`);
+  });
+
+  test("a worker and a scheduled service listen on none of them, not even a sibling's", () => {
+    for (const unit of ["lab.queue", "lab.sync"]) {
+      expect(units[unit]!).not.toInclude("SocketBindAllow=");
+      for (const line of DENIED) expect(units[unit]!).toInclude(`\n${line}\n`);
+    }
+  });
+
+  test("a single server's unit carries them too, network outbound or not", () => {
+    for (const manifest of [APP, { ...APP, network: "outbound" } as Manifest]) {
+      const text = generateUnit(manifest);
+      expect(text).toInclude("\nSocketBindAllow=tcp:3022\n");
+      for (const line of DENIED) expect(text).toInclude(`\n${line}\n`);
+    }
+  });
+
+  test("a unit the previous release generated, without them, is the generator's own and replaced without --force", () => {
+    const generated = generateUnit(APP);
+    const previous = generated
+      .split("\n")
+      .filter((line) => !line.startsWith("SocketBind"))
+      .join("\n");
+    expect(decideUnit({ installed: previous, generated, replace: false })).toBe("install");
+    // One edited by hand besides still stops the deployment.
+    expect(decideUnit({ installed: `${previous}\nLimitNOFILE=4096\n`, generated, replace: false })).toBe("diverged");
   });
 });

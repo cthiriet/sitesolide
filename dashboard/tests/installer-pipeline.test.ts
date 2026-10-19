@@ -5,7 +5,7 @@ import { bundle, entryBlocks, header } from "../borrowed/bundle";
 import { generateFragment, HEADLESS_ANSWER } from "../borrowed/fragment";
 import { readManifest, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected } from "../borrowed/portal";
-import { generateUnits } from "../borrowed/unit";
+import { generateUnits, withoutBindLines } from "../borrowed/unit";
 import type { InstallRequest, Scope } from "../src/control/protocol";
 import { finalManifest, replaceable, runPipeline, STABILITY_WINDOW_MS, type Outcome } from "../src/installer/pipeline";
 import { createBench as newBench, file, hostOf, OWN_UID, stageBundle as stage, ZONE, type Bench, type BenchOptions } from "./installer-bench";
@@ -611,6 +611,20 @@ describe("workers, scheduled services and anchors", () => {
     // run that failed, and systemd keeps it once the file is gone.
     expect(order(again, "systemctl disable --now shop.sync.timer shop.sync.service", "systemctl reset-failed shop.sync.timer shop.sync.service")).toBe(true);
     expect(units(again)).toEqual(["shop.jobs.service", "shop.service"]);
+  });
+
+  test("a unit the release before the bind lines wrote is replaced, the manifest changed or not: it was never edited by hand", async () => {
+    for (const next of [{ ...APP, port: 3040, portal: true }, { ...APP, port: 3040, portal: true, memory: "512M" }]) {
+      const bench = createBench();
+      const previous = { ...APP, port: 3040, portal: true } as Manifest;
+      deposit(bench, previous);
+      for (const { unit, text } of generateUnits(previous)) writeFileSync(join(bench.units, `${unit}.service`), withoutBindLines(text));
+      stageBundle(bench, APP_FILES);
+      const outcome = await run(bench, request(next));
+      expect(outcome).toMatchObject({ ok: true });
+      expect(bench.events.some((event) => event.includes("differs"))).toBe(false);
+      expect(readFileSync(join(bench.units, "shop.service"), "utf8")).toContain("\nSocketBindAllow=tcp:3040\n");
+    }
   });
 
   test("a timer edited by hand on the machine stays, and says so", async () => {

@@ -675,10 +675,14 @@ describe("a backup command's unit", () => {
   test("is confined at least like its service, the loopback kept", () => {
     const wanted = lines
       .filter((line) =>
-        /^(NoNewPrivileges|PrivateTmp|PrivateDevices|ProtectSystem|ProtectHome|ReadWritePaths|TemporaryFileSystem|BindPaths|BindReadOnlyPaths|ProtectKernelTunables|ProtectKernelModules|ProtectControlGroups|RestrictNamespaces|RestrictSUIDSGID|RestrictRealtime|LockPersonality|UMask|IPAddressDeny|IPAddressAllow|MemoryMax)=/.test(line),
+        /^(NoNewPrivileges|PrivateTmp|PrivateDevices|ProtectSystem|ProtectHome|ReadWritePaths|TemporaryFileSystem|BindPaths|BindReadOnlyPaths|ProtectKernelTunables|ProtectKernelModules|ProtectControlGroups|RestrictNamespaces|RestrictSUIDSGID|RestrictRealtime|LockPersonality|UMask|IPAddressDeny|IPAddressAllow|SocketBindDeny|MemoryMax)=/.test(line),
       )
       .map((line) => line.replace(/^(\w+)=true$/, "$1=yes"));
     expect(wanted).toContain("IPAddressAllow=localhost");
+    // The loopback kept, the machine's ports stay its owners': a command run
+    // every hour must not listen where a neighbour or the portal restarts.
+    expect(wanted).toContain("SocketBindDeny=3000-3099");
+    expect(confinement(job).some((property) => property.startsWith("SocketBindAllow"))).toBe(false);
     expect(wanted).toContain("BindReadOnlyPaths=/srv/sites/vault/app");
     expect(wanted).toContain("MemoryMax=512M");
     for (const line of wanted.filter((line) => !line.startsWith("MemoryMax="))) expect(confinement(job)).toContain(line);

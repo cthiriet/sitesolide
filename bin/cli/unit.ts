@@ -9,7 +9,8 @@
  * Pure: returns text, touches nothing.
  */
 import { sameDirectives } from "./comparison";
-import { egressUnitLines } from "./egress";
+import { CONNECTORS_PORT, EGRESS_PROXY_PORT, egressUnitLines } from "./egress";
+import { CADDY_ADMIN_PORT } from "./loopback";
 import {
   commandErrors,
   isAnchored,
@@ -23,6 +24,7 @@ import {
   isValidServiceName,
   isValidSlug,
   isValidTimeout,
+  SERVICE_PORTS,
   servedContact,
   servedZone,
   servicesOf,
@@ -549,6 +551,8 @@ function renderUnit(
     );
   }
 
+  lines.push(...bindLines(service), "");
+
   if ("main" in place) {
     // Never enabled on its own: the main unit wants it, at boot as after a
     // deployment, and a second way of starting it would outlive a removal.
@@ -558,6 +562,65 @@ function renderUnit(
   }
 
   return lines.join("\n");
+}
+
+/**
+ * The ports of the machine no project listens on but its own: Caddy's admin
+ * API, the range Caddy sends the sites' visitors to, the platform's among
+ * them, and the egress proxy with its connectors.
+ */
+export const DENIED_BINDS = [
+  String(CADDY_ADMIN_PORT),
+  `${SERVICE_PORTS.first}-${SERVICE_PORTS.last}`,
+  `${EGRESS_PROXY_PORT}-${CONNECTORS_PORT}`,
+];
+
+/**
+ * Where a service may listen. The loopback rule judges who connects to a
+ * port, never who answers on it, and a project's account may bind any port
+ * left free: Caddy, which reaches the whole range, then connects to whoever
+ * listens. A compromised app waiting on the portal's port while the portal
+ * restarts, during an upgrade, would answer every forward_auth with the
+ * identity it likes and receive the owner's password typed on a sign-in
+ * page; on the egress proxy's ports, every project's outgoing requests; on a
+ * neighbour's port between two of its restarts, that site's visitors. A
+ * server listens on its own port alone, a worker and a scheduled service on
+ * none of them. Ports outside these stay free: what a project binds there
+ * nobody else is sent to.
+ *
+ * SocketBindAllow wins over SocketBindDeny, which is what lets the server's
+ * own port through the range. Every unit generated before carries none of
+ * these lines, and is still the generator's own: see withoutBindLines.
+ */
+function bindLines(service: ServiceView): string[] {
+  return [
+    service.port === null
+      ? "# Listens on none of the machine's ports: not a neighbour's, nor the platform's."
+      : "# Listens on its own port, and on none of the machine's others.",
+    ...(service.port === null ? [] : [`SocketBindAllow=tcp:${service.port}`]),
+    ...DENIED_BINDS.map((ports) => `SocketBindDeny=${ports}`),
+  ];
+}
+
+/**
+ * A generated unit as the generator wrote it before the bind lines: the unit
+ * of every project deployed until then. Recognised as the generator's own, it
+ * is replaced at the next deployment without `--force`, rather than read as
+ * edited by hand on every machine at once.
+ */
+export function withoutBindLines(text: string): string {
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^# Listens on (its own port|none of the machine's ports)/.test(lines[i]!)) {
+      kept.push(lines[i]!);
+      continue;
+    }
+    // The block bindLines writes: its comment, its lines, the blank after.
+    while (lines[i + 1]?.startsWith("SocketBind")) i++;
+    if (lines[i + 1] === "") i++;
+  }
+  return kept.join("\n");
 }
 
 /**
@@ -648,8 +711,11 @@ export function systemdRunArguments(run: ProjectRun, systemdRun = "/usr/bin/syst
     `RuntimeMaxSec=${run.timeoutS}`,
     "TasksMax=256",
     // The extraction needs no network at all; an install fetches packages, but
-    // never reaches the loopback, where every other project listens.
+    // never reaches the loopback, where every other project listens. Nor does
+    // it hold one of the machine's ports for its fifteen minutes: the
+    // portal's, held, could not start again (bindLines).
     ...(run.network ? ["IPAddressDeny=localhost"] : ["PrivateNetwork=yes", "IPAddressDeny=any"]),
+    ...DENIED_BINDS.map((ports) => `SocketBindDeny=${ports}`),
     ...(run.workingDirectory === null ? [] : [`WorkingDirectory=${run.workingDirectory}`]),
   ];
   return [
@@ -775,9 +841,14 @@ export type UnitAction = "install" | "present" | "diverged";
  * equivalence is about the directives and not about the text, failing which a
  * hand-written unit would be declared divergent at every deployment for its
  * comments alone, while running exactly the same service. See comparison.ts.
+ *
+ * A unit the release before the bind lines generated is the generator's own,
+ * not one edited by hand: installed, so that every project takes them at its
+ * next deployment. See bindLines.
  */
 export function decideUnit(state: UnitState): UnitAction {
   if (state.installed.trim() === "") return "install";
   if (sameDirectives(state.installed, state.generated)) return "present";
+  if (sameDirectives(state.installed, withoutBindLines(state.generated))) return "install";
   return state.replace ? "install" : "diverged";
 }
