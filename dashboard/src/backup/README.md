@@ -208,8 +208,9 @@ The file is written whatever happens to a project: whatever one project's
 snapshot throws is that project's failure, and the run goes on to the next.
 A database of the component that does not open costs the audit, the index and
 the import, not the snapshots nor the file; a setting at fault in
-`/etc/sitesolide/dashboard-backup.env` writes `ok: false` with no project, and
-the reason to the journal; so does a repository that does not open, its
+`/etc/sitesolide/dashboard-backup.env` writes `ok: false` with no project, in
+the component's own folder and never one the file names, and the reason to
+the journal; so does a repository that does not open, its
 sentence saying what to do.
 
 ## Who may touch what
@@ -228,7 +229,8 @@ backup.js run                        root, CAP_DAC_READ_SEARCH only, no write ou
    |-- starts, for each project, within its share of the time:
    |     systemd-run --pipe --uid=site-<slug> ... backup.js hook          a service's backup command, if declared
    |        as the project, in its service's walls, its environment, its
-   |        secrets read by PID 1, the loopback alone: fills BACKUP_DIR,
+   |        secrets read by PID 1, the loopback alone, listening on none of
+   |        the machine's ports: fills BACKUP_DIR,
    |        /var/cache/sitesolide-backup/<folder>/hooks/<unit>
    |     restic backup --stdin-from-command -- systemd-run --pipe --uid=site-<slug> ... backup.js copy
    |        restic, root, the repository's key, under choom; the copy as the
@@ -347,6 +349,40 @@ steward reads for the page. The repository stays the truth: a restore
 resolves its snapshot there, and refuses one the index still listed but
 restic no longer has.
 
+### A name a removed project left behind
+
+**This component knows a project by its folder alone.** `sitesolide remove`
+takes the folder, the secrets and the account, and the snapshots stay in both
+repositories, the newest of each kept whatever its age. A project created
+again under that name lists them in its *Backups* section, and a restore puts
+its predecessor's data into its folder: nothing on the machine says when a
+folder changed hands, and the restore does not try to tell
+(tests/backup-audit-reuse.test.ts keeps that on record).
+
+**So the guard is where a name changes hands.** No token creates a project
+under a name the index still holds snapshots of, in either repository, each
+counted once: its creator would be made Admin of it, and restore them. The
+refusal is `reserved`, with the count, never a snapshot's name nor what it
+holds; an index there that does not read refuses the creation too, a
+`failure`, rather than pass for an empty one
+(dashboard/src/control/steward.ts, `judgeDeployment`). The owner's own
+deployment over SSH is not asked: it is how a removed project comes back with
+its data.
+
+**To free the name for a token**, the owner forgets those snapshots by hand,
+in the server's repository with the commands of
+[Restoring by hand](#restoring-by-hand-when-the-dashboard-does-not-answer),
+and in the bucket's with its credentials:
+
+```bash
+restic snapshots --path /<slug>.tar               # every snapshot of the folder
+restic forget <id>...                             # those ids, nothing else
+```
+
+The index follows at the next run, which writes it again from what each
+repository lists, and the daily prune gives the room back. Forgetting is for
+good: a snapshot forgotten in both repositories can no longer be restored.
+
 ## Restoring from the dashboard
 
 A site's *Backups* section, then *Restore* on a snapshot, for the owner or an
@@ -390,7 +426,11 @@ The dialog lists what the server does, then follows it phase by phase.
   it. Restore it by hand (below), knowing what it brings back.
 
 Every restore is recorded in the component's audit with who asked, readable in
-the section's *Activity*.
+the section's *Activity*. The owner's route records `owner` and refuses any
+other name: its token is the owner's unlock, so whoever restores there is the
+owner, and a dashboard that caught that unlock would otherwise restore under
+a person's name. A person restores through their own session, which the
+steward names by the email it verified.
 
 ### A restore that was cut short
 
@@ -619,6 +659,22 @@ is stronger still, where the provider has it.
    Half a configuration is an error the *Backups* section shows, never a silent
    fallback to local copies.
 
+   **The file moves no program and no folder.** The page writes it, and
+   whoever holds the dashboard's unlock is not root on the machine: a
+   `BACKUP_RESTIC`, `BACKUP_CHOOM` or `SYSTEMCTL` there had root run the
+   program it named at the next run or restore, a `SITES_DIR`,
+   `BACKUP_REPOSITORY` or `BACKUP_STATE_FOLDER` had it read and write where
+   it said. Under systemd those are never read, from this file or any other
+   (`pathsFrom`, [config.ts](config.ts)): they move the workstation's tests'
+   tree alone, with `BACKUP_ISOLATION=none`, which root under systemd refuses
+   and which no process systemd started takes, the download child included:
+   it runs as a dynamic account, reads this file too, and holds the network
+   and the bucket's keys.
+   The units read the zone, `/etc/caddy/sitesolide.env`, after this file, and
+   the later file wins: a `SITESOLIDE_ZONE` written here never makes a project
+   the landing. What the file sets is the bucket above, the retention, the
+   disk reserve and a child's time, `BACKUP_CHILD_TIMEOUT_MS`.
+
 4. **Check it now** rather than within the hour:
 
    ```bash
@@ -750,8 +806,8 @@ Then, if you want it, [the offsite copy](#setting-it-up).
 
 | What changed | The command |
 |---|---|
-| `backup.ts`, `src/backup/`, `infra/backup/`, `bin/cli/backups.ts` | `bin/deploy-backup.sh install` |
-| `src/backup/routes.ts`, `reader.ts`, `request.ts`, `src/secrets/` | `bin/deploy-steward.sh` |
+| `backup.ts`, `src/backup/`, `infra/backup/`, `bin/cli/backups.ts`, the ports `bin/cli/unit.ts` denies a service (`DENIED_BINDS`, which a backup command's unit carries too) | `bin/deploy-backup.sh install` |
+| `src/backup/routes.ts`, `reader.ts`, `request.ts`, `src/secrets/`, and `src/control/`, which reads the index before a token creates a project | `bin/deploy-steward.sh` |
 | the page, the relay | `sitesolide deploy` from `dashboard/` |
 
 `install` refuses while a run or a restore is in progress, and keeps the timer
@@ -1007,7 +1063,17 @@ measure, a data folder swapped for a link, the entries counted alike by the
 copy and the extraction; a restore cut short and its cleanup, a download past
 its time, a damaged database saved raw, a snapshot stored under another
 project's name or another time. The services' backup commands
-(tests/backup-hooks.test.ts), as before. The import of the archives of the
+(tests/backup-hooks.test.ts), as before, their units refusing the machine's
+ports. The settings file (tests/backup-audit-config.test.ts): root's programs
+and folders the machine's own under systemd whatever the environment names,
+the download child's restic included, a run that could not start writing its
+status in its own folder, the retention, the reserve and the child's time
+still read, the tests' tree still moved without isolation; and the units
+reading the zone after it (tests/backup-units.test.ts). The owner's restore
+recorded as `owner` alone (tests/backup-steward.test.ts). A project created
+again under a removed one's name handed its data by a restore, kept on record
+(tests/backup-audit-reuse.test.ts); the steward's refusal of such a name to a
+token is in tests/control-creations.test.ts. The import of the archives of the
 format before restic (tests/backup-legacy.test.ts): byte for byte, kept seven
 days, a mislabelled or damaged archive left alone, an object only the bucket
 holds fetched by a download child. `postgres-backup-proof.sh` runs the recipe

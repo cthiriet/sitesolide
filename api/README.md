@@ -93,8 +93,11 @@ fragment, the codes file read and written, the code a stanza in service
 carries. The gatekeeper only adds reading and writing the files.
 
 The code is not a cryptographic secret: Caddy compares it in clear text, so it
-is written in clear text in the fragment. `src/locks.ts` says at the top what
-that implies, and what the lock does not protect.
+is written in clear text in the fragment. The gatekeeper therefore writes the
+fragment `0640`, root's and Caddy's group's: a project's service reads
+`/etc/caddy`, and a fragment open to all handed every site's code to any
+deployed app, the codes file's `0600` keeping nothing. `src/locks.ts` says at
+the top what that implies, and what the lock does not protect.
 
 ## Local development
 

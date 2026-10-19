@@ -117,6 +117,274 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## What a project, a token or a cloned folder could reach
+
+A review of the whole platform found ways past its boundaries, and this
+release closes them. None took more than what the platform hands out on
+purpose: an app deployed on the machine, a token, a repository someone cloned
+and deployed over SSH, a page on a sibling subdomain.
+
+**Every app could read every preview code.** The gatekeeper wrote the preview
+locks' fragment, `/etc/caddy/locks/verrous.caddy`, readable by every account,
+with every code in force in the clear, and a project's service sees
+`/etc/caddy`. The fragment is now root's and Caddy's group's, `0640`. Any
+code drawn before this release may have been read by any project: draw each
+again, below.
+
+**An app could listen where others are sent.** The loopback rule judges who
+connects to a port, never who listens on it. An app could wait on the
+portal's port while the portal restarted, during an upgrade, and answer every
+sign-in check as it liked; on the egress proxy's ports, it read every
+project's outgoing calls. Every generated unit now lets a server listen on its
+own port alone among Caddy's admin API, 2019, the range 3000 to 3099 and the
+proxy's 3128 and 3129, and a worker or a scheduled service on none of them
+(`SocketBindAllow=`, `SocketBindDeny=`); a service's backup command, the
+manifest's `install` and the extraction of a token's archive too. The
+slug `public` is refused as well: a request for `.<zone>`, an empty first
+label, landed in the folder a project of that name would have, its manifest
+and its code served past its portal.
+
+**A cloned repository deployed over SSH could reach the machine's files.**
+`deploy` now refuses, before anything is pushed:
+
+- **a secret file that is not the project's.** The unit reads every declared
+  file as root: `dashboard-backup.env` handed the code the backups' bucket
+  keys and passphrase, `cms.env` the secrets of cms. A project declares
+  `<slug>.env` and `<slug>-<name>` files alone, never the machine's own nor
+  one a more specific site deployed there holds, and a file already on the
+  machine must belong to `site-<slug>`;
+- **a `publicDir` that is a link out of the repository**, which sent
+  `~/.ssh` and served it to anyone;
+- **a link among the public files that leads out of them**, which Caddy
+  follows on the machine: `robots.txt -> /etc/caddy/cloudflare.env` served the
+  zone's DNS token.
+
+`sitesolide remove` deleted every secret file the folder's manifest named,
+`dashboard.env` included; it now deletes the project's own alone, and says
+which it kept.
+
+**A token could do more than its scope said.** Its deployment could switch the
+project's domain on, which `sitesolide domain --activate` does only after
+checking the DNS: the machine's switch now stands. It could create a project
+under the name of one removed and inherit what the machine still keeps under
+that name, the snapshots its creator then restores as Admin and the connector
+grants: no token creates such a name now, `reserved`. Its refused changes of
+access went to the journal unbounded, and pushed out every change of secrets
+made in the hour; its accepted ones could fill the access log, which then
+lets nobody more in for 180 days but the owner over SSH. Both are bounded
+now. An expired token still counted toward the 200 live ones, so that tokens
+a second long stopped everyone minting. And the CLI sent its token to
+whatever address `SITESOLIDE_API` named: it now sends the token it keeps to
+the dashboard `login` checked it against, and nowhere else.
+
+**Smaller ones.** A WebSocket opened from a sibling subdomain reached a
+restricted site with its visitor's cookie: the portal now wants the site's
+Origin on a handshake, a GET though it is. Signing in with password access
+cleared the failures counted against the owner's password; a sign-out minted a
+ticket for anyone who posted, which signed out of the portal whoever opened
+it. The dashboard could be framed by a page on another subdomain, read a
+sign-in body of any size, and the collector, root, followed a link at the
+place of the dashboard's previous snapshot. The settings file of the backups,
+written from the *Secrets* page, could name the program root runs as restic.
+A connector's request body sent in chunks went past its 10 MiB, and a call
+whose app hung up kept its answer streaming into the proxy. A value with a
+Unicode noncharacter made systemd drop every variable of its file; a secret
+file created under the name of an earlier one kept that one's previous
+version; a project deployed over SSH as `dashboard-backup` listed the
+backups' keys in its own *Secrets*; a token's label could carry a terminal
+control. Each is closed, and each component's README says how.
+
+**What `sitesolide upgrade` brings**, in its usual order: the backups, whose
+settings file no longer moves root's programs or folders, the zone read after
+it, and whose service backup commands listen on none of the machine's ports;
+the egress proxy, which counts a connector's body as it streams and lets an
+upstream go when its caller hangs up; the steward, which keeps from every
+token the name of a removed project the machine still keeps snapshots or
+grants of, bounds a token's changes of access, counts live tokens alone,
+refuses the labels and the values above, creates a secret file with no
+previous version, keeps the machine's files to the dashboard, and reads the
+portal's answer within a bound; the dashboard, with its sign-in body bounded,
+its pages refusing to be framed, the collector's new reading, and its own unit
+with the bind lines; the gatekeeper, which writes the fragment `0640` to
+Caddy's group, and whose script closes the one in place; the installer, which
+keeps the machine's domain switch and writes the bind lines, its runs of
+`install` and of the extraction listening on none of those ports; the shared
+service, whose only change is a comment of `src/locks.ts`; the portal, with
+the WebSocket's Origin, the sign-out ticket, and the failures it keeps until
+the owner signs in or a quiet day passes; the monitor, whose unit reads the
+zone after `dashboard-monitor.env`, so that a `SITESOLIDE_ZONE` written from
+*Secrets* never points its probes elsewhere. Caddy's drop-in, the collector's
+units, the Caddyfile and the loopback rule do not move. No file
+on the machine changes form: `team.json`, the access registry and its log, the
+secret files and the backups' index are read as they stand.
+
+**Then by hand, once**, after `sitesolide upgrade` has run to its end:
+
+1. **Check the preview locks' fragment.** The gatekeeper's script, which
+   upgrade runs, gives it to Caddy's group and closes it; a machine that never
+   opened a site with a code has none.
+
+   ```bash
+   ssh <server> 'sudo stat -c "%U:%G %a" /etc/caddy/locks/verrous.caddy'
+   # -> root:caddy 640
+   ```
+
+   Anything else, `644` from an upgrade stopped before the gatekeeper, is
+   closed by hand, the group first, so that Caddy never meets the file closed
+   to it. Nothing reloads, nothing served changes:
+
+   ```bash
+   ssh <server> 'sudo chgrp caddy /etc/caddy/locks/verrous.caddy && sudo chmod 0640 /etc/caddy/locks/verrous.caddy'
+   ```
+
+2. **Draw a new code for every site opened with a code.** Every project could
+   read the old ones. The sites whose general access is *Anyone with the
+   code*:
+
+   ```bash
+   ssh <server> "grep -lE '\"lock\": *true' /srv/sites/*/sitesolide.json"
+   ```
+
+   For each, *New code* in its *Access* section, under the unlock, or
+   `sitesolide lock --new-code` in its folder; then send the new link to
+   whoever should still have it. The old link stops opening the site at once.
+
+3. **Deploy every app again**, so that its units gain the bind lines:
+   `sitesolide deploy` in each project's folder, over your SSH, or a
+   deployment with its token. The dashboard and the portal are done, upgrade
+   having just deployed them. A static site has no unit. A unit the previous
+   release generated is recognised as the generator's own and replaced without
+   `--force`. Check one:
+
+   ```bash
+   ssh <server> 'systemctl cat <slug> | grep -c SocketBindDeny'
+   # -> 3, and as many in each <slug>.<name> of the project
+   ```
+
+   Deploy them after upgrade, not before: the installer from before reads a
+   unit with the new lines as edited by hand, and stops that project's token
+   deployments on `edited-by-hand` until the installer is upgraded.
+
+4. **Check that systemd enforces those lines.** It does through BPF, and a
+   systemd built without it ignores them without a word, the units starting
+   as before:
+
+   ```bash
+   ssh <server> 'systemctl --version | grep -o +BPF_FRAMEWORK'
+   # -> +BPF_FRAMEWORK; nothing printed, the lines hold nothing on that machine
+   ```
+
+5. **Check that no project is named `public`**, a name now refused:
+
+   ```bash
+   ssh <server> 'test -e /srv/sites/public && echo "a project named public" || echo none'
+   ```
+
+   One that is there serves its manifest and its code at `.<zone>` until it
+   is removed. This release's CLI refuses its manifest, the `remove` command
+   included: run `sitesolide remove --confirm public` in its folder with the
+   previous binary, then deploy it under another slug.
+
+**Worth a look**, reading only: the links among the deployed sites' public
+files, `ssh <server> 'sudo find /srv/sites/*/public -type l -exec ls -l {} +'`.
+One that leads out of its folder, which the next `deploy` of that site
+refuses, had Caddy serve its target until now: change what it pointed at,
+then deploy the site with the link replaced. And the names in
+*Sites > dashboard > Secrets > dashboard-backup.env*: the bucket's
+`BACKUP_S3_*`, `BACKUP_ENCRYPTION_PASSPHRASE`, the retention, the reserve and
+the child's time, nothing else. A name you did not write there was written by whoever held the
+dashboard's unlock.
+
+**What changes for you.**
+
+- **Over your SSH, `deploy` may stop on a manifest that deployed before**,
+  saying which file or link, with nothing pushed: `secrets: a file that is not
+  this project's`, `publicDir leads outside the repository`, or `carries
+  links that lead out of publicDir`. Rename a secret file after the project,
+  `<slug>.env` or `<slug>-<name>`, and move its variables there from
+  *Secrets*; replace a link with the file it points to. A manifest in your
+  sites repository keeps a `publicDir` that leads anywhere, as its `source`
+  already did. `deploy` also reads, before anything is pushed, who owns each
+  declared file on the machine, through `sudo`, never its content.
+- **`remove` keeps what is not the project's**, and prints each with its
+  reason, `kept: dashboard.env belongs to the machine, root's, and no project
+  reads it`. A file it kept that really was the removed project's, made by
+  hand under another name, you remove yourself.
+- **A token no longer creates a name a removed project left things under.**
+  The refusal, `reserved`, counts the snapshots and the connector grants left,
+  never what they hold. Deploy it yourself over SSH, which is how a removed
+  project comes back with its data; or withdraw the grants on the
+  *Connectors* page and forget the snapshots by hand
+  ([dashboard/src/backup/README.md](../dashboard/src/backup/README.md#a-name-a-removed-project-left-behind)),
+  and a token may create it again.
+- **Each app's units change at its next deployment**, without `--force`. A
+  bind refused fails with `EPERM`: a server that opened a second port of the
+  machine's, 2019, 3000 to 3099 or 3128 and 3129, or UDP on its own port, and
+  a worker, a scheduled service or a backup command that listened inside
+  that range. Declare a service of its own, with its own `port`, for what
+  listens there. A port outside those stays free. A unit edited by hand
+  on the machine stays as it is, without the lines, until `--force`.
+- **A token's deployment keeps the machine's domain switch.** A domain it
+  declares, a new name or alias, stays inactive until `sitesolide domain
+  --activate` in the project's folder over your SSH.
+- **The slug `public` is refused**, to the owner as to a token.
+- **A token fills half of the access log at most.** Past half, what it would
+  let in, Can open given or a project created, is refused `not-available`
+  until older rows age out; its removals still work, and people and you are
+  not held back. Its refused changes of access count among its 60 refusals an
+  hour, then `too-many-attempts`.
+- **Live means neither revoked nor expired**, for the 200 tokens of the
+  machine as for the ten of a person.
+- **A label with a control character is refused**, C1 included. A label
+  minted before that carries one is printed by the CLI with `?` in its
+  place, when its person leaves.
+- **A value with a Unicode noncharacter is refused**, U+FDD0 to U+FDEF and the
+  last two code points of every plane, from the dashboard, a token or the
+  CLI: systemd would read none of the file's variables.
+- **A secret file created from the dashboard or by a token has no previous
+  version**: one kept under its name, from an earlier file, is dropped first.
+- **A WebSocket on a restricted site needs the site's Origin.** Every browser
+  sends it; a client of your own outside a browser sends it too, or is
+  refused 403.
+- **A site's sign-in failures** are no longer cleared by password access
+  signing in, only by the owner's own success, or forgotten after 24 hours
+  with none.
+- **A sign-out with a provider** ends the portal's session of the person who
+  signed out alone, and only the owner's ends whatever session that browser
+  holds; password access is signed out of the site and sent home. A sign-out
+  link opened in another browser ends nobody's session there.
+- **The backups' settings file** sets the bucket, the retention and the
+  reserve. A `BACKUP_RESTIC`, `SYSTEMCTL`, `SITES_DIR` or any other variable
+  that moved a program or a folder is ignored under systemd, and so is a
+  `SITESOLIDE_ZONE` there.
+- **The dashboard refuses to be framed**, `Content-Security-Policy:
+  frame-ancestors 'none'` and `X-Frame-Options: DENY`, and a sign-in body over
+  8 KiB, 413.
+- **A connector's request body over 10 MiB** is refused 413 as it streams,
+  `body too large` in the proxy's audit, whether it announced its length or
+  came in chunks.
+
+**Whoever works with a token installs the new CLI** too, from the same
+`install.sh` as step 1 above: the token's binding to its dashboard and the
+prompt that no longer echoes it are the CLI's. `sitesolide login` now writes
+the address it checked the token against beside it in the vault,
+`team-token-api`. A vault filled by an earlier `login` holds none, and its
+token goes to the `api` of the `config.json` beside the vault's folder, as
+before. A `SITESOLIDE_API` or a `config.json` naming another dashboard is
+refused `unauthenticated` with the vault's token: `sitesolide login --url`
+again, or `SITESOLIDE_TOKEN` beside it, as in a sandbox. A vault kept
+elsewhere, by `vault` or `SITESOLIDE_VAULT`, needs `sitesolide login` once
+more.
+
+**Going back.** `sitesolide upgrade` with the previous binary. The previous
+gatekeeper writes the fragment `0644` again at its next change of a site's
+general access or code, every code readable by every project once more. A unit
+with the bind lines reads as edited by hand to the previous CLI, which keeps
+it, and to the previous installer, which stops that project's token
+deployments on `edited-by-hand`: `sitesolide deploy --force` in its folder,
+with the previous CLI, writes it without them. `team-token-api` stays in the
+vault, unread. The registry, its log and `team.json` stay as they are.
+
 ## Secrets with a token
 
 A token may now manage secrets. Minted with *Manage secrets*, it lists its

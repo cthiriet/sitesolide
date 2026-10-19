@@ -59,6 +59,14 @@ with a body and an answer that may stream for minutes, which `Bun.serve`
 parses and streams in [src/connectors.ts](src/connectors.ts). A second port is
 cheaper than a second HTTP implementation inside a security component.
 
+**Nobody else listens on them.** Outside the range, the loopback rule no
+longer keeps a project off them, and it judges who connects, never who
+listens: a project waiting on 3128 while the proxy restarted would have
+received every other project's outgoing calls, and a connector's credential
+with them. Every generated unit refuses them to its service
+(`SocketBindDeny=3128-3129`, bin/cli/unit.ts), from each project's first
+deployment with that generator.
+
 **Plain HTTP** in absolute form, what `HTTP_PROXY` produces, goes through the
 same checks; the head is rewritten for the origin with `Connection: close`,
 then the connection becomes the same pipe. Whatever the client sends next on
@@ -118,7 +126,9 @@ under `connectors` and the page grants it to that project:
 - the manifest alone is written by whoever wrote the app, an agent perhaps,
   and must not be able to grant itself a company's credential;
 - the grant alone would lend the credential to code that never asked for it,
-  and to the next project deployed under that slug.
+  and to the next project deployed under that slug: no token creates a
+  project under a slug a grant still names (`reserved`, see
+  [dashboard/README.md](../dashboard/README.md#what-a-tokens-project-may-not-do)).
 
 The app calls `$SITESOLIDE_CONNECTORS/<name>/<path>`, which the unit sets to
 `http://127.0.0.1:3129/connectors`. The proxy keeps every request under the
@@ -213,6 +223,14 @@ any caller.
   own signing a certificate for another name. Not `checkServerIdentity`, which
   Bun 1.3 calls only once the request is written.
 - A project passing itself off as another: the uid comes from the kernel.
+- A project answering in the proxy's place: its unit refuses it 3128 and 3129,
+  so it cannot wait there for the proxy to restart.
+- A connector's request body past its bound, whether it announces its length
+  or comes in chunks, which carry none and which `Bun.serve`'s own limit lets
+  through: it is counted as it streams, and the call refused 413 past 10 MiB.
+- An answer read for nobody: a call whose app hangs up aborts its upstream
+  request, which Bun's fetch would otherwise read to its end, an endless
+  stream of events among them, into the memory every project's egress shares.
 - A manifest granting itself a credential; a credential sitting in a
   repository, an environment file or the app's memory.
 
@@ -247,8 +265,22 @@ any caller.
 - **`network: outbound`**, which this does not restrict at all, and which the
   manifest refuses next to `egress`.
 - **A removed project's grants**, which follow the slug: the page flags a grant
-  whose project is gone, and it should be withdrawn before that slug is
-  reused.
+  whose project is gone. No token creates a project under that slug while the
+  grant stands; the owner's own deployment over SSH may, and it is then lent
+  the credential. Withdraw it before the slug is reused.
+- **Too many connections to the connectors' port.** It counts no connections,
+  unlike the CONNECT port: a project opening thousands of them, slow to send
+  their heads, can use up the proxy's file descriptors, and with them the
+  CONNECT port of every other project. The 32 calls waiting per project bound
+  the calls under way, not the sockets.
+- **A slow reader of a connector's answer.** The answer streams through
+  `Bun.serve` with no pause on the proxy's side: an app that reads it slowly
+  has the proxy hold what the upstream already sent, without the byte budgets
+  the tunnels keep.
+- **Every project's bodies at once.** 32 calls per project, each with a body
+  of up to 10 MiB, add up past the unit's 256 MiB well before the projects
+  run out of calls: the bodies stream rather than wait whole, but nothing
+  budgets them across the proxy as the tunnels' bytes are.
 - **Root**, on the machine.
 
 ## Limits
@@ -265,9 +297,9 @@ any caller.
 | Bytes waiting in the whole proxy | 32 MiB, then no connection is read until half has drained |
 | Bytes sent before a tunnel opens | 2 MiB per connection, then 400 |
 | A refused connection, once answered | read and dropped until the client closes, 1 s and 64 KiB at most, then cut; 1024 at a time, then closed at once |
-| Connector request body | 10 MiB, streamed through, not held |
+| Connector request body | 10 MiB, streamed through, not held, counted as it streams, a body in chunks included: then 413, `body too large` in the audit |
 | Connector calls waiting for an answer, per project | 32, then 503 |
-| Connector answer headers | 30 s; the body then streams as long as it needs |
+| Connector answer headers | 30 s; the body then streams as long as it needs, and stops when the app hangs up, the upstream request aborted |
 | Refused pairs held between two audit writes | 10 000, the rest only counted |
 
 **Memory.** The unit gives the proxy 256 MiB, and the byte limits above keep
@@ -414,4 +446,6 @@ closed whichever end goes first,
 the per-project limit counted before any head, a connector forwarded with its
 header set and the app's removed, an ungranted or unrequested connector
 refused, a connector's host presenting a valid certificate for another name
-refused before the request is written, and the dashboard's read-only routes.
+refused before the request is written, a chunked body past the bound refused
+413 rather than held, an upstream let go when its caller hangs up, and the
+dashboard's read-only routes.

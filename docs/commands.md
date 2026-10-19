@@ -84,6 +84,28 @@ workstation.
 `~/.config/sitesolide/secrets/`, the few credentials your workstation presents
 to production itself, then runs the command. See [secrets.md](secrets.md).
 
+`sitesolide deploy` reads the machine before anything is pushed, and refuses
+there what a cloned folder could reach through it: a secret file that is not
+the project's, `<slug>.env` and `<slug>-<name>` being its own, never the
+machine's, never one a more specific site deployed there holds, and when
+present a plain file of `site-<slug>`, whose owner it reads through `sudo`
+without opening it; a `publicDir` that is a link out of the repository
+holding the manifest, unless that manifest is in your sites repository; and a
+link among the public files that leads out of them, which Caddy would follow
+on the machine. Each refusal names the file or the link, and nothing was
+sent. See [manifest.md](manifest.md#secrets).
+
+`sitesolide remove` deletes the secret files the folder's manifest declares
+only when they are the project's by that same rule, and prints the others,
+`kept:` and why: the manifest is whatever the folder holds now, and a clone's
+naming `dashboard.env` had root delete the dashboard's password. It reads the
+sites on the machine and the files' owners first, and an answer that does not
+read deletes nothing. Its name is free again for a token that may create
+projects, once the machine keeps neither the removed project's backup
+snapshots nor its connector grants: until then a token creating it is refused
+`reserved`, and you deploy it over SSH, or clear what was left
+([dashboard/src/backup/README.md](../dashboard/src/backup/README.md#a-name-a-removed-project-left-behind)).
+
 `sitesolide logs` shows every service of a project, interleaved by time, the
 runs of its scheduled services among them, each under its own unit,
 `<slug>.<name>.service`. A run that failed says why there, and a deployment
@@ -392,9 +414,16 @@ a secret's value never goes on the command line: with --json, secrets set needs 
 SITESOLIDE_API and SITESOLIDE_TOKEN, both in the environment, win over the files.
 ```
 
-`login` keeps the token in `~/.config/sitesolide/secrets/team-token`, 0600, and
-the address in `config.json` under `api`. `SITESOLIDE_API` and
-`SITESOLIDE_TOKEN` in the environment win over both, for an agent's sandbox.
+`login` asks for the token at a prompt that does not echo it, unless
+`--token-stdin` or `SITESOLIDE_TOKEN` gives it, and keeps it in
+`~/.config/sitesolide/secrets/team-token`, 0600, the address it checked it
+against beside it, `team-token-api`, and the address in `config.json` under
+`api`. `SITESOLIDE_API` and `SITESOLIDE_TOKEN` in the environment win over
+both, for an agent's sandbox, the two together: the vault's token goes to the
+address `login` wrote beside it and to no other, and a `SITESOLIDE_API` or a
+`config.json` naming another is refused, `unauthenticated`, until `sitesolide
+login --url` checks the token there. A vault filled before `login` wrote the
+address sends its token to the `api` of the `config.json` beside it.
 A person's own token says so: `login` and `status` print whose roles bound
 it, and what it may do is the steward's reading of those roles at that
 moment. `share` gives Can open alone, and never password access, see
@@ -431,7 +460,9 @@ service's key does (`sk_`, `ghp_`, `xox`, `AKIA`, `sst_` and the like), with a
 reminder that the shell's history now holds it (a variable really named so is
 set from the dashboard); a value on several lines, with a null byte, not valid
 Unicode, or over 8 KiB, which belongs in a file read whole, from the
-dashboard. An empty value is refused too: an unset variable piped by mistake
+dashboard; a value with a Unicode noncharacter, U+FDD0 to U+FDEF or the last
+two code points of a plane, for which systemd would read none of the file's
+variables. An empty value is refused too: an unset variable piped by mistake
 would empty the secret in service; `remove` takes a variable out.
 
 When the connection drops once a change has left, the run says it may have

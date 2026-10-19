@@ -63,7 +63,11 @@ state, its secrets among them, under that name.
 
 So are the names of the services the machine runs, `caddy`, `ssh`, `cron`,
 `nftables` and the others `isSystemName` lists in `bin/cli/manifest.ts`, every
-`systemd-*` and `sitesolide-*`, and `www`, which the landing serves. A unit laid
+`systemd-*` and `sitesolide-*`, `www`, which the landing serves, and
+`public`: Caddy roots a host at `/srv/sites/<first label>/public`, and a host
+whose first label is empty, `.<zone>`, at `/srv/sites//public`, which is
+`/srv/sites/public`, the folder of a project of that name, its manifest and
+its code served from there past its portal or its code. A unit laid
 in `/etc/systemd/system` under such a name would replace the system's own, which
 lives in `/lib/systemd/system`. For the names no list foresees, `deploy` asks
 systemd itself before writing anything, and stops when it already knows a unit of
@@ -107,6 +111,19 @@ otherwise.
 
 These files never wake the service, which is why a static site costs no memory.
 
+Like `source`, it stays inside the repository holding the manifest, links
+resolved, unless that manifest is in your sites repository: validation
+refuses a `..`, but a link is none, and a cloned `public` linked to
+`../../.ssh` would have the workstation's keys sent and served to anyone.
+Inside it, a link that leads out of the folder, to an absolute path or by
+climbing out, is refused too, before anything is sent: Caddy follows links on
+the machine, and `robots.txt -> /etc/caddy/cloudflare.env` would serve the
+zone's DNS token. Where a link lands is judged as the kernel resolves it,
+segment by segment, every link met on the way followed from where it stands,
+never by reading `..` off its text: `a/b/c/d/up/../../../../etc` stays inside
+as text, and climbs out through `up -> ../../../..`. A loop lands nowhere,
+and is refused as well. A link that stays inside the folder travels as it
+is. A token's deployment carries no link at all.
 ### `build`
 
 A command run on your workstation before anything is sent. Typically
@@ -126,9 +143,10 @@ A command run on the machine after the code arrives, typically
 elsewhere; anything platform-independent belongs in `build`.
 
 It runs in `app/` as the project's own account, `site-<slug>`, in a transient
-unit with the walls of its service: the network but not the loopback, nothing
-of `/srv` but `app/`, nothing of `/etc/sitesolide`, a throwaway `HOME`, 1G of
-memory and fifteen minutes at most. That holds for a deployment over SSH as for
+unit with the walls of its service: the network but not the loopback, none
+of the machine's ports to listen on, nothing of `/srv` but `app/`, nothing of
+`/etc/sitesolide`, a throwaway `HOME`, 1G of memory and fifteen minutes at
+most. That holds for a deployment over SSH as for
 one through a token. A package manager runs lifecycle scripts, the
 package's own and those of the dependencies it trusts, and they run there too,
 never with the rights of the account that deploys. A step that writes outside
@@ -197,6 +215,19 @@ That range is not arbitrary: a nftables rule reserves it to Caddy and root, so
 no service can reach another one. Outside it, a service would be reachable by
 every other project on the machine. A project of several processes declares a
 port for each service that listens, see [`services`](#services).
+
+**A service listens on its own port alone of the machine's.** The rule judges
+who connects, not who listens, and Caddy connects to whoever listens on a
+port of the range: the unit therefore refuses the service Caddy's admin API,
+2019, every port of 3000 to 3099 but its own, and the egress proxy's 3128 and
+3129 (`SocketBindAllow=`, `SocketBindDeny=`). A worker and a scheduled service
+listen on none of them, nor does a backup command. A bind refused there fails
+with `EPERM`: a server that opened a second port in the range, or UDP on its
+own, and a worker that listened inside it, declare a service of their own,
+with its own `port`. A port outside those stays free, nobody being sent
+there. systemd applies these lines only when it is built with
+`+BPF_FRAMEWORK`, which `systemctl --version` lists; without it, it ignores
+them without a word.
 
 ### `routes`
 
@@ -585,7 +616,7 @@ deployment.
 The environment files the service reads, from `/etc/sitesolide`.
 
 ```json
-"secrets": ["api.env"]
+"secrets": ["<slug>.env"]
 ```
 
 Plain file names, no path: letters, digits, `.`, `_` and `-`, starting with a
@@ -593,6 +624,14 @@ letter or a digit. systemd reads them as root before dropping
 privileges, so the service receives the variables without ever being able to
 read the files. A project that declares none has the whole directory made
 inaccessible, which hides even the file names.
+
+**A project declares its own files alone**, since root reads whatever it
+declares: `<slug>.env` and `<slug>-<name>`, never the machine's own,
+`dashboard.env`, `dashboard-monitor.env`, `dashboard-backup.env`, nor one a
+more specific site deployed on the machine holds, `acme-crm.env` for `acme`
+when `acme-crm` is there; and a file already on the machine must be a plain
+file of `site-<slug>`. `deploy` refuses the others before anything is pushed,
+naming them. A token's project declares `<slug>.env` alone.
 
 Their values live on the machine and are managed from the dashboard. The
 repository declares that a secret is expected, never what it contains.
@@ -607,7 +646,9 @@ The project's own domain, once it has one.
 
 `active` is written by `sitesolide domain --activate`, not by hand: that command
 also rebuilds the domain table, and without that step the certificate would
-never be authorised. A domain under the served zone is refused, the wildcard
+never be authorised. A token's deployment never switches it: the machine's
+value stands, whatever the manifest says, and only for the names it already
+covered, a new name or alias staying inactive until the owner activates it. A domain under the served zone is refused, the wildcard
 already covers it, and so is a domain for a project that serves no page, see
 [A project that serves no page](#a-project-that-serves-no-page).
 
@@ -735,7 +776,8 @@ service's do, read by systemd from `/etc/sitesolide`, the folder itself hidden
 from it. It reaches the loopback alone, whatever `network` says: enough to
 talk to its service on its port, which the machine's loopback rule lets a
 project's account do for its own ports and nobody else's; never the egress
-proxy's variables. It shares the project's time in the run with the copy,
+proxy's variables. It listens on none of the machine's ports, its service's
+included, which its service holds. It shares the project's time in the run with the copy,
 its share of a 25-minute window, 20 minutes at most, has its service's
 `memory` and 128 MiB more for the program that runs it, and is stopped when
 the disk comes down to the backup component's reserve. `$BACKUP_DIR` is on

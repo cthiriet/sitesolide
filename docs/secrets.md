@@ -28,11 +28,23 @@ declares is on the machine, and when one is not, it stops and names the
 dashboard where to create it. By then the manifest is deposited, so the
 dashboard already knows the file belongs to the site.
 
+**A manifest declares the project's own files alone.** The unit reads every
+file it declares as root, whoever owns it: a cloned repository deployed over
+SSH that declared `dashboard-backup.env` would hand its code the backups'
+keys, one that declared `cms.env` the secrets of cms. So `deploy` refuses,
+before anything is pushed, a file that is not `<slug>.env` or
+`<slug>-<name>`, one of the machine's own, one a more specific site deployed
+there holds, and one already on the machine that is not a plain file of
+`site-<slug>`, reading its owner without opening it. A token's deployment is
+held to `<slug>.env` alone, and the installer refuses the same files,
+`secret-taken`. `sitesolide remove` deletes only the files that are the
+project's by that rule, and says which it kept.
+
 ## Who reads and who writes
 
 | Who | Their projects' files | The machine's own |
 |---|---|---|
-| The owner, with the dashboard's password | read, write, create, restore, change a password hash | the same: `dashboard.env`, `portal.env`, `dashboard-monitor.env` |
+| The owner, with the dashboard's password | read, write, create, restore, change a password hash | the same: `dashboard.env`, `portal.env`, `dashboard-monitor.env`, `dashboard-backup.env` |
 | An Admin of the project | read, write, create, restore | nothing |
 | A Developer of the project | write without reading back: set, replace or remove a variable, replace a file read whole, create a declared file. No value, no size, no previous version ever comes back to them | nothing |
 | A token with *Manage secrets*, a person's token bounded by the person's role, whoever minted it | list the files and variable names; set, replace and remove the variables of `<slug>.env` alone, and create it, when the deployed manifest declares it. Never a value, a size or a previous version back, whoever holds it, and no unlock asked | nothing |
@@ -61,7 +73,11 @@ From its name and its site, with no file to keep up to date:
 A file belongs to a site by its name: `<slug>.env`, `<slug>-<name>`, or
 `<slug>-secrets/<name>` in a single-level subdirectory. When two sites could
 claim a name, `cms-tool.env` with both `cms` and `cms-tool` deployed, the most
-specific one wins. The landing is served from the directory named after the
+specific one wins. The machine's own files, `dashboard.env`,
+`dashboard-monitor.env` and `dashboard-backup.env`, are the dashboard's alone,
+whatever site their name happens to start with: a project deployed over SSH
+as `dashboard-backup` would otherwise list the backups' keys in its own
+*Secrets*, for its Admins to read. The landing is served from the directory named after the
 zone, but its files and its account carry the `landing` label: `landing-mail.env`
 is its.
 
@@ -86,6 +102,18 @@ ssh you@your-machine 'sudo install -m 600 -o site-landing -g site-landing /dev/n
 The owner and mode of a present file are compared exactly: more open, it is no
 longer a secret; more closed, its service would stop reading it. Either way it
 is listed as unmanaged, with the command that repairs it.
+
+**A file created from the dashboard, or by a token, starts with no previous
+version.** The steward drops whatever it kept under that name before it
+creates the file: a site removed and created again under the same name may be
+given its predecessor's uid, `useradd` handing the freed one out again, and a
+restore would otherwise hand it its predecessor's secrets.
+
+**A value systemd refuses never lands.** Besides one line, no null byte and
+valid Unicode, a value may hold no Unicode noncharacter, U+FDD0 to U+FDEF or
+the last two code points of a plane: systemd reads a file with one as invalid,
+and starts the service with none of its variables, the other lines'
+included.
 
 ## Three guard rails
 
@@ -113,6 +141,13 @@ without ambiguity.
 others. The dashboard's service still receives it, since `EnvironmentFile=` is
 read by PID 1 as root before the service takes its identity. In exchange, a
 compromised dashboard cannot rewrite the hash that unlocks the secrets.
+
+`dashboard-backup.env`, the bucket's settings and keys, is root's `0600` too,
+handed by PID 1 to the backup run, which reads there the bucket, the
+retention, the disk reserve and nothing that moves a program or a folder:
+whoever holds the dashboard's unlock writes it, and is not root on the
+machine. See
+[dashboard/src/backup/README.md](../dashboard/src/backup/README.md#setting-it-up).
 
 `dashboard-monitor.env`, the monitor's alerting addresses, is root's `0600` as
 well, and listed under the dashboard's site. PID 1 hands it to the monitor; the

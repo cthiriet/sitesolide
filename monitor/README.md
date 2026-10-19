@@ -98,7 +98,9 @@ what was left out follows in the next pass's message, so that no site that went 
 in a storm goes unnamed.
 
 Two channels, both optional, both set in **`/etc/sitesolide/dashboard-monitor.env`**,
-from the dashboard:
+from the dashboard. The unit reads that file before `/etc/caddy/sitesolide.env`,
+and the later file wins: the zone the monitor probes is Caddy's, whatever the
+Secrets page writes there.
 
 | Variable | What it does |
 |---|---|

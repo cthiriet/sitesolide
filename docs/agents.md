@@ -109,8 +109,9 @@ The refusals, each carrying its `hint`:
 | `locked` | the change needs the dashboard's unlock | the user makes it from the dashboard, or the owner over SSH |
 | `ssh-failed` | a command over SSH failed, nothing changed | run it again; if it fails twice, check that `ssh <server> true` connects without a prompt |
 | `steward-outdated` | over the owner's SSH, the steward does not keep people with access yet | the user runs `sitesolide upgrade` when they decide to, then the same command again |
-| `not-available` | with a token, the dashboard or its steward does not carry access yet | tell the owner of the machine, who runs `sitesolide upgrade` |
-| `unauthenticated` | the token is missing, expired or revoked | ask the owner for one; never guess or borrow a token |
+| `not-available` | with a token, the dashboard or its steward does not carry access yet; or the access log is half full, the half a token may fill, and the token lets nobody more in | tell the user: the owner runs `sitesolide upgrade`, or someone gives the access from the dashboard |
+| `too-many-attempts` | with a token, its hour of refused requests used up, 60, its refused changes of access among them | wait the seconds `details` names, and tell the user what was refused; never retry in a loop |
+| `unauthenticated` | the token is missing, expired or revoked; or the vault's token and an address other than the one `login` checked it against | ask the owner for one; never guess or borrow a token, nor point `SITESOLIDE_API` elsewhere |
 | `failure` | something broke on the machine | tell the owner of the machine, with the message; never retry in a loop |
 
 ## Secrets and restarts with a token
@@ -122,7 +123,8 @@ changes `<slug>.env` alone, once the deployed `sitesolide.json` declares it:
 `secrets set NAME --stdin` and `secrets remove NAME...`, `--restart` to apply
 the change. `sitesolide restart --json` restarts the service, for any token
 that deploys the project, and ends in an `error` unless the service holds.
-Every refusal the steward decides is journaled under the token, 60 an hour.
+Every refusal the steward decides is journaled under the token, 60 an hour,
+its refused changes of access among them.
 See [access.md](access.md#secrets-with-a-token).
 
 The refusals of their own, each carrying its `hint`:
@@ -134,10 +136,10 @@ The refusals of their own, each carrying its `hint`:
 | `stdin-is-terminal` | `--stdin` while standard input is a terminal, where the value would show as it is typed: nothing read, nothing sent | pipe a value you generated; or the user drops `--stdin` and types the value at the prompt |
 | `looks-like-value` | a name over 64 characters, or starting like a service's key (`sk_`, `rk_`, `pk_live`, `whsec_`, `ghp_`, `gho_`, `github_pat_`, `xox`, `AKIA`, `sst_`, `glpat-`): refused before anything is sent, never quoted | tell the user it may be in the shell's history and to change it at its source; then the variable's real name |
 | `out-of-scope` | a token without *Manage secrets*, listing included, a file other than `<slug>.env`, one the deployed manifest does not declare, `PASSWORD_HASH`, a person's role below Developer; an owner's token without public sites on a project not Restricted or one it could not deploy as it stands | ask the user; never another token or file |
-| `invalid` | a name the machine keeps for itself or the unit sets, an empty value; a value on several lines, with a null byte, not valid Unicode or over 8 KiB, refused before it is sent; at the prompt, a control key or a pasted block of several lines | fix what the message names |
+| `invalid` | a name the machine keeps for itself or the unit sets, an empty value; a value on several lines, with a null byte, not valid Unicode, with a Unicode noncharacter or over 8 KiB, refused before it is sent; at the prompt, a control key or a pasted block of several lines | fix what the message names |
 | `unmanaged` | the file was written by hand in a form the dashboard does not rewrite: nothing changed | tell the owner of the machine |
 | `busy` | a deployment of the project runs, the token's previous restart is still under way, or the machine is busy with other changes | wait, then run the same command once |
-| `too-many-attempts` | the token's hour used up: 120 changes, 30 restarts, 60 refused requests | wait the seconds `details` names; never retry in a loop |
+| `too-many-attempts` | the token's hour used up: 120 changes, 30 restarts, 60 refused requests, refused changes of access included | wait the seconds `details` names; never retry in a loop |
 | `unconfirmed` | the change was sent and no answer came: it may be written | run `sitesolide secrets --json`, then the same command once; never in a loop |
 | `restart-failed` | the service did not hold after its restart; a change made with it is written | read `logs`, fix the cause, then `sitesolide restart` once |
 | `not-available` | the dashboard or its steward does not carry secrets by token yet | tell the owner of the machine, who runs `sitesolide upgrade` |

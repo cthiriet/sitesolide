@@ -60,8 +60,15 @@ subdomain of the zone, and the identity provider remembers you across sites.
 and a site's app may offer it: it closes the cookie for that host. With a
 provider configured, it also ends the portal's own session: its answer is a
 page that sends the browser on to `portal.<zone>/oidc/signout`, with a ticket
-naming the site, sealed for a minute, and the portal's host erases its session
-and sends the browser back to the site. Until the next sign-in succeeds, that
+naming the site and who signs out, sealed for a minute, and the portal's host
+erases its session and sends the browser back to the site. Only someone who
+was in gets a ticket: a person signed in with a company account, whose
+ticket ends their own portal session and no other, or the owner, whose ticket
+ends whatever session that browser holds. A stranger, or password access,
+which has no portal session to end, is sent home with the cookie erased. The
+Origin alone proved nothing, since a script outside a browser writes it: a
+ticket minted for whoever posted was a link that signed out of the portal
+whoever opened it. Until the next sign-in succeeds, that
 browser counts as signed out, and a sign-in asks the provider which account
 (`prompt=select_account`): on a shared computer, the next person clicking *Sign
 in with ...* would otherwise come back as the previous one. A page and not a
@@ -162,6 +169,13 @@ then: 24 hours, 7 days (the default), 30 days or none. A token never gives it.
 - **It is typed on the same page as the owner's.** Sign-in looks first for a
   password access for that host, by its hash, then checks the owner's password.
   An access meant for another site, expired or removed, counts as a failure.
+  Its success leaves the site's failures as they stand: they count attempts
+  at the owner's password too, and holding one access proves nothing of the
+  owner's, which opens every site as admin. Only the owner's own success
+  clears them, or a quiet day: failures nobody added to for 24 hours are
+  forgotten, so that a burst long past does not make every later typo on the
+  site wait up to an hour. Whoever waits a day between bursts gains a few
+  tries a day, fewer than the hour's wait already lets through.
 - **Expiry closes like removal**: the access is refused as soon as it passes,
   cookie in hand, and the cookie set does not outlive it anyway. Removed, it
   leaves the projection, and its cookie is refused at the next request.
@@ -685,6 +699,13 @@ account*, which asks the provider to choose.
 - **CSRF protection for every site is here.** Any request that changes state has
   to carry the site's exact `Origin`, or 403. `SameSite` would not be enough:
   to a browser, a customer's preview is the same site as another subdomain.
+  A WebSocket handshake needs it too, a GET though it is: a page on a sibling
+  host opens one with the visitor's cookie, and unlike a GET's answer, which
+  the browser keeps from that page, a socket's messages are the page's to
+  read. A handshake is told by `Sec-WebSocket-Key` as much as by `Upgrade`,
+  which a proxy may drop on the way (`isWebSocketHandshake`, `src/gate.ts`).
+  Every browser sends the Origin with one; a client outside a browser sends
+  it too, or is refused.
 - **`X-Portal-Hote` comes from Caddy, never from the visitor.** `header_up`
   overwrites it, and it is the host the cookie signs. On the portal's own host,
   where Caddy does not set it, only `/sante` and the provider's two steps reach
@@ -763,12 +784,22 @@ account*, which asks the provider to choose.
   steward checks, but which compromised code would capture as it is typed. It
   never touches Caddy itself: the gatekeeper refuses everything its rules
   refuse, and restores.
+- A compromised dashboard can also have the portal seal a dashboard flow of
+  its own making, over the loopback, which is how every dashboard sign-in
+  begins, and send a person's browser to it from a link anywhere. Someone
+  with a role above Can open whose portal session is younger than 12 hours
+  comes back to it signed in, asked nothing, and the dashboard holds their
+  session, within their roles. Their unlock still takes a forced sign-in at
+  the provider, which they see. The portal cannot tell such a flow from one
+  the person started.
 - A stolen token can give Can open on the projects it reaches, and for a
   person's own token only where that person is Admin, to people who sign in
   with a company account and to the company's domains, never password access
   to an outsider, never a role above Can open, never Public; and it can remove
-  Can open entries. Every change is in the steward's journal under
-  `token:<id>`; revoking the token on the *Tokens* page stops it, and the owner
+  Can open entries. Its refused changes count against its 60 refusals an
+  hour, and what it lets in stops once the access log is half full, so that
+  it never fills the log the people need. Every change is in the steward's
+  journal under `token:<id>`; revoking the token on the *Tokens* page stops it, and the owner
   or an Admin removes what it gave, from the dashboard or with `sitesolide
   share --remove`.
 - An account closed at the provider keeps its site cookies until they lapse, 24
@@ -781,8 +812,9 @@ account*, which asks the provider to choose.
 - A site's own JavaScript reads none of the cookies, all `HttpOnly`, but its
   server receives them on every request, like any cookie of its host: a
   compromised site can replay its own visitors' cookies on itself, nowhere else.
-- Rate limiting is per site and in memory: a stranger can block new password
-  sign-ins to one site for an hour, cookies already held keep working, and other
+- Rate limiting is per site and in memory, and forgets a site's failures after
+  a quiet day: a stranger can block new password sign-ins to one site for an
+  hour, cookies already held keep working, and other
   sites are untouched. Filling the handoff codes in flight, ten thousand, takes a
   thousand accounts the provider accepts, ten codes each, every code a minute's
   worth: new sign-ins wait that minute, nothing opens. With
@@ -933,8 +965,14 @@ another client, expired, with another nonce, an unverified email, a disallowed
 domain, a callback or a code opened in another browser, a code replayed or
 carried to another host, a flow altered on the way or replayed for a second
 code, more codes in flight than one email may hold; then a site cookie capped by
-a session about to expire, and a sign-out that ends the portal's session and
-makes the next sign-in ask which account.
+a session about to expire, a sign-out that ends the portal's session and
+makes the next sign-in ask which account, a sign-out link that ends its own
+person's session and never another's, and no ticket for whoever posts a
+sign-out without being in.
+
+`tests/routes.test.ts` and `tests/gate.test.ts` refuse a WebSocket handshake
+from another origin, a GET though it is, keep the site's failures when
+password access signs in, and forget them after a quiet day.
 
 `tests/admin.test.ts` has every moved route answer `410` whatever its body
 names, and reads what `GET /admin/access` says.
@@ -953,7 +991,10 @@ The two `bin/tests` files run Caddy on your workstation, `admin off` on a free
 port, in front of this service and fake sites: what the portal promises hangs
 entirely on the order in which Caddy sorts directives, and an order is
 measured, not read. The first also checks that the admin API cannot be reached
-through the site. The second sends forged identity headers to every kind of
+through the site, and that a WebSocket handshake from another origin is
+refused at the door while the site's own goes through, `forward_auth`
+handing the portal the Origin, `Upgrade` and `Sec-WebSocket-Key` as the
+browser sent them. The second sends forged identity headers to every kind of
 path, the underscore spellings put on inside Caddy since they cannot
 arrive, to a protected site, an open one and its customer domain; signs in and
 out through the portal's own block with the provider; checks that this block

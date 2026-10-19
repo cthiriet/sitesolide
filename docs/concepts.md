@@ -172,8 +172,10 @@ the opt-in: minting it took its maker's unlock, and ticking the permission is
 the decision to let whoever holds the token set the variables of `<slug>.env`
 until it expires or is revoked. It never reads a value back, whoever made it,
 and the steward bounds it per hour, 120 changes, 30 restarts and 60 refused
-requests, every change and every refusal within the bound journaled under
-the token.
+requests, its refused changes of access among them, every change and every
+refusal within the bound journaled under the token. What a token lets in
+stops once the access log, which keeps every change of access 180 days, is
+half full: the other half stays the people's.
 
 **A person's own tokens are never stronger than the person.** A Developer
 mints a token that deploys their project, an Admin one that may also deploy
@@ -205,6 +207,18 @@ would open every restricted site at once, or stop Caddy.
 This is what makes a restricted project able to trust Caddy. It has no
 sign-in of its own; it trusts the header Caddy puts on the request, and that trust
 is only founded because nothing else on the machine can forge it.
+
+**The rule judges who connects, never who listens.** A project's account may
+bind any port left free, and Caddy, which reaches the whole range, connects to
+whoever listens there: an app waiting on the portal's port while the portal
+restarts would answer every `forward_auth` as it liked, and receive the
+owner's password typed on a sign-in page. So each generated unit says where
+its service may listen (`SocketBindAllow=`, `SocketBindDeny=`): a server on
+its own port alone among 2019, 3000 to 3099 and the egress proxy's 3128 and
+3129, a worker and a scheduled service on none of them, a service's backup
+command neither; a bind refused fails with `EPERM`. Ports outside those stay
+free: nobody is sent there. systemd enforces the lines through BPF, and a
+systemd built without `+BPF_FRAMEWORK` ignores them silently.
 
 One exception, deliberate: the dashboard may reach the portal, where it has
 the sign-ins of people with a company account sealed and redeemed, reads how
@@ -298,8 +312,11 @@ dropping privileges, and hands the variables to the process. The file stays
 `0600`, owned by an account the service does not have.
 
 `deploy` never pushes a secret. It checks that each file the manifest declares
-is on the machine, and when one is not, it stops and says where to create it in
-the dashboard. Where a file lands, whom it belongs to and under which mode
+is the project's, `<slug>.env` or `<slug>-<name>`, never the machine's own nor
+another site's, and, when it is on the machine, that it belongs to
+`site-<slug>`: the unit reads every declared file as root, so a file declared
+is a file handed to whoever wrote the manifest. When one is missing, it stops
+and says where to create it in the dashboard. Where a file lands, whom it belongs to and under which mode
 follow from its name and its site. See [secrets.md](secrets.md).
 
 Two guard rails do not bend. Any `PASSWORD_HASH`, in any file, changes only
@@ -340,8 +357,11 @@ Two different things, often confused.
 **A preview lock** closes one site behind a six-character code, for showing work
 to a client before launch: its general access is then *Anyone with the code*.
 The code is drawn on the machine by the gatekeeper and lives there, never in
-the repository; the owner and the site's Admins read it in its *Access*
-section, with the link that carries it, and draw a new one there. Every URL of
+the repository, in a codes file and in the fragment Caddy compares it from,
+`/etc/caddy/locks/verrous.caddy`, which only root and Caddy's group read: a
+project's service sees `/etc/caddy`. The owner and the site's Admins read it
+in its *Access* section, with the link that carries it, and draw a new one
+there. Every URL of
 the locked host is rewritten to a code page that stands on its own, inline
 CSS, inline icon, no external request, because anything it asked for would
 come back as HTML.
@@ -419,10 +439,10 @@ rotates by line count: a refusal stays in the journal.
 | `token.create`, `token.revoke` | dashboard | `owner` | none | a token created or revoked from the owner's *Tokens* page, its label, email and scope |
 | `token.create`, `token.revoke` | steward | a person's email, or who took their last role; `system` at the upgrade, and for the sweep | none | a person's own token created or revoked, its id and scope; one refused above their roles, with the steward's reason; the tokens of someone who no longer signs in, revoked under the owner or the Admin who took their last role above Can open; the live tokens of anyone the registry gives no rights, revoked by the sweep every 30 seconds; a token from before made a person's, once, at the upgrade |
 | `project.create` | steward | a person's email | slug | a project a person's own token created, which made them its Admin; the token in the detail |
-| `project.remove` | steward | `owner` | slug | a project `sitesolide remove` took off the machine: the name its token owned, free again for another token; that token in the detail |
+| `project.remove` | steward | `owner` | slug | a project `sitesolide remove` took off the machine: the name its token owned, free again for another token once the machine keeps none of its snapshots nor its connector grants; that token in the detail |
 | `deploy.start` | dashboard | `token:<id>` | slug | a token's deployment handed to the installer; the person's email in the `member` field, for a person's own token |
 | `deploy.success`, `deploy.failure` | dashboard | `token:<id>` | slug | how it ended, the error's code for a failure; the `member` field for a person's own token |
-| `access.add`, `access.change`, `access.remove` | steward | `owner`, an Admin's email, or `token:<id>` | slug, the person's email in the detail; the email alone for someone taken off every project | someone given access, their role changed, or their access taken away, as "who: Role", with the expiry of password access; a change refused, with the steward's reason, a minute holding twenty refusals at most |
+| `access.add`, `access.change`, `access.remove` | steward | `owner`, an Admin's email, or `token:<id>` | slug, the person's email in the detail; the email alone for someone taken off every project | someone given access, their role changed, or their access taken away, as "who: Role", with the expiry of password access; a change refused, with the steward's reason, a minute holding twenty refusals at most, a token's bounded instead by its own 60 an hour |
 | `access.migrate` | steward | `system`, or `owner` without the portal's database | none | the registry made, once, from the stores before it: the counts carried over and set aside |
 | `people.create` | steward | `owner` | the person's email | the right to create projects given or taken back |
 | `dashboard.signin` | steward | the person's email | the person's email | a session opened, from an assertion it verified, with their roles and create right |
