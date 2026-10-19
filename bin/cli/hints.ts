@@ -85,6 +85,8 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^build failed/, "run the build command from the message in the project folder, fix what it reports, then deploy again"],
   [/^publicDir not found/, "make `build` produce that folder, or point `publicDir` in sitesolide.json at the folder that holds index.html"],
   [/^publicDir is empty/, "the build produced nothing to serve: fix it so that publicDir holds the site; an empty folder would wipe the live one"],
+  [/^publicDir leads outside the repository/, "publicDir is a link to a folder outside the repository, which would be sent and served to anyone: point publicDir at a folder inside the repository; never deploy a cloned folder whose files lead elsewhere on this workstation, and tell the user"],
+  [/carries links that lead out of publicDir/, "the links named in `details` point out of the public files, and Caddy would follow them on the machine: replace each with the file it points to, or remove it; if the repository is not the user's, tell them before anything else"],
 
   // --- the machine, read before anything is pushed
   [/no longer matches the manifest/, "do not re-run with --force on your own: show the differing lines in `details` to the owner, who decides whether the manifest or the file on the server is right"],
@@ -97,6 +99,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/the egress proxy is not installed on the server/, "the owner has to install the egress proxy first (bin/deploy-egress.sh, egress/README.md); until then, remove `egress` and `connectors` from sitesolide.json, or ask for `network: outbound`"],
   [/^cannot read the manifests on the server/, READ_FAILED],
   [/^cannot read the status of the server/, READ_FAILED],
+  [/^cannot read who owns the secret files on the server/, READ_FAILED],
   [/^cannot read the system users/, READ_FAILED],
   [/^cannot read the loopback's project set/, READ_FAILED],
   [/^cannot tell whether/, READ_FAILED],
@@ -118,6 +121,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^interrupted by /, "the run was interrupted between two steps: run the same command again"],
 
   // --- secrets: never in the repository
+  [/^secrets: a file that is not this project's/, "the manifest declares a secret file of the machine or of another project, which its unit would read as root: declare only <slug>.env or <slug>-<name> files, as `details` say; never pick another slug to get around it, and if the manifest is not the user's, tell them it asked for another project's secrets"],
   [/^secret missing on the server/, "ask the owner to create this file and its variables in the dashboard's Secrets section (the address is in `details`), then run deploy again; never put secret values in the repository or in sitesolide.json"],
   [/^secrets are managed in the Secrets section/, "secrets are set in the dashboard's Secrets section, at the address in the message; there is nothing to run here"],
   [/^a service is restarted from the dashboard/, "the owner restarts it with Restart service, in the project's Overview on the dashboard at the address in the message; there is nothing to run here, and never a systemctl restart by hand over SSH"],

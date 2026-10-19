@@ -1,5 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { dashboardAddress, decideSecret, readPresenceAnswer } from "../cli/secrets";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  dashboardAddress,
+  decideSecret,
+  MACHINE_FILES,
+  ownerRefusal,
+  OWNERS_DONE,
+  readPresenceAnswer,
+  readSecretOwners,
+  secretFileRefusal,
+  secretOwnersCommand,
+  type SecretOwner,
+} from "../cli/secrets";
 import { MARKER_ABSENT, MARKER_PRESENT } from "../cli/unit";
 
 /**
@@ -114,5 +127,76 @@ describe("what the VM answers", () => {
   test("case matters", () => {
     expect(readPresenceAnswer(MARKER_PRESENT.toLowerCase())).toEqual({ kind: "unreadable" });
     expect(readPresenceAnswer(MARKER_ABSENT.toLowerCase())).toEqual({ kind: "unreadable" });
+  });
+});
+
+describe("whose secret file it is", () => {
+  test("a project declares its own files alone", () => {
+    expect(secretFileRefusal("shop", "shop.env")).toBeNull();
+    expect(secretFileRefusal("shop", "shop-smtp.env")).toBeNull();
+    expect(secretFileRefusal("shop", "shop-key.pem")).toBeNull();
+    expect(secretFileRefusal("shop", "cms.env")).toContain("cms.env is not named after shop");
+    expect(secretFileRefusal("shop", "shopping.env")).toContain("is not named after shop");
+    expect(secretFileRefusal("shop", "api.env")).not.toBeNull();
+  });
+
+  test("the machine's own files are root's, the dashboard's by their name alone", () => {
+    for (const name of MACHINE_FILES) {
+      expect(secretFileRefusal("thief", name)).toContain("belongs to the machine");
+      expect(secretFileRefusal("dashboard", name)).toBeNull();
+    }
+    // A slug named after one of them takes nothing either.
+    expect(secretFileRefusal("dashboard-backup", "dashboard-backup.env")).toContain("belongs to the machine");
+  });
+
+  test("a more specific site deployed on the machine keeps the files named after it", () => {
+    expect(secretFileRefusal("acme", "acme-crm.env", ["acme-crm", "blog"])).toContain("acme-crm.env belongs to acme-crm");
+    expect(secretFileRefusal("acme", "acme-crm-smtp.env", ["acme-crm", "acme-crm-smtp"])).toContain("belongs to acme-crm-smtp");
+    expect(secretFileRefusal("acme", "acme.env", ["acme-crm"])).toBeNull();
+    // A less specific one keeps nothing of this project's, nor does itself.
+    expect(secretFileRefusal("acme-crm", "acme-crm.env", ["acme", "acme-crm"])).toBeNull();
+  });
+
+  test("the list of the machine's files is the steward's", () => {
+    // Read as text: dashboard/src/secrets/scope.ts imports dashboard/borrowed/, which git does not keep.
+    const source = readFileSync(join(import.meta.dir, "..", "..", "dashboard", "src", "secrets", "scope.ts"), "utf8");
+    const declared = /export const ROOT_FILES = (\[[^\]]*\]);/.exec(source)?.[1];
+    expect(declared).toBeDefined();
+    expect(JSON.parse(declared!)).toEqual([...MACHINE_FILES]);
+  });
+});
+
+describe("who owns a declared file on the machine", () => {
+  test("the reading names each file once, then its marker, or reads as nothing", () => {
+    const names = ["shop.env", "shop-key.pem", "shop-old.env"];
+    const command = secretOwnersCommand(names);
+    expect(command.startsWith("sudo sh -c 'for f in shop.env shop-key.pem shop-old.env; do")).toBe(true);
+    expect(() => secretOwnersCommand(["shop.env; reboot"])).toThrow("not a secret file's name");
+    const read = readSecretOwners(`shop.env site-shop\nshop-key.pem other\nshop-old.env absent\n${OWNERS_DONE}\n`, names);
+    expect(read).toEqual(
+      new Map<string, SecretOwner>([
+        ["shop.env", { kind: "file", owner: "site-shop" }],
+        ["shop-key.pem", { kind: "other" }],
+        ["shop-old.env", { kind: "absent" }],
+      ]),
+    );
+    // A refused sudo prints nothing; a cut answer, a name twice or one not asked are no answer.
+    expect(readSecretOwners("", names)).toBeNull();
+    expect(readSecretOwners(`shop.env site-shop\n${OWNERS_DONE}\n`, names)).toBeNull();
+    expect(readSecretOwners(`shop.env site-shop\nshop.env root\nshop-key.pem other\nshop-old.env absent\n${OWNERS_DONE}\n`, names)).toBeNull();
+    expect(readSecretOwners(`cms.env site-cms\nshop.env site-shop\nshop-key.pem other\nshop-old.env absent\n${OWNERS_DONE}\n`, names)).toBeNull();
+  });
+
+  test("a project reads a file present on the machine only when its own account owns it", () => {
+    expect(ownerRefusal("shop", "shop.env", { kind: "absent" })).toBeNull();
+    expect(ownerRefusal("shop", "shop.env", { kind: "file", owner: "site-shop" })).toBeNull();
+    expect(ownerRefusal("landing-mail", "landing-mail.env", { kind: "file", owner: "site-landing" })).toBe(
+      "/etc/sitesolide/landing-mail.env is already on the machine and belongs to site-landing, not site-landing-mail: a project reads its own files alone",
+    );
+    expect(ownerRefusal("shop", "shop.env", { kind: "file", owner: "root" })).toContain("belongs to root");
+    expect(ownerRefusal("shop", "shop.env", { kind: "other" })).toContain("is not a plain file");
+    // The dashboard's hash is root's by design.
+    expect(ownerRefusal("dashboard", "dashboard.env", { kind: "file", owner: "root" })).toBeNull();
+    expect(ownerRefusal("dashboard", "dashboard-extra.env", { kind: "file", owner: "root" })).toContain("belongs to root");
   });
 });

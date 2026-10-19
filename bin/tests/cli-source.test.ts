@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readRemoteProject } from "../cli/remote";
-import { isInside, repositoryRoot, sourceRefusal } from "../cli/source";
+import { isInside, linksOut, publicRefusal, repositoryRoot, sourceRefusal } from "../cli/source";
 
 /**
  * Where a manifest's `source` may lead: anywhere from the owner's sites
@@ -74,5 +74,54 @@ describe("a manifest of the owner's sites repository", () => {
     expect(sourceRefusal(join(root, "sites", "mini-lab"), join(root, "mini-lab"), join(root, "sites"))).toBeNull();
     // The same manifest elsewhere is someone else's.
     expect(sourceRefusal(join(root, "sites", "mini-lab"), join(root, "mini-lab"), null)).not.toBeNull();
+  });
+});
+
+describe("the public files of a cloned repository", () => {
+  test("a publicDir that is a link out of the repository is refused, one inside it is not", () => {
+    const root = tree(["home/.ssh/id_ed25519", "home/Code/clone/.git/", "home/Code/clone/site/index.html"]);
+    const clone = join(root, "home", "Code", "clone");
+    symlinkSync("../../.ssh", join(clone, "public"));
+    expect(publicRefusal(clone, join(clone, "public"), null)).toContain(join(root, "home", ".ssh"));
+    symlinkSync("site", join(clone, "inside"));
+    expect(publicRefusal(clone, join(clone, "inside"), null)).toBeNull();
+    // From the owner's sites repository, as `source`, anywhere.
+    expect(publicRefusal(clone, join(clone, "public"), join(root, "home", "Code"))).toBeNull();
+  });
+
+  test("links among the public files that lead out of them are named, those inside are not", () => {
+    const root = tree(["public/index.html", "public/v2/index.html", "public/assets/", "public/.git/"]);
+    const folder = join(root, "public");
+    symlinkSync("/etc/caddy/cloudflare.env", join(folder, "robots.txt"));
+    symlinkSync("../../app/config.json", join(folder, "assets", "config.json"));
+    symlinkSync("v2", join(folder, "latest"));
+    symlinkSync("../v2/index.html", join(folder, "assets", "home.html"));
+    // Never sent, so never read.
+    symlinkSync("/etc/passwd", join(folder, ".git", "HEAD"));
+    expect(linksOut(folder, (path) => path === ".git")).toEqual(["assets/config.json -> ../../app/config.json", "robots.txt -> /etc/caddy/cloudflare.env"]);
+  });
+
+  test("a link whose climb goes through another link is judged where the machine lands, not where its text reads", () => {
+    // `up` lands on the public folder itself, four folders above where it
+    // stands, and is the site's own. Read as text, `robots.txt` climbs four
+    // folders from `a/b/c/d/up` and stays inside; the kernel follows `up`
+    // first, and the same four climbs leave /srv/sites/<slug>/public for /,
+    // where Caddy, which reads its group's files, served its own DNS token.
+    const root = tree(["public/index.html", "public/a/b/c/d/", "public/x/y/"]);
+    const folder = join(root, "public");
+    symlinkSync("../../../..", join(folder, "a", "b", "c", "d", "up"));
+    symlinkSync("a/b/c/d/up/../../../../etc/caddy/cloudflare.env", join(folder, "robots.txt"));
+    // Two links that stay inside through one another travel as they did.
+    symlinkSync("../..", join(folder, "x", "y", "top"));
+    symlinkSync("x/y/top/index.html", join(folder, "home.html"));
+    expect(linksOut(folder)).toEqual(["robots.txt -> a/b/c/d/up/../../../../etc/caddy/cloudflare.env"]);
+  });
+
+  test("a loop of links is named rather than walked for ever", () => {
+    const root = tree(["public/index.html"]);
+    const folder = join(root, "public");
+    symlinkSync("b", join(folder, "a"));
+    symlinkSync("a", join(folder, "b"));
+    expect(linksOut(folder)).toEqual(["a -> b", "b -> a"]);
   });
 });

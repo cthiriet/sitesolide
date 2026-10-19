@@ -7,6 +7,7 @@ import {
   leftToDo,
   ownershipReleaseCommand,
   readOwnershipRelease,
+  removableSecrets,
   type RemovalStep,
   type ProjectToRemove,
 } from "../cli/removal";
@@ -233,5 +234,23 @@ describe("the token that created it", () => {
     expect(readOwnershipRelease(ok({ error: "busy", message: "shop is still on the machine" }, 409))).toEqual({ kind: "failed", reason: "shop is still on the machine" });
     expect(readOwnershipRelease({ code: 255, output: "", error: "ssh: connect" })).toEqual({ kind: "failed", reason: "ssh: connect" });
     expect(readOwnershipRelease({ code: 0, output: "garbage", error: "" }).kind).toBe("failed");
+  });
+});
+
+describe("the secret files a removal deletes", () => {
+  test("only the project's own: the machine's and another site's are kept, and said", () => {
+    const chosen = removableSecrets("shop", ["shop.env", "shop-smtp.env", "dashboard.env", "dashboard-backup.env", "cms.env", "shop-admin.env"], ["shop", "cms", "shop-admin"]);
+    expect(chosen.removed).toEqual(["shop.env", "shop-smtp.env"]);
+    expect(chosen.kept).toEqual([
+      "kept: dashboard.env belongs to the machine, root's, and no project reads it",
+      "kept: dashboard-backup.env belongs to the machine, root's, and no project reads it",
+      "kept: cms.env is not named after shop: a project reads shop.env and shop-<name> files alone",
+      "kept: shop-admin.env belongs to shop-admin, deployed on the machine",
+    ]);
+    // A file named after the project that another account owns stays too.
+    const owned = removableSecrets("shop", ["shop.env", "shop-mail.env"], [], new Map([["shop-mail.env", { kind: "file", owner: "site-shopkeeper" } as const]]));
+    expect(owned).toEqual({ removed: ["shop.env"], kept: ["kept: /etc/sitesolide/shop-mail.env is already on the machine and belongs to site-shopkeeper, not site-shop: a project reads its own files alone"] });
+    const commands = removalActions(project({ slug: "shop", secrets: chosen.removed })).map((action) => action.command);
+    expect(commands.filter((command) => command.includes("/etc/sitesolide/"))).toEqual(["sudo rm -f /etc/sitesolide/shop.env", "sudo rm -f /etc/sitesolide/shop-smtp.env"]);
   });
 });

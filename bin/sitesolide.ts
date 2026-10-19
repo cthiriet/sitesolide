@@ -115,7 +115,8 @@ import {
   type Config,
 } from "./cli/config";
 import { backupComponentCommand, backupsReport, readBackupComponent } from "./cli/backups";
-import { sourceRefusal } from "./cli/source";
+import { linksOut, publicRefusal, sourceRefusal } from "./cli/source";
+import { excludedBy } from "./cli/bundle";
 import { decideBlock, domainLeftOpen, generateFragment, LOCKS_FRAGMENT, type Served } from "./cli/fragment";
 import { hintFor } from "./cli/hints";
 import { inferManifest, renderManifest, slugFromFolder, type Inference } from "./cli/infer";
@@ -169,13 +170,19 @@ import {
   isValidConfirmation,
   ownershipReleaseCommand,
   readOwnershipRelease,
+  removableSecrets,
   removalSteps,
   leftToDo,
 } from "./cli/removal";
 import {
   dashboardAddress,
   decideSecret,
+  ownerRefusal,
   readPresenceAnswer,
+  readSecretOwners,
+  secretFileRefusal,
+  secretOwnersCommand,
+  type SecretOwner,
   type SecretAction,
   type PresenceRead,
 } from "./cli/secrets";
@@ -255,9 +262,14 @@ const MANIFEST_NAME = "sitesolide.json";
  * holds what `install` left there as site-<slug>, and a chmod -R would stop on
  * the first of those files. Those are pruned, not entered: a directory of
  * theirs may well be closed to this account.
+ *
+ * Never a link: chmod follows one it is given, and rsync carries a
+ * repository's links as they are. A cloned repository's
+ * `app/notes -> /home/<account>/.ssh/id_ed25519` made the deployment
+ * account's own files readable by every account of the machine.
  */
-function sentModesCommand(path: string): string {
-  return `find ${path} ! -user "$(id -un)" -prune -o -exec chmod u+rwX,go=rX {} +`;
+export function sentModesCommand(path: string): string {
+  return `find ${path} ! -user "$(id -un)" -prune -o ! -type l -exec chmod u+rwX,go=rX {} +`;
 }
 
 type Project = {
@@ -883,6 +895,31 @@ function checkPublicFolder(project: Project, executor?: Executor): void {
   if (!existsSync(folder)) {
     die(`publicDir not found: ${project.manifest.publicDir}`, ["did the build run?"]);
   }
+  // A clone's `public` that is a link out of it, to ~/.ssh, and links among
+  // the files that Caddy would follow on the machine: see bin/cli/source.ts.
+  // After the build, which makes the folder, and before anything leaves,
+  // over SSH as through the API, whose deploy calls this too.
+  let sitesRepo: string | null = null;
+  try {
+    sitesRepo = projectsRepo();
+  } catch {
+    sitesRepo = null;
+  }
+  const escape = publicRefusal(project.folder, folder, sitesRepo);
+  if (escape !== null) {
+    die(escape, [
+      "a manifest outside your sites repository may only send public files from inside its own repository",
+      "nothing was sent: replace the link with the folder it points to, or point publicDir at a folder of the repository",
+    ]);
+  }
+  const out = linksOut(folder, (path, directory) => excludedBy(path, directory, NEVER_SENT));
+  if (out.length > 0) {
+    die(`${project.manifest.publicDir} carries links that lead out of publicDir: Caddy would follow them on the machine`, [
+      ...out.slice(0, 10),
+      ...(out.length > 10 ? [`and ${out.length - 10} more`] : []),
+      "nothing was sent: replace each link with the file it points to, or remove it",
+    ]);
+  }
   // This check protects the rsync's --delete: an empty folder erases the site.
   if (readdirSync(folder).length === 0) {
     die(`publicDir is empty: ${project.manifest.publicDir}`, [
@@ -1001,6 +1038,7 @@ async function deploy(
   if (isApplication) await checkRemoteBlock(manifest, config, executor, replace, doorConfirmed);
   if (isApplication) await checkUnitNames(manifest, config, executor);
   if (isApplication) await checkPorts(manifest, config, executor);
+  if (isApplication) await checkSecretFiles(manifest, config, executor);
   if (scheduledServices(manifest).length > 0) await checkSchedules(manifest, config, executor);
   // A backup command reaches its service on its port, through the same set.
   if (reachesOwnPorts(manifest)) await requireProjectSet(config, executor);
@@ -1959,6 +1997,52 @@ async function checkPorts(manifest: Manifest, config: Config, executor: Executor
   }
 }
 
+/** The sites deployed on the machine, by the label their files carry: `landing` for the zone's folder. */
+function siteLabels(folders: Iterable<string>, zone: string): string[] {
+  return [...folders].map((folder) => (folder === zone ? "landing" : folder));
+}
+
+/**
+ * Refuses, before anything is pushed, a secret file the project may not
+ * read: the machine's own, another site's by its name, or one a more
+ * specific site deployed on the machine holds. The unit reads each declared
+ * file as root, so `deploy` checking that it was there handed it to whoever
+ * wrote the manifest. See secretFileRefusal in bin/cli/secrets.ts.
+ *
+ * The rule without the machine first, then with the sites it carries: a
+ * read, hence done in a dry run too.
+ */
+async function checkSecretFiles(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
+  const declared = manifest.secrets ?? [];
+  if (declared.length === 0) return;
+  const refuse = (refusals: string[]): void => {
+    if (refusals.length === 0) return;
+    die("secrets: a file that is not this project's", [
+      ...refusals,
+      `nothing was pushed: a project declares ${manifest.slug}.env or ${manifest.slug}-<name> files alone, which its unit reads as root`,
+    ]);
+  };
+  refuse(declared.map((name) => secretFileRefusal(manifest.slug, name)).filter((refusal): refusal is string => refusal !== null));
+  const reading = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
+  if (reading.kind === "unreadable") {
+    die("cannot read the manifests on the server to check the secret files", [
+      reading.reason,
+      "nothing was pushed: a file of a project deployed there could be read by this one",
+    ]);
+  }
+  const labels = siteLabels(reading.manifests.keys(), config.zone);
+  refuse(declared.map((name) => secretFileRefusal(manifest.slug, name, labels)).filter((refusal): refusal is string => refusal !== null));
+  const owners = await readOwners(declared, config, executor, "nothing was pushed: a file another account owns could be read by this project");
+  refuse(declared.map((name) => ownerRefusal(manifest.slug, name, owners.get(name)!)).filter((refusal): refusal is string => refusal !== null));
+}
+
+/** Who owns each declared secret file on the machine; an unreadable answer stops the command, `why` saying what that spares. */
+async function readOwners(names: readonly string[], config: Config, executor: Executor, why: string): Promise<Map<string, SecretOwner>> {
+  const owners = readSecretOwners(await executor.read(config, secretOwnersCommand(names)), names);
+  if (owners === null) die("cannot read who owns the secret files on the server", ["the server answered something other than an owner for each file", why]);
+  return owners;
+}
+
 /**
  * Refuses, before anything is pushed, a machine whose loopback rule would cut
  * this project's services off from each other: one laid before the project set
@@ -2816,8 +2900,24 @@ async function remove(
   // stopped service.
   const hasBlock = isApplication || behindPortal;
 
+  // The secret files this folder's manifest names, deleted only when they
+  // are this project's: see removableSecrets. The sites on the machine are
+  // read before any gesture, an unreadable reading deleting nothing.
+  const declared = manifest.secrets ?? [];
+  let secrets: string[] = [];
+  if (declared.length > 0) {
+    const sites = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
+    if (sites.kind === "unreadable") {
+      die("cannot read the manifests on the server to tell whose secret files these are", [sites.reason, "nothing was removed"]);
+    }
+    const owners = await readOwners(declared, config, executor, "nothing was removed: a file another account owns could have been deleted");
+    const chosen = removableSecrets(slug, declared, siteLabels(sites.manifests.keys(), config.zone), owners);
+    for (const line of chosen.kept) say(`   ${line}`);
+    secrets = chosen.removed;
+  }
+
   for (const removalStep of removalSteps(
-    { slug, isApplication, secrets: manifest.secrets ?? [], units: unitNames(manifest) },
+    { slug, isApplication, secrets, units: unitNames(manifest) },
     { block: hasBlock, isProtected: behindPortal },
   )) {
     if (removalStep.kind === "action") {

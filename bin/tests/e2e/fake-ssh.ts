@@ -71,6 +71,7 @@ import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
 import { backupComponentCommand, BACKUP_COMPONENT_MARKER } from "../../cli/backups";
 import { ownerGeneralCommand, ownerReadCommand, ownerWriteCommand, type EntryView, type PersonView, type Role } from "../../cli/access";
 import { ownershipReleaseCommand } from "../../cli/removal";
+import { OWNERS_DONE, secretOwnersCommand } from "../../cli/secrets";
 
 export const TEST_HOST = "sample@invalid.local";
 
@@ -96,6 +97,8 @@ export const SWITCHES = {
   accounts: "accounts",
   refusedSchedules: "refused-schedules",
   standings: "standings.json",
+  /** The secret files /etc/sitesolide carries, `{ name: owner }`: see secretOwnersCommand in bin/cli/secrets.ts. */
+  secretFiles: "secret-files.json",
 } as const;
 
 /**
@@ -345,6 +348,19 @@ if (import.meta.main) {
     record(`ACCOUNT ${accountName}`);
     const line = readAccounts(vm).find((entry) => entry.startsWith(`${accountName}:`));
     process.stdout.write(`${line ?? "missing"}\n`);
+    process.exit(0);
+  }
+  // Who owns the secret files a deployment declares, or a removal would
+  // delete, read before anything is written. A reading, hence always
+  // answered: from what the test lays in SWITCHES.secretFiles, `{ name:
+  // owner }`, every other file absent.
+  const secretFiles = /^sudo sh -c 'for f in ([A-Za-z0-9._ -]+); do p=\/etc\/sitesolide\/\$f; /.exec(command)?.[1];
+  if (secretFiles !== undefined && command === secretOwnersCommand(secretFiles.split(" "))) {
+    record(`SECRET-OWNERS ${secretFiles}`);
+    const laid = join(vm, SWITCHES.secretFiles);
+    const owners = existsSync(laid) ? (JSON.parse(readFileSync(laid, "utf8")) as Record<string, string>) : {};
+    for (const name of secretFiles.split(" ")) process.stdout.write(`${name} ${owners[name] ?? "absent"}\n`);
+    process.stdout.write(`${OWNERS_DONE}\n`);
     process.exit(0);
   }
   // Where the loopback rule stands, read before a project with several

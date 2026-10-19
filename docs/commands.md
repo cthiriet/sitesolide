@@ -389,7 +389,7 @@ sitesolide restart                                restart this folder's project'
 
 --json, on every one of them: one JSON event per line, see docs/agents.md
 a secret's value never goes on the command line: with --json, secrets set needs --stdin
-SITESOLIDE_API and SITESOLIDE_TOKEN in the environment win over the files.
+SITESOLIDE_API and SITESOLIDE_TOKEN, both in the environment, win over the files.
 ```
 
 `login` keeps the token in `~/.config/sitesolide/secrets/team-token`, 0600, and

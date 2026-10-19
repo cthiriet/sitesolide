@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hintForFailure } from "../cli/hints";
@@ -249,6 +249,22 @@ describe("deploy through the API", () => {
     const result = await cli(root, ["deploy"], { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN });
     expect(result.code).toBe(1);
     expect(result.error).toContain("!! bun install --production failed (exit 1): nothing served was changed");
+  });
+
+  test("a cloned repository whose publicDir is a link to ~/.ssh sends nothing", async () => {
+    scenario = "succeeds";
+    received.length = 0;
+    const home = folder("remote-home-");
+    mkdirSync(join(home, ".ssh"));
+    writeFileSync(join(home, ".ssh", "id_ed25519"), "-----BEGIN OPENSSH PRIVATE KEY-----\nnot a real key\n");
+    const root = join(home, "Code", "clone");
+    mkdirSync(join(root, ".git"), { recursive: true });
+    writeFileSync(join(root, "sitesolide.json"), JSON.stringify({ slug: "shop", publicDir: "public" }));
+    symlinkSync("../../.ssh", join(root, "public"));
+    const result = await cli(root, ["deploy"], { HOME: home, SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN });
+    expect(result.code).toBe(1);
+    expect(result.error).toContain("publicDir leads outside the repository holding sitesolide.json");
+    expect(received.filter((entry) => entry.method === "PUT")).toEqual([]);
   });
 
   test("a manifest refused: every reason, before the build runs", async () => {
