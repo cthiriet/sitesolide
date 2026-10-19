@@ -488,8 +488,9 @@ In order, and the order is the point:
 
 1. Read the manifest, refuse it if anything is wrong. Nothing has been sent yet.
 2. Read the machine: does the dashboard say this project is restricted?
-   Is the block in service one the generator would write, or one edited by hand
-   there, which stops everything without `--force`? Does systemd already run a
+   Is the block in service one the generator would write, from this manifest
+   or from the one the machine carries, or one edited by hand there, which
+   stops everything without `--force`? Does systemd already run a
    service of that name that deploy did not write? Does another project already
    declare one of its ports? For a project with several services, does the
    loopback rule have room for its own ports? For a project with `egress` or

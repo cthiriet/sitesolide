@@ -544,6 +544,22 @@ describe("the block against the one in service", () => {
     expect(decide(OPEN, block({ ...OPEN, port: 3031 }), true)).toBe("forced");
   });
 
+  test("what the manifest on the machine generates is the generator's own: a changed manifest replaces it without --force", () => {
+    // The dashboard's own manifest gained headers: the block in service is
+    // the one its previous manifest, deposited on the machine, generates, and
+    // `upgrade`, which never forces, stopped there on every machine.
+    const before: Manifest = { ...OPEN, port: 3031 };
+    const decideWith = (manifest: Manifest, inService: string, previous: Manifest | null) => decideBlock({ manifest, inService, replace: false, doorConfirmed: true, previous });
+    expect(decideWith(OPEN, block(before), before)).toBe("manifest-changed");
+    expect(decideWith({ ...OPEN, headers: { "X-Frame-Options": "DENY" } }, block(OPEN), OPEN)).toBe("manifest-changed");
+    // As an earlier release generated it from that manifest, too.
+    expect(decideWith(OPEN, generateFragment(before, "cookie")!, before)).toBe("manifest-changed");
+    // A block edited by hand matches neither, and still stops the deployment.
+    expect(decideWith(OPEN, `${block(before)}\nheader X-Hand "edited"\n`, before)).toBe("diverged");
+    expect(decideWith(OPEN, block({ ...OPEN, port: 3032 }), before)).toBe("diverged");
+    expect(decideWith(OPEN, block(before), null)).toBe("diverged");
+  });
+
   test("a project without a block has nothing to decide", () => {
     expect(decide({ slug: "brochure", publicDir: "public" }, "anything")).toBe("deposit");
   });

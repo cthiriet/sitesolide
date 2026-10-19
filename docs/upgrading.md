@@ -297,6 +297,13 @@ dashboard's unlock.
 
 **What changes for you.**
 
+- **A changed manifest no longer needs `--force` for its block.** A block in
+  service that is exactly what the manifest deposited on the machine
+  generates is the generator's own, and `deploy` replaces it, as the
+  installer already did for a token: `upgrade`, which never forces, would
+  otherwise stop at the dashboard, whose manifest gains the headers that
+  refuse framing. A block edited by hand on the machine still stops
+  `deploy` until `--force`.
 - **Over your SSH, `deploy` may stop on a manifest that deployed before**,
   saying which file or link, with nothing pushed: `secrets: a file that is not
   this project's`, `publicDir leads outside the repository`, or `carries

@@ -774,6 +774,22 @@ async function readRemoteFile(config: Config, executor: Executor, path: string):
   );
 }
 
+/**
+ * The manifest deposited on the machine, which generated the block in
+ * service unless it was edited by hand: null when there is none, or it does
+ * not read, and the block is then judged without it.
+ */
+async function depositedManifest(slug: string, config: Config, executor: Executor): Promise<Manifest | null> {
+  const reading = await readRemoteFile(config, executor, `${projectPaths(slug).root}/${MANIFEST_NAME}`);
+  return reading.kind === "present" ? textManifest(reading.content) : null;
+}
+
+/** A manifest's text, read; null when it does not read or is refused. */
+function textManifest(text: string): Manifest | null {
+  const { manifest, errors } = readManifest(text);
+  return manifest === undefined || errors.length > 0 ? null : manifest;
+}
+
 /** Where a project's Caddy block lives on the machine. */
 function blockPath(slug: string): string {
   return `/etc/caddy/sites/${slug}.caddy`;
@@ -815,11 +831,15 @@ async function checkRemoteBlock(
     ]);
   }
   const inService = reading.kind === "present" ? reading.content : null;
-  switch (decideBlock({ manifest, inService, replace, doorConfirmed })) {
+  const previous = inService === null ? null : await depositedManifest(manifest.slug, config, executor);
+  switch (decideBlock({ manifest, inService, replace, doorConfirmed, previous })) {
     case "deposit":
       return;
     case "upgrades":
       say(`   ${path} was written by an earlier release, the current one replaces it`);
+      return;
+    case "manifest-changed":
+      say(`   ${path} is what the manifest on the server generates: the changed manifest replaces it`);
       return;
     case "follows-door":
       say(`   ${path} will follow the portal set from the dashboard`);
@@ -1248,7 +1268,8 @@ async function compareWithServer(project: Project, config: Config, executor: Exe
         die(`cannot tell whether ${path} is there`, ["the server answered neither an absence nor a block", "nothing was changed"]);
       }
       const inService = reading.kind === "present" ? reading.content : null;
-      if (decideBlock({ manifest, inService, replace: false, doorConfirmed }) === "diverged") refuseDivergence(path, inService ?? "", generated);
+      const previous = deposited.kind === "present" ? textManifest(deposited.content) : null;
+      if (decideBlock({ manifest, inService, replace: false, doorConfirmed, previous }) === "diverged") refuseDivergence(path, inService ?? "", generated);
       if (inService !== generated) changes.push(path);
     }
   }

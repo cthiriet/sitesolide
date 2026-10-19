@@ -281,10 +281,21 @@ describe("the portal's own block, upgraded to the provider's steps", () => {
   const { build: _, ...PORTAL } = current;
   const BEFORE: Manifest = { ...PORTAL, routes: ["/sante"] };
 
-  test("is refused without --force, naming the two routes, before anything is written", async () => {
+  test("goes ahead without --force when the block in service is the one the manifest on the machine generates", async () => {
+    // `upgrade` never forces: a platform component whose manifest changed its
+    // own block must go through as the installer lets a token's through.
     vm = createFakeVm();
     vm.writeManifest("portal", text(BEFORE));
     vm.writeBlock("portal", generateFragment(BEFORE)!);
+    const r = await run(project(PORTAL), ["deploy"], { vm });
+    expect(r.output).toContain("/etc/caddy/sites/portal.caddy is what the manifest on the server generates: the changed manifest replaces it");
+    expect(r.error).not.toContain("no longer matches the manifest");
+  });
+
+  test("is refused without --force, naming the two routes, before anything is written, when the block was edited by hand", async () => {
+    vm = createFakeVm();
+    vm.writeManifest("portal", text(BEFORE));
+    vm.writeBlock("portal", `${generateFragment(BEFORE)!}\n# edited by hand\nheader X-Hand "kept"\n`);
     const r = await run(project(PORTAL), ["deploy"], { vm });
     expect(r.code).toBe(1);
     expect(r.error).toContain("no longer matches the manifest");
@@ -292,10 +303,10 @@ describe("the portal's own block, upgraded to the provider's steps", () => {
     expect(vm.logs().some((line) => line.startsWith("ACCEPTED"))).toBe(false);
   });
 
-  test("goes ahead with --force", async () => {
+  test("goes ahead with --force, the block edited by hand", async () => {
     vm = createFakeVm();
     vm.writeManifest("portal", text(BEFORE));
-    vm.writeBlock("portal", generateFragment(BEFORE)!);
+    vm.writeBlock("portal", `${generateFragment(BEFORE)!}\n# edited by hand\nheader X-Hand "kept"\n`);
     const r = await run(project(PORTAL), ["deploy", "--force"], { vm });
     expect(r.output).toContain("--force: /etc/caddy/sites/portal.caddy will be replaced by the generated one");
   });

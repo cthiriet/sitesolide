@@ -449,7 +449,7 @@ export function domainLeftOpen(manifest: Manifest, served: Served): string | nul
 }
 
 /** What `deploy` does with its block, given the one in service. */
-export type BlockDecision = "deposit" | "upgrades" | "follows-door" | "forced" | "diverged";
+export type BlockDecision = "deposit" | "upgrades" | "manifest-changed" | "follows-door" | "forced" | "diverged";
 
 /**
  * The block this deployment generates, against the one the machine serves.
@@ -457,6 +457,12 @@ export type BlockDecision = "deposit" | "upgrades" | "follows-door" | "forced" |
  * - none in service, or the same directives: `deposit`, the ordinary case;
  * - the same, as an earlier release generated it: `upgrades`, the current
  *   generation replaces it without `--force`;
+ * - what the manifest the machine carries generates, `previous`, by this
+ *   release or an earlier one: `manifest-changed`, the generator's own block
+ *   behind a manifest changed since, replaced without `--force` as the
+ *   installer replaces it. Without it, a platform component whose manifest
+ *   changed its block, the dashboard's headers, stopped `upgrade`, which never
+ *   forces, on every machine;
  * - different by the door alone, when the machine carries that door
  *   (`doorConfirmed`): `follows-door`, the dashboard changed it and this
  *   deployment catches up, whichever release generated it;
@@ -471,11 +477,18 @@ export function decideBlock(state: {
   inService: string | null;
   replace: boolean;
   doorConfirmed: boolean;
+  /** The manifest deposited on the machine, null when there is none or it does not read. */
+  previous?: Manifest | null;
 }): BlockDecision {
   const generated = generateFragment(state.manifest);
   if (generated === null || state.inService === null) return "deposit";
   if (sameDirectives(state.inService, generated)) return "deposit";
   if (isEarlierGeneration(state.inService, state.manifest)) return "upgrades";
+  const previous = state.previous ?? null;
+  if (previous !== null) {
+    const before = generateFragment(previous);
+    if (before !== null && (sameDirectives(state.inService, before) || isEarlierGeneration(state.inService, previous))) return "manifest-changed";
+  }
   if (state.doorConfirmed) {
     const other = { ...state.manifest, portal: isProtected(state.manifest) ? undefined : true };
     const otherDoor = generateFragment(other);
