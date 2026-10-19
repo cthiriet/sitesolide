@@ -8,8 +8,10 @@ where they are.
 **One machine, on purpose.** There is no staging environment and no automatic
 failover. What breaks production breaks every site at once, and nothing repairs
 itself. That constraint is what keeps the system small enough to understand
-completely, and it is why the deployment path verifies and rolls back rather
-than assuming.
+completely, and it is why the deployment path verifies what it changed rather
+than assuming, and puts Caddy's configuration back when the new one fails. It
+does not keep the previous version of a project's code: see
+[what a deploy costs](#what-a-deploy-costs).
 
 **The server is the source of truth.** For a deployed project, its general
 access and its secrets are what the machine carries, not what the repository
@@ -338,6 +340,12 @@ restored by hand only: the dashboard, which would cut off the page doing it,
 and the portal, whose old copy would bring back its old audit and the tables
 it kept before the access registry.
 
+**The copy to a bucket is off until you configure one.** Until then the
+snapshots stay on the machine's own disk, and a machine lost takes them with
+it. Turning it on takes a bucket, an access key for it, and a passphrase
+kept somewhere else, the only way to read the copy back: see
+[dashboard/src/backup/README.md](../dashboard/src/backup/README.md#setting-it-up).
+
 The boundary is the same as everywhere: **root never opens a project's file**,
 nor walks its folder. The copy, which measures the data too, and the
 extraction run as the project's own account, in a transient unit with its
@@ -349,6 +357,40 @@ of it before the copy, which archives that copy instead of the live files; a
 running server no service declares fails the snapshot rather than being
 copied file by file. See [docs/manifest.md](manifest.md#a-services-backup-command)
 and [dashboard/src/backup/README.md](../dashboard/src/backup/README.md).
+
+## Updates and reboots
+
+`setup` turns on Debian's unattended-upgrades, which installs the security
+updates every day. Bun and Caddy, which come from outside Debian's security
+archive, are not among them.
+
+**Nothing reboots the machine.** A new kernel is installed and waits: the
+machine keeps running the old one, with the hole the update closed, until
+someone reboots it, and so does every process started before an update that
+replaced one of its libraries. A reboot stops every site at once, for as long
+as the machine takes to boot, and when that happens is the owner's choice, not
+setup's.
+
+**What the owner does.** unattended-upgrades writes `/run/reboot-required`
+after a kernel update, and `/run/reboot-required.pkgs` says which packages
+asked for it. When the file is there, reboot at a quiet hour:
+
+```bash
+ssh you@your-machine 'cat /run/reboot-required.pkgs 2>/dev/null; uname -r'
+ssh you@your-machine 'sudo systemctl reboot'
+```
+
+Everything setup and the deployments installed is enabled and starts again on
+its own: Caddy, the platform's services, each project's units and timers, the
+loopback rule. The monitor's next pass says whether every site answers.
+
+To have it done unattended instead, at a fixed hour and only when an update
+asks for it, tell unattended-upgrades so in a file of your own, which setup
+never rewrites:
+
+```bash
+ssh you@your-machine "printf '%s\n' 'Unattended-Upgrade::Automatic-Reboot \"true\";' 'Unattended-Upgrade::Automatic-Reboot-Time \"04:00\";' | sudo tee /etc/apt/apt.conf.d/60reboot"
+```
 
 ## Previews and the portal
 
@@ -517,6 +559,33 @@ For a restricted project, the portal goes in front **before** its files,
 and comes off **after** them. Placed the other way around, its files would be served
 in the clear by the wildcard block for the length of the deployment, and
 indefinitely if the command was interrupted.
+
+### What a deploy costs
+
+**An app is replaced in place, with a gap.** There is no second copy started
+beside the first and no switch of traffic: step 6 sends the new code over the
+folder the running process was started from, step 8 runs `install` in that
+same folder, and step 9 restarts the service. From the restart until the new
+process listens on its port, Caddy finds nobody there and answers a 502: a
+visitor who arrives in that gap gets an error page, for as long as the app
+takes to start. Between steps 6 and 9, the old process still serves, with the
+new files under it: one that loads code lazily may load a file of the new
+version. If no visitor may see that, deploy at a quiet hour.
+
+**There is no automatic rollback of the code.** The rsync deletes what the new
+version no longer has, and nothing keeps the previous one on the machine. A
+service that does not start fails the deployment at step 9, and one that falls
+within ten seconds fails it at step 10, each saying so; the new code stays in
+place either way, and the site answers 502 until a deployment that works. The
+way back is the previous commit, deployed from your checkout. The one thing a
+deployment puts back by itself is Caddy's configuration: a block Caddy
+refuses, or a reload that fails its check, brings back the previous one. A deployment never touches the data folder, but what
+the new version writes there as it starts, a schema migrated, stays after a
+redeploy of the old one.
+
+A static site has neither cost: its files are sent in place and nothing
+restarts. A visitor during the transfer may get a page of the old version and
+a file of the new.
 
 `--dry-run` prints the generated unit and block, and every command it would run,
 without touching anything, nor running the build, which is the folder's own

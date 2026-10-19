@@ -182,4 +182,5 @@ cd your-project && sitesolide deploy
 Then give the monitor a heartbeat, five minutes:
 [monitor/README.md](../monitor/README.md#alerting-healthchecksio-in-five-minutes).
 Setup does not run a full `apt upgrade`: unattended-upgrades applies the
-security updates every day.
+security updates every day. Nothing reboots the machine for a new kernel:
+see [updates and reboots](concepts.md#updates-and-reboots) for what to do.

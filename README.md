@@ -65,13 +65,27 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
   `sitesolide secrets set API_KEY`, the value typed at a prompt and never
   read back.
 - **Backups.** Every project's data snapshotted hourly into restic, SQLite
-  copied consistently, optionally to an encrypted bucket, restored from the
-  dashboard.
+  copied consistently, restored from the dashboard, and copied encrypted to a
+  bucket once you configure one.
 - **A monitor** that checks every site each minute; give it a heartbeat and it
   notices the machine itself dying. See [monitor/README.md](monitor/README.md).
 - **Agents first-class.** The CLI speaks `--json`, every error carrying a hint,
   and `sitesolide mcp` serves deploy, logs and access to Claude Code, Codex or
   Cursor.
+
+## What it does not do
+
+- **Zero-downtime deploys.** A deploy sends the new code over the running
+  version and restarts the service: a visitor gets a 502 until the new process
+  listens. Nothing keeps the previous version, and the way back is a deploy of
+  the previous commit. See
+  [what a deploy costs](docs/concepts.md#what-a-deploy-costs).
+- **Backups off the machine, by default.** The snapshots stay on the server's
+  disk until you give it a bucket, and a lost server takes them with it.
+- **Reboots.** Security updates install every day, but nothing reboots for a
+  new kernel: that is yours to do, see
+  [updates and reboots](docs/concepts.md#updates-and-reboots).
+- **Failover.** One machine; when it is down, every site is.
 
 ## Documentation
 
