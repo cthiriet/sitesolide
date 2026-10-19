@@ -22,8 +22,11 @@ import { isValidDomain } from "./table";
  * It lives **in the clear** in the Caddy fragment dropped on the VM, because
  * Caddy compares it in the clear: the stanza literally contains
  * `query key=<CODE>` and a cookie comparison. It is therefore readable by
- * anyone who reads `/etc/caddy/locks/`, it travels in the clear in the URL the
- * client receives, and it stays in their browsing history.
+ * anyone who reads the fragment, which is why the gatekeeper writes it 0640,
+ * root's and Caddy's group's: a project's service reads /etc/caddy, and a
+ * fragment open to all handed every site's code to any deployed app. It
+ * travels in the clear in the URL the client receives, and it stays in their
+ * browsing history.
  *
  * What it protects: a preview against a passing visitor, a curious
  * competitor, an indexing engine. What it does not protect: personal data, a

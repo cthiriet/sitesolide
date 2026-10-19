@@ -18,7 +18,8 @@
 # missing: /etc/caddy/locks, which the Caddyfile imports by glob,
 # /etc/caddy/locks-codes.json, an empty table of codes for the deployment
 # account in 0600, and /srv/garde, the door pages' folder. It never changes one
-# that is there.
+# that is there, but to close the locks' fragment, verrous.caddy, to root and
+# Caddy's group when an earlier gatekeeper left it readable by every account.
 #
 # IT LAUNCHES NO TRANSACTION. No `systemctl start` of the gatekeeper, no reload
 # of Caddy: the first transaction will come from the steward, on demand. The
@@ -151,6 +152,11 @@ ssh -n "$SITESOLIDE_SERVER" "
   # Laid when missing, never changed when there: a machine that has locked a
   # preview before carries them already.
   sudo test -d $LOCKS_FOLDER || sudo install -d -m 0755 -o root -g root $LOCKS_FOLDER
+  # The fragment in service carries every code in force in the clear, and a
+  # project's service reads /etc/caddy. This gatekeeper writes it 0640, root's
+  # and Caddy's group's; the one an earlier gatekeeper wrote stayed 0644 until
+  # the next lock. The group first, so that Caddy never meets it closed to it.
+  if sudo test -f $LOCKS_FOLDER/verrous.caddy; then sudo chgrp caddy $LOCKS_FOLDER/verrous.caddy && sudo chmod 0640 $LOCKS_FOLDER/verrous.caddy; fi
   sudo test -e $CODES_FILE || printf '{}\\n' | sudo install -m 0600 -o $DEPLOY_USER -g $DEPLOY_USER /dev/stdin $CODES_FILE
   sudo test -d $DOOR_PAGES_FOLDER || sudo install -d -m 0755 -o root -g root $DOOR_PAGES_FOLDER
   sudo systemctl daemon-reload

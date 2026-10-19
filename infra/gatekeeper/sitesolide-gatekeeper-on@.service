@@ -80,8 +80,9 @@ RuntimeDirectory=sitesolide-gatekeeper
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
 # Everything it creates receives its mode explicitly: the manifest keeps its
-# own, the block is 0644, the locks' fragment 0644, the door page 0644 in a 0755
-# folder, the codes file keeps its own, the result 0644, the backups 0600.
+# own, the block is 0644, the locks' fragment 0640 to Caddy's group, the door
+# page 0644 in a 0755 folder, the codes file keeps its own, the result 0644,
+# the backups 0600.
 UMask=0077
 
 # Two capabilities, for its sole job:

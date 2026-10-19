@@ -167,6 +167,15 @@ describe("bin/deploy-gatekeeper.sh", () => {
     expect(script).toContain("-m 0600 -o $DEPLOY_USER -g $DEPLOY_USER");
   });
 
+  test("it closes the locks' fragment an earlier gatekeeper left open to every account", () => {
+    // Every code in force is in it in the clear, and a project's service
+    // reads /etc/caddy. The gatekeeper writes it 0640 to root and Caddy's
+    // group, but only at the next lock: the one in service stayed 0644, every
+    // site's code readable by any deployed app, until someone changed a lock.
+    // The group first, so that Caddy never meets it closed to its own group.
+    expect(script).toContain("sudo chgrp caddy $LOCKS_FOLDER/verrous.caddy && sudo chmod 0640 $LOCKS_FOLDER/verrous.caddy");
+  });
+
   test("it starts no transaction", () => {
     const code = script.split("\n").filter((line) => !/^\s*#/.test(line));
     for (const line of code) {

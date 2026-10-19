@@ -17,8 +17,9 @@
  *     directory. The unit bounds the writing to the directory of the named
  *     site alone (`ReadWritePaths=/srv/sites/%i`);
  *   - CAP_CHOWN: giving the rewritten manifest back to its owner, the
- *     deployment account. The mode is set before the owner, while the file
- *     still belongs to root: afterwards, `fchmod` would demand CAP_FOWNER;
+ *     deployment account, and the locks' fragment to Caddy's group. The mode
+ *     is set before the owner, while the file still belongs to root:
+ *     afterwards, `fchmod` would demand CAP_FOWNER;
  *   - nothing for /etc/caddy/sites, /etc/caddy/locks nor
  *     /run/sitesolide-gatekeeper, root's; CAP_DAC_OVERRIDE again for
  *     /etc/caddy/locks-codes.json, the deployment account's in 0600, which
@@ -58,6 +59,7 @@ import { FRAGMENT_NAME, lockField } from "../../borrowed/locks";
 import { isValidSlug } from "../../borrowed/manifest";
 import { isValidSlug as isSitesFolder } from "../../borrowed/table";
 import { parseEnvBytes } from "../secrets/envfile";
+import { readGroup } from "../secrets/system";
 import { BACKUPS_NAME, HOLDER_NAME, LOCK_NAME } from "./instance";
 import {
   judgeLock,
@@ -111,6 +113,18 @@ export type MachineConfig = {
   doorPagesDir: string;
   /** root:root for a block, like bin/deploy-caddy.sh. null: unchanged, for the workstation. */
   blockOwner: { uid: number; gid: number } | null;
+  /**
+   * The group Caddy reads the locks' fragment with, `caddy` on the machine,
+   * looked up by name in `groupFile` when the fragment is written. The
+   * fragment carries every code in force in the clear, and a project's
+   * service reads /etc/caddy: it is 0640, its owner's and this group's, never
+   * another account's. Absent or null: the group stays the one the file was
+   * created with, for the workstation and for the installer, which never
+   * writes it.
+   */
+  locksGroup?: string | null;
+  /** /etc/group, where `locksGroup` is looked up. */
+  groupFile?: string;
   /** Where to reach Caddy: the loopback and port 443 in production. */
   probeConfig: { address: string; port: number; ca: string | null };
   /** caddy.service */
@@ -412,6 +426,23 @@ export function createMachine(config: MachineConfig): GeneralMachine {
   function blockName(slug: string): string {
     if (!isValidSlug(slug)) throw new Error("invalid slug");
     return `${slug}.caddy`;
+  }
+
+  /**
+   * Whom the locks' fragment belongs to: the blocks' owner, root, and Caddy's
+   * group, the one account beside root that has to read it. A group the
+   * machine does not have is a refusal, never a guess: 0640 for the wrong
+   * group would close every site to Caddy itself, and the transaction
+   * restores rather than reload that.
+   */
+  function fragmentOwner(): { uid: number; gid: number } | null {
+    const group = config.locksGroup ?? null;
+    if (group === null) return config.blockOwner;
+    const groupFile = config.groupFile ?? "/etc/group";
+    const parsed = readFileSafely(groupFile);
+    const gid = parsed === null ? null : readGroup(decoder.decode(parsed.bytes), group);
+    if (gid === null) throw new Error(`the group ${group} is not in ${groupFile}: Caddy could not read the preview locks`);
+    return { uid: config.blockOwner?.uid ?? process.getuid?.() ?? 0, gid };
   }
 
   /**
@@ -743,9 +774,18 @@ export function createMachine(config: MachineConfig): GeneralMachine {
       return parsed === null ? null : decoder.decode(parsed.bytes);
     },
 
+    /**
+     * 0640, never 0644 like the blocks: the fragment writes every code in
+     * force in the clear, and the unit of a project's service hides /srv and
+     * /etc/sitesolide from it, not /etc/caddy. Readable by all, it handed
+     * every site's code to whatever app a token deploys, and the codes file's
+     * 0600 kept nothing. Caddy reads it through its group, root through its
+     * capability.
+     */
     async writeLocksFragment(text) {
       requireFolder(config.locksFolder);
-      writeAtomically(config.locksFolder, FRAGMENT_NAME, text, 0o644, config.blockOwner);
+      const owner = fragmentOwner();
+      writeAtomically(config.locksFolder, FRAGMENT_NAME, text, 0o640, owner);
     },
 
     async removeLocksFragment() {

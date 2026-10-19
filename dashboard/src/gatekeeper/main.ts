@@ -24,7 +24,7 @@ export type Environment = Record<string, string | undefined>;
  * collector. On the workstation, a test tree:
  *
  *   GATEKEEPER_ACTION=on SITES_DIR=$E/srv BLOCKS_FOLDER=$E/sites CADDYFILE=$E/Caddyfile \
- *     CADDY_ENV_FILE=$E/cloudflare.env RUN_FOLDER=$E/run BLOCK_OWNER= \
+ *     CADDY_ENV_FILE=$E/cloudflare.env RUN_FOLDER=$E/run BLOCK_OWNER= LOCKS_GROUP= \
  *     LOCKS_FOLDER=$E/locks CODES_FILE=$E/locks-codes.json DOOR_PAGES_DIR=$E/garde \
  *     PROBE_PORT=8443 PROBE_CA=$E/ca.pem SYSTEMCTL=/usr/bin/false \
  *     bun gatekeeper.ts sitesolide-gatekeeper-on@attempt.service
@@ -53,6 +53,11 @@ export function configFrom(env: Environment, systemctl?: Systemctl): MachineConf
     codesFile: env.CODES_FILE ?? CODES_FILE,
     doorPagesDir: env.DOOR_PAGES_DIR ?? DOOR_PAGES_DIR,
     blockOwner,
+    // The group the Caddy package runs its service with, the one account
+    // beside root that reads the preview codes. Empty: unchanged, for the
+    // workstation.
+    locksGroup: env.LOCKS_GROUP === "" ? null : (env.LOCKS_GROUP ?? "caddy"),
+    groupFile: env.GROUP_FILE ?? "/etc/group",
     probeConfig: {
       address: env.PROBE_ADDRESS ?? "127.0.0.1",
       port,

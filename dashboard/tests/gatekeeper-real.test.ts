@@ -240,15 +240,41 @@ describe("the preview locks", () => {
     expect(readFileSync(join(root, "elsewhere.json"), "utf8")).toBe("{}\n");
   });
 
-  test("the fragment keeps the name the machine carries, 0644, written by rename and removed", async () => {
+  test("the fragment keeps the name the machine carries, 0640, written by rename and removed", async () => {
     const { machine, config } = mount();
     expect(await machine.readLocksFragment()).toBeNull();
     await machine.writeLocksFragment("# Preview locks\n");
     expect(readdirSync(config.locksFolder)).toEqual(["verrous.caddy"]);
-    expect(statSync(join(config.locksFolder, "verrous.caddy")).mode & 0o777).toBe(0o644);
+    expect(statSync(join(config.locksFolder, "verrous.caddy")).mode & 0o777).toBe(0o640);
     expect(await machine.readLocksFragment()).toBe("# Preview locks\n");
     await machine.removeLocksFragment();
     await machine.removeLocksFragment();
+    expect(readdirSync(config.locksFolder)).toEqual([]);
+  });
+
+  test("the fragment, every code in force in the clear, is read by root and Caddy's group alone", async () => {
+    // A project's service reads /etc/caddy: its unit hides /srv and
+    // /etc/sitesolide, never Caddy's configuration. A fragment any account
+    // reads hands every site's code to whatever app a token deploys, the
+    // codes file's 0600 notwithstanding.
+    const { config, root } = mount();
+    const created = statSync(config.locksFolder).gid;
+    const gid = (process.getgroups?.() ?? []).find((one) => one !== created) ?? created;
+    const groups = join(root, "group");
+    writeFileSync(groups, `wheel:x:0:\ncaddy:x:${gid}:\n`);
+    const machine = createMachine({ ...config, locksGroup: "caddy", groupFile: groups });
+    await machine.writeLocksFragment("# Preview locks\n\t@lock_key_sample query key=K7M2PQ\n");
+    const written = statSync(join(config.locksFolder, "verrous.caddy"));
+    expect(written.mode & 0o777).toBe(0o640);
+    expect(written.gid).toBe(gid);
+  });
+
+  test("a machine without Caddy's group refuses the fragment rather than guess who reads it", async () => {
+    const { config, root } = mount();
+    const groups = join(root, "group");
+    writeFileSync(groups, "wheel:x:0:\n");
+    const machine = createMachine({ ...config, locksGroup: "caddy", groupFile: groups });
+    await expect(machine.writeLocksFragment("# Preview locks\n")).rejects.toThrow("caddy");
     expect(readdirSync(config.locksFolder)).toEqual([]);
   });
 

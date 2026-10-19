@@ -103,7 +103,10 @@ export type LockFiles = {
   writeCodes: (text: string, owner: { uid: number; gid: number } | null) => Promise<void>;
   /** `/etc/caddy/locks/verrous.caddy`, null when missing. */
   readLocksFragment: () => Promise<string | null>;
-  /** Atomic, root 0644 as Caddy's other files. */
+  /**
+   * Atomic, root's and Caddy's group's in 0640, unlike Caddy's other files:
+   * it carries every code in force in the clear.
+   */
   writeLocksFragment: (text: string) => Promise<void>;
   removeLocksFragment: () => Promise<void>;
   /** Every directory of /srv/sites and its manifest's `lock`. Throws when one does not read. */

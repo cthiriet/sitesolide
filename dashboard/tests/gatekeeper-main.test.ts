@@ -121,6 +121,9 @@ describe("configFrom", () => {
       caddy: "/usr/bin/caddy",
       runFolder: "/run/sitesolide-gatekeeper",
       blockOwner: { uid: 0, gid: 0 },
+      // The preview codes are read by root and Caddy's group alone.
+      locksGroup: "caddy",
+      groupFile: "/etc/group",
       probeConfig: { address: "127.0.0.1", port: 443, ca: null },
       caddyUnit: "caddy.service",
       collectorUnit: "sitesolide-collector.service",
@@ -131,5 +134,6 @@ describe("configFrom", () => {
     expect(() => configFrom({ BLOCK_OWNER: "root" })).toThrow();
     expect(() => configFrom({ PROBE_PORT: "https" })).toThrow();
     expect(configFrom({ BLOCK_OWNER: "" }).blockOwner).toBeNull();
+    expect(configFrom({ LOCKS_GROUP: "" }).locksGroup).toBeNull();
   });
 });
