@@ -117,6 +117,28 @@ describe("/verifier", () => {
     expect(routes().verify(verification({ ...base, Origin: ORIGIN })).status).toBe(200);
   });
 
+  test("a WebSocket handshake from another origin is refused, though it is a GET", () => {
+    // A sibling project under the zone is the same site to the browser: the
+    // Lax cookie goes with its page's handshake to this host, and a socket's
+    // messages are readable by the page that opened it. Every browser sends
+    // the Origin with a handshake, so the site's own pages keep theirs.
+    const token = issueToken(KEY, HOST, 1_800_000_000 + 60);
+    const base = {
+      "X-Portal-Hote": HOST,
+      Cookie: `__Host-portal=${token}`,
+      "X-Forwarded-Method": "GET",
+      Upgrade: "websocket",
+      "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+      "Sec-WebSocket-Version": "13",
+    };
+    expect(routes().verify(verification({ ...base, Origin: "https://agency.test-zone.invalid" })).status).toBe(403);
+    expect(routes().verify(verification(base)).status).toBe(403);
+    expect(routes().verify(verification({ ...base, Origin: ORIGIN })).status).toBe(200);
+    // Caddy may keep the version without the Upgrade it treats as hop by hop.
+    const { Upgrade: _, ...withoutUpgrade } = base;
+    expect(routes().verify(verification({ ...withoutUpgrade, Origin: "https://agency.test-zone.invalid" })).status).toBe(403);
+  });
+
   test("a well signed password access token with no access behind it does not get through", () => {
     const token = issueToken(KEY, HOST, 1_800_000_000 + 60, "AAAAAAAAAAAAAAAA");
     const response = routes().verify(verification({ "X-Portal-Hote": HOST, Cookie: `__Host-portal=${token}` }));
@@ -301,6 +323,33 @@ describe("a password access", () => {
     expect(r.verify(request).status).toBe(403);
   });
 
+  test("its sign-in does not reset the site's failure count: it proves nothing of the owner's password", async () => {
+    // Whoever holds a password access for one site must not be able to clear
+    // the rate limiting of the owner's password there by signing in between
+    // failures: the owner's password opens every site as admin.
+    const { r } = withGrant();
+    for (let i = 0; i < 3; i++) expect((await r.signIn(signIn({ motdepasse: "wrong" }))).status).toBe(401);
+    expect((await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD }))).status).toBe(303);
+    expect((await r.signIn(signIn({ motdepasse: "wrong" }))).status).toBe(401);
+    expect((await r.signIn(signIn({ motdepasse: PASSWORD }))).status).toBe(429);
+  });
+
+  test("a site's failures are forgotten after a quiet day: a burst long past does not slow every later typo", async () => {
+    // Only the owner's own success clears them, so without a quiet period a
+    // burst of failures left every later typo on that site, a guest's
+    // included, waiting longer each time, up to an hour, for good.
+    let now = START;
+    const { r } = withGrant({}, () => now);
+    for (let i = 0; i < 4; i++) expect((await r.signIn(signIn({ motdepasse: "wrong" }))).status).toBe(401);
+    now += 10_000;
+    expect((await r.signIn(signIn({ motdepasse: "wrong" }))).status).toBe(401);
+    expect((await r.signIn(signIn({ motdepasse: "wrong" }))).status).toBe(429);
+    now += 24 * 3_600_000 + 10_000;
+    expect((await r.signIn(signIn({ motdepasse: "wrong" }))).status).toBe(401);
+    expect((await r.signIn(signIn({ motdepasse: "wrong" }))).status).toBe(401);
+    expect((await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD }))).status).toBe(303);
+  });
+
   test("before the steward writes its projection, a guest of the portal's own table still gets in, as visitor", async () => {
     const guests = memoryGuests();
     guests.add({ id: "InViTeInViTe0001", host: HOST, label: "Alice", createdAt: START, expiresAt: null, seenAt: null }, guestHash(ACCESS_PASSWORD));
@@ -334,9 +383,10 @@ describe("/_portal/deconnexion", () => {
   test("with a provider, goes on to the portal's host to end its session too, with a ticket for this host", () => {
     // A page rather than a 303: a site whose CSP says form-action 'self'
     // would see its sign-out form refused on a redirect to another host.
+    const owner = issueToken(KEY, HOST, 1_800_000_000 + 60);
     const request = new Request("http://127.0.0.1:3026/_portal/deconnexion", {
       method: "POST",
-      headers: { "X-Portal-Hote": HOST, Origin: ORIGIN },
+      headers: { "X-Portal-Hote": HOST, Origin: ORIGIN, Cookie: `__Host-portal=${owner}` },
     });
     const response = routes({ settings: SETTINGS }).signOut(request);
     expect(response.status).toBe(200);
@@ -347,8 +397,29 @@ describe("/_portal/deconnexion", () => {
       const next = new URL(page.match(/<meta http-equiv="refresh" content="0; url=([^"]+)">/)![1]!);
       expect(next.origin).toBe("https://portal.test-zone.invalid");
       expect(next.pathname).toBe("/oidc/signout");
-      expect(readSignOut(KEY, next.searchParams.get("ticket"), START / 1000)).toBe(HOST);
+      expect(readSignOut(KEY, next.searchParams.get("ticket"), START / 1000)).toEqual({ host: HOST, who: "owner" });
     });
+  });
+
+  test("with a provider, the ticket names the person signing out, and nobody gets one who was not in", async () => {
+    function post(cookie: string | null): Response {
+      const headers: Record<string, string> = { "X-Portal-Hote": HOST, Origin: ORIGIN };
+      if (cookie !== null) headers.Cookie = `__Host-portal=${cookie}`;
+      return routes({ settings: SETTINGS }).signOut(new Request("http://127.0.0.1:3026/_portal/deconnexion", { method: "POST", headers }));
+    }
+    const identity = issueIdentityToken(KEY, HOST, 1_800_000_000 + 60, { email: "alice@acme.test", name: null });
+    const page = await post(identity).text();
+    const next = new URL(page.match(/<meta http-equiv="refresh" content="0; url=([^"]+)">/)![1]!.replaceAll("&amp;", "&"));
+    expect(readSignOut(KEY, next.searchParams.get("ticket"), START / 1000)).toEqual({ host: HOST, who: "alice@acme.test" });
+
+    // A stranger, an Origin being whatever a client outside a browser writes,
+    // and a password access, which no provider vouched for: home, no ticket.
+    for (const cookie of [null, "garbage", issueToken(KEY, HOST, 1_800_000_000 + 60, "PaSsWoRdAcCeSs01")]) {
+      const response = post(cookie);
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe("/");
+      expect(response.headers.get("set-cookie")).toInclude("Max-Age=0");
+    }
   });
 });
 

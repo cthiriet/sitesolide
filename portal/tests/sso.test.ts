@@ -790,6 +790,46 @@ describe("what a session, a flow and a sign-out may still do", () => {
     expect(providerVisits((await browser.follow(signInAt(SITE))).visited)).toBe(0);
   });
 
+  /** The portal address a site's sign-out page sends the browser to, or null when it sends nowhere. */
+  async function ticketOf(response: Response): Promise<string | null> {
+    const match = (await response.text()).match(/<meta http-equiv="refresh" content="0; url=([^"]+)">/);
+    return match === null ? null : match[1]!.replaceAll("&amp;", "&");
+  }
+
+  test("a sign-out posted without any cookie mints no ticket that ends someone else's session", async () => {
+    // Outside a browser the Origin is whatever the sender writes: a stranger
+    // posting to a site's sign-out must not come away with a link that signs
+    // whoever opens it out of the portal.
+    share(SITE, { "alice@acme.test": "visitor" });
+    const victim = new Browser();
+    await victim.follow(signInAt(SITE));
+    expect(victim.cookie(PORTAL_HOST, "portal-session")).toBeDefined();
+
+    const stranger = await signOutOf(new Browser(), SITE);
+    const next = await ticketOf(stranger);
+    if (next !== null) await victim.get(next);
+    expect(victim.cookie(PORTAL_HOST, "portal-session")).toBeDefined();
+  });
+
+  test("a person's sign-out link ends their own portal session, never another person's", async () => {
+    share(SITE, { "alice@acme.test": "visitor", "bob@acme.test": "visitor" });
+    provider.next = { email: "bob@acme.test" };
+    const bob = new Browser();
+    await bob.follow(signInAt(SITE));
+    provider.next = {};
+    const alice = new Browser();
+    await alice.follow(signInAt(SITE));
+
+    // Alice's own sign-out link, opened in Bob's browser, leaves Bob in.
+    const next = await ticketOf(await signOutOf(alice, SITE));
+    expect(next).not.toBeNull();
+    await bob.get(next!);
+    expect(bob.cookie(PORTAL_HOST, "portal-session")).toBeDefined();
+    // And in her own browser it does what it is for.
+    await alice.get(next!);
+    expect(alice.cookie(PORTAL_HOST, "portal-session")).toBeUndefined();
+  });
+
   test("a sign-out link forged, expired or replayed elsewhere signs nobody out", async () => {
     share(SITE, { "alice@acme.test": "visitor" });
     const browser = new Browser();

@@ -5,6 +5,7 @@ import {
   HANDOFF_PER_EMAIL,
   HANDOFF_TTL_MS,
   IDENTITY_DURATION_S,
+  OWNER_SIGN_OUT,
   SIGN_OUT_DURATION_S,
   bindingHash,
   drawBinding,
@@ -134,19 +135,27 @@ describe("the portal's session", () => {
 });
 
 describe("the sign-out ticket", () => {
-  test("names the site it came from, for a minute", () => {
-    const ticket = issueSignOut(KEY, HOST, NOW_S);
-    expect(readSignOut(KEY, ticket, NOW_S + SIGN_OUT_DURATION_S - 1)).toBe(HOST);
+  test("names the site it came from and who signed out, for a minute", () => {
+    const ticket = issueSignOut(KEY, HOST, ALICE.email, NOW_S);
+    expect(readSignOut(KEY, ticket, NOW_S + SIGN_OUT_DURATION_S - 1)).toEqual({ host: HOST, who: ALICE.email });
     expect(readSignOut(KEY, ticket, NOW_S + SIGN_OUT_DURATION_S)).toBeNull();
+    expect(readSignOut(KEY, issueSignOut(KEY, HOST, OWNER_SIGN_OUT, NOW_S), NOW_S)).toEqual({ host: HOST, who: OWNER_SIGN_OUT });
   });
 
   test("is no flow, no session, and nothing forged or from another key", () => {
     expect(readSignOut(KEY, issueFlow(KEY, FLOW, NOW_S), NOW_S)).toBeNull();
     expect(readSignOut(KEY, issueSession(KEY, ALICE, NOW_S), NOW_S)).toBeNull();
-    expect(readSession(KEY, issueSignOut(KEY, HOST, NOW_S), NOW_S)).toBeNull();
-    expect(readSignOut(OTHER_KEY, issueSignOut(KEY, HOST, NOW_S), NOW_S)).toBeNull();
-    expect(readSignOut(KEY, issueSignOut(KEY, "Not A Host", NOW_S), NOW_S)).toBeNull();
+    expect(readSession(KEY, issueSignOut(KEY, HOST, ALICE.email, NOW_S), NOW_S)).toBeNull();
+    expect(readSignOut(OTHER_KEY, issueSignOut(KEY, HOST, ALICE.email, NOW_S), NOW_S)).toBeNull();
+    expect(readSignOut(KEY, issueSignOut(KEY, "Not A Host", ALICE.email, NOW_S), NOW_S)).toBeNull();
     expect(readSignOut(KEY, null, NOW_S)).toBeNull();
+  });
+
+  test("names nobody else: no ticket without who signed out, nor one naming what is not an email", () => {
+    const key = purposeKey(KEY, "sign-out");
+    expect(readSignOut(KEY, seal(key, { h: HOST, e: NOW_S + 30 }), NOW_S)).toBeNull();
+    expect(readSignOut(KEY, issueSignOut(KEY, HOST, "Alice@Acme.test", NOW_S), NOW_S)).toBeNull();
+    expect(readSignOut(KEY, issueSignOut(KEY, HOST, "anyone", NOW_S), NOW_S)).toBeNull();
   });
 });
 

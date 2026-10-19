@@ -234,6 +234,56 @@ describe.skipIf(CADDY === null)("the fragment of a protected site, in Caddy", ()
     expect(here.status).toBe(200);
   });
 
+  test("a WebSocket handshake from another origin is refused at the door, the site's own goes through", async () => {
+    // A GET, which the portal lets through from anywhere, but whose socket a
+    // sibling's page reads: the portal tells it by Origin, Upgrade and
+    // Sec-WebSocket-Key, which forward_auth must hand it as the browser sent
+    // them. Measured here rather than assumed, Upgrade being hop by hop: a
+    // Caddy that dropped all three would leave the refusal in the portal's
+    // tests and the sockets open in production. A raw socket, since fetch
+    // writes neither Connection nor Upgrade.
+    const cookie = await signIn();
+    async function handshake(from: string): Promise<string> {
+      const { promise, resolve } = Promise.withResolvers<string>();
+      let received = "";
+      const socket = await Bun.connect({
+        hostname: "127.0.0.1",
+        port: caddyPort,
+        socket: {
+          data(_socket, chunk) {
+            received += new TextDecoder().decode(chunk);
+            if (received.includes("\r\n")) resolve(received.split("\r\n")[0]!);
+          },
+          close() {
+            resolve(received.split("\r\n")[0] ?? "");
+          },
+          error() {
+            resolve("");
+          },
+        },
+      });
+      socket.write(
+        [
+          "GET /live HTTP/1.1",
+          `Host: ${HOST}:${caddyPort}`,
+          "Connection: Upgrade",
+          "Upgrade: websocket",
+          "Sec-WebSocket-Version: 13",
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+          `Origin: ${from}`,
+          `Cookie: ${cookie}`,
+          "",
+          "",
+        ].join("\r\n"),
+      );
+      const line = await Promise.race([promise, Bun.sleep(5000).then(() => "no answer")]);
+      socket.end();
+      return line;
+    }
+    expect(await handshake(`http://agency.localhost:${caddyPort}`)).toStartWith("HTTP/1.1 403");
+    expect(await handshake(origin)).not.toStartWith("HTTP/1.1 403");
+  });
+
   test("an X-Portal-Hote forged by the visitor is overwritten by Caddy", async () => {
     // The test cookie is signed for sample.localhost. If the visitor could
     // choose the host announced to the portal, he could also have a cookie

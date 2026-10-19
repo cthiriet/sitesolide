@@ -248,22 +248,37 @@ export function readSession(key: Uint8Array, token: string | null, nowS: number)
 // --- The sign-out ----------------------------------------------------------------
 
 /**
- * What a site's sign-out hands the portal's host: the host it came from,
- * sealed, for a minute. Only a POST from the site's own origin mints one, so
- * a stranger can neither sign someone out of the portal nor make its host
- * send them anywhere but back to a site Caddy announced.
+ * Who a sign-out ticket is for: the verified email of the person signing
+ * out, or the owner, whose password opens every site and who ends whatever
+ * session the browser holds.
  */
-export function issueSignOut(key: Uint8Array, host: string, nowS: number): string {
-  return seal(purposeKey(key, "sign-out"), { h: host, e: nowS + SIGN_OUT_DURATION_S });
+export const OWNER_SIGN_OUT = "owner";
+
+export type SignOut = { host: string; who: string };
+
+/**
+ * What a site's sign-out hands the portal's host: the host it came from and
+ * who signed out, sealed, for a minute.
+ *
+ * Only someone who was in gets one, from a POST of the site's own origin; an
+ * Origin is written by whoever sends the request outside a browser, so the
+ * POST alone proves nothing. And the ticket ends only the session of the
+ * person it names: without that, a ticket anyone could mint was a link that
+ * signed whoever opened it out of the portal. Nor does it send anywhere but
+ * back to a site Caddy announced.
+ */
+export function issueSignOut(key: Uint8Array, host: string, who: string, nowS: number): string {
+  return seal(purposeKey(key, "sign-out"), { h: host, w: who, e: nowS + SIGN_OUT_DURATION_S });
 }
 
-/** The site a sign-out came from, unexpired; or `null`. */
-export function readSignOut(key: Uint8Array, token: string | null, nowS: number): string | null {
+/** The site a sign-out came from and who signed out, unexpired; or `null`. */
+export function readSignOut(key: Uint8Array, token: string | null, nowS: number): SignOut | null {
   const fields = unseal(purposeKey(key, "sign-out"), token);
   if (fields === null) return null;
-  const { h, e } = fields;
+  const { h, w, e } = fields;
   if (typeof e !== "number" || e <= nowS || e > nowS + SIGN_OUT_DURATION_S) return null;
-  return typeof h === "string" && isValidHost(h) ? h : null;
+  if (typeof w !== "string" || (w !== OWNER_SIGN_OUT && readIdentity({ e: w, n: null })?.email !== w)) return null;
+  return typeof h === "string" && isValidHost(h) ? { host: h, who: w } : null;
 }
 
 // --- The codes -------------------------------------------------------------------

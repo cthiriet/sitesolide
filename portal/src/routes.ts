@@ -6,7 +6,7 @@
 import { remainingWait, isAcceptableSubmission } from "../borrowed/auth";
 import { grantActor, grantExpiration, type PasswordGrant, type Role } from "./access";
 import type { AuditStore, NewEvent } from "./database";
-import { issueSignOut, IDENTITY_DURATION_S } from "./handoff";
+import { issueSignOut, IDENTITY_DURATION_S, OWNER_SIGN_OUT } from "./handoff";
 import type { Settings } from "./oidc";
 import { signedOutPage, signInPage } from "./page";
 import type { AccessReader } from "./projection";
@@ -24,6 +24,7 @@ import {
   isAcceptableOrigin,
   setCookie,
   isAcceptableRequest,
+  isWebSocketHandshake,
   returnForRequest,
   safeReturnTo,
   type Bearer,
@@ -75,6 +76,9 @@ export type Routes = {
 function refuse(text: string, status: number): Response {
   return new Response(text, { status, headers: { "Cache-Control": "no-store" } });
 }
+
+/** How long a site's sign-in failures are kept once nobody fails there any more. */
+export const QUIET_PERIOD_MS = 24 * 60 * 60 * 1000;
 
 export function createRoutes(options: Options, clock: () => number = Date.now): Routes {
   /**
@@ -197,7 +201,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
         role = "visitor";
       }
 
-      if (!isAcceptableRequest(method, req.headers.get("origin"), host, options.online)) {
+      if (!isAcceptableRequest(method, req.headers.get("origin"), host, options.online, isWebSocketHandshake(req.headers))) {
         return refuse("portal: origin refused", 403);
       }
       // Caddy copies these onto the request it sends the site, after taking
@@ -228,8 +232,14 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       const returnTo = safeReturnTo(form.get("retour"));
 
       const now = clock();
-      // Counted by site: its own domain is no second set of attempts.
-      const record = attempts.get(site) ?? { failures: 0, lastAt: 0 };
+      // Counted by site: its own domain is no second set of attempts. Forgotten
+      // after a quiet day: only the owner's own success clears them otherwise,
+      // and a burst long past would make every later typo on the site, a
+      // guest's included, wait up to an hour, for good. An attacker who waits
+      // a day between bursts gets four tries a day, fewer than the hour's
+      // wait already lets through.
+      const kept = attempts.get(site);
+      const record = kept === undefined || now - kept.lastAt >= QUIET_PERIOD_MS ? { failures: 0, lastAt: 0 } : kept;
       const wait = remainingWait(record.failures, record.lastAt, now);
       if (wait > 0) {
         const seconds = Math.ceil(wait / 1000);
@@ -249,7 +259,13 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       if (options.key !== null) {
         const grant = options.access.passwordByHash(guestHash(submitted), site, now);
         if (grant !== null) {
-          attempts.delete(site);
+          // The site's failures are left as they stand. They are attempts at
+          // the owner's password as much as at any access, and knowing one
+          // access proves nothing of the owner's: clearing them here let
+          // whoever holds an access sign in between failures and try the
+          // owner's password, which opens every site as admin, unthrottled.
+          // Only the owner's own success clears them, below.
+          //
           // A name given before the registry is not an email: the activity shows it beside the access's identifier.
           const actor = grantActor(grant);
           audit({ actor, action: "portal.signin", target: host, detail: actor === grant.who ? { method: "password-access" } : { method: "password-access", name: grant.who } }, now);
@@ -318,10 +334,16 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       // The cookie is erased even if it was no longer valid: a dead cookie
       // would otherwise stay in the browser.
       const cleared = { "Set-Cookie": clearCookie(options.online), "Cache-Control": "no-store" };
-      if (options.key === null || settings === null) {
+      // The ticket names who signs out, and ends that person's portal session
+      // alone; the owner's ends whatever session the browser holds. A stranger
+      // gets none, nor does a password access, whom no provider vouched for
+      // and who has no session of its own to end: a ticket minted for anyone
+      // who posts here was a link that signed whoever opened it out.
+      const who = bearer === null ? null : bearer.identity !== undefined ? bearer.identity.email : bearer.guest === null ? OWNER_SIGN_OUT : null;
+      if (options.key === null || settings === null || who === null) {
         return new Response(null, { status: 303, headers: { Location: "/", ...cleared } });
       }
-      const next = `${settings.portalOrigin}/oidc/signout?${new URLSearchParams({ ticket: issueSignOut(options.key, host, nowS) })}`;
+      const next = `${settings.portalOrigin}/oidc/signout?${new URLSearchParams({ ticket: issueSignOut(options.key, host, who, nowS) })}`;
       return new Response(signedOutPage(next), { status: 200, headers: { ...doorHeaders(), ...cleared } });
     },
 

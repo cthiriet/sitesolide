@@ -354,9 +354,24 @@ export function isAcceptableOrigin(origin: string | null, host: string, online: 
  * have to write. It counts because another subdomain of the zone is, to the
  * browser, the same site: `SameSite`, `Lax` as much as `Strict`, would let
  * through a POST coming from a client's preview. The Origin does not.
+ *
+ * A WebSocket handshake is a GET and still needs the Origin: a page on a
+ * sibling host opens one with the visitor's cookie, the same site again, and
+ * unlike a GET's answer, which the browser keeps from that page, a socket's
+ * messages are the page's to read. Every browser sends the Origin with a
+ * handshake, so the site's own pages lose nothing.
  */
-export function isAcceptableRequest(method: string, origin: string | null, host: string, online: boolean): boolean {
-  return SAFE_METHODS.has(method.toUpperCase()) || isAcceptableOrigin(origin, host, online);
+export function isAcceptableRequest(method: string, origin: string | null, host: string, online: boolean, handshake = false): boolean {
+  return (SAFE_METHODS.has(method.toUpperCase()) && !handshake) || isAcceptableOrigin(origin, host, online);
+}
+
+/**
+ * Is this request the opening of a WebSocket? `Sec-WebSocket-Key` as much as
+ * `Upgrade`: the second is a hop-by-hop header a proxy may drop on the way,
+ * the first only a handshake carries, and a browser never lets a page set it.
+ */
+export function isWebSocketHandshake(headers: Headers): boolean {
+  return headers.has("sec-websocket-key") || /\bwebsocket\b/i.test(headers.get("upgrade") ?? "");
 }
 
 /**

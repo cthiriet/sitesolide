@@ -47,6 +47,7 @@ import {
   transactionSuffix,
   DASHBOARD_REAUTH_S,
   IDENTITY_DURATION_S,
+  OWNER_SIGN_OUT,
   type Audience,
   type HandoffStore,
 } from "./handoff";
@@ -413,12 +414,20 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       if (options.key === null || options.settings === null) {
         return page(404, "Not available.", "Signing in with a company account isn't configured on this server.", null);
       }
-      const host = readSignOut(options.key, new URL(req.url).searchParams.get("ticket"), Math.floor(clock() / 1000));
-      if (host === null) {
+      const nowS = Math.floor(clock() / 1000);
+      const ticket = readSignOut(options.key, new URL(req.url).searchParams.get("ticket"), nowS);
+      if (ticket === null) {
         return page(400, "This sign-out link has expired.", "Go back to the site and sign out again.", null);
       }
-      return redirect(`${siteOrigin(host)}/`, [
-        clearCookie(online, SESSION_SUFFIX),
+      // The session ends only when it is the one of the person who signed
+      // out, or for the owner: a ticket carried to another browser leaves
+      // whoever is signed in there alone. The mark that makes the next
+      // sign-in ask which account is set either way; it only makes the
+      // provider ask once more.
+      const session = readSession(options.key, readCookie(req.headers.get("cookie"), cookieName(online, SESSION_SUFFIX)), nowS);
+      const ends = ticket.who === OWNER_SIGN_OUT || session?.identity.email === ticket.who;
+      return redirect(`${siteOrigin(ticket.host)}/`, [
+        ...(ends ? [clearCookie(online, SESSION_SUFFIX)] : []),
         setCookie("1", online, SIGNED_OUT_DURATION_S, SIGNED_OUT_SUFFIX),
       ]);
     },

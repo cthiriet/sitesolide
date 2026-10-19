@@ -13,6 +13,7 @@ import {
   isAcceptableOrigin,
   setCookie,
   isAcceptableRequest,
+  isWebSocketHandshake,
   returnForRequest,
   safeReturnTo,
   issueIdentityToken,
@@ -206,6 +207,15 @@ describe("the origin", () => {
       expect(isAcceptableRequest(method, "https://agency.test-zone.invalid", HOST, true)).toBe(false);
       expect(isAcceptableRequest(method, `https://${HOST}`, HOST, true)).toBe(true);
     }
+  });
+
+  test("a WebSocket handshake requires the origin, though it is a GET", () => {
+    expect(isAcceptableRequest("GET", "https://agency.test-zone.invalid", HOST, true, true)).toBe(false);
+    expect(isAcceptableRequest("GET", null, HOST, true, true)).toBe(false);
+    expect(isAcceptableRequest("GET", `https://${HOST}`, HOST, true, true)).toBe(true);
+    expect(isWebSocketHandshake(new Headers({ "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==" }))).toBe(true);
+    expect(isWebSocketHandshake(new Headers({ Upgrade: "WebSocket" }))).toBe(true);
+    expect(isWebSocketHandshake(new Headers({ Accept: "text/html" }))).toBe(false);
   });
 });
 
