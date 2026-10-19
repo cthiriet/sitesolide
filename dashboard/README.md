@@ -1658,6 +1658,7 @@ answer, into `failure`, 502.
 | Path traversal | The tar reader's refusals, the extraction's `O_EXCL` and `O_NOFOLLOW`, the unit that sees only the staging directory; on root's side, slugs and deployment ids checked against their shape before they enter a path. |
 | Resource exhaustion | Upload counted while it streams (Bun's own cap does not hold for a chunked body), 100 MiB; extraction 512 MiB, 20,000 entries, 256 MiB of memory, five minutes; `install` 1G and fifteen minutes; three deployments running at a time on the machine, claimed when the archive arrives, one per project; three waiting for their archive per token, the newest replacing the oldest, and none of them counted against the machine; an archive that does not arrive in fifteen minutes expires. |
 | A token reaching another project | The slug decision on the steward, again on the installer; secrets limited to `<slug>.env`; `install` runs without the loopback, where the other projects listen, and the extraction without any network. |
+| A token naming its project after a file not its own | The unit reads every declared file as root, whoever owns it, and the slug names the file: `dashboard-backup` would read the backups' keys, `cms-smtp` cms's own `cms-smtp.env`. The installer refuses, before anything is written, `secret-taken`, a file kept for root, a declared file there that is not a plain file of `site-<slug>`, one there before that account exists, and any file another site holds that the new project would take by its name, declared or not (src/installer/claims.ts, the attachment of src/secrets/scope.ts); it checks the declared files again right before the restart. The steward refuses a new slug starting with a platform project's name and a dash, `dashboard-*`, `reserved`, keeping those names free for the files the platform lays later. |
 | A replayed request | The installer refuses a request older than ten minutes or for another slug, and writes nothing for it. |
 | A compromised dashboard | It sees the bearers that pass and can use them within their scope, a person's within the person's roles, and read deployment logs; it cannot mint a token without the password or a person's own unlock, nor deploy without one, nor hand root a file it could not read, nor name a token as the actor of a change of access it made itself: the steward journals the token it judged. |
 | A token giving access too widely | It gives Can open alone, on the projects it may deploy, a person's own only where the person is Admin now, to the company's people and domains alone, never password access to someone outside them, never public; it removes Can open entries alone. The steward judges it and writes, every change is in its journal under `token:<id>`, and the owner or an Admin takes it back from *Access*. |
@@ -1879,6 +1880,7 @@ ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
 | `backup.ts`, `src/backup/` (but its steward routes), `infra/backup/` | `bin/deploy-backup.sh install` |
 | `src/backup/routes.ts`, `src/backup/reader.ts` | `bin/deploy-steward.sh` |
 | `src/backup/database.ts`, which both embed | `bin/deploy-backup.sh install` and `bin/deploy-steward.sh` |
+| `src/secrets/scope.ts`, which the installer embeds too, to judge whose a secret file is (src/installer/claims.ts) | `bin/deploy-steward.sh` and `bin/deploy-installer.sh` |
 | anything else | `sitesolide deploy` |
 
 When the CLI's block generator changes the blocks it writes, as it did when its
@@ -2013,6 +2015,16 @@ person's general access kept (tests/control-policy.test.ts); and the whole
 road through the real `server.ts`, a person minting on the *Tokens* page
 after a forced sign-in, refused above their roles, deploying, narrowed and
 then removed (tests/people-flow.test.ts).
+
+For the secret files a token's project reads (tests/installer-pipeline.test.ts):
+a new project named `dashboard-backup` or `dashboard-monitor` declaring its
+file, there or not, the dashboard deployed or not; `cms-smtp` taking cms's
+`cms-smtp.env`, declared or not, there or not; a declared file there before
+its account, another account's, or a link; each refused `secret-taken`
+before any account, tree or unit; names that take nothing deployed; a file
+that stopped being the project's while it deployed, the service not
+restarted. The steward's refusal of a new `dashboard-*` slug is in
+tests/control-policy.test.ts.
 
 For the audit: each source's rows in the shared shape, bounded, and garbage
 left out (tests/audit-merge.test.ts); the merge, the filters and a cursor

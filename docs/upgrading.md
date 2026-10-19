@@ -117,6 +117,35 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## A token's project reads its own secret files alone
+
+The installer now refuses, before anything is written, a deployment by token
+whose project would read or take a secret file that is not its own:
+`secret-taken`, naming the file, never what it holds. That is a file kept for
+root (`dashboard-backup.env`, `dashboard-monitor.env`), a declared file
+already in `/etc/sitesolide` that is not a plain file of `site-<slug>`, and a
+file another site holds that a new project would take by its name, `cms-smtp`
+taking cms's `cms-smtp.env`. The steward refuses a token creating a project
+named after a platform project and a dash, `dashboard-*`, `portal-*`,
+`api-*`, `analytics-*`, `landing-*`, `www-*`, as `reserved`; a project of such
+a name already on the machine stays deployable.
+
+**What `sitesolide upgrade` brings**: the steward, which refuses the new
+names; the dashboard, whose folder carries the sources of both, with nothing
+new for it; the installer, which judges the files. The backups, the egress
+proxy, the collector, the gatekeeper, the shared service, the portal, the
+monitor, the Caddyfile and Caddy's drop-in do not move. Nothing changes form
+on the machine.
+
+**What changes for you.** A token's deployment that read a file of another
+project, or of the machine, stops at its next run, and says which file: move
+the variable into the project's own `<slug>.env` from *Secrets*, or, for a
+file created by hand, give it to `site-<slug>` (`sudo chown site-<slug>:site-<slug>`)
+if it is the project's. Over your SSH, nothing changes.
+
+**Going back.** `sitesolide upgrade` with the previous binary: the previous
+installer reads the declared files whoever owns them, as before.
+
 ## Workers and scheduled services
 
 A project can run work that answers no request. Under `services`, an

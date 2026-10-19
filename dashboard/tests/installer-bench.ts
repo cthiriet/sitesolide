@@ -25,6 +25,8 @@ import { createHost, spawn, type Commands, type ProjectRun } from "../src/instal
 
 export const ZONE = "test-zone.invalid";
 export const INSTALLER = join(import.meta.dir, "..", "installer.ts");
+/** The uid of whoever runs the tests: the files they lay belong to it. */
+export const OWN_UID = process.getuid?.() ?? 2000;
 const encoder = new TextEncoder();
 
 export type BenchOptions = {
@@ -161,7 +163,10 @@ export function commandsOf(bench: Bench): Commands {
     },
     async useradd(account) {
       bench.events.push(`useradd ${account}`);
-      writeFileSync(join(bench.root, "passwd"), `${readFileSync(join(bench.root, "passwd"), "utf8")}${account}:x:2000:2000::/nonexistent:/usr/sbin/nologin\n`);
+      // The account a project's files belong to is the test's own uid: a
+      // secret file a test lays is then the project's, as the steward would
+      // have laid it, and one owned by anyone else is not.
+      writeFileSync(join(bench.root, "passwd"), `${readFileSync(join(bench.root, "passwd"), "utf8")}${account}:x:${OWN_UID}:${OWN_UID}::/nonexistent:/usr/sbin/nologin\n`);
       return { code: 0, output: "" };
     },
     async userdel(account) {

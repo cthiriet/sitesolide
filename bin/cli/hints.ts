@@ -195,6 +195,8 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   // --- a deployment that failed on the machine
   "install-failed": "run the install command from the message in the project folder, fix what it reports, then deploy again",
   "secret-missing": "ask the owner of the machine to create that file in the dashboard's Secrets section, then deploy again; never put secret values in the repository or in sitesolide.json",
+  "secret-taken":
+    "the project would read a secret file that is not its own: pick another slug in sitesolide.json, or tell the owner of the machine, who looks at the file the message names; never declare another file, and never move, rename or delete one on the machine",
   "edited-by-hand": "do not re-run with --force, a token has none: tell the owner of the machine, who reads the file and decides",
   "system-unit": "pick another slug in sitesolide.json: this one names a service of the machine",
   "caddy-busy": LOCK_BUSY,

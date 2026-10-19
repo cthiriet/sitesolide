@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { bundle, entryBlocks, header } from "../borrowed/bundle";
 import { generateFragment, HEADLESS_ANSWER } from "../borrowed/fragment";
@@ -8,7 +8,7 @@ import { fragmentIsProtected } from "../borrowed/portal";
 import { generateUnits } from "../borrowed/unit";
 import type { InstallRequest, Scope } from "../src/control/protocol";
 import { finalManifest, replaceable, runPipeline, STABILITY_WINDOW_MS, type Outcome } from "../src/installer/pipeline";
-import { createBench as newBench, file, hostOf, stageBundle as stage, ZONE, type Bench, type BenchOptions } from "./installer-bench";
+import { createBench as newBench, file, hostOf, OWN_UID, stageBundle as stage, ZONE, type Bench, type BenchOptions } from "./installer-bench";
 
 /**
  * The installer's pipeline on a throwaway tree, with the real host: real
@@ -653,6 +653,120 @@ describe("workers, scheduled services and anchors", () => {
     const set = readFileSync(join(bench.root, "projects.nft"), "utf8");
     expect(set).toContain(`{ 3002 . ${uid} }`);
     expect(set.match(/ \. /g)?.length).toBe(1);
+  });
+});
+
+describe("the secret files a token's project reads are its own", () => {
+  // Planted in every secret file these tests lay: no refusal may quote it.
+  const CANARY = "secret-value-canary-91c4";
+  const passwd = (bench: Bench) => readFileSync(join(bench.root, "passwd"), "utf8");
+  const account = (bench: Bench, slug: string, uid: number) => writeFileSync(join(bench.root, "passwd"), `${passwd(bench)}site-${slug}:x:${uid}:${uid}::/nonexistent:/usr/sbin/nologin\n`);
+  const lay = (bench: Bench, name: string) => writeFileSync(join(bench.secrets, name), `KEY=${CANARY}\n`, { mode: 0o600 });
+  /** Refused before anything was written: no account, no tree, no unit, no block of its own. */
+  function nothingLaid(bench: Bench, slug: string): void {
+    expect(passwd(bench)).not.toContain(`site-${slug}:`);
+    expect(readdirSync(bench.sites)).not.toContain(slug);
+    expect(readdirSync(bench.units).filter((name) => name.startsWith(`${slug}.`))).toEqual([]);
+    expect(readdirSync(bench.blocks).filter((name) => name.startsWith(`${slug}.`))).toEqual([]);
+    expect(bench.events.some((event) => event.startsWith("useradd") || event.startsWith("as "))).toBe(false);
+  }
+  const refusedFor = (outcome: Outcome, text: string) => {
+    expect(outcome).toMatchObject({ ok: false, code: "secret-taken" });
+    expect(outcome.ok === false && outcome.message).toContain(text);
+    expect(JSON.stringify(outcome)).not.toContain(CANARY);
+  };
+  const DASHBOARD = { slug: "dashboard", start: "/usr/local/bin/bun run server.ts", port: 3022, publicDir: "public", secrets: ["dashboard.env"] } as Manifest;
+  const appNamed = (slug: string, extra: object = {}) => ({ ...APP, slug, ...extra });
+
+  test("a new project named after a file of the machine, declaring it: refused before anything is laid, the file there or not, the dashboard deployed or not", async () => {
+    for (const slug of ["dashboard-backup", "dashboard-monitor"]) {
+      for (const present of [true, false]) {
+        for (const withDashboard of [true, false]) {
+          const bench = createBench();
+          if (withDashboard) deposit(bench, DASHBOARD);
+          if (present) lay(bench, `${slug}.env`);
+          stageBundle(bench, APP_FILES);
+          refusedFor(await run(bench, request(appNamed(slug, { secrets: [`${slug}.env`] }), PRIVATE, slug)), `${slug}.env belongs to the machine`);
+          nothingLaid(bench, slug);
+        }
+      }
+    }
+  });
+
+  test("a new project named after a file another project holds: refused, declared or not, the file there or not; cms keeps it", async () => {
+    const cms = (secrets: string[]) => ({ slug: "cms", start: "/usr/local/bin/bun run server.ts", port: 3048, publicDir: "public", portal: true, secrets }) as Manifest;
+    for (const [declaredByCms, present, declaredByToken] of [
+      [true, true, true],
+      [true, false, true],
+      [false, true, true],
+      [false, true, false],
+    ] as const) {
+      const bench = createBench();
+      deposit(bench, cms(declaredByCms ? ["cms.env", "cms-smtp.env"] : ["cms.env"]));
+      lay(bench, "cms.env");
+      if (present) lay(bench, "cms-smtp.env");
+      stageBundle(bench, APP_FILES);
+      const outcome = await run(bench, request(appNamed("cms-smtp", declaredByToken ? { secrets: ["cms-smtp.env"] } : {}), PRIVATE, "cms-smtp"));
+      refusedFor(outcome, "cms-smtp.env belongs to cms, which this deployment would take it from");
+      nothingLaid(bench, "cms-smtp");
+    }
+  });
+
+  test("a name that takes nothing from anyone is no reason to refuse: cms-blog beside cms, shop beside shop-api", async () => {
+    const bench = createBench();
+    deposit(bench, { slug: "cms", start: "/usr/local/bin/bun run server.ts", port: 3048, publicDir: "public", portal: true, secrets: ["cms.env"] } as Manifest);
+    deposit(bench, { slug: "shop-api", start: "/usr/local/bin/bun run server.ts", port: 3049, publicDir: "public", portal: true, secrets: ["shop-api.env"] } as Manifest);
+    lay(bench, "cms.env");
+    lay(bench, "shop-api.env");
+    for (const slug of ["cms-blog", "shop"]) {
+      stageBundle(bench, APP_FILES);
+      expect(await run(bench, request(appNamed(slug), PRIVATE, slug))).toMatchObject({ ok: true });
+    }
+  });
+
+  test("a declared file there before its account, another account's, or not a plain file: refused before anything changes; the project's own passes", async () => {
+    // A new project: the file is there before site-shop exists.
+    const fresh = createBench();
+    lay(fresh, "shop.env");
+    stageBundle(fresh, APP_FILES);
+    refusedFor(await run(fresh, request({ ...APP, secrets: ["shop.env"] })), "/etc/sitesolide/shop.env is already on the machine and does not belong to site-shop");
+    nothingLaid(fresh, "shop");
+
+    // An existing project, the file another account's, or a link.
+    for (const [uid, link] of [
+      [OWN_UID + 1, false],
+      [OWN_UID, true],
+    ] as const) {
+      const bench = createBench();
+      const previous = { ...APP, port: 3040, portal: true, secrets: ["shop.env"] } as Manifest;
+      deposit(bench, previous);
+      account(bench, "shop", uid);
+      if (link) symlinkSync(join(bench.root, "passwd"), join(bench.secrets, "shop.env"));
+      else lay(bench, "shop.env");
+      stageBundle(bench, APP_FILES);
+      refusedFor(await run(bench, request({ ...APP, port: 3040, secrets: ["shop.env"] })), link ? "/etc/sitesolide/shop.env is not a plain file" : "does not belong to site-shop");
+      expect(readdirSync(bench.units)).toEqual([]);
+      expect(bench.events.some((event) => event.startsWith("as ") || event === "manifest")).toBe(false);
+    }
+
+    // Its own: deployed.
+    const own = createBench();
+    deposit(own, { ...APP, port: 3040, portal: true, secrets: ["shop.env"] } as Manifest);
+    account(own, "shop", OWN_UID);
+    lay(own, "shop.env");
+    stageBundle(own, APP_FILES);
+    expect(await run(own, request({ ...APP, port: 3040, secrets: ["shop.env"] }))).toMatchObject({ ok: true });
+  });
+
+  test("a file that stopped being the project's while it deployed: the service is not restarted", async () => {
+    // The account's uid changes under the Caddy lock, after step 1 judged the file the project's own.
+    const bench = createBench({ onLock: (b) => writeFileSync(join(b.root, "passwd"), passwd(b).replace(`site-shop:x:${OWN_UID}:${OWN_UID}`, `site-shop:x:${OWN_UID + 1}:${OWN_UID + 1}`)) });
+    deposit(bench, { ...APP, port: 3040, portal: true, secrets: ["shop.env"] } as Manifest);
+    account(bench, "shop", OWN_UID);
+    lay(bench, "shop.env");
+    stageBundle(bench, APP_FILES);
+    refusedFor(await run(bench, request({ ...APP, port: 3040, secrets: ["shop.env"] })), "/etc/sitesolide/shop.env does not belong to site-shop");
+    expect(bench.events.some((event) => event.startsWith("systemctl restart"))).toBe(false);
   });
 });
 

@@ -44,6 +44,7 @@ import { isValidSchedule, isValidSlug } from "../../borrowed/manifest";
 import { GENERATOR_MARK, MARKER_DONE, readCurrentPairs, readStability } from "../../borrowed/services";
 import { isTimerUnit, systemdRunArguments, systemUser, unitArgument, unitFileName, type ProjectRun } from "../../borrowed/unit";
 import { BUNDLE_NAME, DEPLOYMENT_ID_SHAPE, MAX_BUNDLE_BYTES } from "../control/protocol";
+import { SUBFOLDER_SUFFIX, type ProjectEntry } from "../secrets/scope";
 import type { ExtractOutcome } from "./extract";
 import type { Execution, Host, Part } from "./host";
 
@@ -95,6 +96,9 @@ export type HostConfig = {
 
 /** Entries a staged tree may hold once `install` has run: node_modules counts tens of thousands. */
 export const MAX_TREE_ENTRIES = 500_000;
+
+/** A secret's name as the steward lists them: a flat file, or one of a `<slug>-secrets` folder. */
+const SECRET_NAME = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)?$/;
 
 const STAGING = ".incoming";
 const ASIDE = ".previous-";
@@ -267,13 +271,40 @@ export function createHost(config: HostConfig): Host {
       return readStability(`${shown.output}\n${MARKER_DONE}\n`, units);
     },
 
-    async secretPresent(name) {
-      if (!/^[A-Za-z0-9._-]+$/.test(name) || name.startsWith(".")) return false;
+    async secretFile(name) {
+      // A name of another shape is never looked up: it reads as something
+      // else, which refuses, rather than as absent, which would let it pass.
+      if (!SECRET_NAME.test(name) || name.split("/").some((part) => part.startsWith("."))) return { kind: "other" };
       try {
-        return lstatSync(join(config.secretsFolder, name)).isFile();
-      } catch {
-        return false;
+        const stat = lstatSync(join(config.secretsFolder, name));
+        return stat.isFile() ? { kind: "file", uid: stat.uid } : { kind: "other" };
+      } catch (error) {
+        return code(error) === "ENOENT" ? { kind: "absent" } : { kind: "other" };
       }
+    },
+
+    async secretScope() {
+      const projects: ProjectEntry[] = [];
+      // withFileTypes does not follow links, as the steward lists them.
+      for (const entry of readdirSync(config.sitesDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+        const examination = readBounded(join(config.sitesDir, entry.name, "sitesolide.json"), 256 * 1024);
+        projects.push({ folder: entry.name, manifest: examination.kind === "present" && examination.bytes !== null ? decoder.decode(examination.bytes) : null });
+      }
+      const present: string[] = [];
+      for (const entry of readdirSync(config.secretsFolder, { withFileTypes: true })) {
+        if (entry.name.startsWith(".")) continue;
+        if (entry.isFile()) present.push(entry.name);
+        if (!entry.isDirectory() || !entry.name.endsWith(SUBFOLDER_SUFFIX)) continue;
+        for (const inner of readdirSync(join(config.secretsFolder, entry.name), { withFileTypes: true })) {
+          if (!inner.name.startsWith(".") && inner.isFile()) present.push(`${entry.name}/${inner.name}`);
+        }
+      }
+      return { projects, present: present.sort() };
+    },
+
+    async accountUid(slug) {
+      return account(systemUser(slug))?.uid ?? null;
     },
 
     async ensureAccount(slug) {

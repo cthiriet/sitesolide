@@ -12,11 +12,13 @@
  * deployment.
  *
  * **A token never reaches what is not its own.** The platform's projects are
- * reserved whatever the scope says; a slug another token created is refused;
+ * reserved whatever the scope says, and so are new names of the shape of
+ * their files, `dashboard-*`; a slug another token created is refused;
  * and a manifest may only declare the secret file named after its own slug, for
  * the unit reads it with `EnvironmentFile=`, as root, before dropping
  * privileges: a manifest naming `dashboard.env` would hand the dashboard's hash
- * to whoever wrote it.
+ * to whoever wrote it. The slug names that file, so the installer checks it
+ * is the project's own on the machine (src/installer/claims.ts).
  *
  * Pure.
  */
@@ -72,6 +74,17 @@ export function decideSlug(identity: Identity, slug: unknown, machine: { exists:
   }
   const reserved = reservedReason(slug, machine.zone);
   if (reserved !== null) return refused("reserved", reserved);
+  // The platform's own files are named after its projects,
+  // `dashboard-backup.env` among them, and a project reads the file named
+  // after it: a new project of that shape would be handed one the platform
+  // lays later. The installer refuses a file that exists already
+  // (src/installer/claims.ts); this keeps the names free for those to come.
+  // A project of such a name already on the machine was the owner's, and
+  // stays deployable by the tokens granted it.
+  const platform = machine.exists ? undefined : RESERVED_SLUGS.find((name) => slug.startsWith(`${name}-`));
+  if (platform !== undefined) {
+    return refused("reserved", `${slug} starts with ${platform}-, which names the platform's own files on the machine: a token never creates such a project; pick another slug`);
+  }
 
   const granted = identity.scope.slugs.includes(slug);
   const own = machine.owner === identity.id;

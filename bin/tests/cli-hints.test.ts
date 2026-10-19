@@ -109,9 +109,24 @@ describe("the hints", () => {
       if (hint.includes("--force")) expect(hint).toMatch(/do not re-run with --force/);
     }
     // The codes the installer stops on, as docs/access.md lists them.
-    for (const code of ["install-failed", "secret-missing", "edited-by-hand", "system-unit", "caddy-busy", "bundle-refused", "service-failed", "verify-failed"]) {
+    for (const code of ["install-failed", "secret-missing", "secret-taken", "edited-by-hand", "system-unit", "caddy-busy", "bundle-refused", "service-failed", "verify-failed"]) {
       expect(Object.hasOwn(REMOTE_HINTS, code)).toBe(true);
     }
+  });
+
+  test("a deployment stopped over a secret file has its code's hint, the file another project's or the machine's never declared instead", () => {
+    // The installer's codes reach the CLI as the deployment's error.code
+    // (bin/cli/remote.ts), and a code without a hint would fall back to the
+    // message's: every `secret-` one it stops on is covered here.
+    const source = readFileSync(join(import.meta.dir, "..", "..", "dashboard", "src", "installer", "pipeline.ts"), "utf8");
+    const codes = new Set([...source.matchAll(/new Stop\(\s*"(secret-[a-z-]+)"/g)].map((match) => match[1]!));
+    expect([...codes].sort()).toEqual(["secret-missing", "secret-taken"]);
+    expect([...codes].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
+    const hint = hintForFailure("secret-taken", "secrets: /etc/sitesolide/shop.env is already on the machine and does not belong to site-shop; nothing was changed");
+    expect(hint).toContain("pick another slug in sitesolide.json");
+    expect(hint).toContain("tell the owner of the machine");
+    expect(hint).toContain("never declare another file");
+    expect(hint).not.toContain("--force");
   });
 
   test("every refusal of share and people has its code's hint, whichever way they run, and so has every code the API's access answers", () => {

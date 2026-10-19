@@ -38,6 +38,18 @@ describe("reserved slugs", () => {
     const refused = decideManifest(app({ slug: "dashboard" }), NONE, false, ZONE);
     expect(refused.kind === "refused" && refused.error === "reserved" && refused.message).toContain("pick another slug");
   });
+
+  test("a new project of the shape of the platform's files, dashboard-backup above all, whatever the scope; one already on the machine stays deployable", () => {
+    const everything = (slug: string) => identity({ slugs: [slug], create: true, public: true });
+    for (const slug of ["dashboard-backup", "dashboard-monitor", "dashboard-next", "portal-x", "api-gateway", "analytics-2", "landing-old", "www-blog"]) {
+      const refusal = decideSlug(everything(slug), slug, { exists: false, owner: null, zone: ZONE });
+      expect(refusal).toMatchObject({ kind: "refused", error: "reserved" });
+      expect(refusal.kind === "refused" && refusal.message).toContain("pick another slug");
+      expect(decideSlug(everything(slug), slug, { exists: true, owner: null, zone: ZONE })).toEqual({ kind: "allowed", creating: false });
+    }
+    // A name that only begins like one is free.
+    for (const slug of ["dashboards", "apiary", "portals-x"]) expect(decideSlug(everything(slug), slug, { exists: false, owner: null, zone: ZONE })).toEqual({ kind: "allowed", creating: true });
+  });
 });
 
 describe("decideManifest", () => {

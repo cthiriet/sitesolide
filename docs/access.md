@@ -441,7 +441,7 @@ curl -s -H "$AUTH" -X PUT -H 'Content-Type: application/json' \
 | `unauthenticated` | 401 | the token is missing, unknown, expired or revoked, or its person no longer signs in to the dashboard: ask the owner, or mint another if it is your own |
 | `too-many-attempts` | 429 | too many wrong tokens from your address: wait `wait` seconds; or, creating a project, your changes of access for this hour used up: try again later |
 | `out-of-scope` | 403 | the token may not do this: outside its scope, its person's role no longer allows it, or, for access, a role above Can open, someone who would need password access, a domain outside the company's, an entry above Can open to take off; the message says whom to ask |
-| `reserved` | 403 | the slug belongs to the platform: pick another |
+| `reserved` | 403 | the slug belongs to the platform, or, for a new project, starts with the name of one of its projects and a dash (`dashboard-*`, `portal-*`), which names the platform's own files: pick another |
 | `invalid-manifest` | 422 | fix every point of `details` |
 | `invalid` | 400 | the request itself is malformed: `who` neither an email nor a `@domain`, a domain given more than Can open, or a domain while signing in with a company account is not set up |
 | `not-found` | 404 | no such deployment or project for this token, a project not deployed yet, or, taking someone off, someone with no access |
@@ -458,7 +458,11 @@ a token never gives.
 A failed deployment carries its own `error.code`, the step that stopped it:
 `install-failed`, `secret-missing`, `edited-by-hand`, `system-unit`, `caddy-busy`,
 `bundle-refused`, `service-failed`, `verify-failed` and a few more, each with a
-message that says what to do. A schedule systemd on the machine does not read
+message that says what to do. `secret-taken` stops it before anything is
+written when the project would read a secret file that is not its own: a
+file of the machine, one another project holds, or a `<slug>.env` already
+there that does not belong to the project's account; it names the file,
+never what it holds. A schedule systemd on the machine does not read
 comes back as `invalid-manifest`, before anything is written; a server or a
 worker that falls within ten seconds of its restart, as `service-failed`.
 

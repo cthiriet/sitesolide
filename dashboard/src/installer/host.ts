@@ -10,6 +10,8 @@
  */
 import type { Machine } from "../gatekeeper/machine";
 import type { LoopbackState, UnitFacts, UnitStanding } from "../../borrowed/services";
+import type { ProjectEntry } from "../secrets/scope";
+import type { SecretFile } from "./claims";
 import type { ExtractOutcome } from "./extract";
 
 export type Execution = { code: number; output: string };
@@ -35,8 +37,22 @@ export type Host = {
   unitFacts: (slug: string, unit: string) => Promise<UnitFacts | null>;
   /** Where this host's systemd reads the units it lays: /etc/systemd/system. */
   unitsFolder: string;
-  /** Is the secret file in /etc/sitesolide? Its content is never read. */
-  secretPresent: (name: string) => Promise<boolean>;
+  /**
+   * A secret file of /etc/sitesolide, read without following a link: absent,
+   * a plain file and the uid that owns it, or anything else. Its content is
+   * never read.
+   */
+  secretFile: (name: string) => Promise<SecretFile>;
+  /**
+   * What the steward attaches a secret file to a site with
+   * (src/secrets/scope.ts, `readSites`): every directory of /srv/sites with
+   * its manifest, null when it has none, and the names in /etc/sitesolide,
+   * those of a `<slug>-secrets` folder included. Throws when either cannot
+   * be listed.
+   */
+  secretScope: () => Promise<{ projects: ProjectEntry[]; present: string[] }>;
+  /** The uid of `site-<slug>`, null while the account does not exist. */
+  accountUid: (slug: string) => Promise<number | null>;
   /**
    * The schedules systemd does not read as a time, asked of
    * `systemd-analyze calendar` one by one, in the order given; null when it

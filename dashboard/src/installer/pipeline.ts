@@ -20,7 +20,8 @@
  *
  *   1. the manifest, re-validated with `validate()`, then the token's scope;
  *      missing ports chosen here, for the public services alone, the door and
- *      the preview lock taken from the machine, as `deploy` does;
+ *      the preview lock taken from the machine, as `deploy` does; then the
+ *      secret files it would read or take from another site (claims.ts);
  *   2. the machine read: the block in service, the unit names systemd already
  *      gives to a unit of the machine, the schedules systemd reads, the ports,
  *      the loopback rule, the portal's readiness, before anything is written;
@@ -35,7 +36,8 @@
  *      portal, its block before its files;
  *   7. the staged trees put in place of the served ones;
  *   8. the manifest, and the loopback's project set;
- *   9. the declared secrets, checked present, then every service restarted;
+ *   9. the declared secrets, checked present and the project's own, then
+ *      every service restarted;
  *  10. for an app in the open, its block; then the verification;
  *  11. the services that run for good read again once STABILITY_WINDOW_MS has
  *      passed since their restart: one that fell meanwhile fails the
@@ -68,7 +70,9 @@ import { isPortalReady, portalHost, fromPortal, answers, describe } from "../gat
 import { TIMEOUTS } from "../gatekeeper/transaction";
 import { allocatePorts, decideDoor, scopeRefusals, takenPorts } from "../control/policy";
 import type { InstallRequest } from "../control/protocol";
+import type { ProjectEntry } from "../secrets/scope";
 import { installBlock } from "./caddy";
+import { claimRefusals, claimsOf, namesToCheck, type SecretFile } from "./claims";
 import type { Host, Part } from "./host";
 
 /**
@@ -237,6 +241,9 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     const { manifest, text } = final;
     const previous = previousManifest(deposited.get(slug));
     const application = isApp(manifest);
+    // Only an app's unit reads its `secrets`; any project's name may take a
+    // file by its prefix all the same.
+    await judgeClaims(host, slug, text, application ? (manifest.secrets ?? []) : []);
     const behindPortal = final.portal;
     for (const { service, port } of allocated) host.log(`   port ${port} chosen for ${service === null ? "the service" : `service ${service}`}`);
     host.log(`   project ${slug}, ${application ? `${servicesOf(manifest).length > 1 ? `${servicesOf(manifest).length} services` : "service"}` : "static"}, ${behindPortal ? "restricted" : "public"}`);
@@ -437,9 +444,21 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
       if (secrets.length > 0) {
         host.log("-> declared secrets");
         const missing: string[] = [];
+        const foreign: string[] = [];
+        // Judged at step 1 already, and again here, right before the restart
+        // that has the unit read them: a file laid since by somebody else.
+        const account = await host.accountUid(slug);
         for (const name of secrets) {
-          if (await host.secretPresent(name)) host.log(`   present  /etc/sitesolide/${name}`);
-          else missing.push(name);
+          const file = await host.secretFile(name);
+          if (file.kind === "absent") missing.push(name);
+          else if (file.kind !== "file" || account === null || file.uid !== account) foreign.push(name);
+          else host.log(`   present  /etc/sitesolide/${name}`);
+        }
+        if (foreign.length > 0) {
+          throw new Stop(
+            "secret-taken",
+            `/etc/sitesolide/${foreign.join(", /etc/sitesolide/")} does not belong to site-${slug}: a project reads its own files alone; the files are in place, the service was not restarted, the owner of the machine must look at it`,
+          );
         }
         if (missing.length > 0) {
           throw new Stop(
@@ -507,6 +526,25 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     }
     if (!succeeded && !served) await undoCreation(host, slug, created);
   }
+}
+
+/**
+ * The secret files this deployment would read or take from another site,
+ * judged before anything is written (claims.ts): a refusal names each file,
+ * never what it holds.
+ */
+async function judgeClaims(host: Host, slug: string, text: string, declared: readonly string[]): Promise<void> {
+  let scope: { projects: ProjectEntry[]; present: string[] };
+  try {
+    scope = await host.secretScope();
+  } catch (error) {
+    throw new Stop("machine-unreadable", `cannot list the projects and the secret files on the machine (${(error as Error).message}): nothing was changed`);
+  }
+  const claims = claimsOf(slug, text, scope.projects, scope.present);
+  const files = new Map<string, SecretFile>();
+  for (const name of namesToCheck(declared, claims)) files.set(name, await host.secretFile(name));
+  const refusals = claimRefusals(slug, declared, claims, files, await host.accountUid(slug));
+  if (refusals.length > 0) throw new Stop("secret-taken", `${refusals.join("; ")}; nothing was changed`);
 }
 
 /** The services that run for good, as read right after their restart. */
