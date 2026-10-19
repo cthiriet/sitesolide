@@ -262,8 +262,9 @@ export const TOKEN_SECRET_CHANGES_PER_HOUR = 120;
 /** Restarts one token may ask for in an hour: each cuts a service for a few seconds, and is a journal line. */
 export const TOKEN_RESTARTS_PER_HOUR = 30;
 /**
- * Refusals of one token's secrets and restart requests the steward journals
- * in an hour, charged before the line is written; past them, the refusal is
+ * Refusals of one token's secrets, restart and access requests the steward
+ * journals in an hour, charged before the line is written, a change of
+ * access given back once accepted; past them, the refusal is
  * `too-many-attempts`, journaled no more. With the two bounds above, one
  * token writes 210 journal lines an hour at most, and the journal keeps the
  * latest 500 at least (src/secrets/log.ts): a stolen token cannot push what

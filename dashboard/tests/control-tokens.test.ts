@@ -18,6 +18,7 @@ import {
   pruneTeam,
   readHolder,
   viewOf,
+  liveTokensOf,
   revokeMemberTokens,
   recordOwnership,
   refusalMessage,
@@ -26,6 +27,7 @@ import {
   views,
   type Team,
 } from "../src/control/tokens";
+import { MAX_TOKENS } from "../src/control/protocol";
 
 const ZONE = "test-zone.invalid";
 const NOW = 1_800_000_000_000;
@@ -85,6 +87,9 @@ describe("what the owner asks for", () => {
     const refusals: [Record<string, unknown>, string][] = [
       [{ ...base, label: "" }, "label"],
       [{ ...base, label: "a\nb" }, "label"],
+      // A C1 control, CSI or OSC in one character: the owner's terminal prints labels (bin/cli/access.ts, leftText).
+      [{ ...base, label: "a\u009b2Jb" }, "label"],
+      [{ ...base, label: "a\u009d52;c;Y3VybA==\u009cb" }, "label"],
       [{ ...base, label: "x".repeat(65) }, "label"],
       [{ ...base, email: "ada" }, "email"],
       [{ ...base, email: 42 }, "email"],
@@ -236,6 +241,18 @@ describe("dead tokens do not pile up", () => {
     expect(readTeam(encodeTeam(fitted))).not.toHaveProperty("unreadable");
     const live = teamOf(Array.from({ length: 200 }, (_, n) => ({ id: id(n + 1), dead: null, slugs: 100 })));
     expect(pruneTeam(live, NOW, 1024 * 1024)).toBeNull();
+  });
+
+  test("an expired token is no longer live: a person who minted two hundred a second apart, ten at a time, stops nobody minting", async () => {
+    const minted = teamOf(Array.from({ length: MAX_TOKENS }, (_, n) => ({ id: id(n + 1), dead: null })));
+    const expired: Team = { ...minted, tokens: minted.tokens.map((record) => ({ ...record, expiresAt: NOW - 1_000 })) };
+    // Their own cap counts live tokens alone: it never held them back.
+    expect(liveTokensOf(expired, "ada@acme.test", NOW)).toEqual([]);
+    const request = readTokenRequest({ label: "owner's laptop", email: "owner", expiresAt: null, scope: SCOPE }, NOW, ZONE);
+    if ("refusal" in request) throw new Error(request.refusal);
+    expect(await createToken(expired, request, NOW, counter())).not.toHaveProperty("refusal");
+    // Live, they still count.
+    expect(await createToken(minted, request, NOW, counter())).toEqual({ refusal: `${MAX_TOKENS} live tokens at most: revoke the ones nobody uses` });
   });
 });
 

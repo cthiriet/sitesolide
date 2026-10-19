@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { emailRole, readProjection, type Projection } from "../borrowed/access";
 import type { MemberPrincipal } from "../src/people/steward";
 import type { Resolved } from "../src/people/identity";
-import { createAccessRoutes, createAccessStore, LOG_FULL, passwordHash, PASSWORD_LOCKED, type AccessEvent } from "../src/access/steward";
+import { createAccessRoutes, createAccessStore, LOG_FULL, LOG_FULL_FOR_TOKENS, passwordHash, PASSWORD_LOCKED, type AccessEvent } from "../src/access/steward";
 import { createAccessRoutes as createDashboardAccessRoutes, ACCESS_LOCKED } from "../src/access/routes";
 import type { AccessSteward } from "../src/access/client";
 import { createTokens } from "../src/secrets/tokens";
@@ -51,7 +51,7 @@ function seed(entries: [string, string, "visitor" | "viewer" | "developer" | "ad
 /** The routes over a temp tree; the people's sessions are a table of the test's. */
 function bench(
   registry: Registry,
-  options: { signIn?: SignInSettings; sessions?: Session[]; zone?: string; full?: () => boolean; changesPerHour?: number; ownerChangesPerHour?: number; clock?: { value: number }; tokens?: Record<string, LeavingToken[]> } = {},
+  options: { signIn?: SignInSettings; sessions?: Session[]; zone?: string; full?: (share: number, reserve: number) => boolean; changesPerHour?: number; ownerChangesPerHour?: number; clock?: { value: number }; tokens?: Record<string, LeavingToken[]> } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "access-steward-"));
   folders.push(root);
@@ -71,7 +71,7 @@ function bench(
     zone,
     hostOf: (slug) => `${slug}.${zone}`,
     journal: async (event) => void events.push(event),
-    logFull: async () => options.full?.() ?? false,
+    logFull: async (share, reserve) => options.full?.(share, reserve) ?? false,
   });
   let drawn = 0;
   const routes = createAccessRoutes({
@@ -609,6 +609,43 @@ describe("the access log's bounds", () => {
     expect((await call("owner", "PUT", "/access/entry", { slug: "blog", who: "new@acme.test", role: "visitor" })).status).toBe(201);
     full = false;
     expect((await call("dashboard", "PUT", "/access/entry", { token: UNLOCK, slug: "blog", who: "late@acme.test", role: "visitor" })).status).toBe(201);
+  });
+
+  test("a token fills half of the log at most: past it, what it would let in is refused, while people still give access", async () => {
+    // A stolen token alternating Can open given and taken away writes two
+    // rows for every one counted against its hour, and several tokens
+    // multiply that: the log, which keeps every row 180 days and refuses
+    // everyone once full, filled in days. Half of it stays the people's.
+    let filled = 0.6;
+    const sessions: Session[] = [{ session: "s-admin", email: "ann@acme.test", unlock: "u-admin" }];
+    const { routes, call } = bench(seed([["blog", "ann@acme.test", "admin"]]), { full: (share) => filled >= share, sessions });
+    const token = { kind: "token" as const, id: "tok1", email: null, role: null };
+    const refused = await routes.forToken.grant("blog", "see@acme.test", "visitor", token);
+    expect(refused.status).toBe(507);
+    expect(await json(refused)).toMatchObject({ error: "log-full", message: LOG_FULL_FOR_TOKENS });
+    expect(await json((await routes.forToken.widen("ada@acme.test"))!)).toMatchObject({ error: "log-full" });
+    // A token still takes away, and a person still gives.
+    expect((await call("dashboard", "PUT", "/access/person/entry", { session: "s-admin", slug: "blog", who: "new@acme.test", role: "visitor" })).status).toBe(201);
+    expect((await routes.forToken.remove("blog", "new@acme.test", token)).status).toBe(200);
+    filled = 0.4;
+    expect((await routes.forToken.grant("blog", "see@acme.test", "visitor", token)).status).toBe(201);
+  });
+
+  test("a token's half counts the rows its removals may still write: given across many projects, then all taken away, it never fills the rest", async () => {
+    // A removal is never refused nor counted. A token reaching many projects
+    // gave Can open up to the half, then took every entry away: as many rows
+    // again, and the log full for everyone. Each entry in the registry is a
+    // row a removal may still write, so it counts against the token's half.
+    let reserved = -1;
+    const { routes } = bench(seed([["blog", "ann@acme.test", "admin"], ["blog", "one@acme.test", "visitor"], ["shop", "two@acme.test", "visitor"]]), {
+      full: (share, reserve) => {
+        if (share < 1) reserved = reserve;
+        return false;
+      },
+    });
+    const token = { kind: "token" as const, id: "tok1", email: null, role: null };
+    expect((await routes.forToken.grant("blog", "see@acme.test", "visitor", token)).status).toBe(201);
+    expect(reserved).toBe(3);
   });
 
   test("what narrows is never refused, full log or used-up hour: lowering, removing, the create right taken back, a person taken off", async () => {

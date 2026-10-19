@@ -165,7 +165,9 @@ export function readHolder(value: unknown): string | Refusal {
 /** What is asked for, judged: label, expiry, scope; `email` the holder's, `owner` for the owner's own. */
 export function readTokenRequest(body: Record<string, unknown>, now: number, zone: string): TokenRequest | Refusal {
   const { label, email, expiresAt, scope } = body;
-  if (typeof label !== "string" || label.trim() === "" || label.length > LABEL_MAX || /[\u0000-\u001f\u007f]/.test(label)) {
+  // The C1 controls too, CSI and OSC in one character each: the owner's
+  // terminal prints a person's labels when they leave (bin/cli/access.ts).
+  if (typeof label !== "string" || label.trim() === "" || label.length > LABEL_MAX || /[\u0000-\u001f\u007f-\u009f]/.test(label)) {
     return { refusal: `label: one line of text, ${LABEL_MAX} characters at most` };
   }
   if (email !== OWNER_HOLDER && (typeof email !== "string" || email.length > EMAIL_MAX || !EMAIL_SHAPE.test(email.trim()))) {
@@ -388,7 +390,10 @@ export async function createToken(
   member: string | null = null,
   byOwner = false,
 ): Promise<{ team: Team; view: TokenView; secret: string } | Refusal> {
-  const alive = team.tokens.filter((record) => record.revokedAt === null).length;
+  // Live as a person's own cap counts them (`liveTokensOf`): an expired token
+  // counted here, a person minting tokens a second long, ten at a time,
+  // stopped everyone minting, the owner included, for their 90 days.
+  const alive = team.tokens.filter((record) => isLive(record, now)).length;
   if (alive >= MAX_TOKENS) return { refusal: `${MAX_TOKENS} live tokens at most: revoke the ones nobody uses` };
   const secret = `${TOKEN_PREFIX}${generateToken(random)}`;
   const record: TokenRecord = {

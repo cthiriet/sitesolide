@@ -273,7 +273,10 @@ export function alsoOpens(admins: readonly string[]): string {
 export function leftText(left: Left, byYou: boolean): string {
   const first = `${left.who} no longer signs in to the dashboard.`;
   if (left.tokens.length === 0) return first;
-  const named = left.tokens.map((token) => `${token.label} (made by ${token.madeBy === "them" ? "them" : byYou ? "you" : "the owner"})`).join(", ");
+  // A label is its maker's text, and one minted before the steward refused C1
+  // controls may hold one: a single-byte OSC 52 would write the owner's
+  // clipboard from their own terminal. Shown, never obeyed.
+  const named = left.tokens.map((token) => `${token.label.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?")} (made by ${token.madeBy === "them" ? "them" : byYou ? "you" : "the owner"})`).join(", ");
   return `${first} Also revoked ${left.tokens.length === 1 ? "1 token" : `${left.tokens.length} tokens`}: ${named}.`;
 }
 

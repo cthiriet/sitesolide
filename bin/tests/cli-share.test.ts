@@ -801,6 +801,12 @@ describe("share, over a fake transport", () => {
     await share(["share", "--remove", "chloe@acme.test"], "kanban", { ...fakeTransport(state(), answers).transport, owner: false }, token.output);
     expect(token.said).toContain("   chloe@acme.test no longer signs in to the dashboard. Also revoked 2 tokens: alice-ci (made by them), Alice's laptop (made by the owner).");
     expect(leftText({ who: "dan@acme.test", tokens: [] }, true)).toBe("dan@acme.test no longer signs in to the dashboard.");
+    // A label minted before the steward refused C1 controls reaches the
+    // owner's terminal: a single-byte OSC 52 there writes the clipboard.
+    const osc = `ci\u009d52;c;cm0gLXJmIH4=\u009c`;
+    expect(leftText({ who: "dan@acme.test", tokens: [{ label: osc, madeBy: "them" }] }, true)).toBe(
+      "dan@acme.test no longer signs in to the dashboard. Also revoked 1 token: ci?52;c;cm0gLXJmIH4=? (made by them).",
+    );
   });
 
   test("a read that fails after the changes falls back to the access read before", async () => {

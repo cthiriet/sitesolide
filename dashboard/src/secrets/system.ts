@@ -50,6 +50,7 @@ import { basename, dirname, join } from "node:path";
 import type { RateLimitRead } from "./unlock";
 import {
   ACCESS_LOG_NAME,
+  ACCESS_MAX_LINES,
   ACCESS_PRUNE_BYTES,
   ACCESS_PRUNE_INTERVAL_MS,
   ACCESS_RETENTION_MS,
@@ -161,7 +162,8 @@ export type System = {
    */
   prepareAccessLog: (now: number) => Promise<void>;
   /** Does the access log hold as many rows younger than its retention as it keeps? Pruned first when due. */
-  accessLogFull: (now: number) => Promise<boolean>;
+  /** Does the access log, pruned, hold `share` of the rows and bytes it keeps, 1 for all of them, `reserve` rows more counted? */
+  accessLogFull: (now: number, share?: number, reserve?: number) => Promise<boolean>;
   readRateLimit: () => Promise<RateLimitRead>;
   writeRateLimit: (text: string) => Promise<void>;
   /** The file that carries PASSWORD_HASH, with its rights. */
@@ -879,12 +881,13 @@ export function createSystem(config: SystemConfig): System {
       pruneAccess(now);
     },
 
-    async accessLogFull(now) {
+    async accessLogFull(now, share = 1, reserve = 0) {
       if (accessCount === null || pruneDue(now)) {
         seedAccessLog();
         pruneAccess(now);
       }
-      return isAccessLogFull(accessCount ?? { lines: 0, bytes: 0 });
+      const count = accessCount ?? { lines: 0, bytes: 0 };
+      return isAccessLogFull({ lines: count.lines + reserve, bytes: count.bytes }, Math.floor(ACCESS_MAX_LINES * share), Math.floor(ACCESS_PRUNE_BYTES * share));
     },
 
 

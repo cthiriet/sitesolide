@@ -155,6 +155,20 @@ export const MIGRATING =
 export const LOG_FULL =
   "the access log is full of changes younger than 180 days, which are never pushed out: nobody more is let in until older ones age out, while removing and lowering still work; the owner may still change access from their workstation, with sitesolide share and sitesolide people, and reads journalctl -u sitesolide-steward";
 
+/**
+ * The answer to a token once the access log is half full. A token's change
+ * that lets someone in is counted against its hour, the one that takes them
+ * away is not, and a removal must never wait: a stolen token alternating the
+ * two wrote two rows for each one counted, several tokens more, and filled in
+ * days a log that keeps every row 180 days and then refuses everyone but the
+ * owner over SSH. Half of it stays the people's.
+ */
+export const LOG_FULL_FOR_TOKENS =
+  "the access log is half full of changes younger than 180 days, the half a token may fill: a token lets nobody more in until older ones age out, while removing still works; people still give access from the dashboard, and the owner reads journalctl -u sitesolide-steward";
+
+/** The share of the access log a token's changes, and the removals they may still write, may fill: see LOG_FULL_FOR_TOKENS. */
+export const TOKEN_LOG_SHARE = 0.5;
+
 /** Accepted changes per actor and per hour: a person, a token, the owner in the dashboard; and the owner over SSH. */
 export const CHANGES_PER_HOUR = 120;
 export const OWNER_SSH_CHANGES_PER_HOUR = 2_000;
@@ -171,8 +185,12 @@ export type AccessStoreDependencies = {
   /** The site's address, where the portal keeps its people: `<slug>.<zone>`. Null for none. */
   hostOf: (slug: string) => string | null;
   journal: (event: AccessEvent) => Promise<void>;
-  /** Is the access log full of rows younger than its retention? Absent: never. */
-  logFull?: () => Promise<boolean>;
+  /**
+   * Does the access log hold this share of the rows younger than its
+   * retention it keeps, 1 for all of them, once `reserve` rows more are
+   * counted? Absent: never.
+   */
+  logFull?: (share: number, reserve: number) => Promise<boolean>;
   /** The wait between two migration attempts; the tests hand their own. */
   sleep?: (ms: number) => Promise<void>;
 };
@@ -195,7 +213,7 @@ export type AccessStore = {
   /** The owner's way out when the portal's database does not read: the registry made without it. */
   migrateWithoutPortal: () => Promise<Response>;
   /** Is the access log full of rows younger than its retention? */
-  full: () => Promise<boolean>;
+  full: (share: number, reserve?: number) => Promise<boolean>;
 };
 
 export function createAccessStore(dependencies: AccessStoreDependencies): AccessStore {
@@ -426,7 +444,7 @@ export function createAccessStore(dependencies: AccessStoreDependencies): Access
     ensure,
     start,
     migrateWithoutPortal,
-    full: async () => (dependencies.logFull === undefined ? false : dependencies.logFull()),
+    full: async (share, reserve = 0) => (dependencies.logFull === undefined ? false : dependencies.logFull(share, reserve)),
   };
 }
 
@@ -560,9 +578,23 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
   }
 
   let fullSaidAt = 0;
-  /** The refusal when the access log has no room left; said in the steward's log once an hour. */
-  async function noRoom(): Promise<Response | null> {
-    if (!(await store.full())) return null;
+  /**
+   * The refusal when the access log has no room left, said in the steward's
+   * log once an hour; for a token, once its half is used.
+   */
+  async function noRoom(channel: Channel): Promise<Response | null> {
+    if (channel === "token" && !(await store.full(1))) {
+      // A removal is never refused nor counted, so the rows a token's
+      // removals may still write count against its half: every entry of the
+      // registry is one. Without them, a token reaching many projects gave
+      // Can open up to the half, then took every entry away, and filled the
+      // rest.
+      const registry = await store.read();
+      if (registry instanceof Response) return registry;
+      const entries = Object.values(registry.projects).reduce((total, list) => total + list.length, 0);
+      if (await store.full(TOKEN_LOG_SHARE, entries)) return fail("log-full", LOG_FULL_FOR_TOKENS);
+    }
+    if (!(await store.full(1))) return null;
     if (now() - fullSaidAt >= HOUR_MS || now() < fullSaidAt) {
       fullSaidAt = now();
       console.error("access: ALERT the access log is full of changes younger than 180 days: nobody more is let in until older ones age out, but over the owner's socket");
@@ -578,7 +610,7 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
    */
   async function widen(channel: Channel, actor: string): Promise<Response | null> {
     if (channel !== "ssh") {
-      const room = await noRoom();
+      const room = await noRoom(channel);
       if (room !== null) return room;
     }
     if (exhausted(channel, actor)) return tooMany(channel);

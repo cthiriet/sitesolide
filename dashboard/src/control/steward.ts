@@ -60,8 +60,8 @@
  * the requester, under their lock, or the project's own turn for a restart,
  * where this judgement is made again once the turn has come. Each token is
  * bounded per hour, in memory: what it may push through the journal, its
- * changes, its restarts and its refusals each, and how often it cuts a
- * service.
+ * changes, its restarts and its refusals each, those of its changes of
+ * access included, and how often it cuts a service.
  *
  * The order of the checks is the order of the risk, as in src/secrets/steward.ts:
  * shape of the body, token, slug, state of the machine, writing.
@@ -717,9 +717,35 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
   const granterOf = (holder: Holder) => ({ kind: "token" as const, id: holder.identity.id, email: holder.identity.member, role: null });
 
+  /**
+   * A token's change of access, charged to the hour of its refusals
+   * (`refusal`, below) before it is asked, and given back once accepted.
+   * The access routes journal a token's refusal, Admin asked of a token that
+   * gives Can open alone, someone outside the company's domains: unbounded,
+   * a stolen token, a deploy token alone, wrote twenty lines a minute, and
+   * within the hour pushed past the thousand lines the journal keeps every
+   * change of secrets made in it, any token's. An accepted change goes to
+   * the access log, bounded by the registry's own hour per actor; `silent`
+   * says which other answers wrote no line either.
+   */
+  async function accessChange(holder: Holder, change: () => Promise<Response>, silent: (answer: Response) => boolean = (answer) => answer.ok): Promise<Response> {
+    const key = `refusals:${holder.identity.id}`;
+    const before = system.now();
+    const bounded = withinHour(key, 1, refusalsPerHour, "refused requests");
+    if (bounded !== null) return bounded;
+    const answer = await change();
+    if (silent(answer)) giveBack(key, before);
+    return answer;
+  }
+
   const accessList = (req: Request) => accessRoute(req, [], (holder, slug) => options.access!.list(slug, granterOf(holder)));
-  const accessGrant = (req: Request) => accessRoute(req, ["who", "role"], (holder, slug, body) => options.access!.grant(slug, body.who, body.role, granterOf(holder)));
-  const accessRemove = (req: Request) => accessRoute(req, ["who"], (holder, slug, body) => options.access!.remove(slug, body.who, granterOf(holder)));
+  const accessGrant = (req: Request) =>
+    accessRoute(req, ["who", "role"], (holder, slug, body) => accessChange(holder, () => options.access!.grant(slug, body.who, body.role, granterOf(holder))));
+  // An entry not there to remove is said, never journaled: a cleanup run twice costs nothing.
+  const accessRemove = (req: Request) =>
+    accessRoute(req, ["who"], (holder, slug, body) =>
+      accessChange(holder, () => options.access!.remove(slug, body.who, granterOf(holder)), (answer) => answer.ok || answer.status === 404),
+    );
 
   // --- a token's secrets and restart -----------------------------------------------
 
@@ -835,6 +861,13 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     spent.set(key, [...(spent.get(key) ?? []), ...Array<number>(cost).fill(system.now())]);
     // A map that keeps only the tokens seen this hour.
     if (spent.size > 10_000) for (const old of [...spent.keys()].slice(0, 1_000)) spent.delete(old);
+  }
+
+  /** One charge made since `since` given back: the work it was counted for wrote no line of this bound. */
+  function giveBack(key: string, since: number): void {
+    const times = spent.get(key) ?? [];
+    const index = times.findLastIndex((at) => at >= since);
+    if (index >= 0) times.splice(index, 1);
   }
 
   /**

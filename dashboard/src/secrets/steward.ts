@@ -2032,10 +2032,10 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           zone: memberZone,
           hostOf: (slug) => (reservedReason(slug, memberZone) === null ? addressOf(slug, memberZone) : null),
           journal: journalEvent,
-          logFull: async () => {
+          logFull: async (share, reserve) => {
             await accessLogPrepared;
             try {
-              return await system.accessLogFull(system.now());
+              return await system.accessLogFull(system.now(), share, reserve);
             } catch (e) {
               // A log that cannot be counted takes nothing more.
               console.error(`access log: not counted (${errorName(e)}), changes of access refused`);
@@ -2079,7 +2079,12 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           isUnlocked: (token) => isValidToken(state, token, system.now()),
           readBody: (req, fields) => readBody(req, fields),
           journal: journalEvent,
-          journalRefusal: members.journalRefusal,
+          // A token's refusal goes to the journal as it stands: the control
+          // routes bound it per token and per hour before asking
+          // (src/control/steward.ts, `accessChange`). Through the people's
+          // bound per minute, shared with everyone, twenty of a token's kept
+          // every other refusal of that minute out, a failed sign-in included.
+          journalRefusal: (event) => (/^token:[0-9a-f]{12}$/.test(event.actor) ? journalEvent(event) : members.journalRefusal(event)),
           authorize: members.authorize,
           leave: members.leave,
           ...(options.members.tokensOf === undefined ? {} : { tokensOf: options.members.tokensOf }),

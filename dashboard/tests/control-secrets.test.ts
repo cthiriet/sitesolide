@@ -275,6 +275,7 @@ const patch = (b: Bench, secret: string, slug: string, change: { set?: Record<st
   b.call("PATCH", "/control/secrets", { bearer: secret, slug, file, ...change });
 const list = (b: Bench, secret: string, slug: string) => b.call("POST", "/control/secrets/list", { bearer: secret, slug });
 const restart = (b: Bench, secret: string, slug: string) => b.call("POST", "/control/restart", { bearer: secret, slug });
+const grantAccess = (b: Bench, secret: string, slug: string, who: string, role: string) => b.call("PUT", "/control/access", { bearer: secret, slug, who, role });
 
 describe("the steward: listing a project's secrets with a token", () => {
   test("an owner's token with the permission lists cms's files and variable names, never a value, a size nor a previous version; writable on cms.env alone", async () => {
@@ -682,6 +683,49 @@ describe("the steward: changing a project's secrets with a token", () => {
     for (let i = 0; i < 20; i++) expect((await list(b, idle.secret, "cms")).status).toBe(403);
     expect((await patch(b, alice.secret, "cms", { set: { X: "y" } })).status).toBe(403);
     expect(b.journal().at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: `token:${alice.token.id}`, member: ALICE, detail: "role viewer" });
+  });
+
+  test("a token's refused changes of access spend the same hour: a stolen token, even one that manages no secret, cannot push what was changed out of the journal", async () => {
+    const b = await mount();
+    const { token, secret } = await b.ownerToken({ slugs: ["cms"], secrets: true });
+    // A deploy token alone, the kind any agent holds.
+    const idle = await b.ownerToken({ slugs: ["cms"] });
+    expect((await patch(b, secret, "cms", { set: { API_KEY: `${CANARY}-1`, SMTP_URL: "smtp://elsewhere.invalid", EXTRA: "x" } })).status).toBe(200);
+    const sets = () => b.journal().filter((line) => line.actor === `token:${token.id}` && line.result === "ok" && line.operation === "set");
+    const refusals = () => b.journal().filter((line) => line.actor === `token:${idle.token.id}` && line.result === "rejects");
+    let bounded = 0;
+    // A token gives Can open alone: Admin is refused, and journaled, twenty a minute for most of an hour.
+    for (let minute = 1; minute <= 55; minute++) {
+      b.clock.t += 60_000;
+      for (let i = 0; i < 20; i++) {
+        const answer = await body(await grantAccess(b, idle.secret, "cms", "someone@acme.test", "admin"));
+        if (answer.status === 429) {
+          bounded++;
+          expect(answer).toMatchObject({ error: "too-many-attempts", message: startingWith(`${TOKEN_REFUSALS_PER_HOUR} refused requests per hour at most for a token`) });
+        } else expect(answer.status).toBe(403);
+      }
+    }
+    expect(sets()).toHaveLength(3);
+    expect(refusals()).toHaveLength(TOKEN_REFUSALS_PER_HOUR);
+    expect(bounded).toBe(55 * 20 - TOKEN_REFUSALS_PER_HOUR);
+    // An accepted change is the access registry's to bound, and an entry not there to remove is never journaled: neither costs anything of this one.
+    b.clock.t += 3_600_000;
+    for (let i = 0; i < TOKEN_REFUSALS_PER_HOUR + 1; i++) expect((await grantAccess(b, idle.secret, "cms", "visitor@acme.test", "visitor")).status).toBeLessThan(300);
+    for (let i = 0; i < TOKEN_REFUSALS_PER_HOUR + 1; i++) {
+      expect((await b.call("DELETE", "/control/access", { bearer: idle.secret, slug: "cms", who: "nobody@acme.test" })).status).toBe(404);
+    }
+    expect((await grantAccess(b, idle.secret, "cms", "someone@acme.test", "admin")).status).toBe(403);
+  });
+
+  test("a token's refused changes of access never take another's place in the journal: a failed sign-in, another token, refused in the same minute are journaled", async () => {
+    const b = await mount();
+    const idle = await b.ownerToken({ slugs: ["cms"] });
+    const other = await b.ownerToken({ slugs: ["cms"] });
+    for (let i = 0; i < 20; i++) expect((await grantAccess(b, idle.secret, "cms", "someone@acme.test", "admin")).status).toBe(403);
+    await b.call("POST", "/people/signin", { assertion: "forged" });
+    expect(b.journal().at(-1)).toMatchObject({ operation: "dashboard.signin_failed", result: "rejects", actor: "anonymous" });
+    expect((await grantAccess(b, other.secret, "cms", "someone@acme.test", "admin")).status).toBe(403);
+    expect(b.journal().at(-1)).toMatchObject({ operation: "access.add", result: "rejects", actor: `token:${other.token.id}`, slug: "cms" });
   });
 });
 

@@ -80,7 +80,7 @@ function bench(options: { access?: boolean; full?: () => boolean; changesPerHour
     zone: ZONE,
     hostOf,
     journal: async (event) => void journal.push(event),
-    ...(options.full === undefined ? {} : { logFull: async () => options.full!() }),
+    ...(options.full === undefined ? {} : { logFull: async (share: number) => share >= 1 && options.full!() }),
   });
   const refuse = (error: string, message: string, status: number) => Response.json({ error, message }, { status });
   const routes = createAccessRoutes({
