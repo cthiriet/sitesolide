@@ -320,9 +320,11 @@ The machine is the source of truth. `/etc/sitesolide` holds the environment
 files, and they are read, placed and replaced from the dashboard's *Secrets*
 section, which also restarts the service.
 
-A service never reads its own secret file. systemd reads it as root, before
-dropping privileges, and hands the variables to the process. The file stays
-`0600`, owned by an account the service does not have.
+systemd reads a project's environment file as root, before dropping
+privileges, and hands the variables to the process. The file is `0600` and
+owned by `site-<slug>`, the account the project's service runs as: no other
+project's account reads it, and `deploy` and the installer tell a file that is
+the project's by that owner. See [secrets.md](secrets.md).
 
 `deploy` never pushes a secret. It checks that each file the manifest declares
 is the project's, `<slug>.env` or `<slug>-<name>`, never the machine's own nor
