@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment } from "../borrowed/fragment";
-import { readManifest, type Manifest } from "../borrowed/manifest";
+import { readManifest, SERVICE_PORTS, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected, PORTAL_PORT } from "../borrowed/portal";
 import { installedCode } from "../borrowed/locks";
 import { DOOR_PAGE_MARKER } from "../borrowed/page";
@@ -33,8 +33,9 @@ import { run } from "../src/gatekeeper/transaction";
  * block as in production, in front of `showcase`, a static site. The
  * names resolve on the loopback through the probe's Host header, and the
  * certificate is drawn here by a test authority. The test skips itself with no
- * `caddy` and no `openssl`, or when the portal's port is already taken on the
- * workstation.
+ * `caddy` and no `openssl`, or when the portal's port, or every other port of
+ * the services' range the site's manifest has to name, is already taken on
+ * the workstation.
  */
 
 const CADDY = Bun.which("caddy");
@@ -54,6 +55,16 @@ function freePort(port = 0): number | null {
 }
 
 const PORTAL_FREE = freePort(PORTAL_PORT) !== null;
+
+/** The site's port: a manifest names one of the services' range, never one the system picks. */
+function freeServicePort(): number | null {
+  for (let port = SERVICE_PORTS.first; port <= SERVICE_PORTS.last; port++) {
+    if (port !== PORTAL_PORT && freePort(port) !== null) return port;
+  }
+  return null;
+}
+
+const SITE_PORT = freeServicePort();
 
 /** The same extraction as bin/tests/cli-portal-caddy.test.ts, to read the real `(commun)`. */
 function block(text: string, header: string): string {
@@ -76,7 +87,7 @@ function openssl(folder: string, ...arguments_: string[]): void {
   if (output.exitCode !== 0) throw new Error(`openssl ${arguments_[0]}: ${output.stderr.toString()}`);
 }
 
-describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekeeper in front of a real Caddy", () => {
+describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE || SITE_PORT === null)("the gatekeeper in front of a real Caddy", () => {
   const D = mkdtempSync(join(tmpdir(), "gatekeeper-caddy-"));
   const portHttps = freePort()!;
   const portHttp = freePort()!;
@@ -214,7 +225,7 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE)("the gatekee
 
     // The fake site service, and the fake portal: /check refuses everyone,
     // as the real one does with no cookie; /sante says it is ready.
-    site = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("site sample") });
+    site = Bun.serve({ port: SITE_PORT!, hostname: "127.0.0.1", fetch: () => new Response("site sample") });
     portal = Bun.serve({
       port: PORTAL_PORT,
       hostname: "127.0.0.1",

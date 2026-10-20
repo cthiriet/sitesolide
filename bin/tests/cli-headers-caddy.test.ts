@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment, ZONE_HOST } from "../cli/fragment";
-import { readManifest, validate, type Manifest } from "../cli/manifest";
+import { readManifest, SERVICE_PORTS, validate, type Manifest } from "../cli/manifest";
 
 /**
  * A manifest's headers, as a real Caddy serves them.
@@ -64,15 +64,34 @@ function freePort(): number {
   return port;
 }
 
+/** The service's port: a manifest names one of the services' range, never one the system picks. */
+function freeServicePort(): number {
+  for (let port = SERVICE_PORTS.first; port <= SERVICE_PORTS.last; port++) {
+    try {
+      Bun.serve({ port, hostname: "127.0.0.1", fetch: () => new Response() }).stop(true);
+      return port;
+    } catch {
+      // Taken on this workstation: the next one.
+    }
+  }
+  throw new Error(`no free port between ${SERVICE_PORTS.first} and ${SERVICE_PORTS.last} on this workstation`);
+}
+
+/** The app the values are judged on: only an app's block carries headers, validate() refuses them elsewhere. */
+const FUZZ_APP: Manifest = { slug: "x", port: SERVICE_PORTS.first, start: "/usr/local/bin/bun run server.ts" };
+
 /** Values validate() accepts, drawn from every printable character with a fixed seed. */
 function acceptedValues(count: number): string[] {
   let seed = 4102026;
   const next = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 2 ** 32;
   const alphabet = [...Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i)), "{$", "{env."];
   const values: string[] = [];
-  while (values.length < count) {
+  // Bounded: a manifest every value fails, for a reason that is not the
+  // value's, would otherwise draw forever.
+  for (let draws = 0; values.length < count; draws++) {
+    if (draws > count * 1000) throw new Error(`only ${values.length} of ${count} values accepted: is FUZZ_APP still valid?`);
     const value = Array.from({ length: 1 + Math.floor(next() * 20) }, () => alphabet[Math.floor(next() * alphabet.length)]).join("").trim();
-    if (value !== "" && validate({ slug: "x", publicDir: "p", headers: { "X-Fuzz": value } }).length === 0) values.push(value);
+    if (value !== "" && validate({ ...FUZZ_APP, headers: { "X-Fuzz": value } }).length === 0) values.push(value);
   }
   return values;
 }
@@ -89,7 +108,7 @@ describe.skipIf(CADDY === null)("a manifest's headers, in a real Caddy", () => {
   beforeAll(async () => {
     for (const name of ["public", "locks"]) mkdirSync(join(folder, name));
     writeFileSync(join(folder, "public", "style.css"), "body{}");
-    service = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("service") });
+    service = Bun.serve({ port: freeServicePort(), hostname: "127.0.0.1", fetch: () => new Response("service") });
 
     const headers = { ...LEGITIMATE, ...Object.fromEntries(fuzz.map((value, rank) => [`X-Fuzz-${rank}`, value])) };
     const manifest: Manifest = { slug: "sample", port: service.port, publicDir: "public", start: "/usr/local/bin/bun run server.ts", headers };
