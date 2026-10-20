@@ -526,8 +526,10 @@ Who may hold which role is the steward's to decide, alone
   expiry, chosen when it is given. The registry and the portal keep its
   SHA-256 alone: drawn at random, it leaves nothing to guess, and a fast hash
   finds it by lookup;
-- **an Admin gives at most their own role, on their project alone**, and a
-  domain only among the company's; **the owner gives anything**;
+- **an Admin gives at most their own role, on their project alone**; **the
+  owner gives anything**, but a whole domain, whoever gives it, only among
+  the company's domains when `OIDC_ALLOWED_DOMAINS` lists them, and any
+  domain, unlocked, while it does not;
 - **removing someone, or lowering them, holds from their next request**, on
   the site as in the dashboard.
 
@@ -969,7 +971,7 @@ from `portal.env` at each change:
 |---|---|---|---|
 | the owner, over SSH | `sitesolide share`, `sitesolide people`, on the owner's socket | any role, to anyone the rules admit, on any deployed project; the create right | nothing more: it is root |
 | the owner, in the dashboard | a site's *Access*, *People* | the same | the password unlock, to give a role above Can open, password access, a domain while none is listed, or the create right |
-| an Admin | their project's *Access* | a role at most their own, Admin included, on that project alone; a domain only among the company's | their own unlock, a forced sign-in, to give a role above Can open, password access or a domain while none is listed |
+| an Admin | their project's *Access* | a role at most their own, Admin included, on that project alone; a domain only among the company's when they are listed | their own unlock, a forced sign-in, to give a role above Can open, password access or a domain while none is listed |
 | a token | `sitesolide share`, `/api/v1/projects/<slug>/access` | Can open alone, see [Access by token](#access-by-token) | nothing more: it never gives more than Can open |
 
 - **Giving Can open to a company account or to one of the company's listed

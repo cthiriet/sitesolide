@@ -96,8 +96,11 @@ creation not settled within a day, the owner gives its roles by hand.
 **Giving someone access** is the project's Admin's, or the owner's: from the
 site's *Access* section, or `sitesolide share <email> --role <role>` in the
 project's folder ([commands.md](commands.md#access-to-a-project)). An Admin
-gives at most their own role, on their project alone; a domain only among the
-company's. No email is sent: the command prints the line to send, and a
+gives at most their own role, on their project alone. A whole domain, whoever
+gives it, the owner included, is one of the company's domains when the owner
+listed them (`OIDC_ALLOWED_DOMAINS`); while that list is empty, any domain is
+given unlocked from the dashboard or by the owner over SSH, never with a
+token. No email is sent: the command prints the line to send, and a
 password once for password access. Removing someone, or lowering them, holds
 from their next request.
 

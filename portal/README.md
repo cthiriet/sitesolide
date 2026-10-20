@@ -469,8 +469,8 @@ it in its journal, `access.add`, `access.change` or `access.remove`:
 
 | Who | How | What they may do |
 |---|---|---|
-| the owner | the dashboard's *Access* section; `sitesolide share` in the project's folder, over SSH, root asking the steward's owner socket | anything; recorded as `owner` |
-| an Admin of the project | its *Access* section, through their session | their project only, a role at most their own; a domain only among `OIDC_ALLOWED_DOMAINS`; recorded under their email |
+| the owner | the dashboard's *Access* section; `sitesolide share` in the project's folder, over SSH, root asking the steward's owner socket | anything, but a domain only among `OIDC_ALLOWED_DOMAINS` when that list is set; recorded as `owner` |
+| an Admin of the project | its *Access* section, through their session | their project only, a role at most their own; a domain only among `OIDC_ALLOWED_DOMAINS` when that list is set, any domain under their unlock while it is empty; recorded under their email |
 | a token | `sitesolide share` with a token, or `/api/v1/projects/<slug>/access` | Can open alone, on the projects it reaches, and for a person's own token only where that person is Admin now; people who sign in with a company account, a domain only among `OIDC_ALLOWED_DOMAINS`, none when that list is empty; never password access; removes Can open entries alone; recorded as `token:<id>` |
 
 A domain is Can open only, and only once a provider is configured. A person
