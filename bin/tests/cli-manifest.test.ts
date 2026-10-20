@@ -110,7 +110,17 @@ describe("validation", () => {
     expect(validate({ slug: "budget", start: "bun run server.ts" })).toContainEqual(
       expect.stringContaining("port"),
     );
-    expect(validate({ ...APP, port: 80 })).toContainEqual(expect.stringContaining("1024"));
+    expect(validate({ ...APP, port: 80 })).toContainEqual(expect.stringContaining("between 3000 and 3099"));
+  });
+
+  test("holds an app's port to the range the loopback rule closes, as a service's", () => {
+    // Outside it, every project of the machine reaches the app directly,
+    // past its portal or its code: the rule judges who connects to 3000-3099
+    // alone.
+    for (const port of [2999, 3100, 4000, 8080, 65535]) {
+      expect(validate({ ...APP, port })).toEqual([expect.stringContaining("port: between 3000 and 3099")]);
+    }
+    for (const port of [3000, 3099]) expect(validate({ ...APP, port })).toEqual([]);
   });
 
   test("refuses a port without a start", () => {

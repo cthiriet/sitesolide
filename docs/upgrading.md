@@ -120,6 +120,35 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## An app's port stays in the range the loopback rule closes
+
+**An app's top-level `port` could be any port from 1024 to 65535.** The
+loopback rule lets only Caddy and the project itself reach 3000 to 3099; an
+app listening on 8080 was reachable by every other project of the machine,
+past its portal or its code. The ports of `services` were already held to the
+range, and `deploy` only ever chose ports inside it, so only a port written by
+hand could be outside. `validate()` now holds the top-level `port` to 3000 to
+3099 too.
+
+**What `sitesolide upgrade` brings**: the components that read a manifest,
+rebuilt with the rule, the installer and the dashboard among them. Nothing on
+the machine changes form, and a project outside the range keeps serving as it
+did.
+
+**What changes for you**, only if a project listens outside the range:
+
+- `sitesolide refresh --all --dry-run` names it, refused, with the reason.
+- `deploy`, `refresh`, a token deployment and the dashboard's *Access* section
+  refuse it until it moves.
+- To move it, set `port` in its `sitesolide.json` to a free port of the range,
+  or leave the key out and `deploy` picks one, then run
+  `sitesolide deploy --force` in its folder: the port of its unit and of its
+  Caddy block changes, which `deploy` otherwise reads as files edited by hand.
+  `sitesolide deploy --dry-run --compare` first lists what it would replace.
+
+**Going back.** `sitesolide upgrade` with the previous binary; a project moved
+into the range stays valid for it.
+
 ## Every app filters its system calls
 
 **An app could make any system call its account was allowed.** The

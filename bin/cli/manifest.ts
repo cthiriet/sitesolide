@@ -893,8 +893,12 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
   } else if (isApplication) {
     if (typeof manifest.port !== "number" || !Number.isInteger(manifest.port)) {
       errors.push("port: required as soon as `start` is declared");
-    } else if (manifest.port < 1024 || manifest.port > 65535) {
-      errors.push("port: between 1024 and 65535");
+    } else if (manifest.port < SERVICE_PORTS.first || manifest.port > SERVICE_PORTS.last) {
+      // The range the loopback rule closes: on any other port, every project
+      // of the machine reaches the app directly, past its door.
+      errors.push(
+        `port: between ${SERVICE_PORTS.first} and ${SERVICE_PORTS.last}, the range only Caddy and the project itself can reach; leave it out and deploy picks a free one`,
+      );
     }
   } else if (manifest.port !== undefined) {
     errors.push("port: useless without `start`, Caddy serves the folder itself");

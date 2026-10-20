@@ -48,7 +48,9 @@ export type PortChoice =
  * declares: its unit listens there, and moving it would leave the installed
  * unit, which `deploy` never replaces without --force, on the old port while
  * the new block points at the new one. That happens on every fresh clone of a
- * repository whose chosen port was never committed.
+ * repository whose chosen port was never committed. A port outside the range
+ * is not kept: validate() refuses it, every other project reaching it, and
+ * the move to a free one is the deployment with --force the refusal asks for.
  *
  * Every other project gets the lowest port of the range nothing claims. A
  * deposited manifest that no longer reads still holds the ports it can be read
@@ -61,7 +63,7 @@ export function choosePort(slug: string, deposited: ReadonlyMap<string, string>)
     if (manifest === undefined) continue;
     if (folder === slug) {
       const port = hasServices(manifest) ? null : mainPort(manifest);
-      if (port !== null && Number.isInteger(port) && port >= 1024 && port <= 65535) return { kind: "kept", port };
+      if (port !== null && Number.isInteger(port) && port >= SERVICE_PORTS.first && port <= SERVICE_PORTS.last) return { kind: "kept", port };
       continue;
     }
     for (const service of servicesOf(manifest)) {

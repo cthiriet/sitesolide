@@ -69,8 +69,9 @@ describe("the port chosen", () => {
     expect(choosePort("shop", machine({ shop: app("shop", 3057), blog: app("blog", 3002) }))).toEqual({ kind: "kept", port: 3057 });
   });
 
-  test("even a port outside the range, chosen by hand before: moving it would leave the unit behind", () => {
-    expect(choosePort("legacy", machine({ legacy: app("legacy", 8080) }))).toEqual({ kind: "kept", port: 8080 });
+  test("not a port outside the range, which every other project reaches: it moves to a free one", () => {
+    expect(validate(app("legacy", 8080) as never)).toContainEqual(expect.stringContaining("port: between 3000 and 3099"));
+    expect(choosePort("legacy", machine({ legacy: app("legacy", 8080) }))).toEqual({ kind: "free", port: 3002 });
   });
 
   test("a project that used to run several services is given a port of its own", () => {

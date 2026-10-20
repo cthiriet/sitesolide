@@ -16,9 +16,9 @@ const D = mkdtempSync(join(tmpdir(), "gatekeeper-principal-"));
 
 afterAll(() => rmSync(D, { recursive: true, force: true }));
 
-function arborescence(name: string): Record<string, string> {
+function machineTree(name: string): Record<string, string> {
   const root = join(D, name);
-  const manifest: Manifest = { slug: "sample", port: 3999, publicDir: "public", start: "bun run server.ts" };
+  const manifest: Manifest = { slug: "sample", port: 3099, publicDir: "public", start: "bun run server.ts" };
   mkdirSync(join(root, "srv", "sample"), { recursive: true });
   mkdirSync(join(root, "sites"), { recursive: true });
   writeFileSync(join(root, "srv", "sample", "sitesolide.json"), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -54,7 +54,7 @@ async function gatekeeper(argv: string[], env: Record<string, string>, action?: 
 
 describe("gatekeeper.ts", () => {
   test("a malformed start: exit code 2, and nothing is written, neither result nor lock", async () => {
-    const env = arborescence("mal-forme");
+    const env = machineTree("malformed");
     const before = readFileSync(join(env.SITES_DIR!, "sample", "sitesolide.json"), "utf8");
     // The template from before, a slug out of rule, a name that is not a unit's.
     expect(await gatekeeper(["on-sample"], env, "on")).toBe(2);
@@ -71,7 +71,7 @@ describe("gatekeeper.ts", () => {
   });
 
   test("a refusal: exit code 0, the result is what counts", async () => {
-    const env = arborescence("rejects");
+    const env = machineTree("rejects");
     expect(await gatekeeper(["sitesolide-gatekeeper-on@dashboard.service"], env, "on")).toBe(0);
     const file = join(env.RUN_FOLDER!, "dashboard.json");
     const result = JSON.parse(readFileSync(file, "utf8"));
@@ -86,7 +86,7 @@ describe("gatekeeper.ts", () => {
   });
 
   test("a failure before the action: exit code 0, nothing changed, no lock or backup left behind", async () => {
-    const env = arborescence("failure");
+    const env = machineTree("failure");
     const before = readFileSync(join(env.SITES_DIR!, "sample", "sitesolide.json"), "utf8");
     expect(await gatekeeper(["sitesolide-gatekeeper-on@sample.service"], env, "on")).toBe(0);
     const result = JSON.parse(readFileSync(join(env.RUN_FOLDER!, "sample.json"), "utf8"));
@@ -96,7 +96,7 @@ describe("gatekeeper.ts", () => {
   });
 
   test("Caddy's lock held by the workstation: refusal, and the lock stays with its holder", async () => {
-    const env = arborescence("held");
+    const env = machineTree("held");
     const lock = join(env.RUN_FOLDER!, "caddy.lock");
     mkdirSync(lock, { recursive: true });
     const holder = `deploy ${process.pid} ${Date.now()}\n`;
