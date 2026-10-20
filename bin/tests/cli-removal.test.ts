@@ -15,9 +15,10 @@ import {
 /**
  * What this file protects: the order and the reach of a removal.
  *
- * It is the only command of the CLI whose mistake cannot be caught up. The VM
- * has no backup: an `rm -rf` on the wrong path, or a Caddy block left behind
- * an erased folder, is paid for with a lost site or a dead address.
+ * It is the only command of the CLI whose mistake cannot be caught up. A
+ * backup holds the data of its last run at best: an `rm -rf` on the wrong
+ * path, or a Caddy block left behind an erased folder, is paid for with a
+ * lost site or a dead address.
  * Everything is tried here on strings, without a single command leaving.
  */
 

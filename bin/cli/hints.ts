@@ -153,7 +153,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   // --- domains and removal: the owner's decisions
   [/^no domain declared in the manifest/, "declare the owner's domain first in sitesolide.json: \"domain\": { \"name\": \"example.com\", \"active\": false }"],
   [/does not resolve to /, "point the domain's DNS record at the server, wait for it to propagate, then run this again; --force only on the owner's explicit decision"],
-  [/^removal needs the slug typed back/, "re-run with --confirm <slug>, and only if the owner asked for this project to be removed: the server keeps no backup"],
+  [/^removal needs the slug typed back/, "re-run with --confirm <slug>, and only if the owner asked for this project to be removed: what it wrote since the last backup is lost for good"],
 
   // --- the binary's kit, see bin/cli/kit.ts
   [/^cannot unpack the kit into /, "the binary could not write its scripts into the folder the message names: free some disk space or fix that folder's permissions, or set XDG_CACHE_HOME to a writable folder, then run the same command again"],

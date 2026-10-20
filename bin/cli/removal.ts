@@ -41,6 +41,15 @@ import { secretPath, projectPaths, systemUser } from "./unit";
  */
 export const PREVIOUS_DIR = "/var/lib/sitesolide-steward/precedents";
 
+/**
+ * What a removal costs, said before it starts. It touches no backup: the
+ * snapshots the machine took, when it takes any, stay in both repositories
+ * (dashboard/src/backup/README.md, a name a removed project left behind), and
+ * what the project wrote since the last of them is gone for good.
+ */
+export const REMOVAL_WARNING =
+  "this deletes the served directory and its data. Backup snapshots, if the machine takes any, stay; what changed since the last one is lost.";
+
 export type Action = {
   /** What is shown, in the CLI's language. */
   title: string;
@@ -90,7 +99,8 @@ export function removalActions(project: ProjectToRemove): Action[] {
   }
 
   // The whole directory, data included. This is the irreversible action of the
-  // lot: the VM has no backup, and a SQLite database that goes does not return.
+  // lot: no backup is touched, and what a SQLite database took since the last
+  // snapshot, when the machine takes any, does not return.
   actions.push({
     title: "remove the served directory, data included",
     command: `sudo rm -rf ${paths.root}`,

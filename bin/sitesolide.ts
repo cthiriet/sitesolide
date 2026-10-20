@@ -169,6 +169,7 @@ import {
 } from "./cli/portal-vm";
 import {
   isValidConfirmation,
+  REMOVAL_WARNING,
   ownershipReleaseCommand,
   readOwnershipRelease,
   removableSecrets,
@@ -2923,7 +2924,7 @@ async function remove(
 
   note({ slug, dryRun: executor.simulated });
   say(`-> removing ${slug}, ${isApplication ? "service" : "static"}`);
-  say("   this deletes the served directory and its data. The VM has no backup.");
+  say(`   ${REMOVAL_WARNING}`);
 
   // A site that opens with a code goes back to Public first, through the
   // steward and the gatekeeper, the one path that changes a general access:

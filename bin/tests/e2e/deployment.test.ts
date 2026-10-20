@@ -575,6 +575,10 @@ describe("a project that runs in the background", () => {
     );
     expect(r.output).toContain("/etc/systemd/system/sample-nightly.report.timer");
     expect(r.output).not.toContain("sample-nightly.report.timer.service");
+    // The removal touches no backup: the snapshots stay, and the warning
+    // says so rather than claiming the machine keeps none.
+    expect(r.output).toContain("Backup snapshots, if the machine takes any, stay; what changed since the last one is lost.");
+    expect(r.output).not.toContain("no backup");
   });
 });
 

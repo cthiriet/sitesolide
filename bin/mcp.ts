@@ -17,7 +17,7 @@
  * workstation that has none yet.
  *
  * What is not a tool, on purpose: `remove`, which deletes a project and its
- * data with no backup; `lock`, `unlock` and `domain --activate`, which change
+ * data, what changed since the last backup for good; `lock`, `unlock` and `domain --activate`, which change
  * what visitors see; `--force`, which replaces a file someone edited by hand
  * on the machine; `refresh`, which rewrites the units of every app on the
  * machine and restarts them. Those stay the owner's, typed by them.

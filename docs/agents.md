@@ -17,7 +17,7 @@ as yours would.
 
 | An agent can | It cannot |
 |---|---|
-| infer a manifest for a folder (`detect`) | remove a project, which the machine keeps no backup of |
+| infer a manifest for a folder (`detect`) | remove a project, whose data since the last backup is lost for good |
 | dry-run a deploy, and deploy | lock or unlock a preview, switch a domain |
 | read the server's status, a project's logs, its lock state | `--force` over a file someone edited on the machine |
 | give the people you named access to a project, by email or `@domain`, with a role, and read who has access | give access to anyone you did not name, or make a site Public, which is its general access, the dashboard's |
