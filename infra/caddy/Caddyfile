@@ -39,7 +39,8 @@
 # is the only way to obtain a wildcard. It does require, however, a token able
 # to modify the zone: the server's one covers only the zone served, so this
 # snippet must never be imported by a block serving a client's own domain. Those
-# domains go through HTTP-01, see the on-demand block at the end of the file.
+# domains go through Caddy's default challenges, HTTP-01 or TLS-ALPN-01, see the
+# on-demand block at the end of the file.
 #
 # Importing this snippet rather than copying the tls block is not only a matter
 # of concision: Caddy reuses the wildcard certificate for a subdomain only if
@@ -196,10 +197,12 @@ import /etc/caddy/sites/*.caddy
 # and it is the domaines.map table that decides which directory is served.
 # Adding a client is therefore done without touching this file, as for previews.
 #
-# The certificate goes through HTTP-01, not through the DNS challenge of the
-# zone: the Cloudflare token can only modify the zone served, and the client
-# often keeps their DNS elsewhere. That is why this block does not import
-# tls-zone.
+# The certificate goes through Caddy's default challenges, not through the DNS
+# challenge of the zone: the Cloudflare token can only modify the zone served,
+# and the client often keeps their DNS elsewhere. That is why this block does
+# not import tls-zone. Caddy enables HTTP-01 and TLS-ALPN-01, picks one of them
+# at random for each issuance, and tries the other when it fails: ports 80 and
+# 443 both have to reach the machine.
 #
 # An application client site must not land here: its domain belongs to its own
 # file in /etc/caddy/sites/, otherwise Caddy would serve its static files
@@ -249,8 +252,10 @@ https:// {
 # on demand, which it does not know in advance.
 #
 # This block occupies the whole of port 80, which might raise fears for the ACME
-# challenge. Checked on a client domain: on-demand issuance goes through
-# TLS-ALPN-01, on port 443, without ever attempting HTTP-01.
+# challenge. It does not stand in its way: Caddy answers an HTTP-01 challenge
+# before any route of the server (HandleHTTPChallenge, in caddyhttp's
+# server.go), so the redirection never sees one. An issuance that picked
+# TLS-ALPN-01 never comes to port 80 at all.
 http:// {
 	redir https://{host}{uri} permanent
 }

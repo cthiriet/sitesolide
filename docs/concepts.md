@@ -294,8 +294,10 @@ get a wildcard, and it needs a token that can edit the zone. Every project under
 the zone shares that certificate. A block that diverged on TLS policy would
 silently get its own certificate instead, so they all import the same snippet.
 
-**A customer domain** gets its own certificate over HTTP-01, issued on first
-request. The token on the machine cannot edit someone else's zone, and the
+**A customer domain** gets its own certificate, issued on first request over
+Caddy's default challenges, HTTP-01 or TLS-ALPN-01, one picked at random and
+the other tried when it fails: ports 80 and 443 both have to reach the
+machine. The token on the machine cannot edit someone else's zone, and the
 customer usually keeps their DNS elsewhere. An app's block claims every name
 the table carries for its domain, the `www` of a second level domain and the
 aliases, and sends them to the domain itself: a name no block claimed fell

@@ -166,8 +166,8 @@ obtains the wildcard certificate.
 
 ## No wildcard at all
 
-Possible but poorer: each project then gets its own
-certificate over HTTP-01, which works, costs an issuance per subdomain, and
+Possible but poorer: each project then gets its own certificate over
+HTTP-01 or TLS-ALPN-01, which works, costs an issuance per subdomain, and
 makes previews visible in certificate transparency logs. Remove the
 `import tls-zone` lines and let Caddy do its default thing.
 
