@@ -84,8 +84,9 @@ sitesolide setup root@203.0.113.10 --zone example.com --email you@example.com
 `--contact`, optional, is shown to a visitor who lands on a locked preview.
 
 Setup hardens the machine (a `deploy` account with sudo, ssh by key only and
-closed to root, ufw, fail2ban, automatic security updates), creates the four
-DNS records, installs Caddy with its DNS module and Bun, then deploys every
+closed to root, ufw, fail2ban, automatic security updates), creates the
+zone's DNS records, an A for `<zone>` and `*.<zone>`, and an AAAA for each when
+the machine has an IPv6, installs Caddy with its DNS module and Bun, then deploys every
 service of the platform in the order a fresh machine accepts: the shared API,
 the dashboard and the root daemon behind it, the portal, the rule that isolates
 services on the loopback, the monitor, backups, the installer that deploys
@@ -156,8 +157,9 @@ Cloudflare is named in two places: setup's records, and the Caddyfile's
 `(tls-zone)` snippet, `dns cloudflare {env.CLOUDFLARE_API_TOKEN}`, which
 obtains the wildcard certificate.
 
-- Run setup with `--skip-dns`: it prints the four records to create, `<zone>`
-  and `*.<zone>`, A and AAAA, and waits for them to resolve.
+- Run setup with `--skip-dns`: it prints the records to create, `<zone>` and
+  `*.<zone>`, an A each, and an AAAA each when the machine has an IPv6, and
+  waits for them to resolve.
 - In `infra/caddy/Caddyfile`, replace `cloudflare` with your provider's Caddy
   module and the variable with whatever it wants, add that module on the
   machine with `caddy add-package`, and lay `/etc/caddy/cloudflare.env`,

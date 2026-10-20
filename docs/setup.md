@@ -33,7 +33,7 @@ missing. The output is a checklist: `[done]` already there, `[ok]` done now,
 |---|---|---|
 | preflight | always read | nothing: system, architecture, free disk, sudo, addresses, ssh port |
 | configuration | `config.json` names this server and zone | your workstation: `~/.config/sitesolide/config.json`, and `setup.json` beside it |
-| dns | `x<random>.<zone>` and `<zone>` resolve to the machine | Cloudflare: `<zone>` and `*.<zone>`, A and AAAA, DNS only, TTL auto |
+| dns | `x<random>.<zone>` and `<zone>` resolve to the machine | Cloudflare: `<zone>` and `*.<zone>`, an A each, an AAAA each when the machine has an IPv6, DNS only, TTL auto |
 | packages | sudo ufw fail2ban unattended-upgrades rsync git curl unzip installed, `nft` present | apt; fail2ban installed without being started |
 | account | the deploy account exists, `sudo -n` works for it, it holds the operator's keys | `useradd`, `/etc/sudoers.d/90-sitesolide-<user>`, its `authorized_keys` |
 | firewall | ufw active, incoming denied, the ssh port, 80 and 443 allowed | ufw |
@@ -164,7 +164,8 @@ the dashboard.
 ## Another DNS provider
 
 `--skip-dns` leaves Cloudflare's API alone: setup prints the records to create,
-`<zone>` and `*.<zone>`, A and AAAA, DNS only, and waits for them, thirty
+`<zone>` and `*.<zone>`, an A each and an AAAA each when the machine has an
+IPv6, DNS only, and waits for them, thirty
 minutes at most, before Caddy. Caddy still needs a DNS module for the wildcard
 certificate, which [install.md](install.md#another-dns-provider) describes:
 replace `cloudflare` in the Caddyfile's `(tls-zone)` snippet with your
