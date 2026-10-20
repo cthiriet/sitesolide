@@ -1,8 +1,8 @@
 # Commands
 
 Every command runs from a project's folder, the one holding its
-`sitesolide.json`, except `setup`, `upgrade`, `refresh`, `init`, `machine`,
-`people`, `help` and `--version`. This is what `sitesolide --help` prints.
+`sitesolide.json`, except `setup`, `upgrade`, `refresh`, `init`, `status`,
+`login`, `mcp`, `machine`, `people`, `help` and `--version`. This is what `sitesolide --help` prints.
 
 ```text
 sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a no-op once done
@@ -26,6 +26,9 @@ sitesolide --version            the release this binary was built from, dev from
 sitesolide init                 write ~/.config/sitesolide/config.json
    --server <user@host> --zone <dns.zone> --email <you@example.com>
    --contact <you@example.com>   shown on the page that asks for a preview code
+   --vault <dir>                the workstation's own credentials, ~/.config/sitesolide/secrets by default
+   --sites <dir>                a repository holding several projects, for the checks that read them all
+   --api <url>                  the dashboard's address, as login --url writes it
 sitesolide detect               the sitesolide.json this folder implies, written nowhere
    --write                      write it, never over an existing one
    --slug <name>                name the project, rather than after its folder
@@ -55,6 +58,7 @@ sitesolide unlock [--dry-run]   back to Public, its code dropped
 sitesolide domain               where this project's own domain stands
    --activate [--force]         switch the site onto it, then rebuild the table
    --deactivate                 back to the preview subdomain
+   --dry-run                    with --activate or --deactivate: show every step, change nothing
 sitesolide remove --confirm <slug>
                                 take the project off the machine, for good, its name freed from the token that created it
    --dry-run                    show every step, remove nothing
@@ -123,8 +127,9 @@ and that account already holds sudo without a password.
 `sitesolide status` reads what the machine runs, one line per unit under each
 project. A worker reads as any service, `active` with its memory. A scheduled
 service shows its schedule, when it last ran and how that run ended, and when
-it runs next. Between two runs it is `inactive`, its normal state and no
-outage, or `failed` after a run that failed, until the next one. The main
+it runs next. Between two runs it reads `waiting` while its timer is armed,
+its normal state and no outage, `failed` after a run that failed, until the
+next one, and `inactive` when its timer is not armed and nothing would run it. The main
 unit of a project whose services are all scheduled, its anchor, is `active`
 and holds no memory, since it runs nothing. See
 [manifest.md](manifest.md#services) for the kinds of service.
