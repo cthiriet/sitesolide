@@ -262,8 +262,8 @@ certificate it signed: an agent's sandbox is set up by whoever trusts it.
 
 A workstation with no `server` in its configuration uses the dashboard for
 `deploy`, `status`, `logs`, `share`, `secrets` and `restart`. Every other
-command (`lock`, `domain`, `remove`, `run`, `people`) needs the owner's SSH
-access and says so.
+command (`lock`, `unlock`, `domain`, `remove`, `run`, `people`, `refresh`,
+`backups`) needs the owner's SSH access and says so.
 
 ### In an agent's sandbox
 

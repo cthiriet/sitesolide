@@ -481,6 +481,11 @@ describe("login, status, logs", () => {
     const removal = await cli(root, ["remove", "--confirm", "shop"], env);
     expect(removal.code).toBe(1);
     expect(removal.error).toContain("sitesolide remove needs the owner's SSH access");
+    // The snapshots are read on the machine, over SSH: a token is told so,
+    // rather than told the command does not exist.
+    const backups = await cli(root, ["backups"], env);
+    expect(backups.code).toBe(1);
+    expect(backups.error).toContain("sitesolide backups needs the owner's SSH access");
     const usage = await cli(root, [], env);
     expect(usage.error).toContain("usage, with a token:");
     // With a server, --api still goes through the API.
