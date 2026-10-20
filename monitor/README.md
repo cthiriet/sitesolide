@@ -238,8 +238,10 @@ The free tier is enough: one check, pinged every minute.
    reads the file at its next pass, within the minute: nothing to restart, and
    the page marks no restart pending, since `dashboard.service` does not read
    this file.
-6. Within two minutes the check turns green on healthchecks.io, and
-   `sudo journalctl -u sitesolide-monitor -n 1` ends with `heartbeat ok`.
+6. Within two minutes the check turns green on healthchecks.io, and the
+   pass's summary ends with `heartbeat ok`; systemd's own lines about the run
+   come after it in the journal, so read it with
+   `sudo journalctl -u sitesolide-monitor -n 20 -o cat | grep -E '^[0-9]+ checks, ' | tail -n 1`.
 
 For messages as well, add `ALERT_WEBHOOK_URL` in the same file: a Slack
 incoming webhook, a Discord channel's webhook, a Google Chat space's webhook,
@@ -407,11 +409,12 @@ timer only if all of that passed. Check:
 
 ```bash
 ssh you@your-machine 'systemctl list-timers sitesolide-monitor.timer'
-ssh you@your-machine 'sudo journalctl -u sitesolide-monitor -n 5 -o cat'
+ssh you@your-machine "sudo journalctl -u sitesolide-monitor -n 20 -o cat | grep -E '^[0-9]+ checks, ' | tail -n 1"
 ssh you@your-machine 'getent passwd sitesolide-monitor && sudo stat -c "%F %U:%G %a" /var/lib/sitesolide-monitor'
 ```
 
-The last journal line reads `N checks, 0 down, ...`. A first pass with problems
+The summary reads `N checks, 0 down, ...`; systemd's own lines about the run
+come after it in the journal, hence the `grep`. A first pass with problems
 shows them as `failing`; they are confirmed, and alerted, at the second pass, a
 minute later. With a heartbeat set, healthchecks.io turns green. The account
 reads `sitesolide-monitor:x:<uid>:<gid>::/nonexistent:/usr/sbin/nologin`, a uid
@@ -441,10 +444,10 @@ dashboard read each other's files whatever their age, and `state.json` is kept:
 ```bash
 bin/deploy-monitor.sh                 # the monitor
 cd dashboard && sitesolide deploy     # the collector that copies the status, and the page that shows it
-ssh you@your-machine 'sudo journalctl -u sitesolide-monitor -n 3 -o cat'
+ssh you@your-machine "sudo journalctl -u sitesolide-monitor -n 20 -o cat | grep -E '^[0-9]+ checks, ' | tail -n 1"
 ```
 
-Check: the last line reads `N checks, ...; heartbeat ok, ...`, and with only a
+Check: the summary reads `N checks, ...; heartbeat ok, ...`, and with only a
 project down, healthchecks.io stays green, the project listed in the ping's
 body, where it used to turn red. An address in plain `http://` is now refused
 and shows as `WARNING The monitor could not run fully: ... must be an https
@@ -519,12 +522,12 @@ alone.
 Check:
 
 ```bash
-ssh you@your-machine 'sudo journalctl -u sitesolide-monitor -n 3 -o cat'
+ssh you@your-machine 'sudo journalctl -u sitesolide-monitor -n 20 -o cat'
 ssh you@your-machine 'sudo stat -c "%F %U:%G %a" /var/lib/sitesolide-monitor; sudo ls -la /var/lib/private'
 ```
 
-The last line reads `N checks, ...` and no line carries `could not run
-fully`; the directory is `directory sitesolide-monitor:sitesolide-monitor 700`,
+The last pass's summary reads `N checks, ...`, systemd's own lines about the
+run after it, and no line carries `could not run fully`; the directory is `directory sitesolide-monitor:sitesolide-monitor 700`,
 and `/var/lib/private` no longer holds `sitesolide-monitor`. Within two passes
 the monitor's own warning is `RECOVERED`, healthchecks.io turns green, and any
 unit that was already down, which the blind monitor could not see, is alerted
@@ -542,10 +545,10 @@ it before the first project with a `schedule`, or that service is reported
 
 ```bash
 bin/deploy-monitor.sh
-ssh you@your-machine 'sudo journalctl -u sitesolide-monitor -n 3 -o cat'
+ssh you@your-machine "sudo journalctl -u sitesolide-monitor -n 20 -o cat | grep -E '^[0-9]+ checks, ' | tail -n 1"
 ```
 
-Check: the last line reads `N checks, ...`, each scheduled service's timer
+Check: the summary reads `N checks, ...`, each scheduled service's timer
 now among them, and a scheduled service already reported down by the older
 monitor says `RECOVERED` within two passes. Roll back: `bin/deploy-monitor.sh`
 from the previous commit; the timers are no longer checked, with one `NO LONGER
@@ -567,7 +570,7 @@ what it left, then run the script and look again:
 # Before: the reason for the change, and the state behind systemd's link.
 sudo systemd-run --wait --pipe -p DynamicUser=yes /usr/bin/systemctl show caddy -p ActiveState   # fails: Transport endpoint is not connected
 sudo systemd-run --wait --pipe -p User=nobody /usr/bin/systemctl show caddy -p ActiveState       # ActiveState=active
-sudo journalctl -u sitesolide-monitor -n 1 -o cat               # ... could not run fully: systemctl show: ...
+sudo journalctl -u sitesolide-monitor -n 20 -o cat | grep 'could not run fully'   # ... could not run fully: systemctl show: ...
 sudo stat -c '%N' /var/lib/sitesolide-monitor                   # '/var/lib/sitesolide-monitor' -> 'private/sitesolide-monitor'
 sudo stat -c '%U:%G %u:%g' /var/lib/private/sitesolide-monitor /var/lib/private/sitesolide-monitor/state.json
 # nobody:nogroup 65534:65534 twice, systemd 257's ID-mapping
@@ -595,7 +598,7 @@ Then, on any test VM:
 sudo systemctl start sitesolide-monitor.service
 systemctl show sitesolide-monitor.service -p Result -p User -p DynamicUser   # Result=success, User=sitesolide-monitor, DynamicUser=no
 sudo systemd-run --wait --pipe -p User=sitesolide-monitor /usr/bin/systemctl show caddy -p ActiveState   # ActiveState=active
-sudo journalctl -u sitesolide-monitor -n 20 -o cat              # no "could not run fully"; the last line "N checks, ..."
+sudo journalctl -u sitesolide-monitor -n 20 -o cat              # no "could not run fully"; "N checks, ..." before systemd's lines
 sudo grep -c '"id":"monitor"' /var/lib/sitesolide-monitor/status.json        # 0: the monitor is not among what is down
 sudo grep -o '"unit:[^"]*"' /var/lib/sitesolide-monitor/state.json | head    # the units it now checks
 systemd-analyze security sitesolide-monitor.service             # the exposure score
@@ -604,7 +607,7 @@ systemd-analyze security sitesolide-monitor.service             # the exposure s
 sudo install -m 600 -o root -g root /dev/null /etc/sitesolide/dashboard-monitor.env
 echo 'HEARTBEAT_URL=https://hc-ping.com/<a test check>' | sudo tee /etc/sitesolide/dashboard-monitor.env > /dev/null
 sudo systemctl start sitesolide-monitor.service
-sudo journalctl -u sitesolide-monitor -n 1 -o cat               # ends with "heartbeat ok"
+sudo journalctl -u sitesolide-monitor -n 20 -o cat | grep -E '^[0-9]+ checks, ' | tail -n 1   # ends with "heartbeat ok"
 
 # A project's service down: one DOWN for its unit and its site, then one
 # RECOVERED; the heartbeat stays green, the site in its body.

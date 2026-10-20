@@ -82,7 +82,12 @@ function healthyVm(machine: Machine = {}): FakeVm {
   fake.answer("sha256sum /usr/local/lib/sitesolide/monitor.js", `${installed}  /usr/local/lib/sitesolide/monitor.js\n`);
   fake.answer("-p Result --value", "success\n");
   fake.answer(LAYOUT_STAT, `${layout}\n`);
-  fake.answer("journalctl -u sitesolide-monitor.service", "16 checks, 0 down, 0 failing; heartbeat ok, webhook idle\n");
+  // As the journal has it: systemd's own lines about the run come after the
+  // pass's summary, which the script has to pick out.
+  fake.answer(
+    "journalctl -u sitesolide-monitor.service",
+    "16 checks, 0 down, 0 failing; heartbeat ok, webhook idle\nsitesolide-monitor.service: Deactivated successfully.\nFinished sitesolide-monitor.service - sitesolide monitor.\n",
+  );
   fake.answer("is-active sitesolide-monitor.timer", "active\n");
   return fake;
 }
@@ -127,7 +132,8 @@ describe("bin/deploy-monitor.sh", () => {
     expect(r.output).toContain("alerting set in /etc/sitesolide/dashboard-monitor.env");
     expect(r.output).toContain(`${ACCOUNT} created`);
     expect(r.output).toContain("no state yet: the first run makes /var/lib/sitesolide-monitor, the account's");
-    expect(r.output).toContain("16 checks, 0 down, 0 failing; heartbeat ok, webhook idle");
+    expect(r.output).toContain("   16 checks, 0 down, 0 failing; heartbeat ok, webhook idle\n");
+    expect(r.output).not.toContain("Finished sitesolide-monitor.service");
     expect(vm.logs().filter((line) => line.startsWith("REFUSED"))).toEqual([]);
 
     inOrder([

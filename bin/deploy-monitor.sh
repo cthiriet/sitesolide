@@ -182,7 +182,10 @@ ssh -n "$SITESOLIDE_SERVER" "sudo test -s $STATUS" || fail "the first run left n
 # on the machine can write.
 layout="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%F %U:%G' $STATE_DIR" || true)"
 [ "$layout" = "directory $ACCOUNT:$ACCOUNT" ] || fail "$STATE_DIR is '${layout:-nothing}', expected a directory of $ACCOUNT:$ACCOUNT"
-echo "   $(ssh -n "$SITESOLIDE_SERVER" "sudo journalctl -u $UNIT.service -n 1 -o cat --no-pager" || true)"
+# The pass's summary, not the journal's last line: systemd writes its own
+# about the run, "Deactivated successfully" and "Finished", after it.
+summary="$(ssh -n "$SITESOLIDE_SERVER" "sudo journalctl -u $UNIT.service -n 20 -o cat --no-pager" | grep -E '^[0-9]+ checks, ' | tail -n 1 || true)"
+echo "   ${summary:-no summary in the journal: sudo journalctl -u $UNIT.service -n 20 says why}"
 
 echo "-> timer"
 ssh -n "$SITESOLIDE_SERVER" "sudo systemctl enable --now $UNIT.timer"
