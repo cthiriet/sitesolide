@@ -418,8 +418,9 @@ CSS, inline icon, no external request, because anything it asked for would
 come back as HTML.
 
 **A site closes on every address it answers on.** Its own domain answers as
-its preview does, the portal's guard or the code alike, and the domain's other
-names, its aliases and its `www`, send there. Every block that serves a site's
+its preview does, the portal's guard or the code alike. The domain's other
+names, its aliases and its `www`, send there for an app, and serve the same
+files, closed alike, for a static site. Every block that serves a site's
 content off its preview says whose site it is: the domain's block in its
 fragment, and, for a static site, Caddy's nameless block from the domain
 table. The preview locks and the portal read that, never the domain's name,

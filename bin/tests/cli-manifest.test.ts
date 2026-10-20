@@ -466,6 +466,13 @@ describe("environment variables", () => {
 });
 
 describe("the site's headers", () => {
+  test("refused on a static site, which has no Caddy block to carry them, rather than ignored", () => {
+    expect(validate({ ...STATIC, headers: { "X-Frame-Options": "DENY" } })).toEqual([
+      expect.stringContaining("headers: only an app has a Caddy block of its own"),
+    ]);
+    expect(validate({ ...APP, headers: { "X-Frame-Options": "DENY" } })).toEqual([]);
+  });
+
   test("accepted", () => {
     expect(
       validate({ ...APP, headers: { "Permissions-Policy": "microphone=(self)" } }),

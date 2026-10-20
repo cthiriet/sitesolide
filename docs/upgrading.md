@@ -149,6 +149,14 @@ did.
 **Going back.** `sitesolide upgrade` with the previous binary; a project moved
 into the range stays valid for it.
 
+## A static site's `headers` are refused
+
+A static site has no Caddy block of its own, and the shared blocks that serve
+it never wrote the `headers` its manifest declared: they were accepted and
+ignored. `validate()` now refuses the key without `start`. A static site that
+declares it is refused by `deploy` and by its *Access* section until the key
+is taken out, which changes nothing it serves.
+
 ## Every app filters its system calls
 
 **An app could make any system call its account was allowed.** The

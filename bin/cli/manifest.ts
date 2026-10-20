@@ -947,6 +947,10 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
   const headersObject = typeof headers === "object" && headers !== null && !Array.isArray(headers);
   if (headers !== undefined && !headersObject) {
     errors.push('headers: an object naming each header, such as { "X-Robots-Tag": "noindex" }');
+  } else if (headers !== undefined && !isApplication) {
+    // A static site has no block of its own: the Caddyfile's shared blocks
+    // serve its folder, and nothing would ever write these headers there.
+    errors.push("headers: only an app has a Caddy block of its own to carry them; a static site is served by the machine's shared blocks, which add none");
   }
   for (const [name, value] of headersObject ? Object.entries(headers) : []) {
     if (!isValidHeaderName(name)) {

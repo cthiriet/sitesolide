@@ -476,7 +476,9 @@ A `%` is written as `%%` and reaches the service as it is.
 
 ### `headers`
 
-HTTP headers added by Caddy for this project.
+HTTP headers added by Caddy for this app, in its own Caddy block. A static
+site has none: Caddy's shared blocks serve it, and add no project's headers,
+so the key is refused there rather than ignored.
 
 ```json
 "headers": { "X-Robots-Tag": "noindex, nofollow" }
@@ -652,9 +654,12 @@ covered, a new name or alias staying inactive until the owner activates it. A do
 already covers it, and so is a domain for a project that serves no page, see
 [A project that serves no page](#a-project-that-serves-no-page).
 
-The domain is the site's address once it is active: its aliases, and the
-`www` of a second level domain, which the table adds by itself, answer with a
-permanent redirect to `name`, the path kept. An alias in the served zone is
+The domain is the site's address once it is active, with its aliases and the
+`www` of a second level domain, which the table adds by itself. An app's
+other names answer with a permanent redirect to `name`, the path kept: its
+block sends them there. A static site has no block of its own, and Caddy's
+shared block for customer domains serves the same files on every one of its
+names, which open and close with the site alike. An alias in the served zone is
 refused, and so is a name, an alias or their `www` that another project on
 the machine declares, active or not: a name belongs to one project. It opens as the preview does,
 Restricted or with a code alike: the domain closes with the site, and
