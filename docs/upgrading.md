@@ -120,7 +120,14 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
-## The zone's TLS policy moves to a file
+## Machines from eight clouds, and any domain
+
+**What the release brings.** `sitesolide machine` orders the machine from
+Hetzner, DigitalOcean, AWS, Google Cloud, Azure, Scaleway, Vultr or Akamai, and
+`sitesolide setup` typed alone at a terminal asks rather than takes options.
+`setup --dns` names who serves the zone: eleven providers through their APIs,
+or `manual`, records made by hand and a certificate per name, which works with
+any registrar. See [machine.md](machine.md) and [setup.md](setup.md#dns).
 
 **The Caddyfile no longer says how the zone's certificates are obtained.** Its
 `(tls-zone)` snippet held Cloudflare's DNS challenge inline; it now imports
@@ -149,6 +156,13 @@ same token in `/etc/caddy/cloudflare.env`, no restart of Caddy, and
 `sitesolide setup` lays it. A hand edit of the file is overwritten by the next
 setup that finds it different; the file is the zone's policy, not a place for
 settings.
+
+`sitesolide setup`, run again on a machine an earlier release set up, finds
+three steps it did not have: Caddy's DNS credentials, the policy file, and no
+other provider's credentials left in `/etc/caddy/cloudflare.env`. On a machine
+upgraded first, all three are done and nothing changes. Its Caddy step now
+waits five minutes at most for Caddy's build service, then builds Caddy with
+the DNS module on the machine itself.
 
 **Going back.** The previous release's Caddyfile carries the policy inline and
 ignores the file, which stays harmlessly in `/etc/caddy`.
