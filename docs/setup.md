@@ -48,7 +48,10 @@ $ sitesolide setup
 4. **The machine's name**: one sitesolide did not create is never touched,
    and one it created earlier is picked up rather than ordered again. Then
    the SSH key: one behind a passphrase has to be loaded in the agent, which
-   the wizard offers to do with `ssh-add`, since setup never types one.
+   the wizard offers to do with `ssh-add`, since setup never types one. With
+   no key in `~/.ssh`, it takes the one the SSH agent holds, a password
+   manager's for instance, and asks which when it holds several; with none at
+   all, it offers to make one with `ssh-keygen`.
 5. **The domain, the email and its DNS**: the wizard reads the zone's name
    servers and offers the provider that serves it first, every other one
    sitesolide speaks, and records made by hand. With a provider, its

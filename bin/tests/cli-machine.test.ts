@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REMOTE_HINTS } from "../cli/hints";
 import {
+  agentKeys,
   choosePublicKey,
   DEFAULTS,
   resolvePublicKey,
@@ -97,12 +98,19 @@ function fakeClock() {
 type Run = { code: number; events: OutputEvent[]; last: OutputEvent; text: string };
 
 /** The command in this process, under --json, against the fake. */
-/** A workstation whose SSH agent holds these keys, and no provider CLI: never the real agent of whoever runs the tests. */
-function agentHolding(...keys: string[]): Workstation {
+/**
+ * A workstation whose SSH agent holds these keys, whose key files open without
+ * a passphrase unless `passphrase`, and with no provider CLI: never the real
+ * agent of whoever runs the tests.
+ */
+function agentHolding(keys: string[] = [], passphrase = false): Workstation {
   return {
     environment: {},
-    run: async (argv) =>
-      argv[0] === "ssh-add" ? (keys.length === 0 ? { code: 1, stdout: "", stderr: "The agent has no identities." } : { code: 0, stdout: keys.map((key) => `${key}\n`).join(""), stderr: "" }) : { code: 127, stdout: "", stderr: "not installed" },
+    run: async (argv) => {
+      if (argv[0] === "ssh-add") return keys.length === 0 ? { code: 1, stdout: "", stderr: "The agent has no identities." } : { code: 0, stdout: keys.map((key) => `${key}\n`).join(""), stderr: "" };
+      if (argv[0] === "ssh-keygen") return passphrase ? { code: 1, stdout: "", stderr: "incorrect passphrase supplied to decrypt private key" } : { code: 0, stdout: `${ED25519}\n`, stderr: "" };
+      return { code: 127, stdout: "", stderr: "not installed" };
+    },
     readFile: () => null,
   };
 }
@@ -198,6 +206,29 @@ describe("the public key", () => {
     const none = await resolvePublicKey(undefined, home, async () => [], () => false);
     expect(none).toMatchObject({ error: "no-ssh-key", message: "no public key in ~/.ssh to install on the machine" });
     expect(JSON.stringify(none)).toContain("or load one in the SSH agent");
+  });
+
+  test("the agent read is the one ssh asks: IdentityAgent in ~/.ssh/config wins over SSH_AUTH_SOCK, and none means none", async () => {
+    const asked: string[][] = [];
+    const named = (agent: string | null): Workstation => ({
+      environment: {},
+      run: async (argv) => {
+        asked.push(argv);
+        if (argv[0] === "ssh") return { code: 0, stdout: `user ada\n${agent === null ? "" : `identityagent ${agent}\n`}identityfile ~/.ssh/id_ed25519\n`, stderr: "" };
+        return { code: 0, stdout: `${ED25519}\n`, stderr: "" };
+      },
+      readFile: () => null,
+    });
+    const socket = "/Users/ada/Library/Group Containers/agent.sock";
+    expect(await agentKeys(named(socket))).toHaveLength(1);
+    expect(asked.at(-1)).toEqual(["env", `SSH_AUTH_SOCK=${socket}`, "ssh-add", "-L"]);
+    expect(await agentKeys(named(null))).toHaveLength(1);
+    expect(asked.at(-1)).toEqual(["ssh-add", "-L"]);
+    expect(await agentKeys(named("SSH_AUTH_SOCK"))).toHaveLength(1);
+    expect(asked.at(-1)).toEqual(["ssh-add", "-L"]);
+    asked.length = 0;
+    expect(await agentKeys(named("none"))).toEqual([]);
+    expect(asked).toEqual([["ssh", "-G", "agent.invalid"]]);
   });
 
   test("a key in ~/.ssh wins, and the agent is not even asked", async () => {
@@ -670,7 +701,7 @@ describe("machine create", () => {
 
   test("with no key in ~/.ssh, the one the SSH agent holds is installed, as a password manager's agent keeps it", async () => {
     rmSync(join(home, ".ssh", "id_ed25519.pub"));
-    const created = await run(CREATE, { workstation: agentHolding(ED25519) });
+    const created = await run(CREATE, { workstation: agentHolding([ED25519]) });
     resultOf(created);
     expect(fake.keys[0]).toMatchObject({ fingerprint: ED25519_MD5 });
     expect(created.text).toContain(`SSH key ada@workstation.test-zone.invalid, from the SSH agent, ${ED25519_SHA256}`);
@@ -678,10 +709,28 @@ describe("machine create", () => {
 
   test("among several keys of the agent, --ssh-key names the one installed by its fingerprint", async () => {
     rmSync(join(home, ".ssh", "id_ed25519.pub"));
-    expect(errorOf(await run(CREATE, { workstation: agentHolding(ED25519, BOB) })).details).toContain(`bob@workstation.test-zone.invalid: --ssh-key ${BOB_SHA256}`);
+    expect(errorOf(await run(CREATE, { workstation: agentHolding([ED25519, BOB]) })).details).toContain(`bob@workstation.test-zone.invalid: --ssh-key ${BOB_SHA256}`);
     expect(fake.requests).toEqual([]);
-    resultOf(await run([...CREATE, "--ssh-key", BOB_SHA256], { workstation: agentHolding(ED25519, BOB) }));
+    resultOf(await run([...CREATE, "--ssh-key", BOB_SHA256], { workstation: agentHolding([ED25519, BOB]) }));
     expect(fake.keys[0]).toMatchObject({ fingerprint: "2b:95:d0:51:de:52:18:12:66:bf:7d:7b:97:26:68:19" });
+  });
+
+  test("a key behind a passphrase the agent does not hold is refused before anything is ordered, and said how to load it", async () => {
+    writeFileSync(join(home, ".ssh", "id_ed25519"), "a private key, never read by these tests\n");
+    const refusal = errorOf(await run(CREATE, { workstation: agentHolding([], true) }));
+    expect(refusal.message).toBe("~/.ssh/id_ed25519 needs its passphrase, which nothing here can type, and is not loaded in the SSH agent");
+    expect(refusal.details).toContain("load it first: ssh-add ~/.ssh/id_ed25519, then run the same command again");
+    expect(fake.requests).toEqual([]);
+    // Loaded in the agent, the same key goes through.
+    resultOf(await run(CREATE, { workstation: agentHolding([ED25519], true) }));
+    expect(fake.keys[0]).toMatchObject({ fingerprint: ED25519_MD5 });
+  });
+
+  test("a .pub whose private half is neither beside it nor in the agent is refused", async () => {
+    writeFileSync(join(home, "deploy.pub"), `${RSA}\n`);
+    const refusal = errorOf(await run([...CREATE, "--ssh-key", "~/deploy.pub"], { workstation: agentHolding([], true) }));
+    expect(refusal.message).toBe("~/deploy.pub: its private half is neither beside it, ~/deploy, nor in the SSH agent");
+    expect(fake.requests).toEqual([]);
   });
 
   test("another key is installed with --ssh-key", async () => {
@@ -1094,7 +1143,7 @@ describe("the token", () => {
     const codes: number[] = [];
     let everything = "";
     try {
-      const base = { environment: { HCLOUD_TOKEN: FAKE_TOKEN, SITESOLIDE_HETZNER_API: fake.url }, home, clock: fakeClock(), sshTarget: () => ({ hostname: "127.0.0.1", port: listener.port }), interactive: false };
+      const base = { environment: { HCLOUD_TOKEN: FAKE_TOKEN, SITESOLIDE_HETZNER_API: fake.url }, home, workstation: agentHolding(), clock: fakeClock(), sshTarget: () => ({ hostname: "127.0.0.1", port: listener.port }), interactive: false };
       codes.push(await machine(["machine", ...CREATE, "--backups"], base));
       codes.push(await machine(["machine", "list", "--provider", "hetzner"], base));
       codes.push(await machine(["machine", "destroy", "web", "--provider", "hetzner", "--confirm", "web", "--delete-key"], base));

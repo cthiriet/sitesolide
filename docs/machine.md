@@ -76,16 +76,26 @@ obtained along the way included, with `[token]`.
 
 ## The SSH key
 
-A password manager's SSH agent, 1Password's or Secretive's, keeps its keys out
-of `~/.ssh`. With no key there, `create` installs the one the agent holds
-(`ssh-add -L` lists them); when it holds several, it names each one and stops,
-since which key a machine trusts is not guessed: `--ssh-key` then takes its
-SHA256 fingerprint, as `ssh-add -l` prints it. The setup wizard asks instead.
+The key is, in this order, the one `--ssh-key` names, a `.pub` file or the
+SHA256 fingerprint of a key the SSH agent holds; the first of
+`~/.ssh/id_ed25519.pub`, `id_ecdsa.pub` and `id_rsa.pub`; else the key the SSH
+agent holds. The agent is the one ssh itself asks, `IdentityAgent` in
+`~/.ssh/config` when it names one, else `SSH_AUTH_SOCK`: OpenSSH's own, the
+macOS keychain's, or a password manager's, 1Password's, Bitwarden's or
+Secretive's, which keep their keys out of `~/.ssh`. When the agent holds
+several keys and `~/.ssh` none, `create` names each one and stops, since which
+key a machine trusts is not guessed: `--ssh-key` then takes its fingerprint, as
+`ssh-add -l` prints it. The setup wizard asks instead.
 
-Such an agent also asks you to approve each use of a key, and refuses when
-nobody does: `create`, waiting for the machine to let its account in, says so
-when the machine takes the key but the agent did not sign with it. Approve the
-request, or run the same command again once you are at the workstation.
+The login that follows the order, and setup's after it, run without a prompt.
+A key file behind a passphrase has to be loaded in the agent first, `ssh-add
+~/.ssh/id_ed25519`: `create` checks it before ordering anything, and says so,
+rather than bill a machine nobody can log in to.
+
+A password manager's agent also asks you to approve each use of a key, and
+refuses when nobody does: `create`, waiting for the machine to let its account
+in, says so when the agent did not sign with the key. Approve the request, or
+run the same command again once you are at the workstation.
 
 ## What `create` makes
 

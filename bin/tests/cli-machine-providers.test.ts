@@ -24,7 +24,12 @@ const ED25519 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICezpiOyiQWMYqOeL4S4OgE0T7F
 /** The providers, by the name `--provider` takes, each with the module of its fake. */
 const NAMES = ["digitalocean", "aws", "gcp", "azure", "vultr", "linode", "scaleway"] as const;
 
-const nobody: Workstation = { environment: {}, run: async () => ({ code: 127, stdout: "", stderr: "" }), readFile: () => null };
+/** No provider CLI and no SSH agent; the key file opens without a passphrase, as ssh-keygen -y says. */
+const nobody: Workstation = {
+  environment: {},
+  run: async (argv) => (argv[0] === "ssh-keygen" ? { code: 0, stdout: `${ED25519}\n`, stderr: "" } : { code: 127, stdout: "", stderr: "" }),
+  readFile: () => null,
+};
 
 function fakeClock() {
   let now = Date.parse("2026-10-21T10:00:00Z");

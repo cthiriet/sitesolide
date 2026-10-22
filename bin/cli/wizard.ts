@@ -61,6 +61,7 @@ import {
   fieldsToAsk,
   isFailure,
   isValidMachineName,
+  keyUsable,
   loadPublicKey,
   machine,
   openProvider,
@@ -349,18 +350,6 @@ async function chooseCloud(deps: WizardDependencies, secrets: string[]): Promise
 async function pick(ui: Prompter, message: string, choices: Choice[], initial: string): Promise<Choice> {
   const value = await ui.select(message, choices, choices.some((choice) => choice.value === initial) ? initial : choices[0]?.value);
   return choices.find((choice) => choice.value === value)!;
-}
-
-/**
- * Whether ssh can use the key without a prompt, as setup's ssh does: loaded
- * in the agent, or without a passphrase. A key behind a passphrase nobody
- * types would order a machine nobody can log in to.
- */
-async function keyUsable(workstation: Workstation, path: string, key: PublicKey): Promise<boolean> {
-  const loaded = await workstation.run(["ssh-add", "-L"]).catch(() => null);
-  if (loaded?.code === 0 && loaded.stdout.split("\n").some((line) => line.split(/\s+/)[1] === key.blob)) return true;
-  const bare = await workstation.run(["ssh-keygen", "-y", "-P", "", "-f", path.replace(/\.pub$/, "")]).catch(() => null);
-  return bare?.code === 0;
 }
 
 async function chooseKey(deps: WizardDependencies, entry: ProviderEntry | null): Promise<ChosenKey> {

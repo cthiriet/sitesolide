@@ -334,14 +334,35 @@ export function sha256Fingerprint(key: PublicKey): string {
   return `SHA256:${new Bun.CryptoHasher("sha256").update(Buffer.from(key.blob, "base64")).digest("base64").replace(/=+$/, "")}`;
 }
 
-/** The keys the SSH agent holds, as `ssh-add -L` lists them; none when no agent answers. */
+/**
+ * The keys the SSH agent holds, as `ssh-add -L` lists them; none when no
+ * agent answers. The agent is the one ssh itself asks: ~/.ssh/config may name
+ * one with IdentityAgent that SSH_AUTH_SOCK does not, as the guides of
+ * 1Password and Secretive suggest.
+ */
 export async function agentKeys(workstation: Workstation): Promise<PublicKey[]> {
-  const listed = await workstation.run(["ssh-add", "-L"]).catch(() => null);
+  const settings = await workstation.run(["ssh", "-G", "agent.invalid"]).catch(() => null);
+  const named = settings?.code === 0 ? /^identityagent (.+)$/m.exec(settings.stdout)?.[1]?.trim() : undefined;
+  if (named === "none") return [];
+  const socket = named === undefined || named === "SSH_AUTH_SOCK" || named.startsWith("$") ? null : named;
+  const listed = await workstation.run(socket === null ? ["ssh-add", "-L"] : ["env", `SSH_AUTH_SOCK=${socket}`, "ssh-add", "-L"]).catch(() => null);
   if (listed === null || listed.code !== 0) return [];
   return listed.stdout
     .split("\n")
     .map((line) => readPublicKey(line))
     .filter((key): key is PublicKey => key !== null);
+}
+
+/**
+ * Whether ssh can use a key file's private half without a prompt, as
+ * `create`'s login wait and setup's ssh need: loaded in the agent, or without
+ * a passphrase. A key nothing can unlock would order a machine nobody logs in
+ * to, billed all the same.
+ */
+export async function keyUsable(workstation: Workstation, path: string, key: PublicKey): Promise<boolean> {
+  if ((await agentKeys(workstation)).some((held) => held.blob === key.blob)) return true;
+  const bare = await workstation.run(["ssh-keygen", "-y", "-P", "", "-f", path.replace(/\.pub$/, "")]).catch(() => null);
+  return bare?.code === 0;
 }
 
 /** The key a machine is made with: a .pub file, or a key the SSH agent holds, which has no file. */
@@ -921,13 +942,15 @@ async function create(context: Context): Promise<number> {
     });
   }
   const home = dependencies.home ?? homedir();
-  const chosen = await resolvePublicKey(parsed.values["--ssh-key"], home, () => agentKeys(dependencies.workstation ?? realWorkstation(dependencies.environment, home)));
+  const workstation = dependencies.workstation ?? realWorkstation(dependencies.environment, home);
+  const chosen = await resolvePublicKey(parsed.values["--ssh-key"], home, () => agentKeys(workstation));
   if (isFailure(chosen)) return refuse(output, chosen);
   const { key, path } = chosen;
   const keyProblem = entry.keyProblem?.(key) ?? null;
   if (keyProblem !== null) {
     return refuse(output, { error: "no-ssh-key", message: `${entry.title} would not take the key ${chosen.shown}: ${keyProblem}`, details: ["create one it takes: ssh-keygen -t ed25519, then pass it with --ssh-key"] });
   }
+  if (path !== null && !(await keyUsable(workstation, path, key))) return refuse(output, unusableKey(path, home));
 
   output.say(`-> machine ${name} at ${entry.title}: ${choices.type} at ${choices.location}, ${choices.image}${backups ? ", with backups" : ""}`);
   const provider = await open(context, (line) => output.say(line));
@@ -957,6 +980,24 @@ async function create(context: Context): Promise<number> {
   output.say(`next: ${next}`);
   output.succeeded("machine create", { provider: provider.name, created: outcome.created, machine: outcome.machine, resources: outcome.resources, next });
   return 0;
+}
+
+/** A key file whose private half ssh cannot use without a prompt: why, and what to do, before anything is ordered. */
+function unusableKey(path: string, home: string): Failure {
+  const name = (file: string) => (file.startsWith(`${home}/`) ? `~/${file.slice(home.length + 1)}` : file);
+  const secret = path.replace(/\.pub$/, "");
+  if (!existsSync(secret)) {
+    return {
+      error: "no-ssh-key",
+      message: `${name(path)}: its private half is neither beside it, ${name(secret)}, nor in the SSH agent`,
+      details: ["nothing was ordered: the machine would let in a key this workstation cannot offer", "load the key in the SSH agent, or pass one this workstation holds: --ssh-key <path to the .pub>"],
+    };
+  }
+  return {
+    error: "no-ssh-key",
+    message: `${name(secret)} needs its passphrase, which nothing here can type, and is not loaded in the SSH agent`,
+    details: ["nothing was ordered: the login that follows the order, and setup's after it, run without a prompt", `load it first: ssh-add ${name(secret)}, then run the same command again`],
+  };
 }
 
 async function list(context: Context): Promise<number> {
