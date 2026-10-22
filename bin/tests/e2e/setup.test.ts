@@ -135,7 +135,7 @@ describe("sitesolide setup, in front of the fake machine", () => {
     // resolves nowhere: those three are to do, everything else answered done.
     const todo = checks.filter((event) => event.status === "todo").map((event) => event.step);
     expect(todo).toEqual(["configuration", "dns", "resolution"]);
-    expect(checks.filter((event) => event.status === "done")).toHaveLength(26);
+    expect(checks.filter((event) => event.status === "done")).toHaveLength(28);
 
     const logs = vm.logs();
     expect(logs[0]).toBe("ACCEPTED sh -s setup:preflight:read");
@@ -151,7 +151,7 @@ describe("sitesolide setup, in front of the fake machine", () => {
     vm.answer(":check", "check: done\n");
     const run = await setup(vm, folder(), ["--dry-run", "--cloudflare-token-stdin"], {}, `${TOKEN}\n`);
     expect(run.code).toBe(0);
-    expect(run.output).toContain("[done] Caddy's Cloudflare token");
+    expect(run.output).toContain("[done] Caddy's DNS credentials");
     expect(`${run.output}${run.error}${vm.logs().join("\n")}`).not.toContain(TOKEN);
   });
 
@@ -162,7 +162,7 @@ describe("sitesolide setup, in front of the fake machine", () => {
     vm.answer(":check", "check: done\n");
     const run = await setup(vm, folder(), ["--dry-run"]);
     expect(run.code).toBe(0);
-    expect(run.output).toMatch(/\[todo\] Caddy, with the Cloudflare module\s+unreadable: fake ssh: command refused by the simulated server/);
+    expect(run.output).toMatch(/\[todo\] Caddy, with the zone's DNS module\s+unreadable: fake ssh: command refused by the simulated server/);
     expect(vm.logs().filter((line) => line.startsWith("REFUSED"))).toEqual(["REFUSED sudo -n sh -s setup:caddy:check"]);
   });
 });

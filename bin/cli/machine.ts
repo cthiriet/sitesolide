@@ -3,27 +3,32 @@
  * before `sitesolide setup` installs anything on it.
  *
  *   sitesolide machine create --provider hetzner --name web
- *   sitesolide machine list --provider hetzner
- *   sitesolide machine destroy web --provider hetzner
+ *   sitesolide machine list --provider aws
+ *   sitesolide machine destroy web --provider gcp
+ *   sitesolide machine providers
  *
  * It replaces what infra/main.tf did with Terraform: a server, its firewall,
  * and the workstation's SSH key, with no state file to keep. What exists is
  * read from the provider each time, and found again by the labels every
  * resource carries (bin/cli/providers/provider.ts), so a run interrupted
- * anywhere is finished by running the same command again.
+ * anywhere is finished by running the same command again. Each provider is a
+ * file of bin/cli/providers/, registered in PROVIDERS below; the setup wizard
+ * (bin/cli/wizard.ts) drives the same functions.
  *
  * `create` stops once the machine accepts connections on port 22, and prints
  * the `setup` command that comes next. It hardens nothing: cloud-init, which
  * did it up to 0.2, ran once and could not be checked; `setup` runs over SSH
  * and can be run again.
  *
- * **The token.** It comes from the provider's usual environment variable,
- * HCLOUD_TOKEN for Hetzner, or from standard input with `--token-stdin`, and
- * from nowhere else: an option would put it in `ps` and in the shell's
- * history. It goes into the Authorization header of the provider's API and
+ * **The credentials.** They come from the provider's usual environment
+ * variables, HCLOUD_TOKEN for Hetzner, AWS_ACCESS_KEY_ID and its secret for
+ * AWS, from standard input with `--token-stdin`, or, when the environment
+ * holds none, from the provider's own CLI already signed in (`discover`), and
+ * from nowhere else: an option would put them in `ps` and in the shell's
+ * history. They go into the provider's API, in a header or a signature, and
  * nowhere else: every line this command prints, every refusal and every
- * result passes through `redacting`, which replaces it, should it ever turn
- * up, with `[token]`.
+ * result passes through `redacting`, which replaces each secret, should it
+ * ever turn up, with `[token]`.
  *
  * **Destroying.** Only a machine carrying `managed-by=sitesolide`, and only
  * once its name is typed back, at the terminal or with `--confirm <name>`
@@ -38,25 +43,40 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { expandHome } from "./config";
+import { HOST_KEY_CHANGED, hostKeyAdvice } from "./harden";
+import { AWS } from "./providers/aws";
+import { AZURE } from "./providers/azure";
+import { DIGITALOCEAN } from "./providers/digitalocean";
+import { GCP } from "./providers/gcp";
+import { dnsVariables } from "./dns/registry";
 import { HETZNER } from "./providers/hetzner";
+import { LINODE } from "./providers/linode";
+import { SCALEWAY } from "./providers/scaleway";
+import { VULTR } from "./providers/vultr";
 import {
   formatPrice,
   ProviderError,
   realClock,
   type Clock,
+  type CredentialField,
+  type Credentials,
   type Fetch,
   type Machine,
   type Provider,
   type ProviderEntry,
   type PublicKey,
+  type Workstation,
 } from "./providers/provider";
 import { humanOutput, type Failure, type Output } from "./remote";
 
-/** The providers `--provider` accepts, by the name it takes. */
-export const PROVIDERS: Readonly<Record<string, ProviderEntry>> = { hetzner: HETZNER };
+/** The providers `--provider` accepts, in the order the wizard offers them. */
+export const PROVIDER_LIST: readonly ProviderEntry[] = [HETZNER, DIGITALOCEAN, AWS, GCP, AZURE, SCALEWAY, VULTR, LINODE];
 
-/** What `create` orders when nothing else is said: the smallest current x86 type, in Germany, Debian. */
-export const DEFAULTS = { type: "cx23", location: "fsn1", image: "debian-13" };
+/** The same, by the name `--provider` takes. */
+export const PROVIDERS: Readonly<Record<string, ProviderEntry>> = Object.fromEntries(PROVIDER_LIST.map((entry) => [entry.name, entry]));
+
+/** Hetzner's defaults, which the first version of this command had for everyone. */
+export const DEFAULTS = HETZNER.defaults({});
 
 /** The public keys tried, in this order, under ~/.ssh, when --ssh-key is not given. */
 export const DEFAULT_KEYS = ["id_ed25519.pub", "id_ecdsa.pub", "id_rsa.pub"];
@@ -64,35 +84,42 @@ export const DEFAULT_KEYS = ["id_ed25519.pub", "id_ecdsa.pub", "id_rsa.pub"];
 /** How long `create` waits for port 22, how often it tries, and how long one try lasts. */
 export const SSH_WAIT = { totalMs: 5 * 60_000, pollMs: 3_000, attemptMs: 5_000 };
 
+/** How long `create` waits, after port 22 answers, for the image to let the account in with the key. */
+export const LOGIN_WAIT = { totalMs: 4 * 60_000, pollMs: 5_000 };
+
 export const MACHINE_USAGE = [
   "usage of sitesolide machine:",
-  "  sitesolide machine create --provider hetzner --name <name>",
+  "  sitesolide machine create --provider <provider> --name <name>",
   "                                  order a VM, its firewall and your SSH key, ready for setup",
-  "     --type <type>                cx23 by default; a refusal lists what the location sells",
-  "     --location <location>        fsn1 by default",
+  "     --type <type>                the provider's smallest sound type by default; a refusal lists others",
+  "     --location <location>        a location in Europe by default, see docs/providers/",
   "     --image <image>              debian-13 by default",
-  "     --backups                    the provider's daily backups, about 20 % on the price",
+  "     --backups                    the provider's daily backups, where it has them, at a price",
   "     --ssh-key <path.pub>         ~/.ssh/id_ed25519.pub, id_ecdsa.pub or id_rsa.pub by default",
-  "  sitesolide machine list --provider hetzner",
+  "  sitesolide machine list --provider <provider>",
   "                                  the machines sitesolide created, their addresses and price",
-  "  sitesolide machine destroy <name> --provider hetzner",
+  "  sitesolide machine destroy <name> --provider <provider>",
   "                                  delete the machine and its firewall, for good",
   "     --confirm <name>             the name typed back, where no terminal can ask for it",
   "     --delete-key                 delete the SSH key uploaded for it too",
-  "  any machine command --token-stdin",
-  "                                  read the token from standard input rather than HCLOUD_TOKEN",
+  "  sitesolide machine providers",
+  "                                  the providers, and whether this workstation holds credentials for each",
+  "  create, list or destroy --token-stdin",
+  "                                  read the credentials from standard input rather than the environment",
   "",
+  `providers: ${PROVIDER_LIST.map((entry) => entry.name).join(", ")}`,
   "--json, on every one of them: one JSON event per line, see docs/agents.md",
-  "the token is never an option, where ps would show it: see docs/machine.md",
+  "credentials are never an option, where ps would show them: see docs/machine.md",
 ];
 
-type Action = "create" | "list" | "destroy";
+type Action = "create" | "list" | "destroy" | "providers";
 
 /** The options of each command, and whether one takes a value. `--json` is everyone's. */
 const OPTIONS: Readonly<Record<Action, Readonly<Record<string, boolean>>>> = {
   create: { "--provider": true, "--name": true, "--type": true, "--location": true, "--image": true, "--backups": false, "--ssh-key": true, "--token-stdin": false },
   list: { "--provider": true, "--token-stdin": false },
   destroy: { "--provider": true, "--confirm": true, "--delete-key": false, "--token-stdin": false },
+  providers: {},
 };
 
 export type MachineArguments = { action: Action; values: Record<string, string>; flags: Set<string>; positionals: string[] };
@@ -111,9 +138,21 @@ export type MachineDependencies = {
   probe?: (hostname: string, port: number) => Promise<boolean>;
   /** Where port 22 of a new machine is tried; tests point it at a local port. */
   sshTarget?: (address: string) => { hostname: string; port: number };
+  /**
+   * Whether the machine lets that account in with the workstation's key.
+   * Without it, `create` stops once port 22 answers; the entry point and the
+   * wizard give the real one, sshLogin.
+   */
+  login?: (account: string, address: string, identity: string | null) => Promise<boolean>;
+  /** What `discover` may read: the provider CLIs, a key file. Tests give a fake one. */
+  workstation?: Workstation;
+  /** Credentials typed at the wizard, by variable: they win over the environment and are scrubbed like it. */
+  credentials?: Credentials;
+  /** Where those came from, said for a person: the wizard may hand on what the environment or a CLI held. */
+  credentialSource?: string;
 };
 
-function isFailure(value: object): value is Failure {
+export function isFailure(value: object): value is Failure {
   return "error" in value && "message" in value;
 }
 
@@ -136,9 +175,24 @@ export function isValidMachineName(name: string): boolean {
   return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(name);
 }
 
-/** A server type, a location or an image, as providers name them. */
-function isValidChoice(value: string): boolean {
-  return /^[a-z0-9][a-z0-9._-]{0,62}$/.test(value);
+/**
+ * A value of 32 characters or more without a dot or a separator a name
+ * would have: what a token pasted in the wrong place looks like. No type,
+ * location or image any provider names is that long in one piece.
+ */
+export function looksLikeCredential(value: string): boolean {
+  // A UUID, Scaleway's image ids among them, has its own shape: not a token.
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)) return false;
+  return /^[A-Za-z0-9_-]{32,}$/.test(value);
+}
+
+/**
+ * A server type, a location or an image, as providers name them: `cx23`,
+ * `eu-west-3`, `Standard_B2ats_v2`, `DEV1-S`, `ami-0123456789abcdef0`.
+ */
+export function isValidChoice(value: string, option = "type"): boolean {
+  // An image may also be named with colons, Azure's URN, or a slash, Akamai's `linode/debian13`.
+  return option === "image" ? /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value) : /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value);
 }
 
 export function parseMachineArguments(arguments_: string[]): MachineArguments | Failure {
@@ -148,7 +202,7 @@ export function parseMachineArguments(arguments_: string[]): MachineArguments | 
   if (action === undefined || !Object.hasOwn(OPTIONS, action)) {
     return {
       error: "machine-usage",
-      message: action === undefined || action.startsWith("-") ? "sitesolide machine needs a command: create, list or destroy" : `unknown machine command: ${shown(action)}`,
+      message: action === undefined || action.startsWith("-") ? "sitesolide machine needs a command: create, list, destroy or providers" : `unknown machine command: ${shown(action)}`,
       details: usage,
     };
   }
@@ -156,7 +210,7 @@ export function parseMachineArguments(arguments_: string[]): MachineArguments | 
   const values: Record<string, string> = {};
   const flags = new Set<string>();
   const positionals: string[] = [];
-  const takes = `sitesolide machine ${action} takes ${Object.keys(known).join(", ")}, and --json`;
+  const takes = Object.keys(known).length === 0 ? `sitesolide machine ${action} takes only --json` : `sitesolide machine ${action} takes ${Object.keys(known).join(", ")}, and --json`;
   for (let i = rest.indexOf(action) + 1; i < rest.length; i++) {
     const word = rest[i]!;
     if (word === "--json") continue;
@@ -175,7 +229,12 @@ export function parseMachineArguments(arguments_: string[]): MachineArguments | 
       return {
         error: "machine-option",
         message: `${/^--?[a-z][a-z0-9-]{0,40}$/.test(option) ? option : "an option"}: not an option of sitesolide machine ${action}`,
-        details: [takes, ...(option === "--token" ? ["the token is read from the provider's environment variable, or from standard input with --token-stdin, never from the command line, where ps shows it"] : [])],
+        details: [
+          takes,
+          ...(/^--(token|secret|key|api-key|access-key|password)$/.test(option)
+            ? ["credentials are read from the provider's environment variables, or from standard input with --token-stdin, never from the command line, where ps shows them"]
+            : []),
+        ],
       };
     }
     positionals.push(word);
@@ -252,7 +311,7 @@ export function choosePublicKey(given: string | undefined, home: string, exists:
   };
 }
 
-function loadPublicKey(path: string): PublicKey | Failure {
+export function loadPublicKey(path: string): PublicKey | Failure {
   let text: string;
   try {
     // A public key fits in a few hundred bytes; anything much larger is not one, and is not read.
@@ -265,35 +324,264 @@ function loadPublicKey(path: string): PublicKey | Failure {
   return readPublicKey(text) ?? { error: "no-ssh-key", message: `${path} is not an OpenSSH public key`, details: [`the line starts with one of ${KEY_ALGORITHMS.slice(0, 5).join(", ")}`] };
 }
 
-// --- the token ----------------------------------------------------------------------------
+// --- the credentials ----------------------------------------------------------------------
 
-/** What a token is made of: enough to refuse a stray line or a quote, which could not travel in a header. */
-const TOKEN_SHAPE = /^[A-Za-z0-9_\-.:+/=]{16,512}$/;
+/**
+ * What reading credentials needs to know of whoever takes them: a cloud
+ * provider, or a DNS provider (bin/cli/dns/dns.ts), whose entries share these
+ * fields.
+ */
+export type CredentialSource = Pick<ProviderEntry, "title" | "credentials" | "alternatives" | "credentialHelp"> & Partial<Pick<ProviderEntry, "discover">>;
 
-async function readToken(entry: ProviderEntry, flags: Set<string>, dependencies: MachineDependencies): Promise<string | Failure> {
-  const fromStdin = flags.has("--token-stdin");
-  const token = (fromStdin ? await (dependencies.stdin ?? (() => Bun.stdin.text()))() : (dependencies.environment[entry.tokenVariable] ?? "")).trim();
-  const where = fromStdin ? "standard input" : entry.tokenVariable;
-  if (token === "") {
-    return {
-      error: "no-provider-token",
-      message: fromStdin ? `no ${entry.title} token on standard input` : `no ${entry.title} token: set ${entry.tokenVariable}, or pipe it to --token-stdin`,
-      details: entry.tokenHelp,
-    };
+/** Credentials, where they came from, said for a person, and the values to scrub. */
+export type Found = { credentials: Credentials; source: string; secrets: string[] };
+
+/** The secret values of a set of credentials: what is scrubbed from every line. */
+export function secretValues(entry: CredentialSource, credentials: Credentials): string[] {
+  const secret = new Set(entry.credentials.filter((field) => field.secret).map((field) => field.variable));
+  return Object.entries(credentials)
+    .filter(([variable, value]) => value !== "" && (secret.has(variable) || !entry.credentials.some((field) => field.variable === variable)))
+    .map(([, value]) => value);
+}
+
+function required(entry: CredentialSource): CredentialField[] {
+  return entry.credentials.filter((field) => field.optional !== true);
+}
+
+/** What the environment holds of a provider's credentials, the empty ones left out. */
+export function fromEnvironment(entry: CredentialSource, environment: Record<string, string | undefined>): Record<string, string> {
+  const found: Record<string, string> = {};
+  for (const field of entry.credentials) {
+    const value = environment[field.variable]?.trim();
+    if (value !== undefined && value !== "") found[field.variable] = value;
   }
-  if (!TOKEN_SHAPE.test(token)) {
-    return { error: "no-provider-token", message: `what ${where} holds is not a ${entry.title} token: it has characters or a length a token never has`, details: entry.tokenHelp };
-  }
-  return token;
+  return found;
 }
 
 /**
- * The output, with every known secret replaced before it is printed. Values
+ * The fields a set of credentials lacks: the required ones, and, for a
+ * provider that takes them in several forms, the rest of the first form
+ * when none is whole.
+ */
+export function missingFields(entry: CredentialSource, credentials: Credentials): CredentialField[] {
+  const has = (variable: string): boolean => (credentials[variable] ?? "") !== "";
+  const missing = required(entry).filter((field) => !has(field.variable));
+  const forms = entry.alternatives ?? [];
+  if (forms.length === 0 || forms.some((form) => form.every(has))) return missing;
+  return [...missing, ...entry.credentials.filter((field) => forms[0]!.includes(field.variable) && !has(field.variable))];
+}
+
+/** What a prompt asks for when nothing is found: the required fields, then the first form's. */
+export function fieldsToAsk(entry: CredentialSource): CredentialField[] {
+  return missingFields(entry, {});
+}
+
+/**
+ * Standard input, read: a single secret alone on its line for a provider
+ * that needs one value, `VARIABLE=value` lines otherwise, as an environment
+ * file holds them. A line naming a variable the provider does not read is
+ * refused without being repeated, it may be a secret pasted in the wrong
+ * place.
+ */
+export function parseStdinCredentials(entry: CredentialSource, text: string): Record<string, string> | Failure {
+  const lines = text.split("\n").map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith("#"));
+  const fields = fieldsToAsk(entry);
+  const assignments = lines.every((line) => /^(export\s+)?[A-Z][A-Z0-9_]*=/.test(line));
+  if (!assignments) {
+    if (fields.length === 1 && lines.length === 1) return { [fields[0]!.variable]: lines[0]! };
+    if (lines.length === 0) return {};
+    return {
+      error: "no-provider-token",
+      message: `what standard input holds is not ${entry.title} credentials`,
+      details: [`one VARIABLE=value line each: ${entry.credentials.map((field) => field.variable).join(", ")}`, ...entry.credentialHelp],
+    };
+  }
+  const found: Record<string, string> = {};
+  for (const line of lines) {
+    const bare = line.replace(/^export\s+/, "");
+    const equal = bare.indexOf("=");
+    const variable = bare.slice(0, equal);
+    const value = bare.slice(equal + 1).trim().replace(/^(["'])(.*)\1$/, "$2");
+    if (!entry.credentials.some((field) => field.variable === variable)) {
+      return {
+        error: "no-provider-token",
+        message: `standard input names a variable ${entry.title} does not read`,
+        details: [`the variables read: ${entry.credentials.map((field) => field.variable).join(", ")}`],
+      };
+    }
+    if (value !== "") found[variable] = value;
+  }
+  return found;
+}
+
+/** The first value that does not have the shape of its field, said without the value. */
+function shapeFailure(entry: CredentialSource, credentials: Credentials, where: (field: CredentialField) => string): Failure | null {
+  for (const field of entry.credentials) {
+    const value = credentials[field.variable];
+    if (value === undefined || value === "" || field.shape.test(value)) continue;
+    return {
+      error: "no-provider-token",
+      message: `what ${where(field)} holds is not a ${entry.title} ${field.label}: it has characters or a length a ${field.label} never has`,
+      details: entry.credentialHelp,
+    };
+  }
+  return null;
+}
+
+function noCredentials(entry: CredentialSource, missing: CredentialField[]): Failure {
+  const single = fieldsToAsk(entry).length === 1 && missing.length === 1;
+  const what = missing.length === 1 ? missing[0]!.label : "credentials";
+  return {
+    error: "no-provider-token",
+    message: single
+      ? `no ${entry.title} ${what}: set ${missing[0]!.variable}, or pipe it to --token-stdin`
+      : `no ${entry.title} ${what}: set ${missing.map((field) => field.variable).join(", ")}, or pipe every value to --token-stdin as VARIABLE=value lines`,
+    details: entry.credentialHelp,
+  };
+}
+
+/**
+ * The credentials a command runs with. `--token-stdin` reads standard input
+ * and nothing else. Otherwise: what the wizard was given, then the
+ * environment; when they leave a required field empty, what the provider's
+ * own CLI holds (`discover`), the environment's values that are not secret,
+ * a project or a region, still winning over the CLI's. A secret is never
+ * taken half from one place and half from another.
+ */
+export async function resolveCredentials(
+  entry: CredentialSource,
+  options: { stdin: boolean; given?: Credentials; source?: string },
+  dependencies: Pick<MachineDependencies, "environment" | "stdin" | "workstation">,
+): Promise<Found | Failure> {
+  if (options.stdin) {
+    const parsed = parseStdinCredentials(entry, await (dependencies.stdin ?? (() => Bun.stdin.text()))());
+    if (isFailure(parsed)) return parsed;
+    const missing = missingFields(entry, parsed);
+    if (missing.length > 0) {
+      return {
+        error: "no-provider-token",
+        message: fieldsToAsk(entry).length === 1 ? `no ${entry.title} ${missing[0]!.label} on standard input` : `standard input lacks ${missing.map((field) => field.variable).join(", ")}`,
+        details: entry.credentialHelp,
+      };
+    }
+    const wrong = shapeFailure(entry, parsed, () => "standard input");
+    return wrong ?? { credentials: parsed, source: "standard input", secrets: secretValues(entry, parsed) };
+  }
+
+  // What was typed replaces the environment's secrets whole: a token the
+  // environment holds would otherwise win over the form typed instead of it.
+  const environment = fromEnvironment(entry, dependencies.environment);
+  const kept = options.given === undefined ? environment : Object.fromEntries(Object.entries(environment).filter(([variable]) => entry.credentials.some((field) => field.variable === variable && !field.secret)));
+  const given = { ...kept, ...(options.given ?? {}) };
+  const wrong = shapeFailure(entry, given, (field) => (options.given?.[field.variable] !== undefined ? `the ${field.label} typed` : field.variable));
+  if (wrong !== null) return wrong;
+  const missing = missingFields(entry, given);
+  if (missing.length === 0) {
+    const named = entry.credentials.filter((field) => given[field.variable] !== undefined).map((field) => field.variable);
+    return { credentials: given, source: options.given === undefined ? named.join(", ") : (options.source ?? "the values typed"), secrets: secretValues(entry, given) };
+  }
+  const discovered = entry.discover === undefined ? null : await entry.discover(dependencies.workstation ?? realWorkstation(dependencies.environment));
+  if (discovered !== null) {
+    const plain = Object.fromEntries(Object.entries(given).filter(([variable]) => entry.credentials.some((field) => field.variable === variable && !field.secret)));
+    const merged = { ...discovered.credentials, ...plain };
+    if (missingFields(entry, merged).length === 0) {
+      return { credentials: merged, source: discovered.source, secrets: secretValues(entry, merged) };
+    }
+  }
+  return noCredentials(entry, missing);
+}
+
+/** Whether credentials for a provider are at hand, and where, without asking anyone: for `providers` and the wizard. */
+export async function credentialStatus(entry: CredentialSource, dependencies: Pick<MachineDependencies, "environment" | "workstation">): Promise<{ found: boolean; source: string | null }> {
+  const found = await resolveCredentials(entry, { stdin: false }, dependencies).catch(() => null);
+  return found === null || isFailure(found) ? { found: false, source: null } : { found: true, source: found.source };
+}
+
+/** What every child process is spared: Cloudflare's token, a sitesolide token, and every provider's secrets. */
+const NEVER_INHERITED = ["CLOUDFLARE_API_TOKEN", "SITESOLIDE_TOKEN"];
+
+/**
+ * The environment a child process gets: none of the secrets above, so that
+ * one cloud's CLI never receives another's credentials, and a PATH of
+ * absolute folders only. A `.` or a relative folder in PATH would let a
+ * repository the command runs in ship its own `aws` or `ssh`, and run it.
+ */
+export function withoutSecrets(environment: Record<string, string | undefined>): Record<string, string> {
+  // A DNS provider's variables too, which hold credentials meant for a
+  // machine's Caddy and nothing else: no cloud's CLI needs them.
+  const secret = new Set([
+    ...NEVER_INHERITED,
+    ...dnsVariables(),
+    ...PROVIDER_LIST.flatMap((entry) => entry.credentials.filter((field) => field.secret).map((field) => field.variable)),
+  ]);
+  const clean: Record<string, string> = {};
+  for (const [name, value] of Object.entries(environment)) {
+    if (value === undefined || secret.has(name)) continue;
+    clean[name] = value;
+  }
+  clean.PATH = (clean.PATH ?? "")
+    .split(":")
+    .filter((folder) => folder.startsWith("/"))
+    .join(":");
+  return clean;
+}
+
+/**
+ * The workstation as `discover` sees it: commands run without a shell, their
+ * standard input closed so that none waits on a prompt, twenty seconds at
+ * most; small files read by path.
+ */
+export function realWorkstation(environment: Record<string, string | undefined>, home = homedir()): Workstation {
+  const clean = withoutSecrets(environment);
+  return {
+    environment,
+    async run(argv) {
+      const found = Bun.which(argv[0]!, { PATH: clean.PATH ?? "" });
+      if (found === null) return { code: 127, stdout: "", stderr: `${argv[0]}: not installed` };
+      const proc = Bun.spawn([found, ...argv.slice(1)], { env: clean, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 20_000 });
+      const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+      return { code: await proc.exited, stdout, stderr };
+    },
+    readFile(path) {
+      try {
+        const full = expandHome(path, home);
+        if (statSync(full).size > 65_536) return null;
+        return readFileSync(full, "utf8");
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+/**
+ * The text, with every known secret replaced before it is printed. Values
  * shorter than eight characters are not scrubbed: they are no token, and
  * replacing them would mangle every line.
  */
-function redacting(output: Output, secrets: string[]): Output {
-  const scrub = (text: string): string => secrets.reduce((done, secret) => (secret.length < 8 ? done : done.split(secret).join("[token]")), text);
+export function scrubSecrets(text: string, secrets: readonly string[]): string {
+  // The longest first: a secret that holds a shorter one would otherwise
+  // keep its remainder once the shorter one is replaced.
+  return [...secrets].sort((a, b) => b.length - a.length).reduce((done, secret) => {
+    if (secret.length < 8) return done;
+    // A secret with a line break or a quote, a service account's key, is
+    // escaped inside a JSON event: both spellings are scrubbed.
+    const escaped = JSON.stringify(secret).slice(1, -1);
+    return done.split(secret).join("[token]").split(escaped).join("[token]");
+  }, text);
+}
+
+/** Every string inside a value, scrubbed, the shape kept. */
+function scrubValue(value: unknown, scrub: (text: string) => string): unknown {
+  if (typeof value === "string") return scrub(value);
+  if (Array.isArray(value)) return value.map((item) => scrubValue(item, scrub));
+  if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrubValue(item, scrub)]));
+  return value;
+}
+
+/** The output, every line of it through scrubSecrets. */
+export function redacting(output: Output, secrets: string[]): Output {
+  const scrub = (text: string): string => scrubSecrets(text, secrets);
   return {
     say: (line) => output.say(scrub(line)),
     journal: (line) => output.journal(scrub(line)),
@@ -302,15 +590,7 @@ function redacting(output: Output, secrets: string[]): Output {
         { ...failure, message: scrub(failure.message), ...(failure.details === undefined ? {} : { details: failure.details.map(scrub) }) },
         said,
       ),
-    succeeded: (command, fields) => {
-      let clean = fields;
-      try {
-        clean = JSON.parse(scrub(JSON.stringify(fields))) as Record<string, unknown>;
-      } catch {
-        // A token is made of characters JSON never escapes: scrubbing cannot break the text.
-      }
-      output.succeeded(command, clean);
-    },
+    succeeded: (command, fields) => output.succeeded(command, scrubValue(fields, scrub) as Record<string, unknown>),
   };
 }
 
@@ -367,6 +647,63 @@ export async function waitForSsh(
   }
 }
 
+/**
+ * Waits, bounded, until the machine lets the account in with the
+ * workstation's key. Port 22 may answer before the image has installed the
+ * key: Google's guest agent creates the account a few seconds after sshd
+ * starts, and cloud-init on AWS and Azure writes the key while sshd already
+ * listens. A setup started then would be refused, and say so as if the key
+ * were wrong. No fail2ban runs yet on a machine this fresh: a refused
+ * attempt costs nothing.
+ */
+export async function waitForLogin(
+  account: string,
+  address: string,
+  login: (account: string, address: string, identity: string | null) => Promise<boolean>,
+  clock: Clock,
+  say: (line: string) => void,
+  identity: string | null = null,
+): Promise<void> {
+  const started = clock.now();
+  const deadline = started + LOGIN_WAIT.totalMs;
+  for (;;) {
+    if (await login(account, address, identity)) {
+      say(`   ${account} logs in with the key, after ${Math.round((clock.now() - started) / 1000)} s`);
+      return;
+    }
+    if (clock.now() >= deadline) {
+      throw new ProviderError({
+        error: "login-timeout",
+        message: `${account}@${address} did not accept the key within ${LOGIN_WAIT.totalMs / 60_000} minutes`,
+        details: ["port 22 answers: the image may still be installing the key, or this workstation offers another one (ssh-add -l lists them)"],
+      });
+    }
+    await clock.sleep(LOGIN_WAIT.pollMs);
+  }
+}
+
+/**
+ * A login as setup makes them: no prompt, a bounded wait, the host key
+ * accepted on first contact only. `true`, run there, is all it asks.
+ */
+export async function sshLogin(account: string, address: string, identity: string | null = null): Promise<boolean> {
+  const environment = withoutSecrets(process.env);
+  const ssh = Bun.which("ssh", { PATH: environment.PATH ?? "" });
+  if (ssh === null) return false;
+  // A key given with --ssh-key, not one ssh would offer by itself: offered alone.
+  const key = identity !== null && existsSync(identity) ? ["-i", identity, "-o", "IdentitiesOnly=yes"] : [];
+  const proc = Bun.spawn(
+    [ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new", "-o", "LogLevel=ERROR", ...key, `${account}@${address}`, "true"],
+    { env: environment, stdin: "ignore", stdout: "ignore", stderr: "pipe", timeout: 30_000 },
+  );
+  const [code, said] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+  // An address a previous machine had: no wait makes ssh accept it.
+  if (HOST_KEY_CHANGED.test(said)) {
+    throw new ProviderError({ error: "host-key-changed", message: `ssh refuses ${address}: its host key is not the one this workstation knew there`, details: hostKeyAdvice(address) });
+  }
+  return code === 0;
+}
+
 // --- what is printed -------------------------------------------------------------------------
 
 function addresses(machine: Machine): string {
@@ -402,9 +739,15 @@ export function machineTable(machines: Machine[]): string[] {
   return rows.map((row) => `   ${row.map((cell, column) => cell.padEnd(widths[column]!)).join("  ").trimEnd()}`);
 }
 
-/** The command that comes after `create`. */
+/**
+ * The command that comes after `create`. Where the image only lets in a
+ * sudoer, AWS's `admin`, setup connects as that account and is told to make
+ * the usual `deploy` account all the same, so that every installation
+ * deploys as the same name whatever the provider.
+ */
 export function nextCommand(machine: Machine): string {
-  return `sitesolide setup root@${machine.ipv4 ?? machine.ipv6 ?? "<address>"} --zone <your zone> --email <you>`;
+  const user = machine.login === "root" ? "" : " --user deploy";
+  return `sitesolide setup ${machine.login}@${machine.ipv4 ?? machine.ipv6 ?? "<address>"} --zone <your zone> --email <you>${user}`;
 }
 
 // --- the commands --------------------------------------------------------------------------
@@ -418,51 +761,99 @@ type Context = {
   json: boolean;
 };
 
-async function openProvider(context: Context): Promise<Provider | Failure> {
-  const token = await readToken(context.entry, context.parsed.flags, context.dependencies);
-  if (typeof token !== "string") return token;
-  context.secrets.push(token);
-  return context.entry.open({
-    token,
-    environment: context.dependencies.environment,
-    fetcher: context.dependencies.fetcher ?? fetch,
-    clock: context.dependencies.clock ?? realClock,
+/**
+ * The provider, opened with its credentials, once they are known to be
+ * scrubbed from everything printed. `say` names where they came from, never
+ * what they are.
+ */
+export async function openProvider(
+  entry: ProviderEntry,
+  options: { stdin: boolean; given?: Credentials; source?: string },
+  dependencies: MachineDependencies,
+  secrets: string[],
+  say: (line: string) => void = () => {},
+): Promise<Provider | Failure> {
+  const found = await resolveCredentials(entry, options, dependencies);
+  if (isFailure(found)) return found;
+  secrets.push(...found.secrets);
+  say(`   credentials: ${found.source}`);
+  return entry.open({
+    credentials: found.credentials,
+    environment: dependencies.environment,
+    fetcher: dependencies.fetcher ?? fetch,
+    clock: dependencies.clock ?? realClock,
+    secret: (value) => {
+      if (value !== "") secrets.push(value);
+    },
   });
+}
+
+function open(context: Context, say?: (line: string) => void): Promise<Provider | Failure> {
+  const { credentials, credentialSource } = context.dependencies;
+  return openProvider(
+    context.entry,
+    { stdin: context.parsed.flags.has("--token-stdin"), ...(credentials === undefined ? {} : { given: credentials }), ...(credentialSource === undefined ? {} : { source: credentialSource }) },
+    context.dependencies,
+    context.secrets,
+    say,
+  );
 }
 
 async function create(context: Context): Promise<number> {
   const { parsed, output, dependencies, entry } = context;
   const name = parsed.values["--name"];
   if (name === undefined || !isValidMachineName(name)) return refuse(output, nameFailure(name, "--name <name>"));
-  const choices = { type: parsed.values["--type"] ?? DEFAULTS.type, location: parsed.values["--location"] ?? DEFAULTS.location, image: parsed.values["--image"] ?? DEFAULTS.image };
+  const problem = entry.nameProblem?.(name) ?? null;
+  if (problem !== null) return refuse(output, { error: "machine-name", message: `${entry.title} would not take the name ${name}: ${problem}`, details: ["pick another --name"] });
+  const defaults = entry.defaults(dependencies.environment);
+  const choices = { type: parsed.values["--type"] ?? defaults.type, location: parsed.values["--location"] ?? defaults.location, image: parsed.values["--image"] ?? defaults.image };
   for (const [option, value] of Object.entries(choices)) {
-    if (!isValidChoice(value)) return refuse(output, { error: "machine-option", message: `--${option}: not a ${option} name: ${shown(value)}`, details: ["lowercase letters, digits, dots and dashes"] });
+    if (!isValidChoice(value, option) || looksLikeCredential(value)) {
+      return refuse(output, { error: "machine-option", message: `--${option}: not ${option === "image" ? "an" : "a"} ${option} name: ${shown(value)}`, details: ["letters, digits, dots, dashes and underscores, as the provider names them"] });
+    }
+  }
+  const backups = parsed.flags.has("--backups");
+  if (backups && !entry.backups) {
+    return refuse(output, {
+      error: "machine-option",
+      message: `--backups: sitesolide does not turn on ${entry.title}'s backups`,
+      details: ["setup's own backups snapshot every project hourly, and copy them to a bucket once you configure one: see docs/concepts.md"],
+    });
   }
   const home = dependencies.home ?? homedir();
   const path = choosePublicKey(parsed.values["--ssh-key"], home);
   if (typeof path !== "string") return refuse(output, path);
   const key = loadPublicKey(path);
   if (isFailure(key)) return refuse(output, key);
-  const provider = await openProvider(context);
-  if (isFailure(provider)) return refuse(output, provider);
+  const keyProblem = entry.keyProblem?.(key) ?? null;
+  if (keyProblem !== null) {
+    return refuse(output, { error: "no-ssh-key", message: `${entry.title} would not take the key ${path}: ${keyProblem}`, details: ["create one it takes: ssh-keygen -t ed25519, then pass it with --ssh-key"] });
+  }
 
-  const backups = parsed.flags.has("--backups");
   output.say(`-> machine ${name} at ${entry.title}: ${choices.type} at ${choices.location}, ${choices.image}${backups ? ", with backups" : ""}`);
+  const provider = await open(context, (line) => output.say(line));
+  if (isFailure(provider)) return refuse(output, provider);
   output.say(`   SSH key ${path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path}, ${key.fingerprint}`);
   const outcome = await provider.create({ name, ...choices, backups, key }, (line) => output.say(line));
 
   const address = outcome.machine.ipv4 ?? outcome.machine.ipv6;
+  const clock = dependencies.clock ?? realClock;
   if (address === null) {
     output.say("!! the machine has no public address: there is no port 22 to wait for");
   } else {
     output.say(`-> SSH on ${address}`);
-    await waitForSsh(address, dependencies, dependencies.clock ?? realClock, (line) => output.say(line));
+    await waitForSsh(address, dependencies, clock, (line) => output.say(line));
+    const identity = parsed.values["--ssh-key"] === undefined ? null : path.replace(/\.pub$/, "");
+    if (dependencies.login !== undefined) await waitForLogin(outcome.machine.login, address, dependencies.login, clock, (line) => output.say(line), identity);
   }
 
   const next = nextCommand(outcome.machine);
   output.say(outcome.created ? "-> ready" : "-> ready, created by an earlier run");
   for (const line of describeMachine(outcome.machine)) output.say(line);
-  output.say("   nothing is installed nor hardened yet: setup does both, over SSH as root");
+  output.say(`   nothing is installed nor hardened yet: setup does both, over SSH as ${outcome.machine.login}`);
+  if (parsed.values["--ssh-key"] !== undefined && !DEFAULT_KEYS.some((name) => path === join(home, ".ssh", name))) {
+    output.say(`   setup connects with the keys ssh offers by itself: load this one first, ssh-add ${path.replace(/\.pub$/, "")}`);
+  }
   output.say("");
   output.say(`next: ${next}`);
   output.succeeded("machine create", { provider: provider.name, created: outcome.created, machine: outcome.machine, resources: outcome.resources, next });
@@ -470,11 +861,11 @@ async function create(context: Context): Promise<number> {
 }
 
 async function list(context: Context): Promise<number> {
-  const provider = await openProvider(context);
+  const provider = await open(context);
   if (isFailure(provider)) return refuse(context.output, provider);
   const machines = await provider.list();
   if (!context.json) {
-    if (machines.length === 0) context.output.say(`no machine created by sitesolide in this ${context.entry.title} project`);
+    if (machines.length === 0) context.output.say(`no machine created by sitesolide in this ${context.entry.title} account`);
     else for (const line of machineTable(machines)) context.output.say(line);
   }
   context.output.succeeded("machine list", { provider: provider.name, machines });
@@ -501,12 +892,12 @@ async function destroy(context: Context): Promise<number> {
       details: ["without a terminal to type it in, the name is passed with --confirm; nothing was destroyed"],
     });
   }
-  const provider = await openProvider(context);
+  const provider = await open(context);
   if (isFailure(provider)) return refuse(output, provider);
 
   output.say(`-> machine ${name} at ${entry.title}`);
   const found = await provider.find(name);
-  if (found === null) return refuse(output, { error: "machine-not-found", message: `no machine named ${name} in this ${entry.title} project`, details: ["nothing was destroyed"] });
+  if (found === null) return refuse(output, { error: "machine-not-found", message: `no machine named ${name} in this ${entry.title} account`, details: ["nothing was destroyed"] });
   if (!found.managed) {
     return refuse(output, {
       error: "machine-not-managed",
@@ -530,6 +921,36 @@ async function destroy(context: Context): Promise<number> {
   return 0;
 }
 
+/**
+ * `machine providers`: every provider, and whether this workstation holds
+ * credentials for it, read without asking anything and without calling any
+ * provider's API. Where they come from is said, never what they are.
+ */
+async function providers(context: Context): Promise<number> {
+  const statuses = await Promise.all(PROVIDER_LIST.map(async (entry) => ({ entry, status: await credentialStatus(entry, context.dependencies) })));
+  if (!context.json) {
+    const width = Math.max(...PROVIDER_LIST.map((entry) => entry.name.length));
+    for (const { entry, status } of statuses) {
+      context.output.say(`   ${entry.name.padEnd(width)}  ${entry.title.padEnd(16)} ${status.found ? `credentials: ${status.source}` : `no credentials: ${fieldsToAsk(entry).map((field) => field.variable).join(", ")}`}`);
+    }
+    context.output.say("");
+    context.output.say("each provider's page in docs/providers/ says how to make its credentials");
+  }
+  context.output.succeeded("machine providers", {
+    providers: statuses.map(({ entry, status }) => ({
+      name: entry.name,
+      title: entry.title,
+      credentials: status.found,
+      source: status.source,
+      variables: entry.credentials.map((field) => field.variable),
+      backups: entry.backups,
+      defaults: entry.defaults(context.dependencies.environment),
+      docs: entry.docs,
+    })),
+  });
+  return 0;
+}
+
 /** Runs `sitesolide machine ...`; the exit code is returned, never thrown. */
 export async function machine(arguments_: string[], dependencies: MachineDependencies): Promise<number> {
   const secrets: string[] = [];
@@ -537,11 +958,14 @@ export async function machine(arguments_: string[], dependencies: MachineDepende
   try {
     const parsed = parseMachineArguments(arguments_);
     if (isFailure(parsed)) return refuse(output, parsed);
+    // Every provider's secrets the environment holds are scrubbed from the
+    // first line on, whether or not they are the ones used.
+    for (const known of PROVIDER_LIST) secrets.push(...secretValues(known, fromEnvironment(known, dependencies.environment)));
+    if (parsed.action === "providers") {
+      return await providers({ entry: HETZNER, parsed, dependencies, output, secrets, json: arguments_.includes("--json") });
+    }
     const entry = chooseProvider(parsed.values["--provider"]);
     if (isFailure(entry)) return refuse(output, entry);
-    // Scrubbed from the first line on, whether or not it is the one used.
-    const fromEnvironment = dependencies.environment[entry.tokenVariable]?.trim();
-    if (fromEnvironment !== undefined && fromEnvironment !== "") secrets.push(fromEnvironment);
     const context: Context = { entry, parsed, dependencies, output, secrets, json: arguments_.includes("--json") };
     switch (parsed.action) {
       case "create":

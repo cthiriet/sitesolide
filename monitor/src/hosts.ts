@@ -88,14 +88,23 @@ export function servedTargets(zone: string, folders: readonly string[], domains:
 /**
  * The certificates to read, one per certificate rather than one per host.
  *
- * Every preview rests on the zone's wildcard: reading it through each of them
- * would raise as many alerts as there are sites for one certificate. It is
- * read once, through the first preview, or through www when there is none, and
- * named `*.<zone>` whichever host carried the question. The bare domain has a
- * certificate of its own, the wildcard not covering it, and so does each
- * customer domain, obtained on demand.
+ * With a DNS provider, every preview rests on the zone's wildcard: reading it
+ * through each of them would raise as many alerts as there are sites for one
+ * certificate. It is read once, through the first preview, or through www when
+ * there is none, and named `*.<zone>` whichever host carried the question. The
+ * bare domain has a certificate of its own, the wildcard not covering it, and
+ * so does each customer domain, obtained on demand.
+ *
+ * With manual DNS, `onDemand`, there is no wildcard: the zone, its www and
+ * each preview have a certificate of their own, obtained at the first
+ * handshake and renewed on its own, and each is read under its own name.
+ * Whether the zone is, is its TLS policy's to say, read as the shared service
+ * reads it (onDemandPolicy in api/src/zone-names.ts).
  */
-export function certificateTargets(zone: string, targets: readonly Target[]): CertificateTarget[] {
+export function certificateTargets(zone: string, targets: readonly Target[], onDemand = false): CertificateTarget[] {
+  if (onDemand) {
+    return targets.map((target) => ({ id: `certificate:${target.host}`, label: target.host, sni: target.host, slug: target.slug }));
+  }
   const preview = targets.find((target) => target.host !== `www.${zone}` && target.host.endsWith(`.${zone}`));
   const landing = targets.find((target) => target.host === zone)?.slug ?? null;
   const certificates: CertificateTarget[] = [

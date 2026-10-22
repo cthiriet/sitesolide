@@ -80,6 +80,8 @@ export type FakeVm = {
   refuseSchedules(schedules: string[]): void;
   /** How the services stand at each reading after the restart, in order; see Standing. */
   setStandings(readings: Record<string, Standing>[]): void;
+  /** What the reading of the zone's TLS policy answers, one of TLS_ZONE_STATES in bin/cli/tls.ts. */
+  setTlsZoneState(state: string): void;
   /** The static accounts as /etc/passwd lines: those laid, and those an accepted useradd made. */
   accounts(): string[];
   /** The commands received, one per line: CONNECT, READ <pattern>, REFUSED <command>... */
@@ -201,6 +203,9 @@ export function createFakeVm(): FakeVm {
     },
     setStandings(readings) {
       writeFileSync(join(root, SWITCHES.standings), JSON.stringify(readings));
+    },
+    setTlsZoneState(state) {
+      writeFileSync(join(root, SWITCHES.tlsZoneState), state);
     },
     accounts() {
       return readAccounts(root);

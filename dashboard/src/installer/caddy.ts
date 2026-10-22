@@ -29,6 +29,7 @@ import { BACKUPS_NAME } from "../gatekeeper/instance";
 import type { Machine } from "../gatekeeper/machine";
 import { answers, describe, judgeTarget, regressions, servedHosts, type ProbeResponse } from "../gatekeeper/probe";
 import { TIMEOUTS, caddyExtract } from "../gatekeeper/transaction";
+import { FIRST_CERTIFICATE_MS } from "../../borrowed/zone-names";
 
 export type BlockOutcome = { ok: true; changed: boolean; detail: string } | { ok: false; message: string };
 
@@ -41,6 +42,13 @@ export type BlockStep = {
   protected: boolean;
   /** Where the gatekeeper keeps its backups, /run/sitesolide-gatekeeper. */
   runFolder: string;
+  /**
+   * The zone is certified on demand, manual DNS: a target that does not
+   * answer at all may be obtaining its first certificate, its handshake
+   * being the one that does, and is waited for up to FIRST_CERTIFICATE_MS,
+   * as long as no other site was lost.
+   */
+  onDemand?: boolean;
 };
 
 function errorMessage(error: unknown): string {
@@ -53,20 +61,29 @@ async function probeAll(machine: Machine, hosts: string[]): Promise<Map<string, 
   return new Map(hosts.map((host, i) => [host, responses[i]!]));
 }
 
-/** The target in its wanted state, and nobody lost, with retries up to the delay, as the gatekeeper does. */
+/**
+ * The target in its wanted state, and nobody lost, with retries up to the
+ * delay, as the gatekeeper does. With manual DNS, a target that does not
+ * answer at all, while every other site still does, is given the time a first
+ * certificate takes; any other failure keeps the gatekeeper's delay.
+ */
 async function probeAfter(machine: Machine, step: BlockStep, target: string, before: Map<string, ProbeResponse>): Promise<string | null> {
-  const deadline = machine.now() + TIMEOUTS.probes;
+  const started = machine.now();
+  const deadline = started + TIMEOUTS.probes;
   const hosts = [target, ...[...before].filter(([host, response]) => host !== target && answers(response)).map(([host]) => host)];
   const seen = new Map<string, ProbeResponse>();
   let pending = hosts;
+  let limit = deadline;
   for (;;) {
-    const remaining = Math.max(500, Math.min(TIMEOUTS.probeConfig, deadline - machine.now()));
+    const remaining = Math.max(500, Math.min(TIMEOUTS.probeConfig, limit - machine.now()));
     const responses = await Promise.all(pending.map((host) => machine.probe(host, "/", remaining)));
     pending.forEach((host, i) => seen.set(host, responses[i]!));
     const problem = judgeTarget(step.protected, target, seen.get(target)!);
     const lost = regressions(before, seen, [target]);
     if (problem === null && lost.length === 0) return null;
-    if (machine.now() + TIMEOUTS.pause >= deadline) {
+    const issuing = step.onDemand === true && lost.length === 0 && "error" in seen.get(target)!;
+    limit = issuing ? Math.max(deadline, started + FIRST_CERTIFICATE_MS) : deadline;
+    if (machine.now() + TIMEOUTS.pause >= limit) {
       const reasons = problem === null ? [] : [problem];
       if (lost.length > 0) reasons.push(`no longer answering: ${lost.map((host) => `${host} ${describe(seen.get(host) ?? { error: "not probed" })}`).slice(0, 3).join(", ")}`);
       return reasons.join("; ");

@@ -14,6 +14,7 @@ import {
   releaseLock,
   takeScript,
   releaseScript,
+  releaseHeldScript,
   takeoverScript,
   checkScript,
   checkOwnership,
@@ -345,6 +346,20 @@ describe("giving back", () => {
     expect(release.kind).toBe("warning");
     expect(holder(r)).toBe(fresh);
     expect(readdirSync(r)).toEqual(["caddy.lock"]);
+  });
+
+  test("from a script that took it, by the line held in a shell variable, and only that line", async () => {
+    // How setup's TLS step holds the lock across a reload, in one script run
+    // as root: see tlsZoneRun in bin/cli/tls.ts.
+    const r = root();
+    const acquisition = await takeLock("setup", 4242, local(), r, withoutSudo);
+    if (acquisition.kind !== "taken") throw new Error("not taken");
+    const giveBack = (line: string) => Bun.spawnSync(["sh", "-c", `held='${line}'; ${releaseHeldScript("held", r)}`]);
+    expect(giveBack("setup 4242 1").exitCode).toBe(0);
+    expect(holder(r)).toBe(acquisition.line);
+    expect(giveBack(acquisition.line).exitCode).toBe(0);
+    expect(existsSync(join(r, "caddy.lock"))).toBe(false);
+    expect(() => releaseHeldScript("held; rm -rf /")).toThrow();
   });
 
   test("a lock already absent is given back", async () => {

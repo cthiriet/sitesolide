@@ -42,6 +42,7 @@ describe.skipIf(CADDY === null || OPENSSL === null)("the probes in front of a re
       zone: ZONE,
       sitesDir: join(D, "srv", "sites"),
       domainsFile: join(D, "domaines.map"),
+      tlsZoneFile: join(D, "tls-zone.caddy"),
       stateDir: join(D, "state"),
       backupFile: join(D, "last-run.json"),
       diskPaths: [D],

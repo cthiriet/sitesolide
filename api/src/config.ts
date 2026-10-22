@@ -1,3 +1,5 @@
+import { TLS_ZONE_PATH, ZONE_NAMES_PATH } from "./zone-names";
+
 /** Local port of the shared service. See bin/cli/loopback.ts for the allocation. */
 export const PORT = Number(process.env.PORT ?? 3001);
 
@@ -25,6 +27,51 @@ export const DOMAIN_TABLE_TTL_MS = 10_000;
  * the domain table alone decides.
  */
 export const MAIN_ZONE = process.env.SITESOLIDE_ZONE ?? "";
+
+/**
+ * The zone's TLS policy, laid on the machine by `sitesolide setup` and
+ * imported by name by the Caddyfile's `(tls-zone)` snippet. This service reads
+ * it for one thing only: whether the zone's own names are certified on demand,
+ * one certificate per name, in which case it decides them too. The file Caddy
+ * reads is the one that says so: the two cannot disagree. See src/zone.ts.
+ */
+export const TLS_ZONE_FILE = process.env.TLS_ZONE_FILE ?? TLS_ZONE_PATH;
+
+/**
+ * The labels of the sites deployed under the zone, one per line, written on
+ * the machine from /srv/sites with the script of src/zone-names.ts, and only
+ * when the zone is certified on demand. This service cannot read /srv/sites
+ * itself, its unit hides it.
+ */
+export const ZONE_NAMES_FILE = process.env.ZONE_NAMES_FILE ?? ZONE_NAMES_PATH;
+
+/**
+ * A name of the zone missing from the list read last is looked up again once
+ * this much time has passed since that read, without waiting for the table's
+ * window: a site deployed a moment ago is found at its first handshake, and a
+ * flood of random names costs one read per second at most.
+ */
+export const ZONE_NAMES_MISS_MS = 1_000;
+
+/**
+ * With manual DNS, at most this many names new to the zone are allowed in any
+ * window of NEW_ZONE_NAMES_WINDOW_MS. A name is new until this service has
+ * allowed it once; one listed when it first reads the list is not, and a name
+ * it allowed stays allowed: a renewal never meets the cap, nor does the zone
+ * or its www.
+ *
+ * What it bounds is a burst: a token that may create projects, or anything
+ * else that lists sites faster than the owner looks, spending the authority's
+ * fifty new certificates a week on the zone, and the owner's own sites then
+ * getting none. Twenty a day leaves the owner more than two days to notice
+ * before that limit, and is more than a machine deploys in a day.
+ *
+ * Kept in memory: the service's unit gives it no writable directory, by
+ * design, and the first reading of the list after a restart counts every name
+ * listed then as known, so that a restart costs no renewal.
+ */
+export const NEW_ZONE_NAMES_CAP = 20;
+export const NEW_ZONE_NAMES_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** A refusal is logged only once per domain over this window. */
 export const LOG_WINDOW_MS = 5 * 60 * 1000;

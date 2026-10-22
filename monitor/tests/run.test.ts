@@ -76,6 +76,7 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
       zone: ZONE,
       sitesDir: sites,
       domainsFile,
+      tlsZoneFile: join(D, "tls-zone.caddy"),
       stateDir: state,
       backupFile,
       diskPaths: [D],
@@ -226,6 +227,30 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     // Only readings were asked of systemd, never a change.
     const calls = readFileSync(join(systemd, "calls"), "utf8").trim().split("\n");
     expect(calls.every((call) => call.startsWith("show caddy.service ") || call.startsWith("list-units "))).toBe(true);
+  });
+
+  test("manual DNS: the certificate of each name of the zone read under its own name, and no wildcard", async () => {
+    // The ids of the certificate checks the pass left in the monitor's memory.
+    const certificates = (): string[] =>
+      Object.keys((JSON.parse(readFileSync(join(state, "state.json"), "utf8")) as { checks: Record<string, unknown> }).checks)
+        .filter((id) => id.startsWith("certificate:"))
+        .sort();
+    await pass();
+    expect(certificates()).toEqual([`certificate:*.${ZONE}`, "certificate:sample-agency.example", `certificate:${ZONE}`].sort());
+
+    rmSync(join(state, "state.json"), { force: true });
+    const onDemand = await pass({}, { tlsPolicy: () => ({ value: "# manual DNS\ntls {\n\ton_demand\n}\n" }) });
+    expect(certificates()).toEqual(
+      [`certificate:${ZONE}`, `certificate:www.${ZONE}`, `certificate:cms.${ZONE}`, `certificate:shop.${ZONE}`, "certificate:sample-agency.example"].sort(),
+    );
+    expect(onDemand.status.down).toEqual([]);
+  });
+
+  test("an unreadable policy is said, and the wildcard read once as with a DNS provider", async () => {
+    await pass({}, { tlsPolicy: () => ({ error: "/etc/caddy/tls-zone.caddy: EACCES" }) });
+    const checks = (JSON.parse(readFileSync(join(state, "state.json"), "utf8")) as { checks: Record<string, unknown> }).checks;
+    expect(Object.keys(checks)).toContain(`certificate:*.${ZONE}`);
+    expect(JSON.stringify(checks.monitor)).toContain("/etc/caddy/tls-zone.caddy: EACCES");
   });
 
   test("the bare domain down is the platform down: the heartbeat on /fail until it recovers", async () => {

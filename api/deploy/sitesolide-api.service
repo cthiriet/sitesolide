@@ -51,8 +51,10 @@ TemporaryFileSystem=/srv:ro
 BindReadOnlyPaths=/srv/api
 
 # The table of domains is read in /etc/caddy, which ProtectSystem leaves
-# read-only. The Cloudflare token lives in the same directory: its permissions
-# 0640 root:caddy already exclude it from this user, this line makes it
+# read-only, and so are the zone's TLS policy, tls-zone.caddy, and with manual
+# DNS the list of the zone's sites, zone-names: /srv/sites stays hidden. The
+# Cloudflare token lives in the same directory: its permissions 0640
+# root:caddy already exclude it from this user, this line makes it
 # unreachable even in case of a permissions mistake.
 InaccessiblePaths=/etc/caddy/cloudflare.env
 

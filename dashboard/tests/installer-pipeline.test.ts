@@ -8,7 +8,8 @@ import { fragmentIsProtected } from "../borrowed/portal";
 import { earlierGenerations, generateUnits } from "../borrowed/unit";
 import type { InstallRequest, Scope } from "../src/control/protocol";
 import { finalManifest, replaceable, runPipeline, STABILITY_WINDOW_MS, type Outcome } from "../src/installer/pipeline";
-import { createBench as newBench, file, hostOf, OWN_UID, stageBundle as stage, ZONE, type Bench, type BenchOptions } from "./installer-bench";
+import { FIRST_CERTIFICATE_MS, parseZoneNames, ZONE_NAMES_PATH } from "../borrowed/zone-names";
+import { createBench as newBench, file, hostOf, OWN_UID, stageBundle as stage, zoneNames, ZONE, type Bench, type BenchOptions } from "./installer-bench";
 
 /**
  * The installer's pipeline on a throwaway tree, with the real host: real
@@ -798,6 +799,99 @@ describe("the secret files a token's project reads are its own", () => {
     stageBundle(bench, APP_FILES);
     refusedFor(await run(bench, request({ ...APP, port: 3040, secrets: ["shop.env"] })), "/etc/sitesolide/shop.env does not belong to site-shop");
     expect(bench.events.some((event) => event.startsWith("systemctl restart"))).toBe(false);
+  });
+});
+
+describe("the zone's sites for the ask endpoint", () => {
+  const STATIC = { slug: "shop", publicDir: "public" };
+  const STATIC_FILES = [file("public/index.html", "static")];
+  const said = (bench: Bench, text: string) => bench.events.some((event) => event.startsWith("log ") && event.includes(text));
+
+  test("a provider's zone: the script runs and writes nothing, nothing is said, and a site that does not answer fails at once", async () => {
+    const bench = createBench({ probe: (host) => (host === `shop.${ZONE}` ? { error: "connection refused" } : null) });
+    stageBundle(bench, STATIC_FILES);
+    const outcome = await run(bench, request(STATIC, PUBLIC));
+    expect(outcome).toMatchObject({ ok: false, code: "verify-failed" });
+    expect(bench.events).toContain("zone-names");
+    expect(zoneNames(bench)).toBeNull();
+    expect(said(bench, ZONE_NAMES_PATH) || said(bench, "no answer yet")).toBe(false);
+    expect(bench.elapsed).toBe(0);
+  });
+
+  test("manual DNS: listed before the first handshake, and the site's first certificate waited for", async () => {
+    let attempts = 0;
+    const bench = createBench({ onDemand: true, probe: (host) => (host === `shop.${ZONE}` && ++attempts < 4 ? { error: "tls: handshake failure" } : null) });
+    stageBundle(bench, STATIC_FILES);
+    const outcome = await run(bench, request(STATIC, PUBLIC));
+    expect(outcome).toMatchObject({ ok: true, url: `https://shop.${ZONE}/` });
+    expect(parseZoneNames(zoneNames(bench)!)).toEqual(new Set(["shop"]));
+    expect(said(bench, `${ZONE_NAMES_PATH}: 1 site(s) under the zone`)).toBe(true);
+    expect(said(bench, `no answer yet: the zone is certified on demand, and the site's first certificate is obtained by this handshake; asking again for up to ${FIRST_CERTIFICATE_MS / 1000} s`)).toBe(true);
+    expect(attempts).toBe(4);
+    expect(bench.events.indexOf("zone-names")).toBeLessThan(bench.events.indexOf("log -> verify"));
+  });
+
+  test("manual DNS: a site that never answers fails once the bound is reached, and not before", async () => {
+    const bench = createBench({ onDemand: true, probe: (host) => (host === `shop.${ZONE}` ? { error: "tls: handshake failure" } : null) });
+    stageBundle(bench, STATIC_FILES);
+    const outcome = await run(bench, request(STATIC, PUBLIC));
+    expect(outcome).toMatchObject({ ok: false, code: "verify-failed" });
+    expect(bench.elapsed).toBeGreaterThan(FIRST_CERTIFICATE_MS - 10_000);
+    expect(bench.elapsed).toBeLessThanOrEqual(FIRST_CERTIFICATE_MS);
+  });
+
+  test("manual DNS: an open app's block waits for its first certificate too, while every other site answers", async () => {
+    let attempts = 0;
+    const bench = createBench({
+      onDemand: true,
+      probe: (host, _path, current) => (host === `shop.${ZONE}` && current.events.includes("reload") && ++attempts < 4 ? { error: "tls: handshake failure" } : null),
+    });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request(APP, PUBLIC));
+    expect(outcome.ok).toBe(true);
+    expect(attempts).toBeGreaterThanOrEqual(4);
+    expect(said(bench, "validated, reloaded")).toBe(true);
+  });
+
+  test("a provider's zone: an app's block that does not answer is restored within the gatekeeper's delay", async () => {
+    const bench = createBench({ probe: (host, _path, current) => (host === `shop.${ZONE}` && current.events.includes("reload") ? { error: "connection refused" } : null) });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request(APP, PUBLIC));
+    expect(outcome).toMatchObject({ ok: false, code: "caddy-refused" });
+    expect(bench.elapsed).toBeLessThan(FIRST_CERTIFICATE_MS / 3);
+  });
+
+  test("manual DNS: a creation undone takes its name out of the list again", async () => {
+    const bench = createBench({ onDemand: true });
+    const link = header("app/escape", { type: "2", mode: 0o777, size: 0, mtime: 1 });
+    const tar = new Uint8Array([...entryBlocks(file("app/a"))[0]!, ...entryBlocks(file("app/a"))[1]!, ...link, ...new Uint8Array(1024)]);
+    stageBundle(bench, Bun.gzipSync(tar));
+    const outcome = await run(bench, request(APP));
+    expect(outcome).toMatchObject({ ok: false, code: "bundle-refused" });
+    expect(existsSync(join(bench.sites, "shop"))).toBe(false);
+    expect(parseZoneNames(zoneNames(bench)!).has("shop")).toBe(false);
+    // Written once, by the undoing: never listed before the archive was judged.
+    expect(bench.events.filter((event) => event === "zone-names")).toHaveLength(1);
+  });
+
+  test("manual DNS: a name is listed only once the deployment is in place, never while `install` runs", async () => {
+    // A token that may create projects could otherwise open TLS to a name
+    // whose install it makes last and fail, a certificate spent each time.
+    const bench = createBench({ onDemand: true });
+    stageBundle(bench, APP_FILES);
+    const failed = await run(bench, request({ ...APP, install: "echo broken >&2; exit 3" }));
+    expect(failed).toMatchObject({ ok: false, code: "install-failed" });
+    const listedAt = bench.events.indexOf("zone-names");
+    expect(listedAt).toBeGreaterThan(bench.events.indexOf("as shop install"));
+    expect(parseZoneNames(zoneNames(bench)!).has("shop")).toBe(false);
+
+    const kept = createBench({ onDemand: true });
+    stageBundle(kept, APP_FILES);
+    expect((await run(kept, request({ ...APP, install: "echo ok" }, PUBLIC))).ok).toBe(true);
+    expect(kept.events).toContain("as shop install");
+    expect(order(kept, "as shop install", "zone-names")).toBe(true);
+    expect(order(kept, "log -> manifest", "zone-names")).toBe(false);
+    expect(parseZoneNames(zoneNames(kept)!).has("shop")).toBe(true);
   });
 });
 

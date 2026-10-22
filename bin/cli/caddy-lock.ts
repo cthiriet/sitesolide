@@ -64,7 +64,7 @@ const STALE_MIN = STALE_MS / 60_000;
  * any name of the form `[a-z][a-z0-9-]{0,31}` reads: a holder unknown here is
  * still a holder, which we name in the refusal rather than take for unreadable.
  */
-export const HOLDERS = ["deploy-caddy", "lock", "deploy", "generate-domains", "deploy-gatekeeper", "refresh"] as const;
+export const HOLDERS = ["deploy-caddy", "lock", "deploy", "generate-domains", "deploy-gatekeeper", "refresh", "setup"] as const;
 export type Who = (typeof HOLDERS)[number];
 
 /** The name the dashboard's gatekeeper writes. */
@@ -241,6 +241,19 @@ export function releaseScript(line: string, root = RUN_DIR): string {
       `if [ -d "$d" ]; then echo ${m.other}; cat "$d/${HOLDER_NAME}" 2>/dev/null; echo; echo ${m.end}; else echo ${m.absent}; fi;`,
     ),
   ].join(" ");
+}
+
+/**
+ * The hand back of a lock taken by the same script on the machine, whose
+ * holder line exists only there, in the shell variable `variable`: the line
+ * the take answered after its TAKEN. Erased if and only if the holder is still
+ * that line, as releaseScript does, and silent: the script that took it has
+ * nothing to read from it. `sitesolide setup` reloads Caddy that way, from
+ * one script run as root (bin/cli/tls.ts).
+ */
+export function releaseHeldScript(variable: string, root = RUN_DIR): string {
+  if (!/^[a-z_][a-z0-9_]*$/.test(variable)) throw new Error(`unexpected shell variable: ${variable}`);
+  return [`: caddy-lock release-held;`, `r=${requireRoot(root)};`, ...removeIfState(`$${variable}`, ":;", ":;")].join(" ");
 }
 
 /** The check of a passed-on ownership, writing nothing. */

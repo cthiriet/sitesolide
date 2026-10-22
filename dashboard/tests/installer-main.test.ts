@@ -9,6 +9,7 @@ import { main, pruneResults, RESULT_RETENTION_MS } from "../src/installer/main";
 import { spawn, type Commands } from "../src/installer/real";
 import { INSTALLER } from "./installer-bench";
 import { registryOf, writeRegistry } from "./registry-fixtures";
+import { NOT_ON_DEMAND } from "../borrowed/zone-names";
 
 /**
  * The installer as systemd launches it, `main` with an environment, on a
@@ -64,6 +65,7 @@ describe("main", () => {
       asProject: async (run) => (run.purpose === "extract" ? spawn(run.command, 60_000, { stdin: run.stdin }) : { code: 1, output: "unexpected" }),
       nft: async () => ({ code: 1, output: "" }),
       systemdAnalyze: async () => ({ code: 0, output: "" }),
+      shell: async () => ({ code: 0, output: `${NOT_ON_DEMAND}\n` }),
     };
 
     const code = await main(
@@ -81,6 +83,8 @@ describe("main", () => {
         SPOOL_FOLDER: join(root, "spool"),
         ACCOUNTS_FILE: join(root, "passwd"),
         PROJECT_PORTS_FILE: join(root, "projects.nft"),
+        TLS_ZONE_FILE: join(root, "caddy", "tls-zone.caddy"),
+        ZONE_NAMES_FILE: join(root, "caddy", "zone-names"),
         EXTRACTOR: `${process.execPath} ${INSTALLER}`,
         CHECK_ACCOUNTS: "",
         PROBE_PORT: "9",

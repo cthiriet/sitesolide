@@ -66,6 +66,7 @@ import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "..
 import { domainConflicts, foreignUnit, portConflicts, staleUnits, unstableUnits, type UnitStanding } from "../../borrowed/services";
 import { decideUnit, earlierGenerations, generateUnits, runningUnits, unitArgument, unitFileName, watchedUnits } from "../../borrowed/unit";
 import { compareDirectives, sameDirectives, summariseDivergence } from "../../borrowed/comparison";
+import { FIRST_CERTIFICATE_MS, readZoneNamesAnswer, ZONE_NAMES_PATH } from "../../borrowed/zone-names";
 import { isPortalReady, portalHost, fromPortal, answers, describe } from "../gatekeeper/probe";
 import { TIMEOUTS } from "../gatekeeper/transaction";
 import { allocatePorts, decideDoor, scopeRefusals, takenPorts } from "../control/policy";
@@ -96,6 +97,29 @@ export type PipelineOptions = {
 export type Outcome =
   | { ok: true; url: string; allocated: { service: string | null; port: number }[] }
   | { ok: false; code: string; message: string; allocated: { service: string | null; port: number }[] };
+
+/** Between two probes of a verification waiting for a first certificate, and how long each may take. */
+const VERIFY_PAUSE_MS = 5_000;
+const VERIFY_PROBE_MS = 15_000;
+
+/**
+ * The zone's sites written again for the ask endpoint, see
+ * api/src/zone-names.ts: whether the zone is certified on demand. An answer
+ * the script never gives is said, and stops nothing: with a DNS provider the
+ * list is not read, and with manual DNS the verification tells whether the
+ * site got its certificate.
+ */
+async function refreshZoneNames(host: Host): Promise<boolean> {
+  const listed = await host.refreshZoneNames();
+  const answer = listed.code === 0 ? readZoneNamesAnswer(listed.output) : null;
+  if (answer === null) {
+    const said = listed.output.trim().split("\n").at(-1)?.slice(0, 200) || `exit ${listed.code}`;
+    host.log(`   !! ${ZONE_NAMES_PATH} could not be written again (${said}): with manual DNS, a site it does not list gets no certificate`);
+    return false;
+  }
+  if (answer.onDemand) host.log(`   ${ZONE_NAMES_PATH}: ${answer.sites} site(s) under the zone, which the ask endpoint allows`);
+  return answer.onDemand;
+}
 
 /** A refusal that stops the pipeline: a stable code and a message that says what to do. */
 export class Stop extends Error {
@@ -440,9 +464,18 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     // apart from here: everything stays from this point on.
     served = true;
 
+    // Only now, with manual DNS, may the ask endpoint allow the site's name:
+    // the archive judged, `install` run, and everything that follows kept
+    // even if it fails, a project the owner sees. Listed any earlier, a
+    // token could open TLS to a name whose deployment it then lets fail, and
+    // spend the authority's weekly certificates on the zone one throwaway
+    // slug at a time. Before the Caddy step and the verification, whose
+    // handshakes obtain the certificate.
+    const onDemand = await refreshZoneNames(host);
+
     if (block !== null && behindPortal) {
       host.log("-> Caddy block, before the files: the restriction goes up first");
-      const outcome = await installBlock(host.machine, { slug, zone, text: block, protected: true, runFolder: options.runFolder });
+      const outcome = await installBlock(host.machine, { slug, zone, text: block, protected: true, runFolder: options.runFolder, onDemand });
       if (!outcome.ok) throw new Stop("caddy-refused", outcome.message);
       host.log(`   ${outcome.detail}`);
     }
@@ -501,7 +534,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
       // --- 10. an open app's block, then the verification ---------------------------
       if (block !== null && !behindPortal) {
         host.log("-> Caddy block, through the validated path");
-        const outcome = await installBlock(host.machine, { slug, zone, text: block, protected: false, runFolder: options.runFolder });
+        const outcome = await installBlock(host.machine, { slug, zone, text: block, protected: false, runFolder: options.runFolder, onDemand });
         if (!outcome.ok) throw new Stop("caddy-refused", outcome.message);
         host.log(`   ${outcome.detail}`);
       }
@@ -510,7 +543,18 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
 
     host.log("-> verify");
     const url = `https://${slug}.${zone}/`;
-    const answer = await host.machine.probe(`${slug}.${zone}`, "/", TIMEOUTS.probeConfig);
+    let answer = await host.machine.probe(`${slug}.${zone}`, "/", TIMEOUTS.probeConfig);
+    // With manual DNS alone, a site that does not answer at all may be
+    // obtaining its first certificate through this very handshake: asked
+    // again, bounded. Any answer is judged at once, as it always was.
+    if (onDemand && "error" in answer) {
+      host.log(`   no answer yet: the zone is certified on demand, and the site's first certificate is obtained by this handshake; asking again for up to ${FIRST_CERTIFICATE_MS / 1000} s`);
+      const until = host.machine.now() + FIRST_CERTIFICATE_MS;
+      while ("error" in answer && host.machine.now() + VERIFY_PAUSE_MS < until) {
+        await host.machine.wait(VERIFY_PAUSE_MS);
+        answer = await host.machine.probe(`${slug}.${zone}`, "/", VERIFY_PROBE_MS);
+      }
+    }
     if (behindPortal) {
       if (!fromPortal(answer)) throw new Stop("verify-failed", `${url} should answer the portal's 401, got ${describe(answer)}: sitesolide.json says Restricted, and the site answers anyone; tell the owner of the machine now`);
       host.log(`   ${url} 401, restricted: visitors are asked to sign in`);
@@ -637,6 +681,9 @@ async function undoCreation(host: Host, slug: string, created: Created): Promise
       return;
     }
     host.log(`   removed    /srv/sites/${slug}`);
+    // Never listed by this run, but listed by any other writer that ran
+    // while the folder existed: it drops out with the folder.
+    await refreshZoneNames(host);
     if (!created.account) return;
     const removed = await host.removeAccount(slug);
     if (removed.code !== 0) {

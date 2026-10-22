@@ -42,6 +42,7 @@ import {
 } from "./checks";
 import type { Config } from "./config";
 import { certificateTargets, projectUnits, readDomainTable, servedTargets, siteFolders } from "./hosts";
+import { onDemandPolicy } from "../../api/src/zone-names";
 import type { Machine } from "./machine";
 import { heartbeatRequest, webhookRequest } from "./notify";
 import { buildStatus, type ChannelState, type MonitorStatus } from "./status";
@@ -114,6 +115,7 @@ export async function run(config: Config, machine: Machine, now: number, clock: 
   const [caddy, units, backup] = await Promise.all([machine.caddy(), machine.units(), machine.backup()]);
   const folders = machine.folders();
   const domains = machine.domains();
+  const policy = machine.tlsPolicy();
 
   // Caddy, and whether systemd had to restart it since the last run.
   const show = "value" in caddy ? caddy.value : null;
@@ -147,9 +149,15 @@ export async function run(config: Config, machine: Machine, now: number, clock: 
     unknownKinds.add("platform");
   }
 
+  // With manual DNS each name of the zone has its own certificate, read
+  // under its own name; an unreadable policy is said, and read as a DNS
+  // provider's, the wildcard then read once as before.
+  if ("error" in policy) problems.push(policy.error);
+  const onDemand = "value" in policy && policy.value !== null && onDemandPolicy(policy.value);
+
   if (names !== null) {
     const targets = servedTargets(config.zone, names, table);
-    const certificates = certificateTargets(config.zone, targets);
+    const certificates = certificateTargets(config.zone, targets, onDemand);
     if (caddyResult.verdict === "fail") {
       const reason = "not probed: Caddy is not running";
       for (const target of targets) results.push(notProbed(target.host, target.slug, reason));

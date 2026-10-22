@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { DOMAIN_TABLE_TTL_MS, MAIN_ZONE } from "./config";
+import { DOMAIN_TABLE_TTL_MS } from "./config";
+import { createZone, type Zone } from "./zone";
 
 /**
  * Reduces what Caddy passes along to a comparable host name: lowercase, no
@@ -52,9 +53,10 @@ export type Table = {
  * a disk access on every request.
  *
  * Time is received as a parameter rather than read here, so that the tests can
- * cross the cache window without waiting.
+ * cross the cache window without waiting. So is the zone, whose own names are
+ * decided before the table is read: see src/zone.ts.
  */
-export function createTable(path: string, ttlMs: number = DOMAIN_TABLE_TTL_MS): Table {
+export function createTable(path: string, ttlMs: number = DOMAIN_TABLE_TTL_MS, zone: Zone = createZone({ ttlMs })): Table {
   let allowedHosts = new Set<string>();
   let lastRead = 0;
   let neverRead = true;
@@ -96,12 +98,14 @@ export function createTable(path: string, ttlMs: number = DOMAIN_TABLE_TTL_MS): 
       const host = normalizeHost(raw);
       if (!host) return { allowed: false, reason: "invalid host name" };
 
-      // The main zone is served by the wildcard and by the apex certificate,
-      // both obtained through DNS-01. Authorizing it on demand there would
-      // issue a second certificate for a name already covered.
-      if (MAIN_ZONE !== "" && (host === MAIN_ZONE || host.endsWith(`.${MAIN_ZONE}`))) {
-        return { allowed: false, reason: "covered by the wildcard" };
-      }
+      // The main zone's names never reach the table. With a DNS provider they
+      // are served by the wildcard and by the apex certificate, both obtained
+      // through DNS-01, and authorizing one on demand would issue a second
+      // certificate for a name already covered. With manual DNS, the zone
+      // itself, its www and the sites deployed under it are allowed, and
+      // nothing else.
+      const zoned = zone.decide(host, now);
+      if (zoned !== null) return zoned;
 
       if (!reread(now).has(host)) return { allowed: false, reason: "unknown domain" };
 

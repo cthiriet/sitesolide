@@ -67,6 +67,14 @@ export type Config = {
    * skips them rather than failing them.
    */
   sites: string | null;
+  /**
+   * Who serves the zone's DNS, as setup was told with `--dns`: a provider of
+   * bin/cli/dns/registry.ts, or `manual`. Absent means Cloudflare, which
+   * every installation used before the others existed; setup reads it again
+   * when run without `--dns`, so that a run never switches a machine to
+   * another way of obtaining its certificates unasked.
+   */
+  dns?: string;
 };
 
 /** What `mergeConfig` requires, and only the user can know. */
@@ -213,7 +221,7 @@ export function configPath(home = homedir(), environment: Record<string, string 
 }
 
 /** The settings `init` writes only when they are given or already set. */
-export const OPTIONAL_SETTINGS = ["contact", "vault", "sites", "api"] as const;
+export const OPTIONAL_SETTINGS = ["contact", "vault", "sites", "api", "dns"] as const;
 
 /**
  * The file `sitesolide init` writes, and `sitesolide setup` too: the three

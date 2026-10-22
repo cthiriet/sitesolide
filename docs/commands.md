@@ -5,12 +5,15 @@ Every command runs from a project's folder, the one holding its
 `login`, `mcp`, `machine`, `people`, `help` and `--version`. This is what `sitesolide --help` prints.
 
 ```text
+sitesolide setup                alone at a terminal: pick a cloud, a region and a size, then order and install
 sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a no-op once done
    --zone <dns.zone> --email <you@example.com>
    --contact <you@example.com>   shown on the page that asks for a preview code
    --user <name>                the account that deploys, deploy by default as root
+   --dns <provider|manual>      who serves the zone's DNS: cloudflare by default, see docs/dns/
    --skip-dns                   create the DNS records by hand: setup lists them and waits
    --dns-replace                replace records that point elsewhere, on your decision alone
+   --dns-credentials-stdin      read the DNS provider's credentials from standard input
    --cloudflare-token-stdin     read the Cloudflare token from standard input
    --minimal                    leave out backups, the installer and the egress proxy
    --any-os                     go on with a system other than Debian 13, at your own risk
@@ -67,8 +70,9 @@ sitesolide mcp                  serve these commands to an agent, over MCP on st
 sitesolide login --url <https://dashboard.zone>
                                 a person with a token: deploy, set secrets and restart without SSH
    --token-stdin                read the token from standard input
-sitesolide machine create|list|destroy --provider hetzner
+sitesolide machine create|list|destroy --provider <provider>
                                 a VM ordered by API, before setup: sitesolide machine lists the options
+sitesolide machine providers    the clouds it orders from, and which have credentials here
 any command --api               go through the dashboard's API even with a server
 SITESOLIDE_CONFIG_DIR=<dir>     before any command: read that installation's configuration
 
@@ -438,32 +442,51 @@ never decided for you: secrets and the network.
 
 `sitesolide machine` orders the VM itself, before there is a configuration to
 read: it talks to the provider's API, never over SSH. See
-[machine.md](machine.md) for what it creates, what it costs and what the token
-needs.
+[machine.md](machine.md) for what it creates and where its credentials come
+from, and [providers/](providers/) for each cloud, what it costs and what its
+credentials need.
 
 ```text
-sitesolide machine create --provider hetzner --name <name>
+sitesolide machine create --provider <provider> --name <name>
                                 order a VM, its firewall and your SSH key, ready for setup
-   --type <type>                cx23 by default; a refusal lists what the location sells
-   --location <location>        fsn1 by default
+   --type <type>                the provider's smallest sound type by default; a refusal lists others
+   --location <location>        a location in Europe by default, see docs/providers/
    --image <image>              debian-13 by default
-   --backups                    the provider's daily backups, about 20 % on the price
+   --backups                    the provider's daily backups, where it has them, at a price
    --ssh-key <path.pub>         ~/.ssh/id_ed25519.pub, id_ecdsa.pub or id_rsa.pub by default
-sitesolide machine list --provider hetzner
+sitesolide machine list --provider <provider>
                                 the machines sitesolide created, their addresses and price
-sitesolide machine destroy <name> --provider hetzner
+sitesolide machine destroy <name> --provider <provider>
                                 delete the machine and its firewall, for good
    --confirm <name>             the name typed back, where no terminal can ask for it
    --delete-key                 delete the SSH key uploaded for it too
-any machine command --token-stdin
-                                read the token from standard input rather than HCLOUD_TOKEN
+sitesolide machine providers
+                                the providers, and whether this workstation holds credentials for each
+create, list or destroy --token-stdin
+                                read the credentials from standard input rather than the environment
 
+providers: hetzner, digitalocean, aws, gcp, azure, scaleway, vultr, linode
 --json, on every one of them: one JSON event per line, see docs/agents.md
-the token is never an option, where ps would show it: see docs/machine.md
+credentials are never an option, where ps would show them: see docs/machine.md
 ```
 
-`create` ends on the command that comes next, `sitesolide setup
-root@<ipv4> --zone <your zone> --email <you>`, once port 22 answers.
+`create` ends on the command that comes next, once port 22 answers and the
+machine lets its account in with the key: `sitesolide setup
+root@<ipv4> --zone <your zone> --email <you>`, or, where the provider's image
+only lets in a sudoer, `sitesolide setup admin@<ipv4> ... --user deploy`.
+
+## The setup wizard
+
+`sitesolide setup`, typed alone at a terminal, asks rather than takes
+options: where to run (a new machine from a cloud, or one you have), which
+cloud, among those it found credentials for first, the region and the size
+with their price, the machine's name, the domain, and who serves its DNS,
+read from its name servers, with credentials scoped to the zone, or records
+made by hand.
+Everything is checked as it is answered, and nothing is ordered before the
+plan, its price included, is confirmed. It then runs `machine create` and
+`setup` themselves, and ends by printing both commands, so that the same
+install can be run again without questions. See [setup.md](setup.md).
 
 ## For agents
 

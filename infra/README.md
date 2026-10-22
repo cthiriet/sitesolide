@@ -24,6 +24,70 @@ and `sitesolide setup` hardens and installs any Debian 13 machine
 cloud-init part of the second; see [docs/upgrading.md](../docs/upgrading.md)
 for what that leaves on a workstation.
 
+## The zone's TLS policy
+
+How the served zone's certificates are obtained is not in the Caddyfile: it
+depends on who holds the zone's DNS, which the repository does not know. The
+`(tls-zone)` snippet imports `/etc/caddy/tls-zone.caddy` by name, a whole
+`tls { }` block, and the zone's own blocks and every app's preview block import
+the snippet. `sitesolide setup` lays the file, root:root 0644, from the DNS it
+is given (`bin/cli/tls.ts`):
+
+| DNS | `tls-zone.caddy` | Certificates |
+|---|---|---|
+| a provider (`--dns cloudflare`, ...) | `dns <module> {env.<CREDENTIAL>}` | one for `*.<zone>` and one for the zone, through a DNS-01 challenge; the credentials in `/etc/caddy/cloudflare.env`, which systemd hands Caddy |
+| manual (`--dns manual`) | `on_demand` | one per name, at its first handshake, through HTTP-01 or TLS-ALPN-01, once the ask endpoint agrees |
+
+The file never holds a credential: a directive names one as `{env.NAME}`, which
+Caddy reads from its environment when it runs, and `tlsZoneContent` refuses
+anything else, `{$NAME}` included, which Caddy would write into the
+configuration its admin API hands out.
+
+**A named import, not a glob.** A missing file fails the whole configuration,
+for every site, and that is the point: a zone without its policy would fall
+back to Caddy's defaults, an HTTP challenge for a wildcard it can never
+obtain, without anything saying so. `bin/deploy-caddy.sh` therefore reads the
+file's state before anything leaves: present, it is the machine's and never
+compared; missing on a machine that holds a Cloudflare token, that machine is
+one from before the file, whose Caddyfile carried Cloudflare's policy itself,
+and the script lays exactly that policy, inside its transaction, before the
+Caddyfile that imports it, and takes it away again if it restores; missing
+anywhere else, it stops before any write. So does a file that is there and
+holds no policy it recognises (a `tls {` block closed, with a `dns <module>`
+or an `on_demand` line): an empty or cut-short file validates, and would put
+the zone under Caddy's default issuers, where the wildcard cannot renew.
+
+**A change of policy restarts Caddy.** When setup lays a different policy on a
+Caddy in service, a switch of mode or of provider, it takes the Caddy lock,
+validates, and restarts Caddy rather than reloading it: only a restart loads a
+binary `caddy add-package` rebuilt and an environment file systemd reads at
+start alone. On any failure the previous file is put back and Caddy restarted
+with it. A policy that is already the one in place changes nothing. A new
+token for the same provider is the same restart, without the policy
+(`caddyRestartScript` in `bin/cli/tls.ts`).
+
+**Manual DNS and the ask endpoint.** The person creates `<zone>` and
+`*.<zone>` A records, and AAAA ones if the machine has IPv6, at any registrar.
+The wildcard record points every name at the machine, so the ask endpoint
+must not allow any name: it allows the zone, its www, and `<label>.<zone>` for
+a site deployed on the machine, and nothing else (`api/src/zone.ts`). It
+knows the policy by reading `tls-zone.caddy` itself, so it can never disagree
+with Caddy, and the deployed sites from `/etc/caddy/zone-names`, one label per
+line, since its unit hides `/srv/sites`. That list is written from the folders
+of `/srv/sites` by every gesture that adds or takes away a site, `sitesolide
+deploy` and `remove`, `bin/deploy-caddy.sh`, `bin/generate-domains.sh` and the
+dashboard's installer, with one script (`api/src/zone-names.ts`) that writes
+nothing on a zone with a DNS provider. A first deployment's verification waits
+up to 90 s for the site's first certificate, with manual DNS alone, and the
+monitor reads each site's certificate under its own name. A certificate per
+name means the authority's limit, fifty new
+certificates a week per registered domain, counts every new site, and the
+zone and its www once: ample for a machine, not for creating a hundred sites
+in a week.
+
+`cloudflare.env` stays in the drop-in's `EnvironmentFile=` with manual DNS
+too, without a dash: setup lays it with a comment and no credential.
+
 ## Caddy's restart policy
 
 The unit the Caddy package ships (`caddyserver/dist`, `init/caddy.service`)

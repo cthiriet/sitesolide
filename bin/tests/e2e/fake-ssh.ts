@@ -51,7 +51,10 @@
  * - `keep-units`: an accepted write of a systemd unit, `sudo install ...
  *   /dev/stdin /etc/systemd/system/<unit>`, lays what came on standard input
  *   in the VM's tree, as the machine would, so that the next reading of that
- *   unit finds it. Every other accepted write still runs nothing.
+ *   unit finds it. Every other accepted write still runs nothing;
+ * - `tls-zone-state`: what the reading of the zone's TLS policy answers, one
+ *   of TLS_ZONE_STATES in bin/cli/tls.ts. A machine that carries a provider's
+ *   policy unless the test lays it.
  *
  * `sitesolide setup`'s scripts, `sh -s <tag>` with the script on standard
  * input, are writes like any other: refused, or accepted and answered from
@@ -76,6 +79,8 @@ import { backupComponentCommand, BACKUP_COMPONENT_MARKER } from "../../cli/backu
 import { ownerGeneralCommand, ownerReadCommand, ownerWriteCommand, type EntryView, type PersonView, type Role } from "../../cli/access";
 import { ownershipReleaseCommand } from "../../cli/removal";
 import { OWNERS_DONE, secretOwnersCommand } from "../../cli/secrets";
+import { NOT_ON_DEMAND, TLS_ZONE_STATE_COMMAND, TLS_ZONE_STATES, ZONE_NAMES_COMMAND } from "../../cli/tls";
+import { ZONE_LABEL } from "../../../api/src/zone-names";
 
 export const TEST_HOST = "sample@invalid.local";
 
@@ -104,6 +109,7 @@ export const SWITCHES = {
   /** The secret files /etc/sitesolide carries, `{ name: owner }`: see secretOwnersCommand in bin/cli/secrets.ts. */
   secretFiles: "secret-files.json",
   keepUnits: "keep-units",
+  tlsZoneState: "tls-zone-state",
 } as const;
 
 /**
@@ -522,6 +528,14 @@ if (import.meta.main) {
     }
     process.exit(0);
   }
+  // The zone's TLS policy, which bin/deploy-caddy.sh reads before anything
+  // leaves: a reading, hence always answered, from the switch the test lays.
+  if (command === TLS_ZONE_STATE_COMMAND) {
+    record("TLS_ZONE");
+    const laid = join(vm, SWITCHES.tlsZoneState);
+    process.stdout.write(`${existsSync(laid) ? readFileSync(laid, "utf8").trim() : TLS_ZONE_STATES.dns}\n`);
+    process.exit(0);
+  }
   if (command === LIST_BLOCKS) {
     record("BLOCKS");
     const folder = join(vm, "etc", "caddy", "sites");
@@ -716,6 +730,16 @@ if (import.meta.main) {
         for (const [answerPattern, output] of pairs) {
           if (command.includes(answerPattern)) process.stdout.write(output);
         }
+      }
+      // The zone's sites written again for the ask endpoint: the line the
+      // machine's script ends on, by the policy the test lays, the sites
+      // counted in the tree. Nothing is written.
+      if (command === ZONE_NAMES_COMMAND) {
+        const laid = join(vm, SWITCHES.tlsZoneState);
+        const onDemand = existsSync(laid) && readFileSync(laid, "utf8").trim() === TLS_ZONE_STATES.onDemand;
+        const sites = join(vm, "srv", "sites");
+        const count = existsSync(sites) ? readdirSync(sites, { withFileTypes: true }).filter((entry) => entry.isDirectory() && ZONE_LABEL.test(entry.name)).length : 0;
+        process.stdout.write(`${onDemand ? `zone-names: ${count} site(s) under the zone` : NOT_ON_DEMAND}\n`);
       }
       const action = join(vm, SWITCHES.onFirstAccepted);
       if (existsSync(action)) {

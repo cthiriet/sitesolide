@@ -71,7 +71,9 @@ echo "=== tools of the repository"
 # dependencies that let it be read, like every other folder here, and is checked
 # the same way: `bun run check` runs its tests then its typing, and the
 # deprecation check comes after, for the reason given above.
-[ -d "$REPO_ROOT/bin/node_modules" ] || (cd "$REPO_ROOT/bin" && bun install --silent)
+# Always, not only when node_modules is missing: bin/ has a dependency at run
+# time, the wizard's prompts, and a checkout made before it would lack it.
+(cd "$REPO_ROOT/bin" && bun install --silent --frozen-lockfile)
 if ! (cd "$REPO_ROOT/bin" && bun run check); then
   FAILURES=$((FAILURES + 1))
 elif ! bun "$REPO_ROOT/bin/deprecations.ts" "$REPO_ROOT/bin"; then

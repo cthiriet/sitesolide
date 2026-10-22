@@ -43,6 +43,7 @@ import { LOOPBACK_TABLE, PROJECT_PORTS_SET } from "../../borrowed/loopback";
 import { isValidSchedule, isValidSlug } from "../../borrowed/manifest";
 import { GENERATOR_MARK, MARKER_DONE, readCurrentPairs, readStability } from "../../borrowed/services";
 import { isTimerUnit, systemdRunArguments, systemUser, unitArgument, unitFileName, type ProjectRun } from "../../borrowed/unit";
+import { zoneNamesScript } from "../../borrowed/zone-names";
 import { BUNDLE_NAME, DEPLOYMENT_ID_SHAPE, MAX_BUNDLE_BYTES } from "../control/protocol";
 import { SUBFOLDER_SUFFIX, type ProjectEntry } from "../secrets/scope";
 import type { ExtractOutcome } from "./extract";
@@ -63,6 +64,8 @@ export type Commands = {
   nft: (arguments_: string[], timeoutMs: number) => Promise<Execution>;
   /** `systemd-analyze`, for `calendar` alone: a reading of a schedule, which needs no manager. */
   systemdAnalyze: (arguments_: string[], timeoutMs: number) => Promise<Execution>;
+  /** `/bin/sh -c`, for a script of the platform's own, never one a manifest wrote: the zone's sites. */
+  shell: (script: string, timeoutMs: number) => Promise<Execution>;
 };
 
 export type HostConfig = {
@@ -78,6 +81,10 @@ export type HostConfig = {
   accountsFile: string;
   /** /etc/sitesolide-loopback-projects.nft */
   projectPortsFile: string;
+  /** /etc/caddy/tls-zone.caddy, whose policy says whether the zone is certified on demand. */
+  tlsZoneFile: string;
+  /** /etc/caddy/zone-names, the zone's sites the ask endpoint allows on demand. */
+  zoneNamesFile: string;
   /**
    * The account that owns the served trees and the manifest, as the SSH path
    * leaves them: the one `sitesolide init` names in `server`. null on the
@@ -138,6 +145,7 @@ export function realCommands(paths: { systemctl: string; useradd: string; userde
     asProject: (run) => spawn(systemdRunArguments(run, paths.systemdRun), (run.timeoutS + 30) * 1000, { stdin: run.stdin }),
     nft: (arguments_, timeoutMs) => spawn([paths.nft, ...arguments_], timeoutMs),
     systemdAnalyze: (arguments_, timeoutMs) => spawn([paths.systemdAnalyze, ...arguments_], timeoutMs),
+    shell: (script, timeoutMs) => spawn(["/bin/sh", "-c", script], timeoutMs),
   };
 }
 
@@ -242,6 +250,10 @@ export function createHost(config: HostConfig): Host {
         // Unreadable: neither mark nor project, so foreign unless absent.
       }
       return { loadState, fragmentPath, generated: text.includes(GENERATOR_MARK), project: text.includes(`/srv/sites/${slug}/`) };
+    },
+
+    refreshZoneNames() {
+      return config.commands.shell(zoneNamesScript({ sites: config.sitesDir, policy: config.tlsZoneFile, names: config.zoneNamesFile }), 30_000);
     },
 
     async refusedSchedules(schedules) {

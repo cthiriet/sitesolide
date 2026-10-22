@@ -72,8 +72,11 @@ Use the MCP tools when they are available (`detect`, `deploy`, `status`,
 Every error carries a `hint`: follow it. The usual ones:
 
 - **`missing settings`.** Nothing is configured on this workstation. A new
-  server is `sitesolide machine create`, then `sitesolide setup`, run only when
-  the user asks, with their own tokens from the environment; a server already
+  server is `sitesolide machine create --provider <cloud>`, then `sitesolide
+  setup` with the `next` command it printed, run only when the user asks, with
+  their own credentials from the environment or their cloud's CLI (`sitesolide
+  machine providers` says which are there); a person may instead run
+  `sitesolide setup` alone, which asks its questions; a server already
   installed is `sitesolide init`; someone with a token runs `sitesolide
   login`. Never guess a server or a zone.
 - **A secret is missing on the server.** The deploy stopped before restarting

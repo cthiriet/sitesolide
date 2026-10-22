@@ -27,6 +27,7 @@ import { extract } from "./extract";
 import { readLaunch, readRequest } from "./instance";
 import { runPipeline, type Outcome } from "./pipeline";
 import { createHost, realCommands, type Commands } from "./real";
+import { TLS_ZONE_PATH, ZONE_NAMES_PATH } from "../../borrowed/zone-names";
 
 export const LIMITS = { maxBytes: MAX_EXTRACTED_BYTES, maxEntries: MAX_ENTRIES, maxPathBytes: MAX_PATH_BYTES };
 
@@ -209,6 +210,8 @@ export async function main(argv: string[], env: Environment, overrides: { comman
     spoolFolder: env.SPOOL_FOLDER ?? "/srv/sites/dashboard/data/control",
     accountsFile: env.ACCOUNTS_FILE ?? "/etc/passwd",
     projectPortsFile: env.PROJECT_PORTS_FILE ?? "/etc/sitesolide-loopback-projects.nft",
+    tlsZoneFile: env.TLS_ZONE_FILE ?? TLS_ZONE_PATH,
+    zoneNamesFile: env.ZONE_NAMES_FILE ?? ZONE_NAMES_PATH,
     deployAccount: deployAccount === "" ? null : deployAccount,
     dashboardAccount: deployAccount === "" ? null : (env.DASHBOARD_ACCOUNT ?? "site-dashboard"),
     extractor: (env.EXTRACTOR ?? "/usr/local/bin/bun /usr/local/lib/sitesolide/installer.js").split(" ").filter((part) => part !== ""),

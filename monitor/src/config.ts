@@ -26,6 +26,7 @@
  * none.
  */
 import { alertUrl, webhookFormat, type WebhookFormat } from "./notify";
+import { TLS_ZONE_PATH } from "../../api/src/zone-names";
 
 export type ProbeConfig = {
   /** Where Caddy listens: the loopback and 443 on the machine. */
@@ -41,6 +42,8 @@ export type Config = {
   zone: string;
   sitesDir: string;
   domainsFile: string;
+  /** The zone's TLS policy, which says whether the zone's names are certified one by one, on demand. */
+  tlsZoneFile: string;
   stateDir: string;
   backupFile: string;
   /** The filesystems to watch, by a path on each; duplicates are merged by device. */
@@ -103,6 +106,7 @@ export function readConfig(
       zone,
       sitesDir: tree.SITES_DIR ?? "/srv/sites",
       domainsFile: tree.DOMAINS_FILE ?? "/etc/caddy/domaines.map",
+      tlsZoneFile: tree.TLS_ZONE_FILE ?? TLS_ZONE_PATH,
       // The unit's StateDirectory=; systemd's STATE_DIRECTORY says the same,
       // and is a variable the alerting file could override like any other.
       stateDir: tree.STATE_DIRECTORY ?? "/var/lib/sitesolide-monitor",

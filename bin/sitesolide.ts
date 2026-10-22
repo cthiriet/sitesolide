@@ -17,6 +17,7 @@
  *   sitesolide mcp                  the same commands, as tools for an agent
  *   sitesolide login --url <url>    a team member: a token instead of SSH
  *   sitesolide machine create       a VM from a cloud provider's API, see cli/machine.ts
+ *   sitesolide setup                alone at a terminal, the wizard: see cli/wizard.ts
  *   sitesolide help, --version      without any configuration
  *
  * The scripts this file runs live in the kit, the repository or what a
@@ -234,8 +235,10 @@ import {
   type RefreshOptions,
 } from "./cli/refresh";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts, type ProjectAccount } from "./cli/loopback";
+import { FIRST_CERTIFICATE_MS, readZoneNamesAnswer, ZONE_NAMES_COMMAND, ZONE_NAMES_FILE } from "./cli/tls";
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
-import { machine } from "./cli/machine";
+import { machine, sshLogin } from "./cli/machine";
+import { DNS_PROVIDERS, dnsEntry, MANUAL } from "./cli/dns/registry";
 import { eventOutput, humanOutput, login, remoteMode, REMOTE_USAGE, runRemote } from "./cli/remote";
 import { KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
 import { ownerGeneralCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshGeneral, sshPeople } from "./cli/access";
@@ -472,7 +475,13 @@ function script(name: string): string {
  */
 function projectEnvironment(): Record<string, string | undefined> | undefined {
   const extra = fromKit(projectEnv);
-  return Object.keys(extra).length === 0 ? undefined : { ...process.env, ...extra };
+  // A DNS provider's credentials, meant for a machine's Caddy alone, never
+  // reach a project's build: SITESOLIDE_DNS_<...> are sitesolide's own names.
+  const dns = Object.keys(process.env).filter((name) => name.startsWith("SITESOLIDE_DNS_"));
+  if (Object.keys(extra).length === 0 && dns.length === 0) return undefined;
+  const environment: Record<string, string | undefined> = { ...process.env, ...extra };
+  for (const name of dns) delete environment[name];
+  return environment;
 }
 
 /** The final event of a run that succeeded, under --json. */
@@ -1200,7 +1209,12 @@ async function deploy(
   // The end of the Caddy step. The release is also guaranteed by the `exit`
   // event on every failure path, `die` unwinding no finally.
   releaseCaddyLock();
-  await verify(manifest, config, executor);
+  // The site's folder exists: with manual DNS, the ask endpoint must find it
+  // before the verification's handshake obtains its first certificate, which
+  // is then given the time an issuance takes. A static site goes through no
+  // other step that would list it.
+  const onDemand = await refreshZoneNames(config, executor);
+  await verify(manifest, config, executor, note, onDemand === true ? FIRST_CERTIFICATE_MS : 0);
   if (stability !== null) await checkStability(stability, config, executor);
   if (executor.simulated) {
     say("-> dry run, nothing was installed");
@@ -1664,11 +1678,44 @@ async function depositText(
  * result for deploy, the project's own entry for refresh, which checks
  * several.
  */
+/** Between two attempts of a verification waiting for a first certificate. */
+const VERIFY_RETRY_MS = 5_000;
+
+/**
+ * With manual DNS, the ask endpoint allows the zone's sites from
+ * /etc/caddy/zone-names, which only its writers keep up: a site deployed
+ * without it is refused its first certificate, and a site removed without it
+ * stays certifiable (api/src/zone-names.ts). Written again from /srv/sites,
+ * as root; on a zone with a DNS provider the command writes nothing, and this
+ * says nothing either. Whether the zone is certified on demand; null in a dry
+ * run, or when the answer is not one the command gives, which is said and
+ * stops nothing: the verification that follows tells whether the site
+ * answers.
+ */
+async function refreshZoneNames(config: Config, executor: Executor): Promise<boolean | null> {
+  if (executor.simulated) {
+    say(`   [dry-run] ${ZONE_NAMES_FILE}, the zone's sites for the ask endpoint, written again if the zone is certified on demand`);
+    return null;
+  }
+  const execution = await executor.execute(config, ZONE_NAMES_COMMAND);
+  const answer = execution.code === 0 ? readZoneNamesAnswer(execution.output) : null;
+  if (answer === null) {
+    warn(`${ZONE_NAMES_FILE} could not be written again`, [
+      execution.error.trim().split("\n").at(-1) || execution.output.trim().split("\n").at(-1) || `exit code ${execution.code}`,
+      "with manual DNS, the ask endpoint allows only the sites it lists: a site missing there gets no certificate",
+    ]);
+    return null;
+  }
+  if (answer.onDemand) say(`   ${ZONE_NAMES_FILE}: ${answer.sites} site(s) under the zone, which the ask endpoint allows`);
+  return answer.onDemand;
+}
+
 async function verify(
   manifest: Manifest,
   config: Config,
   executor: Executor,
   record: (fields: Record<string, unknown>) => void = note,
+  patienceMs = 0,
 ): Promise<void> {
   const address = `https://${manifest.slug}.${config.zone}/`;
   // `headless`: the address answers a line saying the project serves no
@@ -1682,15 +1729,33 @@ async function verify(
   step("verify");
   let code = 0;
   let door: string | null = null;
-  try {
-    const response = await fetch(address, {
-      redirect: "manual",
-      signal: AbortSignal.timeout(15000),
-    });
-    code = response.status;
-    door = response.headers.get("x-portal");
-  } catch (err) {
-    die(`${address} unreachable: ${(err as Error).message}`);
+  // `patienceMs`, with manual DNS alone: a site that does not answer at all
+  // is asked again until then, its first certificate being obtained by the
+  // handshake itself. Any answer is judged at once, and without patience a
+  // site that does not answer fails at once, as it always did.
+  const deadline = Date.now() + patienceMs;
+  let waiting = false;
+  for (;;) {
+    try {
+      const response = await fetch(address, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(15000),
+      });
+      code = response.status;
+      door = response.headers.get("x-portal");
+      break;
+    } catch (err) {
+      if (Date.now() + VERIFY_RETRY_MS < deadline) {
+        if (!waiting) say(`   no answer yet: the zone is certified on demand, and the site's first certificate is obtained by this handshake; asking again for up to ${patienceMs / 1000} s`);
+        waiting = true;
+        await Bun.sleep(VERIFY_RETRY_MS);
+        continue;
+      }
+      die(
+        `${address} unreachable: ${(err as Error).message}`,
+        patienceMs > 0 ? [`still no answer after ${patienceMs / 1000} s: is ${ZONE_NAMES_FILE} listing ${manifest.slug}, and do the zone's records point at the machine?`] : [],
+      );
+    }
   }
   say(`   ${address} ${code}`);
   record({ status: code });
@@ -3025,6 +3090,11 @@ async function remove(
     });
   }
 
+  // Its folder gone, its label drops out of the zone's sites: with manual
+  // DNS, the ask endpoint would otherwise go on allowing a certificate for a
+  // name that serves nothing.
+  await refreshZoneNames(config, executor);
+
   // Its manifest gone with its folder, the project drops out of the set: its
   // ports go back to being Caddy's alone, before another project takes them.
   await rebuildProjectPorts(config, executor, "follow");
@@ -3453,6 +3523,10 @@ async function initialise(arguments_: string[]): Promise<void> {
     Object.fromEntries(OPTIONAL_SETTINGS.map((key) => [key, value(key)])),
     previous,
   );
+  // Setup reads it again when run without --dns: only a name it knows.
+  if (config.dns !== undefined && dnsEntry(config.dns) === undefined) {
+    die(`dns is not valid: ${/^[a-z0-9-]{1,40}$/.test(config.dns) ? config.dns : "(not shown)"}`, [`one of ${[...DNS_PROVIDERS.map((entry) => entry.name), MANUAL].join(", ")}; see docs/setup.md`]);
+  }
 
   const path = configPath();
   await writeConfig(path, config);
@@ -3469,12 +3543,15 @@ function usage(zone: string | null): string {
     "usage:",
     "  sitesolide help                 this list, with or without a configuration; --help after any command",
     "  sitesolide --version            the release this binary was built from, dev from a checkout",
+    "  sitesolide setup                alone at a terminal: pick a cloud, a region and a size, then order and install",
     "  sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a no-op once done",
     "     --zone <dns.zone> --email <you@example.com>",
     "     --contact <you@example.com>   shown on the page that asks for a preview code",
     "     --user <name>                the account that deploys, deploy by default as root",
+    "     --dns <provider|manual>      who serves the zone's DNS: cloudflare by default, see docs/dns/",
     "     --skip-dns                   create the DNS records by hand: setup lists them and waits",
     "     --dns-replace                replace records that point elsewhere, on your decision alone",
+    "     --dns-credentials-stdin      read the DNS provider's credentials from standard input",
     "     --cloudflare-token-stdin     read the Cloudflare token from standard input",
     "     --minimal                    leave out backups, the installer and the egress proxy",
     "     --any-os                     go on with a system other than Debian 13, at your own risk",
@@ -3529,8 +3606,9 @@ function usage(zone: string | null): string {
     "  sitesolide login --url <https://dashboard.zone>",
     "                                  a person with a token: deploy, set secrets and restart without SSH",
     "     --token-stdin                read the token from standard input",
-    "  sitesolide machine create|list|destroy --provider hetzner",
+    "  sitesolide machine create|list|destroy --provider <provider>",
     "                                  a VM ordered by API, before setup: sitesolide machine lists the options",
+    "  sitesolide machine providers    the clouds it orders from, and which have credentials here",
     "  any command --api               go through the dashboard's API even with a server",
     "  SITESOLIDE_CONFIG_DIR=<dir>     before any command: read that installation's configuration",
     "",
@@ -3641,6 +3719,10 @@ if (import.meta.main) {
   // reads the one in place itself, to refuse one that names another server.
   // See bin/cli/setup.ts.
   if (command === "setup") {
+    // Alone, at a terminal, it asks its questions instead: see bin/cli/wizard.ts.
+    if (arguments_.length === 1 && process.stdin.isTTY === true && process.stdout.isTTY === true) {
+      process.exit(await (await import("./cli/wizard-run")).wizardCommand());
+    }
     process.exit(await (await import("./cli/setup")).setupCommand(arguments_.slice(1)));
   }
 
@@ -3663,7 +3745,7 @@ if (import.meta.main) {
   // `machine` orders the VM the configuration will name: it comes before
   // there is one to read, and talks to the provider's API, never over SSH.
   // See bin/cli/machine.ts.
-  if (command === "machine") process.exit(await machine(arguments_, { environment: process.env, output: remoteOutput }));
+  if (command === "machine") process.exit(await machine(arguments_, { environment: process.env, output: remoteOutput, login: sshLogin }));
   if (command === "login") process.exit(await login(arguments_, { environment: process.env, output: remoteOutput }));
   if (remoteMode(arguments_, process.env)) {
     process.exit(

@@ -39,6 +39,9 @@ export type FakeServer = {
   ipv4: string | null;
   ipv6: string | null;
   user_data?: unknown;
+  /** Attached by hand in a test: a volume's ids, a Floating IP's ids. */
+  volumes?: number[];
+  floating_ips?: number[];
 };
 type FakeAction = { id: number; command: string; status: "running" | "success" | "error"; progress: number; polls: number; resource: number; error: { code: string; message: string } | null };
 export type Received = { method: string; path: string; search: string; url: string; authorization: string | null; body: unknown };
@@ -176,7 +179,7 @@ export function createFakeHetzner(options: { pageSize?: number; actionPolls?: nu
       public_net: {
         ipv4: server.ipv4 === null ? null : { id: server.id * 10 + 1, ip: server.ipv4, blocked: false, dns_ptr: `static.${server.ipv4}.clients.your-server.test-zone.invalid` },
         ipv6: server.ipv6 === null ? null : { id: server.id * 10 + 2, ip: server.ipv6, blocked: false, dns_ptr: [] },
-        floating_ips: [],
+        floating_ips: server.floating_ips ?? [],
         firewalls: server.firewalls.map((id) => ({ id, status: "applied" })),
       },
       private_net: [],
@@ -192,7 +195,7 @@ export function createFakeHetzner(options: { pageSize?: number; actionPolls?: nu
       included_traffic: 21990232555520,
       protection: { delete: false, rebuild: false },
       labels: server.labels,
-      volumes: [],
+      volumes: server.volumes ?? [],
       load_balancers: [],
       primary_disk_size: type?.disk ?? 40,
     };

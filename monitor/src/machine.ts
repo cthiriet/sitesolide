@@ -41,6 +41,8 @@ export type Machine = {
   folders(): Reading<string[]>;
   /** The domain table, null when it does not exist yet. */
   domains(): Reading<string | null>;
+  /** The zone's TLS policy, /etc/caddy/tls-zone.caddy, null when the machine has none. */
+  tlsPolicy(): Reading<string | null>;
   meminfo(): string | null;
   disks(paths: readonly string[]): Array<{ path: string; stats: DiskStats | null }>;
   backup(): Promise<BackupReading>;
@@ -157,6 +159,15 @@ export function createMachine(config: Config, options: MachineOptions = { system
       } catch (error) {
         if (errorCode(error) === "ENOENT") return { value: null };
         return { error: `${config.domainsFile}: ${errorCode(error)}` };
+      }
+    },
+
+    tlsPolicy() {
+      try {
+        return { value: readFileSync(config.tlsZoneFile, "utf8") };
+      } catch (error) {
+        if (errorCode(error) === "ENOENT") return { value: null };
+        return { error: `${config.tlsZoneFile}: ${errorCode(error)}` };
       }
     },
 

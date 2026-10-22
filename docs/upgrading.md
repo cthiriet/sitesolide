@@ -120,6 +120,39 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## The zone's TLS policy moves to a file
+
+**The Caddyfile no longer says how the zone's certificates are obtained.** Its
+`(tls-zone)` snippet held Cloudflare's DNS challenge inline; it now imports
+`/etc/caddy/tls-zone.caddy`, a file of the machine that `sitesolide setup`
+lays from the DNS it is given, a provider's DNS challenge or, with manual DNS,
+a certificate per name on demand. See
+[infra/README.md](../infra/README.md#the-zones-tls-policy).
+
+**What `sitesolide upgrade` brings**: the Caddyfile, out of date, goes through
+`bin/deploy-caddy.sh`, which finds the file missing on a machine that holds a
+Cloudflare token and lays Cloudflare's policy, root:root 0644, inside its
+transaction: after the backup, before the Caddyfile that imports it, then
+validated, reloaded and verified with it, and taken away again by the restore
+if anything fails. The policy is the block the Caddyfile carried, to the byte:
+Caddy adapts the new Caddyfile with it to the configuration it ran before,
+which `bin/tests/cli-tls-caddy.test.ts` checks in a real Caddy against the
+Caddyfile of 0.6.4. The one difference is Caddy's own, the new file added to
+the paths its file servers hide. The shared service is redeployed too: it
+reads the same file, and on a zone with a DNS provider it refuses the zone's
+names exactly as before. Nothing else changes: the same certificates, the
+same token in `/etc/caddy/cloudflare.env`, no restart of Caddy, and
+`sitesolide setup` run again finds the file it would lay.
+
+**What changes for you**: nothing, unless the machine has no Cloudflare token.
+`bin/deploy-caddy.sh` then stops before any write, saying the file is missing:
+`sitesolide setup` lays it. A hand edit of the file is overwritten by the next
+setup that finds it different; the file is the zone's policy, not a place for
+settings.
+
+**Going back.** The previous release's Caddyfile carries the policy inline and
+ignores the file, which stays harmlessly in `/etc/caddy`.
+
 ## An app's port stays in the range the loopback rule closes
 
 **An app's top-level `port` could be any port from 1024 to 65535.** The

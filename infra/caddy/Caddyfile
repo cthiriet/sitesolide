@@ -1,7 +1,7 @@
 # Caddy configuration of the machine, deployed to /etc/caddy/Caddyfile.
 #
 # THREE VARIABLES COME FROM THE ENVIRONMENT, placed by bin/deploy-caddy.sh
-# in /etc/caddy/sitesolide.env and read by systemd like the Cloudflare token:
+# in /etc/caddy/sitesolide.env and read by systemd like the DNS credentials:
 #
 #   SITESOLIDE_ZONE        the zone served, of which each project gets a subdomain
 #   SITESOLIDE_ACME_EMAIL  the address the certificate authority notifies
@@ -13,8 +13,9 @@
 # Caddyfile.
 #
 # Placed by bin/deploy-caddy.sh, never by hand: that script backs up, validates
-# with the Cloudflare token the way systemd supplies it, reloads, queries the
-# sites, and restores the previous version at the slightest misstep.
+# with the zone's DNS credentials the way systemd supplies them, reloads,
+# queries the sites, and restores the previous version at the slightest
+# misstep.
 #
 # Principle: a client site is a directory, not a process. The subdomain is
 # resolved to /srv/sites/<slug>/public by naming convention, so adding a client
@@ -26,8 +27,10 @@
 	# Certificates for the clients' own domains, obtained on the first
 	# request. The "ask" endpoint is not optional: without it, anyone pointing
 	# their DNS at this machine would trigger issuances in our name. It answers
-	# 200 for the domains present in domaines.map and for those alone; if it is
-	# stopped, no issuance takes place.
+	# 200 for the domains present in domaines.map and for those alone, and,
+	# when the zone's own policy is on demand (manual DNS, see tls-zone below),
+	# for the zone, its www and the sites deployed under it; if it is stopped,
+	# no issuance takes place.
 	on_demand_tls {
 		ask http://127.0.0.1:3001/interne/domaine-autorise
 	}
@@ -35,12 +38,33 @@
 
 # TLS policy of the zone served, and of it alone.
 #
-# The DNS-01 challenge obtains the certificate without exposing a port, and it
-# is the only way to obtain a wildcard. It does require, however, a token able
-# to modify the zone: the server's one covers only the zone served, so this
-# snippet must never be imported by a block serving a client's own domain. Those
-# domains go through Caddy's default challenges, HTTP-01 or TLS-ALPN-01, see the
-# on-demand block at the end of the file.
+# The policy itself is a file of the machine, /etc/caddy/tls-zone.caddy, a whole
+# tls block: it depends on who holds the zone's DNS, which this file does not
+# know. `sitesolide setup` lays it (bin/cli/tls.ts), one of two kinds:
+#
+#   a DNS provider   `dns <module> {env.<CREDENTIAL>}`. The DNS-01 challenge
+#                    obtains the certificate without exposing a port, and it is
+#                    the only way to obtain a wildcard: one for *.zone, one for
+#                    the zone itself. It does require credentials able to modify
+#                    the zone, read from Caddy's environment: they cover only
+#                    the zone served, so this snippet must never be imported by
+#                    a block serving a client's own domain. Those domains go
+#                    through Caddy's default challenges, HTTP-01 or TLS-ALPN-01,
+#                    see the on-demand block at the end of the file. Cloudflare's
+#                    is the policy this snippet carried inline up to 0.6, and
+#                    bin/deploy-caddy.sh lays it on a machine from before.
+#   manual DNS       `on_demand`. No DNS API at all: the records are made by
+#                    hand, and each name gets its own certificate at its first
+#                    handshake, through HTTP-01 or TLS-ALPN-01, once the ask
+#                    endpoint above agrees. It agrees to the zone, its www and
+#                    the sites deployed under it, and to nothing else: the
+#                    wildcard record points every name here, and an allowed
+#                    random name would spend the authority's weekly limit.
+#
+# A named import, not a glob: a missing file fails the whole configuration,
+# which is the point. A zone without its policy would fall back to Caddy's
+# defaults, an HTTP challenge for a wildcard it can never obtain, without
+# anything saying so. bin/deploy-caddy.sh lays the file before it validates.
 #
 # Importing this snippet rather than copying the tls block is not only a matter
 # of concision: Caddy reuses the wildcard certificate for a subdomain only if
@@ -48,9 +72,7 @@
 # client block that diverged here would obtain its own certificate without
 # anything signalling it.
 (tls-zone) {
-	tls {
-		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-	}
+	import /etc/caddy/tls-zone.caddy
 }
 
 # Settings shared by every site.
@@ -113,7 +135,8 @@
 
 # The landing. The wildcard does not cover the bare domain: this block therefore
 # has its own certificate, for the name of the zone alone. www, for its part, is
-# a subdomain like any other and rests on the wildcard.
+# a subdomain like any other and rests on the wildcard. With manual DNS, every
+# name has a certificate of its own, these two included.
 {$SITESOLIDE_ZONE}, www.{$SITESOLIDE_ZONE} {
 	import tls-zone
 	import commun
@@ -198,11 +221,11 @@ import /etc/caddy/sites/*.caddy
 # Adding a client is therefore done without touching this file, as for previews.
 #
 # The certificate goes through Caddy's default challenges, not through the DNS
-# challenge of the zone: the Cloudflare token can only modify the zone served,
-# and the client often keeps their DNS elsewhere. That is why this block does
-# not import tls-zone. Caddy enables HTTP-01 and TLS-ALPN-01, picks one of them
-# at random for each issuance, and tries the other when it fails: ports 80 and
-# 443 both have to reach the machine.
+# challenge of the zone: the zone's DNS credentials, when it has any, can only
+# modify the zone served, and the client often keeps their DNS elsewhere. That
+# is why this block does not import tls-zone. Caddy enables HTTP-01 and
+# TLS-ALPN-01, picks one of them at random for each issuance, and tries the
+# other when it fails: ports 80 and 443 both have to reach the machine.
 #
 # An application client site must not land here: its domain belongs to its own
 # file in /etc/caddy/sites/, otherwise Caddy would serve its static files

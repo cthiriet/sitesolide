@@ -29,13 +29,18 @@
  * `sites.example.com` and `*.sites.example.com` in that parent zone.
  */
 
+import { apiAddress } from "./providers/provider";
+
 export const DEFAULT_CLOUDFLARE_API = "https://api.cloudflare.com/client/v4";
 export const CLOUDFLARE_API_VARIABLE = "SITESOLIDE_CLOUDFLARE_API";
 
-/** The API's base URL, the environment's when it names one. */
+/**
+ * The API's base URL, the environment's when it names one, for a local mock:
+ * https, or http to the loopback only, as the cloud providers' addresses, so
+ * that the token never travels in the clear. Throws, saying why, otherwise.
+ */
 export function cloudflareBase(environment: Record<string, string | undefined> = process.env): string {
-  const chosen = environment[CLOUDFLARE_API_VARIABLE];
-  return (chosen === undefined || chosen === "" ? DEFAULT_CLOUDFLARE_API : chosen).replace(/\/+$/, "");
+  return apiAddress(environment, CLOUDFLARE_API_VARIABLE, DEFAULT_CLOUDFLARE_API);
 }
 
 export type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
@@ -81,6 +86,8 @@ async function call<T>(api: Api, method: string, path: string, query: Record<str
   try {
     response = await (api.fetcher ?? fetch)(url.toString(), {
       method,
+      // The token follows no address an answer names.
+      redirect: "error",
       headers: { Authorization: `Bearer ${api.token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -279,6 +286,20 @@ async function apply(api: Api, zoneId: string, actions: readonly RecordAction[])
       await call(api, "POST", base, {}, { type: action.type, name: action.name, content: action.content, proxied: false, ttl: 1 });
     }
   }
+}
+
+/** One record created, DNS only, TTL auto. */
+export async function createRecord(api: Api, zoneId: string, record: { type: string; name: string; content: string }): Promise<void> {
+  await call(api, "POST", `/zones/${encodeURIComponent(zoneId)}/dns_records`, {}, { type: record.type, name: record.name, content: record.content, proxied: false, ttl: 1 });
+}
+
+/** One record pointed elsewhere, and taken out of Cloudflare's proxy. */
+export async function updateRecord(api: Api, zoneId: string, id: string, content: string): Promise<void> {
+  await call(api, "PATCH", `/zones/${encodeURIComponent(zoneId)}/dns_records/${encodeURIComponent(id)}`, {}, { content, proxied: false, ttl: 1 });
+}
+
+export async function deleteRecord(api: Api, zoneId: string, id: string): Promise<void> {
+  await call(api, "DELETE", `/zones/${encodeURIComponent(zoneId)}/dns_records/${encodeURIComponent(id)}`);
 }
 
 /**

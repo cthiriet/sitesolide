@@ -19,6 +19,16 @@
 # /etc/caddy/domaines.map, produced by bin/generate-domains.sh. Overwriting
 # them from the workstation would reopen locked previews.
 #
+# WHAT IS LAID ONLY WHEN MISSING: /etc/caddy/tls-zone.caddy, the zone's TLS
+# policy, which the Caddyfile imports by name and `sitesolide setup` lays from
+# the DNS it was given (bin/cli/tls.ts). A machine from before that file, 0.6
+# or earlier, had Cloudflare's policy written in the Caddyfile itself, and
+# holds a Cloudflare token: that policy is laid for it, the same bytes setup
+# would lay, inside the transaction below, and taken away again by its
+# restore. A machine with no file and no such token stops before any write.
+# With manual DNS, /etc/caddy/zone-names, the zone's sites the ask endpoint
+# allows, is written again from /srv/sites before each deposit.
+#
 # WHAT STOPS THE SCRIPT BEFORE ANY WRITE: a block given whose door contradicts
 # the manifest the VM carries for its site. The portal of a deployed site is set
 # from the dashboard, and the VM is the source of truth: the script refuses to
@@ -46,6 +56,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$REPO_ROOT/bin/config.sh"
 sitesolide_require_config
+
+# The zone's TLS policy, from bin/cli/tls.ts, the module setup lays it with:
+# the file, Cloudflare's policy to the byte, the reading of the machine's state
+# and the command that lists the zone's sites. Evaluated as bin/config.sh
+# evaluates the settings; a module that printed nothing stops here.
+eval "$(bun "$REPO_ROOT/bin/cli/tls.ts")"
+[ -n "${TLS_ZONE_STATE_COMMAND:-}" ] || { echo "bin/cli/tls.ts printed nothing: the zone's TLS policy is unknown" >&2; exit 1; }
+
 DRY_RUN=""
 BLOCKS=()
 for argument in "$@"; do
@@ -157,6 +175,51 @@ compare() {
 }
 compare "$CADDYFILE" /etc/caddy/Caddyfile
 for block in ${BLOCKS[@]+"${BLOCKS[@]}"}; do compare "$block" "/etc/caddy/sites/$(basename "$block")"; done
+
+# The zone's TLS policy, which the Caddyfile imports by name: a missing file
+# fails the whole configuration, for every site. Present, it is the machine's
+# and never compared, setup alone lays it. Missing on a machine that holds a
+# Cloudflare token, it is one from before the file, whose Caddyfile carried
+# Cloudflare's policy: that one is laid. Missing anywhere else, nothing says
+# which policy the zone needs, and guessing one would aim a DNS challenge at
+# credentials the machine does not have. Present but holding no policy, empty
+# or cut short, it would validate and leave the zone to Caddy's default
+# issuers: that stops too. An answer that is none of these, a connection that
+# failed, stops here as well, before the slightest write.
+TLS_ZONE_STATE="$(ssh "$SITESOLIDE_SERVER" "$TLS_ZONE_STATE_COMMAND" || true)"
+TLS_ZONE_TO_LAY=""
+ZONE_ON_DEMAND=""
+case "$TLS_ZONE_STATE" in
+  "$TLS_ZONE_ON_DEMAND") ZONE_ON_DEMAND="yes" ;;
+  "$TLS_ZONE_DNS") ;;
+  "$TLS_ZONE_LAY_CLOUDFLARE")
+    echo "   TO LAY     $TLS_ZONE_FILE, Cloudflare's policy, which the Caddyfile in service carries itself"
+    TLS_ZONE_TO_LAY="yes"
+    DIFFERENCES="yes"
+    ;;
+  "$TLS_ZONE_UNRECOGNISED")
+    cat >&2 <<EOF
+!! STOP: $TLS_ZONE_FILE holds no TLS policy this release recognises: empty,
+   cut short, or edited. Caddy would validate it all the same and put the zone
+   under its default issuers, where the wildcard cannot renew.
+   sitesolide setup lays it again from the DNS it is given. Nothing was changed.
+EOF
+    exit 1
+    ;;
+  "$TLS_ZONE_NONE")
+    cat >&2 <<EOF
+!! STOP: $TLS_ZONE_FILE is missing, and nothing on the machine says which
+   TLS policy the zone needs: no Cloudflare token in /etc/caddy/cloudflare.env.
+   The Caddyfile imports that file by name, and validates nowhere without it.
+   sitesolide setup lays it from the DNS it is given. Nothing was changed.
+EOF
+    exit 1
+    ;;
+  *)
+    echo "!! the state of $TLS_ZONE_FILE could not be read on $SITESOLIDE_SERVER: ${TLS_ZONE_STATE:-no answer}" >&2
+    exit 1
+    ;;
+esac
 if [ -n "$SITESOLIDE_REMOVE" ]; then
   if ssh "$SITESOLIDE_SERVER" "sudo test -e /etc/caddy/sites/$SITESOLIDE_REMOVE"; then
     echo "   TO REMOVE  /etc/caddy/sites/$SITESOLIDE_REMOVE"
@@ -282,6 +345,30 @@ ssh "$SITESOLIDE_SERVER" "sudo mkdir -p $BACKUP/sites \
 FIRST_INSTALL=""
 ssh "$SITESOLIDE_SERVER" "sudo grep -q SITESOLIDE_ZONE $BACKUP/Caddyfile" || FIRST_INSTALL=1
 
+# With manual DNS, the ask endpoint allows the zone's sites from a list it
+# reads in /etc/caddy, its unit hiding /srv/sites: written again here, before
+# anything is deposited, so that a site whose block arrives now gets its
+# certificate at the verification's first handshake. A failure stops the run
+# with nothing deposited. See bin/cli/tls.ts.
+if [ -n "$ZONE_ON_DEMAND" ]; then
+  echo "-> the zone's sites, for the ask endpoint"
+  ssh "$SITESOLIDE_SERVER" "$ZONE_NAMES_COMMAND" | sed 's/^/   /'
+fi
+
+# The zone's TLS policy, on a machine from before the file: laid before the
+# Caddyfile that imports it, and only if still missing. Written beside it and
+# renamed over it: a disk that fills up leaves a partial .new, never a partial
+# policy, which Caddy would validate and serve the zone with under its default
+# issuers. The remote shell says whether it laid it, and the restore takes
+# away only what this run laid.
+TLS_ZONE_LAID=""
+if [ -n "$TLS_ZONE_TO_LAY" ]; then
+  echo "-> the zone's TLS policy, Cloudflare's: $TLS_ZONE_FILE"
+  TLS_ZONE_STAGED="$(dirname "$TLS_ZONE_FILE")/.$(basename "$TLS_ZONE_FILE").new"
+  laid="$(printf '%s' "$TLS_ZONE_CLOUDFLARE" | ssh "$SITESOLIDE_SERVER" "if test -f $TLS_ZONE_FILE; then echo kept; else sudo install -m 644 -o root -g root /dev/stdin $TLS_ZONE_STAGED && sudo mv -f $TLS_ZONE_STAGED $TLS_ZONE_FILE && echo laid; fi")"
+  if [ "$laid" = laid ]; then TLS_ZONE_LAID="yes"; fi
+fi
+
 echo "-> deposit"
 WORK="$(ssh "$SITESOLIDE_SERVER" 'mktemp -d /tmp/caddy.XXXXXXXX')"
 rsync -a "$CADDYFILE" "$SITESOLIDE_SERVER:$WORK/Caddyfile"
@@ -338,6 +425,10 @@ restore() {
     if [ -n \"\$(ls -A $BACKUP/sites 2>/dev/null)\" ]; then
       sudo rsync -a --delete $BACKUP/sites/ /etc/caddy/sites/
     fi
+
+    # The zone's TLS policy this run laid goes with the Caddyfile that imports
+    # it, unless the one put back imports it too.
+    ${TLS_ZONE_LAID:+sudo grep -Eq '^[[:space:]]*import $TLS_ZONE_FILE' $BACKUP/Caddyfile || sudo rm -f $TLS_ZONE_FILE}
 
     sudo systemctl reload caddy
   "; then
@@ -441,22 +532,48 @@ probe() {
   curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$1" 2>/dev/null || true
 }
 
+# With manual DNS, a site whose block this run deposits may have no
+# certificate yet: the probe's handshake is the one that obtains it, through
+# HTTP-01 or TLS-ALPN-01, and the authority may take longer than a probe
+# waits. Those addresses are probed last, and a 000 there is waited for
+# FIRST_CERTIFICATE_S, from bin/cli/tls.ts, but only while every other address
+# has answered: a configuration that broke the sites already served is
+# restored without waiting for anything.
+FRESH=" "
+if [ -n "$ZONE_ON_DEMAND" ]; then
+  for block in ${BLOCKS[@]+"${BLOCKS[@]}"}; do FRESH="${FRESH}https://$(basename "$block" .caddy).$SITESOLIDE_ZONE/ "; done
+fi
+ORDERED=()
+for address in ${ADDRESSES[@]+"${ADDRESSES[@]}"}; do
+  if [[ "$FRESH" != *" $address "* ]]; then ORDERED+=("$address"); fi
+done
+for address in ${ADDRESSES[@]+"${ADDRESSES[@]}"}; do
+  if [[ "$FRESH" == *" $address "* ]]; then ORDERED+=("$address"); fi
+done
+
 FAILURES=0
 NOTHING_AT_ROOT=""
-for address in ${ADDRESSES[@]+"${ADDRESSES[@]}"}; do
+for address in ${ORDERED[@]+"${ORDERED[@]}"}; do
   code="$(probe "$address")"
   # On a first install a 000 is most often a certificate the authority has not
   # issued yet: the wildcard over DNS-01 takes a minute. Two minutes of patience
   # there, and only there: on a machine already serving, a 000 is an outage,
   # and every second spent waiting is a second every site stays down.
+  patience=0
   if [ -n "$FIRST_INSTALL" ]; then
-    waited=0
-    while [ "$code" = 000 ] && [ "$waited" -lt 120 ]; do
-      sleep 5
-      waited=$((waited + 5))
-      code="$(probe "$address")"
-    done
+    patience=120
+  elif [ "$FAILURES" -eq 0 ] && [[ "$FRESH" == *" $address "* ]]; then
+    patience="$FIRST_CERTIFICATE_S"
+    if [ "$code" = 000 ]; then
+      echo "   $address: no answer yet; the zone is certified on demand, its first certificate is waited for up to $patience s"
+    fi
   fi
+  waited=0
+  while [ "$code" = 000 ] && [ "$waited" -lt "$patience" ]; do
+    sleep 5
+    waited=$((waited + 5))
+    code="$(probe "$address")"
+  done
   case "$code" in
     # 401 is the intended behaviour of a site that opens with a code, see
     # api/src/locks.ts, and of a site behind the portal, see portal/README.md.

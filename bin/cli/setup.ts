@@ -3,10 +3,12 @@
  * install of docs/install.md in one command, on a fresh Debian 13 machine.
  *
  *   configuration      ~/.config/sitesolide/config.json, as `init` writes it
- *   dns                the zone and its wildcard at the machine, through Cloudflare's API
+ *   dns                the zone and its wildcard at the machine, through the DNS
+ *                      provider's API (bin/cli/dns/), or by hand under --dns manual
  *   packages ... fail2ban   the hardening, see bin/cli/harden.ts
- *   caddy, bun         from their own repositories, Caddy with the Cloudflare module
- *   cloudflare-token   /etc/caddy/cloudflare.env, root:caddy 0640
+ *   caddy, bun         from their own repositories, Caddy with the provider's DNS module
+ *   dns-credentials    /etc/caddy/cloudflare.env, root:caddy 0640, the provider's credentials
+ *   tls-zone           /etc/caddy/tls-zone.caddy, the zone's tls block (bin/cli/tls.ts)
  *   resolution         this workstation resolves the zone to the machine
  *   caddy-zone ...     bin/deploy-caddy.sh, the drop-in, bin/deploy-caddy.sh again
  *   api ... monitor    every component, in the order docs/install.md verified
@@ -35,12 +37,15 @@
  * `caddy stop` nor `caddy start`, which address the admin API of whatever
  * instance runs: see the Production section of CLAUDE.md.
  *
- * THE CLOUDFLARE TOKEN comes from CLOUDFLARE_API_TOKEN, from standard input
- * with --cloudflare-token-stdin, or from a prompt that does not echo. It is
- * asked for only when a step needs it, and it is never printed, never an
- * argument of any command, never in a URL nor an error: it reaches the API in
- * a header, and the machine inside a script on ssh's standard input. The
- * scripts setup launches do not inherit it.
+ * THE DNS CREDENTIALS come from the provider's variables, CLOUDFLARE_API_TOKEN
+ * for Cloudflare and SITESOLIDE_DNS_<...> for the others, from standard input
+ * with --dns-credentials-stdin (--cloudflare-token-stdin for Cloudflare), from
+ * the wizard, or from a prompt that does not echo. They are asked for only
+ * when a step needs them, and they are never printed, never an argument of
+ * any command, never in a URL nor an error: they reach the API in a header or
+ * a signature, and the machine inside a script on ssh's standard input, where
+ * Caddy keeps them to renew the wildcard. The scripts setup launches do not
+ * inherit them. `--dns manual` needs none.
  *
  * THE PASSWORDS. The dashboard's is drawn by bin/dashboard-password.sh, which
  * shows it once on standard error, and only when the machine has none. The
@@ -58,7 +63,12 @@ import { homedir } from "node:os";
 import { isIP } from "node:net";
 import { join, resolve } from "node:path";
 import { generatePassword } from "../../dashboard/src/password";
-import { canonicalAddress, CloudflareError, cloudflareBase, describePlan, ensureRecords, manualRecords, type Fetcher } from "./cloudflare";
+import { canonicalAddress, describePlan, manualRecords } from "./cloudflare";
+import { DnsError, ensureZoneRecords, type DnsEntry } from "./dns/dns";
+import { DNS_PROVIDERS, dnsEntry, dnsVariables, MANUAL } from "./dns/registry";
+import { fieldsToAsk, fromEnvironment, isFailure, missingFields, parseStdinCredentials, scrubSecrets, secretValues } from "./machine";
+import { ProviderError, type Credentials, type Fetch } from "./providers/provider";
+import { CADDY_RESTART, caddyRestartScript, tlsZoneCheck, tlsZoneContent, tlsZoneRun, TLS_ZONE_FILE, TLS_ZONE_RESTARTED } from "./tls";
 import { adoptLegacyKeys, composeConfig, CONFIG_DIR_VARIABLE, privateFolder, writeConfig } from "./config";
 import {
   APT,
@@ -99,17 +109,24 @@ export type SetupOptions = {
   anyOs: boolean;
   dryRun: boolean;
   tokenStdin: boolean;
+  /**
+   * Who serves the zone's DNS: a provider of bin/cli/dns/registry.ts, whose
+   * API makes the records and whose Caddy module obtains the wildcard, or
+   * `manual`: records made by hand, a certificate per name. Null when
+   * `--dns` was not given: the configuration's, else `cloudflare`.
+   */
+  dns: string | null;
   configDir: string | null;
   json: boolean;
 };
 
-const VALUED = ["--zone", "--email", "--contact", "--user", "--config-dir"] as const;
-const FLAGS = ["--skip-dns", "--dns-replace", "--minimal", "--any-os", "--dry-run", "--cloudflare-token-stdin", "--json"] as const;
+const VALUED = ["--zone", "--email", "--contact", "--user", "--config-dir", "--dns"] as const;
+const FLAGS = ["--skip-dns", "--dns-replace", "--minimal", "--any-os", "--dry-run", "--cloudflare-token-stdin", "--dns-credentials-stdin", "--json"] as const;
 
-const ACCOUNT = /^[a-z_][a-z0-9_-]{0,31}$/;
-const HOST = /^[A-Za-z0-9][A-Za-z0-9.:-]*$/;
-const ZONE = /^(?=.{3,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/;
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const ACCOUNT = /^[a-z_][a-z0-9_-]{0,31}$/;
+export const HOST = /^[A-Za-z0-9][A-Za-z0-9.:-]*$/;
+export const ZONE = /^(?=.{3,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/;
+export const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export type Refusal = { message: string; details: string[] };
 
@@ -228,6 +245,13 @@ export function parseSetupArguments(arguments_: readonly string[]): SetupOptions
   const user = values["--user"] ?? (login === "root" ? "deploy" : login);
   if (!ACCOUNT.test(user) || user === "root") return REFUSALS.invalid("--user", user, "an account other than root: lowercase letters, digits, dashes");
   const json = flags.has("--json");
+  const dns = values["--dns"] ?? null;
+  const known = [...DNS_PROVIDERS.map((entry) => entry.name), MANUAL];
+  if (dns !== null && dnsEntry(dns) === undefined) return REFUSALS.invalid("--dns", /^[a-z0-9-]{1,40}$/.test(dns) ? dns : "(not shown)", `one of ${known.join(", ")}; see docs/dns/`);
+  if (flags.has("--cloudflare-token-stdin") && dns !== null && dns !== "cloudflare" && dns !== MANUAL) return REFUSALS.usage(`--cloudflare-token-stdin is Cloudflare's: with --dns ${dns}, pipe the credentials to --dns-credentials-stdin`);
+  if (dns === MANUAL && (flags.has("--dns-credentials-stdin") || flags.has("--cloudflare-token-stdin") || flags.has("--dns-replace"))) {
+    return REFUSALS.usage("--dns manual uses no DNS API: the records are made by hand, and nothing reads credentials nor replaces records");
+  }
 
   return {
     login,
@@ -236,12 +260,13 @@ export function parseSetupArguments(arguments_: readonly string[]): SetupOptions
     email,
     contact,
     user,
-    skipDns: flags.has("--skip-dns"),
     dnsReplace: flags.has("--dns-replace"),
     minimal: flags.has("--minimal"),
     anyOs: flags.has("--any-os"),
     dryRun: flags.has("--dry-run"),
-    tokenStdin: flags.has("--cloudflare-token-stdin"),
+    tokenStdin: flags.has("--cloudflare-token-stdin") || flags.has("--dns-credentials-stdin"),
+    skipDns: flags.has("--skip-dns"),
+    dns,
     configDir: values["--config-dir"] ?? null,
     json,
   };
@@ -534,9 +559,14 @@ export type SetupDependencies = {
   /** What the workstation resolves a name to, through its own resolver. */
   resolve(name: string): Promise<Observed>;
   sameMachine: SameMachine;
-  cloudflare: { base: string; fetcher?: Fetcher };
-  /** The Cloudflare token: from the environment or standard input, and from a prompt only when `ask`. */
-  token(ask: boolean): Promise<string | null>;
+  /** Where the DNS provider's API is reached: the environment its address variable is read from, and the fetch. */
+  dnsApi: { environment: Record<string, string | undefined>; fetcher?: Fetch };
+  /**
+   * The DNS provider's credentials, scoped to the zone: from the wizard, the
+   * environment or standard input, and from a prompt only when `ask`. Null
+   * when they are not at hand.
+   */
+  dnsCredentials(entry: DnsEntry, ask: boolean): Promise<Credentials | null>;
   drawPassword(): Promise<{ password: string; hash: string }>;
   sleep(ms: number): Promise<void>;
   now(): number;
@@ -557,42 +587,41 @@ export type SetupContext = HardenContext & {
   server: string;
   contact: string | null;
   addresses: { ipv4: string; ipv6: string | null };
-  /** The token once obtained; undefined until a step asked for it. */
-  token: string | null | undefined;
+  /** Who serves the zone's DNS; null for `--dns manual`. */
+  dns: DnsEntry | null;
+  /** Its credentials once obtained; undefined until a step asked for them. */
+  dnsCredentials: Credentials | null | undefined;
   dashboardDrawn: boolean;
   /** What every script and every `sitesolide deploy` setup launches receives. */
   childEnvironment: Record<string, string>;
 };
 
-/** The Cloudflare token, asked for when a step needs it, once. */
-async function requireToken(context: SetupContext): Promise<string> {
-  if (typeof context.token === "string") return context.token;
-  const token = await context.deps.token(true);
-  if (token === null || token === "") {
-    throw new StepFailure("no Cloudflare token", [
-      "set CLOUDFLARE_API_TOKEN in the environment, or pipe it to --cloudflare-token-stdin",
-      "it needs Zone / Zone / Read and Zone / DNS / Edit on the zone, from dash.cloudflare.com/profile/api-tokens",
-      "with another DNS provider: --skip-dns, see docs/setup.md",
+/** The DNS provider's credentials, asked for when a step needs them, once. */
+async function requireDnsCredentials(context: SetupContext, entry: DnsEntry): Promise<Credentials> {
+  if (context.dnsCredentials !== undefined && context.dnsCredentials !== null) return context.dnsCredentials;
+  const credentials = await context.deps.dnsCredentials(entry, true);
+  const missing = missingFields(entry, credentials ?? {});
+  if (credentials === null || missing.length > 0) {
+    throw new StepFailure(`no ${entry.title} credentials`, [
+      `set ${(missing.length > 0 ? missing : fieldsToAsk(entry)).map((field) => field.variable).join(", ")} in the environment, or pipe them to ${entry.name === "cloudflare" ? "--cloudflare-token-stdin" : "--dns-credentials-stdin"}`,
+      ...entry.credentialHelp,
+      `see ${entry.docs}; with a DNS no module serves, --dns manual and docs/setup.md`,
     ]);
   }
-  if (!TOKEN.test(token)) throw new StepFailure("the Cloudflare token given is not one: letters, digits, dashes and underscores only", []);
-  context.token = token;
-  return token;
+  const wrong = entry.credentials.find((field) => credentials[field.variable] !== undefined && credentials[field.variable] !== "" && !field.shape.test(credentials[field.variable]!));
+  if (wrong !== undefined) throw new StepFailure(`the ${entry.title} ${wrong.label} given is not one: it has characters or a length a ${wrong.label} never has`, []);
+  context.dnsCredentials = credentials;
+  return credentials;
 }
 
-/** The token if it is known without asking anyone: given, or asked for earlier. */
-async function knownToken(context: SetupContext): Promise<string | null> {
-  if (context.token !== undefined) return context.token;
-  const token = await context.deps.token(false);
-  context.token = token !== null && TOKEN.test(token) ? token : undefined;
-  return context.token ?? null;
+/** The credentials if they are known without asking anyone: given, or asked for earlier. */
+async function knownDnsCredentials(context: SetupContext, entry: DnsEntry): Promise<Credentials | null> {
+  if (context.dnsCredentials !== undefined) return context.dnsCredentials;
+  const credentials = await context.deps.dnsCredentials(entry, false);
+  const usable = credentials !== null && missingFields(entry, credentials).length === 0 && entry.credentials.every((field) => (credentials[field.variable] ?? "") === "" || field.shape.test(credentials[field.variable]!));
+  context.dnsCredentials = usable ? credentials : undefined;
+  return context.dnsCredentials ?? null;
 }
-
-/**
- * What a Cloudflare API token is made of. Anything else, a line break above
- * all, would write more than one line into the machine's environment file.
- */
-const TOKEN = /^[A-Za-z0-9_-]{20,200}$/;
 
 // --- the install steps ------------------------------------------------------------
 
@@ -690,7 +719,7 @@ export const COMPONENT_CONDITIONS = {
   "steward-after-egress": [stewardAfter("steward-after-egress", `${UNITS}/sitesolide-egress.service`)],
 } satisfies Record<string, Condition[]>;
 
-function caddyRun(): string {
+function caddyRun(dns: DnsEntry | null): string {
   return runScript(
     "setup:caddy:run",
     `
@@ -701,8 +730,12 @@ if ! dpkg-query -W -f='\${Status}' caddy 2>/dev/null | grep -q 'ok installed'; t
   ${APT} update -q </dev/null
   ${APT} install -y -q caddy </dev/null
 fi
-# The standard build lacks the DNS module the wildcard certificate needs.
-caddy list-modules 2>/dev/null | grep -q '^dns.providers.cloudflare' || caddy add-package github.com/caddy-dns/cloudflare </dev/null
+${
+  dns === null
+    ? "# --dns manual: certificates name by name, through HTTP-01 or TLS-ALPN-01, which the standard build carries."
+    : `# The standard build lacks the DNS module the wildcard certificate needs.
+caddy list-modules 2>/dev/null | grep -q '^${dns.caddy.module}$' || caddy add-package ${dns.caddy.package} </dev/null`
+}
 `,
   );
 }
@@ -717,34 +750,150 @@ curl -fsSL https://bun.com/install | BUN_INSTALL=/usr/local bash
   );
 }
 
-const TOKEN_FILE = "/etc/caddy/cloudflare.env";
+/**
+ * Caddy's environment file, the DNS provider's credentials for the
+ * wildcard's renewals. Its name is the first provider's: machines in service
+ * load it by that name, through the drop-in, the gatekeeper's validation and
+ * the scripts that run `caddy validate`; it holds whichever provider's
+ * variables now, or none under `--dns manual`.
+ */
+export const CADDY_ENV_FILE = "/etc/caddy/cloudflare.env";
 
-/** The token's fingerprint, compared on the machine with the one of the file's value: neither travels in the clear. */
-function tokenFingerprint(token: string): string {
-  return new Bun.CryptoHasher("sha256").update(token).digest("hex");
+/**
+ * The file's whole text. One `NAME=value` line per variable the provider's
+ * module reads; under `--dns manual`, a comment alone, since systemd and the
+ * scripts load the file whatever the mode.
+ *
+ * TWO READERS, ONE MEANING. systemd reads the file as an EnvironmentFile, and
+ * bin/deploy-caddy.sh, bin/generate-domains.sh and the tls-zone step source it
+ * with bash, as root, to validate Caddy's configuration as systemd would run
+ * it. A value made of letters, digits and `_ - . / : + = @ % ,` alone means
+ * the same to both, and is written bare, as Cloudflare's token always was;
+ * any other is single-quoted, which both read literally. A value that a quote
+ * could not hold, a single quote, a backslash, a line break or a control
+ * character, is refused: in bash it could end the quote and run what follows.
+ */
+export function caddyEnvironmentText(dns: DnsEntry | null, credentials: Credentials | null): string {
+  if (dns === null) return "# --dns manual: no DNS credentials, the zone's certificates are obtained name by name\n";
+  const variables = dns.caddy.environment(credentials ?? {});
+  const lines = Object.entries(variables).map(([name, value]) => {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name) || value === "" || /['\\\x00-\x1f\x7f]/.test(value) || !/^[\x20-\x7e]+$/.test(value)) {
+      throw new StepFailure(`${dns.title}'s ${name} cannot be written to ${CADDY_ENV_FILE} as it is: empty, or holding a single quote, a backslash, a line break or a character outside printable ASCII`, []);
+    }
+    return /^[A-Za-z0-9_\-.\/:+=@%,]+$/.test(value) ? `${name}=${value}` : `${name}='${value}'`;
+  });
+  return `${lines.join("\n")}\n`;
 }
 
-export function tokenCheck(fingerprint: string | null): string {
-  return machineCheck("setup:cloudflare-token:check", [
-    present("token-file", TOKEN_FILE),
-    { label: "token-permissions", test: `[ "$(stat -c '%U:%G %a' ${TOKEN_FILE})" = 'root:caddy 640' ]` },
-    ...(fingerprint === null
+/** A value's fingerprint, compared on the machine with the file's: neither travels in the clear. */
+function fingerprintOf(text: string): string {
+  return new Bun.CryptoHasher("sha256").update(text).digest("hex");
+}
+
+/**
+ * Each variable the file must hold, by its name and its value's fingerprint;
+ * null when the values are not known. Compared value by value, as setup
+ * always compared Cloudflare's token, not byte for byte: a file written by
+ * hand, with a comment, another line or CRLF endings, holding the right
+ * values, is the right file.
+ */
+export function expectedVariables(dns: DnsEntry | null, credentials: Credentials | null): { name: string; fingerprint: string | null }[] {
+  if (dns === null) return [];
+  if (credentials !== null) return Object.entries(dns.caddy.environment(credentials)).map(([name, value]) => ({ name, fingerprint: fingerprintOf(value) }));
+  // The values unknown, the names are not: every variable the module's
+  // directive reads must at least be there, or a switch of provider made
+  // without credentials would pass with the previous provider's file.
+  return [...new Set([...dns.caddy.directive.join("\n").matchAll(/\{env\.([A-Z][A-Z0-9_]*)\}/g)].map((match) => match[1]!))].map((name) => ({ name, fingerprint: null }));
+}
+
+/**
+ * Whether a running Caddy has read the file since it was last written: it
+ * fills its {env.X} at its start, and a rotation whose restart failed would
+ * otherwise never be finished. True when no Caddy runs the platform's
+ * configuration, a first install.
+ */
+const CADDY_READ_ENV = `! systemctl is-active --quiet caddy || ! grep -q SITESOLIDE_ZONE /etc/caddy/Caddyfile || { started=$(systemctl show -p ActiveEnterTimestamp --value caddy) && [ -n "$started" ] && [ "$(date -d "$started" +%s)" -ge "$(stat -c %Y ${CADDY_ENV_FILE})" ]; }`;
+
+export function dnsCredentialsCheck(variables: { name: string; fingerprint: string | null }[] | null): string {
+  // The value after NAME=, its line ending and its single quotes taken off.
+  const value = (name: string) => `sed -n 's/^[[:space:]]*${name}=//p' ${CADDY_ENV_FILE} | head -n 1 | tr -d '\\r\\n' | sed "s/^'\\(.*\\)'$/\\1/"`;
+  return machineCheck("setup:dns-credentials:check", [
+    present("env-file", CADDY_ENV_FILE),
+    { label: "env-permissions", test: `[ "$(stat -c '%U:%G %a' ${CADDY_ENV_FILE})" = 'root:caddy 640' ]` },
+    { label: "caddy-read-env", test: CADDY_READ_ENV },
+    ...(variables === null || variables.length === 0
       ? []
       : [
           {
-            label: "token-same",
-            test: `[ "$(sed -n 's/^CLOUDFLARE_API_TOKEN=//p' ${TOKEN_FILE} | head -n 1 | tr -d '\\r\\n' | sha256sum | cut -d' ' -f1)" = '${fingerprint}' ]`,
+            label: "env-same",
+            test: variables
+              .map((variable) =>
+                variable.fingerprint === null ? `[ -n "$(${value(variable.name)})" ]` : `[ "$(${value(variable.name)} | sha256sum | cut -d' ' -f1)" = '${variable.fingerprint}' ]`,
+              )
+              .join(" && "),
           },
         ]),
   ]);
 }
 
-export function tokenRun(token: string): string {
-  return runScript("setup:cloudflare-token:run", `install -m 0640 -o root -g caddy /dev/stdin ${TOKEN_FILE} <<'TOKEN'\nCLOUDFLARE_API_TOKEN=${token}\nTOKEN`);
+/** What names a DNS credential in Caddy's environment file, whichever provider's: grep's words. */
+const CREDENTIAL_LINE = "^[[:space:]]*(CLOUDFLARE_API_TOKEN|SITESOLIDE_DNS_[A-Z0-9_]+)=";
+
+/** The names a text of caddyEnvironmentText defines. */
+function definedNames(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => /^([A-Z][A-Z0-9_]*)=/.exec(line)?.[1])
+    .filter((name): name is string => name !== undefined);
 }
 
-function tokenPermissionsRun(): string {
-  return runScript("setup:cloudflare-token:run", `chown root:caddy ${TOKEN_FILE}\nchmod 640 ${TOKEN_FILE}`);
+/**
+ * The file written with these values, every other credential line it held
+ * KEPT: a switch of provider writes the new one's variables a step before
+ * the zone's policy names them, and the previous provider's must still be
+ * there, for the policy in service, should anything stop in between. The
+ * dns-leftovers step takes them out once the new policy is in service.
+ */
+export function dnsCredentialsRun(text: string): string {
+  const names = definedNames(text);
+  const others = names.length === 0 ? `grep -E '${CREDENTIAL_LINE}' ${CADDY_ENV_FILE}` : `grep -E '${CREDENTIAL_LINE}' ${CADDY_ENV_FILE} | grep -Ev '^[[:space:]]*(${names.join("|")})='`;
+  return runScript(
+    "setup:dns-credentials:run",
+    `next=$(mktemp)
+trap 'rm -f "$next"' EXIT
+cat > "$next" <<'VARIABLES'
+${text}VARIABLES
+if [ -f ${CADDY_ENV_FILE} ]; then { ${others} || true; } >> "$next"; fi
+install -m 0640 -o root -g caddy "$next" ${CADDY_ENV_FILE}`,
+  );
+}
+
+/** Whether the file holds a credential line the provider in place does not read: its previous provider's. */
+export function dnsLeftoversCheck(text: string): string {
+  const names = definedNames(text);
+  const foreign = names.length === 0 ? `grep -E '${CREDENTIAL_LINE}' ${CADDY_ENV_FILE}` : `grep -E '${CREDENTIAL_LINE}' ${CADDY_ENV_FILE} | grep -Ev '^[[:space:]]*(${names.join("|")})='`;
+  return machineCheck("setup:dns-leftovers:check", [{ label: "env-own-only", test: `! { ${foreign}; } | grep -q .` }]);
+}
+
+/** The file keeping every line but the credentials the provider in place does not read. */
+export function dnsLeftoversRun(text: string): string {
+  const names = definedNames(text);
+  // Under --dns manual, no credential is left: the file is the comment alone.
+  const rewrite =
+    names.length === 0
+      ? `cat > "$next" <<'VARIABLES'\n${text}VARIABLES`
+      : `grep -Ev '${CREDENTIAL_LINE}' ${CADDY_ENV_FILE} > "$next" || true\ngrep -E '^[[:space:]]*(${names.join("|")})=' ${CADDY_ENV_FILE} >> "$next" || true`;
+  return runScript(
+    "setup:dns-leftovers:run",
+    `next=$(mktemp)
+trap 'rm -f "$next"' EXIT
+${rewrite}
+install -m 0640 -o root -g caddy "$next" ${CADDY_ENV_FILE}`,
+  );
+}
+
+function envPermissionsRun(): string {
+  return runScript("setup:dns-credentials:run", `chown root:caddy ${CADDY_ENV_FILE}\nchmod 640 ${CADDY_ENV_FILE}`);
 }
 
 export function caddyUnitRun(dropIn: string): string {
@@ -851,12 +1000,13 @@ export function installSteps(): Step<SetupContext>[] {
   return [
     {
       id: "caddy",
-      title: "Caddy, with the Cloudflare module",
-      check: installCheck("setup:caddy:check", [
-        { label: "caddy-package", test: "dpkg-query -W -f='${Status}' caddy | grep -q 'ok installed'" },
-        { label: "cloudflare-module", test: "caddy list-modules | grep -q '^dns.providers.cloudflare'" },
-      ]),
-      run: (context) => rootRun(context.machine, context.operator, "setup:caddy:run", caddyRun(), "Caddy could not be installed"),
+      title: "Caddy, with the zone's DNS module",
+      check: (context) =>
+        installCheck("setup:caddy:check", [
+          { label: "caddy-package", test: "dpkg-query -W -f='${Status}' caddy | grep -q 'ok installed'" },
+          ...(context.dns === null ? [] : [{ label: "dns-module", test: `caddy list-modules | grep -q '^${context.dns.caddy.module}$'` }]),
+        ])(context),
+      run: (context) => rootRun(context.machine, context.operator, "setup:caddy:run", caddyRun(context.dns), "Caddy could not be installed"),
       inspect: (context) => `ssh ${context.server} 'caddy list-modules | grep dns.providers'`,
     },
     {
@@ -867,25 +1017,81 @@ export function installSteps(): Step<SetupContext>[] {
       inspect: (context) => `ssh ${context.server} '/usr/local/bin/bun --version'`,
     },
     {
-      id: "cloudflare-token",
-      title: "Caddy's Cloudflare token",
+      id: "dns-credentials",
+      title: "Caddy's DNS credentials",
       check: async (context) => {
-        const token = await knownToken(context);
-        return rootCheck(context.machine, context.operator, "setup:cloudflare-token:check", tokenCheck(token === null ? null : tokenFingerprint(token)));
+        // Under --dns manual the file holds a comment alone; otherwise its
+        // text is known once the credentials are, and compared whole.
+        const credentials = context.dns === null ? null : await knownDnsCredentials(context, context.dns);
+        return rootCheck(context.machine, context.operator, "setup:dns-credentials:check", dnsCredentialsCheck(expectedVariables(context.dns, credentials)));
       },
       run: async (context, missing) => {
-        if (missing.every((label) => label === "token-permissions")) {
-          await rootRun(context.machine, context.operator, "setup:cloudflare-token:run", tokenPermissionsRun(), `${TOKEN_FILE} could not be given to root:caddy 0640`);
+        if (missing.every((label) => label === "env-permissions")) {
+          await rootRun(context.machine, context.operator, "setup:dns-credentials:run", envPermissionsRun(), `${CADDY_ENV_FILE} could not be given to root:caddy 0640`);
           return "root:caddy 0640 again";
         }
-        const token = await requireToken(context);
-        const execution = await asRoot(context.machine, context.operator, "setup:cloudflare-token:run", tokenRun(token));
-        if (execution.code !== 0) throw new StepFailure(`${TOKEN_FILE} could not be written (exit code ${execution.code})`, []);
-        return missing.includes("token-file")
-          ? `${TOKEN_FILE} in place, root:caddy 0640`
-          : `${TOKEN_FILE} held another token, replaced: Caddy reads it at its next start`;
+        const what = context.dns === null ? "no credentials, under --dns manual" : `${context.dns.title}'s`;
+        let written = false;
+        if (missing.some((label) => label !== "env-permissions" && label !== "caddy-read-env")) {
+          const credentials = context.dns === null ? null : await requireDnsCredentials(context, context.dns);
+          // Tried before they reach the machine: the records may already
+          // resolve, a rotation or a switch, and nothing else would ask the
+          // provider anything before the renewal that needs them. Not under
+          // --skip-dns, which promises the provider's API is left alone.
+          if (context.dns !== null && credentials !== null && !context.options.skipDns) await proveDnsCredentials(context, context.dns, credentials);
+          const execution = await asRoot(context.machine, context.operator, "setup:dns-credentials:run", dnsCredentialsRun(caddyEnvironmentText(context.dns, credentials)));
+          if (execution.code !== 0) throw new StepFailure(`${CADDY_ENV_FILE} could not be written (exit code ${execution.code})`, []);
+          if (missing.includes("env-file")) return `${CADDY_ENV_FILE} in place, root:caddy 0640, ${what}`;
+          written = true;
+        }
+        // A running Caddy filled its {env.X} at its start: new values reach
+        // it only through a restart. When the zone's policy file still has
+        // to change, a switch of provider, the tls-zone step restarts it with
+        // both; otherwise, a rotation, or one whose restart failed earlier,
+        // it is restarted here.
+        const policy = await rootCheck(context.machine, context.operator, "setup:tls-zone:check", tlsZoneCheck(zoneTls(context)));
+        const switching = policy.state === "missing" && policy.missing.some((label) => label === "tls-zone-file" || label === "tls-zone-same");
+        const said = written ? `${CADDY_ENV_FILE} held other values, now ${what}` : `${CADDY_ENV_FILE} holds ${what}`;
+        if (switching) return `${said}: the next step restarts Caddy with them`;
+        const restart = await asRoot(context.machine, context.operator, "setup:caddy-restart:run", caddyRestartScript("the DNS credentials changed"), true);
+        if (restart.code !== 0) {
+          throw new StepFailure(`${said}, but Caddy could not be restarted to read them: run setup again, it tries again`, `${restart.output}\n${restart.error}`.split("\n").filter((line) => line.trim() !== "").slice(-5));
+        }
+        return `${said}${restart.output.includes(CADDY_RESTART.restarted) ? ", and Caddy restarted to read them" : ""}`;
       },
-      inspect: (context) => `ssh ${context.server} 'sudo stat -c "%U:%G %a" ${TOKEN_FILE}'`,
+      inspect: (context) => `ssh ${context.server} 'sudo stat -c "%U:%G %a" ${CADDY_ENV_FILE}'`,
+    },
+    {
+      id: "tls-zone",
+      title: "how the zone's certificates are obtained",
+      check: (context) => rootCheck(context.machine, context.operator, "setup:tls-zone:check", tlsZoneCheck(zoneTls(context))),
+      run: async (context) => {
+        const execution = await asRoot(context.machine, context.operator, "setup:tls-zone:run", tlsZoneRun(zoneTls(context)), true);
+        if (execution.code !== 0) {
+          throw new StepFailure(`${TLS_ZONE_FILE} could not be laid: the previous one is back`, `${execution.output}\n${execution.error}`.split("\n").filter((line) => line.trim() !== "").slice(-5));
+        }
+        const restarted = execution.output.includes(TLS_ZONE_RESTARTED) ? ", Caddy restarted with it" : "";
+        return context.dns === null ? `${TLS_ZONE_FILE}: a certificate per name, on demand${restarted}` : `${TLS_ZONE_FILE}: the wildcard, through ${context.dns.title}'s DNS${restarted}`;
+      },
+      inspect: (context) => `ssh ${context.server} 'cat ${TLS_ZONE_FILE}'`,
+    },
+    {
+      id: "dns-leftovers",
+      title: "no other provider's credentials left",
+      check: (context) => rootCheck(context.machine, context.operator, "setup:dns-leftovers:check", dnsLeftoversCheck(caddyEnvironmentText(context.dns, placeholderCredentials(context.dns)))),
+      run: async (context) => {
+        // Once the zone's policy in service is this provider's: the
+        // previous one's credentials, kept until now, can go.
+        await rootRun(
+          context.machine,
+          context.operator,
+          "setup:dns-leftovers:run",
+          dnsLeftoversRun(caddyEnvironmentText(context.dns, placeholderCredentials(context.dns))),
+          `${CADDY_ENV_FILE} could not be rewritten`,
+        );
+        return `the previous provider's credentials taken out of ${CADDY_ENV_FILE}`;
+      },
+      inspect: (context) => `ssh ${context.server} "sudo grep -Eo '^[[:space:]]*[A-Z_]+=' ${CADDY_ENV_FILE}"`,
     },
     {
       id: "resolution",
@@ -1067,12 +1273,20 @@ function configurationStep(): Step<SetupContext> {
     title: "workstation configuration",
     check: async (context) => {
       const file = adoptLegacyKeys(readJson(path(context)) as never).config;
-      const same = file.server === context.server && file.zone === context.options.zone && file.email === context.options.email && (file.contact ?? null) === context.contact;
+      const same =
+        file.server === context.server &&
+        file.zone === context.options.zone &&
+        file.email === context.options.email &&
+        (file.contact ?? null) === context.contact &&
+        (file.dns ?? "cloudflare") === (context.options.dns ?? "cloudflare");
       return same ? { state: "done" } : { state: "missing", missing: [path(context)] };
     },
     run: async (context) => {
       const previous = adoptLegacyKeys(readJson(path(context)) as never).config as Record<string, unknown>;
       const config = composeConfig({ server: context.server, zone: context.options.zone, email: context.options.email }, context.contact === null ? {} : { contact: context.contact }, previous);
+      // Cloudflare is what an absent key means: written only otherwise.
+      if (context.options.dns === null || context.options.dns === "cloudflare") delete config.dns;
+      else config.dns = context.options.dns;
       // The marker first, so that a run stopped anywhere after this point is
       // this install's to resume. One left by an install on another machine
       // or zone, whose configuration is gone, is replaced: this step only
@@ -1090,26 +1304,75 @@ function configurationStep(): Step<SetupContext> {
   };
 }
 
-/** The records, through Cloudflare's API, at the start: they propagate while the machine installs. */
+/**
+ * Values that only stand for the names a provider's module reads: what the
+ * leftovers step needs, which looks at names alone and never at values.
+ */
+function placeholderCredentials(dns: DnsEntry | null): Credentials | null {
+  if (dns === null) return null;
+  return Object.fromEntries(dns.credentials.map((field) => [field.variable, "placeholder"]));
+}
+
+/** The credentials, tried with a read of the zone: refused ones stop the step before anything is written. */
+async function proveDnsCredentials(context: SetupContext, entry: DnsEntry, credentials: Credentials): Promise<void> {
+  const secrets = secretValues(entry, credentials);
+  const scrub = (text: string): string => scrubSecrets(text, secrets);
+  try {
+    const api = entry.open({
+      credentials,
+      environment: context.deps.dnsApi.environment,
+      fetcher: context.deps.dnsApi.fetcher ?? fetch,
+      clock: { now: () => context.deps.now(), sleep: (ms) => context.deps.sleep(ms) },
+      secret: (value) => {
+        if (value !== "") secrets.push(value);
+      },
+    });
+    await api.verify();
+    await api.findZone(context.options.zone);
+  } catch (error) {
+    if (error instanceof DnsError) throw new StepFailure(`${entry.title} refused the credentials given: ${scrub(error.message)}`, error.details.map(scrub));
+    if (error instanceof ProviderError) throw new StepFailure(scrub(error.failure.message), (error.failure.details ?? []).map(scrub));
+    throw error;
+  }
+}
+
+/** What /etc/caddy/tls-zone.caddy holds for this machine: the provider's DNS challenge, or certificates on demand. */
+function zoneTls(context: SetupContext): string {
+  return tlsZoneContent(context.dns === null ? { kind: "on-demand" } : { kind: "dns", title: context.dns.title, directive: context.dns.caddy.directive });
+}
+
+/** The records, through the DNS provider's API, at the start: they propagate while the machine installs. */
 function dnsStep(): Step<SetupContext> {
   return {
     id: "dns",
     title: "DNS records",
-    skip: (context) => (context.options.skipDns ? "--skip-dns: by hand, as listed above" : null),
+    skip: (context) => (context.options.skipDns ? `${context.dns === null ? "--dns manual" : "--skip-dns"}: by hand, as listed above` : null),
     check: async (context) => (await resolution(context)).check,
     run: async (context) => {
-      const token = await requireToken(context);
+      // Never reached under --dns manual, which skips this step.
+      const entry = context.dns!;
+      const credentials = await requireDnsCredentials(context, entry);
+      // The credentials, and a token the provider obtains for them, are
+      // scrubbed from whatever a failure says, whichever provider wrote it.
+      const secrets = secretValues(entry, credentials);
+      const scrub = (text: string): string => scrubSecrets(text, secrets);
       try {
-        const { zone, actions } = await ensureRecords(
-          { base: context.deps.cloudflare.base, token, ...(context.deps.cloudflare.fetcher === undefined ? {} : { fetcher: context.deps.cloudflare.fetcher }) },
-          context.options.zone,
-          context.addresses,
-          context.options.dnsReplace,
-        );
+        const api = entry.open({
+          credentials,
+          environment: context.deps.dnsApi.environment,
+          fetcher: context.deps.dnsApi.fetcher ?? fetch,
+          clock: { now: () => context.deps.now(), sleep: (ms) => context.deps.sleep(ms) },
+          secret: (value) => {
+            if (value !== "") secrets.push(value);
+          },
+        });
+        const { zone, actions } = await ensureZoneRecords(api, context.options.zone, context.addresses, context.options.dnsReplace);
         const changes = describePlan(actions);
-        return changes.length === 0 ? `already in the Cloudflare zone ${zone}` : `${changes.join("; ")}, in the Cloudflare zone ${zone}`;
+        return changes.length === 0 ? `already in the ${entry.title} zone ${zone}` : `${changes.join("; ")}, in the ${entry.title} zone ${zone}`;
       } catch (error) {
-        if (error instanceof CloudflareError) throw new StepFailure(error.message, error.details);
+        if (error instanceof DnsError) throw new StepFailure(scrub(error.message), error.details.map(scrub));
+        if (error instanceof ProviderError) throw new StepFailure(scrub(error.failure.message), (error.failure.details ?? []).map(scrub));
+        if (error instanceof Error) throw new StepFailure(scrub(error.message), []);
         throw error;
       }
     },
@@ -1135,8 +1398,11 @@ export function setupSteps(): Step<SetupContext>[] {
  */
 export function withoutToken(environment: Record<string, string | undefined>, json: boolean): Record<string, string> {
   const child: Record<string, string> = {};
+  // Every DNS provider's credentials, Cloudflare's token among them: a
+  // script setup launches never needs them, and reaches them through nothing.
+  const kept = new Set(["CLOUDFLARE_API_TOKEN", ...dnsVariables()]);
   for (const [key, value] of Object.entries(environment)) {
-    if (value !== undefined && key !== "CLOUDFLARE_API_TOKEN") child[key] = value;
+    if (value !== undefined && !kept.has(key)) child[key] = value;
   }
   if (json) Object.assign(child, { SSH_ASKPASS_REQUIRE: "force", SSH_ASKPASS: Bun.which("false") ?? "/usr/bin/false" });
   return child;
@@ -1184,7 +1450,7 @@ function stepList(reports: readonly StepReport[]) {
 }
 
 /** Runs setup; the exit code. */
-export async function runSetup(options: SetupOptions, deps: SetupDependencies): Promise<number> {
+export async function runSetup(given: SetupOptions, deps: SetupDependencies): Promise<number> {
   const out = deps.output;
   const refuse = (refusal: Refusal): number => {
     out.error(refusal.message, refusal.details);
@@ -1195,6 +1461,11 @@ export async function runSetup(options: SetupOptions, deps: SetupDependencies): 
   const folder = privateFolder(deps.home, deps.environment);
   const configPath = join(folder, "config.json");
   const file = adoptLegacyKeys(readJson(configPath) as never).config;
+  // The DNS: what --dns says, else what the configuration recorded, else
+  // Cloudflare. Manual means records by hand: listed, then waited for.
+  const dnsName = given.dns ?? (typeof file.dns === "string" && file.dns !== "" ? file.dns : "cloudflare");
+  if (dnsEntry(dnsName) === undefined) return refuse(REFUSALS.invalid("dns in the configuration", dnsName, `one of ${[...DNS_PROVIDERS.map((entry) => entry.name), MANUAL].join(", ")}`));
+  const options: SetupOptions = { ...given, dns: dnsName, skipDns: given.skipDns || dnsName === MANUAL };
   const configured = {
     server: deps.environment.SITESOLIDE_SERVER ?? file.server,
     zone: deps.environment.SITESOLIDE_ZONE ?? file.zone,
@@ -1258,7 +1529,8 @@ export async function runSetup(options: SetupOptions, deps: SetupDependencies): 
     server,
     contact,
     addresses,
-    token: undefined,
+    dns: dnsEntry(dnsName) ?? null,
+    dnsCredentials: undefined,
     dashboardDrawn: false,
     childEnvironment: childEnvironment(deps.environment, { server, zone: options.zone, email: options.email, contact, folder }, options.json),
   };
@@ -1276,7 +1548,7 @@ export async function runSetup(options: SetupOptions, deps: SetupDependencies): 
   }
 
   if (options.skipDns) {
-    out.say("-> --skip-dns: create these records at your DNS provider; setup waits for them before Caddy's configuration");
+    out.say(`-> ${options.dns === MANUAL ? "--dns manual" : "--skip-dns"}: create these records at your DNS provider; setup waits for them before Caddy's configuration`);
     for (const line of manualRecords(options.zone, addresses.ipv4, addresses.ipv6)) out.say(`   ${line}`);
   }
 
@@ -1537,12 +1809,24 @@ export function setupOutput(json: boolean, write: (line: string) => void = (line
 export async function setupCommand(arguments_: readonly string[]): Promise<number> {
   const parsed = parseSetupArguments(arguments_);
   const json = arguments_.includes("--json");
-  const output = setupOutput(json);
   if ("message" in parsed) {
-    output.error(parsed.message, parsed.details);
+    setupOutput(json).error(parsed.message, parsed.details);
     return 1;
   }
-  const options = parsed;
+  return setupFromWorkstation(parsed);
+}
+
+/**
+ * What the setup wizard (bin/cli/wizard.ts) hands setup besides its options:
+ * the DNS credentials typed at its prompts, which never reach the
+ * environment the scripts inherit, and the output it draws with.
+ */
+export type SetupExtras = { dnsCredentials?: Credentials; output?: SetupOutput };
+
+/** Setup with this workstation's ssh, kit, resolver and Cloudflare: the exit code. */
+export async function setupFromWorkstation(options: SetupOptions, extras: SetupExtras = {}): Promise<number> {
+  const json = options.json;
+  const output = extras.output ?? setupOutput(json);
   if (options.configDir !== null) process.env[CONFIG_DIR_VARIABLE] = resolve(options.configDir.replace(/^~(?=\/|$)/, homedir()));
 
   // Read at once when it is piped: the scripts launched later inherit this
@@ -1557,13 +1841,27 @@ export async function setupCommand(arguments_: readonly string[]): Promise<numbe
     kit: kitRunner(output),
     resolve: resolveFromWorkstation,
     sameMachine,
-    cloudflare: { base: cloudflareBase(environment) },
-    token: async (ask) => {
-      const fromEnvironment = environment.CLOUDFLARE_API_TOKEN?.trim();
-      if (fromEnvironment !== undefined && fromEnvironment !== "") return fromEnvironment;
-      if (piped !== null && piped !== "") return piped;
+    dnsApi: { environment },
+    dnsCredentials: async (entry, ask) => {
+      // Typed at the wizard, after it checked them against the zone: they
+      // win over the environment's, which the wizard may have found refused.
+      if (extras.dnsCredentials !== undefined) return extras.dnsCredentials;
+      // Piped on purpose, they win over whatever the environment holds,
+      // an account-wide CLOUDFLARE_API_TOKEN that wrangler reads above all.
+      if (piped !== null && piped !== "") {
+        const parsed = parseStdinCredentials(entry, piped);
+        return isFailure(parsed) ? null : parsed;
+      }
+      const given = fromEnvironment(entry, environment);
+      if (missingFields(entry, given).length === 0) return given;
       if (!ask || json || process.stdin.isTTY !== true) return null;
-      return (await readHidden(`Cloudflare API token for ${options.zone} (Zone / DNS / Edit), not echoed: `)).trim() || null;
+      const typed: Record<string, string> = { ...given };
+      for (const field of missingFields(entry, given)) {
+        const value = (await readHidden(`${entry.title} ${field.label} for ${options.zone}, ${field.variable}${field.secret ? ", not echoed" : ""}: `)).trim();
+        if (value === "") return null;
+        typed[field.variable] = value;
+      }
+      return typed;
     },
     drawPassword: async () => {
       const password = generatePassword();

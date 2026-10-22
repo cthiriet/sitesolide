@@ -293,8 +293,11 @@ export function bench(mock: CloudflareMock, home: string, options: MachineOption
       kit: kit.run,
       resolve: resolver.resolve,
       sameMachine: async (a, b) => a === b,
-      cloudflare: { base: mock.base },
-      token: async () => (options.token === undefined ? TOKEN : options.token),
+      dnsApi: { environment: { SITESOLIDE_CLOUDFLARE_API: mock.base } },
+      dnsCredentials: async () => {
+        const token = options.token === undefined ? TOKEN : options.token;
+        return token === null ? null : { CLOUDFLARE_API_TOKEN: token };
+      },
       drawPassword: async () => {
         drawn.count++;
         return { password: PORTAL_PASSWORD, hash: PORTAL_HASH };

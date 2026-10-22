@@ -70,6 +70,13 @@ export type Host = {
    * exist before.
    */
   prepareTree: (slug: string, application: boolean) => Promise<"created" | "present">;
+  /**
+   * The zone's sites written again for the ask endpoint, /etc/caddy/zone-names,
+   * by the script `sitesolide deploy` sends over SSH (api/src/zone-names.ts),
+   * run as root: nothing written on a zone with a DNS provider. Its last line
+   * says which, see readZoneNamesAnswer.
+   */
+  refreshZoneNames: () => Promise<Execution>;
   /** An empty staging directory the project's account may write; returns its path. */
   stage: (slug: string) => Promise<string>;
   /** The deployment's archive, extracted into the staging directory as the project's account. */

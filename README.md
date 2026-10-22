@@ -17,12 +17,28 @@ containers, no per-seat pricing.
 
 ## Quick start
 
-You need a domain on Cloudflare, and a Hetzner Cloud token or any Debian 13
-machine you reach as root.
+You need a domain, at any registrar, and an account at Hetzner, DigitalOcean,
+AWS, Google Cloud, Azure, Vultr, Akamai (Linode) or Scaleway, or any Debian 13
+machine you reach over SSH.
 
 ```bash
 curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/install.sh | sh
 ```
+
+```bash
+sitesolide setup
+```
+
+```bash
+cd your-project && sitesolide deploy
+```
+
+One executable, no Bun and no clone. `sitesolide setup` asks which cloud,
+region and size, checks your domain at its DNS provider, shows the plan with its
+price, then orders the machine, hardens it, creates the DNS records where your
+DNS provider has an API sitesolide speaks (or lists the two to create by hand),
+and installs everything; it can be run again at any time. Without questions, for a
+script or an agent, the same is two commands:
 
 ```bash
 sitesolide machine create --provider hetzner --name web
@@ -32,12 +48,6 @@ sitesolide machine create --provider hetzner --name web
 sitesolide setup root@203.0.113.10 --zone example.com --email you@example.com
 ```
 
-```bash
-cd your-project && sitesolide deploy
-```
-
-One executable, no Bun and no clone. `setup` hardens the machine, creates the
-DNS records and installs everything, and can be run again at any time.
 [docs/install.md](docs/install.md) explains each step and the tokens they read.
 A new release later: install it the same way, then `sitesolide upgrade`
 redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
@@ -91,7 +101,7 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
 
 - [Install](docs/install.md): from nothing to a first deployment
 - [Setup](docs/setup.md): what `sitesolide setup` checks and changes, step by step
-- [A machine](docs/machine.md): a VM ordered from Hetzner, and the token it needs
+- [A machine](docs/machine.md): a VM ordered from a cloud, and the credentials it needs; [each cloud](docs/providers/)
 - [How it works](docs/concepts.md): the parts, and who may touch what
 - [The manifest](docs/manifest.md): every key of `sitesolide.json`
 - [Commands](docs/commands.md): everything the CLI does

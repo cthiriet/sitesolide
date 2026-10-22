@@ -76,6 +76,7 @@ describe("the configuration", () => {
     zone: "test-zone.invalid",
     sitesDir: "/srv/sites",
     domainsFile: "/etc/caddy/domaines.map",
+    tlsZoneFile: "/etc/caddy/tls-zone.caddy",
     stateDir: "/var/lib/sitesolide-monitor",
     backupFile: "/var/lib/sitesolide-backup/last-run.json",
     diskPaths: ["/", "/srv", "/var"],

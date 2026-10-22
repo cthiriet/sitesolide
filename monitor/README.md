@@ -25,7 +25,7 @@ did before, and no worse.
 | Caddy | `systemctl show caddy.service` | critical | not `active` (or `reloading`) |
 | Caddy's automatic restarts | `NRestarts` going up since the last pass | warning | systemd restarted Caddy on its own in the last 15 minutes: something stopped it |
 | every served site | `GET https://<host>/` on `127.0.0.1:443`, the certificate verified for `<host>` | critical | no answer, a failed handshake, or a status of 500 and above |
-| certificates | the certificate Caddy serves for the bare domain, the zone's wildcard and each customer domain | warning | expires within 14 days |
+| certificates | the certificate Caddy serves for the bare domain, the zone's wildcard and each customer domain; with manual DNS, for the bare domain, its `www`, each preview and each customer domain, one by one | warning | expires within 14 days |
 | projects' units | `systemctl list-units --type=service,timer`, every `<slug>.service`, `<slug>.<name>.service` and `sitesolide-landing.service`, scheduled services aside | critical | failed, stopped, or crashing in a loop (`activating (auto-restart)`) |
 | a scheduled service's last run | the same listing, a `<slug>.<name>.service` that a loaded `<slug>.<name>.timer` starts | warning | `failed`: its last run failed, until a run succeeds; `inactive` between two runs is its rest |
 | a project's timers | the same listing, every `<slug>.<name>.timer` | critical | anything but `active`: the schedule stopped, nothing will run |
@@ -43,6 +43,14 @@ table and the gatekeeper's probes, read the same way. Anything below 500
 answers: a locked preview's 401, the portal's redirect to its sign-in and a
 root that serves nothing all prove Caddy serves the host with a valid
 certificate.
+
+**Which certificates depends on the zone's TLS policy**, `/etc/caddy/tls-zone.caddy`,
+read the way the shared service reads it (`api/src/zone-names.ts`). With a DNS
+provider, every preview rests on one wildcard, read once under `*.<zone>`. With
+manual DNS, a line `on_demand`, there is no wildcard: each name of the zone has
+a certificate of its own, renewed on its own, and each is read under its own
+name. A policy that cannot be read is said by the monitor's own check, and the
+wildcard read as before.
 
 **A scheduled service is at rest between its runs.** Its timer starts it, it
 runs to its end, and until the next run it is `inactive (dead)`, which for a

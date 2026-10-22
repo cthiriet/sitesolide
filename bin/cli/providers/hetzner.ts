@@ -34,6 +34,8 @@
  * requests an hour, given back one a second.
  */
 import {
+  apiAddress,
+  DEBIAN,
   formatPrice,
   isManaged,
   labelsFor,
@@ -41,6 +43,7 @@ import {
   MANAGED_VALUE,
   MACHINE_LABEL,
   ProviderError,
+  type Choice,
   type CreateOutcome,
   type CreateRequest,
   type DestroyOutcome,
@@ -50,10 +53,17 @@ import {
   type ProviderEntry,
   type Report,
   type Resource,
+  TRANSIENT,
 } from "./provider";
 import type { Failure } from "../remote";
 
 export const DEFAULT_API = "https://api.hetzner.cloud/v1";
+
+/** Where the token is read from: the variable the hcloud CLI and the Terraform provider read. */
+export const TOKEN_VARIABLE = "HCLOUD_TOKEN";
+
+/** What `create` orders when nothing else is said: the smallest current x86 type, in Germany, Debian. */
+export const HETZNER_DEFAULTS = { type: "cx23", location: "fsn1", image: DEBIAN };
 
 /** The API's address, for tests against a local fake: https, or http on the loopback only. */
 export const API_VARIABLE = "SITESOLIDE_HETZNER_API";
@@ -100,7 +110,11 @@ export type HetznerServer = {
     ipv4: { id?: number; ip: string } | null;
     ipv6: { id?: number; ip: string } | null;
     firewalls?: { id: number; status: string }[];
+    /** Ids of the Floating IPs assigned to the server. */
+    floating_ips?: number[];
   };
+  /** Ids of the volumes attached to the server. */
+  volumes?: number[];
   server_type: { name: string; prices?: Price[] };
   location?: { name: string };
   /** Before the API moved the location onto the server, it lived here. */
@@ -147,9 +161,6 @@ export class HetznerError extends ProviderError {
     super(failure);
   }
 }
-
-/** The codes a wait shrugs off until its deadline: they say "later", not "no". */
-const TRANSIENT = new Set(["provider-rate-limited", "provider-failure", "provider-unreachable", "provider-busy"]);
 
 /** `invalid_input` names the fields it refused, and why. */
 function fieldDetails(details: unknown): string[] {
@@ -224,21 +235,7 @@ export function failureFrom(status: number, body: unknown, headers: Headers, wha
 
 /** The API's address from the environment, or why it is refused. */
 export function apiBase(environment: Record<string, string | undefined>): string {
-  const raw = environment[API_VARIABLE]?.trim() || DEFAULT_API;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new ProviderError({ error: "provider-endpoint", message: `${API_VARIABLE} is not an address` });
-  }
-  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
-    throw new ProviderError({ error: "provider-endpoint", message: `${API_VARIABLE}: the token only leaves over https, or over http to the loopback` });
-  }
-  if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") {
-    throw new ProviderError({ error: "provider-endpoint", message: `${API_VARIABLE} carries more than an address` });
-  }
-  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+  return apiAddress(environment, API_VARIABLE, DEFAULT_API);
 }
 
 // --- what the answers mean -------------------------------------------------------------------
@@ -272,6 +269,8 @@ export function toMachine(server: HetznerServer, currency: string | null): Machi
     backups: server.backup_window !== null && server.backup_window !== undefined,
     managed: isManaged(server.labels),
     labels: server.labels ?? {},
+    // Hetzner's images take the key for root, and only for root.
+    login: "root",
   };
 }
 
@@ -391,7 +390,8 @@ function appliedElsewhere(firewall: HetznerFirewall, except: number): string[] {
 export function hetzner(context: ProviderContext): Provider {
   const base = apiBase(context.environment);
   const host = new URL(base).host;
-  const { clock, fetcher, token } = context;
+  const { clock, fetcher } = context;
+  const token = context.credentials[TOKEN_VARIABLE] ?? "";
 
   /** One call: the token in its header, JSON both ways, every failure said in the CLI's words. */
   async function call<T>(method: string, path: string, what: string, body?: unknown): Promise<T> {
@@ -714,7 +714,15 @@ export function hetzner(context: ProviderContext): Provider {
           });
         } catch (error) {
           if (!(error instanceof ProviderError)) throw error;
-          const undone = await undo(made, report);
+          // Once the order has left, only a refusal Hetzner said for certain,
+          // a 4xx or its own code for a product it cannot sell, proves no
+          // server was made. An unreachable API, another 5xx or an answer cut
+          // short may hide a server already booting: deleting its firewall
+          // then would leave it open. The next run finds it, or the key and
+          // the firewall, and reuses them.
+          const certain = error instanceof HetznerError && ((error.status >= 400 && error.status < 500) || refusesTheOffer(error));
+          const unknown = ordering && !certain;
+          const undone = unknown ? ["the order's outcome is unknown: nothing was undone, and the same command run again picks up what was made"] : await undo(made, report);
           if (ordering && error instanceof HetznerError && refusesTheOffer(error)) {
             // The list of types may call a type available that is not, and
             // the reverse: the order is what decides, and its refusal still
@@ -740,6 +748,36 @@ export function hetzner(context: ProviderContext): Provider {
       return { machine: toMachine(running, await currency()), created, resources };
     },
 
+    async locations(): Promise<Choice[]> {
+      const locations = await listAll<HetznerLocation>("/locations", "locations", "read the locations");
+      const first = (name: string) => (name === HETZNER_DEFAULTS.location ? 0 : 1);
+      return [...locations]
+        .sort((a, b) => first(a.name) - first(b.name) || a.name.localeCompare(b.name))
+        .map((location) => ({ value: location.name, label: [location.city, location.country].filter(Boolean).join(", ") || location.name, hint: location.name }));
+    },
+
+    async types(location): Promise<Choice[]> {
+      const types = await listAll<HetznerServerType>("/server_types", "server_types", "read the server types");
+      const unit = await currency();
+      const now = clock.now();
+      const sold = types
+        .filter((type) => {
+          const offer = typeOffer(type, location, now);
+          return offer.orderable && offer.deprecatedUntil === null;
+        })
+        .sort((a, b) => Number(b.name === HETZNER_DEFAULTS.type) - Number(a.name === HETZNER_DEFAULTS.type) || monthlyNet(a, location) - monthlyNet(b, location) || a.name.localeCompare(b.name))
+        .slice(0, 12);
+      return sold.map((type) => {
+        const price = monthlyNet(type, location);
+        const arm = type.architecture === "arm" ? ", arm64" : "";
+        return {
+          value: type.name,
+          label: `${type.name}  ${type.cores} vCPU, ${type.memory} GB RAM, ${type.disk} GB disk${arm}`,
+          ...(Number.isFinite(price) ? { hint: formatPrice(price, unit) } : {}),
+        };
+      });
+    },
+
     async list() {
       const servers = await listAll<HetznerServer>("/servers", "servers", "read the servers", { label_selector: `${MANAGED_LABEL}=${MANAGED_VALUE}` });
       const unit = servers.length === 0 ? null : await currency();
@@ -759,6 +797,17 @@ export function hetzner(context: ProviderContext): Provider {
       // since one that stayed would be billed without anyone knowing.
       const before = await call<{ server: HetznerServer }>("GET", `/servers/${id}`, `read the server ${machine.name}`);
       const primaryIps = [before.server.public_net?.ipv4, before.server.public_net?.ipv6].filter((ip): ip is { id: number; ip: string } => typeof ip?.id === "number");
+      // Volumes and Floating IPs attached by hand outlive the server, detached,
+      // and stay billed: said, never deleted, since they may hold data or be
+      // named in someone's DNS.
+      for (const volume of before.server.volumes ?? []) {
+        kept.push(`volume ${volume}: Hetzner detaches it and bills it until it is deleted from the console`);
+        report(`!! volume ${volume} is attached: it outlives the server, detached and billed`);
+      }
+      for (const floating of before.server.public_net?.floating_ips ?? []) {
+        kept.push(`floating IP ${floating}: Hetzner keeps it and bills it until it is deleted from the console`);
+        report(`!! floating IP ${floating} is assigned: it outlives the server, and stays billed`);
+      }
       const deletion = await call<{ action?: HetznerAction }>("DELETE", `/servers/${id}`, `delete the server ${machine.name}`);
       if (deletion.action !== undefined) await waitForAction(deletion.action, report);
       removed.push(`server ${machine.name}${addresses === "" ? "" : ` (${addresses})`}`);
@@ -825,11 +874,16 @@ export function hetzner(context: ProviderContext): Provider {
 
 /** The token is read from HCLOUD_TOKEN, as the hcloud CLI and the Terraform provider read it. */
 export const HETZNER: ProviderEntry = {
+  name: "hetzner",
   title: "Hetzner",
-  tokenVariable: "HCLOUD_TOKEN",
-  tokenHelp: [
+  credentials: [{ variable: TOKEN_VARIABLE, label: "token", secret: true, shape: /^[A-Za-z0-9_\-.:+/=]{16,512}$/ }],
+  credentialHelp: [
     "create it in the Hetzner console: the project, Security, API tokens, with Read & Write",
     "a project of its own for sitesolide keeps the token away from everything else you run at Hetzner",
   ],
+  docs: "docs/providers/hetzner.md",
+  defaults: () => HETZNER_DEFAULTS,
+  backups: true,
+  apiVariable: API_VARIABLE,
   open: hetzner,
 };

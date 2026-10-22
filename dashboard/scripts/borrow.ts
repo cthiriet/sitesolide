@@ -36,6 +36,10 @@ const BORROWINGS = [
   "api/src/locks.ts",
   "api/src/config.ts",
   "api/src/table.ts",
+  // The zone's sites for the ask endpoint, and how a TLS policy says the zone
+  // is certified on demand: config.ts reads its paths there, and the
+  // installer writes the list with its script, as `sitesolide deploy` does.
+  "api/src/zone-names.ts",
   // The sharing modes and the rules of an email and a domain, which the portal
   // applies, and the names of its sign-in settings, which the steward lets the
   // dashboard write into portal.env.

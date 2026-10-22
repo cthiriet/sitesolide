@@ -326,7 +326,8 @@ describe("deploy-caddy.sh does not contradict the VM", () => {
   function caddyRepo(manifests: Manifest[]): { repo: string; blocks: string[] } {
     const repo = tempDir("repo-caddy-");
     mkdirSync(join(repo, "bin"));
-    for (const name of ["config.sh", "deploy-caddy.sh", "portal-guard.ts"]) {
+    // cli/: the script reads the zone's TLS policy from bin/cli/tls.ts.
+    for (const name of ["cli", "config.sh", "deploy-caddy.sh", "portal-guard.ts"]) {
       symlinkSync(join(REPO, "bin", name), join(repo, "bin", name));
     }
     mkdirSync(join(repo, "infra", "caddy"), { recursive: true });

@@ -67,6 +67,11 @@ bun bin/build.ts --version v0.3.0         # what the release workflow runs for a
 bun bin/build.ts --target bun-darwin-arm64 --out /tmp/out
 ```
 
+The CLI has one dependency at run time, `@clack/prompts`, which draws the
+setup wizard (`bin/cli/wizard-clack.ts`): `bun install` in `bin/` fetches it,
+`bun build --compile` bundles it into the binary, and no script of the kit
+imports it, so the unpacked kit, which has no `node_modules`, never needs it.
+
 Each binary embeds the Bun runtime and the kit: the scripts of `bin/`, the
 sources of the components they build and upload, and `infra/`, packed into one
 archive it unpacks on first use into `~/.cache/sitesolide/<version>-<hash>/`.

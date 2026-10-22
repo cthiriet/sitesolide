@@ -63,6 +63,19 @@ describe("what the machine serves", () => {
     ]);
   });
 
+  test("manual DNS: no wildcard, the zone, its www and each preview read under their own names", () => {
+    const targets = servedTargets(ZONE, ["cms", "shop", ZONE], [["sample-agency.example", "cms"]]);
+    expect(certificateTargets(ZONE, targets, true)).toEqual([
+      { id: `certificate:${ZONE}`, label: ZONE, sni: ZONE, slug: ZONE },
+      { id: `certificate:www.${ZONE}`, label: `www.${ZONE}`, sni: `www.${ZONE}`, slug: ZONE },
+      { id: `certificate:cms.${ZONE}`, label: `cms.${ZONE}`, sni: `cms.${ZONE}`, slug: "cms" },
+      { id: `certificate:shop.${ZONE}`, label: `shop.${ZONE}`, sni: `shop.${ZONE}`, slug: "shop" },
+      { id: "certificate:sample-agency.example", label: "sample-agency.example", sni: "sample-agency.example", slug: "cms" },
+    ]);
+    // With a DNS provider, the reading of every release before it.
+    expect(certificateTargets(ZONE, targets, false)).toEqual(certificateTargets(ZONE, targets));
+  });
+
   test("with no preview, the wildcard is read through www, under the same name", () => {
     const certificates = certificateTargets(ZONE, servedTargets(ZONE, [], []));
     expect(certificates[1]).toEqual({ id: `certificate:*.${ZONE}`, label: `*.${ZONE}`, sni: `www.${ZONE}`, slug: null });

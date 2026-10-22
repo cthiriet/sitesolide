@@ -21,6 +21,11 @@
 # which already hold it, it receives their line in CADDY_LOCK_HELD, checks it,
 # and neither takes nor releases anything. See bin/cli/caddy-lock.ts.
 #
+# With manual DNS, it also writes again /etc/caddy/zone-names, the sites
+# deployed under the zone, which the ask endpoint allows on demand: a site
+# removed drops out of it as its domain drops out of the table. On a zone with
+# a DNS provider, that command says so and writes nothing. See bin/cli/tls.ts.
+#
 # NEVER `caddy stop` nor `caddy start`: only systemctl reload applies a
 # configuration. See the Production section of CLAUDE.md.
 set -euo pipefail
@@ -28,6 +33,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$REPO_ROOT/bin/config.sh"
 sitesolide_require_config
+eval "$(bun "$REPO_ROOT/bin/cli/tls.ts")"
+[ -n "${ZONE_NAMES_COMMAND:-}" ] || { echo "bin/cli/tls.ts printed nothing: the zone's sites cannot be listed" >&2; exit 1; }
 
 # The table goes through a file of our own on the workstation, and not through a
 # shared /tmp/domaines.map that two runs would overwrite one another.
@@ -87,6 +94,16 @@ if [ -n "$CADDY_LOCK" ]; then
   SITESOLIDE_SERVER="$SITESOLIDE_SERVER" bun "$REPO_ROOT/bin/portal-guard.ts" --lock release "$CADDY_LOCK" || true
   CADDY_LOCK=""
 fi
+
+# Neither Caddy nor the lock has anything to do with it: only the ask endpoint
+# reads the list, and it is renamed into place whole. Caddy is reloaded by
+# now: a failure here is said and stops nothing, the table being in service,
+# and the next writer of the list writes it whole again.
+echo "-> the zone's sites, for the ask endpoint"
+if ! ssh "$SITESOLIDE_SERVER" "$ZONE_NAMES_COMMAND" | sed 's/^/   /'; then
+  echo "   !! /etc/caddy/zone-names could not be written again: with manual DNS, the ask endpoint allows only the sites it lists" >&2
+fi
+
 # sudo: the loopback rule only lets Caddy and root reach ports 3000 to 3099.
 # Without it, this check failed after a successful reload and announced a
 # failure that was not one. Measured on 15 September 2026, while removing three

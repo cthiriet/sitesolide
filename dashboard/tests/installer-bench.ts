@@ -42,6 +42,8 @@ export type BenchOptions = {
   /** How a unit stands from the second reading after the restart on, by unit as deploy names it; every other one runs. */
   falls?: Record<string, { active: string; sub: string; restarts: number }>;
   probe?: (host: string, path: string, bench: Bench) => ProbeResponse | null;
+  /** The zone certified on demand, manual DNS: its policy laid on the bench, the zone's sites written there. */
+  onDemand?: boolean;
 };
 
 export type Bench = {
@@ -82,7 +84,18 @@ export function createBench(options: BenchOptions = {}): Bench {
   };
   for (const folder of [bench.sites, bench.blocks, bench.units, bench.secrets, bench.spool, bench.run]) mkdirSync(folder, { recursive: true });
   writeFileSync(join(root, "passwd"), "root:x:0:0::/root:/bin/sh\n");
+  if (options.onDemand) writeFileSync(join(root, "tls-zone.caddy"), "tls {\n\ton_demand\n}\n");
+  // The zone's sites are written as root: a chown that does nothing stands
+  // in for it, the rest of the script runs as it is.
+  mkdirSync(join(root, "stubs"));
+  writeFileSync(join(root, "stubs", "chown"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   return bench;
+}
+
+/** The zone's sites the bench's script wrote, null before any. */
+export function zoneNames(bench: Bench): string | null {
+  const file = join(bench.root, "zone-names");
+  return existsSync(file) ? readFileSync(file, "utf8") : null;
 }
 
 export function machineOf(bench: Bench): Machine {
@@ -191,6 +204,12 @@ export function commandsOf(bench: Bench): Commands {
       const refused = arguments_[0] === "calendar" && (bench.options.refusedSchedules ?? []).includes(arguments_[1]!);
       return refused ? { code: 1, output: `Failed to parse calendar specification '${arguments_[1]}': Invalid argument` } : { code: 0, output: "  Original form: x\n" };
     },
+    // The script really runs, on the bench's tree.
+    async shell(script, timeoutMs) {
+      bench.events.push("zone-names");
+      const run = Bun.spawnSync(["/bin/sh", "-c", script], { env: { PATH: `${join(bench.root, "stubs")}:/usr/bin:/bin` }, timeout: timeoutMs });
+      return { code: run.exitCode ?? 1, output: `${run.stdout.toString()}${run.stderr.toString()}` };
+    },
   };
 }
 
@@ -220,6 +239,8 @@ export function hostOf(bench: Bench, log: (line: string) => void = (line) => ben
     spoolFolder: bench.spool,
     accountsFile: join(bench.root, "passwd"),
     projectPortsFile: join(bench.root, "projects.nft"),
+    tlsZoneFile: join(bench.root, "tls-zone.caddy"),
+    zoneNamesFile: join(bench.root, "zone-names"),
     deployAccount: null,
     dashboardAccount: null,
     extractor: [process.execPath, INSTALLER],

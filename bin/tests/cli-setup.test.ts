@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_HINT, hintFor } from "../cli/hints";
+import { CLOUDFLARE } from "../cli/dns/cloudflare";
 import {
   accountRun,
   closeSsh,
@@ -31,8 +32,10 @@ import {
   REFUSALS,
   runSetup,
   setupOutput,
-  tokenCheck,
-  tokenRun,
+  caddyEnvironmentText,
+  dnsCredentialsCheck,
+  expectedVariables,
+  dnsCredentialsRun,
   type Facts,
   type SetupOptions,
 } from "../cli/setup";
@@ -97,7 +100,9 @@ const ORDER = [
   "fail2ban",
   "caddy",
   "bun",
-  "cloudflare-token",
+  "dns-credentials",
+  "tls-zone",
+  "dns-leftovers",
   "resolution",
   "caddy-zone",
   "caddy-unit",
@@ -540,7 +545,7 @@ describe("the preflight", () => {
   });
 });
 
-describe("the Cloudflare token", () => {
+describe("the DNS credentials, Cloudflare's token by default", () => {
   test("never printed, never in a command line nor a script's environment: only in the script that writes it", async () => {
     const { b, mock: m } = world();
     const r = await setup(b);
@@ -550,21 +555,62 @@ describe("the Cloudflare token", () => {
     for (const call of b.machine.calls) expect(call.command).not.toContain(TOKEN);
     for (const task of b.kit.tasks) expect(JSON.stringify(task.environment)).not.toContain(TOKEN);
     const carrying = b.machine.calls.filter((call) => call.input.includes(TOKEN)).map((call) => call.tag);
-    expect(carrying).toEqual(["setup:cloudflare-token:run"]);
+    expect(carrying).toEqual(["setup:dns-credentials:run"]);
     // The check compares fingerprints: the machine computes the file's.
     const fingerprint = new Bun.CryptoHasher("sha256").update(TOKEN).digest("hex");
-    expect(b.machine.calls.filter((call) => call.tag === "setup:cloudflare-token:check").at(-1)!.input).toContain(fingerprint);
+    expect(b.machine.calls.filter((call) => call.tag === "setup:dns-credentials:check").at(-1)!.input).toContain(fingerprint);
     for (const request of m.requests) {
       expect(request.url).not.toContain(TOKEN);
       expect(request.authorization).toBe(`Bearer ${TOKEN}`);
     }
   });
 
-  test("the file is written root:caddy 0640 from standard input", () => {
-    const script = tokenRun(TOKEN);
-    expect(script).toContain("install -m 0640 -o root -g caddy /dev/stdin /etc/caddy/cloudflare.env <<'TOKEN'");
-    expect(script).toContain(`CLOUDFLARE_API_TOKEN=${TOKEN}\nTOKEN`);
-    expect(tokenCheck(null)).not.toContain("token-same");
+  test("the file is written root:caddy 0640 from standard input, exactly as setup has always written Cloudflare's", () => {
+    const text = caddyEnvironmentText(CLOUDFLARE, { CLOUDFLARE_API_TOKEN: TOKEN });
+    expect(text).toBe(`CLOUDFLARE_API_TOKEN=${TOKEN}\n`);
+    const script = dnsCredentialsRun(text);
+    expect(script).toContain(`cat > "$next" <<'VARIABLES'\nCLOUDFLARE_API_TOKEN=${TOKEN}\nVARIABLES`);
+    expect(script).toContain(`install -m 0640 -o root -g caddy "$next" /etc/caddy/cloudflare.env`);
+    expect(dnsCredentialsCheck(null)).not.toContain("env-same");
+  });
+
+  test("a value a single quote cannot hold is refused; any other that a shell would read otherwise is quoted", () => {
+    for (const value of [`${TOKEN}'`, `${TOKEN}\\`, `${TOKEN}\nX=1`, `${TOKEN}\u00e9`]) {
+      expect(() => caddyEnvironmentText(CLOUDFLARE, { CLOUDFLARE_API_TOKEN: value })).toThrow("cannot be written");
+    }
+    expect(caddyEnvironmentText(CLOUDFLARE, { CLOUDFLARE_API_TOKEN: "abcdefgh;touch>X" })).toBe("CLOUDFLARE_API_TOKEN='abcdefgh;touch>X'\n");
+  });
+
+  test("the check reads each value as systemd would, so that a hand-written file holding the right token is the right file", () => {
+    const check = dnsCredentialsCheck(expectedVariables(CLOUDFLARE, { CLOUDFLARE_API_TOKEN: TOKEN }));
+    const folder = mkdtempSync(join(tmpdir(), "envcheck-"));
+    HOMES.push(folder);
+    const file = join(folder, "env");
+    const verdict = (text: string): string => {
+      writeFileSync(file, text);
+      return Bun.spawnSync(["bash", "-c", check.replaceAll("/etc/caddy/cloudflare.env", file)], { stdout: "pipe" }).stdout.toString();
+    };
+    for (const text of [`CLOUDFLARE_API_TOKEN=${TOKEN}\n`, `# by hand\nCLOUDFLARE_API_TOKEN=${TOKEN}\r\n`, `CLOUDFLARE_API_TOKEN=${TOKEN}`, `  CLOUDFLARE_API_TOKEN='${TOKEN}'\n`]) {
+      expect({ text, verdict: verdict(text) }).toEqual({ text, verdict: expect.not.stringContaining("env-same") });
+    }
+    expect(verdict(`CLOUDFLARE_API_TOKEN=${TOKEN}x\n`)).toContain("env-same");
+  });
+
+  test("the file means to bash, which sources it as root, exactly what it means to systemd", () => {
+    const values = ["abcdefgh;touch>PWNED", "abcdefgh&touch>PWNED", "abc|tee>PWNED", "a:~root", "rg(prod)", "with space", 'with"double', "dollar$HOME", "back`tick`"];
+    for (const value of values) {
+      const text = caddyEnvironmentText(CLOUDFLARE, { CLOUDFLARE_API_TOKEN: value });
+      const folder = mkdtempSync(join(tmpdir(), "envfile-"));
+      HOMES.push(folder);
+      writeFileSync(join(folder, "env"), text);
+      const shell = Bun.spawnSync(["bash", "-c", `set -a; . ./env; set +a; printf %s "$CLOUDFLARE_API_TOKEN"`], { cwd: folder, stdout: "pipe", stderr: "pipe" });
+      expect({ value, read: shell.stdout.toString() }).toEqual({ value, read: value });
+      expect(existsSync(join(folder, "PWNED"))).toBe(false);
+    }
+  });
+
+  test("under --dns manual the file holds no credential, and nothing asks for one", () => {
+    expect(caddyEnvironmentText(null, null)).toStartWith("# --dns manual");
   });
 
   test("no token anywhere: the DNS step stops and says where to put one", async () => {
@@ -572,8 +618,8 @@ describe("the Cloudflare token", () => {
     const b = bench(mock, home(), { token: null });
     const r = await setup(b);
     expect(r.code).toBe(1);
-    expect(r.print.errors[0]!.message).toBe("setup stopped at dns: no Cloudflare token");
-    expect(hintFor(r.print.errors[0]!.message)).toContain("never pass it as an argument");
+    expect(r.print.errors[0]!.message).toBe("setup stopped at dns: no Cloudflare credentials");
+    expect(hintFor(r.print.errors[0]!.message)).toContain("never pass them as an argument");
     expect(mock.requests).toEqual([]);
   });
 
@@ -581,19 +627,112 @@ describe("the Cloudflare token", () => {
     const { b } = world();
     expect((await setup(b)).code).toBe(0);
     const print = printed();
-    const code = await runSetup(options(), b.deps(print, { token: async () => null }));
+    const code = await runSetup(options(), b.deps(print, { dnsCredentials: async () => null }));
     expect(code).toBe(0);
-    expect(print.checks.find((report) => report.step === "cloudflare-token")!.status).toBe("done");
+    expect(print.checks.find((report) => report.step === "dns-credentials")!.status).toBe("done");
   });
 
-  test("a machine holding another token gets the one given, and says Caddy reads it at its next start", async () => {
+  test("a machine holding another token gets the one given, and Caddy is restarted to read it", async () => {
     const { b } = world();
     expect((await setup(b)).code).toBe(0);
-    b.machine.labels.delete("token-same");
+    b.machine.labels.delete("env-same");
     const r = await setup(b);
     expect(r.code).toBe(0);
-    expect(r.print.checks.find((report) => report.step === "cloudflare-token")!.detail).toBe("/etc/caddy/cloudflare.env held another token, replaced: Caddy reads it at its next start");
-    expect(b.machine.runs().filter((tag) => tag === "setup:cloudflare-token:run")).toHaveLength(2);
+    expect(r.print.checks.find((report) => report.step === "dns-credentials")!.detail).toBe("/etc/caddy/cloudflare.env held other values, now Cloudflare's");
+    expect(b.machine.runs().filter((tag) => tag === "setup:dns-credentials:run")).toHaveLength(2);
+    // The policy file already right, the restart is this step's: once, after the write.
+    expect(b.machine.runs().filter((tag) => tag === "setup:caddy-restart:run")).toHaveLength(1);
+    expect(b.machine.runs().indexOf("setup:caddy-restart:run")).toBeGreaterThan(b.machine.runs().lastIndexOf("setup:dns-credentials:run"));
+  });
+});
+
+describe("switching DNS provider on an installed machine", () => {
+  async function switched(failTlsZone: boolean) {
+    const { b, home: folder } = world();
+    expect((await setup(b)).code).toBe(0);
+    const route53 = ((await import("./fake-dns-route53")) as { createFake: () => import("./fake-dns").FakeDns }).createFake();
+    try {
+      // What the machine reports once asked for another provider: its module
+      // is not there, its values are not in the file, the policy names Cloudflare.
+      for (const label of ["dns-module", "env-same", "tls-zone-same", "env-own-only"]) b.machine.labels.delete(label);
+      if (failTlsZone) b.machine.failing.add("setup:tls-zone:run");
+      const before = b.machine.runs().length;
+      const credentials = Object.fromEntries(Object.entries(route53.environment).filter(([name]) => name.startsWith("SITESOLIDE_DNS_")));
+      const print = printed();
+      const code = await runSetup(options("--dns", "route53"), b.deps(print, { dnsCredentials: async () => credentials, dnsApi: { environment: route53.environment } }));
+      return { b, code, print, folder, credentials, runs: () => b.machine.runs().slice(before) };
+    } finally {
+      route53.stop();
+    }
+  }
+
+  test("the new variables join the old ones, Caddy restarts once with the new policy, and only then do the old ones go", async () => {
+    const { b, code, print, folder, runs: after } = await switched(false);
+    expect(print.errors).toEqual([]);
+    expect(code).toBe(0);
+    const runs = after();
+    const written = b.machine.calls.filter((call) => call.tag === "setup:dns-credentials:run").at(-1)!;
+    // The previous provider's lines are kept: everything but the new names.
+    expect(written.input).toContain("grep -Ev '^[[:space:]]*(SITESOLIDE_DNS_ROUTE53_ACCESS_KEY_ID|SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY)='");
+    expect(b.machine.calls.filter((call) => call.tag === "setup:tls-zone:run").at(-1)!.input).toContain("dns route53");
+    const order = ["setup:dns-credentials:run", "setup:tls-zone:run", "setup:dns-leftovers:run"].map((tag) => runs.lastIndexOf(tag));
+    expect(order).toEqual([...order].sort((x, y) => x - y));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    // No restart of its own before the policy changes: the tls-zone step's is the one.
+    expect(runs.filter((tag) => tag === "setup:caddy-restart:run")).toEqual([]);
+    expect(JSON.parse(readFileSync(join(folder, ".config", "sitesolide", "config.json"), "utf8")).dns).toBe("route53");
+  });
+
+  test("a tls-zone step that fails leaves the previous provider's credentials in place for the policy still in service", async () => {
+    const { code, print, runs } = await switched(true);
+    expect(code).toBe(1);
+    expect(print.errors[0]!.message).toStartWith("setup stopped at tls-zone");
+    expect(runs()).toContain("setup:dns-credentials:run");
+    expect(runs()).not.toContain("setup:dns-leftovers:run");
+  });
+});
+
+describe("--dns", () => {
+  const byHand = [
+    { name: ZONE, type: "A", content: HOST, proxied: false, ttl: 1 },
+    { name: `*.${ZONE}`, type: "A", content: HOST, proxied: false, ttl: 1 },
+  ];
+
+  test("manual: no DNS API and no credential, certificates on demand; recorded, and read again by the next run", async () => {
+    const { b, home: folder, mock: m } = world({}, { records: byHand });
+    const r = await setup(b, options("--dns", "manual"));
+    expect(r.print.errors).toEqual([]);
+    expect(r.code).toBe(0);
+    expect(m.requests).toEqual([]);
+    expect(r.statuses).toContain("dns:skip");
+    expect(b.machine.calls.find((call) => call.tag === "setup:tls-zone:run")!.input).toContain("on_demand");
+    expect(b.machine.calls.find((call) => call.tag === "setup:dns-credentials:run")!.input).toContain("# --dns manual");
+    expect(b.machine.calls.find((call) => call.tag === "setup:caddy:run")!.input).not.toContain("add-package");
+    expect(JSON.parse(readFileSync(join(folder, ".config", "sitesolide", "config.json"), "utf8")).dns).toBe("manual");
+
+    // Run again without --dns: still manual, nothing asked of Cloudflare, nothing rewritten.
+    const again = await setup(b);
+    expect(again.code).toBe(0);
+    expect(m.requests).toEqual([]);
+    expect(b.machine.runs().filter((tag) => tag === "setup:tls-zone:run")).toHaveLength(1);
+  });
+
+  test("the default stays Cloudflare, and the configuration records nothing for it", async () => {
+    const { b, home: folder } = world();
+    expect((await setup(b)).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(folder, ".config", "sitesolide", "config.json"), "utf8")).dns).toBeUndefined();
+    expect(b.machine.calls.find((call) => call.tag === "setup:tls-zone:run")!.input).toContain("dns cloudflare {env.CLOUDFLARE_API_TOKEN}");
+  });
+
+  test("an unknown provider, Cloudflare's stdin flag with another, and manual with an API's options are refused before anything", () => {
+    const refusal = (...extra: string[]) => {
+      const parsed = parseSetupArguments([`root@${HOST}`, "--zone", ZONE, "--email", EMAIL, ...extra]);
+      return "message" in parsed ? `${parsed.message} ${parsed.details.join(" ")}` : "accepted";
+    };
+    expect(refusal("--dns", "bind9")).toContain("--dns is not valid: bind9");
+    expect(refusal("--dns", "azure-dns", "--cloudflare-token-stdin")).toContain("--dns-credentials-stdin");
+    expect(refusal("--dns", "manual", "--dns-replace")).toContain("--dns manual uses no DNS API");
+    expect(refusal("--dns", "manual")).toBe("accepted");
   });
 });
 
@@ -756,8 +895,8 @@ describe("what setup runs", () => {
       sshDisarm(),
       portalPasswordRun(PORTAL_HASH),
       preflightScript(),
-      tokenRun(TOKEN),
-      tokenCheck("0".repeat(64)),
+      dnsCredentialsRun(caddyEnvironmentText(CLOUDFLARE, { CLOUDFLARE_API_TOKEN: TOKEN })),
+      dnsCredentialsCheck([{ name: "CLOUDFLARE_API_TOKEN", fingerprint: "0".repeat(64) }]),
     ];
     for (const script of scripts) {
       const parsed = Bun.spawnSync(["sh", "-n"], { stdin: new TextEncoder().encode(script), stderr: "pipe" });

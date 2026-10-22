@@ -10,5 +10,8 @@
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5"
+  },
+  "dependencies": {
+    "@clack/prompts": "1.8.1"
   }
 }

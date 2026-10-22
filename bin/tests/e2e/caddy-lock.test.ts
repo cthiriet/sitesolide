@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { generateFragment } from "../../cli/fragment";
 import type { Manifest } from "../../cli/manifest";
 import { utcTime } from "../../cli/caddy-lock";
+import { ZONE_NAMES_COMMAND } from "../../cli/tls";
 import { CLI, REPO, run, TEST_EMAIL, TEST_ZONE } from "./run";
 import { createFakeVm, type FakeVm } from "./fake-vm";
 
@@ -177,6 +178,7 @@ describe("bin/deploy-caddy.sh holds the guard's lock to the end", () => {
       "READ *",
       "FINGERPRINT",
       "FINGERPRINT",
+      "TLS_ZONE",
       "BLOCKS",
       "LOCK release deploy-caddy",
     ]);
@@ -309,7 +311,9 @@ describe("sitesolide deploy takes the lock before its first deposit", () => {
     expect(taken).toBeLessThan(reads[1]!);
     expect(reads[1]!).toBeLessThan(repo);
     expect(repo).toBeLessThan(release);
-    expect(logs.at(-1)).toBe("LOCK release deploy");
+    // Then only the zone's sites for the ask endpoint, which Caddy does not
+    // read and the lock does not cover, before the final check.
+    expect(logs.slice(release)).toEqual(["LOCK release deploy", `ACCEPTED ${ZONE_NAMES_COMMAND}`]);
     expect(vm.lock()).toBeNull();
   });
 

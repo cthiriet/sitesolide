@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REMOTE_HINTS } from "../cli/hints";
@@ -10,6 +10,7 @@ import {
   MACHINE_USAGE,
   machineTable,
   parseMachineArguments,
+  PROVIDER_LIST,
   readPublicKey,
   shown,
   tcpProbe,
@@ -161,7 +162,7 @@ describe("the public key", () => {
 
 describe("the arguments", () => {
   test("a command is required, and only the three exist", () => {
-    expect(parseMachineArguments(["machine"])).toMatchObject({ error: "machine-usage", message: "sitesolide machine needs a command: create, list or destroy" });
+    expect(parseMachineArguments(["machine"])).toMatchObject({ error: "machine-usage", message: "sitesolide machine needs a command: create, list, destroy or providers" });
     expect(parseMachineArguments(["machine", "--json"])).toMatchObject({ error: "machine-usage" });
     expect(parseMachineArguments(["machine", "start"])).toMatchObject({ error: "machine-usage", message: "unknown machine command: start" });
   });
@@ -193,9 +194,9 @@ describe("the arguments", () => {
   test("the provider is named, and an unknown one is refused with the known ones", async () => {
     const missing = errorOf(await run(["list"]));
     expect(missing.message).toContain("--provider is required");
-    expect(missing.details).toEqual(["the providers sitesolide knows: hetzner"]);
-    const unknown = errorOf(await run(["list", "--provider", "aws"]));
-    expect(unknown.message).toBe("unknown provider: aws");
+    expect(missing.details).toEqual([`the providers sitesolide knows: ${PROVIDER_LIST.map((entry) => entry.name).join(", ")}`]);
+    const unknown = errorOf(await run(["list", "--provider", "ovh"]));
+    expect(unknown.message).toBe("unknown provider: ovh");
     expect(unknown.hint).toBe(REMOTE_HINTS["unknown-provider"]!);
     expect(fake.requests).toEqual([]);
   });
@@ -550,6 +551,19 @@ describe("machine create", () => {
     expect(image.details).toEqual(["image: image not found", "deleted the firewall web this run had created", "deleted the SSH key sitesolide-web this run had created"]);
   });
 
+  test("an order whose outcome is unknown undoes nothing: a server may be booting behind it", async () => {
+    fake.fail("POST", /^\/servers$/, 502, "", "bad gateway");
+    const refusal = errorOf(await run(CREATE));
+    expect(refusal.details).toContain("the order's outcome is unknown: nothing was undone, and the same command run again picks up what was made");
+    expect(fake.firewalls.map((firewall) => firewall.name)).toEqual(["web"]);
+  });
+
+  test("a volume or a floating IP attached by hand is said kept and billed after a destroy", async () => {
+    fake.addServer({ name: "web", labels: { "managed-by": "sitesolide", "sitesolide-machine": "web" }, volumes: [77], floating_ips: [88] });
+    const done = resultOf(await run(["destroy", "web", "--provider", "hetzner", "--confirm", "web"]));
+    expect(done.kept).toEqual(expect.arrayContaining([expect.stringContaining("volume 77"), expect.stringContaining("floating IP 88")]));
+  });
+
   test("what an earlier run made, or the project held, is never undone", async () => {
     fake.addKey({ name: "laptop", public_key: ED25519 });
     const firewall = fake.addFirewall({ name: "web", labels: { "managed-by": "sitesolide", "sitesolide-machine": "web" } });
@@ -759,7 +773,7 @@ describe("machine list", () => {
     const said: string[] = [];
     const output: Output = { ...humanOutput, say: (line) => said.push(line) };
     await machine(["machine", "list", "--provider", "hetzner"], { environment: { HCLOUD_TOKEN: FAKE_TOKEN, SITESOLIDE_HETZNER_API: fake.url }, output });
-    expect(said).toEqual(["no machine created by sitesolide in this Hetzner project"]);
+    expect(said).toEqual(["no machine created by sitesolide in this Hetzner account"]);
   });
 });
 
@@ -797,7 +811,7 @@ describe("machine destroy", () => {
   });
 
   test("a name the project does not have", async () => {
-    expect(errorOf(await run([...DESTROY, "--confirm", "web"])).message).toBe("no machine named web in this Hetzner project");
+    expect(errorOf(await run([...DESTROY, "--confirm", "web"])).message).toBe("no machine named web in this Hetzner account");
   });
 
   test("the server, then its firewall; the key stays, and DNS is said untouched", async () => {
@@ -965,7 +979,7 @@ describe("bin/sitesolide.ts machine", () => {
   test("with no command, the usage, without needing a configuration", async () => {
     const { code, error } = await cli(["machine"], {});
     expect(code).toBe(1);
-    expect(error).toContain("sitesolide machine create --provider hetzner --name <name>");
+    expect(error).toContain("sitesolide machine create --provider <provider> --name <name>");
   });
 });
 
@@ -973,7 +987,8 @@ describe("bin/sitesolide.ts machine", () => {
 
 describe("the hints and the documentation", () => {
   test("every code machine.ts and the providers report has a hint", () => {
-    const sources = ["machine.ts", "providers/provider.ts", "providers/hetzner.ts"].map((file) => readFileSync(join(REPO, "bin", "cli", file), "utf8"));
+    const providers = readdirSync(join(REPO, "bin", "cli", "providers")).map((file) => `providers/${file}`);
+    const sources = ["machine.ts", "wizard.ts", ...providers].map((file) => readFileSync(join(REPO, "bin", "cli", file), "utf8"));
     const codes = new Set(sources.flatMap((source) => [...source.matchAll(/error: "([a-z0-9-]+)"/g)].map((match) => match[1]!)));
     expect(codes.size).toBeGreaterThan(25);
     expect([...codes].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
@@ -987,10 +1002,9 @@ describe("the hints and the documentation", () => {
     for (const line of lines) expect({ line, documented: documented.includes(line) }).toEqual({ line, documented: true });
   });
 
-  test("docs/machine.md exists, and says what the token needs", () => {
-    const text = readFileSync(join(REPO, "docs", "machine.md"), "utf8");
-    expect(text).toContain("Read & Write");
-    expect(text).toContain("sitesolide machine destroy");
+  test("docs/machine.md exists, and Hetzner's page says what the token needs", () => {
+    expect(readFileSync(join(REPO, "docs", "machine.md"), "utf8")).toContain("sitesolide machine destroy");
+    expect(readFileSync(join(REPO, "docs", "providers", "hetzner.md"), "utf8")).toContain("Read & Write");
   });
 });
 

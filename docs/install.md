@@ -1,11 +1,24 @@
 # Installing sitesolide
 
-From nothing to a first deployed project in four commands. Budget a quarter of
+From nothing to a first deployed project in three commands. Budget a quarter of
 an hour, most of it the machine installing packages while you wait.
 
 ```bash
 curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/install.sh | sh
 ```
+
+```bash
+sitesolide setup
+```
+
+```bash
+cd your-project && sitesolide deploy
+```
+
+`sitesolide setup`, alone at a terminal, asks which cloud, which region and
+which size, checks your domain at its DNS provider, shows the plan with its price,
+then orders the machine and installs it: see [the wizard](setup.md#the-wizard).
+The same, without questions, for a script or an agent:
 
 ```bash
 sitesolide machine create --provider hetzner --name web
@@ -15,25 +28,28 @@ sitesolide machine create --provider hetzner --name web
 sitesolide setup root@203.0.113.10 --zone example.com --email you@example.com
 ```
 
-```bash
-cd your-project && sitesolide deploy
-```
-
 ## What you need first
 
-- **A domain whose DNS is at Cloudflare.** Every project gets a subdomain of
-  it, and the machine serves the bare domain too. Another DNS provider works
-  with a few more steps: see [Another DNS provider](#another-dns-provider).
-- **One Cloudflare token**, created at
+- **A domain, at any registrar.** Every project gets a subdomain of it, and the
+  machine serves the bare domain too. Where its DNS is served by Cloudflare,
+  Route 53, Azure, DigitalOcean, Hetzner, Scaleway, Vultr, Akamai, OVHcloud,
+  Gandi or Porkbun, setup creates the records and Caddy obtains one wildcard
+  certificate, with credentials scoped to the zone; anywhere else, you create
+  two records by hand and each project gets its own certificate. See
+  [setup.md](setup.md#dns).
+- **The DNS credentials**, for a provider: Cloudflare's is a token created at
   [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens)
   with **Create Custom Token**, restricted to that zone, with `Zone / Zone /
-  Read` and `Zone / DNS / Edit`. Setup uses it from your workstation to create
-  the records, and lays it on the machine, where Caddy uses it for the wildcard
-  certificate.
+  Read` and `Zone / DNS / Edit`; each other provider's page in [dns/](dns/)
+  says how to make its own. Setup uses them from your workstation to create the
+  records, and lays them on the machine, where Caddy uses them for the
+  wildcard certificate.
 - **An SSH key** on your workstation, `~/.ssh/id_ed25519` or another.
-- **A machine**: either a Hetzner Cloud API token, and `sitesolide machine`
-  orders one, or any fresh Debian 13 VM, from any provider, that you reach as
-  `root` with that key.
+- **A machine**: either an account at one of the clouds of
+  [machine.md](machine.md), Hetzner, DigitalOcean, AWS, Google Cloud, Azure,
+  Vultr, Akamai (Linode) or Scaleway, and sitesolide orders one, or any fresh
+  Debian 13 VM, from any provider, that you reach as `root` with that key, or
+  as an account with sudo that asks no password.
 
 ## 1. Install the CLI
 
@@ -51,7 +67,10 @@ From a checkout instead, for development: `ln -sf "$PWD/bin/sitesolide.ts"
 
 ## 2. A machine
 
-At Hetzner, with a token of a project of its own (*Security*, *API tokens*,
+`sitesolide setup` alone at a terminal orders it for you, from the cloud you
+pick: skip to [3](#3-install-it) and run it bare. Without the wizard, each
+cloud's page in [providers/](providers/) says how to make its credentials; at
+Hetzner, with a token of a project of its own (*Security*, *API tokens*,
 **Read & Write**):
 
 ```bash
@@ -65,8 +84,9 @@ sitesolide machine create --provider hetzner --name web
 It uploads your public key, creates a firewall that opens 22, 80, 443 and ICMP,
 orders a `cx23` (2 vCPU, 4 GB) running Debian 13, and waits until SSH answers,
 under a minute. `--type`, `--location` and `--backups` change the defaults;
-`sitesolide machine list` and `sitesolide machine destroy` do the rest. See
-[machine.md](machine.md).
+`sitesolide machine list` and `sitesolide machine destroy` do the rest. Any
+other cloud is `--provider digitalocean`, `aws`, `gcp`, `azure`, `vultr`,
+`linode` or `scaleway`. See [machine.md](machine.md).
 
 Anywhere else, create a Debian 13 VM with your key for `root`, and go on.
 
@@ -153,25 +173,23 @@ their roles.
 
 ## Another DNS provider
 
-Cloudflare is named in two places: setup's records, and the Caddyfile's
-`(tls-zone)` snippet, `dns cloudflare {env.CLOUDFLARE_API_TOKEN}`, which
-obtains the wildcard certificate.
+`--dns` names it: setup creates the records through its API, adds its module
+to Caddy and lays its credentials for the wildcard's renewals. Every provider
+sitesolide speaks, and what its credentials need, is in [dns/](dns/); the
+wizard reads the zone's name servers and offers the one that serves it.
 
-- Run setup with `--skip-dns`: it prints the records to create, `<zone>` and
-  `*.<zone>`, an A each, and an AAAA each when the machine has an IPv6, and
-  waits for them to resolve.
-- In `infra/caddy/Caddyfile`, replace `cloudflare` with your provider's Caddy
-  module and the variable with whatever it wants, add that module on the
-  machine with `caddy add-package`, and lay `/etc/caddy/cloudflare.env`,
-  root:caddy 0640, with its variables before running setup. This needs a
-  checkout: the binary carries the Caddyfile as released.
+```bash
+sitesolide setup root@203.0.113.10 --zone example.com --email you@example.com --dns route53
+```
 
-## No wildcard at all
+## Any registrar, no API
 
-Possible but poorer: each project then gets its own certificate over
-HTTP-01 or TLS-ALPN-01, which works, costs an issuance per subdomain, and
-makes previews visible in certificate transparency logs. Remove the
-`import tls-zone` lines and let Caddy do its default thing.
+`--dns manual`: setup lists the two records to create, `<zone>` and
+`*.<zone>`, and waits for them; each project then gets its own certificate at
+its first visit, through HTTP-01 or TLS-ALPN-01, for the names of the sites
+deployed and those alone. It costs a second or two on a project's first visit,
+an issuance per name, and each project's name in public Certificate
+Transparency logs. See [setup.md](setup.md#dns).
 
 ## Installing by hand
 
