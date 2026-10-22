@@ -36,6 +36,7 @@ import {
   dnsCredentialsCheck,
   expectedVariables,
   dnsCredentialsRun,
+  XCADDY,
   type Facts,
   type SetupOptions,
 } from "../cli/setup";
@@ -250,6 +251,18 @@ describe("a failure, then the same command again", () => {
     expect(r.code).toBe(1);
     expect(r.print.errors[0]!.message).toBe("setup stopped at caddy: Caddy could not be installed (exit code 1)");
     expect(r.print.errors[0]!.details).toContain("E: the run of caddy broke");
+  });
+
+  test("Caddy's build service gets five minutes, then Caddy is built on the machine, and the script parses", async () => {
+    const { b } = world();
+    expect((await setup(b)).code).toBe(0);
+    const script = b.machine.calls.find((call) => call.tag === "setup:caddy:run")!.input;
+    expect(script).toContain("timeout 300 caddy add-package github.com/caddy-dns/cloudflare </dev/null");
+    expect(script).toContain(`go install ${XCADDY}`);
+    expect(script).toContain('"$GOPATH/bin/xcaddy" build "$version" --with github.com/caddy-dns/cloudflare --output "$work/caddy"');
+    expect(script).toContain("grep -q '^dns.providers.cloudflare$'");
+    expect(script).toContain("work=$(mktemp -d /var/tmp/sitesolide-caddy.XXXXXX)");
+    expect(Bun.spawnSync(["sh", "-n"], { stdin: new TextEncoder().encode(script) }).exitCode).toBe(0);
   });
 
   test("the portal's password drawn before a failure is still shown, once", async () => {

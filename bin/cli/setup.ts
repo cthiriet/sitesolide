@@ -734,10 +734,54 @@ ${
   dns === null
     ? "# --dns manual: certificates name by name, through HTTP-01 or TLS-ALPN-01, which the standard build carries."
     : `# The standard build lacks the DNS module the wildcard certificate needs.
-caddy list-modules 2>/dev/null | grep -q '^${dns.caddy.module}$' || caddy add-package ${dns.caddy.package} </dev/null`
+if ! caddy list-modules 2>/dev/null | grep -q '^${dns.caddy.module}$'; then
+${caddyModuleScript(dns.caddy.package, dns.caddy.module)}
+fi`
 }
 `,
   );
+}
+
+/** How long Caddy's build service gets to deliver a build with the module, in seconds. */
+export const CADDY_BUILD_SERVICE_SECONDS = 300;
+
+/** The xcaddy that builds Caddy on the machine when the build service does not deliver. */
+export const XCADDY = "github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.7";
+
+/**
+ * Caddy with the module: from Caddy's build service, `caddy add-package`, or,
+ * when it does not deliver in time, built on the machine. That service is a
+ * single one, sometimes down for hours, and an add-package waiting on it
+ * waits for ever. The build here takes Caddy at the version the package
+ * installed, with Debian's Go, which fetches the toolchain Caddy asks for
+ * through Go's proxy and checksum database, and xcaddy at a pinned version.
+ * Go and everything it fetched are removed afterwards, the build failed or not.
+ */
+function caddyModuleScript(module: string, id: string): string {
+  return `if ! timeout ${CADDY_BUILD_SERVICE_SECONDS} caddy add-package ${module} </dev/null; then
+  echo "Caddy's build service did not deliver within ${CADDY_BUILD_SERVICE_SECONDS / 60} minutes: Caddy is built here instead, which takes a few minutes"
+  # On disk: Debian 13's /tmp is a tmpfs of half the memory, which Go's module cache alone fills.
+  work=$(mktemp -d /var/tmp/sitesolide-caddy.XXXXXX)
+  had_go=no
+  dpkg-query -W -f='\${Status}' golang-go 2>/dev/null | grep -q 'ok installed' && had_go=yes
+  cleanup() {
+    status=$?
+    rm -rf "$work"
+    [ "$had_go" = yes ] || ${APT} purge -y -q --autoremove golang-go </dev/null >/dev/null 2>&1 || true
+    exit $status
+  }
+  trap cleanup EXIT
+  [ "$had_go" = yes ] || ${APT} install -y -q --no-install-recommends golang-go </dev/null
+  version=$(caddy version | cut -d' ' -f1)
+  (
+    export HOME="$work" TMPDIR="$work" GOPATH="$work/go" GOCACHE="$work/cache" CGO_ENABLED=0
+    export GOTOOLCHAIN=auto GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org
+    go install ${XCADDY}
+    "$GOPATH/bin/xcaddy" build "$version" --with ${module} --output "$work/caddy"
+  ) </dev/null
+  "$work/caddy" list-modules | grep -q '^${id}$'
+  install -m 0755 "$work/caddy" /usr/bin/caddy
+fi`;
 }
 
 function bunRun(): string {

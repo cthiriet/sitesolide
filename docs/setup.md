@@ -108,7 +108,7 @@ missing. The output is a checklist: `[done]` already there, `[ok]` done now,
 | directories | `/srv/sites`, `/srv/api`, `/srv/data` exist | `mkdir` |
 | ssh | `sshd -T` says no root login, no password, no keyboard-interactive | `/etc/ssh/sshd_config.d/00-sitesolide.conf`, `systemctl reload ssh` |
 | fail2ban | enabled and active | `systemctl enable fail2ban`, a restart, your address spared for the run |
-| caddy | the package installed and the DNS provider's module listed, `dns.providers.cloudflare` by default; none under `--dns manual` | Caddy's apt repository, `caddy add-package` |
+| caddy | the package installed and the DNS provider's module listed, `dns.providers.cloudflare` by default; none under `--dns manual` | Caddy's apt repository, `caddy add-package`, or a build on the machine when Caddy's build service does not deliver within five minutes |
 | bun | `/usr/local/bin/bun` exists | Bun's installer |
 | dns-credentials | `/etc/caddy/cloudflare.env` root:caddy 0640, holding every variable the provider's module reads, with the values given, and a running Caddy started after it was written | that file, once the credentials are proven against the zone, the previous provider's lines kept; a restart of Caddy when the values change on a running machine, since Caddy reads them at its start, unless the next step restarts it |
 | tls-zone | `/etc/caddy/tls-zone.caddy` root:root 0644, the zone's `tls` block: the provider's DNS challenge, or `on_demand` | that file; `/etc/caddy/zone-names` under `--dns manual`; a restart of Caddy when it changes on a running machine; refused on a Caddyfile from before this file, which `sitesolide upgrade` brings first |
@@ -269,6 +269,14 @@ With a provider, setup adds its module to Caddy (`caddy add-package`), lays
 its credentials in `/etc/caddy/cloudflare.env`, and writes
 `/etc/caddy/tls-zone.caddy`, the `tls` block every block of the zone imports,
 naming the module and reading the credentials from Caddy's environment.
+
+`caddy add-package` asks Caddy's build service, at caddyserver.com, for a
+build with the module. That service is a single one, sometimes down for hours,
+and Caddy waits on it for ever: setup gives it five minutes, then builds Caddy
+on the machine instead, at the version the package installed, with Debian's Go
+and a pinned xcaddy. Go fetches the toolchain Caddy asks for through its proxy
+and checksum database, and everything it fetched is removed afterwards. The
+build takes a few minutes and a gigabyte of memory.
 
 **`--dns manual`** works with any registrar and asks no API anything. Setup
 prints the records to create, `<zone>` and `*.<zone>`, an A each and an AAAA
