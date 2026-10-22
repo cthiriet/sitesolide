@@ -68,7 +68,7 @@ import { DnsError, ensureZoneRecords, type DnsEntry } from "./dns/dns";
 import { DNS_PROVIDERS, dnsEntry, dnsVariables, MANUAL } from "./dns/registry";
 import { fieldsToAsk, fromEnvironment, isFailure, missingFields, parseStdinCredentials, scrubSecrets, secretValues } from "./machine";
 import { ProviderError, type Credentials, type Fetch } from "./providers/provider";
-import { CADDY_RESTART, caddyRestartScript, tlsZoneCheck, tlsZoneContent, tlsZoneRun, TLS_ZONE_FILE, TLS_ZONE_RESTARTED } from "./tls";
+import { CADDY_RESTART, caddyRestartScript, policyPending, tlsZoneCheck, tlsZoneContent, tlsZoneRun, TLS_ZONE_FILE, TLS_ZONE_RESTARTED } from "./tls";
 import { adoptLegacyKeys, composeConfig, CONFIG_DIR_VARIABLE, privateFolder, writeConfig } from "./config";
 import {
   APT,
@@ -858,13 +858,18 @@ export function expectedVariables(dns: DnsEntry | null, credentials: Credentials
  */
 const CADDY_READ_ENV = `! systemctl is-active --quiet caddy || ! grep -q SITESOLIDE_ZONE /etc/caddy/Caddyfile || { started=$(systemctl show -p ActiveEnterTimestamp --value caddy) && [ -n "$started" ] && [ "$(date -d "$started" +%s)" -ge "$(stat -c %Y ${CADDY_ENV_FILE})" ]; }`;
 
-export function dnsCredentialsCheck(variables: { name: string; fingerprint: string | null }[] | null): string {
+/**
+ * `policy`, the zone's policy this run lays: when the tls-zone step will
+ * restart Caddy for it, a switch of provider, Caddy reads the new credentials
+ * then, and this step does not restart it a step too early.
+ */
+export function dnsCredentialsCheck(variables: { name: string; fingerprint: string | null }[] | null, policy: string | null = null): string {
   // The value after NAME=, its line ending and its single quotes taken off.
   const value = (name: string) => `sed -n 's/^[[:space:]]*${name}=//p' ${CADDY_ENV_FILE} | head -n 1 | tr -d '\\r\\n' | sed "s/^'\\(.*\\)'$/\\1/"`;
   return machineCheck("setup:dns-credentials:check", [
     present("env-file", CADDY_ENV_FILE),
     { label: "env-permissions", test: `[ "$(stat -c '%U:%G %a' ${CADDY_ENV_FILE})" = 'root:caddy 640' ]` },
-    { label: "caddy-read-env", test: CADDY_READ_ENV },
+    { label: "caddy-read-env", test: policy === null ? CADDY_READ_ENV : `${policyPending(policy)} || { ${CADDY_READ_ENV}; }` },
     ...(variables === null || variables.length === 0
       ? []
       : [
@@ -927,12 +932,16 @@ export function dnsLeftoversRun(text: string): string {
     names.length === 0
       ? `cat > "$next" <<'VARIABLES'\n${text}VARIABLES`
       : `grep -Ev '${CREDENTIAL_LINE}' ${CADDY_ENV_FILE} > "$next" || true\ngrep -E '^[[:space:]]*(${names.join("|")})=' ${CADDY_ENV_FILE} >> "$next" || true`;
+  // What leaves is what Caddy no longer reads: the file keeps its time, so
+  // that the credentials step still finds Caddy started after its last
+  // change, and asks for no restart over it.
   return runScript(
     "setup:dns-leftovers:run",
     `next=$(mktemp)
 trap 'rm -f "$next"' EXIT
 ${rewrite}
-install -m 0640 -o root -g caddy "$next" ${CADDY_ENV_FILE}`,
+touch -r ${CADDY_ENV_FILE} "$next"
+install -p -m 0640 -o root -g caddy "$next" ${CADDY_ENV_FILE}`,
   );
 }
 
@@ -1067,7 +1076,7 @@ export function installSteps(): Step<SetupContext>[] {
         // Under --dns manual the file holds a comment alone; otherwise its
         // text is known once the credentials are, and compared whole.
         const credentials = context.dns === null ? null : await knownDnsCredentials(context, context.dns);
-        return rootCheck(context.machine, context.operator, "setup:dns-credentials:check", dnsCredentialsCheck(expectedVariables(context.dns, credentials)));
+        return rootCheck(context.machine, context.operator, "setup:dns-credentials:check", dnsCredentialsCheck(expectedVariables(context.dns, credentials), zoneTls(context)));
       },
       run: async (context, missing) => {
         if (missing.every((label) => label === "env-permissions")) {
@@ -1093,8 +1102,11 @@ export function installSteps(): Step<SetupContext>[] {
         // to change, a switch of provider, the tls-zone step restarts it with
         // both; otherwise, a rotation, or one whose restart failed earlier,
         // it is restarted here.
-        const policy = await rootCheck(context.machine, context.operator, "setup:tls-zone:check", tlsZoneCheck(zoneTls(context)));
-        const switching = policy.state === "missing" && policy.missing.some((label) => label === "tls-zone-file" || label === "tls-zone-same");
+        // Only a Caddy that runs the policy file is restarted by that step: a
+        // Caddyfile from before it, or a Caddy at rest, is not.
+        const policy = await rootCheck(context.machine, context.operator, "setup:tls-zone:check", tlsZoneCheck(zoneTls(context), true));
+        const switching =
+          policy.state === "missing" && policy.missing.some((label) => label === "tls-zone-file" || label === "tls-zone-same") && !policy.missing.includes("tls-zone-live");
         const said = written ? `${CADDY_ENV_FILE} held other values, now ${what}` : `${CADDY_ENV_FILE} holds ${what}`;
         if (switching) return `${said}: the next step restarts Caddy with them`;
         const restart = await asRoot(context.machine, context.operator, "setup:caddy-restart:run", caddyRestartScript("the DNS credentials changed"), true);
@@ -1821,7 +1833,8 @@ async function readHidden(question: string): Promise<string> {
 }
 
 function humanCheck(report: StepReport): string {
-  return `${`[${report.status}]`.padEnd(7)}${report.title.padEnd(36)}${report.detail ?? ""}`.trimEnd();
+  // A title longer than its column still keeps a space before the detail.
+  return `${`[${report.status}]`.padEnd(7)}${report.title.padEnd(35)} ${report.detail ?? ""}`.trimEnd();
 }
 
 export function setupOutput(json: boolean, write: (line: string) => void = (line) => console.log(line), command = "setup"): SetupOutput {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_HINT, hintFor } from "../cli/hints";
@@ -36,6 +36,7 @@ import {
   dnsCredentialsCheck,
   expectedVariables,
   dnsCredentialsRun,
+  dnsLeftoversRun,
   XCADDY,
   type Facts,
   type SetupOptions,
@@ -607,6 +608,28 @@ describe("the DNS credentials, Cloudflare's token by default", () => {
       expect({ text, verdict: verdict(text) }).toEqual({ text, verdict: expect.not.stringContaining("env-same") });
     }
     expect(verdict(`CLOUDFLARE_API_TOKEN=${TOKEN}x\n`)).toContain("env-same");
+  });
+
+  test("taking the previous provider's credentials out keeps the file's time: Caddy, started before, needs no restart over it", () => {
+    const folder = mkdtempSync(join(tmpdir(), "leftovers-"));
+    HOMES.push(folder);
+    const file = join(folder, "cloudflare.env");
+    writeFileSync(file, `CLOUDFLARE_API_TOKEN=${TOKEN}\n`);
+    const then = new Date("2026-10-22T10:00:00Z");
+    utimesSync(file, then, then);
+    // install as GNU's: -p keeps the source's times; the owner, root:caddy, is not ours to give here.
+    const stubs = join(folder, "stubs");
+    mkdirSync(stubs);
+    writeFileSync(join(stubs, "install"), '#!/bin/sh\nkeep=""\nwhile [ "$#" -gt 2 ]; do case "$1" in -p) keep=yes; shift ;; -m|-o|-g) shift 2 ;; *) shift ;; esac; done\ncat "$1" > "$2"\n[ -z "$keep" ] || touch -r "$1" "$2"\n');
+    chmodSync(join(stubs, "install"), 0o755);
+    const script = dnsLeftoversRun(caddyEnvironmentText(null, null))
+      .replace(/^export PATH=.*$/m, `export PATH=${stubs}:/usr/bin:/bin`)
+      .replaceAll("/etc/caddy/cloudflare.env", file);
+    const run = Bun.spawnSync(["sh", "-s"], { stdin: new TextEncoder().encode(script), stdout: "pipe", stderr: "pipe" });
+    expect(run.stderr.toString()).toBe("");
+    expect(run.exitCode).toBe(0);
+    expect(readFileSync(file, "utf8")).not.toContain(TOKEN);
+    expect(statSync(file).mtime.getTime()).toBe(then.getTime());
   });
 
   test("the file means to bash, which sources it as root, exactly what it means to systemd", () => {

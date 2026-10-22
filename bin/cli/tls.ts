@@ -274,12 +274,19 @@ function fingerprint(content: string): string {
  * Reads whether the machine carries exactly `content`, root:root 0644; with
  * manual DNS, also the list of the zone's sites, which the run writes.
  */
-export function tlsZoneCheck(content: string): string {
+export function tlsZoneCheck(content: string, live = false): string {
   return machineCheck("setup:tls-zone:check", [
+    // Asked by the credentials step only: whether a new policy would reach a running Caddy.
+    ...(live ? [{ label: "tls-zone-live", test: POLICY_LIVE }] : []),
     { label: "tls-zone-file", test: `test -f ${TLS_ZONE_FILE}` },
     { label: "tls-zone-permissions", test: `[ "$(stat -c '%U:%G %a' ${TLS_ZONE_FILE})" = 'root:root 644' ]` },
     { label: "tls-zone-same", test: `[ "$(sha256sum < ${TLS_ZONE_FILE} | cut -d' ' -f1)" = '${fingerprint(content)}' ]` },
-    ...(isOnDemand(content) ? [{ label: "zone-names", test: `test -f ${ZONE_NAMES_FILE}` }] : []),
+    ...(isOnDemand(content)
+      ? [
+          { label: "zone-names", test: `test -f ${ZONE_NAMES_FILE}` },
+          { label: "no-wildcard", test: `! ${WILDCARD_HELD}` },
+        ]
+      : []),
   ]);
 }
 
@@ -290,6 +297,27 @@ export const TLS_ZONE_RESTARTED = "tls-zone: Caddy restarted with it";
 
 /** What makes a Caddyfile in service import the policy file, in grep's words. */
 const IMPORTS_POLICY = `grep -Eq '^[[:space:]]*import ${TLS_ZONE_FILE.replaceAll(".", "\\.")}' /etc/caddy/Caddyfile 2>/dev/null`;
+
+/** A Caddy that runs a Caddyfile importing the policy file: a new policy reaches it through tlsZoneRun's restart. */
+export const POLICY_LIVE = `${IMPORTS_POLICY} && systemctl is-active --quiet caddy`;
+
+/**
+ * True when the tls-zone step will lay another policy than the one in place
+ * on a Caddy that runs it, and so restart Caddy: a switch of provider, whose
+ * new credentials that restart reads too.
+ */
+export function policyPending(content: string): string {
+  return `{ ${POLICY_LIVE} && [ "$(sha256sum < ${TLS_ZONE_FILE} 2>/dev/null | cut -d' ' -f1)" != '${fingerprint(content)}' ]; }`;
+}
+
+/** Where Caddy, run by its package's unit as the caddy account, keeps its certificates. */
+export const CADDY_CERTIFICATES = "/var/lib/caddy/.local/share/caddy/certificates";
+
+/** Where a wildcard set aside waits, outside Caddy's storage, until the run that set it aside ends. */
+const RETIRED_WILDCARDS = "/var/lib/caddy/sitesolide-wildcards";
+
+/** A wildcard certificate in Caddy's storage, which no certificate on demand renews. */
+const WILDCARD_HELD = `ls -d ${CADDY_CERTIFICATES}/*/wildcard_.* >/dev/null 2>&1`;
 
 /**
  * What both of setup's scripts that restart Caddy share, as shell functions:
@@ -384,6 +412,21 @@ export function tlsZoneRun(content: string, pid: number = process.pid): string {
   }
   const staged = TLS_ZONE_FILE.replace(/[^/]+$/, ".$&.new");
   const names = isOnDemand(content) ? ZONE_NAMES_COMMAND.replace(/^sudo /, "") : ":";
+  // A wildcard certificate a provider's DNS challenge obtained stays in
+  // Caddy's storage when the zone turns to certificates on demand: Caddy goes
+  // on serving it for every name, cannot renew it without that challenge, and
+  // every site would go dark the day it expires. It is set aside, put back
+  // with the previous policy if that one has to come back, deleted otherwise.
+  const setAside = isOnDemand(content)
+    ? `for wildcard in ${CADDY_CERTIFICATES}/*/wildcard_.*; do
+  [ -d "$wildcard" ] || continue
+  [ -n "$retired" ] || retired=$(mktemp -d ${RETIRED_WILDCARDS}.XXXXXX)
+  issuer=$(basename "$(dirname "$wildcard")")
+  mkdir -p "$retired/$issuer"
+  mv "$wildcard" "$retired/$issuer/"
+  echo "tls-zone: $(basename "$wildcard") set aside: a certificate on demand never renews a wildcard"
+done`
+    : "";
   // A Caddyfile in service from before this file carries Cloudflare's policy
   // itself and imports nothing: any other policy written here would change
   // nothing Caddy runs, while the credentials step has already changed what
@@ -405,12 +448,23 @@ previous=""
 existed=""
 written=""
 completed=""
+retired=""
 put_back() {
   if [ -n "$existed" ]; then install -m 644 -o root -g root "$previous" ${TLS_ZONE_FILE}; else rm -f ${TLS_ZONE_FILE}; fi
+  if [ -n "$retired" ]; then
+    for issuer in "$retired"/*; do
+      [ -d "$issuer" ] || continue
+      mkdir -p ${CADDY_CERTIFICATES}/"$(basename "$issuer")"
+      for wildcard in "$issuer"/*; do mv "$wildcard" ${CADDY_CERTIFICATES}/"$(basename "$issuer")"/; done
+    done
+    rm -rf "$retired"
+    retired=""
+  fi
   written=""
 }
 cleanup() {
   if [ -n "$written" ] && [ -z "$completed" ]; then put_back; fi
+  [ -z "$retired" ] || rm -rf "$retired"
   rm -f ${staged}
   [ -z "$previous" ] || rm -f "$previous"
 }
@@ -421,7 +475,7 @@ if ${IMPORTS_POLICY} && systemctl is-active --quiet caddy; then
 fi
 install -m 644 -o root -g root /dev/stdin ${staged} <<'${DELIMITER}'
 ${content}${DELIMITER}
-if [ -f ${TLS_ZONE_FILE} ] && cmp -s ${staged} ${TLS_ZONE_FILE}; then
+if [ -f ${TLS_ZONE_FILE} ] && cmp -s ${staged} ${TLS_ZONE_FILE}${isOnDemand(content) ? ` && ! ${WILDCARD_HELD}` : ""}; then
   mv -f ${staged} ${TLS_ZONE_FILE}
   ${names}
   completed=yes
@@ -435,6 +489,7 @@ written=yes
 mv -f ${staged} ${TLS_ZONE_FILE}
 echo "tls-zone: ${TLS_ZONE_FILE} written"
 ${names}
+${setAside}
 if [ -n "$live" ]; then
   if ! validate_caddy; then
     put_back

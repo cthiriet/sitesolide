@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { onDemandPolicy, parseZoneNames } from "../../api/src/zone";
@@ -21,6 +21,7 @@ import {
   tlsZoneCheck,
   tlsZoneContent,
   tlsZoneRun,
+  policyPending,
   ZONE_NAMES_COMMAND,
   ZONE_NAMES_FILE,
   type TlsZoneMode,
@@ -148,7 +149,7 @@ describe("tlsZoneCheck", () => {
   });
 
   test("with manual DNS, also wants the list of the zone's sites", () => {
-    expect(scriptLabels(tlsZoneCheck(ON_DEMAND))).toEqual(["tls-zone-file", "tls-zone-permissions", "tls-zone-same", "zone-names"]);
+    expect(scriptLabels(tlsZoneCheck(ON_DEMAND))).toEqual(["tls-zone-file", "tls-zone-permissions", "tls-zone-same", "zone-names", "no-wildcard"]);
   });
 });
 
@@ -203,6 +204,7 @@ function machine(): Machine {
         .replace(SCRIPT_PATH, `export PATH=${path}`)
         .replaceAll("/etc/caddy", etc)
         .replaceAll("/srv/sites", sites)
+        .replaceAll("/var/lib/caddy", join(root, "var", "lib", "caddy"))
         .replaceAll(RUN_DIR, run)
         .replace(/^sudo sh -c '/, "sh -c '"),
   };
@@ -221,6 +223,24 @@ function shCommand(m: Machine, command: string): Ran {
   const run = Bun.spawnSync(["sh", "-c", m.localize(command)], { stdout: "pipe", stderr: "pipe", env: { ...process.env, PATH: m.path } });
   return { code: run.exitCode, output: run.stdout.toString(), error: run.stderr.toString() };
 }
+
+describe("policyPending", () => {
+  test("true only when a Caddy that runs the policy file would get another policy, which tls-zone restarts it for", () => {
+    const m = machine();
+    const pending = (content: string) => shCommand(m, policyPending(content)).code === 0;
+    // As setup lays it: the fingerprint is the content's, its paths unmoved.
+    writeFileSync(join(m.etc, "tls-zone.caddy"), CLOUDFLARE_CONTENT);
+    // A Caddyfile from before the policy file: no restart comes from tls-zone.
+    writeFileSync(join(m.etc, "Caddyfile"), "(tls-zone) {\n\ttls {\n\t\tdns cloudflare {env.CLOUDFLARE_API_TOKEN}\n\t}\n}\n");
+    writeFileSync(join(m.root, "active"), "");
+    expect(pending(ON_DEMAND)).toBe(false);
+    writeFileSync(join(m.etc, "Caddyfile"), `(tls-zone) {\n\timport ${join(m.etc, "tls-zone.caddy")}\n}\n`);
+    expect(pending(ON_DEMAND)).toBe(true);
+    expect(pending(CLOUDFLARE_CONTENT)).toBe(false);
+    rmSync(join(m.root, "active"));
+    expect(pending(ON_DEMAND)).toBe(false);
+  });
+});
 
 describe("tlsZoneRun", () => {
   /** A machine in service: the Caddyfile imports the policy, Caddy is active, validation passes unless told. */
@@ -328,6 +348,66 @@ describe("tlsZoneRun", () => {
     const r = sh(m.localize(tlsZoneRun(ON_DEMAND)));
     expect(r.code).toBe(1);
     expect(existsSync(join(m.etc, "tls-zone.caddy"))).toBe(false);
+  });
+
+  /** Caddy's storage holding the zone's wildcard and its apex, as a provider's DNS challenge left them. */
+  function certificates(m: Machine): { wildcard: string; apex: string; library: string } {
+    const library = join(m.root, "var", "lib", "caddy");
+    const issuer = join(library, ".local", "share", "caddy", "certificates", "acme-v02.api.letsencrypt.org-directory");
+    for (const name of ["wildcard_.test-zone.invalid", "test-zone.invalid"]) {
+      mkdirSync(join(issuer, name), { recursive: true });
+      writeFileSync(join(issuer, name, `${name}.crt`), "a certificate\n");
+    }
+    return { wildcard: join(issuer, "wildcard_.test-zone.invalid", "wildcard_.test-zone.invalid.crt"), apex: join(issuer, "test-zone.invalid", "test-zone.invalid.crt"), library };
+  }
+  const leftAside = (library: string) => readdirSync(library).filter((name) => name.startsWith("sitesolide-wildcards"));
+
+  test("turning to certificates on demand sets the zone's wildcard aside, which nothing would renew, and keeps the apex", () => {
+    const m = machine();
+    inService(m, CLOUDFLARE_CONTENT);
+    const held = certificates(m);
+    const r = sh(m.localize(tlsZoneRun(ON_DEMAND)));
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("wildcard_.test-zone.invalid set aside: a certificate on demand never renews a wildcard");
+    expect(existsSync(held.wildcard)).toBe(false);
+    expect(existsSync(held.apex)).toBe(true);
+    expect(restarts(m)).toBe(1);
+    // Gone for good once Caddy runs without it: its key does not linger.
+    expect(leftAside(held.library)).toEqual([]);
+  });
+
+  test("the wildcard comes back with the previous policy, refused by validation or by the restart", () => {
+    for (const failure of ["validate", "restart"] as const) {
+      const m = machine();
+      inService(m, CLOUDFLARE_CONTENT, failure !== "validate");
+      if (failure === "restart") writeFileSync(join(m.root, "restart-fails"), "");
+      const held = certificates(m);
+      const r = sh(m.localize(tlsZoneRun(ON_DEMAND)));
+      expect(r.code).toBe(1);
+      expect(readFileSync(join(m.etc, "tls-zone.caddy"), "utf8")).toBe(CLOUDFLARE_CONTENT);
+      expect(readFileSync(held.wildcard, "utf8")).toBe("a certificate\n");
+      expect(leftAside(held.library)).toEqual([]);
+    }
+  });
+
+  test("the policy already in place, a wildcard still held: set aside all the same, and Caddy restarted without it", () => {
+    const m = machine();
+    inService(m, m.localize(ON_DEMAND));
+    const held = certificates(m);
+    const r = sh(m.localize(tlsZoneRun(ON_DEMAND)));
+    expect(r.code).toBe(0);
+    expect(r.output).not.toContain("already holds this policy");
+    expect(r.output).toContain(TLS_ZONE_RESTARTED);
+    expect(existsSync(held.wildcard)).toBe(false);
+    expect(readFileSync(join(m.etc, "tls-zone.caddy"), "utf8")).toBe(m.localize(ON_DEMAND));
+  });
+
+  test("a provider's policy sets nothing aside", () => {
+    const m = machine();
+    inService(m, m.localize(ON_DEMAND));
+    const held = certificates(m);
+    expect(sh(m.localize(tlsZoneRun(CLOUDFLARE_CONTENT))).code).toBe(0);
+    expect(existsSync(held.wildcard)).toBe(true);
   });
 
   test("a session hung up during the restart: the previous policy back, the lock handed back", () => {

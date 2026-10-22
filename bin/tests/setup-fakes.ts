@@ -195,7 +195,8 @@ export function fakeKit(machine: FakeMachine): FakeKit {
         machine.install(["zone-file", "domain-table"]);
         return { code: 1, output: "-> first install: the zone file and an empty domain table, where missing\n!! STOP: the caddy.service unit does not load /etc/caddy/sitesolide.env." };
       }
-      machine.install(["caddyfile"]);
+      // The Caddyfile in service imports the zone's policy file, and Caddy runs it.
+      machine.install(["caddyfile", "tls-zone-live"]);
       return { code: 0, output: "" };
     }
     if (name === "deploy portal" && !machine.labels.has("portal-password")) return { code: 1, output: "!! secret missing on the server: /etc/sitesolide/portal.env" };
