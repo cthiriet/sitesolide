@@ -291,7 +291,13 @@ done < <(ssh "$SITESOLIDE_SERVER" '
   done')
 for address in ${ADDRESSES[@]+"${ADDRESSES[@]}"}; do
   # curl already writes 000 when nothing answers; an `|| echo 000` doubled it.
-  code="$(curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$address" 2>/dev/null || true)"
+  # A test installation's staging certificates are accepted unverified, as
+  # bin/deploy-caddy.sh's probe does.
+  if [ "${SITESOLIDE_ACME:-}" = staging ]; then
+    code="$(curl -sS -k -o /dev/null --max-time 15 -w '%{http_code}' "$address" 2>/dev/null || true)"
+  else
+    code="$(curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$address" 2>/dev/null || true)"
+  fi
   case "$code" in
     200|401) printf "   %-44s %s\n" "$address" "$code" ;;
     *) printf "   %-44s %s  FAILED\n" "$address" "$code"; FAILURES=$((FAILURES + 1)) ;;

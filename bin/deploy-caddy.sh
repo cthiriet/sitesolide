@@ -528,8 +528,15 @@ done < <(ssh "$SITESOLIDE_SERVER" '
 # curl already writes 000 when it gets no answer, and exits non-zero: an
 # `|| echo 000` appended a second one, the code read 000000, and the wait below
 # for a first install's certificates never started.
+# A test installation's certificates are Let's Encrypt staging's, which no
+# store trusts: its probes, which carry nothing secret and read a status
+# alone, accept them unverified (setup --acme staging).
 probe() {
-  curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$1" 2>/dev/null || true
+  if [ "${SITESOLIDE_ACME:-}" = staging ]; then
+    curl -sS -k -o /dev/null --max-time 15 -w '%{http_code}' "$1" 2>/dev/null || true
+  else
+    curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$1" 2>/dev/null || true
+  fi
 }
 
 # With manual DNS, a site whose block this run deposits may have no

@@ -734,6 +734,23 @@ describe("--dns", () => {
     { name: `*.${ZONE}`, type: "A", content: HOST, proxied: false, ttl: 1 },
   ];
 
+  test("--acme staging: the policy names Let's Encrypt's staging, the configuration records it, the next run keeps it, and the children are told", async () => {
+    const { b, home: folder } = world();
+    const r = await setup(b, options("--acme", "staging"));
+    expect(r.print.errors).toEqual([]);
+    expect(r.code).toBe(0);
+    expect(b.machine.calls.find((call) => call.tag === "setup:tls-zone:run")!.input).toContain("ca https://acme-staging-v02.api.letsencrypt.org/directory");
+    const configFile = join(folder, ".config", "sitesolide", "config.json");
+    expect(JSON.parse(readFileSync(configFile, "utf8")).acme).toBe("staging");
+    expect(b.kit.tasks.length).toBeGreaterThan(0);
+    expect(b.kit.tasks.every((task) => task.environment.SITESOLIDE_ACME === "staging")).toBe(true);
+    const again = await setup(b);
+    expect(again.code).toBe(0);
+    expect(again.statuses).toContain("configuration:done");
+    expect(JSON.parse(readFileSync(configFile, "utf8")).acme).toBe("staging");
+    expect(parseSetupArguments([`root@${HOST}`, "--zone", ZONE, "--email", EMAIL, "--acme", "letsencrypt"])).toMatchObject({ message: expect.stringContaining("--acme is not valid") });
+  });
+
   test("manual: no DNS API and no credential, certificates on demand; recorded, and read again by the next run", async () => {
     const { b, home: folder, mock: m } = world({}, { records: byHand });
     const r = await setup(b, options("--dns", "manual"));

@@ -75,7 +75,22 @@ export type Config = {
    * another way of obtaining its certificates unasked.
    */
   dns?: string;
+  /**
+   * `staging`: the zone's certificates come from Let's Encrypt's staging
+   * environment, whose limits a test never reaches and whose certificates no
+   * browser trusts, as setup was told with `--acme staging`. Absent means
+   * production. A test installation's alone.
+   */
+  acme?: string;
 };
+
+/** The one value of `acme` that changes anything. */
+export const ACME_STAGING = "staging";
+
+/** Whether the zone's certificates are staging's, which the workstation's own probes then accept unverified. */
+export function acmeStaging(config: Pick<Config, "acme">): boolean {
+  return config.acme === ACME_STAGING;
+}
 
 /** What `mergeConfig` requires, and only the user can know. */
 export const REQUIRED_SETTINGS = ["server", "zone", "email"] as const;
@@ -221,7 +236,7 @@ export function configPath(home = homedir(), environment: Record<string, string 
 }
 
 /** The settings `init` writes only when they are given or already set. */
-export const OPTIONAL_SETTINGS = ["contact", "vault", "sites", "api", "dns"] as const;
+export const OPTIONAL_SETTINGS = ["contact", "vault", "sites", "api", "dns", "acme"] as const;
 
 /**
  * The file `sitesolide init` writes, and `sitesolide setup` too: the three
@@ -300,7 +315,9 @@ export function mergeConfig(
 
   const sites = environment.SITESOLIDE_SITES_REPO ?? adopted.sites ?? null;
   const contact = environment.SITESOLIDE_CONTACT ?? adopted.contact ?? null;
+  const acme = environment.SITESOLIDE_ACME ?? adopted.acme;
   return {
+    ...(acme === ACME_STAGING ? { acme } : {}),
     server: required.server as string,
     zone: required.zone as string,
     email: required.email as string,

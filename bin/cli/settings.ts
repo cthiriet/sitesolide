@@ -49,6 +49,10 @@ export function settings(
     SITESOLIDE_VAULT: path(environment.SITESOLIDE_VAULT ?? file.vault, defaults.vault),
   };
 
+  // The certificate authority of the zone, `staging` on a test installation:
+  // the scripts' probes over HTTPS then accept a certificate no browser trusts.
+  output.SITESOLIDE_ACME = environment.SITESOLIDE_ACME ?? file.acme ?? "";
+
   // The contact address is optional: left empty, it makes the line disappear
   // from the door page rather than putting a stranger's address there.
   output.SITESOLIDE_CONTACT = environment.SITESOLIDE_CONTACT ?? file.contact ?? "";

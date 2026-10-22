@@ -297,6 +297,26 @@ the names of your projects. See [api/README.md](../api/README.md).
 `--skip-dns` keeps the provider for the certificates and leaves the records to
 you: setup lists them and waits, as under `manual`.
 
+## A test installation: `--acme staging`
+
+Let's Encrypt limits what one domain obtains: fifty new certificates a week,
+five a week for the same names. A machine set up, destroyed and set up again
+for tests reaches that quickly, and then serves its sites without a
+certificate. `--acme staging` asks Let's Encrypt's staging environment
+instead, whose limits a test does not reach: `/etc/caddy/tls-zone.caddy` then
+names its directory, `ca https://acme-staging-v02.api.letsencrypt.org/directory`,
+and says it is a test installation.
+
+Its certificates are real ones that no browser and no system trusts. The
+probes setup, `deploy` and the scripts make over HTTPS accept them unverified
+on such an installation, since they carry nothing secret and read a status
+alone; the CLI's calls to the dashboard's API, which carry a token, do not,
+and the monitor reports the sites' certificates as failing. Never use it for
+sites people visit.
+
+Setup records it in `config.json` (`"acme": "staging"`) and keeps it on later
+runs; `--acme production` brings the installation back to Let's Encrypt.
+
 ## After setup
 
 ```bash

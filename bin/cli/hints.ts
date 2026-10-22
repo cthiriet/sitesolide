@@ -30,6 +30,7 @@ const LOCK_BUSY = "someone else is changing Caddy right now: wait a minute, then
 export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   // --- setup: first, since a step's failure may quote a message of the
   // patterns below, a domain that does not resolve for one
+  [/^acme is not valid: |^setup: --acme is not valid: /, "pass --acme staging for a test installation, or leave it out for production: nothing else is a certificate authority setup knows"],
   [/^dns is not valid: |^setup: --dns is not valid: |^setup: dns in the configuration is not valid: /, "pass --dns with one of the names `details` lists, or leave it out for Cloudflare; never guess the provider: ask the owner who serves the zone's DNS"],
   [/^usage: sitesolide setup|^setup: .* is not valid: /, "pass the machine as user@host and the options it needs: sitesolide setup root@<address> --zone <dns.zone> --email <address>; docs/setup.md lists them all"],
   [/^the configuration names another (server|zone|account)/, "do not edit, move or delete that configuration: it may point at a machine in service; a second installation gets its own folder, --config-dir <dir> on setup and SITESOLIDE_CONFIG_DIR=<dir> for every command after it; ask the owner when unsure"],

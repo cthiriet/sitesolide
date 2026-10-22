@@ -11,6 +11,7 @@ sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a 
    --contact <you@example.com>   shown on the page that asks for a preview code
    --user <name>                the account that deploys, deploy by default as root
    --dns <provider|manual>      who serves the zone's DNS: cloudflare by default, see docs/dns/
+   --acme staging               a test installation: Let's Encrypt's staging, untrusted certificates
    --skip-dns                   create the DNS records by hand: setup lists them and waits
    --dns-replace                replace records that point elsewhere, on your decision alone
    --dns-credentials-stdin      read the DNS provider's credentials from standard input

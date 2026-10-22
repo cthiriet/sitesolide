@@ -69,7 +69,7 @@ import { DNS_PROVIDERS, dnsEntry, dnsVariables, MANUAL } from "./dns/registry";
 import { fieldsToAsk, fromEnvironment, isFailure, missingFields, parseStdinCredentials, scrubSecrets, secretValues } from "./machine";
 import { ProviderError, type Credentials, type Fetch } from "./providers/provider";
 import { CADDY_RESTART, caddyRestartScript, policyPending, tlsZoneCheck, tlsZoneContent, tlsZoneRun, TLS_ZONE_FILE, TLS_ZONE_RESTARTED } from "./tls";
-import { adoptLegacyKeys, composeConfig, CONFIG_DIR_VARIABLE, privateFolder, writeConfig } from "./config";
+import { ACME_STAGING, adoptLegacyKeys, composeConfig, CONFIG_DIR_VARIABLE, privateFolder, writeConfig } from "./config";
 import {
   APT,
   BAN_ADVICE,
@@ -116,11 +116,17 @@ export type SetupOptions = {
    * `--dns` was not given: the configuration's, else `cloudflare`.
    */
   dns: string | null;
+  /**
+   * The zone's certificate authority: `production`, Let's Encrypt's, or
+   * `staging`, its test environment, for a test installation. Null when
+   * `--acme` was not given: the configuration's, else production.
+   */
+  acme: string | null;
   configDir: string | null;
   json: boolean;
 };
 
-const VALUED = ["--zone", "--email", "--contact", "--user", "--config-dir", "--dns"] as const;
+const VALUED = ["--zone", "--email", "--contact", "--user", "--config-dir", "--dns", "--acme"] as const;
 const FLAGS = ["--skip-dns", "--dns-replace", "--minimal", "--any-os", "--dry-run", "--cloudflare-token-stdin", "--dns-credentials-stdin", "--json"] as const;
 
 export const ACCOUNT = /^[a-z_][a-z0-9_-]{0,31}$/;
@@ -252,6 +258,10 @@ export function parseSetupArguments(arguments_: readonly string[]): SetupOptions
   if (dns === MANUAL && (flags.has("--dns-credentials-stdin") || flags.has("--cloudflare-token-stdin") || flags.has("--dns-replace"))) {
     return REFUSALS.usage("--dns manual uses no DNS API: the records are made by hand, and nothing reads credentials nor replaces records");
   }
+  const acme = values["--acme"] ?? null;
+  if (acme !== null && acme !== "production" && acme !== ACME_STAGING) {
+    return REFUSALS.invalid("--acme", /^[a-z]{1,20}$/.test(acme) ? acme : "(not shown)", "production, the default, or staging, for a test installation whose certificates no browser trusts");
+  }
 
   return {
     login,
@@ -267,6 +277,7 @@ export function parseSetupArguments(arguments_: readonly string[]): SetupOptions
     tokenStdin: flags.has("--cloudflare-token-stdin") || flags.has("--dns-credentials-stdin"),
     skipDns: flags.has("--skip-dns"),
     dns,
+    acme,
     configDir: values["--config-dir"] ?? null,
     json,
   };
@@ -1334,7 +1345,8 @@ function configurationStep(): Step<SetupContext> {
         file.zone === context.options.zone &&
         file.email === context.options.email &&
         (file.contact ?? null) === context.contact &&
-        (file.dns ?? "cloudflare") === (context.options.dns ?? "cloudflare");
+        (file.dns ?? "cloudflare") === (context.options.dns ?? "cloudflare") &&
+        (file.acme ?? "production") === (context.options.acme ?? "production");
       return same ? { state: "done" } : { state: "missing", missing: [path(context)] };
     },
     run: async (context) => {
@@ -1343,6 +1355,9 @@ function configurationStep(): Step<SetupContext> {
       // Cloudflare is what an absent key means: written only otherwise.
       if (context.options.dns === null || context.options.dns === "cloudflare") delete config.dns;
       else config.dns = context.options.dns;
+      // Production too: written only for staging.
+      if (context.options.acme === ACME_STAGING) config.acme = ACME_STAGING;
+      else delete config.acme;
       // The marker first, so that a run stopped anywhere after this point is
       // this install's to resume. One left by an install on another machine
       // or zone, whose configuration is gone, is replaced: this step only
@@ -1394,7 +1409,10 @@ async function proveDnsCredentials(context: SetupContext, entry: DnsEntry, crede
 
 /** What /etc/caddy/tls-zone.caddy holds for this machine: the provider's DNS challenge, or certificates on demand. */
 function zoneTls(context: SetupContext): string {
-  return tlsZoneContent(context.dns === null ? { kind: "on-demand" } : { kind: "dns", title: context.dns.title, directive: context.dns.caddy.directive });
+  return tlsZoneContent(
+    context.dns === null ? { kind: "on-demand" } : { kind: "dns", title: context.dns.title, directive: context.dns.caddy.directive },
+    context.options.acme === ACME_STAGING,
+  );
 }
 
 /** The records, through the DNS provider's API, at the start: they propagate while the machine installs. */
@@ -1467,7 +1485,7 @@ export function withoutToken(environment: Record<string, string | undefined>, js
 /** The settings every script and `sitesolide deploy` receive, over whatever the configuration says. */
 export function childEnvironment(
   environment: Record<string, string | undefined>,
-  settings: { server: string; zone: string; email: string; contact: string | null; folder: string },
+  settings: { server: string; zone: string; email: string; contact: string | null; folder: string; acme?: string | null },
   json: boolean,
 ): Record<string, string> {
   const child = withoutToken(environment, json);
@@ -1476,6 +1494,7 @@ export function childEnvironment(
     SITESOLIDE_ZONE: settings.zone,
     SITESOLIDE_EMAIL: settings.email,
     SITESOLIDE_CONTACT: settings.contact ?? "",
+    SITESOLIDE_ACME: settings.acme === ACME_STAGING ? ACME_STAGING : "",
     [CONFIG_DIR_VARIABLE]: settings.folder,
   });
   return child;
@@ -1521,7 +1540,9 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
   // Cloudflare. Manual means records by hand: listed, then waited for.
   const dnsName = given.dns ?? (typeof file.dns === "string" && file.dns !== "" ? file.dns : "cloudflare");
   if (dnsEntry(dnsName) === undefined) return refuse(REFUSALS.invalid("dns in the configuration", dnsName, `one of ${[...DNS_PROVIDERS.map((entry) => entry.name), MANUAL].join(", ")}`));
-  const options: SetupOptions = { ...given, dns: dnsName, skipDns: given.skipDns || dnsName === MANUAL };
+  // The certificate authority likewise: --acme, else the configuration's, else production.
+  const acmeName = given.acme ?? (file.acme === ACME_STAGING ? ACME_STAGING : "production");
+  const options: SetupOptions = { ...given, dns: dnsName, acme: acmeName, skipDns: given.skipDns || dnsName === MANUAL };
   const configured = {
     server: deps.environment.SITESOLIDE_SERVER ?? file.server,
     zone: deps.environment.SITESOLIDE_ZONE ?? file.zone,
@@ -1588,7 +1609,7 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
     dns: dnsEntry(dnsName) ?? null,
     dnsCredentials: undefined,
     dashboardDrawn: false,
-    childEnvironment: childEnvironment(deps.environment, { server, zone: options.zone, email: options.email, contact, folder }, options.json),
+    childEnvironment: childEnvironment(deps.environment, { server, zone: options.zone, email: options.email, contact, folder, acme: acmeName }, options.json),
   };
   const steps = setupSteps();
 

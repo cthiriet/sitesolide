@@ -103,6 +103,8 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { compareDirectives, countItemized, sameDirectives, summariseDivergence } from "./cli/comparison";
 import {
+  ACME_STAGING,
+  acmeStaging,
   adoptLegacyKeys,
   composeConfig,
   configPath,
@@ -1740,6 +1742,9 @@ async function verify(
       const response = await fetch(address, {
         redirect: "manual",
         signal: AbortSignal.timeout(15000),
+        // A test installation's certificates are staging's, which nothing
+        // trusts: the probe carries no credential, and only reads a status.
+        ...(acmeStaging(config) ? { tls: { rejectUnauthorized: false } } : {}),
       });
       code = response.status;
       door = response.headers.get("x-portal");
@@ -1935,7 +1940,7 @@ async function requirePortal(config: Config, executor: Executor): Promise<void> 
   step("portal");
   let state: { configure?: unknown } = {};
   try {
-    const response = await fetch(address, { signal: AbortSignal.timeout(15000) });
+    const response = await fetch(address, { signal: AbortSignal.timeout(15000), ...(acmeStaging(config) ? { tls: { rejectUnauthorized: false } } : {}) });
     if (response.ok) state = (await response.json()) as { configure?: unknown };
   } catch {
     // Treated as an absence, below.
@@ -3523,6 +3528,9 @@ async function initialise(arguments_: string[]): Promise<void> {
     Object.fromEntries(OPTIONAL_SETTINGS.map((key) => [key, value(key)])),
     previous,
   );
+  if (config.acme !== undefined && config.acme !== ACME_STAGING && config.acme !== "production") {
+    die(`acme is not valid: ${/^[a-z]{1,20}$/.test(config.acme) ? config.acme : "(not shown)"}`, ["production, the default, or staging; see docs/setup.md"]);
+  }
   // Setup reads it again when run without --dns: only a name it knows.
   if (config.dns !== undefined && dnsEntry(config.dns) === undefined) {
     die(`dns is not valid: ${/^[a-z0-9-]{1,40}$/.test(config.dns) ? config.dns : "(not shown)"}`, [`one of ${[...DNS_PROVIDERS.map((entry) => entry.name), MANUAL].join(", ")}; see docs/setup.md`]);
@@ -3549,6 +3557,7 @@ function usage(zone: string | null): string {
     "     --contact <you@example.com>   shown on the page that asks for a preview code",
     "     --user <name>                the account that deploys, deploy by default as root",
     "     --dns <provider|manual>      who serves the zone's DNS: cloudflare by default, see docs/dns/",
+    "     --acme staging               a test installation: Let's Encrypt's staging, untrusted certificates",
     "     --skip-dns                   create the DNS records by hand: setup lists them and waits",
     "     --dns-replace                replace records that point elsewhere, on your decision alone",
     "     --dns-credentials-stdin      read the DNS provider's credentials from standard input",

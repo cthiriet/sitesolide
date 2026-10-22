@@ -205,6 +205,12 @@ describe("the scripts under bin/ read the same configuration", () => {
     expect(text).toContain("SITESOLIDE_VAULT='/Users/test/.config/sitesolide/secrets'");
   });
 
+  test("a test installation's certificate authority reaches the scripts, empty otherwise", () => {
+    expect(settings({ ...MINIMUM, acme: "staging" }, {}, HOME).SITESOLIDE_ACME).toBe("staging");
+    expect(settings(MINIMUM, {}, HOME).SITESOLIDE_ACME).toBe("");
+    expect(settings(MINIMUM, { SITESOLIDE_ACME: "staging" }, HOME).SITESOLIDE_ACME).toBe("staging");
+  });
+
   test("a single quote in a path does not break the evaluation", () => {
     // The shell recomposes the string: 'a'\''b' is a'b. Without that quoting, a
     // directory whose name carries an apostrophe would have anything at all

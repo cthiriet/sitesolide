@@ -748,6 +748,8 @@ export async function runWizard(deps: WizardDependencies): Promise<number> {
       dryRun: false,
       tokenStdin: false,
       dns: site.dns?.name ?? MANUAL,
+      // The wizard installs for real: the configuration's, else production.
+      acme: null,
       configDir,
       json: false,
     };

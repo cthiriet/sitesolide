@@ -13,6 +13,7 @@ import {
   CLOUDFLARE_POLICY,
   isOnDemand,
   recognisedPolicy,
+  ACME_STAGING_DIRECTORY,
   TLS_ZONE_RESTARTED,
   shellAssignments,
   TLS_ZONE_FILE,
@@ -61,6 +62,17 @@ function block(content: string): string {
 }
 
 describe("tlsZoneContent", () => {
+  test("a test installation's adds Let's Encrypt's staging directory inside the block, and says so; the policy is still recognised", () => {
+    for (const mode of [{ kind: "on-demand" } as const, CLOUDFLARE_POLICY]) {
+      const content = tlsZoneContent(mode, true);
+      expect(block(content)).toEndWith(`\tca ${ACME_STAGING_DIRECTORY}\n}\n`);
+      expect(content).toContain("# A TEST INSTALLATION: Let's Encrypt's staging environment issues these");
+      expect(recognisedPolicy(content)).toBe(mode.kind === "on-demand" ? "on-demand" : "dns");
+      expect(isOnDemand(content)).toBe(mode.kind === "on-demand");
+      expect(tlsZoneContent(mode)).not.toContain("staging");
+    }
+  });
+
   test("Cloudflare's is the block the Caddyfile carried inline up to 0.6, under a header that says what it is", () => {
     expect(block(CLOUDFLARE_CONTENT)).toBe("tls {\n\tdns cloudflare {env.CLOUDFLARE_API_TOKEN}\n}\n");
     expect(CLOUDFLARE_CONTENT).toStartWith("# The served zone's TLS policy, imported by name by the (tls-zone) snippet of\n");

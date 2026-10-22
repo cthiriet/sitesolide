@@ -68,6 +68,18 @@ export const CLOUDFLARE_POLICY = {
   directive: ["dns cloudflare {env.CLOUDFLARE_API_TOKEN}"],
 } as const satisfies TlsZoneMode;
 
+/** Let's Encrypt's staging directory: limits no test reaches, certificates no browser trusts. */
+export const ACME_STAGING_DIRECTORY = "https://acme-staging-v02.api.letsencrypt.org/directory";
+
+/** The lines a test installation's policy adds inside `tls { }`, after the policy's own. */
+const STAGING_LINES = [`\tca ${ACME_STAGING_DIRECTORY}`];
+
+/** The comment that says so, above the block. */
+const STAGING_COMMENT = [
+  "# A TEST INSTALLATION: Let's Encrypt's staging environment issues these",
+  "# certificates, which no browser trusts (setup --acme staging).",
+];
+
 /** A policy that turns on-demand issuance on: a line `on_demand` of its own, as Caddy reads it. */
 export const isOnDemand = onDemandPolicy;
 
@@ -153,7 +165,9 @@ function directiveLines(directive: readonly string[]): string[] {
  * policy does, and the `tls` block. Throws on a directive tlsZoneContent
  * would not write, see directiveLines.
  */
-export function tlsZoneContent(mode: TlsZoneMode): string {
+export function tlsZoneContent(mode: TlsZoneMode, staging = false): string {
+  const comment = staging ? STAGING_COMMENT : [];
+  const authority = staging ? STAGING_LINES : [];
   if (mode.kind === "on-demand") {
     return [
       ...HEADER,
@@ -161,8 +175,10 @@ export function tlsZoneContent(mode: TlsZoneMode): string {
       "# handshake through HTTP-01 or TLS-ALPN-01, once the ask endpoint agrees. It",
       "# agrees to the zone, its www and the sites deployed under it, listed in",
       `# ${ZONE_NAMES_FILE}, and to nothing else: see api/src/zone.ts.`,
+      ...comment,
       "tls {",
       "\ton_demand",
+      ...authority,
       "}",
       "",
     ].join("\n");
@@ -177,8 +193,10 @@ export function tlsZoneContent(mode: TlsZoneMode): string {
     "# DNS-01 challenge. The credentials are read from Caddy's environment, which",
     `# systemd loads from ${DNS_CREDENTIALS_FILE}: never written here, this file`,
     "# is readable by all.",
+    ...comment,
     "tls {",
     ...directiveLines(mode.directive),
+    ...authority,
     "}",
     "",
   ].join("\n");
