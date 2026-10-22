@@ -74,6 +74,19 @@ writes them to a file, and never prints them: every line it prints passes
 through a filter that replaces each secret it knows, an access token it
 obtained along the way included, with `[token]`.
 
+## The SSH key
+
+A password manager's SSH agent, 1Password's or Secretive's, keeps its keys out
+of `~/.ssh`. With no key there, `create` installs the one the agent holds
+(`ssh-add -L` lists them); when it holds several, it names each one and stops,
+since which key a machine trusts is not guessed: `--ssh-key` then takes its
+SHA256 fingerprint, as `ssh-add -l` prints it. The setup wizard asks instead.
+
+Such an agent also asks you to approve each use of a key, and refuses when
+nobody does: `create`, waiting for the machine to let its account in, says so
+when the machine takes the key but the agent did not sign with it. Approve the
+request, or run the same command again once you are at the workstation.
+
 ## What `create` makes
 
 Every provider makes the same three things, under its own names, and labels
@@ -83,7 +96,7 @@ and how `destroy` tells them from what it must never touch.
 
 | What | Why |
 |---|---|
-| Your workstation's public key, `--ssh-key` or the first of `~/.ssh/id_ed25519.pub`, `id_ecdsa.pub`, `id_rsa.pub` | the only way in: no password is ever set |
+| Your workstation's public key, `--ssh-key` or the first of `~/.ssh/id_ed25519.pub`, `id_ecdsa.pub`, `id_rsa.pub`, else the key the SSH agent holds | the only way in: no password is ever set |
 | A firewall named after the machine | inbound TCP 22, 80 and 443, and ICMP, from everywhere; everything else inbound is dropped before it reaches the machine |
 | The machine | Debian 13, a public IPv4 that stays the same across a stop and a start, since the DNS records point at it, and IPv6 where the provider routes it |
 

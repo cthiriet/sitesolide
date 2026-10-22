@@ -6,6 +6,8 @@ import { REMOTE_HINTS } from "../cli/hints";
 import {
   choosePublicKey,
   DEFAULTS,
+  resolvePublicKey,
+  sha256Fingerprint,
   machine,
   MACHINE_USAGE,
   machineTable,
@@ -14,8 +16,10 @@ import {
   readPublicKey,
   shown,
   tcpProbe,
+  type ChosenKey,
   type MachineDependencies,
 } from "../cli/machine";
+import type { Workstation } from "../cli/providers/provider";
 import { apiBase, cheapestTypes, failureFrom, hostAddress, offerWarnings, suggestedTypes, typeOffer, WAITS, type HetznerServerType } from "../cli/providers/hetzner";
 import type { OutputEvent } from "../cli/output";
 import { eventOutput, humanOutput, type Output } from "../cli/remote";
@@ -39,6 +43,11 @@ import { createFakeHetzner, FAKE_TOKEN, SERVER_TYPES, type FakeHetzner } from ".
 const ED25519 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICezpiOyiQWMYqOeL4S4OgE0T7Fq2bLHWUJ1afO4cczN ada@workstation.test-zone.invalid";
 /** What `ssh-keygen -E md5 -lf` printed for it. */
 const ED25519_MD5 = "a4:46:30:d5:fd:7e:1a:77:e5:ad:8d:21:4f:9a:3e:9e";
+/** What `ssh-keygen -lf` printed for it. */
+const ED25519_SHA256 = "SHA256:eiqYgPmsybLkA2Wlm4qqhweGbEO3OJsW13k5pTd3oic";
+/** A second key the agent may hold, generated the same way. */
+const BOB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBezsiC2kgzd5Qh8zd9F2WUSbJ4TgTwllfgEh3Lwry6k bob@workstation.test-zone.invalid";
+const BOB_SHA256 = "SHA256:FCkVFqw+TvEBnUmfuR7Fyq5dwiGMLT9epKIl2RPwP0w";
 const RSA =
   "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDCdJWi+3KfOZP6ARBvtusfyCxfyZWSBpo1smBB7F0vcG1/HE9YixVmfSLEGo3ooja9G7Y/787HEek0wxExEwdaDMNBcSq/V1wRpZG9zimD7eKfiubJePOuG6P2ISfmJqZmAqd3BsWX7HLsZ7+zMZzKIIlgmHzfA2pX0k4r8FhA10aj4h78gcNk3CyAq7/d/AHkgvIepgtNv7zpPOjPEMbxtJSQN3dc3Sg/5nC4hsEPbWGvQt0uSjoyddTHrWxwcPOPfR7q88YMbJQHZD/k5grqCjN+hvQlylGk06z9rkR4sH9NJsEQiwIUaWUrpysY/DwJiu2EgUJjcImXfoU4ZC55";
 const RSA_MD5 = "04:af:9d:90:7f:64:6b:21:05:6d:ff:9b:00:06:7d:df";
@@ -88,11 +97,22 @@ function fakeClock() {
 type Run = { code: number; events: OutputEvent[]; last: OutputEvent; text: string };
 
 /** The command in this process, under --json, against the fake. */
+/** A workstation whose SSH agent holds these keys, and no provider CLI: never the real agent of whoever runs the tests. */
+function agentHolding(...keys: string[]): Workstation {
+  return {
+    environment: {},
+    run: async (argv) =>
+      argv[0] === "ssh-add" ? (keys.length === 0 ? { code: 1, stdout: "", stderr: "The agent has no identities." } : { code: 0, stdout: keys.map((key) => `${key}\n`).join(""), stderr: "" }) : { code: 127, stdout: "", stderr: "not installed" },
+    readFile: () => null,
+  };
+}
+
 async function run(arguments_: string[], extra: Partial<MachineDependencies> = {}): Promise<Run> {
   const lines: string[] = [];
   const code = await machine(["machine", ...arguments_, "--json"], {
     environment: { HCLOUD_TOKEN: FAKE_TOKEN, SITESOLIDE_HETZNER_API: fake.url },
     home,
+    workstation: agentHolding(),
     output: eventOutput((line) => lines.push(line)),
     clock: fakeClock(),
     sshTarget: () => ({ hostname: "127.0.0.1", port: listener.port }),
@@ -157,6 +177,44 @@ describe("the public key", () => {
     expect(choosePublicKey("~/.ssh/id_ed25519", home, () => true)).toMatchObject({ error: "no-ssh-key" });
     expect(choosePublicKey("~/keys/deploy.pub", home, () => false)).toMatchObject({ error: "no-ssh-key", message: `no such public key: ${join(home, "keys", "deploy.pub")}` });
     expect(choosePublicKey("~/keys/deploy.pub", home, () => true)).toBe(join(home, "keys", "deploy.pub"));
+  });
+
+  test("a key's SHA256 fingerprint is the one ssh-keygen -l prints", () => {
+    expect(sha256Fingerprint(readPublicKey(ED25519)!)).toBe(ED25519_SHA256);
+    expect(sha256Fingerprint(readPublicKey(BOB)!)).toBe(BOB_SHA256);
+  });
+
+  test("with no key in ~/.ssh, the SSH agent's is used when it holds only one, and never guessed among several", async () => {
+    const [ada, bob] = [readPublicKey(ED25519)!, readPublicKey(BOB)!];
+    expect(await resolvePublicKey(undefined, home, async () => [ada], () => false)).toEqual({
+      key: ada,
+      path: null,
+      argument: ED25519_SHA256,
+      shown: `ada@workstation.test-zone.invalid, from the SSH agent, ${ED25519_SHA256}`,
+    });
+    const several = await resolvePublicKey(undefined, home, async () => [ada, bob], () => false);
+    expect(several).toMatchObject({ error: "no-ssh-key", message: "~/.ssh holds no public key, and the SSH agent holds 2: say which one the machine trusts" });
+    expect((several as { details: string[] }).details).toContain(`bob@workstation.test-zone.invalid: --ssh-key ${BOB_SHA256}`);
+    const none = await resolvePublicKey(undefined, home, async () => [], () => false);
+    expect(none).toMatchObject({ error: "no-ssh-key", message: "no public key in ~/.ssh to install on the machine" });
+    expect(JSON.stringify(none)).toContain("or load one in the SSH agent");
+  });
+
+  test("a key in ~/.ssh wins, and the agent is not even asked", async () => {
+    let asked = false;
+    const chosen = (await resolvePublicKey(undefined, home, async () => ((asked = true), [readPublicKey(BOB)!]))) as ChosenKey;
+    expect(chosen).toMatchObject({ path: join(home, ".ssh", "id_ed25519.pub"), argument: join(home, ".ssh", "id_ed25519.pub"), shown: `~/.ssh/id_ed25519.pub, ${ED25519_MD5}` });
+    expect(asked).toBe(false);
+  });
+
+  test("--ssh-key SHA256:... picks a key the agent holds, and lists the ones it holds when none has it", async () => {
+    const [ada, bob] = [readPublicKey(ED25519)!, readPublicKey(BOB)!];
+    expect(await resolvePublicKey(BOB_SHA256, home, async () => [ada, bob])).toMatchObject({ key: bob, path: null, argument: BOB_SHA256 });
+    const missing = `SHA256:${"A".repeat(43)}`;
+    const refused = await resolvePublicKey(missing, home, async () => [ada]);
+    expect(refused).toMatchObject({ error: "no-ssh-key", message: `the SSH agent holds no key ${missing}` });
+    expect((refused as { details: string[] }).details).toEqual(["it holds:", `  ada@workstation.test-zone.invalid: ${ED25519_SHA256}`]);
+    expect(await resolvePublicKey("SHA256:not a fingerprint", home, async () => [])).toMatchObject({ message: "the SSH agent holds no key with that fingerprint" });
   });
 });
 
@@ -608,6 +666,22 @@ describe("machine create", () => {
     writeFileSync(join(home, ".ssh", "id_ed25519.pub"), "-----BEGIN OPENSSH PRIVATE KEY-----\n");
     expect(errorOf(await run(CREATE)).message).toContain("holds a private key");
     expect(fake.requests).toEqual([]);
+  });
+
+  test("with no key in ~/.ssh, the one the SSH agent holds is installed, as a password manager's agent keeps it", async () => {
+    rmSync(join(home, ".ssh", "id_ed25519.pub"));
+    const created = await run(CREATE, { workstation: agentHolding(ED25519) });
+    resultOf(created);
+    expect(fake.keys[0]).toMatchObject({ fingerprint: ED25519_MD5 });
+    expect(created.text).toContain(`SSH key ada@workstation.test-zone.invalid, from the SSH agent, ${ED25519_SHA256}`);
+  });
+
+  test("among several keys of the agent, --ssh-key names the one installed by its fingerprint", async () => {
+    rmSync(join(home, ".ssh", "id_ed25519.pub"));
+    expect(errorOf(await run(CREATE, { workstation: agentHolding(ED25519, BOB) })).details).toContain(`bob@workstation.test-zone.invalid: --ssh-key ${BOB_SHA256}`);
+    expect(fake.requests).toEqual([]);
+    resultOf(await run([...CREATE, "--ssh-key", BOB_SHA256], { workstation: agentHolding(ED25519, BOB) }));
+    expect(fake.keys[0]).toMatchObject({ fingerprint: "2b:95:d0:51:de:52:18:12:66:bf:7d:7b:97:26:68:19" });
   });
 
   test("another key is installed with --ssh-key", async () => {

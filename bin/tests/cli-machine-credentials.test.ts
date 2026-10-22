@@ -251,6 +251,19 @@ describe("after create", () => {
     expect(said).toEqual(["   admin logs in with the key, after 10 s"]);
     await expect(waitForLogin("admin", "203.0.113.7", async () => false, clock, () => {})).rejects.toMatchObject({ failure: { error: "login-timeout" } });
   });
+
+  test("an SSH agent that does not sign, waiting for its owner's approval, is said once, and named when the wait ends", async () => {
+    let now = 0;
+    const clock = { now: () => now, sleep: async (milliseconds: number) => void (now += milliseconds) };
+    let tries = 0;
+    const said: string[] = [];
+    await waitForLogin("root", "203.0.113.7", async () => (++tries >= 4 ? true : "agent"), clock, (line) => said.push(line));
+    expect(said).toHaveLength(2);
+    expect(said[0]).toStartWith("!! the SSH agent did not sign with the key for root@203.0.113.7: a password manager's agent, 1Password's for one, asks you to approve");
+    const refused = await waitForLogin("root", "203.0.113.7", async () => "agent", clock, () => {}).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ failure: { error: "login-timeout", message: "no login to root@203.0.113.7 within 4 minutes: the SSH agent did not sign with the key" } });
+    expect((refused as { failure: { details: string[] } }).failure.details.join("\n")).toContain("approve each use of a key");
+  });
 });
 
 describe("machine providers", () => {

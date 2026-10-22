@@ -453,7 +453,8 @@ sitesolide machine create --provider <provider> --name <name>
    --location <location>        a location in Europe by default, see docs/providers/
    --image <image>              debian-13 by default
    --backups                    the provider's daily backups, where it has them, at a price
-   --ssh-key <path.pub>         ~/.ssh/id_ed25519.pub, id_ecdsa.pub or id_rsa.pub by default
+   --ssh-key <path.pub>         ~/.ssh/id_ed25519.pub, id_ecdsa.pub or id_rsa.pub by default,
+                                else the SSH agent's key; or SHA256:... for one the agent holds
 sitesolide machine list --provider <provider>
                                 the machines sitesolide created, their addresses and price
 sitesolide machine destroy <name> --provider <provider>

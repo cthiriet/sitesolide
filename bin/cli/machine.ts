@@ -95,7 +95,8 @@ export const MACHINE_USAGE = [
   "     --location <location>        a location in Europe by default, see docs/providers/",
   "     --image <image>              debian-13 by default",
   "     --backups                    the provider's daily backups, where it has them, at a price",
-  "     --ssh-key <path.pub>         ~/.ssh/id_ed25519.pub, id_ecdsa.pub or id_rsa.pub by default",
+  "     --ssh-key <path.pub>         ~/.ssh/id_ed25519.pub, id_ecdsa.pub or id_rsa.pub by default,",
+  "                                  else the SSH agent's key; or SHA256:... for one the agent holds",
   "  sitesolide machine list --provider <provider>",
   "                                  the machines sitesolide created, their addresses and price",
   "  sitesolide machine destroy <name> --provider <provider>",
@@ -143,7 +144,7 @@ export type MachineDependencies = {
    * Without it, `create` stops once port 22 answers; the entry point and the
    * wizard give the real one, sshLogin.
    */
-  login?: (account: string, address: string, identity: string | null) => Promise<boolean>;
+  login?: (account: string, address: string, identity: string | null) => Promise<LoginAttempt>;
   /** What `discover` may read: the provider CLIs, a key file. Tests give a fake one. */
   workstation?: Workstation;
   /** Credentials typed at the wizard, by variable: they win over the environment and are scrubbed like it. */
@@ -295,7 +296,11 @@ export function choosePublicKey(given: string | undefined, home: string, exists:
   if (given !== undefined) {
     const path = expandHome(given, home);
     if (!path.endsWith(".pub")) {
-      return { error: "no-ssh-key", message: `--ssh-key takes a public key, the .pub file: ${shown(given.split("/").pop() ?? "")}`, details: ["the private key never leaves this workstation"] };
+      return {
+        error: "no-ssh-key",
+        message: `--ssh-key takes a public key, the .pub file: ${shown(given.split("/").pop() ?? "")}`,
+        details: ["the private key never leaves this workstation", "or the SHA256 fingerprint of a key the SSH agent holds, as ssh-add -l prints it"],
+      };
     }
     if (!exists(path)) return { error: "no-ssh-key", message: `no such public key: ${path}`, details: [create] };
     return path;
@@ -322,6 +327,77 @@ export function loadPublicKey(path: string): PublicKey | Failure {
   }
   if (text.includes("PRIVATE KEY")) return { error: "no-ssh-key", message: `${path} holds a private key`, details: ["pass the .pub beside it: the private key never leaves this workstation"] };
   return readPublicKey(text) ?? { error: "no-ssh-key", message: `${path} is not an OpenSSH public key`, details: [`the line starts with one of ${KEY_ALGORITHMS.slice(0, 5).join(", ")}`] };
+}
+
+/** A key's SHA256 fingerprint, as `ssh-add -l` and `ssh-keygen -l` print it. */
+export function sha256Fingerprint(key: PublicKey): string {
+  return `SHA256:${new Bun.CryptoHasher("sha256").update(Buffer.from(key.blob, "base64")).digest("base64").replace(/=+$/, "")}`;
+}
+
+/** The keys the SSH agent holds, as `ssh-add -L` lists them; none when no agent answers. */
+export async function agentKeys(workstation: Workstation): Promise<PublicKey[]> {
+  const listed = await workstation.run(["ssh-add", "-L"]).catch(() => null);
+  if (listed === null || listed.code !== 0) return [];
+  return listed.stdout
+    .split("\n")
+    .map((line) => readPublicKey(line))
+    .filter((key): key is PublicKey => key !== null);
+}
+
+/** The key a machine is made with: a .pub file, or a key the SSH agent holds, which has no file. */
+export type ChosenKey = {
+  key: PublicKey;
+  /** The .pub file, or null for a key of the agent. */
+  path: string | null;
+  /** What --ssh-key takes to choose it again: the file, or the agent key's fingerprint. */
+  argument: string;
+  /** The key said for a person, with its fingerprint. */
+  shown: string;
+};
+
+/** An agent key's name, its comment: what 1Password calls the key, for instance. */
+export function agentKeyName(key: PublicKey): string {
+  return key.comment.replace(/[^\x20-\x7e]/g, "").trim() || "a key without a name";
+}
+
+export function chosenFromAgent(key: PublicKey): ChosenKey {
+  return { key, path: null, argument: sha256Fingerprint(key), shown: `${agentKeyName(key)}, from the SSH agent, ${sha256Fingerprint(key)}` };
+}
+
+/**
+ * The public key to install: what --ssh-key names, a .pub file or the SHA256
+ * fingerprint of a key the SSH agent holds; else the first of DEFAULT_KEYS
+ * this workstation has; else the agent's key, when it holds only one. A
+ * password manager's agent, 1Password's or Secretive's, keeps its keys out of
+ * ~/.ssh: with several, which one a machine trusts is not guessed.
+ */
+export async function resolvePublicKey(given: string | undefined, home: string, agent: () => Promise<PublicKey[]>, exists: (path: string) => boolean = existsSync): Promise<ChosenKey | Failure> {
+  if (given?.startsWith("SHA256:")) {
+    const held = await agent();
+    const key = held.find((candidate) => sha256Fingerprint(candidate) === given);
+    if (key !== undefined) return chosenFromAgent(key);
+    return {
+      error: "no-ssh-key",
+      message: `the SSH agent holds no key ${/^SHA256:[A-Za-z0-9+/]{43}$/.test(given) ? given : "with that fingerprint"}`,
+      details: held.length === 0 ? ["no SSH agent answers, or it holds no key: ssh-add -l says which"] : ["it holds:", ...held.map((candidate) => `  ${agentKeyName(candidate)}: ${sha256Fingerprint(candidate)}`)],
+    };
+  }
+  const path = choosePublicKey(given, home, exists);
+  if (typeof path === "string") {
+    const key = loadPublicKey(path);
+    if (isFailure(key)) return key;
+    const shownPath = path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path;
+    return { key, path, argument: path, shown: `${shownPath}, ${key.fingerprint}` };
+  }
+  if (given !== undefined) return path;
+  const held = await agent();
+  if (held.length === 1) return chosenFromAgent(held[0]!);
+  if (held.length === 0) return { ...path, details: [...(path.details ?? []), "or load one in the SSH agent: ssh-add -l lists what it holds"] };
+  return {
+    error: "no-ssh-key",
+    message: `~/.ssh holds no public key, and the SSH agent holds ${held.length}: say which one the machine trusts`,
+    details: [...held.map((key) => `${agentKeyName(key)}: --ssh-key ${sha256Fingerprint(key)}`), "or a .pub file: --ssh-key <path to the .pub>"],
+  };
 }
 
 // --- the credentials ----------------------------------------------------------------------
@@ -648,6 +724,15 @@ export async function waitForSsh(
 }
 
 /**
+ * One login attempt: in or not, or "agent" when ssh waited on the SSH agent
+ * for a signature it never got, which a password manager's agent does until
+ * its owner approves the key's use.
+ */
+export type LoginAttempt = boolean | "agent";
+
+const AGENT_APPROVAL = "a password manager's agent, 1Password's for one, asks you to approve each use of a key, and refuses when nobody does";
+
+/**
  * Waits, bounded, until the machine lets the account in with the
  * workstation's key. Port 22 may answer before the image has installed the
  * key: Google's guest agent creates the account a few seconds after sshd
@@ -659,23 +744,33 @@ export async function waitForSsh(
 export async function waitForLogin(
   account: string,
   address: string,
-  login: (account: string, address: string, identity: string | null) => Promise<boolean>,
+  login: (account: string, address: string, identity: string | null) => Promise<LoginAttempt>,
   clock: Clock,
   say: (line: string) => void,
   identity: string | null = null,
 ): Promise<void> {
   const started = clock.now();
   const deadline = started + LOGIN_WAIT.totalMs;
+  let unsigned = false;
   for (;;) {
-    if (await login(account, address, identity)) {
+    const attempt = await login(account, address, identity);
+    if (attempt === true) {
       say(`   ${account} logs in with the key, after ${Math.round((clock.now() - started) / 1000)} s`);
       return;
+    }
+    if (attempt === "agent" && !unsigned) {
+      unsigned = true;
+      say(`!! the SSH agent did not sign with the key for ${account}@${address}: ${AGENT_APPROVAL}; the login is tried again every ${LOGIN_WAIT.pollMs / 1000} s`);
     }
     if (clock.now() >= deadline) {
       throw new ProviderError({
         error: "login-timeout",
-        message: `${account}@${address} did not accept the key within ${LOGIN_WAIT.totalMs / 60_000} minutes`,
-        details: ["port 22 answers: the image may still be installing the key, or this workstation offers another one (ssh-add -l lists them)"],
+        message: unsigned
+          ? `no login to ${account}@${address} within ${LOGIN_WAIT.totalMs / 60_000} minutes: the SSH agent did not sign with the key`
+          : `${account}@${address} did not accept the key within ${LOGIN_WAIT.totalMs / 60_000} minutes`,
+        details: unsigned
+          ? [AGENT_APPROVAL, "approve it, then run the same command again: it resumes at this wait"]
+          : ["port 22 answers: the image may still be installing the key, or this workstation offers another one (ssh-add -l lists them)"],
       });
     }
     await clock.sleep(LOGIN_WAIT.pollMs);
@@ -686,7 +781,7 @@ export async function waitForLogin(
  * A login as setup makes them: no prompt, a bounded wait, the host key
  * accepted on first contact only. `true`, run there, is all it asks.
  */
-export async function sshLogin(account: string, address: string, identity: string | null = null): Promise<boolean> {
+export async function sshLogin(account: string, address: string, identity: string | null = null): Promise<LoginAttempt> {
   const environment = withoutSecrets(process.env);
   const ssh = Bun.which("ssh", { PATH: environment.PATH ?? "" });
   if (ssh === null) return false;
@@ -701,8 +796,13 @@ export async function sshLogin(account: string, address: string, identity: strin
   if (HOST_KEY_CHANGED.test(said)) {
     throw new ProviderError({ error: "host-key-changed", message: `ssh refuses ${address}: its host key is not the one this workstation knew there`, details: hostKeyAdvice(address) });
   }
-  return code === 0;
+  if (code === 0) return true;
+  // The agent said no, or ssh was still waiting on it when the attempt's time
+  // ran out: connecting is bounded by ConnectTimeout and `true` returns at once.
+  return AGENT_UNSIGNED.test(said) || proc.signalCode !== null ? "agent" : false;
 }
+
+const AGENT_UNSIGNED = /signing failed for .* from agent|agent refused operation/;
 
 // --- what is printed -------------------------------------------------------------------------
 
@@ -821,19 +921,18 @@ async function create(context: Context): Promise<number> {
     });
   }
   const home = dependencies.home ?? homedir();
-  const path = choosePublicKey(parsed.values["--ssh-key"], home);
-  if (typeof path !== "string") return refuse(output, path);
-  const key = loadPublicKey(path);
-  if (isFailure(key)) return refuse(output, key);
+  const chosen = await resolvePublicKey(parsed.values["--ssh-key"], home, () => agentKeys(dependencies.workstation ?? realWorkstation(dependencies.environment, home)));
+  if (isFailure(chosen)) return refuse(output, chosen);
+  const { key, path } = chosen;
   const keyProblem = entry.keyProblem?.(key) ?? null;
   if (keyProblem !== null) {
-    return refuse(output, { error: "no-ssh-key", message: `${entry.title} would not take the key ${path}: ${keyProblem}`, details: ["create one it takes: ssh-keygen -t ed25519, then pass it with --ssh-key"] });
+    return refuse(output, { error: "no-ssh-key", message: `${entry.title} would not take the key ${chosen.shown}: ${keyProblem}`, details: ["create one it takes: ssh-keygen -t ed25519, then pass it with --ssh-key"] });
   }
 
   output.say(`-> machine ${name} at ${entry.title}: ${choices.type} at ${choices.location}, ${choices.image}${backups ? ", with backups" : ""}`);
   const provider = await open(context, (line) => output.say(line));
   if (isFailure(provider)) return refuse(output, provider);
-  output.say(`   SSH key ${path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path}, ${key.fingerprint}`);
+  output.say(`   SSH key ${chosen.shown}`);
   const outcome = await provider.create({ name, ...choices, backups, key }, (line) => output.say(line));
 
   const address = outcome.machine.ipv4 ?? outcome.machine.ipv6;
@@ -843,7 +942,7 @@ async function create(context: Context): Promise<number> {
   } else {
     output.say(`-> SSH on ${address}`);
     await waitForSsh(address, dependencies, clock, (line) => output.say(line));
-    const identity = parsed.values["--ssh-key"] === undefined ? null : path.replace(/\.pub$/, "");
+    const identity = parsed.values["--ssh-key"] === undefined || path === null ? null : path.replace(/\.pub$/, "");
     if (dependencies.login !== undefined) await waitForLogin(outcome.machine.login, address, dependencies.login, clock, (line) => output.say(line), identity);
   }
 
@@ -851,7 +950,7 @@ async function create(context: Context): Promise<number> {
   output.say(outcome.created ? "-> ready" : "-> ready, created by an earlier run");
   for (const line of describeMachine(outcome.machine)) output.say(line);
   output.say(`   nothing is installed nor hardened yet: setup does both, over SSH as ${outcome.machine.login}`);
-  if (parsed.values["--ssh-key"] !== undefined && !DEFAULT_KEYS.some((name) => path === join(home, ".ssh", name))) {
+  if (parsed.values["--ssh-key"] !== undefined && path !== null && !DEFAULT_KEYS.some((name) => path === join(home, ".ssh", name))) {
     output.say(`   setup connects with the keys ssh offers by itself: load this one first, ssh-add ${path.replace(/\.pub$/, "")}`);
   }
   output.say("");

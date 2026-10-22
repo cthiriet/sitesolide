@@ -20,6 +20,10 @@ import { createFakeHetzner, FAKE_TOKEN, type FakeHetzner } from "./fake-hetzner"
  */
 
 const ED25519 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICezpiOyiQWMYqOeL4S4OgE0T7Fq2bLHWUJ1afO4cczN ada@workstation.test-zone.invalid";
+const ED25519_SHA256 = "SHA256:eiqYgPmsybLkA2Wlm4qqhweGbEO3OJsW13k5pTd3oic";
+/** A second key the agent may hold; its private half was deleted at once. */
+const BOB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBezsiC2kgzd5Qh8zd9F2WUSbJ4TgTwllfgEh3Lwry6k bob@workstation.test-zone.invalid";
+const BOB_SHA256 = "SHA256:FCkVFqw+TvEBnUmfuR7Fyq5dwiGMLT9epKIl2RPwP0w";
 const CLOUDFLARE_TOKEN = "cloudflare-token-0123456789abcdef";
 const ZONE = "test-zone.invalid";
 
@@ -493,7 +497,25 @@ describe("the SSH key", () => {
     expect(hetzner.servers).toHaveLength(1);
   });
 
+  test("none in ~/.ssh, one in the SSH agent: it is used without a question", async () => {
+    rmSync(join(home, ".ssh", "id_ed25519.pub"));
+    const run = scripted(HAPPY);
+    expect(await runWizard(dependencies(run.prompter, { HCLOUD_TOKEN: FAKE_TOKEN, CLOUDFLARE_API_TOKEN: CLOUDFLARE_TOKEN }, [], run.planConfirmed))).toBe(0);
+    expect(run.shown).toContain(`SSH key: ada@workstation.test-zone.invalid, from the SSH agent, ${ED25519_SHA256}`);
+    expect(hetzner.servers).toHaveLength(1);
+  });
+
+  test("none in ~/.ssh, several in the SSH agent: the one the machine trusts is picked", async () => {
+    rmSync(join(home, ".ssh", "id_ed25519.pub"));
+    const agent: Workstation = { ...workstation, run: async (argv) => (argv[0] === "ssh-add" ? { code: 0, stdout: `${ED25519}\n${BOB}\n`, stderr: "" } : workstation.run(argv)) };
+    const run = scripted([...HAPPY.slice(0, 6), [/^SSH key the machine trusts/, BOB_SHA256], ...HAPPY.slice(6)]);
+    expect(await runWizard(dependencies(run.prompter, { HCLOUD_TOKEN: FAKE_TOKEN, CLOUDFLARE_API_TOKEN: CLOUDFLARE_TOKEN }, [], run.planConfirmed, { workstation: agent }))).toBe(0);
+    expect(run.shown).toContain(`ssh key    bob@workstation.test-zone.invalid, from the SSH agent, ${BOB_SHA256}`);
+    expect(hetzner.keys[0]).toMatchObject({ public_key: BOB });
+  });
+
   test("none on the workstation: ssh-keygen is offered, and declining stops before anything is ordered", async () => {
+    locked = true;
     rmSync(join(home, ".ssh", "id_ed25519.pub"));
     const run = scripted([...HAPPY.slice(0, 6), [/^Create one now with ssh-keygen/, false]]);
     const code = await runWizard(dependencies(run.prompter, { HCLOUD_TOKEN: FAKE_TOKEN, CLOUDFLARE_API_TOKEN: CLOUDFLARE_TOKEN }, [], run.planConfirmed, { keygen: async () => true }));
@@ -502,10 +524,13 @@ describe("the SSH key", () => {
   });
 
   test("a key made by ssh-keygen is used at once", async () => {
+    locked = true;
     rmSync(join(home, ".ssh", "id_ed25519.pub"));
     const run = scripted([...HAPPY.slice(0, 6), [/^Create one now with ssh-keygen/, true], ...HAPPY.slice(6)]);
     const keygen = async () => {
       writeFileSync(join(home, ".ssh", "id_ed25519.pub"), `${ED25519}\n`);
+      // Without a passphrase, as setup's ssh needs it: the fake says so through the agent.
+      locked = false;
       return true;
     };
     expect(await runWizard(dependencies(run.prompter, { HCLOUD_TOKEN: FAKE_TOKEN, CLOUDFLARE_API_TOKEN: CLOUDFLARE_TOKEN }, [], run.planConfirmed, { keygen }))).toBe(0);

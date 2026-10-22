@@ -53,7 +53,10 @@ import { DnsError, detectDns, recordLine, zoneRecords, type DnsEntry } from "./d
 import { DNS_PROVIDERS, MANUAL } from "./dns/registry";
 import { adoptLegacyKeys, CONFIG_DIR_VARIABLE, expandHome, privateFolder } from "./config";
 import {
+  agentKeyName,
+  agentKeys,
   choosePublicKey,
+  chosenFromAgent,
   credentialStatus,
   fieldsToAsk,
   isFailure,
@@ -65,8 +68,10 @@ import {
   resolveCredentials,
   scrubSecrets,
   secretValues,
+  sha256Fingerprint,
   fromEnvironment as fromEnvironmentOf,
   missingFields,
+  type ChosenKey,
   type CredentialSource,
   type Found,
   type MachineDependencies,
@@ -157,8 +162,7 @@ type Target =
       type: Choice;
       name: string;
       backups: boolean;
-      keyPath: string;
-      key: PublicKey;
+      sshKey: ChosenKey;
       reused: Machine | null;
     }
   | { kind: "own"; login: string; host: string };
@@ -336,8 +340,8 @@ async function chooseCloud(deps: WizardDependencies, secrets: string[]): Promise
     }
 
     const backups = entry.backups && !reused ? await ui.confirm(`Also turn on ${entry.title}'s daily backups of the whole machine, at extra cost?`, false) : false;
-    const { keyPath, key } = await chooseKey(deps, entry);
-    return { kind: "cloud", entry, provider, found, location, type, name: machineName, backups, keyPath, key, reused };
+    const sshKey = await chooseKey(deps, entry);
+    return { kind: "cloud", entry, provider, found, location, type, name: machineName, backups, sshKey, reused };
   }
 }
 
@@ -359,7 +363,7 @@ async function keyUsable(workstation: Workstation, path: string, key: PublicKey)
   return bare?.code === 0;
 }
 
-async function chooseKey(deps: WizardDependencies, entry: ProviderEntry | null): Promise<{ keyPath: string; key: PublicKey }> {
+async function chooseKey(deps: WizardDependencies, entry: ProviderEntry | null): Promise<ChosenKey> {
   const ui = deps.prompter;
   for (let attempt = 0; ; attempt++) {
     const path = choosePublicKey(undefined, deps.home);
@@ -382,7 +386,19 @@ async function chooseKey(deps: WizardDependencies, entry: ProviderEntry | null):
           throw new Stop(1);
         }
       }
-      return { keyPath: path, key };
+      return { key, path, argument: path, shown: `${shownPath(path, deps.home)}, ${key.fingerprint}` };
+    }
+    // No file: a password manager's agent, 1Password's or Secretive's, keeps its keys out of ~/.ssh.
+    const held = (await agentKeys(deps.workstation)).filter((key) => (entry?.keyProblem?.(key) ?? null) === null);
+    if (held.length === 1) {
+      const chosen = chosenFromAgent(held[0]!);
+      ui.info(`SSH key: ${chosen.shown}`);
+      return chosen;
+    }
+    if (held.length > 1) {
+      const choices = held.map((key) => ({ value: sha256Fingerprint(key), label: agentKeyName(key), hint: sha256Fingerprint(key) }));
+      const picked = await pick(ui, "SSH key the machine trusts, from the SSH agent", choices, choices[0]!.value);
+      return chosenFromAgent(held.find((key) => sha256Fingerprint(key) === picked.value)!);
     }
     if (attempt > 0 || deps.keygen === undefined) {
       ui.error(path.message, path.details);
@@ -570,7 +586,7 @@ function planLines(target: Target, site: Site, home: string): string[] {
             `size       ${target.type.label}`,
             price === null ? `price      not given by ${target.entry.title}'s API: see ${target.entry.docs}` : `price      ${price}${target.backups ? ", plus the backups" : ""}`,
             `machine    ${target.name}, Debian 13`,
-            `ssh key    ${shownPath(target.keyPath, home)}, ${target.key.fingerprint}`,
+            `ssh key    ${target.sshKey.shown}`,
           ]
       : [`machine    ${target.login}@${target.host}`];
   return [
@@ -604,7 +620,7 @@ async function order(deps: WizardDependencies, target: Extract<Target, { kind: "
       result = fields;
     },
   };
-  const code = await machine(["machine", "create", ...options, "--ssh-key", target.keyPath], {
+  const code = await machine(["machine", "create", ...options, "--ssh-key", target.sshKey.argument], {
     ...deps.machine,
     environment: deps.environment,
     home: deps.home,
@@ -626,7 +642,7 @@ async function order(deps: WizardDependencies, target: Extract<Target, { kind: "
     return null;
   }
   task.succeed(`${created.name} is up at ${created.ipv4 ?? created.ipv6}, ${created.type} at ${created.location}`);
-  return { machine: created, command: `sitesolide machine create ${options.join(" ")} --ssh-key ${shownPath(target.keyPath, deps.home)}` };
+  return { machine: created, command: `sitesolide machine create ${options.join(" ")} --ssh-key ${target.sshKey.path === null ? target.sshKey.argument : shownPath(target.sshKey.argument, deps.home)}` };
 }
 
 /** The wizard, from the first question to the last line; the exit code. */
