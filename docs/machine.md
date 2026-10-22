@@ -44,6 +44,13 @@ memory, in Germany, France or the Netherlands, on Debian 13; `--type`,
 `--location` and `--image` choose otherwise, and a refused `--type` lists the
 ones that location sells.
 
+**What has run for real.** Hetzner, DigitalOcean and Google Cloud have ordered
+machines through their real APIs, which `setup` then installed and served
+sites from, before `destroy` left nothing behind. AWS, Azure, Scaleway, Vultr
+and Akamai follow their providers' documentation and pass the same tests
+against local fakes of their APIs, but have not yet ordered a real machine:
+say so if one of them refuses something its page says it takes.
+
 **Give sitesolide an account, a project or a subscription of its own** where
 the provider has them. Credentials reach everything their scope reaches: in a
 scope that holds only this machine, they can touch nothing else you run there,

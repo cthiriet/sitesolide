@@ -268,6 +268,11 @@ machine to another way unasked.
 | `porkbun` | through the API | one wildcard, DNS-01 | [porkbun.md](dns/porkbun.md) |
 | `manual` | by you, at any registrar | one per name, on demand | below |
 
+Cloudflare and `manual` have served real machines, switches between the two
+included. The other providers follow their documentation and the Caddy module
+each one names, and pass the same tests against local fakes of their APIs,
+but have not yet made records nor obtained a certificate for a real zone.
+
 With a provider, setup adds its module to Caddy (`caddy add-package`), lays
 its credentials in `/etc/caddy/cloudflare.env`, and writes
 `/etc/caddy/tls-zone.caddy`, the `tls` block every block of the zone imports,
