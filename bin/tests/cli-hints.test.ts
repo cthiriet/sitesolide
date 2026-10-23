@@ -123,7 +123,7 @@ describe("the hints", () => {
       if (hint.includes("--force")) expect(hint).toMatch(/do not re-run with --force/);
     }
     // The codes the installer stops on, as docs/access.md lists them.
-    for (const code of ["install-failed", "secret-taken", "store-refused", "store-failed", "edited-by-hand", "system-unit", "caddy-busy", "bundle-refused", "service-failed", "verify-failed"]) {
+    for (const code of ["install-failed", "secret-taken", "store-refused", "store-failed", "store-not-yours", "taken-meanwhile", "migrate-first", "edited-by-hand", "system-unit", "caddy-busy", "bundle-refused", "service-failed", "verify-failed"]) {
       expect(Object.hasOwn(REMOTE_HINTS, code)).toBe(true);
     }
   });
@@ -139,7 +139,7 @@ describe("the hints", () => {
     expect([...codes].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
     // And the store's folders, which the installer lays before the units.
     const store = new Set([...source.matchAll(/new Stop\(\s*"(store-[a-z-]+)"/g)].map((match) => match[1]!));
-    expect([...store].sort()).toEqual(["store-failed", "store-refused"]);
+    expect([...store].sort()).toEqual(["store-failed", "store-not-yours", "store-refused"]);
     expect([...store].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
     expect(hintForFailure("store-failed", "the project's store of secrets could not be laid under /etc/sitesolide/projects (EACCES)")).toContain("tell the owner of the machine");
     const hint = hintForFailure("secret-taken", "secrets: /etc/sitesolide/shop.env is already on the machine and does not belong to site-shop; nothing was changed");

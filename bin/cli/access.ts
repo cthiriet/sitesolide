@@ -526,7 +526,9 @@ const SLUG = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
  * is built into the address only once it has a slug's shape: the address is
  * quoted, and a quote in it would end the quoting.
  */
-export function ownerReadCommand(path: "/people" | `/access?slug=${string}` | `/store?slug=${string}` | `/store/leftovers?slug=${string}`): string {
+export function ownerReadCommand(
+  path: "/people" | `/access?slug=${string}` | `/store?slug=${string}` | `/store/leftovers?slug=${string}` | `/tokens/claim?slug=${string}`,
+): string {
   const slug = /\?slug=(.*)$/.exec(path)?.[1];
   if (slug !== undefined && !SLUG.test(slug)) throw new Error("not a project's slug: no read is built from it");
   return `sudo curl -sS --max-time 30 -w '\\n%{http_code}\\n' ${SOCKET} 'http://steward${path}'`;
@@ -543,7 +545,8 @@ export type OwnerWritePath =
   | "/store/file"
   | "/store/migrate"
   | "/store/retire"
-  | "/restart";
+  | "/restart"
+  | "/tokens/claim";
 
 /**
  * Those that wait for the steward's lock and then for a service: a restart
@@ -720,4 +723,55 @@ export async function sshGeneral(run: RunOnMachine, slug: string, access: "publi
   if (!isObject(general) || typeof general.access !== "string" || typeof detail !== "string") return unreadable("answer");
   if (code !== null && (!isObject(code) || typeof code.code !== "string")) return unreadable("answer");
   return { ok: true, value: read.value as unknown as GeneralAnswer };
+}
+
+// --- a name a token holds, for the owner's deploy -------------------------------------
+
+/**
+ * Whether a token holds, or claims, a name the machine does not carry: its
+ * deployment accepted, or its write that made the project's store. The
+ * owner's SSH deploy of such a name would hand the token what the owner sets
+ * there, so it stops unless the owner takes the name back (`--adopt`).
+ */
+export type ClaimView = {
+  slug: string;
+  claimed: boolean;
+  token: { id: string; label: string; email: string } | null;
+  /** The project's store was made by that token's write, ahead of any deployment. */
+  store: boolean;
+  /** A deployment of the name by that token is under way: taking it back waits for its end. */
+  deploying: boolean;
+};
+
+const NOTHING_CLAIMED = (slug: string): ClaimView => ({ slug, claimed: false, token: null, store: false, deploying: false });
+
+/** How askSteward words a steward without the route, here: told apart from a socket missing. */
+const BEFORE_CLAIMS = "the steward predates claims";
+
+/**
+ * The claim on a name, asked of the steward's owner socket, as root. A
+ * steward from before claims answers no such route: nothing is claimed then,
+ * no token having been able to hold a name ahead of a deployment.
+ */
+export async function sshClaim(run: RunOnMachine, slug: string): Promise<Reading<ClaimView>> {
+  if (!SLUG.test(slug)) return { ok: false, failure: { error: "invalid", message: `${slug} is not a project's slug` } };
+  const read = await askSteward(run, ownerReadCommand(`/tokens/claim?slug=${slug}`), undefined, { outdated: BEFORE_CLAIMS, unchanged: false });
+  if (!read.ok) return read.failure.error === "steward-outdated" && read.failure.message === BEFORE_CLAIMS ? { ok: true, value: NOTHING_CLAIMED(slug) } : read;
+  const { claimed, token, store, deploying } = read.value;
+  const tokenRead = token === null || (isObject(token) && typeof token.id === "string" && typeof token.label === "string" && typeof token.email === "string");
+  if (read.value.slug !== slug || typeof claimed !== "boolean" || typeof store !== "boolean" || typeof deploying !== "boolean" || !tokenRead) return unreadable("claim");
+  return { ok: true, value: read.value as unknown as ClaimView };
+}
+
+/** The owner takes back a name a token holds: its hold and claim dropped. The token released, or null when none held it. */
+export async function sshTakeBack(run: RunOnMachine, slug: string): Promise<Reading<string | null>> {
+  if (!SLUG.test(slug)) return { ok: false, failure: { error: "invalid", message: `${slug} is not a project's slug` } };
+  const read = await askSteward(run, ownerWriteCommand("DELETE", "/tokens/claim"), JSON.stringify({ slug }), {
+    outdated: "the steward on the server cannot take a name back from a token yet: run sitesolide upgrade first",
+    unchanged: true,
+  });
+  if (!read.ok) return read;
+  const released = read.value.released;
+  if (read.value.slug !== slug || (released !== null && typeof released !== "string")) return unreadable("answer");
+  return { ok: true, value: released as string | null };
 }

@@ -122,6 +122,8 @@ export const SWITCHES = {
   tlsZoneState: "tls-zone-state",
   store: "store.json",
   storePrepare: "store-prepare",
+  /** The names tokens hold ahead of the machine carrying their project: see ClaimsState. */
+  claims: "claims.json",
 } as const;
 
 /**
@@ -141,6 +143,18 @@ export type StoreState = {
 };
 
 export const DEFAULT_STORE: StoreState = { state: "current", variables: {}, files: {} };
+
+/**
+ * The names tokens hold, or claim, while the machine does not carry their
+ * project, as the steward's owner socket answers for them: this release's
+ * routes, a steward from before claims (`old`, a 404 `no such route`), or no
+ * owner socket at all (`down`, curl's 7). Absent, the steward is the store's,
+ * holding no claim.
+ */
+export type ClaimsState = {
+  state: "current" | "old" | "down";
+  claims: Record<string, { token: { id: string; label: string; email: string }; store: boolean; deploying: boolean }>;
+};
 
 /**
  * How a unit stands when `deploy` reads it after its restart, as `systemctl
@@ -762,6 +776,32 @@ if (import.meta.main) {
     answerOwner(current.state);
     answer(200, { slug: leftoversOf, leftovers: current.leftovers?.[leftoversOf] ?? [] });
   }
+  // The names tokens hold, on the steward's owner socket: the read is a
+  // reading; taking a name back is a write, refused unless the test accepts
+  // writes, and busy while the token's deployment runs.
+  const claimsFile = join(vm, SWITCHES.claims);
+  const claims = (): ClaimsState => (existsSync(claimsFile) ? (JSON.parse(readFileSync(claimsFile, "utf8")) as ClaimsState) : { state: stores().state, claims: {} });
+  const claimOf = /^sudo curl .*http:\/\/steward\/tokens\/claim\?slug=([a-z0-9-]+)'$/.exec(command)?.[1];
+  if (claimOf !== undefined && command === ownerReadCommand(`/tokens/claim?slug=${claimOf}`)) {
+    record(`CLAIM GET ${claimOf}`);
+    const current = claims();
+    answerOwner(current.state);
+    const held = current.claims[claimOf];
+    answer(200, held === undefined ? { slug: claimOf, claimed: false, token: null, store: false, deploying: false } : { slug: claimOf, claimed: true, ...held });
+  }
+  if (command === ownerWriteCommand("DELETE", "/tokens/claim")) {
+    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
+    const { slug } = JSON.parse(await Bun.stdin.text()) as { slug: string };
+    record(`CLAIM DELETE ${slug}`);
+    const current = claims();
+    answerOwner(current.state);
+    const held = current.claims[slug];
+    if (held?.deploying === true) refusal(409, "busy", `${held.token.id}'s deployment of ${slug} is under way: wait for it to end`);
+    delete current.claims[slug];
+    writeFileSync(claimsFile, JSON.stringify(current));
+    answer(200, { slug, released: held?.token.id ?? null });
+  }
+
   const storeWrites = [
     ["PUT", "/store/variable"],
     ["DELETE", "/store/variable"],

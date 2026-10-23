@@ -205,13 +205,21 @@ legacy file without a dot, and that nothing is already named `projects`.
   shell: `export A=b` or a space around `=` stop it, with the line number,
   and `$(...)` is a value taken as it is, never run. A legacy manifest's files
   are loaded as before.
+- **A name a token holds stops your deploy.** A token's deployment accepted,
+  or its write that made a project's store ahead of one, holds the name
+  until the machine carries the project: `sitesolide deploy` over SSH stops
+  on such a name, naming the token, before it asks for any value, and
+  `sitesolide deploy --adopt` takes the name back, then deploys. A steward
+  from before claims holds none.
 
 **Whoever works with a token installs the new CLI.** A CLI from before 0.8
 refuses a manifest that lists names before anything is pushed, and the old
 token route answers a project kept in its store `this project keeps its
 variables in its store: update your sitesolide CLI, then sitesolide secrets
-set NAME`. The new CLI facing a steward not upgraded yet warns that it cannot
-tell which runtime secrets are set, and deploys.
+set NAME`. The new CLI facing a steward or a dashboard not upgraded yet
+deploys a manifest in the old form as before, and stops one that lists
+names before anything is sent, since what that deployment would drop cannot
+be told: upgrade the machine first.
 
 **Going back.** `sitesolide upgrade` with the previous binary. The values in
 the stores stay on the machine, unread by the previous steward and dashboard;

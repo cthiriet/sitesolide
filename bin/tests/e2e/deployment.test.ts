@@ -1134,6 +1134,119 @@ describe("a changed manifest replaces the unit its previous version made", () =>
   }, 60_000);
 });
 
+/**
+ * A name a token holds while the machine does not carry its project: its
+ * deployment accepted, or its write that made the project's store. The
+ * owner's deploy stops on it, naming the token, before any prompt or write,
+ * unless --adopt takes the name back first; a deployment of the token's under
+ * way is waited for.
+ */
+describe("deploy and a name a token holds", () => {
+  const HELD = { token: { id: "tok_ci", label: "ci", email: "dev@acme.test" }, store: true, deploying: false };
+  const written = (logs: string[]): string[] => logs.filter((line) => /^(ACCEPTED|STORE (?!GET )|STORE-PREPARE|CLAIM DELETE|LOCK)/.test(line) || line.includes("rsync"));
+
+  test("held, without --adopt: a stop naming the token and its store, before anything is asked or written, dry run included", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      vm.setClaims({ state: "current", claims: { "sample-store": HELD } });
+      for (const asked of [["deploy", "--json"], ["deploy", "--dry-run", "--json"]]) {
+        const r = await run("projects/store-app", asked, { vm });
+        expect(r.code).toBe(1);
+        expect(jsonEvents(r.output).at(-1)).toMatchObject({
+          type: "error",
+          message: "sample-store is held by token ci (tok_ci, dev@acme.test), and the server does not carry it yet: sitesolide deploy --adopt takes the name back",
+          details: expect.arrayContaining(["the token's write made the project's store, which holds what it set there"]),
+          hint: expect.stringContaining("never add --adopt on your own"),
+        });
+      }
+      // The claim read before the store's listing, which leads to the prompts; nothing written.
+      const logs = vm.logs();
+      expect(logs).toContain("CLAIM GET sample-store");
+      expect(logs).not.toContain("STORE GET sample-store");
+      expect(written(logs)).toEqual([]);
+      expect(vm.claims()?.claims["sample-store"]).toEqual(HELD);
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("--adopt takes the name back before anything is written, then deploys; a dry run only says it would", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      vm.setClaims({ state: "current", claims: { "sample-store": { ...HELD, store: false } } });
+      const dry = await run("projects/store-app", ["deploy", "--dry-run", "--adopt"], { vm });
+      expect(dry.code).toBe(0);
+      expect(dry.output).toContain("[dry-run] take sample-store back from token ci (tok_ci, dev@acme.test)");
+      expect(written(vm.logs())).toEqual([]);
+
+      const r = await run("projects/store-app", ["deploy", "--adopt", "--json"], { vm });
+      const logs = vm.logs();
+      const taken = logs.indexOf("CLAIM DELETE sample-store");
+      expect(taken).toBeGreaterThan(-1);
+      // Before the store is read for the prompts, laid, or anything installed.
+      expect(taken).toBeLessThan(logs.lastIndexOf("STORE GET sample-store"));
+      expect(taken).toBeLessThan(logs.indexOf("STORE-PREPARE sample-store"));
+      expect(taken).toBeLessThan(logs.findIndex((line) => line.startsWith("ACCEPTED")));
+      expect(jsonEvents(r.output)).toContainEqual(expect.objectContaining({ type: "step", message: "take sample-store back from token ci (tok_ci, dev@acme.test)" }));
+      expect(vm.claims()?.claims).toEqual({});
+      expect(logs.some((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart sample-store"))).toBe(true);
+    } finally {
+      vm.cleanup();
+    }
+  }, 30_000);
+
+  test("a deployment of the token's under way is waited for, --adopt or not", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      vm.setClaims({ state: "current", claims: { "sample-store": { ...HELD, deploying: true } } });
+      for (const asked of [["deploy", "--json"], ["deploy", "--adopt", "--json"]]) {
+        const r = await run("projects/store-app", asked, { vm });
+        expect(r.code).toBe(1);
+        expect(jsonEvents(r.output).at(-1)).toMatchObject({
+          type: "error",
+          message: "sample-store is being deployed by token ci (tok_ci, dev@acme.test): wait for its deployment to end, then deploy again",
+          hint: expect.stringContaining("wait for it to end"),
+        });
+      }
+      expect(written(vm.logs())).toEqual([]);
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("a steward from before claims holds none; one that cannot say is warned of, and the deployment goes on", async () => {
+    for (const state of ["old", "down"] as const) {
+      const vm = createFakeVm();
+      try {
+        vm.acceptWrites();
+        vm.setClaims({ state, claims: { "sample-store": HELD } });
+        const r = await run("projects/store-app", ["deploy", "--dry-run", "--json"], { vm });
+        expect({ state, code: r.code }).toEqual({ state, code: 0 });
+        const warned = jsonEvents(r.output).filter((event) => event.type === "warning" && String(event.message).startsWith("cannot tell whether a token holds sample-store"));
+        expect({ state, warned: warned.length }).toEqual({ state, warned: state === "down" ? 1 : 0 });
+      } finally {
+        vm.cleanup();
+      }
+    }
+  });
+
+  test("a project the machine carries is the owner's already: no claim is asked", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.setClaims({ state: "current", claims: { "sample-store": HELD } });
+      vm.writeManifest("sample-store", readFileSync(join(TESTS_ROOT, "projects", "store-app", "sitesolide.json"), "utf8"));
+      const r = await run("projects/store-app", ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(0);
+      expect(vm.logs().filter((line) => line.startsWith("CLAIM"))).toEqual([]);
+    } finally {
+      vm.cleanup();
+    }
+  });
+});
+
 describe("sitesolide remove and the secret files a project left behind", () => {
   test("a project that names its secrets: the leftovers the steward attaches to it are read first, then deleted with their previous versions when they are its own", async () => {
     const vm = createFakeVm();

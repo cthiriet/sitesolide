@@ -83,8 +83,9 @@ describe("deploy reads the door on the VM", () => {
     // for the ports they declare, and nothing else was asked of the machine:
     // the other sites' blocks are not this deployment's business, and in a
     // dry run there is no lock. The store's listing is a read too: it says
-    // what deploying would drop of the legacy files a unit reads.
-    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *", "STORE GET sample-door"]);
+    // what deploying would drop of the legacy files a unit reads; so is the
+    // claim on its name, which the machine does not carry yet.
+    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *", "CLAIM GET sample-door", "STORE GET sample-door"]);
   });
 
   test("the same value on both sides changes nothing", async () => {

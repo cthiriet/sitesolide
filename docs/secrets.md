@@ -137,6 +137,8 @@ What still stops a deployment, and why:
 | a build secret missing | before anything is read on the machine or sent | the remedy is on your workstation, and nothing is half done |
 | a workstation secrets file that does not parse | the same | a guess would build with a wrong value |
 | a legacy file that is the machine's, another project's, or owned by another account | before anything is pushed | root reads whatever a unit names |
+| a manifest that names its variables, or none, while the installed units read legacy files holding values the store lacks (`migrate-first`) | the same | its units would read the store alone, and drop those values |
+| over SSH, a name a token holds that the machine does not carry yet, without `--adopt` | before the prompts | your values would sit in a store, and your project under a name, that token may deploy code to ([commands.md](commands.md)) |
 | the store's folder is a link, not a folder, or not root's | before the units and the code | systemd would read through it |
 | the store's folders cannot be laid | the same | without `files/`, every start of the project fails |
 | the build, `install` or the stability check fails | as always | |
@@ -446,9 +448,11 @@ landing or a service made by hand, keeps its files by name, as before.
    that names its variables would drop the values the legacy files still
    supply, its units reading the store alone: `deploy` stops before anything
    is sent, `migrate first: sitesolide secrets migrate --restart`, naming
-   them. A deployment that cannot list the store stops too, since what it
-   would drop cannot be told: a token needs *Manage secrets* to deploy such a
-   manifest, and over SSH a steward from before the store is upgraded first.
+   them. With a token, the machine refuses such a deployment itself,
+   `migrate-first`, whether the token may list the store or not. A
+   deployment whose listing of the store fails otherwise stops too, since
+   what it would drop cannot be told: a steward or a dashboard from before
+   the store is upgraded first.
 
 Merging and retiring are the owner's alone. Steps 4 and 5 may come in either
 order. Never `sitesolide refresh --all` for any of them. The detail, and how

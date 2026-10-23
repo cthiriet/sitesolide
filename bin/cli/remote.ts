@@ -649,9 +649,10 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
   // A manifest that names its variables, or none, makes units that read the
   // store alone: what legacy files the installed units read hold, and the
   // store lacks, would be dropped. Read first, and a stop before anything is
-  // sent, a listing this token may not make or that fails included, since
-  // what would be dropped cannot be told then; then what the store lacks of
-  // the declared names.
+  // sent; then what the store lacks of the declared names. A listing this
+  // token may not make leaves the judgement to the machine, which refuses
+  // such a deployment itself (migrate-first); one that fails otherwise is a
+  // stop, what would be dropped not being told.
   if (hasStore(manifest) && declaration.form !== "legacy") {
     if (declares) output.say("-> runtime secrets");
     const listed = await transport.list(slug);
@@ -662,6 +663,8 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
         missing = await store.handleMissing(store.withDeclared(listed.value, declaration), transport, io);
         if (missing.runtime.length === 0 && missing.files.length === 0) output.say("   every declared runtime secret is set");
       }
+    } else if (listed.failure.error === "out-of-scope") {
+      if (declares) output.say("   this token may not list the store: the machine judges what this deployment would drop, and its log names what is missing");
     } else if (listed.failure.error === "not-found") {
       // A project not deployed yet whose store this token may not hold
       // ahead: nothing installed reads a legacy file, and what the store
@@ -672,11 +675,9 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
       // What would refuse the deployment itself, said as it stands.
       return report(output, listed.failure);
     } else {
-      const why =
-        listed.failure.error === "out-of-scope" ? "this token may not list the project's store, which a token minted with Manage secrets may" : listed.failure.message;
       return report(output, {
         error: "store-unlisted",
-        message: `cannot tell whether this deployment would drop values legacy files supply: ${why}`,
+        message: `cannot tell whether this deployment would drop values legacy files supply: ${listed.failure.message}`,
         details: [
           "a manifest that names its variables, or none, makes units that read the store alone: the store is read first, to stop a deployment that would drop a value",
           "nothing was sent",
@@ -1251,6 +1252,7 @@ export function unknownOptions(command: string, arguments_: string[]): Failure |
       details: [
         takes.length === 0 ? `with a token, sitesolide ${command} takes no option` : `with a token, sitesolide ${command} takes ${takes.join(", ")}`,
         ...(option === "--yes" || option === "--slug" ? ["a folder without sitesolide.json: write it first with sitesolide detect --write, review it, then deploy"] : []),
+        ...(option === "--adopt" ? ["taking a name back from a token is the owner's, over SSH: a token never takes another's name"] : []),
       ],
     };
   }

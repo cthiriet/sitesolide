@@ -52,8 +52,8 @@ function folder(prefix: string): string {
 type Received = { method: string; path: string; authorization: string | null; body: string | Uint8Array | null };
 const received: Received[] = [];
 let scenario: "succeeds" | "fails" | "refuses" = "succeeds";
-/** The store routes: as this release answers them, from a dashboard before them, a refusal quoting what was sent, or a token that may not list. */
-let storeScenario: "answers" | "unmigrated" | "old" | "quotes" | "out-of-scope" | "not-found" = "answers";
+/** The store routes: as this release answers them, from a dashboard before them, a refusal quoting what was sent, a token that may not list, or a listing that breaks. */
+let storeScenario: "answers" | "unmigrated" | "old" | "quotes" | "out-of-scope" | "not-found" | "broken" = "answers";
 /** What a restart's observation concludes. */
 let restartVerdict: "active" | "failure" = "active";
 /** What the finished deployment says the store lacked, and the placeholders it hands the build; undefined for a dashboard before them. */
@@ -152,6 +152,7 @@ beforeAll(() => {
       if (url.pathname === "/api/v1/projects/shop/store" && req.method === "GET") {
         if (storeScenario === "out-of-scope") return Response.json({ error: "out-of-scope", message: "this token may not manage secrets" }, { status: 403 });
         if (storeScenario === "not-found") return Response.json({ error: "not-found", message: "shop is not deployed" }, { status: 404 });
+        if (storeScenario === "broken") return Response.json({ error: "failure", message: "the store of shop does not read" }, { status: 500 });
         return Response.json({ store: storeScenario === "unmigrated" ? UNMIGRATED : STORE });
       }
       const changed = (over: object) => Response.json({ store: STORE, created: false, set: [], generated: [], removed: [], absent: [], files: { set: [], removed: [] }, restart: null, ...over });
@@ -363,12 +364,15 @@ describe("what a token's run refuses, and --json", () => {
     received.length = 0;
     const root = project(APP, APP_FILES);
     const env = { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN };
-    for (const arguments_ of [["deploy", "--yes"], ["deploy", "--force"], ["status", "--follow"], ["logs", "--lines", "9000"]]) {
+    for (const arguments_ of [["deploy", "--yes"], ["deploy", "--force"], ["deploy", "--adopt"], ["status", "--follow"], ["logs", "--lines", "9000"]]) {
       const result = await cli(root, [...arguments_, "--json"], env);
       expect({ arguments_, code: result.code }).toEqual({ arguments_, code: 1 });
       expect(events(result.output).at(-1)!.type).toBe("error");
     }
     expect(received).toEqual([]);
+    // Taking a name back from a token is the owner's: said so.
+    const adopt = await cli(root, ["deploy", "--adopt", "--json"], env);
+    expect(events(adopt.output).at(-1)).toMatchObject({ type: "error", message: "--adopt: not an option of sitesolide deploy with a token: nothing was sent", details: expect.arrayContaining([expect.stringContaining("a token never takes another's name")]) });
   });
 
   test("deploy --json: the steps and the machine's log as events, and a result carrying the address", async () => {
@@ -799,11 +803,24 @@ describe("deploy through the API: the secrets", () => {
     storeScenario = "answers";
   });
 
-  test("a store this token may not list, or a dashboard before the store: what would be dropped cannot be told, a stop before anything is sent", async () => {
+  test("a store this token may not list: the machine judges what the deployment would drop, and it goes on", async () => {
+    scenario = "succeeds";
+    storeScenario = "out-of-scope";
+    for (const manifest of [{ ...APP, secrets: ["API_KEY"] }, APP]) {
+      received.length = 0;
+      const r = await cli(project(manifest, APP_FILES), ["deploy"], env());
+      expect(r.code).toBe(0);
+      expect(r.all.includes("this token may not list the store: the machine judges what this deployment would drop")).toBe("secrets" in manifest);
+      expect(received.some((entry) => entry.method === "POST" && entry.path === "/api/v1/deployments")).toBe(true);
+    }
+    storeScenario = "answers";
+  });
+
+  test("a dashboard before the store, or a listing that breaks: what would be dropped cannot be told, a stop before anything is sent", async () => {
     scenario = "succeeds";
     for (const [state, said] of [
-      ["out-of-scope", "this token may not list the project's store, which a token minted with Manage secrets may"],
       ["old", "does not carry the store of secrets by token yet"],
+      ["broken", "the store of shop does not read"],
     ] as const) {
       for (const manifest of [{ ...APP, secrets: ["API_KEY"] }, APP]) {
         storeScenario = state;
@@ -813,14 +830,14 @@ describe("deploy through the API: the secrets", () => {
         expect(events(r.output).at(-1)).toMatchObject({
           type: "error",
           message: expect.stringContaining(`cannot tell whether this deployment would drop values legacy files supply: `),
-          hint: expect.stringContaining("Manage secrets"),
+          hint: expect.stringContaining("tell the owner of the machine"),
         });
         expect(r.output).toContain(said);
         expect(received.filter((entry) => entry.method !== "GET")).toEqual([]);
       }
     }
     // The old form keeps reading its files: nothing to tell, nothing asked.
-    storeScenario = "out-of-scope";
+    storeScenario = "broken";
     expect((await cli(project({ ...APP, secrets: ["shop.env"] }, APP_FILES), ["deploy"], env())).code).toBe(0);
     storeScenario = "answers";
   });

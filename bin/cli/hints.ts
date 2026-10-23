@@ -38,7 +38,7 @@ const MIGRATE_FIRST =
 
 /** A deployment that could not list the store, which it reads to know what it would drop. */
 const STORE_UNLISTED =
-  "the project's store could not be listed, and a manifest that names its variables, or none, is only deployed once it is: over SSH, if the message says the steward predates the store, the owner runs `sitesolide upgrade` first, otherwise run the same command again; with a token, a token minted with Manage secrets lists it, or the owner deploys";
+  "the project's store could not be listed, and a manifest that names its variables, or none, is only deployed once it is: if the message says the steward or the dashboard predates the store, the owner runs `sitesolide upgrade` first; otherwise run the same command again once, and if it fails again tell the owner of the machine, with the message; never retry in a loop, and never switch the manifest back to the old form of `secrets` to get around it";
 
 /** A store folder that is a link or no folder. */
 const STORE_REFUSED =
@@ -163,6 +163,9 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^build secrets missing: /, BUILD_SECRET_MISSING],
   [/^the build secrets file does not read: /, BUILD_SECRETS_UNREADABLE],
   [/^migrate first: /, MIGRATE_FIRST],
+  [/ is being deployed by .*: wait for its deployment to end/, "a token's deployment of this name is under way, and nothing was sent: wait for it to end, then run `sitesolide deploy` again once; never retry in a loop, and never take the name back with --adopt unless the owner asked for it"],
+  [/, and the server does not carry it yet: sitesolide deploy --adopt takes the name back/, "a token holds this name, and nothing was sent: pick another slug in sitesolide.json, or ask the owner, who alone decides to take the name back with `sitesolide deploy --adopt`; never add --adopt on your own, it drops the token's hold"],
+  [/ could not be taken back from /, "the name stays the token's, and nothing was sent: busy means its deployment runs, or the project is on the machine now, so wait and run `sitesolide deploy` again once; otherwise tell the owner of the machine, with the message"],
   [/^the store of secrets cannot be laid: /, STORE_REFUSED],
   [/store of secrets cannot be laid, which its units load/, STORE_REFUSED],
   [/^cannot tell whether the store's folders of /, READ_FAILED],
@@ -264,6 +267,9 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "store-unlisted": STORE_UNLISTED,
   "store-failed":
     "the machine could not lay the project's store of secrets, which its units load: tell the owner of the machine, with the message; nothing was served; never create anything on the machine by hand, nor deploy again in a loop",
+  "store-not-yours":
+    "the project's store was not made by this token's own write: a token's creation never takes another's store; do not retry, tell the owner of the machine",
+  "taken-meanwhile": "the project was deployed on the machine after this creation was accepted; pick another slug, or ask the owner",
   "store-unmanaged":
     "the project's store on the machine is in a state the steward does not rewrite, and nothing was changed: tell the owner of the machine, with the message; never work around it",
   "migrate-conflict":

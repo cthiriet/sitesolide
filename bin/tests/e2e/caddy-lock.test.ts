@@ -630,8 +630,9 @@ describe("sitesolide deploy leaves the other sites' blocks alone", () => {
     expect(existsSync(join(folder, "built"))).toBe(true);
     // Its manifest is read with every other one, for the ports it declares;
     // its block is not.
-    // The store's listing, a read too, says what deploying would drop of its legacy files.
-    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *", "STORE GET sample-door"]);
+    // The store's listing, a read too, says what deploying would drop of its legacy files;
+    // the claim on its name, whether a token holds it, the machine not carrying it.
+    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *", "CLAIM GET sample-door", "STORE GET sample-door"]);
   });
 
   test("the site in progress, whose door the dashboard changed, follows it", async () => {
@@ -656,7 +657,8 @@ describe("sitesolide deploy leaves the other sites' blocks alone", () => {
       cli: join(repo, "bin", "sitesolide.ts"),
     });
     expect(r.code).toBe(0);
-    expect(vm.logs()).toEqual(["READ sample-static"]);
+    // Its own door, and whether a token holds its name, the machine not carrying it.
+    expect(vm.logs()).toEqual(["READ sample-static", "CLAIM GET sample-static"]);
   });
 });
 

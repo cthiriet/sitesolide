@@ -257,7 +257,7 @@ import { machine, sshLogin } from "./cli/machine";
 import { DNS_PROVIDERS, dnsEntry, MANUAL } from "./cli/dns/registry";
 import { eventOutput, humanOutput, login, promptWithoutEcho, remoteMode, REMOTE_USAGE, runRemote, type BuildContext } from "./cli/remote";
 import { buildEnv, KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
-import { ownerGeneralCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshGeneral, sshPeople } from "./cli/access";
+import { ownerGeneralCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshPeople, sshTakeBack } from "./cli/access";
 import {
   foreignUnit,
   listUnitsCommand,
@@ -1053,6 +1053,51 @@ async function runtimeSecrets(manifest: Manifest, config: Config, executor: Exec
   note({ missingSecrets: missing });
 }
 
+/**
+ * A name a token holds or claims while the machine does not carry its
+ * project: its deployment was accepted, or its write made the project's
+ * store. Deploying it over SSH would lay the owner's project, and the values
+ * the owner sets in its store, under a name the token may then deploy code
+ * to, so it stops, naming the token, unless the owner takes the name back
+ * with `--adopt`. A deployment of the token's under way is waited for. A
+ * steward from before claims holds none; one that cannot say is warned of,
+ * and the deployment goes on: the machine refuses a token while its claims
+ * do not read. A read, hence in a dry run too; the taking back is not done
+ * there.
+ */
+async function settleClaim(slug: string, config: Config, executor: Executor, adopt: boolean): Promise<void> {
+  const run = (command: string, input?: string) => executor.execute(config, command, input);
+  const read = await sshClaim(run, slug);
+  if (!read.ok) {
+    warn(`cannot tell whether a token holds ${slug}: ${read.failure.message}`, read.failure.details ?? []);
+    return;
+  }
+  const claim = read.value;
+  if (!claim.claimed) return;
+  const holder = claim.token === null ? "a token" : `token ${claim.token.label === "" ? claim.token.id : `${claim.token.label} (${claim.token.id}${claim.token.email === "" ? "" : `, ${claim.token.email}`})`}`;
+  if (claim.deploying) {
+    die(`${slug} is being deployed by ${holder}: wait for its deployment to end, then deploy again`, [
+      "its name is the token's until then, and nothing was sent",
+      "once it ended, sitesolide deploy --adopt takes the name back if the project is not on the machine",
+    ]);
+  }
+  if (!adopt) {
+    die(`${slug} is held by ${holder}, and the server does not carry it yet: sitesolide deploy --adopt takes the name back`, [
+      claim.store ? "the token's write made the project's store, which holds what it set there" : "the token's deployment of it was accepted",
+      "deployed as it is, your project and the values you set in its store would sit under a name that token may deploy code to",
+      "--adopt drops the token's hold on the name, then deploys; nothing was sent",
+    ]);
+  }
+  if (executor.simulated) {
+    say(`   [dry-run] take ${slug} back from ${holder}`);
+    return;
+  }
+  step(`take ${slug} back from ${holder}`);
+  const released = await sshTakeBack(run, slug);
+  if (!released.ok) die(`${slug} could not be taken back from ${holder}: ${released.failure.message}`, ["nothing was sent"]);
+  say(`   ${released.value === null ? "no token held it any more" : `taken back from token ${released.value}`}`);
+}
+
 /** The store over the owner's SSH: root on the machine asks the steward's owner socket, every body on standard input. */
 function ownerStore(config: Config, executor: Executor): StoreTransport {
   return sshStore((command, input) => executor.execute(config, command, input));
@@ -1180,6 +1225,7 @@ async function deploy(
   config: Config,
   executor: Executor,
   replace = false,
+  adopt = false,
 ): Promise<void> {
   const slug = rawProject.manifest.slug;
   const paths = projectPaths(slug);
@@ -1236,6 +1282,10 @@ async function deploy(
   const behindPortal = isProtected(manifest);
   if (behindPortal) await requirePortal(config, executor);
 
+  // A name a token holds, the machine not carrying its project: before the
+  // prompts, which would set values in a store the token may then deploy
+  // code to read. A project the machine carries is the owner's already.
+  if (!doorConfirmed) await settleClaim(slug, config, executor, adopt);
   // What the store lacks, before the build and before the Caddy lock: a
   // person thinking at a prompt never holds the lock the gatekeeper and every
   // other deployment wait for.
@@ -3901,6 +3951,7 @@ function usage(zone: string | null): string {
     "     --compare                    with --dry-run: build, then list what would change on the server",
     "     --force                      switch a hand-written unit to the generated one",
     "     --yes [--slug <name>]        no sitesolide.json: write the inferred one, then deploy",
+    "     --adopt                      take back a name a token holds that the server does not carry, then deploy",
     "  sitesolide status               what the server actually runs",
     "  sitesolide logs [--follow]      journalctl for this project",
     "     --lines <n>                  how many lines back, 50 by default",
@@ -4126,6 +4177,7 @@ if (import.meta.main) {
         config,
         executor,
         replace,
+        arguments_.includes("--adopt"),
       );
       break;
     case "status":

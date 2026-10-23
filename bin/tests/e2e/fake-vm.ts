@@ -26,7 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HOLDER_NAME, LOCK_NAME } from "../../cli/caddy-lock";
-import { addAccount, DEFAULT_ACCESS, DEFAULT_STORE, readAccounts, SWITCHES, TEST_HOST, type AccessRegistry, type Standing, type StoreState } from "./fake-ssh";
+import { addAccount, DEFAULT_ACCESS, DEFAULT_STORE, readAccounts, SWITCHES, TEST_HOST, type AccessRegistry, type ClaimsState, type Standing, type StoreState } from "./fake-ssh";
 
 export type FakeVm = {
   /** The folder that stands in for the machine. */
@@ -88,6 +88,10 @@ export type FakeVm = {
   store(): StoreState;
   /** The command that lays a store's folders finds a link or a file in their place. */
   refuseStorePrepare(): void;
+  /** The names tokens hold ahead of the machine carrying their project; by default none, on the store's steward. */
+  setClaims(state: ClaimsState): void;
+  /** The claims as they stand, after the names taken back. */
+  claims(): ClaimsState | null;
   /** The static accounts as /etc/passwd lines: those laid, and those an accepted useradd made. */
   accounts(): string[];
   /** The commands received, one per line: CONNECT, READ <pattern>, REFUSED <command>... */
@@ -219,6 +223,13 @@ export function createFakeVm(): FakeVm {
     },
     refuseStorePrepare() {
       writeFileSync(join(root, SWITCHES.storePrepare), "refused");
+    },
+    setClaims(state) {
+      writeFileSync(join(root, SWITCHES.claims), JSON.stringify(state));
+    },
+    claims() {
+      const file = join(root, SWITCHES.claims);
+      return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as ClaimsState) : null;
     },
     setTlsZoneState(state) {
       writeFileSync(join(root, SWITCHES.tlsZoneState), state);

@@ -21,7 +21,9 @@ import {
   share,
   leftText,
   sshAccess,
+  sshClaim,
   sshPeople,
+  sshTakeBack,
   type AccessState,
   type AccessTransport,
   type EntryAnswer,
@@ -1012,6 +1014,57 @@ describe("sshAccess and sshPeople, over a fake machine", () => {
       { command: ownerReadCommand("/people"), input: undefined },
       { command: ownerWriteCommand("PUT", "/people/person"), input: '{"email":"a@acme.test","create":true}' },
     ]);
+  });
+});
+
+describe("sshClaim and sshTakeBack: a name a token holds, for the owner's deploy", () => {
+  const held = { slug: "kanban", claimed: true, token: { id: "tok_1", label: "ci", email: "dev@acme.test" }, store: true, deploying: false };
+
+  test("the read, as root on the owner socket; the taking back, its body on standard input", async () => {
+    const { ran, run } = fakeMachine((command) => (command.includes("-X DELETE") ? curl(200, { slug: "kanban", released: "tok_1" }) : curl(200, held)));
+    expect(await sshClaim(run, "kanban")).toEqual({ ok: true, value: held });
+    expect(await sshTakeBack(run, "kanban")).toEqual({ ok: true, value: "tok_1" });
+    expect(ran).toEqual([
+      { command: ownerReadCommand("/tokens/claim?slug=kanban"), input: undefined },
+      { command: ownerWriteCommand("DELETE", "/tokens/claim"), input: '{"slug":"kanban"}' },
+    ]);
+    // Nothing held any more by the time it is taken back.
+    expect(await sshTakeBack(fakeMachine(() => curl(200, { slug: "kanban", released: null })).run, "kanban")).toEqual({ ok: true, value: null });
+  });
+
+  test("a steward from before claims holds none; one without an owner's socket is not taken for it", async () => {
+    const old = fakeMachine(() => curl(404, { error: "not-found", message: "no such route" }));
+    expect(await sshClaim(old.run, "kanban")).toEqual({ ok: true, value: { slug: "kanban", claimed: false, token: null, store: false, deploying: false } });
+    const socketless = fakeMachine(() => ({ code: 7, output: "", error: "curl: (7) Couldn't connect to server\n" }));
+    expect(await sshClaim(socketless.run, "kanban")).toMatchObject({ ok: false, failure: { error: "steward-outdated", message: expect.stringContaining("no owner's socket") } });
+    // Taking a name back needs the route: an older steward is told to upgrade.
+    expect(await sshTakeBack(old.run, "kanban")).toMatchObject({ ok: false, failure: { error: "steward-outdated", message: expect.stringContaining("run sitesolide upgrade first") } });
+  });
+
+  test("a refusal keeps its code: busy while the token deploys, a bad slug, claims that do not read", async () => {
+    const busy = fakeMachine(() => curl(409, { error: "busy", message: "tok_1 is deploying kanban" }));
+    expect(await sshTakeBack(busy.run, "kanban")).toEqual({ ok: false, failure: { error: "busy", message: "tok_1 is deploying kanban: nothing was changed" } });
+    const broken = fakeMachine(() => curl(500, { error: "failure", message: "the claims do not read" }));
+    expect(await sshClaim(broken.run, "kanban")).toEqual({ ok: false, failure: { error: "failure", message: "the claims do not read" } });
+  });
+
+  test("an answer of another shape, or for another slug, is never taken for nothing claimed", async () => {
+    for (const body of [
+      { ...held, slug: "other" },
+      { ...held, claimed: "yes" },
+      { ...held, token: { id: "tok_1" } },
+      { ...held, deploying: undefined },
+    ]) {
+      expect(await sshClaim(fakeMachine(() => curl(200, body)).run, "kanban")).toEqual({ ok: false, failure: { error: "failure", message: "the steward's claim does not read: nothing was changed" } });
+    }
+    expect(await sshTakeBack(fakeMachine(() => curl(200, { slug: "kanban", released: 3 })).run, "kanban")).toMatchObject({ ok: false, failure: { error: "failure" } });
+  });
+
+  test("a slug that is not one never reaches the machine", async () => {
+    const { ran, run } = fakeMachine(() => curl(200, held));
+    expect(await sshClaim(run, "../etc; reboot")).toMatchObject({ ok: false, failure: { error: "invalid" } });
+    expect(await sshTakeBack(run, "Kanban")).toMatchObject({ ok: false, failure: { error: "invalid" } });
+    expect(ran).toEqual([]);
   });
 });
 
