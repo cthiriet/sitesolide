@@ -12,7 +12,7 @@
  */
 
 import { OWNER_SOCKET, readCurlAnswer } from "./access";
-import { isValidSlug } from "./manifest";
+import { isLegacySecretName, isValidSlug } from "./manifest";
 import { ownerRefusal, secretFileRefusal, type SecretOwner } from "./secrets";
 import { removeUnitsCommand } from "./services";
 import { storeRemovalActions } from "./store";
@@ -64,6 +64,14 @@ export type ProjectToRemove = {
   isApplication: boolean;
   /** The manifest's flat files of the old form, each at /etc/sitesolide/<name>: legacySecretFiles, those removableSecrets keeps. */
   secrets: readonly string[];
+  /**
+   * Flat files of the old form the manifest no longer names but the machine
+   * still attaches to the project by its name, a project that moved to its
+   * store and never retired them: deleted with it, each with its previous
+   * version, so that a project created again under this name inherits none.
+   * Judged by removableSecrets as `secrets` are, by the caller.
+   */
+  leftovers?: readonly string[];
   /**
    * The project's units as unitNames in unit.ts names them, the main one
    * first: without `.service`, a timer with its `.timer`; the slug alone for
@@ -126,6 +134,23 @@ export function removalActions(project: ProjectToRemove): Action[] {
     actions.push({
       title: `remove the previous version of ${secret} kept by the dashboard`,
       command: `sudo rm -f ${PREVIOUS_DIR}/${secret}`,
+    });
+  }
+
+  // The flat files the project left behind when it moved to its store: no
+  // unit reads them any more, and nothing but this removal deletes them.
+  // Each name is a flat file's, checked again here since a path is built
+  // from it; one the manifest names too is deleted once.
+  for (const leftover of new Set(project.leftovers ?? [])) {
+    if (!isLegacySecretName(leftover)) throw new Error("not a secret file's name: nothing is removed for it");
+    if (project.secrets.includes(leftover)) continue;
+    actions.push({
+      title: `remove ${leftover}, which the project no longer declares`,
+      command: `sudo rm -f ${secretPath(leftover)}`,
+    });
+    actions.push({
+      title: `remove the previous version of ${leftover} kept by the dashboard`,
+      command: `sudo rm -f ${PREVIOUS_DIR}/${leftover}`,
     });
   }
 

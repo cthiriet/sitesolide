@@ -155,6 +155,25 @@ describe("removalActions", () => {
     expect(commands.some((c) => /rm -rf? \/var\/lib\/sitesolide-steward\/precedents\/?$/.test(c))).toBe(false);
   });
 
+  test("the flat files a project left behind when it moved to its store go with it, each with its previous version, before the store", () => {
+    const commands = removalActions(project({ secrets: ["sample.env"], leftovers: ["sample-ses.env", "sample.env", "sample-ses.env"] })).map((g) => g.command);
+    // Each once, a name the manifest names too included.
+    expect(commands.filter((c) => c === "sudo rm -f /etc/sitesolide/sample-ses.env")).toHaveLength(1);
+    expect(commands.filter((c) => c === "sudo rm -f /etc/sitesolide/sample.env")).toHaveLength(1);
+    expect(commands).toContain("sudo rm -f /var/lib/sitesolide-steward/precedents/sample-ses.env");
+    const leftover = commands.indexOf("sudo rm -f /etc/sitesolide/sample-ses.env");
+    expect(leftover).toBeGreaterThan(commands.indexOf("sudo rm -rf /srv/sites/sample"));
+    expect(leftover).toBeLessThan(commands.indexOf("sudo rm -rf /etc/sitesolide/projects/sample"));
+    // None given, none touched: the actions are those of before.
+    expect(removalActions(project({ leftovers: [] }))).toEqual(removalActions(project()));
+  });
+
+  test("a leftover that is not a flat file's name is refused before a single command is built", () => {
+    for (const name of ["", "..", "../etc/shadow", "a/b.env", "projects", "sample-secrets/x.env", "sample.env;reboot", "-sample.env", "SAMPLE_KEY"]) {
+      expect(() => removalActions(project({ leftovers: [name] }))).toThrow("not a secret file's name");
+    }
+  });
+
   test("everything is taken up again without error after a failure halfway", () => {
     // An interrupted removal must be able to go to the end: a service already
     // stopped, a file already gone, an account already deleted are not
