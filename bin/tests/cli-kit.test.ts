@@ -274,6 +274,7 @@ describe("the environment of a project's build: an allow list", () => {
     BUN_INSTALL: "/home/someone/.bun",
     NODE_ENV: "development",
     AWS_SECRET_ACCESS_KEY: "a cloud's key the shell happens to carry",
+    SSH_AUTH_SOCK: "/tmp/ssh-agent/agent.1234",
     GITHUB_TOKEN: "ghp_planted",
     SITESOLIDE_TOKEN: `sst_${"T".repeat(43)}`,
     SITESOLIDE_API: "https://dashboard.test-zone.invalid",
@@ -307,6 +308,11 @@ describe("the environment of a project's build: an allow list", () => {
     expect(built.NODE_ENV).toBe("production");
     expect(built.PUBLIC_SITE_URL).toBe("https://blog.test-zone.invalid");
     expect(Object.keys(built).filter((name) => name.startsWith("SITESOLIDE_"))).toEqual([]);
+  });
+
+  test("the SSH agent's socket never reaches it unless the manifest names it: its keys log into the machine", () => {
+    expect(buildEnv({ inherited: WORKSTATION, ...nothing }).SSH_AUTH_SOCK).toBeUndefined();
+    expect(buildEnv({ inherited: WORKSTATION, lent: {}, project: [], secrets: { SSH_AUTH_SOCK: "/tmp/ssh-agent/agent.1234" } }).SSH_AUTH_SOCK).toBe("/tmp/ssh-agent/agent.1234");
   });
 
   test("a declared build secret reaches it, and wins over the manifest's env; an undeclared one from the shell never does", () => {

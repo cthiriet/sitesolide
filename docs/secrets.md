@@ -314,7 +314,7 @@ does not run only warns.
 
 1. from your environment, only these: `PATH`, `HOME`, `USER`, `LOGNAME`,
    `SHELL`, `TERM`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`, `LANG`,
-   `LANGUAGE`, `TZ`, `TMPDIR`, `SSH_AUTH_SOCK`, `CI`, the toolchains'
+   `LANGUAGE`, `TZ`, `TMPDIR`, `CI`, the toolchains'
    locations (`BUN_INSTALL`, `NVM_DIR`, `NVM_BIN`, `VOLTA_HOME`, `PNPM_HOME`,
    `COREPACK_HOME`, `GOPATH`, `GOROOT`, `GOCACHE`, `GOMODCACHE`, `CARGO_HOME`,
    `RUSTUP_HOME`, `JAVA_HOME`, `ANDROID_HOME`, `PYENV_ROOT`, `UV_CACHE_DIR`,
@@ -327,8 +327,11 @@ does not run only warns.
 Never a `SITESOLIDE_*` variable of yours, a token exported as
 `SITESOLIDE_TOKEN` first among them. `NODE_ENV` is not inherited: the
 manifest sets it, and a workstation's `development` must not reach a
-production build. A build that needs another variable of yours, a proxy, names
-it under `secrets.build`: that is what "taken from whoever deploys" means.
+production build. Nor is `SSH_AUTH_SOCK`: the SSH agent it names holds the
+keys that log into your server, with sudo, and the build is the folder's own
+code. A build that needs another variable of yours, a proxy, or the agent to
+fetch a private dependency, names it under `secrets.build`: that is what
+"taken from whoever deploys" means.
 `deploy.sh`, the script that deploys without the CLI, takes build secrets
 from the environment alone, and never puts a value on a command line.
 

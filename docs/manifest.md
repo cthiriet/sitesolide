@@ -135,14 +135,17 @@ no compiler, and does not need any.
 It runs with a clean environment, over SSH as with a token, never with your
 whole one: from your environment, only what locates things and the
 toolchains (`PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `LANG`, `TZ`, `TMPDIR`,
-`SSH_AUTH_SOCK`, `CI`, `BUN_INSTALL`, `NVM_DIR`, `GOPATH`, `CARGO_HOME`,
-`JAVA_HOME` and their kin, every `LC_*` and `XDG_*`); then the project's
+`CI`, `BUN_INSTALL`, `NVM_DIR`, `GOPATH`, `CARGO_HOME`, `JAVA_HOME` and their
+kin, every `LC_*` and `XDG_*`); then the project's
 [`env`](#env), its placeholders replaced; then the names of
 [`secrets.build`](#secrets), taken from whoever deploys. Never a variable
 whose name starts with `SITESOLIDE_`: a token exported as `SITESOLIDE_TOKEN`
 or a DNS provider's credentials never reach the folder's code. `NODE_ENV`
 is not inherited either: the manifest sets it, and a workstation's
-`development` must not reach a production build. The full list, and where a
+`development` must not reach a production build. Nor is `SSH_AUTH_SOCK`: the
+SSH agent it names holds the keys that log into your server, and the build is
+the folder's own code; one that fetches a private dependency over SSH names
+it under `secrets.build`. The full list, and where a
 build secret is read, is in [secrets.md](secrets.md#build-secrets).
 
 `deploy --dry-run` shows it and does not run it: it is the folder's own code, and

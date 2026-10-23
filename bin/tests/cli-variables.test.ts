@@ -110,10 +110,11 @@ describe("what a secret looks like", () => {
 describe("the build's environment", () => {
   test("what every build inherits: locations, identity, terminal, language, toolchains, never NODE_ENV nor sitesolide's", () => {
     expect(BUILD_INHERITED_PREFIXES).toEqual(["LC_", "XDG_"]);
-    for (const name of ["PATH", "HOME", "USER", "LANG", "TZ", "TMPDIR", "SSH_AUTH_SOCK", "CI", "BUN_INSTALL", "NVM_DIR", "GOPATH", "CARGO_HOME", "DEVELOPER_DIR", "LC_ALL", "XDG_CACHE_HOME"]) {
+    for (const name of ["PATH", "HOME", "USER", "LANG", "TZ", "TMPDIR", "CI", "BUN_INSTALL", "NVM_DIR", "GOPATH", "CARGO_HOME", "DEVELOPER_DIR", "LC_ALL", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR"]) {
       expect({ name, inherited: isBuildInherited(name) }).toEqual({ name, inherited: true });
     }
-    for (const name of ["NODE_ENV", "SITESOLIDE_TOKEN", "SITESOLIDE_BINARY", "AWS_SECRET_ACCESS_KEY", "NPM_TOKEN", "HTTPS_PROXY", "path"]) {
+    // SSH_AUTH_SOCK names the agent whose keys log into the machine: never inherited.
+    for (const name of ["NODE_ENV", "SITESOLIDE_TOKEN", "SITESOLIDE_BINARY", "AWS_SECRET_ACCESS_KEY", "NPM_TOKEN", "HTTPS_PROXY", "path", "SSH_AUTH_SOCK", "SSH_AGENT_PID"]) {
       expect({ name, inherited: isBuildInherited(name) }).toEqual({ name, inherited: false });
     }
     expect(BUILD_INHERITED.filter((name) => name.startsWith("SITESOLIDE_"))).toEqual([]);
@@ -123,6 +124,8 @@ describe("the build's environment", () => {
   test("a build secret's name: a variable, not sitesolide's, not inherited, the refused one never quoted", () => {
     expect(buildNameRefusal("CMS_TOKEN")).toBeNull();
     expect(buildNameRefusal("NODE_ENV")).toBeNull();
+    // A build that fetches a private dependency over SSH names the agent itself.
+    expect(buildNameRefusal("SSH_AUTH_SOCK")).toBeNull();
     expect(buildNameRefusal("SITESOLIDE_TOKEN")).toBe("SITESOLIDE_TOKEN is sitesolide's own: a build never receives a SITESOLIDE_ variable");
     expect(buildNameRefusal("PATH")).toBe("PATH reaches every build from whoever deploys already: it needs no declaring");
     expect(buildNameRefusal("LC_ALL")).toBe("LC_ALL reaches every build from whoever deploys already: it needs no declaring");

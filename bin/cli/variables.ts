@@ -231,8 +231,13 @@ export function looksLikeSecretValue(value: string): boolean {
  * a proxy or a registry's token, is named under `secrets.build`.
  *
  * `NODE_ENV` is deliberately absent: the manifest's `env` sets it, and a
- * workstation's `development` must not leak into a production build. deploy.sh
- * carries a copy of these two lists, which its test holds equal to this one.
+ * workstation's `development` must not leak into a production build. So is
+ * `SSH_AUTH_SOCK`: the agent it names holds the keys that log into the
+ * machine, as the account that deploys with sudo, and a build is the folder's
+ * own code, often a clone nobody has read. A build that needs the agent, to
+ * fetch a private dependency over SSH, names it under `secrets.build`.
+ * deploy.sh carries a copy of these two lists, which its test holds equal to
+ * this one.
  */
 export const BUILD_INHERITED: readonly string[] = [
   "PATH",
@@ -248,7 +253,6 @@ export const BUILD_INHERITED: readonly string[] = [
   "LANGUAGE",
   "TZ",
   "TMPDIR",
-  "SSH_AUTH_SOCK",
   "CI",
   "BUN_INSTALL",
   "NVM_DIR",

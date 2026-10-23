@@ -86,6 +86,7 @@ describe("built documentation", () => {
           SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
           ENV_PROBE: probe,
           BUILD_PROBE: "kept",
+          SSH_AUTH_SOCK: "/tmp/ssh-agent/agent.1234",
         },
       });
       expect(r.code).toBe(0);
@@ -95,7 +96,8 @@ describe("built documentation", () => {
       expect(lines.filter((line) => line.startsWith("SITESOLIDE_"))).toEqual([]);
       expect(lines.some((line) => line.includes(token) || line.includes("a DNS provider's secret"))).toBe(false);
       for (const line of [`PATH=${vm.env.PATH}`, `ENV_PROBE=${probe}`, "SITE_URL=https://build-env.test-zone.invalid"]) expect(lines).toContain(line);
-      expect(lines.filter((line) => line.startsWith("BUILD_PROBE="))).toEqual([]);
+      // Nor the SSH agent, whose keys log into the machine.
+      expect(lines.filter((line) => line.startsWith("BUILD_PROBE=") || line.startsWith("SSH_AUTH_SOCK="))).toEqual([]);
       expect(r.output).toContain("build secret ENV_PROBE from your environment");
     } finally {
       vm.cleanup();

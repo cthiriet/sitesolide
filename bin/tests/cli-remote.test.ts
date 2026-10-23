@@ -705,6 +705,7 @@ describe("deploy through the API: the secrets", () => {
       BUILD_PROBE: "an undeclared variable",
       CMS_TOKEN: "the-cms-token",
       AWS_SECRET_ACCESS_KEY: "planted-cloud-key",
+      SSH_AUTH_SOCK: "/tmp/ssh-agent/agent.1234",
       NODE_ENV: "development",
       LANG: "en_GB.UTF-8",
     });
@@ -720,7 +721,7 @@ describe("deploy through the API: the secrets", () => {
     expect(lines).toContain("CONTACT=sample@test-zone.invalid");
     expect(lines).toContain(`HOME=${home}`);
     expect(lines).toContain("LANG=en_GB.UTF-8");
-    expect(lines.filter((line) => /^(SITESOLIDE_|AWS_SECRET_ACCESS_KEY|NODE_ENV|BUILD_PROBE)/.test(line))).toEqual([]);
+    expect(lines.filter((line) => /^(SITESOLIDE_|AWS_SECRET_ACCESS_KEY|NODE_ENV|BUILD_PROBE|SSH_AUTH_SOCK)/.test(line))).toEqual([]);
   });
 
   test("a build secret from the workstation's file of the project, said by its path, never its value", async () => {
