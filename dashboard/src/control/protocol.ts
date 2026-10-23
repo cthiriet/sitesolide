@@ -29,6 +29,7 @@ import type { EntryView, GeneralView } from "../access/protocol";
 import type { AuditRow } from "../audit/protocol";
 import type { ServiceKind } from "../../borrowed/manifest";
 import type { FileView, ServiceView, Verdict } from "../secrets/protocol";
+import type { StoreMissing } from "../../borrowed/store-protocol";
 
 // --- Tokens --------------------------------------------------------------------
 
@@ -55,10 +56,11 @@ export type Scope = {
   /** May deploy a site that is not behind the portal, or exempts paths from it. */
   public: boolean;
   /**
-   * May list its projects' secret files and variable names, and set and
-   * remove the variables of `<slug>.env`, through the API. Never reads a
-   * value back. Without `public`, an owner's token writes only on a project
-   * restricted on the machine.
+   * May list its projects' secret names, set, generate and remove any name
+   * and file of their stores, and, for a project still in the old form, the
+   * variables of `<slug>.env`, through the API. Never reads a value back.
+   * Without `public`, an owner's token writes only on a project restricted
+   * on the machine, or the store of one it is creating.
    *
    * Optional in the type alone: this steward reads a registry from before
    * the flag as false (tokens.ts, `readTeam`) and always writes it, but a
@@ -166,6 +168,13 @@ export type InstallerResult = {
   url: string | null;
   /** Ports the installer chose for services whose manifest named none. */
   allocated: { service: string | null; port: number }[];
+  /**
+   * Declared runtime names and files the store lacked when the deployment
+   * finished; null for a static site, a project without a store, a store
+   * whose names could not be read, and a result an older installer wrote.
+   * Names only.
+   */
+  missingSecrets: StoreMissing | null;
 };
 
 /**
@@ -256,7 +265,9 @@ export const MAX_SECRETS_BODY_BYTES = 512 * 1024;
 /**
  * What one change of secrets by a token costs of its hour: a variable name set
  * or removed is one, a request one at least, `{}` included, and a file it
- * created one more. Each is a journal line at most.
+ * created one more. In a store: a change its names, a value generated one, a
+ * file set or removed one, and the store's folder made one more. Each is a
+ * journal line at most.
  */
 export const TOKEN_SECRET_CHANGES_PER_HOUR = 120;
 /** Restarts one token may ask for in an hour: each cuts a service for a few seconds, and is a journal line. */
@@ -292,6 +303,7 @@ export const TOKEN_REFUSALS_PER_HOUR = 60;
  *   too-large           413  the archive, the manifest or a change of secrets is over its limit
  *   expired             410  the archive arrived after the upload window
  *   unmanaged           409  the secret file is there, in a form the steward does not rewrite
+ *   already-present     409  a value to generate is set already: `replace` draws a new one
  *   not-available       503  the machine does not carry the control API, the access registry
  *                            or the secrets routes yet
  *   failure             500/502  something broke on the machine; the message says where to look
@@ -314,6 +326,7 @@ export type ControlErrorCode =
   | "expired"
   | "no-portal"
   | "unmanaged"
+  | "already-present"
   | "not-available"
   | "failure";
 
@@ -333,6 +346,7 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
   expired: 410,
   "no-portal": 409,
   unmanaged: 409,
+  "already-present": 409,
   "not-available": 503,
   failure: 500,
 };
@@ -343,7 +357,7 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   POST   /tokens/create   CreateTokenRequest     -> CreatedTokenResponse   (unlocked)
 //   POST   /tokens/revoke   { id }                 -> { token: TokenView }
 //   POST   /control/authenticate  { bearer }       -> { identity: Identity }
-//   POST   /control/preflight     { bearer, slug } -> { creating: boolean }
+//   POST   /control/preflight     { bearer, slug } -> PreflightResponse
 //   POST   /control/deploy        DeployRequest    -> { deployment, slug, creating }   202
 //   GET    /control/deployment?id=<id>             -> { result: InstallerResult }
 //   POST   /control/logs          LogsRequest      -> LogsResponse
@@ -353,13 +367,27 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   POST   /control/secrets/list  { bearer, slug }            -> SecretsListResponse            the `secrets` flag
 //   PATCH  /control/secrets       { bearer, slug, file, set, remove } -> 200|201 StewardSecretsChange   the `secrets` flag
 //   POST   /control/restart       { bearer, slug }            -> TokenRestartResponse           any token that deploys it
+//   POST   /control/store/list    { bearer, slug }            -> StoreListResponse              the `secrets` flag
+//   PATCH  /control/store         { bearer, slug, set, remove } -> 200|201 StoreChangeResponse   the `secrets` flag
+//   POST   /control/store/generate { bearer, slug, name, format?, bytes?, replace? } -> StoreChangeResponse
+//   PUT    /control/store/file    { bearer, slug, name, content } -> StoreChangeResponse        content in base64
+//   DELETE /control/store/file    { bearer, slug, name }      -> StoreChangeResponse
 //
-// The three last ones judge a person's token by role first (`secrets.list`,
-// `secrets.write`, `restart`), then the project among those it reaches, then
-// the flag, and are bounded per token and per hour. `set` is an object of
-// names and values, `remove` a list of names: both optional, fifty names in
-// all at most. An older steward answers `no such route`: the dashboard says
-// to run sitesolide upgrade.
+// The secrets and store ones judge a person's token by role first
+// (`secrets.list`, `secrets.write`, `restart`), then the project among those
+// it reaches, then the flag, and are bounded per token and per hour. `set` is
+// an object of names and values, `remove` a list of names: both optional,
+// fifty names in all at most. An older steward answers `no such route`: the
+// dashboard says to run sitesolide upgrade.
+//
+// **A store ahead of the first deployment.** On a slug the machine does not
+// carry, the store routes judge the token as a deployment creating it would
+// be judged, the leftovers of a removed project included, a store another
+// token or the owner laid there among them; the first write records the
+// slug as the token's, as a deployment's creation does, so that its own
+// deployment then finds the name its own and the store with it. The
+// answer's values are never a value: a value set, generated or held in a
+// file is never sent back to a token.
 //
 // A person's own tokens, judged by their session, their unlock to create, and
 // their roles (src/people/tokens.ts):
@@ -400,6 +428,13 @@ export type CreateTokenRequest = {
 export type CreatedTokenResponse = { token: TokenView; secret: string };
 export type DeployRequest = { bearer: string; deployment: string; slug: string; manifest: string };
 export type DeployResponse = { deployment: string; slug: string; creating: boolean };
+/**
+ * Whether a deployment would create its project, and what `{zone}` and
+ * `{contact}` become on this machine, which the client's build needs: the
+ * steward reads both from the machine's own settings. An older steward
+ * answers `creating` alone.
+ */
+export type PreflightResponse = { creating: boolean; placeholders: { zone: string; contact: string } };
 export type LogsRequest = { bearer: string; slug: string; lines: number; cursor: string | null };
 export type LogsResponse = { lines: string[]; cursor: string | null };
 
@@ -511,6 +546,11 @@ export type TeamPageResponse = {
 //   GET    /api/v1/projects/:slug/secrets          -> SecretsListResponse
 //   PATCH  /api/v1/projects/:slug/secrets/:file  { set?, remove?, restart? } -> 200|201 SecretsChangeResponse
 //   POST   /api/v1/projects/:slug/restart          -> TokenRestartResponse
+//   GET    /api/v1/projects/:slug/store            -> StoreListResponse
+//   PATCH  /api/v1/projects/:slug/store     StoreApiChangeBody   -> 200|201 StoreApiChangeResponse
+//   POST   /api/v1/projects/:slug/store/generate  StoreApiGenerateBody -> StoreApiChangeResponse
+//   PUT    /api/v1/projects/:slug/store/files/:name  StoreApiFileBody  -> StoreApiChangeResponse
+//   DELETE /api/v1/projects/:slug/store/files/:name  { restart? }      -> StoreApiChangeResponse
 
 export type DeploymentView = {
   id: string;
@@ -528,6 +568,13 @@ export type DeploymentView = {
   error: { code: string; message: string } | null;
   url: string | null;
   allocated: { service: string | null; port: number }[];
+  /** What {zone} and {contact} become, for the build on the client. */
+  placeholders: { zone: string; contact: string };
+  /**
+   * The declared runtime names and files the store lacked once the
+   * installer was done, null until then and for a project without a store.
+   */
+  missingSecrets: StoreMissing | null;
 };
 
 export type ProjectStatus = {

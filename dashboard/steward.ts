@@ -41,6 +41,7 @@ import { createConnectorStore } from "./src/connectors/store";
 import { EGRESS_ACCOUNT, EGRESS_CONFIG_DIR } from "./borrowed/connectors";
 import { createControlSteward, isControlPath, MAX_SECRETS_CHANGE_BODY_BYTES } from "./src/control/steward";
 import { createControlSystem } from "./src/control/system";
+import type { StoreForToken } from "./src/secrets/store-api";
 import { INSTALLER_RUN_FOLDER } from "./src/control/protocol";
 import { CODES_FILE as LOCK_CODES_FILE, FRAGMENT_NAME, LOCKS_DIR } from "./borrowed/locks";
 import { createBackupReader } from "./src/backup/reader";
@@ -121,6 +122,11 @@ const PORTAL_DATA_FOLDER = process.env.PORTAL_DATA_FOLDER ?? `${SITES_DIR}/porta
  * hash.
  */
 const OWNERS = process.env.OWNERS ?? "site-";
+
+/** The secrets routes' work on a store for a token, null when they carry none. */
+function storeForTokenOf(handler: object): StoreForToken | null {
+  return "storeForToken" in handler ? ((handler as { storeForToken: StoreForToken | null }).storeForToken ?? null) : null;
+}
 
 function die(message: string): never {
   console.error(`steward: ${message}`);
@@ -241,7 +247,7 @@ if (keys !== null) {
 // ask the secrets routes whether a token is the live unlock, the members
 // routes who a person is and what they may do now, for a person's own
 // tokens, the access routes for a token's changes of access, and the secrets
-// routes for a token's secrets and restart. See src/control/steward.ts.
+// routes for a token's secrets, restart and store. See src/control/steward.ts.
 const control = createControlSteward(
   createControlSystem({
     stateFolder: STATE_FOLDER,
@@ -254,6 +260,8 @@ const control = createControlSteward(
     // section and the Connectors page read it: no token creates that name.
     backups,
     connectors,
+    // A store left under a name the machine does not carry, which no token creates.
+    storeRoot: `${SECRETS_FOLDER}/projects`,
   }),
   {
     zone: process.env.SITESOLIDE_ZONE ?? "",
@@ -263,6 +271,13 @@ const control = createControlSteward(
     access: handler.accessForToken,
     forgetAccess: handler.forgetProjectAccess,
     secrets: handler.secretsForToken,
+    // A token's work on a project's store, judged by the control routes then
+    // done by the secrets routes' own code (src/secrets/store-api.ts). A
+    // handler without it leaves the store routes out, as on a steward that
+    // predates them.
+    store: storeForTokenOf(handler),
+    // What {contact} becomes in a token's build, the same file Caddy reads.
+    contact: process.env.SITESOLIDE_CONTACT ?? "",
   },
 );
 revokeMemberTokens = control.revokeMember;

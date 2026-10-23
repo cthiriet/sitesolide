@@ -26,8 +26,9 @@
  *      gives to a unit of the machine, the schedules systemd reads, the ports,
  *      the loopback rule, the portal's readiness, before anything is written;
  *   3. the build happened on the client: the archive carries its result;
- *   4. the account and the directories, then the archive extracted as the
- *      project's account into a staging directory, and `install` run there.
+ *   4. the account and the directories, the project's store of secrets for
+ *      an app, then the archive extracted as the project's account into a
+ *      staging directory, and `install` run there.
  *      Over SSH, `install` runs after the code is in place; here it runs
  *      before, in the staging directory, because the project's account may
  *      write there and not in `app/`: a failing install changes nothing served;
@@ -36,8 +37,9 @@
  *      portal, its block before its files;
  *   7. the staged trees put in place of the served ones;
  *   8. the manifest, and the loopback's project set;
- *   9. the declared secrets, checked present and the project's own, then
- *      every service restarted;
+ *   9. the declared secret files, checked the project's own, a missing one
+ *      said; the store's declared names, those missing said and returned,
+ *      none of them stopping anything; then every service restarted;
  *  10. for an app in the open, its block; then the verification;
  *  11. the services that run for good read again once STABILITY_WINDOW_MS has
  *      passed since their restart: one that fell meanwhile fails the
@@ -51,6 +53,15 @@
  * this run created is therefore removed when it stops before anything was
  * served, see undoCreation; an existing project keeps everything it had.
  *
+ * **The store's folders exist before any unit that loads them.** Every unit
+ * of an app with a store loads its `files/` folder with `LoadCredential=`,
+ * which has no optional form: without the folder, every start of the
+ * project fails with 243/CREDENTIALS. So the store is laid at step 4, on
+ * every deployment, before step 5 lays a unit and before step 9 restarts
+ * anything; a folder deleted by hand comes back at the next deployment. A
+ * failure to lay it stops the deployment there, and is worded, as a 243 is
+ * wherever a unit's exit status is read (bin/cli/store.ts).
+ *
  * **One rule `deploy` cannot apply, applied here.** Over SSH, a block or a unit
  * in service that differs from the generated one stops the deployment until
  * `--force`: it may have been edited by hand, and a manifest that changed looks
@@ -61,7 +72,22 @@
  */
 import { generateFragment, decideBlock } from "../../borrowed/fragment";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts, type ProjectAccount } from "../../borrowed/loopback";
-import { domainHosts, isApp, legacySecretFiles, readManifest, scheduledServices, servicesOf, setDomainActive, setLock, setPortal, type Manifest } from "../../borrowed/manifest";
+import {
+  domainHosts,
+  hasStore,
+  isApp,
+  legacySecretFiles,
+  readManifest,
+  scheduledServices,
+  secretsOf,
+  servicesOf,
+  setDomainActive,
+  setLock,
+  setPortal,
+  type Manifest,
+} from "../../borrowed/manifest";
+import { credentialsFailure, CREDENTIALS_EXIT_STATUS } from "../../borrowed/store";
+import type { StoreMissing } from "../../borrowed/store-protocol";
 import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "../../borrowed/portal-vm";
 import { domainConflicts, foreignUnit, portConflicts, staleUnits, unstableUnits, type UnitStanding } from "../../borrowed/services";
 import { decideUnit, earlierGenerations, generateUnits, runningUnits, unitArgument, unitFileName, watchedUnits } from "../../borrowed/unit";
@@ -94,9 +120,15 @@ export type PipelineOptions = {
   installTail?: number;
 };
 
+/**
+ * `missingSecrets`: the declared runtime names and files the store lacked
+ * when the services were restarted, names alone; null for a project without
+ * a store or whose store could not be read, absent when the deployment
+ * stopped before.
+ */
 export type Outcome =
-  | { ok: true; url: string; allocated: { service: string | null; port: number }[] }
-  | { ok: false; code: string; message: string; allocated: { service: string | null; port: number }[] };
+  | { ok: true; url: string; allocated: { service: string | null; port: number }[]; missingSecrets?: StoreMissing | null }
+  | { ok: false; code: string; message: string; allocated: { service: string | null; port: number }[]; missingSecrets?: StoreMissing | null };
 
 /** Between two probes of a verification waiting for a first certificate, and how long each may take. */
 const VERIFY_PAUSE_MS = 5_000;
@@ -250,7 +282,9 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
   const { zone } = options;
   let allocated: { service: string | null; port: number }[] = [];
   let release: (() => void) | null = null;
-  const created: Created = { account: false, tree: false, units: [] };
+  const created: Created = { account: false, tree: false, units: [], store: false };
+  // What the store lacked once read, at step 9: kept in a failure that came after.
+  let missing: { missingSecrets?: StoreMissing | null } = {};
   // Set once Caddy or the served trees may have changed: from there on, a
   // stop keeps what this run created, see undoCreation.
   let served = false;
@@ -350,6 +384,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     created.account = account === "created";
     if (created.account) host.log(`   site-${slug} created`);
     created.tree = (await host.prepareTree(slug, application)) === "created";
+    if (hasStore(manifest)) created.store = await prepareStore(host, slug);
 
     host.log("-> archive, extracted as the project's own account");
     const staging = await host.stage(slug);
@@ -494,15 +529,16 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     if (application) {
       const secrets = legacySecretFiles(manifest);
       if (secrets.length > 0) {
-        host.log("-> declared secrets");
-        const missing: string[] = [];
+        host.log("-> declared secret files");
         const foreign: string[] = [];
         // Judged at step 1 already, and again here, right before the restart
         // that has the unit read them: a file laid since by somebody else.
+        // A file missing stops nothing: the unit reads it optionally, and the
+        // service starts without its variables, which the log says.
         const account = await host.accountUid(slug);
         for (const name of secrets) {
           const file = await host.secretFile(name);
-          if (file.kind === "absent") missing.push(name);
+          if (file.kind === "absent") host.log(`   !! /etc/sitesolide/${name} missing: the service starts without its variables`);
           else if (file.kind !== "file" || account === null || file.uid !== account) foreign.push(name);
           else host.log(`   present  /etc/sitesolide/${name}`);
         }
@@ -512,22 +548,22 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
             `/etc/sitesolide/${foreign.join(", /etc/sitesolide/")} does not belong to site-${slug}: a project reads its own files alone; the files are in place, the service was not restarted, the owner of the machine must look at it`,
           );
         }
-        if (missing.length > 0) {
-          throw new Stop(
-            "secret-missing",
-            `/etc/sitesolide/${missing.join(", /etc/sitesolide/")} missing: the owner of the machine creates it in the Secrets section of https://dashboard.${zone}/ for ${slug}, or a token that may manage secrets creates it with sitesolide secrets set, then deploy again; the files are in place, the service was not restarted`,
-          );
-        }
       }
+      missing = { missingSecrets: hasStore(manifest) ? await missingFromStore(host, slug, manifest) : null };
       // Every unit but the scheduled services, which their timers start:
       // restarted, one would run at once, outside its schedule, and an idle
       // one is inactive by design. The main unit's restart reaches a run in
       // progress through its PartOf, and leaves an idle one idle.
-      const names = runningUnits(manifest).map(unitArgument);
+      const units = runningUnits(manifest);
+      const names = units.map(unitArgument);
       host.log(names.length > 1 ? "-> services restart" : "-> service restart");
       const restarted = await host.restart(names);
       if (restarted.code !== 0) {
-        throw new Stop("service-failed", `${names.join(", ")} did not come back active (${restarted.output.trim().split("\n").join(", ") || "no answer"}): read sitesolide logs`);
+        // A unit that could not load its files says so in systemd's words,
+        // "Protocol error": its exit status says what it is.
+        const worded = await credentialsFailures(host, slug, units);
+        const said = `${names.join(", ")} did not come back active (${restarted.output.trim().split("\n").join(", ") || "no answer"})`;
+        throw new Stop("service-failed", `${worded.length > 0 ? worded.join("; ") : said}: read sitesolide logs`);
       }
       stability = await firstReading(host, watchedUnits(manifest));
 
@@ -573,13 +609,13 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     }
 
     // --- 11. the services, a while after their restart -------------------------------
-    if (stability !== null) await secondReading(host, stability);
+    if (stability !== null) await secondReading(host, slug, stability);
     succeeded = true;
-    return { ok: true, url, allocated };
+    return { ok: true, url, allocated, ...missing };
   } catch (error) {
-    if (error instanceof Stop) return { ok: false, code: error.code, message: error.message, allocated };
+    if (error instanceof Stop) return { ok: false, code: error.code, message: error.message, allocated, ...missing };
     const name = (error as { code?: unknown } | null)?.code ?? (error as Error).name;
-    return { ok: false, code: "failure", message: `unexpected error on the machine (${String(name)}): the owner must read journalctl -u sitesolide-installer@${slug}`, allocated };
+    return { ok: false, code: "failure", message: `unexpected error on the machine (${String(name)}): the owner must read journalctl -u sitesolide-installer@${slug}`, allocated, ...missing };
   } finally {
     unlock();
     try {
@@ -610,6 +646,70 @@ async function judgeClaims(host: Host, slug: string, text: string, declared: rea
   if (refusals.length > 0) throw new Stop("secret-taken", `${refusals.join("; ")}; nothing was changed`);
 }
 
+/**
+ * The project's store laid before any unit that loads it (I3'), the three
+ * folders root's: whether this run made the project's folder. A refusal, a
+ * link or anything that is no folder where one goes, stops the deployment
+ * before a unit is laid, and so does a store that cannot be laid at all.
+ */
+async function prepareStore(host: Host, slug: string): Promise<boolean> {
+  let prepared: Awaited<ReturnType<Host["prepareStore"]>>;
+  try {
+    prepared = await host.prepareStore(slug);
+  } catch (error) {
+    const name = (error as { code?: unknown } | null)?.code ?? (error as Error).name;
+    throw new Stop(
+      "store-failed",
+      `the project's store of secrets could not be laid under /etc/sitesolide/projects (${String(name)}): without its files folder every start of the project would fail; nothing was served, the owner of the machine must run sitesolide upgrade, then look at it`,
+    );
+  }
+  if (prepared.kind === "refused") {
+    throw new Stop("store-refused", `${prepared.path} is not a folder root owns: the owner of the machine must look at it; nothing was changed`);
+  }
+  if (prepared.created) host.log("   the project's store of secrets laid, empty");
+  return prepared.created;
+}
+
+/**
+ * The declared runtime names and files the store lacks, read right before
+ * the restart, said in the log and returned. Names alone: nothing is ever
+ * read of a value. Nothing stops: a service that cannot live without one
+ * fails its start, which the stability reading then says. Null when the
+ * store's names cannot be read, which is said too.
+ */
+async function missingFromStore(host: Host, slug: string, manifest: Manifest): Promise<StoreMissing | null> {
+  const declared = secretsOf(manifest);
+  if (declared.runtime.length === 0 && declared.files.length === 0) return { runtime: [], files: [] };
+  host.log("-> the store's declared names");
+  const names = await host.storeNames(slug);
+  if (names === null) {
+    host.log("   !! the store's names could not be read: whether a declared secret is missing is not checked");
+    return null;
+  }
+  const runtime = declared.runtime.filter((name) => !names.variables.includes(name));
+  const files = declared.files.filter((name) => !names.files.includes(name));
+  if (runtime.length > 0) {
+    host.log(`   !! runtime secrets not set on the machine: ${runtime.join(", ")}: sitesolide secrets set ${runtime[0]}, or sitesolide secrets generate ${runtime.at(-1)}`);
+  }
+  if (files.length > 0) {
+    host.log(`   !! secret files not set on the machine: ${files.join(", ")}: sitesolide secrets set-file ${files[0]} < ${files[0]}`);
+  }
+  if (runtime.length === 0 && files.length === 0) host.log("   every declared name is set");
+  return { runtime, files };
+}
+
+/**
+ * The units among these whose main process exited 243, each worded by
+ * `credentialsFailure`: systemd logs it "Failed to set up credentials:
+ * Protocol error", which sends one looking elsewhere. Empty when none did,
+ * or when their standing cannot be read.
+ */
+async function credentialsFailures(host: Host, slug: string, units: string[]): Promise<string[]> {
+  const standing = await host.standing(units).catch(() => null);
+  if (standing === null) return [];
+  return units.filter((unit) => standing.get(unit)?.status === CREDENTIALS_EXIT_STATUS).map((unit) => credentialsFailure(unitFileName(unit), slug));
+}
+
 /** The services that run for good, as read right after their restart. */
 type Stability = { units: string[]; at: number; before: Map<string, UnitStanding> };
 
@@ -636,7 +736,7 @@ async function firstReading(host: Host, units: string[]): Promise<Stability | nu
  * deployment, named with what was seen. Everything is in place by then, as
  * after a failed verification: the owner reads the logs, fixes, deploys again.
  */
-async function secondReading(host: Host, stability: Stability): Promise<void> {
+async function secondReading(host: Host, slug: string, stability: Stability): Promise<void> {
   const remaining = stability.at + STABILITY_WINDOW_MS - host.machine.now();
   host.log(`-> ${stability.units.length > 1 ? "services" : "service"}, ${STABILITY_WINDOW_MS / 1000} s after the restart`);
   if (remaining > 0) await host.machine.wait(remaining);
@@ -647,13 +747,16 @@ async function secondReading(host: Host, stability: Stability): Promise<void> {
   }
   const fallen = unstableUnits(stability.before, after);
   if (fallen.length > 0) {
+    // A unit that could not load its files is worded by what it is.
+    const credentials = stability.units.filter((unit) => after.get(unit)?.status === CREDENTIALS_EXIT_STATUS);
+    if (credentials.length > 0) throw new Stop("service-failed", `${credentials.map((unit) => credentialsFailure(unitFileName(unit), slug)).join("; ")}: read sitesolide logs`);
     throw new Stop("service-failed", `${fallen.join("; ")}, within ${STABILITY_WINDOW_MS / 1000} s of the restart: the files are in place; read sitesolide logs`);
   }
   host.log(`   ${stability.units.map(unitFileName).join(", ")} still running`);
 }
 
 /** What this run created on the machine, as opposed to what it found there. */
-type Created = { account: boolean; tree: boolean; units: string[] };
+type Created = { account: boolean; tree: boolean; units: string[]; store: boolean };
 
 /**
  * A project this run created, taken away again when it stops before anything
@@ -667,6 +770,12 @@ type Created = { account: boolean; tree: boolean; units: string[] };
  * removed, even for a new tree: an account left by a removal that stopped half
  * way is not this run's to take. A step that fails leaves the rest, and says
  * so: the refusal stands either way, the leftovers are the owner's.
+ *
+ * The store's folders this run laid go after the units that load them and
+ * the tree, and only while empty: left, they would be a store under a name
+ * nobody holds, which no token may then create (src/control/policy.ts). A
+ * store found on the machine, one a token wrote ahead of this deployment
+ * above all, stays.
  */
 async function undoCreation(host: Host, slug: string, created: Created): Promise<void> {
   if (!created.tree) return;
@@ -677,10 +786,16 @@ async function undoCreation(host: Host, slug: string, created: Created): Promise
       for (const unit of created.units) host.log(`   removed    ${unitFileName(unit)}`);
     }
     if (!(await host.removeTree(slug))) {
-      host.log(`   !! /srv/sites/${slug} carries a manifest deposited in the meantime: left as it is${created.account ? `, and site-${slug} with it` : ""}`);
+      host.log(`   !! /srv/sites/${slug} carries a manifest deposited in the meantime: left as it is${created.account ? `, and site-${slug} with it` : ""}${created.store ? ", and its store" : ""}`);
       return;
     }
     host.log(`   removed    /srv/sites/${slug}`);
+    // Once nobody else deployed it meanwhile: a deployment that did would
+    // have laid units that load the folder.
+    if (created.store) {
+      if (await host.removeStore(slug)) host.log("   removed    the project's store of secrets, empty");
+      else host.log("   !! the project's store of secrets holds something written since: left for the owner");
+    }
     // Never listed by this run, but listed by any other writer that ran
     // while the folder existed: it drops out with the folder.
     await refreshZoneNames(host);

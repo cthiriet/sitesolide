@@ -59,6 +59,7 @@ export function createReporter(folder: string, request: InstallRequest, clock: (
     error: null,
     url: null,
     allocated: [],
+    missingSecrets: null,
   };
   const write = () => {
     result.updatedAt = clock();
@@ -79,6 +80,8 @@ export function createReporter(folder: string, request: InstallRequest, clock: (
       result.state = outcome.ok ? "succeeded" : "failed";
       result.finishedAt = clock();
       result.allocated = outcome.allocated;
+      // Names alone, read before the restart: the client says which to set.
+      result.missingSecrets = outcome.missingSecrets ?? null;
       if (outcome.ok) {
         result.url = outcome.url;
         result.log.push(`-> deployed: ${outcome.url}`);
@@ -207,6 +210,8 @@ export async function main(argv: string[], env: Environment, overrides: { comman
     sitesDir: machineConfig.sitesDir,
     unitsFolder: env.UNITS_FOLDER ?? "/etc/systemd/system",
     secretsFolder: env.SECRETS_FOLDER ?? "/etc/sitesolide",
+    // The steward's previous versions of each store, dropped for a store laid anew.
+    storePreviousFolder: join(stateFolder, "precedents", "projects"),
     spoolFolder: env.SPOOL_FOLDER ?? "/srv/sites/dashboard/data/control",
     accountsFile: env.ACCOUNTS_FILE ?? "/etc/passwd",
     projectPortsFile: env.PROJECT_PORTS_FILE ?? "/etc/sitesolide-loopback-projects.nft",

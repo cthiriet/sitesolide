@@ -247,6 +247,26 @@ describe("a deployment, from the manifest to the site", () => {
   });
 });
 
+describe("a project's store through a deployment", () => {
+  test("what {zone} and {contact} become comes with the deployment; once done, the declared names its store lacks, names alone, the store laid", async () => {
+    const manifest = { slug: "kanban", start: "/usr/local/bin/bun run server.ts", publicDir: "public", secrets: { runtime: ["ADMIN_TOKEN", "SESSION_KEY"], files: ["gcp.json"] } };
+    const created = await api("/api/v1/deployments", { method: "POST", body: JSON.stringify({ manifest }) });
+    expect(created.status).toBe(201);
+    const deployment = ((await created.json()) as { deployment: DeploymentView }).deployment;
+    expect(deployment).toMatchObject({ slug: "kanban", placeholders: { zone: ZONE, contact: "" }, missingSecrets: null });
+    // The token's store, as one written ahead would hold it: one name set.
+    mkdirSync(join(bench.store, "kanban", "files"), { recursive: true });
+    writeFileSync(join(bench.store, "kanban", "env"), "ADMIN_TOKEN=a-value-never-read-back\n", { mode: 0o600 });
+    const archive = bundle([file("app/server.ts", "Bun.serve({})"), file("public/index.html", "<h1>kanban</h1>")]);
+    expect((await api(`/api/v1/deployments/${deployment.id}/bundle`, { method: "PUT", body: archive, headers: { "Content-Type": "application/gzip" } })).status).toBe(202);
+    const done = await follow(deployment.id);
+    expect(done).toMatchObject({ state: "succeeded", placeholders: { zone: ZONE, contact: "" }, missingSecrets: { runtime: ["SESSION_KEY"], files: ["gcp.json"] } });
+    expect(done.log).toContain("   !! runtime secrets not set on the machine: SESSION_KEY: sitesolide secrets set SESSION_KEY, or sitesolide secrets generate SESSION_KEY");
+    expect(JSON.stringify(done)).not.toContain("a-value-never-read-back");
+    expect(existsSync(join(bench.store, "kanban", "files"))).toBe(true);
+  });
+});
+
 describe("refusals an agent can act on", () => {
   test("a manifest the scope refuses: every reason in details, before any upload", async () => {
     const response = await api("/api/v1/deployments", {

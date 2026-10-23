@@ -195,6 +195,7 @@ async function wire(registry: Registry, sites: string[]) {
       error: state === "failed" ? { code: "invalid-manifest", message: "refused" } : null,
       url: null,
       allocated: [],
+      missingSecrets: null,
     };
     writeFileSync(join(root, "installer", `${deployment}.json`), JSON.stringify(written), { mode: 0o600 });
   };
@@ -275,7 +276,7 @@ describe("a creation's own project, nobody given access to it, makes its creator
     bench.result(D, "shop", "failed", true);
     await bench.control.settleCreations();
     expect(await bench.entries("shop")).toEqual([`${DAVE}:admin`]);
-    expect(await (await bench.preflight(dave.secret, "shop")).json()).toEqual({ creating: false });
+    expect(await (await bench.preflight(dave.secret, "shop")).json()).toMatchObject({ creating: false });
     const again = await bench.deploy(dave.secret, "aaaaaaaaaaaaaaaaaaaaaaad", "shop");
     expect(await again.json()).toEqual({ deployment: "aaaaaaaaaaaaaaaaaaaaaaad", slug: "shop", creating: false });
   });
@@ -296,7 +297,7 @@ describe("a creation's own project, nobody given access to it, makes its creator
     expect(await bench.entries("shop")).toEqual([`${DAVE}:admin`]);
     expect(creates(bench)).toHaveLength(1);
     expect(bench.creations()).toEqual([]);
-    expect(await (await bench.preflight(dave.secret, "shop")).json()).toEqual({ creating: false });
+    expect(await (await bench.preflight(dave.secret, "shop")).json()).toMatchObject({ creating: false });
     const again = await bench.deploy(dave.secret, "222222222222222222222222", "shop");
     expect(await again.json()).toEqual({ deployment: "222222222222222222222222", slug: "shop", creating: false });
     expect(bench.request("shop")).toMatchObject({ deployment: "222222222222222222222222", creating: false });
@@ -470,7 +471,7 @@ describe("the owner's project and grants are never a creation's", () => {
     expect(await refusal(await bench.preflight(dave.secret, "shop"))).toEqual({ status: 403, message: `${DAVE} holds no role on shop` });
     // The owner gives it by hand.
     expect((await bench.ownerGrant("shop", DAVE, "admin")).status).toBe(201);
-    expect(await (await bench.preflight(dave.secret, "shop")).json()).toEqual({ creating: false });
+    expect(await (await bench.preflight(dave.secret, "shop")).json()).toMatchObject({ creating: false });
   });
 });
 
@@ -734,7 +735,7 @@ describe("a name a removed project left things under is never a token's creation
     bench.snapshot("shop", "offsite");
     bench.grantChat("shop");
     const dave = await bench.mint(DAVE, true, ["shop"]);
-    expect(await (await bench.preflight(dave.secret, "shop")).json()).toEqual({ creating: false });
+    expect(await (await bench.preflight(dave.secret, "shop")).json()).toMatchObject({ creating: false });
     const D = "b1b1b1b1b1b1b1b1b1b1b1b1";
     expect(await (await bench.deploy(dave.secret, D, "shop")).json()).toEqual({ deployment: D, slug: "shop", creating: false });
     expect(bench.request("shop")).toMatchObject({ deployment: D, creating: false });
@@ -746,7 +747,7 @@ describe("a name a removed project left things under is never a token's creation
     bench.snapshot("blog", "offsite");
     bench.grantChat("blog");
     const dave = await bench.mint(DAVE, true);
-    expect(await (await bench.preflight(dave.secret, "shop")).json()).toEqual({ creating: true });
+    expect(await (await bench.preflight(dave.secret, "shop")).json()).toMatchObject({ creating: true });
     const D = "b2b2b2b2b2b2b2b2b2b2b2b2";
     expect(await (await bench.deploy(dave.secret, D, "shop")).json()).toEqual({ deployment: D, slug: "shop", creating: true });
     expect(bench.request("shop")).toMatchObject({ deployment: D, creating: true });

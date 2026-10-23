@@ -40,7 +40,9 @@ export type BenchOptions = {
   /** The schedules `systemd-analyze calendar` refuses. */
   refusedSchedules?: string[];
   /** How a unit stands from the second reading after the restart on, by unit as deploy names it; every other one runs. */
-  falls?: Record<string, { active: string; sub: string; restarts: number }>;
+  falls?: Record<string, { active: string; sub: string; restarts: number; status?: number }>;
+  /** The exit status of a unit's main process at every reading, by unit as deploy names it; 0 otherwise. */
+  statuses?: Record<string, number>;
   probe?: (host: string, path: string, bench: Bench) => ProbeResponse | null;
   /** The zone certified on demand, manual DNS: its policy laid on the bench, the zone's sites written there. */
   onDemand?: boolean;
@@ -52,6 +54,10 @@ export type Bench = {
   blocks: string;
   units: string;
   secrets: string;
+  /** The stores of secrets, `<secrets>/projects`, as /etc/sitesolide/projects. */
+  store: string;
+  /** The steward's previous versions of each store, as /var/lib/sitesolide-steward/precedents/projects. */
+  previous: string;
   spool: string;
   run: string;
   events: string[];
@@ -73,6 +79,8 @@ export function createBench(options: BenchOptions = {}): Bench {
     blocks: join(root, "caddy"),
     units: join(root, "units"),
     secrets: join(root, "secrets"),
+    store: join(root, "secrets", "projects"),
+    previous: join(root, "precedents", "projects"),
     spool: join(root, "spool"),
     run: join(root, "run"),
     events: [],
@@ -214,9 +222,9 @@ export function commandsOf(bench: Bench): Commands {
 }
 
 /**
- * `systemctl show -p Id -p ActiveState -p SubState -p NRestarts`, one block
- * per unit as systemd separates them: every unit running at the first
- * reading, and from the second on as `falls` says.
+ * `systemctl show -p Id -p ActiveState -p SubState -p NRestarts -p
+ * ExecMainStatus`, one block per unit as systemd separates them: every unit
+ * running at the first reading, and from the second on as `falls` says.
  */
 function standing(bench: Bench, names: string[]) {
   bench.readings++;
@@ -226,7 +234,8 @@ function standing(bench: Bench, names: string[]) {
     const unit = id.replace(/\.service$/, "");
     const fell = bench.readings > 1 ? bench.options.falls?.[unit] : undefined;
     const now = fell ?? { active: "active", sub: "running", restarts: 0 };
-    return `Id=${id}\nActiveState=${now.active}\nSubState=${now.sub}\nNRestarts=${now.restarts}\n`;
+    const status = fell?.status ?? bench.options.statuses?.[unit] ?? 0;
+    return `Id=${id}\nActiveState=${now.active}\nSubState=${now.sub}\nNRestarts=${now.restarts}\nExecMainStatus=${status}\n`;
   });
   return { code: 0, output: blocks.join("\n") };
 }
@@ -236,6 +245,7 @@ export function hostOf(bench: Bench, log: (line: string) => void = (line) => ben
     sitesDir: bench.sites,
     unitsFolder: bench.units,
     secretsFolder: bench.secrets,
+    storePreviousFolder: bench.previous,
     spoolFolder: bench.spool,
     accountsFile: join(bench.root, "passwd"),
     projectPortsFile: join(bench.root, "projects.nft"),

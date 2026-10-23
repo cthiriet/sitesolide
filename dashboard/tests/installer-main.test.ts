@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Role } from "../borrowed/access";
 import { bundle } from "../borrowed/bundle";
 import { BUNDLE_NAME, type InstallerResult } from "../src/control/protocol";
-import { main, pruneResults, RESULT_RETENTION_MS } from "../src/installer/main";
+import { createReporter, main, pruneResults, RESULT_RETENTION_MS } from "../src/installer/main";
 import { spawn, type Commands } from "../src/installer/real";
 import { INSTALLER } from "./installer-bench";
 import { registryOf, writeRegistry } from "./registry-fixtures";
@@ -97,12 +97,38 @@ describe("main", () => {
     expect(statSync(path).mode & 0o777).toBe(0o600);
     const result = JSON.parse(readFileSync(path, "utf8")) as InstallerResult;
     expect(result).toMatchObject({ deployment: DEPLOYMENT, slug: "notes", state: "failed", error: { code: "verify-failed" } });
+    // A static site has no store: nothing is known missing, and none was laid.
+    expect(result.missingSecrets).toBeNull();
+    expect(readdirSync(join(root, "secrets"))).toEqual([]);
     expect(result.log[0]).toBe("-> deployment abcdefabcdefabcdefabcdef of notes, for ada@test-zone.invalid (token aaaaaaaaaaaa)");
     expect(result.log).toContain("-> public, put in place");
     // Everything up to the verification happened: the files and the manifest are in place.
     expect(readFileSync(join(root, "sites", "notes", "public", "index.html"), "utf8")).toBe("<h1>notes</h1>");
     expect(JSON.parse(readFileSync(join(root, "sites", "notes", "sitesolide.json"), "utf8"))).toEqual({ slug: "notes", publicDir: "public" });
     expect(calls).toContain("useradd site-notes");
+  });
+
+  test("the names the store lacked go into the result with its verdict, names alone; none known until then", () => {
+    const root = mkdtempSync(join(tmpdir(), "installer-reporter-"));
+    toClean.push(root);
+    const request = {
+      deployment: DEPLOYMENT,
+      slug: "shop",
+      requestedAt: 1,
+      token: { id: "aaaaaaaaaaaa", email: "ada@test-zone.invalid", member: null },
+      scope: { slugs: [], create: true, outbound: false, domain: false, public: false },
+      creating: true,
+      manifest: "{}",
+    };
+    const read = () => JSON.parse(readFileSync(join(root, `${DEPLOYMENT}.json`), "utf8")) as InstallerResult;
+    const reporter = createReporter(root, request, () => 1, () => {});
+    reporter.log("-> manifest");
+    expect(read().missingSecrets).toBeNull();
+    reporter.finish({ ok: false, code: "service-failed", message: "shop did not come back", allocated: [], missingSecrets: { runtime: ["ADMIN_TOKEN"], files: ["gcp.json"] } });
+    expect(read()).toMatchObject({ state: "failed", missingSecrets: { runtime: ["ADMIN_TOKEN"], files: ["gcp.json"] } });
+    const other = createReporter(root, request, () => 2, () => {});
+    other.finish({ ok: true, url: "https://shop.test-zone.invalid/", allocated: [] });
+    expect(read()).toMatchObject({ state: "succeeded", missingSecrets: null });
   });
 
   test("results older than a week are pruned, and nothing else in the folder", () => {

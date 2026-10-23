@@ -80,11 +80,20 @@ CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH 
 # content. /var/lib/sitesolide-steward, where the request is, stays read-only
 # under ProtectSystem=strict.
 #
+# But for the projects' stores of secrets, nested writable inside the
+# read-only secrets: every unit of an app loads its store's files/ folder,
+# which has to exist before the unit is laid, so the installer lays the
+# folders of the project it deploys (never a file in them), and drops the
+# previous versions the steward kept for a removed project of the same name
+# when it lays a store anew. Both with a dash: missing at the start, the
+# first is laid by bin/deploy-installer.sh, the second holds nothing to drop.
+#
 # useradd also resets the new account's entries in lastlog and faillog when the
 # files exist; the dash ignores them on a system that keeps neither.
 ProtectSystem=strict
 ReadWritePaths=/srv/sites /etc /run/sitesolide-gatekeeper -/var/log/lastlog -/var/log/faillog
 ReadOnlyPaths=/etc/sitesolide
+ReadWritePaths=-/etc/sitesolide/projects -/var/lib/sitesolide-steward/precedents/projects
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true

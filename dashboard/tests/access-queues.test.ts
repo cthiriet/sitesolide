@@ -120,7 +120,7 @@ async function wire(registry: Registry, sites: string[]) {
     writeFileSync(join(root, "state", "team.json"), JSON.stringify(team), { mode: 0o600 });
   };
   const succeeded = (deployment: string, slug: string) => {
-    const result: InstallerResult = { deployment, slug, state: "succeeded", startedAt: Date.now(), updatedAt: Date.now(), finishedAt: Date.now(), log: [], error: null, url: null, allocated: [] };
+    const result: InstallerResult = { deployment, slug, state: "succeeded", startedAt: Date.now(), updatedAt: Date.now(), finishedAt: Date.now(), log: [], error: null, url: null, allocated: [], missingSecrets: null };
     writeFileSync(join(root, "installer", `${deployment}.json`), JSON.stringify(result), { mode: 0o600 });
   };
   return { root, store, access, control, post, mint, pending, succeeded };

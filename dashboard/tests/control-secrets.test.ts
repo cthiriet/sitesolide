@@ -513,15 +513,16 @@ describe("the steward: changing a project's secrets with a token", () => {
     expect(b.everywhere()).not.toContain(CANARY);
   });
 
-  test("cms.env present but undeclared: refused; absent and undeclared: never created", async () => {
+  test("a project that declares no file keeps its variables in its store: wiki.env present or not, refused with the update, never created", async () => {
     const b = await mount();
-    const { secret } = await b.ownerToken({ slugs: ["wiki"], secrets: true });
-    const message = 'the sitesolide.json deployed for wiki does not declare wiki.env: add "secrets": ["wiki.env"] to it and deploy, then set its variables';
+    const { token, secret } = await b.ownerToken({ slugs: ["wiki"], secrets: true });
+    const message = "this project keeps its variables in its store: update your sitesolide CLI, then sitesolide secrets set NAME";
     expect(await body(await patch(b, secret, "wiki", { set: { A: "c" } }))).toEqual({ status: 403, error: "out-of-scope", message });
+    expect(b.journal().at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: `token:${token.id}`, slug: "wiki", detail: "kept in its store" });
     expect(b.file("wiki.env")).toBe("A=b\n");
-    // Listed, but not writable.
+    // Never writable: a leftover of a project that keeps a store, listed as no file of its own.
     const { secrets } = (await (await list(b, secret, "wiki")).json()) as SecretsListResponse;
-    expect(secrets.files.map((file) => [file.name, file.writable])).toEqual([["wiki.env", false]]);
+    expect(secrets.files.filter((file) => file.writable)).toEqual([]);
     unlinkSync(join(b.root, "secrets", "wiki.env"));
     for (const change of [{ set: { A: "c" } }, {}]) expect(await body(await patch(b, secret, "wiki", change))).toMatchObject({ status: 403, error: "out-of-scope" });
     expect(existsSync(join(b.root, "secrets", "wiki.env"))).toBe(false);

@@ -9,6 +9,7 @@
  * the machine does not carry it yet, the Tokens page says which script to run.
  */
 import { DEFAULT_TIMEOUTS } from "../secrets/client";
+import type { StoreChangeRequest, StoreFileRemoveRequest, StoreFileRequest, StoreGenerateRequest } from "../../borrowed/store-protocol";
 import type { CreateTokenRequest, DeployRequest, LogsRequest, SecretsChangeRequest } from "./protocol";
 
 export type ControlSteward = {
@@ -31,6 +32,15 @@ export type ControlSteward = {
   secretsChange: (requested: SecretsChangeRequest) => Promise<Response>;
   /** A project's service restarted for a token, and its verdict. */
   restart: (bearer: string, slug: string) => Promise<Response>;
+  /** A project's store, names and states, as a token reads it. */
+  storeList: (bearer: string, slug: string) => Promise<Response>;
+  /** Names of the store set and removed by a token, all or nothing. */
+  storeChange: (requested: { bearer: string } & StoreChangeRequest) => Promise<Response>;
+  /** A value drawn on the machine, never sent back. */
+  storeGenerate: (requested: { bearer: string } & StoreGenerateRequest) => Promise<Response>;
+  /** A file of the store set, its bytes in base64. */
+  storeSetFile: (requested: { bearer: string } & StoreFileRequest) => Promise<Response>;
+  storeRemoveFile: (requested: { bearer: string } & StoreFileRemoveRequest) => Promise<Response>;
 };
 
 /**
@@ -70,6 +80,12 @@ export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_
     secretsList: (bearer, slug) => call("POST", "/control/secrets/list", { bearer, slug }),
     secretsChange: (requested) => call("PATCH", "/control/secrets", requested, longMs),
     restart: (bearer, slug) => call("POST", "/control/restart", { bearer, slug }, longMs),
+    storeList: (bearer, slug) => call("POST", "/control/store/list", { bearer, slug }),
+    // Every write waits its turn under the secrets' lock, as a change of secrets does.
+    storeChange: (requested) => call("PATCH", "/control/store", requested, longMs),
+    storeGenerate: (requested) => call("POST", "/control/store/generate", requested, longMs),
+    storeSetFile: (requested) => call("PUT", "/control/store/file", requested, longMs),
+    storeRemoveFile: (requested) => call("DELETE", "/control/store/file", requested, longMs),
   };
 }
 
@@ -98,8 +114,10 @@ export async function reach(call: () => Promise<Response>, secrets: string[] = [
   } catch {
     return { kind: "unreachable" };
   }
+  // Compared in their JSON form as well: a quote or a backslash would be
+  // escaped there, a line of a file's content above all.
   for (const secret of secrets) {
-    if (secret.length >= 12 && text.includes(secret)) return { kind: "unreadable" };
+    if (secret.length >= 12 && (text.includes(secret) || text.includes(JSON.stringify(secret).slice(1, -1)))) return { kind: "unreadable" };
   }
   let body: unknown;
   try {

@@ -39,20 +39,44 @@ const FILE: FileView = {
 
 const PORTAL = { requested: true, installed: true, modifiable: true, reason: null };
 
-const PROJECTS: ProjectView[] = [
-  {
-    slug: "cms",
-    service: { unit: "site-cms.service", state: "active", subState: "running", startedAt: NOW - 60_000 },
-    files: [FILE],
-    portal: PORTAL,
-  },
-];
+/** cms in the old form: no store. Not a literal of the type, which gains `store` with the steward's view of it. */
+const CMS_PROJECT = {
+  slug: "cms",
+  service: { unit: "site-cms.service", state: "active", subState: "running", startedAt: NOW - 60_000 },
+  files: [FILE],
+  portal: PORTAL,
+  store: null,
+};
+
+const PROJECTS: ProjectView[] = [CMS_PROJECT];
 
 /** The dashboard's password retyped, and a brand new one: neither comes back out. */
 const NEW_PASSWORD = "a-brand-new-password-for-the-portal";
 const DRAWN_PASSWORD = "Ab3d-Ef4g-Hj5k-Mn6p-Qr7s-Tu8v";
 
 const VERDICT = { kind: "active", state: "active", subState: "running", restarts: 0 };
+
+/** A store as the steward lists it to the owner: names and states, never a value. */
+const STORE = {
+  slug: "cms",
+  exists: true,
+  state: "managed",
+  reason: null,
+  variables: [{ name: "API_KEY", source: "store", file: null, shadows: [], declared: true }],
+  missing: [],
+  files: [{ name: "gcp.json", state: "set", declared: true, reason: null, bytes: 120, modifiedAt: NOW, restartPending: false }],
+  legacy: [],
+  build: [],
+  public: [],
+  unitReadsStore: true,
+  modifiedAt: NOW,
+  restartPending: true,
+  previous: true,
+  may: { write: true, reveal: true, restore: true, migrate: true },
+};
+const STORE_CHANGE = { store: STORE, created: false, set: ["API_KEY"], generated: [], removed: [], absent: [], files: { set: [], removed: [] } };
+/** The one answer of the store that carries a value: a reveal, the owner's. */
+const REVEALED = "revealed-store-value-4d1e";
 
 type Method = keyof Steward;
 type Responder = (requested: unknown) => Response | Promise<Response>;
@@ -91,6 +115,16 @@ function fakeSteward() {
     changePassword: () => Response.json({ file: FILE, password: DRAWN_PASSWORD }),
     togglePortal: () => Response.json({ portal: PORTAL, detail: "portal installed" }),
     restart: () => Response.json({ verdict: VERDICT }),
+    readStore: () => Response.json({ store: STORE }),
+    setStoreVariable: () => Response.json(STORE_CHANGE),
+    removeStoreVariables: () => Response.json(STORE_CHANGE),
+    generateStoreVariable: () => Response.json(STORE_CHANGE),
+    setStoreFile: () => Response.json(STORE_CHANGE),
+    removeStoreFile: () => Response.json(STORE_CHANGE),
+    restoreStore: () => Response.json({ ...STORE_CHANGE, appeared: [], disappeared: [], restored: true }),
+    revealStoreValue: () => Response.json({ value: REVEALED }),
+    migrateStore: () => Response.json({ store: STORE, sources: ["cms.env"], skipped: [], merged: ["API_KEY"], already: [], overridden: [], conflicts: [], written: true }),
+    retireStore: () => Response.json({ store: STORE, retired: ["cms.env"], kept: [] }),
   };
 
   async function call(method: Method, requested: unknown): Promise<Response> {
@@ -113,6 +147,16 @@ function fakeSteward() {
     changePassword: (requested) => call("changePassword", requested),
     togglePortal: (requested) => call("togglePortal", requested),
     restart: (requested) => call("restart", requested),
+    readStore: (slug) => call("readStore", slug),
+    setStoreVariable: (requested) => call("setStoreVariable", requested),
+    removeStoreVariables: (requested) => call("removeStoreVariables", requested),
+    generateStoreVariable: (requested) => call("generateStoreVariable", requested),
+    setStoreFile: (requested) => call("setStoreFile", requested),
+    removeStoreFile: (requested) => call("removeStoreFile", requested),
+    restoreStore: (requested) => call("restoreStore", requested),
+    revealStoreValue: (requested) => call("revealStoreValue", requested),
+    migrateStore: (requested) => call("migrateStore", requested),
+    retireStore: (requested) => call("retireStore", requested),
   };
 
   return { steward, calls, issued, responses };
@@ -239,7 +283,16 @@ type TokenRouteName =
   | "replaceContent"
   | "changePassword"
   | "togglePortal"
-  | "restart";
+  | "restart"
+  | "setStoreVariable"
+  | "removeStoreVariables"
+  | "generateStoreVariable"
+  | "setStoreFile"
+  | "removeStoreFile"
+  | "restoreStore"
+  | "revealStoreValue"
+  | "migrateStore"
+  | "retireStore";
 
 type TokenRoute = { route: TokenRouteName; http: string; path: string; body: Record<string, unknown>; texts?: string[] };
 
@@ -261,6 +314,15 @@ const TOKEN_ROUTES: Required<TokenRoute>[] = ([] as TokenRoute[]).concat([
   },
   { route: "togglePortal", http: "POST", path: "/portal", body: { slug: "cms", active: false, confirmation: "cms" }, texts: ["slug", "confirmation"] },
   { route: "restart", http: "POST", path: "/restart", body: { slug: "cms" } },
+  { route: "setStoreVariable", http: "PUT", path: "/store/variable", body: { slug: "cms", name: "API_KEY", value: "a-store-value-set-77c1" } },
+  { route: "removeStoreVariables", http: "DELETE", path: "/store/variable", body: { slug: "cms", names: ["API_KEY", "OLD"] }, texts: ["slug"] },
+  { route: "generateStoreVariable", http: "POST", path: "/store/generate", body: { slug: "cms", name: "SESSION_KEY", format: "base64url", bytes: 48, replace: true }, texts: ["slug", "name"] },
+  { route: "setStoreFile", http: "PUT", path: "/store/file", body: { slug: "cms", name: "gcp.json", content: "eyJ0eXBlIjoic2VydmljZV9hY2NvdW50In0=" } },
+  { route: "removeStoreFile", http: "DELETE", path: "/store/file", body: { slug: "cms", name: "gcp.json" } },
+  { route: "restoreStore", http: "POST", path: "/store/restore", body: { slug: "cms", dryRun: true }, texts: ["slug"] },
+  { route: "revealStoreValue", http: "POST", path: "/store/value", body: { slug: "cms", name: "API_KEY" } },
+  { route: "migrateStore", http: "POST", path: "/store/migrate", body: { slug: "cms", dryRun: false }, texts: ["slug"] },
+  { route: "retireStore", http: "POST", path: "/store/retire", body: { slug: "cms", files: ["cms.env"] }, texts: ["slug"] },
 ]).map((route) => ({ ...route, texts: route.texts ?? Object.keys(route.body) }));
 
 const EXPECTED_RESPONSES: Record<TokenRouteName, unknown> = {
@@ -274,6 +336,15 @@ const EXPECTED_RESPONSES: Record<TokenRouteName, unknown> = {
   changePassword: { file: FILE, password: DRAWN_PASSWORD },
   togglePortal: { portal: PORTAL, detail: "portal installed" },
   restart: { verdict: VERDICT },
+  setStoreVariable: STORE_CHANGE,
+  removeStoreVariables: STORE_CHANGE,
+  generateStoreVariable: STORE_CHANGE,
+  setStoreFile: STORE_CHANGE,
+  removeStoreFile: STORE_CHANGE,
+  restoreStore: { ...STORE_CHANGE, appeared: [], disappeared: [], restored: true },
+  revealStoreValue: { value: REVEALED },
+  migrateStore: { store: STORE, sources: ["cms.env"], skipped: [], merged: ["API_KEY"], already: [], overridden: [], conflicts: [], written: true },
+  retireStore: { store: STORE, retired: ["cms.env"], kept: [] },
 };
 
 /** Every route that is not a GET, with a valid body. */
@@ -1161,5 +1232,143 @@ describe("localSteward, on a real Unix socket", () => {
     expect(received.map((r) => r.path)).toEqual(["/unlock", "/projects", "/variable", "/lock"]);
     expect(JSON.parse(received[2]!.body)).toEqual({ slug: "cms", file: "cms.env", variable: "API_KEY", token: serverToken });
     expect(JSON.parse(received[3]!.body)).toEqual({ token: serverToken });
+  });
+});
+
+describe("a project's store, the owner's", () => {
+  test("a value set or a file's content that an answer copies back does not come out, quoted in JSON or as it stands", async () => {
+    const open = await openSession();
+    await unlock(open);
+    const value = 'a-value-with-"quotes"-and-\\-9e1f';
+    fake.responses.setStoreVariable = () => Response.json({ ...STORE_CHANGE, set: [value] });
+    expect((await read(secrets.setStoreVariable(requested("/store/variable", { method: "PUT", body: { slug: "cms", name: "API_KEY", value }, cookie: open.cookie })))).status).toBe(502);
+    const line = '{"private_key":"-----BEGIN PRIVATE KEY-----"}';
+    const content = Buffer.from(`${line}\n`).toString("base64");
+    fake.responses.setStoreFile = () => Response.json({ ...STORE_CHANGE, reason: line });
+    expect((await read(secrets.setStoreFile(requested("/store/file", { method: "PUT", body: { slug: "cms", name: "gcp.json", content }, cookie: open.cookie })))).status).toBe(502);
+    fake.responses.setStoreFile = () => Response.json({ ...STORE_CHANGE, reason: content });
+    expect((await read(secrets.setStoreFile(requested("/store/file", { method: "PUT", body: { slug: "cms", name: "gcp.json", content }, cookie: open.cookie })))).status).toBe(502);
+  });
+
+  test("a reveal's value goes to the owner's page as the steward answers it, under the session's unlock alone", async () => {
+    const open = await openSession();
+    const token = await unlock(open);
+    fake.calls.length = 0;
+    const parsed = await read(secrets.revealStoreValue(requested("/store/value", { body: { slug: "cms", name: "API_KEY", token: "from-the-page" }, cookie: open.cookie })));
+    expect(parsed).toMatchObject({ status: 200, body: { value: REVEALED } });
+    expect(fake.calls).toEqual([{ method: "revealStoreValue", requested: { slug: "cms", name: "API_KEY", token } }]);
+  });
+
+  test("each field of its type, a list where a list goes; nothing goes off otherwise, and a file takes a content's cap", async () => {
+    const open = await openSession();
+    await unlock(open);
+    fake.calls.length = 0;
+    for (const [route, path, method, body, message] of [
+      ["removeStoreVariables", "/store/variable", "DELETE", { slug: "cms", names: "API_KEY" }, "Missing or non-list field: names."],
+      ["removeStoreVariables", "/store/variable", "DELETE", { slug: "cms", names: ["A", 1] }, "Missing or non-list field: names."],
+      ["generateStoreVariable", "/store/generate", "POST", { slug: "cms", name: "A", format: 42 }, "Non-string field: format."],
+      ["generateStoreVariable", "/store/generate", "POST", { slug: "cms", name: "A", bytes: "32" }, "Non-number field: bytes."],
+      ["generateStoreVariable", "/store/generate", "POST", { slug: "cms", name: "A", replace: "true" }, "Non-boolean field: replace."],
+      ["restoreStore", "/store/restore", "POST", { slug: "cms", dryRun: 1 }, "Non-boolean field: dryRun."],
+      ["migrateStore", "/store/migrate", "POST", { slug: "cms", dryRun: "no" }, "Non-boolean field: dryRun."],
+      ["retireStore", "/store/retire", "POST", { slug: "cms" }, "Missing or non-list field: files."],
+    ] as const) {
+      const parsed = await read(secrets[route](requested(path, { method, body, cookie: open.cookie })));
+      expect({ route, status: parsed.status, body: parsed.body }).toEqual({ route, status: 400, body: { error: "invalid", message } });
+    }
+    expect(fake.calls).toEqual([]);
+    // Only the fields each takes go off, of their types: a generate without its options.
+    const generated = await read(secrets.generateStoreVariable(requested("/store/generate", { body: { slug: "cms", name: "SESSION_KEY", value: "x" }, cookie: open.cookie })));
+    expect(generated.status).toBe(200);
+    expect(fake.calls.at(-1)).toMatchObject({ method: "generateStoreVariable", requested: { slug: "cms", name: "SESSION_KEY" } });
+    expect(Object.keys(fake.calls.at(-1)!.requested as object).sort()).toEqual(["name", "slug", "token"]);
+    // 64 KiB of a file in base64 is well past a variable's cap.
+    const content = Buffer.alloc(64 * 1024).toString("base64");
+    expect((await read(secrets.setStoreFile(requested("/store/file", { method: "PUT", body: { slug: "cms", name: "big.bin", content }, cookie: open.cookie })))).status).toBe(200);
+    expect((await read(secrets.setStoreVariable(requested("/store/variable", { method: "PUT", body: { slug: "cms", name: "A", value: content }, cookie: open.cookie })))).status).toBe(400);
+  });
+
+  test("server.ts: reading a value back, merging and retiring the old files answer a person 403 before any handler; the writes and the restore are relayed for a person too, each with the long delay", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "server.ts"), "utf8");
+    const entry = (path: string) => {
+      const start = source.indexOf(`"/api/secrets${path}": {`);
+      expect(start).toBeGreaterThan(-1);
+      const tail = source.slice(start + 1);
+      const finish = tail.search(/\n\s*"\/api\/|\n\s*\},\n/);
+      return tail.slice(0, finish === -1 ? undefined : finish);
+    };
+    for (const path of ["/store/value", "/store/migrate", "/store/retire"]) {
+      const text = entry(path);
+      expect(text).toContain("POST: owner((req, server) => long(req, server, secrets.");
+      expect(text).not.toContain("memberRelay");
+    }
+    for (const [path, verbs] of [
+      ["/store/variable", 2],
+      ["/store/generate", 1],
+      ["/store/file", 2],
+      ["/store/restore", 1],
+    ] as const) {
+      const text = entry(path);
+      expect({ path, either: text.match(/either\(/g)?.length ?? 0, member: text.match(/memberRelay\.\w+/g)?.length ?? 0, long: text.match(/long\(req, server, /g)?.length ?? 0 }).toEqual({
+        path,
+        either: verbs,
+        member: verbs,
+        long: 2 * verbs,
+      });
+    }
+  });
+});
+
+describe("localSteward's store routes, on a real Unix socket", () => {
+  test("every method aims at its route, with its verb, the body as JSON, the slug of a listing encoded; every write and the reveal wait the long delay", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "socket-store-"));
+    const socket = join(folder, "s.sock");
+    const received: { method: string; path: string; query: string; body: string }[] = [];
+    const server = Bun.serve({
+      unix: socket,
+      async fetch(req) {
+        const url = new URL(req.url);
+        received.push({ method: req.method, path: url.pathname, query: url.search, body: await req.text() });
+        if (url.pathname !== "/store") await Bun.sleep(150);
+        return Response.json({ ok: true });
+      },
+    });
+    try {
+      const steward = localSteward(socket, { shortMs: 100, longMs: 5_000 });
+      const token = "unlock-token";
+      const calls = [
+        steward.setStoreVariable({ token, slug: "cms", name: "A", value: "v" }),
+        steward.removeStoreVariables({ token, slug: "cms", names: ["A"] }),
+        steward.generateStoreVariable({ token, slug: "cms", name: "K", format: "hex", bytes: 32 }),
+        steward.setStoreFile({ token, slug: "cms", name: "gcp.json", content: "e30=" }),
+        steward.removeStoreFile({ token, slug: "cms", name: "gcp.json" }),
+        steward.restoreStore({ token, slug: "cms", dryRun: true }),
+        steward.revealStoreValue({ token, slug: "cms", name: "A" }),
+        steward.migrateStore({ token, slug: "cms", dryRun: false }),
+        steward.retireStore({ token, slug: "cms", files: ["cms.env"] }),
+      ];
+      expect((await Promise.all(calls)).map((response) => response.status)).toEqual(Array(9).fill(200));
+      expect((await steward.readStore("cms&slug=x/../y")).status).toBe(200);
+      expect(received.map(({ method, path }) => `${method} ${path}`).sort()).toEqual(
+        [
+          "PUT /store/variable",
+          "DELETE /store/variable",
+          "POST /store/generate",
+          "PUT /store/file",
+          "DELETE /store/file",
+          "POST /store/restore",
+          "POST /store/value",
+          "POST /store/migrate",
+          "POST /store/retire",
+          "GET /store",
+        ].sort(),
+      );
+      expect(received.find((one) => one.path === "/store/generate")!.body).toBe(JSON.stringify({ token, slug: "cms", name: "K", format: "hex", bytes: 32 }));
+      const listing = received.find((one) => one.method === "GET")!;
+      expect(listing).toEqual({ method: "GET", path: "/store", query: "?slug=cms%26slug%3Dx%2F..%2Fy", body: "" });
+    } finally {
+      await server.stop(true);
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 });

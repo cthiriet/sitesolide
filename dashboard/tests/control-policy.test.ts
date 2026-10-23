@@ -104,14 +104,25 @@ describe("decideSlug", () => {
 
 describe("leftoversReason", () => {
   test("nothing left: no reason; each kind counted, with its own remedy and the owner's SSH deploy", () => {
-    expect(leftoversReason("shop", { snapshots: 0, grants: 0 })).toBeNull();
-    expect(leftoversReason("shop", { snapshots: 3, grants: 0 })).toBe(
+    expect(leftoversReason("shop", { snapshots: 0, grants: 0, store: false })).toBeNull();
+    expect(leftoversReason("shop", { snapshots: 3, grants: 0, store: false })).toBe(
       "the machine still keeps 3 backup snapshots of a project once named shop, which a project created under that name would be handed: no token creates it. " +
         "Pick another slug, or ask the owner of the machine, who may deploy shop themselves over SSH, or forget the snapshots first",
     );
-    expect(leftoversReason("shop", { snapshots: 0, grants: 2 })).toBe(
+    expect(leftoversReason("shop", { snapshots: 0, grants: 2, store: false })).toBe(
       "the machine still keeps 2 connector grants of a project once named shop, which a project created under that name would be handed: no token creates it. " +
         "Pick another slug, or ask the owner of the machine, who may deploy shop themselves over SSH, or withdraw the grants on the dashboard's Connectors page first",
+    );
+  });
+
+  test("a store of secrets left under the name: its values would reach whatever code a token deploys there", () => {
+    expect(leftoversReason("shop", { snapshots: 0, grants: 0, store: true })).toBe(
+      "the machine still keeps a secrets store of a project once named shop, which a project created under that name would be handed: no token creates it. " +
+        "Pick another slug, or ask the owner of the machine, who may deploy shop themselves over SSH, or remove the store with sitesolide remove --confirm shop first",
+    );
+    expect(leftoversReason("shop", { snapshots: 1, grants: 1, store: true })).toBe(
+      "the machine still keeps 1 backup snapshot, 1 connector grant and a secrets store of a project once named shop, which a project created under that name would be handed: no token creates it. " +
+        "Pick another slug, or ask the owner of the machine, who may deploy shop themselves over SSH, or withdraw the grant on the dashboard's Connectors page, remove the store with sitesolide remove --confirm shop and forget the snapshot first",
     );
   });
 });

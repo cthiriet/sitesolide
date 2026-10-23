@@ -13,7 +13,9 @@
  * steward's own state directory, 0700, and the installer's results in its
  * runtime directory, 0700. Nothing is written where the dashboard could have
  * laid a link. The backups' index and the connectors' files are only read,
- * through the readers the steward's pages already use, with their checks.
+ * through the readers the steward's pages already use, with their checks,
+ * and a project's store of secrets is only looked at: whether its folder is
+ * there, never what it holds.
  */
 import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,6 +24,7 @@ import { DEPLOYMENT_ID_SHAPE, INSTALLER_TEMPLATE } from "./protocol";
 import { CREATIONS_NAME } from "./creations";
 import type { Leftovers } from "./policy";
 import { isValidSlug } from "../../borrowed/manifest";
+import { storePaths, STORE_ROOT } from "../../borrowed/store";
 import type { BackupReader } from "../backup/reader";
 import type { ConnectorStore } from "../connectors/store";
 
@@ -48,6 +51,8 @@ export type ControlSystemConfig = {
    */
   backups: BackupReader | null;
   connectors: ConnectorStore | null;
+  /** /etc/sitesolide/projects, the stores of secrets: `STORE_ROOT` when absent. */
+  storeRoot?: string;
 };
 
 export type ControlSystem = {
@@ -66,11 +71,15 @@ export type ControlSystem = {
   readManifest: (slug: string) => Promise<string | null>;
   /**
    * What the machine keeps under this name whether or not it carries the
-   * project: snapshots in the backups' index, connector grants. Throws when
-   * either is there and does not read: what cannot be read is never taken
-   * for nothing left (src/control/policy.ts, `leftoversReason`).
+   * project: snapshots in the backups' index, connector grants, and whether
+   * its store's folder is there, whoever laid it: the steward clears `store`
+   * for the token that holds the name. Throws when the index or the grants
+   * are there and do not read: what cannot be read is never taken for
+   * nothing left (src/control/policy.ts, `leftoversReason`).
    */
   leftovers: (slug: string) => Promise<Leftovers>;
+  /** Is `/etc/sitesolide/projects/<slug>` there, a link or anything else included? Never what it holds. Throws when that cannot be told. */
+  storeExists: (slug: string) => Promise<boolean>;
   /** Is the installer's template in place? Without it, nothing can start. */
   installerInstalled: () => Promise<boolean>;
   readResult: (deployment: string) => Promise<Examination>;
@@ -104,6 +113,20 @@ async function run(command: string[], timeoutMs: number): Promise<Command> {
 export function createControlSystem(config: ControlSystemConfig): ControlSystem {
   const teamFile = join(config.stateFolder, "team.json");
   const requests = join(config.stateFolder, "installs");
+  const storeRoot = config.storeRoot ?? STORE_ROOT;
+
+  /** Throws on anything but a folder that is there or one that is not: what cannot be read is never taken for nothing. */
+  function storeExists(slug: string): boolean {
+    if (!isValidSlug(slug)) throw new Error("not a slug");
+    try {
+      // A link counts as present: it is not a store a token may take.
+      lstatSync(storePaths(slug, storeRoot).folder);
+      return true;
+    } catch (e) {
+      if ((e as { code?: unknown } | null)?.code === "ENOENT") return false;
+      throw new Error("the stores' folder does not read");
+    }
+  }
 
   return {
     now: () => Date.now(),
@@ -170,8 +193,10 @@ export function createControlSystem(config: ControlSystemConfig): ControlSystem 
       // Absent: the egress proxy is not installed, and nothing is lent.
       if (reading.kind === "unmanaged") throw new Error(`the connectors' files do not read: ${reading.reason}`);
       if (reading.kind === "managed") grants = reading.grants.grants.filter((grant) => grant.slug === slug).length;
-      return { snapshots, grants };
+      return { snapshots, grants, store: storeExists(slug) };
     },
+
+    storeExists: async (slug) => storeExists(slug),
 
     async installerInstalled() {
       try {

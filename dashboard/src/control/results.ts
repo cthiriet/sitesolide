@@ -12,7 +12,9 @@
  */
 import type { Examination } from "../secrets/system";
 import { DEPLOYMENT_ID_SHAPE, MAX_LOG_LINE, MAX_LOG_LINES, type InstallerResult } from "./protocol";
-import { isValidSlug } from "../../borrowed/manifest";
+import { isValidFileName, isValidSlug, MAX_DECLARED_FILES } from "../../borrowed/manifest";
+import { isVariableName } from "../../borrowed/variables";
+import type { StoreMissing } from "../../borrowed/store-protocol";
 
 export type ResultJudgement = { kind: "absent" } | { kind: "read"; result: InstallerResult } | { kind: "unreadable"; reason: string };
 
@@ -28,6 +30,23 @@ export function cleanLine(line: string): string {
   // included, is dropped: a log line must not repaint a terminal.
   const clean = line.replace(/\t/g, "  ").replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
   return clean.length > MAX_LOG_LINE ? `${clean.slice(0, MAX_LOG_LINE - 3)}...` : clean;
+}
+
+/** A manifest declares no more names than these: past them, a list is no installer's. */
+const MAX_MISSING_NAMES = 512;
+
+/**
+ * The names the store lacked, as the installer wrote them: a variable's
+ * names and a file's names alone, bounded. Absent, from an installer before
+ * the store, or malformed: null, which says nothing is known, and never
+ * fails the result.
+ */
+export function readMissing(value: unknown): StoreMissing | null {
+  if (!isObject(value)) return null;
+  const { runtime, files } = value;
+  if (!Array.isArray(runtime) || runtime.length > MAX_MISSING_NAMES || !runtime.every((name) => isVariableName(name))) return null;
+  if (!Array.isArray(files) || files.length > MAX_DECLARED_FILES || !files.every((name) => isValidFileName(name))) return null;
+  return { runtime: [...runtime], files: [...files] };
 }
 
 /** The result's text, read, for the deployment the caller expects. */
@@ -76,6 +95,7 @@ export function readResult(text: string, deployment: string): ResultJudgement {
       error: error === null ? null : { code: cleanLine((error as { code: string }).code).slice(0, 64), message: cleanLine((error as { message: string }).message) },
       url: url as string | null,
       allocated: allocated as InstallerResult["allocated"],
+      missingSecrets: readMissing(object.missingSecrets),
     },
   };
 }

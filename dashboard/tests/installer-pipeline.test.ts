@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { bundle, entryBlocks, header } from "../borrowed/bundle";
 import { generateFragment, HEADLESS_ANSWER } from "../borrowed/fragment";
@@ -72,7 +72,7 @@ describe("a new project, private by default", () => {
     const bench = createBench();
     stageBundle(bench, APP_FILES);
     const outcome = await run(bench, request(APP));
-    expect(outcome).toEqual({ ok: true, url: `https://shop.${ZONE}/`, allocated: [{ service: null, port: 3002 }] });
+    expect(outcome).toEqual({ ok: true, url: `https://shop.${ZONE}/`, allocated: [{ service: null, port: 3002 }], missingSecrets: { runtime: [], files: [] } });
 
     const manifest = deposited(bench);
     expect(manifest.portal).toBe(true);
@@ -369,9 +369,9 @@ describe("a new project refused before anything is served leaves nothing behind"
   });
 
   test("once something may be served, a new project keeps what it has, the owner then sees why", async () => {
-    const bench = createBench();
+    const bench = createBench({ restartFails: true });
     stageBundle(bench, APP_FILES);
-    expect(await run(bench, request({ ...APP, secrets: ["shop.env"] }))).toMatchObject({ ok: false, code: "secret-missing" });
+    expect(await run(bench, request(APP))).toMatchObject({ ok: false, code: "service-failed" });
     expect(passwd(bench)).toContain("site-shop");
     expect(existsSync(join(bench.sites, "shop", "sitesolide.json"))).toBe(true);
     expect(bench.events.some((event) => event.startsWith("userdel"))).toBe(false);
@@ -379,16 +379,17 @@ describe("a new project refused before anything is served leaves nothing behind"
 });
 
 describe("after the files are in place", () => {
-  test("a missing secret: the files are there, the service is not restarted, the owner is told where to create it", async () => {
+  test("a legacy file missing stops nothing: said in the log, the service restarted without its variables", async () => {
     const bench = createBench();
     stageBundle(bench, APP_FILES);
     const outcome = await run(bench, request({ ...APP, secrets: ["shop.env"] }));
-    expect(outcome).toMatchObject({ ok: false, code: "secret-missing" });
-    expect(outcome.ok === false && outcome.message).toContain(`https://dashboard.${ZONE}/`);
-    expect(bench.events.some((event) => event.startsWith("systemctl restart"))).toBe(false);
+    expect(outcome).toMatchObject({ ok: true, missingSecrets: { runtime: [], files: [] } });
+    expect(bench.events).toContain("log    !! /etc/sitesolide/shop.env missing: the service starts without its variables");
+    expect(bench.events).toContain("systemctl restart shop");
     writeFileSync(join(bench.secrets, "shop.env"), "TOKEN=x\n");
     stageBundle(bench, APP_FILES);
     expect((await run(bench, request({ ...APP, secrets: ["shop.env"] }))).ok).toBe(true);
+    expect(bench.events).toContain(`log    present  /etc/sitesolide/shop.env`);
   });
 
   test("a site whose root answers 404 fails, saying what to serve there", async () => {
@@ -486,7 +487,7 @@ describe("workers, scheduled services and anchors", () => {
     const bench = createBench();
     stageBundle(bench, APP_FILES);
     const outcome = await run(bench, request(BACKGROUND));
-    expect(outcome).toEqual({ ok: true, url: `https://shop.${ZONE}/`, allocated: [{ service: "web", port: 3002 }] });
+    expect(outcome).toEqual({ ok: true, url: `https://shop.${ZONE}/`, allocated: [{ service: "web", port: 3002 }], missingSecrets: { runtime: [], files: [] } });
     const manifest = deposited(bench);
     expect(manifest.services!.jobs!.port).toBeUndefined();
     expect(manifest.services!.sync!.port).toBeUndefined();
@@ -551,7 +552,7 @@ describe("workers, scheduled services and anchors", () => {
     const bench = createBench();
     stageBundle(bench, SYNC_FILES);
     const outcome = await run(bench, request(ANCHORED, PUBLIC));
-    expect(outcome).toEqual({ ok: true, url: `https://shop.${ZONE}/`, allocated: [] });
+    expect(outcome).toEqual({ ok: true, url: `https://shop.${ZONE}/`, allocated: [], missingSecrets: { runtime: [], files: [] } });
     expect(units(bench)).toEqual(["shop.service", "shop.sync.service", "shop.sync.timer"]);
     const anchor = readFileSync(join(bench.units, "shop.service"), "utf8");
     expect(anchor).toContain("Type=oneshot");
@@ -567,7 +568,7 @@ describe("workers, scheduled services and anchors", () => {
     const bench = createBench();
     stageBundle(bench, [file("app/bot.ts", "await listen()")]);
     const outcome = await run(bench, request({ slug: "shop", services: { bot: { start: "/usr/local/bin/bun run bot.ts", internal: true } } }, PUBLIC));
-    expect(outcome).toEqual({ ok: true, url: `https://shop.${ZONE}/`, allocated: [] });
+    expect(outcome).toEqual({ ok: true, url: `https://shop.${ZONE}/`, allocated: [], missingSecrets: { runtime: [], files: [] } });
     expect(units(bench)).toEqual(["shop.service"]);
     const unit = readFileSync(join(bench.units, "shop.service"), "utf8");
     expect(unit).toContain("RestartSteps=8");
@@ -799,6 +800,219 @@ describe("the secret files a token's project reads are its own", () => {
     stageBundle(bench, APP_FILES);
     refusedFor(await run(bench, request({ ...APP, port: 3040, secrets: ["shop.env"] })), "/etc/sitesolide/shop.env does not belong to site-shop");
     expect(bench.events.some((event) => event.startsWith("systemctl restart"))).toBe(false);
+  });
+});
+
+describe("the project's store of secrets", () => {
+  // Planted in every value the tests lay in a store: no log line, no outcome may carry it.
+  const CANARY = "store-value-canary-3b7e";
+  const mode = (path: string) => lstatSync(path).mode & 0o777;
+  const storeOf = (bench: Bench, slug = "shop") => join(bench.store, slug);
+
+  /** The real host, its store and its units recorded in the order they are laid. */
+  function recorded(bench: Bench) {
+    const host = hostOf(bench);
+    return {
+      ...host,
+      prepareStore: async (slug: string) => {
+        bench.events.push("prepare store");
+        return host.prepareStore(slug);
+      },
+      installUnit: async (unit: string, text: string) => {
+        bench.events.push(`install unit ${unit}`);
+        return host.installUnit(unit, text);
+      },
+    };
+  }
+
+  test("laid before any unit, on every deployment of an app, root's three folders 0700, empty; the old form's apps get one too, a static site none", async () => {
+    for (const manifest of [APP, { ...APP, secrets: ["shop.env"] }, { ...APP, secrets: ["ADMIN_TOKEN"] }]) {
+      const bench = createBench();
+      stageBundle(bench, APP_FILES);
+      expect((await runPipeline(recorded(bench), request(manifest), { zone: ZONE, runFolder: bench.run })).ok).toBe(true);
+      expect(order(bench, "prepare store", "install unit shop")).toBe(true);
+      expect(order(bench, "prepare store", "systemctl restart shop")).toBe(true);
+      for (const path of [bench.store, storeOf(bench), join(storeOf(bench), "files")]) expect(mode(path)).toBe(0o700);
+      expect(readdirSync(storeOf(bench))).toEqual(["files"]);
+      expect(readdirSync(join(storeOf(bench), "files"))).toEqual([]);
+      expect(bench.events).toContain("log    the project's store of secrets laid, empty");
+    }
+    const static_ = createBench();
+    stageBundle(static_, [file("public/index.html")]);
+    const outcome = await run(static_, request({ slug: "shop", publicDir: "public" }, PUBLIC));
+    expect(outcome.ok).toBe(true);
+    expect(outcome.missingSecrets).toBeUndefined();
+    expect(existsSync(static_.store)).toBe(false);
+  });
+
+  test("a files folder deleted by hand comes back at the next deployment, and nothing the store holds is touched", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    expect((await run(bench, request(APP))).ok).toBe(true);
+    writeFileSync(join(storeOf(bench), "env"), `API_KEY=${CANARY}\n`, { mode: 0o600 });
+    rmSync(join(storeOf(bench), "files"), { recursive: true });
+    bench.events.length = 0;
+    stageBundle(bench, APP_FILES);
+    expect((await run(bench, request(APP))).ok).toBe(true);
+    expect(mode(join(storeOf(bench), "files"))).toBe(0o700);
+    expect(readFileSync(join(storeOf(bench), "env"), "utf8")).toBe(`API_KEY=${CANARY}\n`);
+    expect(bench.events).not.toContain("log    the project's store of secrets laid, empty");
+    expect(bench.events.join("\n")).not.toContain(CANARY);
+  });
+
+  test("a link, or anything that is no folder, where a folder of the store goes: refused before any unit, the path named; a new project's creation undone, an existing one untouched", async () => {
+    const elsewhere = (bench: Bench) => {
+      mkdirSync(join(bench.root, "elsewhere"), { recursive: true });
+      return join(bench.root, "elsewhere");
+    };
+    const layouts: [string, (bench: Bench) => string][] = [
+      ["the stores' root a link", (bench) => (symlinkSync(elsewhere(bench), bench.store), bench.store)],
+      ["the project's folder a link", (bench) => (mkdirSync(bench.store, { recursive: true }), symlinkSync(elsewhere(bench), storeOf(bench)), storeOf(bench))],
+      ["the project's folder a file", (bench) => (mkdirSync(bench.store, { recursive: true }), writeFileSync(storeOf(bench), "x"), storeOf(bench))],
+      ["its files a link", (bench) => (mkdirSync(storeOf(bench), { recursive: true }), symlinkSync(elsewhere(bench), join(storeOf(bench), "files")), join(storeOf(bench), "files"))],
+    ];
+    for (const [, lay] of layouts) {
+      const bench = createBench();
+      const refusedPath = lay(bench);
+      stageBundle(bench, APP_FILES);
+      const outcome = await run(bench, request(APP));
+      expect(outcome).toMatchObject({ ok: false, code: "store-refused", message: `${refusedPath} is not a folder root owns: the owner of the machine must look at it; nothing was changed` });
+      expect(readdirSync(bench.units)).toEqual([]);
+      expect(readdirSync(bench.sites)).toEqual([]);
+      expect(readFileSync(join(bench.root, "passwd"), "utf8")).not.toContain("site-shop");
+      // Nothing written through the link.
+      expect(existsSync(join(bench.root, "elsewhere", "shop"))).toBe(false);
+      expect(existsSync(join(bench.root, "elsewhere", "files"))).toBe(false);
+    }
+    const existing = createBench();
+    const previous = { ...APP, port: 3040, portal: true } as Manifest;
+    deposit(existing, previous);
+    writeFileSync(join(existing.units, "shop.service"), generateUnits(previous)[0]!.text);
+    const before = readFileSync(join(existing.units, "shop.service"), "utf8");
+    mkdirSync(storeOf(existing), { recursive: true });
+    writeFileSync(join(storeOf(existing), "files"), "not a folder");
+    stageBundle(existing, APP_FILES);
+    expect(await run(existing, request({ ...APP, port: 3040 }))).toMatchObject({ ok: false, code: "store-refused" });
+    expect(readFileSync(join(existing.units, "shop.service"), "utf8")).toBe(before);
+    expect(existing.events.some((event) => event.startsWith("systemctl restart"))).toBe(false);
+  });
+
+  test("a store that cannot be laid stops before any unit, and says what to do", async () => {
+    const bench = createBench();
+    const host = { ...hostOf(bench), prepareStore: async () => Promise.reject(Object.assign(new Error("read-only file system"), { code: "EROFS" })) };
+    stageBundle(bench, APP_FILES);
+    const outcome = await runPipeline(host, request(APP), { zone: ZONE, runFolder: bench.run });
+    expect(outcome).toMatchObject({ ok: false, code: "store-failed" });
+    expect(outcome.ok === false && outcome.message).toContain("could not be laid under /etc/sitesolide/projects (EROFS)");
+    expect(outcome.ok === false && outcome.message).toContain("sitesolide upgrade");
+    expect(readdirSync(bench.units)).toEqual([]);
+  });
+
+  test("a creation undone takes the store it laid, after its units and its tree; a store found there, written ahead, stays as it is", async () => {
+    const traversal = bundle([file("app/../../../etc/cron.d/x", "* * * * * root id")]);
+    const bench = createBench({ lockHeld: true });
+    stageBundle(bench, APP_FILES);
+    expect(await run(bench, request(APP))).toMatchObject({ ok: false, code: "caddy-busy" });
+    expect(existsSync(storeOf(bench))).toBe(false);
+    expect(order(bench, "log    removed    /srv/sites/shop", "log    removed    the project's store of secrets, empty")).toBe(true);
+    expect(order(bench, "systemctl disable --now shop", "log    removed    the project's store of secrets, empty")).toBe(true);
+
+    const ahead = createBench();
+    mkdirSync(join(storeOf(ahead), "files"), { recursive: true });
+    writeFileSync(join(storeOf(ahead), "env"), `API_KEY=${CANARY}\n`, { mode: 0o600 });
+    stageBundle(ahead, traversal);
+    expect(await run(ahead, request(APP))).toMatchObject({ ok: false, code: "bundle-refused" });
+    expect(readFileSync(join(storeOf(ahead), "env"), "utf8")).toBe(`API_KEY=${CANARY}\n`);
+    expect(ahead.events.join("\n")).not.toContain("store of secrets");
+  });
+
+  test("the previous versions a removed project left are dropped when its store is laid anew, and kept when the store was there", async () => {
+    const fresh = createBench();
+    mkdirSync(join(fresh.previous, "shop", "files"), { recursive: true });
+    writeFileSync(join(fresh.previous, "shop", "env"), `API_KEY=${CANARY}\n`);
+    mkdirSync(join(fresh.previous, "other"), { recursive: true });
+    stageBundle(fresh, APP_FILES);
+    expect((await run(fresh, request(APP))).ok).toBe(true);
+    expect(existsSync(join(fresh.previous, "shop"))).toBe(false);
+    expect(existsSync(join(fresh.previous, "other"))).toBe(true);
+
+    const kept = createBench();
+    mkdirSync(join(storeOf(kept), "files"), { recursive: true });
+    mkdirSync(join(kept.previous, "shop"), { recursive: true });
+    writeFileSync(join(kept.previous, "shop", "env"), "API_KEY=before\n");
+    stageBundle(kept, APP_FILES);
+    expect((await run(kept, request(APP))).ok).toBe(true);
+    expect(readFileSync(join(kept.previous, "shop", "env"), "utf8")).toBe("API_KEY=before\n");
+  });
+
+  test("the declared names the store lacks: said in the log and in the outcome, names alone; nothing stops, the service restarted", async () => {
+    const bench = createBench();
+    mkdirSync(join(storeOf(bench), "files"), { recursive: true });
+    writeFileSync(join(storeOf(bench), "env"), `ADMIN_TOKEN=${CANARY}\nUNDECLARED=${CANARY}\n`, { mode: 0o600 });
+    writeFileSync(join(storeOf(bench), "files", "gcp.json"), `{"key":"${CANARY}"}`, { mode: 0o600 });
+    writeFileSync(join(storeOf(bench), "files", "tls.key"), "", { mode: 0o600 });
+    writeFileSync(join(storeOf(bench), "files", ".tls.key.0123456789abcdef.tmp"), CANARY, { mode: 0o600 });
+    stageBundle(bench, APP_FILES);
+    const manifest = { ...APP, secrets: { runtime: ["ADMIN_TOKEN", "STRIPE_SECRET_KEY", "SESSION_KEY"], files: ["gcp.json", "tls.key"] } };
+    const outcome = await run(bench, request(manifest));
+    expect(outcome).toMatchObject({ ok: true, missingSecrets: { runtime: ["STRIPE_SECRET_KEY", "SESSION_KEY"], files: ["tls.key"] } });
+    expect(bench.events).toContain("log    !! runtime secrets not set on the machine: STRIPE_SECRET_KEY, SESSION_KEY: sitesolide secrets set STRIPE_SECRET_KEY, or sitesolide secrets generate SESSION_KEY");
+    expect(bench.events).toContain("log    !! secret files not set on the machine: tls.key: sitesolide secrets set-file tls.key < tls.key");
+    expect(bench.events).toContain("systemctl restart shop");
+    expect(bench.events.join("\n")).not.toContain(CANARY);
+    expect(JSON.stringify(outcome)).not.toContain(CANARY);
+
+    // Every one set: said so, nothing missing.
+    writeFileSync(join(storeOf(bench), "env"), `ADMIN_TOKEN=a\nSTRIPE_SECRET_KEY=b\nSESSION_KEY=c\n`, { mode: 0o600 });
+    writeFileSync(join(storeOf(bench), "files", "tls.key"), "key", { mode: 0o600 });
+    stageBundle(bench, APP_FILES);
+    expect(await run(bench, request(manifest))).toMatchObject({ ok: true, missingSecrets: { runtime: [], files: [] } });
+    expect(bench.events).toContain("log    every declared name is set");
+  });
+
+  test("a store's env that does not read back: said with its line and reason, never the line; nothing known of what is missing, nothing stops", async () => {
+    const bench = createBench();
+    mkdirSync(join(storeOf(bench), "files"), { recursive: true });
+    writeFileSync(join(storeOf(bench), "env"), `export ADMIN_TOKEN=${CANARY}\n`, { mode: 0o600 });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, secrets: ["ADMIN_TOKEN"] }));
+    expect(outcome).toMatchObject({ ok: true, missingSecrets: null });
+    expect(bench.events.some((event) => event.startsWith("log    !! the store's env does not read back (line 1: "))).toBe(true);
+    expect(bench.events).toContain("log    !! the store's names could not be read: whether a declared secret is missing is not checked");
+    expect(bench.events.join("\n")).not.toContain(CANARY);
+  });
+
+  test("a unit that could not load its files is said as such, 243/CREDENTIALS, at the restart and within the window", async () => {
+    const restarting = createBench({ restartFails: true, statuses: { shop: 243 } });
+    stageBundle(restarting, APP_FILES);
+    expect(await run(restarting, request(APP))).toMatchObject({
+      ok: false,
+      code: "service-failed",
+      message: "shop.service could not load its secret files (243/CREDENTIALS): the store's files folder is missing, or its files are too large; sitesolide refresh shop lays the folder again: read sitesolide logs",
+    });
+    const falling = createBench({ falls: { shop: { active: "activating", sub: "auto-restart", restarts: 2, status: 243 } } });
+    stageBundle(falling, APP_FILES);
+    expect(await run(falling, request(APP))).toMatchObject({ ok: false, code: "service-failed", message: expect.stringContaining("shop.service could not load its secret files (243/CREDENTIALS)") });
+    // Any other status is said as before.
+    const other = createBench({ restartFails: true, statuses: { shop: 1 } });
+    stageBundle(other, APP_FILES);
+    expect(await run(other, request(APP))).toMatchObject({ ok: false, code: "service-failed", message: expect.stringContaining("did not come back active") });
+  });
+
+  test("a foreign legacy file is still refused before anything is written, the store included; one that becomes foreign meanwhile, before the restart", async () => {
+    const bench = createBench();
+    deposit(bench, { ...APP, port: 3040, portal: true, secrets: ["shop.env"] } as Manifest);
+    writeFileSync(join(bench.root, "passwd"), `${readFileSync(join(bench.root, "passwd"), "utf8")}site-shop:x:${OWN_UID + 1}:${OWN_UID + 1}::/nonexistent:/usr/sbin/nologin\n`);
+    writeFileSync(join(bench.secrets, "shop.env"), "A=b\n", { mode: 0o600 });
+    stageBundle(bench, APP_FILES);
+    expect(await run(bench, request({ ...APP, port: 3040, secrets: ["shop.env"] }))).toMatchObject({ ok: false, code: "secret-taken" });
+    expect(existsSync(bench.store)).toBe(false);
+    const later = createBench({ onLock: (b) => writeFileSync(join(b.secrets, "shop.env"), "A=b\n", { mode: 0o600 }) });
+    writeFileSync(join(later.root, "passwd"), `${readFileSync(join(later.root, "passwd"), "utf8")}site-shop:x:${OWN_UID + 1}:${OWN_UID + 1}::/nonexistent:/usr/sbin/nologin\n`);
+    stageBundle(later, APP_FILES);
+    expect(await run(later, request({ ...APP, secrets: ["shop.env"] }))).toMatchObject({ ok: false, code: "secret-taken" });
+    expect(existsSync(join(storeOf(later), "files"))).toBe(true);
+    expect(later.events.some((event) => event.startsWith("systemctl restart"))).toBe(false);
   });
 });
 

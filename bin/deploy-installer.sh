@@ -35,6 +35,8 @@ UNIT_SOURCE="$REPO_ROOT/infra/installer/$UNIT"
 TARGET_JS="/usr/local/lib/sitesolide/installer.js"
 UNITS_FOLDER="/etc/systemd/system"
 ENV_FILE="/etc/sitesolide-installer.env"
+# The projects' stores of secrets, bin/cli/store.ts's STORE_ROOT.
+STORE_ROOT="/etc/sitesolide/projects"
 
 fail() {
   echo "!! $1" >&2
@@ -111,8 +113,14 @@ REMOTE="$(ssh -n "$SITESOLIDE_SERVER" "mktemp -d")"
 rsync -a "$LOCAL/installer.js" "$LOCAL/sitesolide-installer.env" "$UNIT_SOURCE" "$SITESOLIDE_SERVER:$REMOTE/"
 
 echo "-> installation"
+# The stores' root, before the unit that makes it writable: the unit names it
+# with a dash, and missing at the start of a deployment, the installer could
+# not lay a project's store under the read-only /etc/sitesolide. A link or
+# anything that is no folder there is refused, as storePrepareCommand
+# refuses it (bin/cli/store.ts): root would write through it.
 ssh -n "$SITESOLIDE_SERVER" "
   set -e
+  sudo sh -c 'if [ -L $STORE_ROOT ] || { [ -e $STORE_ROOT ] && [ ! -d $STORE_ROOT ]; }; then echo \"$STORE_ROOT is not a folder: the owner must look at it\" >&2; exit 3; fi; mkdir -p -m 700 $STORE_ROOT; chown root:root $STORE_ROOT; chmod 700 $STORE_ROOT'
   sudo install -D -m 0644 -o root -g root $REMOTE/installer.js $TARGET_JS
   sudo install -m 0644 -o root -g root '$REMOTE/$UNIT' '$UNITS_FOLDER/$UNIT'
   sudo install -m 0644 -o root -g root $REMOTE/sitesolide-installer.env $ENV_FILE

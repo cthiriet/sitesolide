@@ -13,12 +13,30 @@
  * What the dashboard keeps to itself, on the other hand, is the token: it goes
  * out in no response. The dashboard's password and the new password of a
  * `/password` request come back out no more than that, and nothing here logs.
+ *
+ * **A project's store**, `/api/secrets/store/*`, the same way: the owner's
+ * calls under the token the dashboard holds, relayed with only the fields
+ * each route takes. A value set and a file's content are never sent back,
+ * whatever the steward answers; the one answer that carries a value is a
+ * reveal, the owner's alone, which goes to the page and nowhere else.
  */
 import { isAcceptableSubmission } from "../auth";
 import type { SessionReader } from "../routes";
 import { isAcceptableOrigin, type Session } from "../sessions";
 import type { Steward } from "./client";
 import type { Tokens } from "./tokens";
+import { withheldOf } from "../control/secrets";
+import type {
+  StoreFileRemoveRequest,
+  StoreFileRequest,
+  StoreGenerateRequest,
+  StoreMigrateRequest,
+  StoreRemoveRequest,
+  StoreRestoreRequest,
+  StoreRetireRequest,
+  StoreRevealRequest,
+  StoreSetRequest,
+} from "../../borrowed/store-protocol";
 import type { BackupSteward } from "../backup/client";
 import type { RestoreRequest } from "../backup/protocol";
 import type {
@@ -63,6 +81,17 @@ export type SecretsRoutes = {
   changePassword: Handler;
   togglePortal: Handler;
   restart: Handler;
+  /** A project's store, under the session's token: the owner's. */
+  setStoreVariable: Handler;
+  removeStoreVariables: Handler;
+  generateStoreVariable: Handler;
+  setStoreFile: Handler;
+  removeStoreFile: Handler;
+  restoreStore: Handler;
+  /** The one route whose answer is a value: the owner's alone, server.ts refuses it to a person. */
+  revealStoreValue: Handler;
+  migrateStore: Handler;
+  retireStore: Handler;
   /** A site's snapshots and its restore, read with the session alone, like the projects. */
   backups: Handler;
   /** Starts a restore, under the session's token, the slug retyped. */
@@ -231,6 +260,71 @@ const extractPortal: Extraction<WithoutToken<PortalRequest>> = (body) => {
   const { active } = body!;
   if (typeof active !== "boolean") return error(400, "invalid", "Missing or non-boolean field: active.");
   return { ...names, active };
+};
+
+/** A list of strings, or the refusal that names the field. */
+function strings(body: Record<string, unknown>, name: string): string[] | Response {
+  const value = body[name];
+  if (!Array.isArray(value) || !value.every((one) => typeof one === "string")) return error(400, "invalid", `Missing or non-list field: ${name}.`);
+  return [...value];
+}
+
+/** An optional field of this type: absent, or the refusal that names it. */
+function optional<T>(body: Record<string, unknown>, name: string, type: "boolean" | "number" | "string"): T | undefined | Response {
+  const value = body[name];
+  if (value === undefined) return undefined;
+  return typeof value === type ? (value as T) : error(400, "invalid", `Non-${type} field: ${name}.`);
+}
+
+/**
+ * The bodies of the store's routes: the fields each takes, of their type,
+ * those alone, the person's relay reading them the same way (people/relay.ts).
+ * What a name, a value, a format or a size may be is the steward's to judge.
+ */
+export const STORE_EXTRACTIONS = {
+  set: fields(["slug", "name", "value"] as const) as Extraction<StoreSetRequest>,
+  remove: ((body) => {
+    const named = fields(["slug"] as const)(body);
+    if (named instanceof Response) return named;
+    const names = strings(body!, "names");
+    return names instanceof Response ? names : { slug: named.slug, names };
+  }) as Extraction<StoreRemoveRequest>,
+  generate: ((body) => {
+    const named = fields(["slug", "name"] as const)(body);
+    if (named instanceof Response) return named;
+    const format = optional<string>(body!, "format", "string");
+    const bytes = optional<number>(body!, "bytes", "number");
+    const replace = optional<boolean>(body!, "replace", "boolean");
+    for (const one of [format, bytes, replace]) if (one instanceof Response) return one;
+    return {
+      ...named,
+      ...(format === undefined ? {} : { format: format as StoreGenerateRequest["format"] }),
+      ...(bytes === undefined ? {} : { bytes: bytes as number }),
+      ...(replace === undefined ? {} : { replace: replace as boolean }),
+    };
+  }) as Extraction<StoreGenerateRequest>,
+  file: fields(["slug", "name", "content"] as const) as Extraction<StoreFileRequest>,
+  fileRemove: fields(["slug", "name"] as const) as Extraction<StoreFileRemoveRequest>,
+  restore: ((body) => {
+    const named = fields(["slug"] as const)(body);
+    if (named instanceof Response) return named;
+    const dryRun = optional<boolean>(body!, "dryRun", "boolean");
+    if (dryRun instanceof Response) return dryRun;
+    return dryRun === undefined ? named : { ...named, dryRun };
+  }) as Extraction<StoreRestoreRequest>,
+  reveal: fields(["slug", "name"] as const) as Extraction<StoreRevealRequest>,
+  retire: ((body) => {
+    const named = fields(["slug"] as const)(body);
+    if (named instanceof Response) return named;
+    const files = strings(body!, "files");
+    return files instanceof Response ? files : { slug: named.slug, files };
+  }) as Extraction<StoreRetireRequest>,
+};
+
+/** What a store's request must never get back: the value set, the file's content. */
+export const STORE_WITHHELD = {
+  set: (requested: StoreSetRequest) => [requested.value],
+  file: (requested: StoreFileRequest) => withheldOf([], requested.content),
 };
 
 export type Received =
@@ -455,6 +549,16 @@ export function createSecretsRoutes(dependencies: SecretsDependencies, clock: ()
     }),
     togglePortal: withToken(extractPortal, (requested) => steward.togglePortal(requested)),
     restart: withToken(fields(PROJECT_FIELDS), (requested) => steward.restart(requested)),
+
+    setStoreVariable: withToken(STORE_EXTRACTIONS.set, (requested) => steward.setStoreVariable(requested), { secrets: STORE_WITHHELD.set }),
+    removeStoreVariables: withToken(STORE_EXTRACTIONS.remove, (requested) => steward.removeStoreVariables(requested)),
+    generateStoreVariable: withToken(STORE_EXTRACTIONS.generate, (requested) => steward.generateStoreVariable(requested)),
+    setStoreFile: withToken(STORE_EXTRACTIONS.file, (requested) => steward.setStoreFile(requested), { max: MAX_CONTENT_BODY_BYTES, secrets: STORE_WITHHELD.file }),
+    removeStoreFile: withToken(STORE_EXTRACTIONS.fileRemove, (requested) => steward.removeStoreFile(requested)),
+    restoreStore: withToken(STORE_EXTRACTIONS.restore, (requested) => steward.restoreStore(requested)),
+    revealStoreValue: withToken(STORE_EXTRACTIONS.reveal, (requested) => steward.revealStoreValue(requested)),
+    migrateStore: withToken(STORE_EXTRACTIONS.restore as Extraction<StoreMigrateRequest>, (requested) => steward.migrateStore(requested)),
+    retireStore: withToken(STORE_EXTRACTIONS.retire, (requested) => steward.retireStore(requested)),
 
     async backups(req) {
       const open = await check(req, false);

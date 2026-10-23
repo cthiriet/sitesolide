@@ -65,11 +65,25 @@
  * changes, its restarts and its refusals each, those of its changes of
  * access included, and how often it cuts a service.
  *
+ * **So is a token's work on a project's store** (`/control/store/*`): the
+ * same judgement, then the store's own code (src/secrets/steward.ts,
+ * `storeForToken`, the contract of src/secrets/store-api.ts). On a slug the
+ * machine does not carry yet, a token that may create it writes its store
+ * ahead of its first deployment: judged as that deployment's creation would
+ * be, the leftovers of a removed project included, a store laid there by
+ * anyone else among them, and recorded at the first write as the token's
+ * name, as a deployment's creation is, so that its own deployment then
+ * finds the name and the store its own. Its person becomes Admin through
+ * that deployment, as for any creation (`settleCreations`), never through a
+ * store alone: the registry never makes anyone Admin of a name the machine
+ * does not carry. No value is ever sent back: neither one set, nor one
+ * drawn, nor a file's content.
+ *
  * The order of the checks is the order of the risk, as in src/secrets/steward.ts:
  * shape of the body, token, slug, state of the machine, writing.
  */
 import type { RandomSource } from "../sessions";
-import { isValidSlug, servicesOf, readManifest as parseManifest } from "../../borrowed/manifest";
+import { hasStore, isValidSlug, secretsOf, servicesOf, readManifest as parseManifest } from "../../borrowed/manifest";
 import { portalFromManifest } from "../../borrowed/portal-vm";
 import { unitArgument } from "../../borrowed/unit";
 import type { MemberEvent, MemberPrincipal, TokenRefusal } from "../people/steward";
@@ -79,7 +93,8 @@ import type { Role } from "../people/protocol";
 import type { AccessRoutes } from "../access/steward";
 import type { LeavingToken } from "../access/protocol";
 import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../people/tokens";
-import { readSecretsChange, type TokenSecretsChange } from "./secrets";
+import type { StoreForToken } from "../secrets/store-api";
+import { readFileContent, readFileName, readGenerate, readSecretsChange, type TokenSecretsChange } from "./secrets";
 import { CREATION_MAX_AGE_MS, encodeCreations, MAX_PENDING, readCreations, type PendingCreation } from "./creations";
 import { MAX_CONTROL_FILE_BYTES, type ControlSystem } from "./system";
 import { decideManifest, decideSlug, leftoversReason, reservedReason, type Leftovers, type SlugDecision } from "./policy";
@@ -101,6 +116,7 @@ import {
   type InstallRequest,
   type InstallerResult,
   type LogsResponse,
+  type PreflightResponse,
   type TeamResponse,
   type TokenView,
   OWNER_HOLDER,
@@ -187,6 +203,18 @@ export type ControlStewardOptions = {
    * predates them, and the dashboard says to upgrade.
    */
   secrets?: SecretsForToken | null;
+  /**
+   * A token's work on a project's store (src/secrets/store-api.ts), the
+   * token judged here first. Absent, the store routes do not exist, as on a
+   * steward that predates them, and the dashboard says to upgrade.
+   */
+  store?: StoreForToken | null;
+  /**
+   * What `{contact}` becomes on this machine, `SITESOLIDE_CONTACT`: a
+   * deployment's build fills it in on the client. Empty when the machine
+   * declares none.
+   */
+  contact?: string;
   /** The hourly bounds per token, lower in the tests. */
   secretChangesPerHour?: number;
   restartsPerHour?: number;
@@ -251,6 +279,9 @@ export const MAX_SECRETS_CHANGE_BODY_BYTES = MAX_SECRETS_BODY_BYTES + 4 * 1024;
 const HOUR_MS = 3_600_000;
 
 const CURSOR_SHAPE = /^[A-Za-z0-9=;_-]{1,512}$/;
+
+/** The old token route's answer for a project whose variables live in its store. */
+export const STORE_FORM = "this project keeps its variables in its store: update your sitesolide CLI, then sitesolide secrets set NAME";
 
 function failure(code: ControlErrorCode, message: string, details?: string[]): Response {
   const body: ControlFailure = details === undefined ? { error: code, message } : { error: code, message, details };
@@ -429,6 +460,24 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     };
   }
 
+  /**
+   * A token holds a bounded number of names the machine does not carry:
+   * creations running or undone, and stores written ahead of a first
+   * deployment. A name per attempt would grow the registry until nothing
+   * reads it. The refusal past the bound, or null.
+   */
+  async function uncarriedBound(registry: Team, id: string, target: string): Promise<Response | null> {
+    const uncarried: string[] = [];
+    for (const name of ownedBy(registry, id)) {
+      if (name !== target && !(await system.projectExists(name))) uncarried.push(name);
+    }
+    if (uncarried.length < MAX_UNCARRIED_NAMES) return null;
+    return failure(
+      "too-many-attempts",
+      `this token already holds ${uncarried.length} names of projects the machine does not carry, creations still running or undone, or stores written ahead of a first deployment: wait for those running to finish, then try again; the owner frees the others with sitesolide remove --confirm <name>`,
+    );
+  }
+
   async function slugState(slug: string): Promise<{ exists: boolean; owner: string | null } | Response> {
     const registry = await team();
     if (registry instanceof Response) return registry;
@@ -468,7 +517,9 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       console.error(`control: what the machine keeps under ${target} does not read (${e instanceof Error ? e.message : errorName(e)}): its creation refused`);
       return failure("failure", `what a removed project may have left under ${target}, backups or connector grants, cannot be read on the machine, and no token creates it meanwhile: the owner must read the steward's log`);
     }
-    const reason = leftoversReason(target, left);
+    // A store this token laid ahead of its first deployment is its own; any
+    // other is a leftover, whoever laid it.
+    const reason = leftoversReason(target, { ...left, store: left.store && state.owner !== holder.identity.id });
     return reason === null ? decision : { kind: "refused", error: "reserved", message: reason };
   }
 
@@ -564,7 +615,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     const decision = await judgeDeployment(holder, body.slug, state);
     if (decision instanceof Response) return decision;
     if (decision.kind === "refused") return failure(decision.error, decision.message);
-    return Response.json({ creating: decision.creating });
+    const answer: PreflightResponse = { creating: decision.creating, placeholders: { zone: options.zone, contact: options.contact ?? "" } };
+    return Response.json(answer);
   }
 
   async function isActive(unit: string): Promise<boolean> {
@@ -622,16 +674,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         // a token holds a bounded number the machine does not carry.
         const held = await team();
         if (held instanceof Response) return held;
-        const uncarried: string[] = [];
-        for (const name of ownedBy(held, identity.id)) {
-          if (name !== target && !(await system.projectExists(name))) uncarried.push(name);
-        }
-        if (uncarried.length >= MAX_UNCARRIED_NAMES) {
-          return failure(
-            "too-many-attempts",
-            `this token already holds ${uncarried.length} names of projects the machine does not carry, creations still running or undone: wait for those running to finish, then try again; the owner frees the others with sitesolide remove --confirm <name>`,
-          );
-        }
+        const bounded = await uncarriedBound(held, identity.id, target);
+        if (bounded !== null) return bounded;
         // The token owns the name from its first deployment; a person
         // becomes its Admin once the installer has finished, noted here so
         // that it is settled then, even across a restart of this steward.
@@ -876,15 +920,32 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (!identity.owned.includes(slug) && !identity.scope.slugs.includes(slug)) return failure("not-found", `no project ${slug} for this token`);
     if (!(await system.projectExists(slug))) return failure("not-found", `${slug} is not deployed on this machine`);
     if (work === "restart") return null;
-    if (identity.scope.secrets !== true) {
-      const another = rights === null ? "ask the owner of the machine for one that may manage secrets" : "mint one with Manage secrets from the dashboard's Tokens page";
-      return refusal(holder, slug, operation, "no secrets permission", failure("out-of-scope", `this token may not manage secrets: ${another}`), quiet);
-    }
+    if (identity.scope.secrets !== true) return noSecrets(holder, slug, operation, quiet);
     if (work === "write" && rights === null && !identity.scope.public && !(await privateTokenWrites(identity, slug))) {
       const message = `${slug} is not restricted on the machine as this token could deploy it, and this token, which deploys private sites only, changes the secrets of those alone: ask the owner of the machine`;
       return refusal(holder, slug, operation, "not restricted", failure("out-of-scope", message), quiet);
     }
     return null;
+  }
+
+  /**
+   * Does the project keep its variables in its store: an app, not the
+   * dashboard nor the portal, whose deployed manifest conforms and lists
+   * names, or nothing, rather than files? A manifest missing or refused
+   * is not: the old route keeps today's rules for it.
+   */
+  async function keepsAStore(slug: string): Promise<boolean> {
+    const raw = await system.readManifest(slug);
+    if (raw === null) return false;
+    const { manifest, errors } = parseManifest(raw);
+    if (manifest === undefined || errors.length > 0) return false;
+    return hasStore(manifest) && secretsOf(manifest).form !== "legacy";
+  }
+
+  /** A token without the `secrets` flag: refused, journaled within its hour. */
+  function noSecrets(holder: Holder, slug: string, operation: WorkOperation, quiet: boolean): Promise<Response> {
+    const another = holder.rights === null ? "ask the owner of the machine for one that may manage secrets" : "mint one with Manage secrets from the dashboard's Tokens page";
+    return refusal(holder, slug, operation, "no secrets permission", failure("out-of-scope", `this token may not manage secrets: ${another}`), quiet);
   }
 
   /** What each token used of its hour, by bound: in memory, a restart of the steward forgets it. */
@@ -959,6 +1020,10 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     const operation = change.set.length === 0 && change.remove.length > 0 ? "remove" : "set";
     const refused = await judgeWork(holder, slug, "write", operation);
     if (refused !== null) return refused;
+    // A project that keeps its variables in its store: a `<slug>.env` its
+    // units no longer read would take the change and change nothing. A CLI
+    // from before the store sends this route; it is told to update.
+    if (await keepsAStore(slug)) return refusal(holder, slug, operation, "kept in its store", failure("out-of-scope", STORE_FORM), false);
     // The file asked for is never quoted nor journaled: a value pasted in its place would stay.
     if (body.file !== `${slug}.env`) return refusal(holder, slug, operation, "out-of-scope", failure("out-of-scope", `a token manages ${slug}.env alone`), false);
     const names = change.set.length + change.remove.length;
@@ -1017,6 +1082,187 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     } finally {
       restarting.delete(id);
     }
+  }
+
+  // --- a token's work on a project's store -------------------------------------------
+
+  const store = options.store ?? null;
+
+  /**
+   * May this holder list or write this project's store now, and is it a
+   * slug the machine does not carry yet? A deployed project is judged as
+   * for its secrets (`judgeWork`): the person's role, the project among
+   * those the token reaches, the flag, and an owner's token without
+   * `public` writes the store of a project restricted on the machine alone.
+   *
+   * A slug not deployed is judged as the deployment that would create it
+   * (`judgeSlug`): a name the token may not create, another token's, of a
+   * platform's prefix, reads as unknown and is never journaled, a guess
+   * learning nothing; then the flag, journaled; then what a removed
+   * project left under the name (`leftoversReason`), a store laid there by
+   * anyone but this token included, which the token would otherwise adopt
+   * and then deploy code that reads it. Not `public`: the project it
+   * creates will be private (src/control/policy.ts).
+   */
+  async function judgeStoreWork(holder: Holder, slug: string, work: "list" | "write", operation: WorkOperation, quiet = false): Promise<{ creating: boolean } | Response> {
+    if (await system.projectExists(slug)) {
+      const refused = await judgeWork(holder, slug, work, operation, quiet);
+      return refused ?? { creating: false };
+    }
+    const registry = await team();
+    if (registry instanceof Response) return registry;
+    const owner = registry.owners[slug] ?? null;
+    if (judgeSlug(holder, slug, { exists: false, owner }).kind === "refused") return failure("not-found", `no project ${slug} for this token`);
+    if (holder.identity.scope.secrets !== true) return noSecrets(holder, slug, operation, quiet);
+    let left: Leftovers;
+    try {
+      left = await system.leftovers(slug);
+    } catch (e) {
+      console.error(`control: what the machine keeps under ${slug} does not read (${e instanceof Error ? e.message : errorName(e)}): its store refused to a token`);
+      return failure("failure", `what a removed project may have left under ${slug} cannot be read on the machine, and no token writes its store meanwhile: the owner must read the steward's log`);
+    }
+    const reason = leftoversReason(slug, { ...left, store: left.store && owner !== holder.identity.id });
+    if (reason !== null) return failure("reserved", reason);
+    return { creating: true };
+  }
+
+  /**
+   * The slug recorded as this token's, once, at its first write ahead of a
+   * deployment, in the tokens' queue, as a deployment's creation records it:
+   * judged again there, another token may have taken the name meanwhile, or
+   * laid its store. Bounded as a creation is (`uncarriedBound`). A refusal,
+   * or null once the name is the token's, or the project deployed since,
+   * which the judgement made again under the secrets' lock then says.
+   */
+  function recordStoreCreation(holder: Holder, slug: string): Promise<Response | null> {
+    const { identity } = holder;
+    return serially(async () => {
+      const registry = await team();
+      if (registry instanceof Response) return registry;
+      const owner = registry.owners[slug] ?? null;
+      if (owner === identity.id || (await system.projectExists(slug))) return null;
+      if (judgeSlug(holder, slug, { exists: false, owner }).kind === "refused") return failure("not-found", `no project ${slug} for this token`);
+      let laid: boolean;
+      try {
+        laid = await system.storeExists(slug);
+      } catch {
+        laid = true;
+      }
+      if (laid) return failure("reserved", leftoversReason(slug, { snapshots: 0, grants: 0, store: true })!);
+      const bounded = await uncarriedBound(registry, identity.id, slug);
+      if (bounded !== null) return bounded;
+      const owned = recordOwnership(registry, slug, identity.id);
+      if (owned !== null) {
+        const refused = await save(owned);
+        if (refused !== null) return refused;
+      }
+      console.log(`control: ${slug} is now token ${identity.id}'s, its store written ahead of its first deployment`);
+      return null;
+    });
+  }
+
+  /** Did this answer make the store's folder? One journal line more, counted once known. */
+  async function madeStore(answer: Response): Promise<boolean> {
+    if (answer.status !== 200 && answer.status !== 201) return false;
+    try {
+      return ((await answer.clone().json()) as { created?: unknown }).created === true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function storeList(req: Request): Promise<Response> {
+    const body = await readBody(req, ["bearer", "slug"], bodyTimeoutMs);
+    if (body instanceof Response) return body;
+    const holder = await identify(body.bearer);
+    if (holder instanceof Response) return holder;
+    const slug = tokenSlug(body.slug);
+    if (slug instanceof Response) return slug;
+    const judged = await judgeStoreWork(holder, slug, "list", "list");
+    if (judged instanceof Response) return judged;
+    return store!.list(slug, whoOf(holder), judged.creating);
+  }
+
+  /**
+   * A write to a project's store, its body read and judged first: the
+   * token, the slug, the token's hour, then, for a slug not deployed, the
+   * name recorded as the token's; the write handed over with a `still`
+   * judged again once the secrets' lock is taken, as a change of secrets
+   * is. `cost`: what it spends of the hour, one more once the store's
+   * folder was made. `creates`: a write that may lay the store, every one
+   * but a file removed.
+   */
+  async function storeWrite(
+    body: Body,
+    operation: WorkOperation,
+    cost: number,
+    creates: boolean,
+    hand: (who: Who, slug: string, creating: boolean, still: () => Promise<Response | null>) => Promise<Response>,
+  ): Promise<Response> {
+    const holder = await identify(body.bearer);
+    if (holder instanceof Response) return holder;
+    const slug = tokenSlug(body.slug);
+    if (slug instanceof Response) return slug;
+    const judged = await judgeStoreWork(holder, slug, "write", operation);
+    if (judged instanceof Response) return judged;
+    const key = `secrets:${holder.identity.id}`;
+    const bounded = withinHour(key, Math.max(1, cost), secretChangesPerHour, "secret names and files changed");
+    if (bounded !== null) return bounded;
+    if (judged.creating && creates) {
+      const recorded = await recordStoreCreation(holder, slug);
+      if (recorded !== null) return recorded;
+    }
+    const still = async (): Promise<Response | null> => {
+      const again = await identify(body.bearer, false);
+      if (again instanceof Response) return again;
+      const rejudged = await judgeStoreWork(again, slug, "write", operation, true);
+      return rejudged instanceof Response ? rejudged : null;
+    };
+    const answer = await hand(whoOf(holder), slug, judged.creating, still);
+    if (await madeStore(answer)) spend(key, 1);
+    return answer;
+  }
+
+  /** Names set and removed in one write, all or nothing. A name that starts like a key is a value, refused unquoted. */
+  async function storeChange(req: Request): Promise<Response> {
+    const body = await readBody(req, ["bearer", "slug", "set", "remove"], bodyTimeoutMs, MAX_SECRETS_CHANGE_BODY_BYTES);
+    if (body instanceof Response) return body;
+    const change = readSecretsChange(body.set, body.remove, true);
+    if ("refusal" in change) return failure("invalid", change.refusal);
+    const operation = change.set.length === 0 && change.remove.length > 0 ? "remove" : "set";
+    return storeWrite(body, operation, change.set.length + change.remove.length, true, (who, slug, creating, still) =>
+      store!.change(req, { slug, set: change.set, remove: change.remove }, who, creating, still),
+    );
+  }
+
+  /** A value drawn on the machine: never sent back, journaled as a set. */
+  async function storeGenerate(req: Request): Promise<Response> {
+    const body = await readBody(req, ["bearer", "slug", "name", "format", "bytes", "replace"], bodyTimeoutMs);
+    if (body instanceof Response) return body;
+    const asked = readGenerate(body.name, body.format, body.bytes, body.replace);
+    if ("refusal" in asked) return failure("invalid", asked.refusal);
+    return storeWrite(body, "set", 1, true, (who, slug, creating, still) => store!.generate(req, { slug, ...asked }, who, creating, still));
+  }
+
+  /** A file of the store, its bytes in base64, 64 KiB at most: judged here first, never quoted. */
+  async function storeSetFile(req: Request): Promise<Response> {
+    const body = await readBody(req, ["bearer", "slug", "name", "content"], bodyTimeoutMs, MAX_SECRETS_CHANGE_BODY_BYTES);
+    if (body instanceof Response) return body;
+    const name = readFileName(body.name);
+    if (typeof name !== "string") return failure("invalid", name.refusal);
+    const content = readFileContent(body.content);
+    if (!(content instanceof Uint8Array)) return failure("invalid", content.refusal);
+    const text = body.content as string;
+    return storeWrite(body, "set", 1, true, (who, slug, creating, still) => store!.setFile(req, { slug, name, content: text }, who, creating, still));
+  }
+
+  /** A file of the store removed, that file alone: never the folder, which every unit loads. */
+  async function storeRemoveFile(req: Request): Promise<Response> {
+    const body = await readBody(req, ["bearer", "slug", "name"], bodyTimeoutMs);
+    if (body instanceof Response) return body;
+    const name = readFileName(body.name);
+    if (typeof name !== "string") return failure("invalid", name.refusal);
+    return storeWrite(body, "remove", 1, false, (who, slug, _creating, still) => store!.removeFile(req, { slug, name }, who, still));
   }
 
   // --- a person's own tokens ------------------------------------------------------
@@ -1336,6 +1582,10 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       for (const creation of undone) {
         if (noted.some((one) => one.slug === creation.slug)) continue;
         if (registry.owners[creation.slug] !== creation.token || (await system.projectExists(creation.slug))) continue;
+        // A store the token wrote ahead keeps the name its own: given back,
+        // the store would be a leftover nobody may create again, its writer
+        // included. A folder that cannot be told keeps it too.
+        if (await storeKept(creation.slug)) continue;
         const forgotten = forgetOwnership(registry, creation.slug);
         if (forgotten === null) continue;
         registry = forgotten.team;
@@ -1345,6 +1595,14 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       if ((await save(registry)) !== null) return;
       console.log(`control: name${given.length === 1 ? "" : "s"} given back, creation undone: ${given.join(", ")}`);
     });
+  }
+
+  async function storeKept(slug: string): Promise<boolean> {
+    try {
+      return await system.storeExists(slug);
+    } catch {
+      return true;
+    }
   }
 
   /**
@@ -1432,6 +1690,14 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
           "/control/secrets/list": { POST: secretsList },
           "/control/secrets": { PATCH: secretsChange },
           "/control/restart": { POST: restartRoute },
+        }),
+    ...(store === null
+      ? {}
+      : {
+          "/control/store/list": { POST: storeList },
+          "/control/store": { PATCH: storeChange },
+          "/control/store/generate": { POST: storeGenerate },
+          "/control/store/file": { PUT: storeSetFile, DELETE: storeRemoveFile },
         }),
     // The names before `/tokens/`, which a dashboard deployed before this
     // steward still calls: kept one release.

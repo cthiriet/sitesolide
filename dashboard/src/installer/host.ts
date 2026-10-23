@@ -16,6 +16,14 @@ import type { ExtractOutcome } from "./extract";
 
 export type Execution = { code: number; output: string };
 
+/**
+ * How a unit stands, and the exit status of its main process, which says
+ * what systemd's own words hide: 243 is a unit that could not load its
+ * credentials, logged as a "Protocol error" (bin/cli/store.ts,
+ * `credentialsFailure`). Null when systemd does not say.
+ */
+export type Standing = UnitStanding & { status: number | null };
+
 /** The two trees a deployment replaces. */
 export type Part = "app" | "public";
 
@@ -59,8 +67,15 @@ export type Host = {
    * could not be asked. A read: nothing is written.
    */
   refusedSchedules: (schedules: string[]) => Promise<string[] | null>;
-  /** How each unit stands, by unit as named, see stabilityCommand in services.ts; null when systemctl did not answer. */
-  standing: (units: string[]) => Promise<Map<string, UnitStanding> | null>;
+  /** How each unit stands, by unit as named, see stabilityCommand in services.ts, with its exit status; null when systemctl did not answer. */
+  standing: (units: string[]) => Promise<Map<string, Standing> | null>;
+  /**
+   * The store's names: the variables its `env` sets and its files present,
+   * regular and not empty, never a value nor a size. Null when it cannot be
+   * read, an `env` that does not read back included, which the host says in
+   * the log with its reason, never a line of it.
+   */
+  storeNames: (slug: string) => Promise<{ variables: string[]; files: string[] } | null>;
 
   /** Creates `site-<slug>` when it is missing. */
   ensureAccount: (slug: string) => Promise<"created" | "present">;
@@ -70,6 +85,21 @@ export type Host = {
    * exist before.
    */
   prepareTree: (slug: string, application: boolean) => Promise<"created" | "present">;
+  /**
+   * The store's folders laid, as storePrepareCommand does over SSH
+   * (bin/cli/store.ts): `projects/`, `projects/<slug>/` and its `files/`,
+   * root's, 0700, each changed through a descriptor opened without
+   * following a link; the previous versions a removed project of that name
+   * left dropped when the project's folder is new. "refused" with the path
+   * of a link or of anything there that is no folder: PID 1 would read
+   * through it. Never touches the env file nor a file of the store.
+   */
+  prepareStore: (slug: string) => Promise<{ kind: "ready"; created: boolean } | { kind: "refused"; path: string }>;
+  /**
+   * The store's folders this deployment laid, removed again, while empty: a
+   * creation undone. False, and the store left, when it holds anything.
+   */
+  removeStore: (slug: string) => Promise<boolean>;
   /**
    * The zone's sites written again for the ask endpoint, /etc/caddy/zone-names,
    * by the script `sitesolide deploy` sends over SSH (api/src/zone-names.ts),

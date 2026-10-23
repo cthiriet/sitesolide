@@ -10,6 +10,7 @@ import { readLaunch, readRequest } from "../src/installer/instance";
 import { STABILITY_WINDOW_MS } from "../src/installer/pipeline";
 import { main } from "../src/installer/main";
 import { createHost, systemdRunArguments, type Commands, type ProjectRun } from "../src/installer/real";
+import { STORE_PREVIOUS_ROOT, STORE_ROOT } from "../borrowed/store";
 
 /**
  * The contract between the steward and the installer, the installer's unit
@@ -198,17 +199,24 @@ describe("what the real host reads of systemd", () => {
     await expect(hostWith({}).refusedSchedules(["hourly; reboot"])).rejects.toThrow("invalid schedule");
   });
 
-  test("the standing of each unit, by its name, a timer's or a service's", async () => {
+  test("the standing of each unit, by its name, a timer's or a service's, with its exit status", async () => {
     const shown: string[][] = [];
     const host = hostWith({
       systemctl: async (arguments_) => {
         shown.push(arguments_);
-        return { code: 0, output: "Id=shop.service\nActiveState=active\nSubState=running\nNRestarts=0\n\nId=shop.jobs.service\nActiveState=activating\nSubState=auto-restart\nNRestarts=3\n" };
+        return {
+          code: 0,
+          output: "Id=shop.service\nActiveState=active\nSubState=running\nNRestarts=0\nExecMainStatus=0\n\nId=shop.jobs.service\nActiveState=activating\nSubState=auto-restart\nNRestarts=3\nExecMainStatus=243\n",
+        };
       },
     });
     const standing = await host.standing(["shop", "shop.jobs"]);
-    expect(shown[0]).toEqual(["show", "-p", "Id", "-p", "ActiveState", "-p", "SubState", "-p", "NRestarts", "shop", "shop.jobs.service"]);
-    expect(standing?.get("shop.jobs")).toEqual({ active: "activating", sub: "auto-restart", restarts: 3 });
+    expect(shown[0]).toEqual(["show", "-p", "Id", "-p", "ActiveState", "-p", "SubState", "-p", "NRestarts", "-p", "ExecMainStatus", "shop", "shop.jobs.service"]);
+    expect(standing?.get("shop.jobs")).toEqual({ active: "activating", sub: "auto-restart", restarts: 3, status: 243 });
+    expect(standing?.get("shop")).toEqual({ active: "active", sub: "running", restarts: 0, status: 0 });
+    // A systemd that does not say it: unknown, never a status made up.
+    const silent = hostWith({ systemctl: async () => ({ code: 0, output: "Id=shop.service\nActiveState=active\nSubState=running\nNRestarts=0\n" }) });
+    expect((await silent.standing(["shop"]))?.get("shop")).toEqual({ active: "active", sub: "running", restarts: 0, status: null });
     expect(await hostWith({ systemctl: async () => ({ code: 1, output: "" }) }).standing(["shop"])).toBeNull();
     // A unit systemd did not answer for is no answer at all.
     expect(await host.standing(["shop", "shop.other"])).toBeNull();
@@ -252,6 +260,20 @@ describe("the unit template", () => {
     const directives = UNIT.split("\n").filter((line) => !line.startsWith("#"));
     expect(directives).not.toContain("[Install]");
     expect(directives.join("\n")).not.toMatch(/caddy (stop|start)/);
+  });
+
+  test("the stores of secrets writable inside the read-only secrets, where the installer lays them, and nothing else of it", () => {
+    const directives = UNIT.split("\n").filter((line) => !line.startsWith("#"));
+    const writable = directives.filter((line) => line.startsWith("ReadWritePaths=")).flatMap((line) => line.slice("ReadWritePaths=".length).split(" "));
+    expect(writable).toContain(`-${STORE_ROOT}`);
+    expect(writable).toContain(`-${STORE_PREVIOUS_ROOT}`);
+    expect(writable.filter((path) => path.replace(/^-/, "").startsWith("/etc/sitesolide"))).toEqual([`-${STORE_ROOT}`]);
+    // Nested after the read-only secrets, as systemd reads them: the deeper path wins.
+    expect(directives.indexOf("ReadOnlyPaths=/etc/sitesolide")).toBeLessThan(directives.findIndex((line) => line.includes(STORE_ROOT)));
+    // bin/deploy-installer.sh lays the stores' root before the unit names it.
+    const script = readFileSync(join(REPO, "bin", "deploy-installer.sh"), "utf8");
+    expect(script).toContain(`STORE_ROOT="${STORE_ROOT}"`);
+    expect(script).toContain("mkdir -p -m 700 $STORE_ROOT; chown root:root $STORE_ROOT; chmod 700 $STORE_ROOT");
   });
 
   test("its delay covers the steps it bounds: extraction, install, a Caddy step, and the services watched after their restart", () => {

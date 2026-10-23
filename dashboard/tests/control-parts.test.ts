@@ -178,12 +178,31 @@ describe("the installer's result, judged", () => {
     error: null,
     url: "https://shop.test-zone.invalid/",
     allocated: [{ service: null, port: 3002 }],
+    missingSecrets: { runtime: ["ADMIN_TOKEN"], files: ["gcp.json"] },
   };
   const info = { link: false, regular: true, links: 1, uid: 0, gid: 0, mode: 0o600, size: 10, modifiedAt: 0 };
   const present = (value: unknown, extra: Partial<typeof info> = {}) => ({ kind: "present" as const, info: { ...info, ...extra }, bytes: new TextEncoder().encode(JSON.stringify(value)) });
 
   test("root's, closed to others, for this deployment: read", () => {
     expect(judgeResult(present(result), ID, 0)).toEqual({ kind: "read", result });
+  });
+
+  test("the names the store lacked: names alone, read again; absent, from an older installer, or malformed, nothing known, the result read all the same", () => {
+    const { missingSecrets: _missing, ...older } = result;
+    expect(readResult(JSON.stringify(older), ID)).toEqual({ kind: "read", result: { ...result, missingSecrets: null } });
+    for (const missingSecrets of [
+      null,
+      "ADMIN_TOKEN",
+      { runtime: ["ADMIN_TOKEN"] },
+      { runtime: ["sk_live leaked value"], files: [] },
+      { runtime: [], files: [".hidden"] },
+      { runtime: [], files: ["../passwd"] },
+      { runtime: [42], files: [] },
+      { runtime: Array.from({ length: 600 }, (_, i) => `NAME_${i}`), files: [] },
+    ]) {
+      expect(readResult(JSON.stringify({ ...result, missingSecrets }), ID)).toEqual({ kind: "read", result: { ...result, missingSecrets: null } });
+    }
+    expect(readResult(JSON.stringify({ ...result, missingSecrets: { runtime: [], files: [] } }), ID)).toEqual({ kind: "read", result: { ...result, missingSecrets: { runtime: [], files: [] } } });
   });
 
   test("anything else is not believed", () => {

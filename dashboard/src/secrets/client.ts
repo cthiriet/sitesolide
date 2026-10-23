@@ -20,6 +20,17 @@ import type {
   VariableRequest,
 } from "./protocol";
 import { MAX_PORTAL_MS, MAX_RESTART_MS } from "./protocol";
+import type {
+  StoreFileRemoveRequest,
+  StoreFileRequest,
+  StoreGenerateRequest,
+  StoreMigrateRequest,
+  StoreRemoveRequest,
+  StoreRestoreRequest,
+  StoreRetireRequest,
+  StoreRevealRequest,
+  StoreSetRequest,
+} from "../../borrowed/store-protocol";
 
 export type Steward = {
   readProjects: () => Promise<Response>;
@@ -40,6 +51,19 @@ export type Steward = {
   changePassword: (requested: PasswordRequest) => Promise<Response>;
   togglePortal: (requested: PortalRequest) => Promise<Response>;
   restart: (requested: ProjectRequest) => Promise<Response>;
+  /** A project's store, names and states, as the owner lists it: no token, like `/projects`. */
+  readStore: (slug: string) => Promise<Response>;
+  setStoreVariable: (requested: WithToken & StoreSetRequest) => Promise<Response>;
+  removeStoreVariables: (requested: WithToken & StoreRemoveRequest) => Promise<Response>;
+  /** A value drawn on the machine: the answer names it, never carries it. */
+  generateStoreVariable: (requested: WithToken & StoreGenerateRequest) => Promise<Response>;
+  setStoreFile: (requested: WithToken & StoreFileRequest) => Promise<Response>;
+  removeStoreFile: (requested: WithToken & StoreFileRemoveRequest) => Promise<Response>;
+  restoreStore: (requested: WithToken & StoreRestoreRequest) => Promise<Response>;
+  /** The one route that answers a value: the owner's live unlock token alone. */
+  revealStoreValue: (requested: WithToken & StoreRevealRequest) => Promise<Response>;
+  migrateStore: (requested: WithToken & StoreMigrateRequest) => Promise<Response>;
+  retireStore: (requested: WithToken & StoreRetireRequest) => Promise<Response>;
 };
 
 export type Timeouts = {
@@ -108,5 +132,16 @@ export function localSteward(socket: string, timeouts: Timeouts = DEFAULT_TIMEOU
     changePassword: (requested) => call("POST", "/password", requested, timeouts.longMs),
     togglePortal: (requested) => call("POST", "/portal", requested, timeouts.longMs),
     restart: (requested) => call("POST", "/restart", requested, timeouts.longMs),
+    readStore: (slug) => call("GET", `/store?${new URLSearchParams({ slug })}`),
+    // Every write, and the reveal, waits its turn under the steward's lock.
+    setStoreVariable: (requested) => call("PUT", "/store/variable", requested, timeouts.longMs),
+    removeStoreVariables: (requested) => call("DELETE", "/store/variable", requested, timeouts.longMs),
+    generateStoreVariable: (requested) => call("POST", "/store/generate", requested, timeouts.longMs),
+    setStoreFile: (requested) => call("PUT", "/store/file", requested, timeouts.longMs),
+    removeStoreFile: (requested) => call("DELETE", "/store/file", requested, timeouts.longMs),
+    restoreStore: (requested) => call("POST", "/store/restore", requested, timeouts.longMs),
+    revealStoreValue: (requested) => call("POST", "/store/value", requested, timeouts.longMs),
+    migrateStore: (requested) => call("POST", "/store/migrate", requested, timeouts.longMs),
+    retireStore: (requested) => call("POST", "/store/retire", requested, timeouts.longMs),
   };
 }

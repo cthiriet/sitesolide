@@ -151,9 +151,10 @@ describe("authentication and preflight", () => {
   test("preflight: creating, granted, reserved, another's", async () => {
     const s = setup();
     const { secret } = await newToken(s);
-    expect(await (await call(s, "POST", "/control/preflight", { bearer: secret, slug: "shop" })).json()).toEqual({ creating: true });
+    // With what {zone} and {contact} become, which the client's build fills in.
+    expect(await (await call(s, "POST", "/control/preflight", { bearer: secret, slug: "shop" })).json()).toEqual({ creating: true, placeholders: { zone: ZONE, contact: "" } });
     mkdirSync(join(s.root, "sites", "cms"));
-    expect(await (await call(s, "POST", "/control/preflight", { bearer: secret, slug: "cms" })).json()).toEqual({ creating: false });
+    expect(await (await call(s, "POST", "/control/preflight", { bearer: secret, slug: "cms" })).json()).toMatchObject({ creating: false });
     const reserved = await call(s, "POST", "/control/preflight", { bearer: secret, slug: "dashboard" });
     expect(reserved.status).toBe(403);
     expect(await reserved.json()).toMatchObject({ error: "reserved" });
@@ -218,6 +219,7 @@ describe("the installer's result", () => {
     error: null,
     url: null,
     allocated: [],
+    missingSecrets: null,
     ...extra,
   });
 

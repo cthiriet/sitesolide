@@ -31,6 +31,16 @@
  * answer from the fields it knows: a steward's answer is never relayed as it
  * stands, nor a value ever sent back, logged or recorded in dashboard.db.
  *
+ * **And a project's store.** The same token lists its project's store,
+ * sets and removes names in it, has a value drawn on the machine, and sets
+ * and removes its files, `restart` asked or not, as for its secrets. Every
+ * answer is built from the fields known here, and a token's view of the
+ * store is a Developer's whatever the steward sends: no file size, no
+ * `covered`, no previous version, never `reveal`, `restore` nor `migrate`.
+ * A value set, a value drawn and a file's content never come back: neither
+ * in an answer, nor in a refusal's message, nor anywhere this process
+ * writes.
+ *
  * Nothing here logs a bearer, and no response carries one.
  */
 import type { RandomSource } from "../sessions";
@@ -65,7 +75,16 @@ import {
   type StewardSecretsChange,
   type TokenFileView,
 } from "./protocol";
-import { readSecretsChange } from "./secrets";
+import { readFileContent, readFileName, readGenerate, readSecretsChange, withheldOf } from "./secrets";
+import type {
+  LegacyFileView,
+  StoreApiChangeResponse,
+  StoreChangeResponse,
+  StoreFileView,
+  StoreVariableView,
+  StoreView,
+} from "../../borrowed/store-protocol";
+import { readMissing } from "./results";
 import type { Spool } from "./spool";
 import type { ControlStore, DeploymentRow } from "./store";
 import { bearerOf, isTokenShape } from "./tokens";
@@ -100,6 +119,11 @@ export type ApiRoutes = {
   projectSecrets: (req: Request, slug: string) => Promise<Response>;
   changeProjectSecrets: (req: Request, slug: string, file: string) => Promise<Response>;
   restartProject: (req: Request, slug: string) => Promise<Response>;
+  projectStore: (req: Request, slug: string) => Promise<Response>;
+  changeProjectStore: (req: Request, slug: string) => Promise<Response>;
+  generateInStore: (req: Request, slug: string) => Promise<Response>;
+  setStoreFile: (req: Request, slug: string, name: string) => Promise<Response>;
+  removeStoreFile: (req: Request, slug: string, name: string) => Promise<Response>;
 };
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -230,10 +254,101 @@ function verdictOf(value: unknown): Verdict | null {
   return { kind: value.kind as Verdict["kind"], state: value.state, subState: value.subState, restarts: value.restarts };
 }
 
-/** A JSON body, bounded, or null. Read piece by piece: a chunked body has no length to trust. */
-async function readJson(req: Request, max: number): Promise<Record<string, unknown> | null | "too-large"> {
+// --- a project's store, as a token reads it ---------------------------------------
+
+const isStringOrNull = (value: unknown): value is string | null => value === null || typeof value === "string";
+const isNumberOrNull = (value: unknown): value is number | null => value === null || (typeof value === "number" && Number.isFinite(value));
+const oneOf = <T extends string>(value: unknown, allowed: readonly T[]): value is T => typeof value === "string" && (allowed as readonly string[]).includes(value);
+
+function storeVariableOf(value: unknown): StoreVariableView | null {
+  if (!isObject(value)) return null;
+  const shadows = strings(value.shadows);
+  if (typeof value.name !== "string" || !oneOf(value.source, ["store", "legacy", "none"] as const) || !isStringOrNull(value.file) || shadows === null) return null;
+  if (typeof value.declared !== "boolean") return null;
+  return { name: value.name, source: value.source, file: value.file, shadows, declared: value.declared };
+}
+
+/** A file of the store as a token reads it: its size is the owner's alone, whatever the steward says. */
+function storeFileOf(value: unknown): StoreFileView | null {
+  if (!isObject(value)) return null;
+  if (typeof value.name !== "string" || !oneOf(value.state, ["set", "missing", "unmanaged"] as const) || typeof value.declared !== "boolean") return null;
+  if (!isStringOrNull(value.reason) || !isNumberOrNull(value.modifiedAt)) return null;
+  return { name: value.name, state: value.state, declared: value.declared, reason: value.reason, bytes: null, modifiedAt: value.modifiedAt, restartPending: value.restartPending === true };
+}
+
+/** A legacy file as a token reads it: whether the store covers it is the owner's alone to know, whatever the steward says. */
+function legacyFileOf(value: unknown): LegacyFileView | null {
+  if (!isObject(value)) return null;
+  const variables = strings(value.variables);
+  if (typeof value.name !== "string" || !oneOf(value.state, ["managed", "absent", "unmanaged"] as const) || !isStringOrNull(value.reason) || variables === null) return null;
+  if (typeof value.read !== "boolean" || typeof value.leftover !== "boolean") return null;
+  return { name: value.name, state: value.state, reason: value.reason, variables, read: value.read, leftover: value.leftover, covered: null };
+}
+
+/** Every entry read, or null when one does not. */
+function listOf<T>(value: unknown, read: (one: unknown) => T | null): T[] | null {
+  if (!Array.isArray(value)) return null;
+  const items = value.map(read);
+  return items.some((one) => one === null) ? null : (items as T[]);
+}
+
+/**
+ * A project's store as a token reads it, from the fields known alone: a
+ * Developer's view whatever the steward sends, its writes as the steward
+ * says, never a reveal, a restore nor a migration, which are the owner's and
+ * an Admin's in the dashboard. Null when it does not read.
+ */
+export function storeViewOf(value: unknown): StoreView | null {
+  if (!isObject(value)) return null;
+  const variables = listOf(value.variables, storeVariableOf);
+  const files = listOf(value.files, storeFileOf);
+  const legacy = listOf(value.legacy, legacyFileOf);
+  const missing = strings(value.missing);
+  const build = strings(value.build);
+  const visible = listOf(value.public, (one) => (isObject(one) && typeof one.name === "string" && typeof one.value === "string" ? { name: one.name, value: one.value } : null));
+  if (typeof value.slug !== "string" || typeof value.exists !== "boolean" || !oneOf(value.state, ["managed", "absent", "unmanaged"] as const) || !isStringOrNull(value.reason)) return null;
+  if (variables === null || files === null || legacy === null || missing === null || build === null || visible === null) return null;
+  if (!(value.unitReadsStore === null || typeof value.unitReadsStore === "boolean") || !isNumberOrNull(value.modifiedAt)) return null;
+  const may = isObject(value.may) ? value.may : {};
+  return {
+    slug: value.slug,
+    exists: value.exists,
+    state: value.state,
+    reason: value.reason,
+    variables,
+    missing,
+    files,
+    legacy,
+    build,
+    public: visible,
+    unitReadsStore: value.unitReadsStore,
+    modifiedAt: value.modifiedAt,
+    restartPending: value.restartPending === true,
+    previous: false,
+    may: { write: may.write === true, reveal: false, restore: false, migrate: false },
+  };
+}
+
+/** A change of the store as a token reads it: names alone, from the fields known. */
+function storeChangeOf(body: Record<string, unknown>): StoreChangeResponse | null {
+  const store = storeViewOf(body.store);
+  const set = strings(body.set);
+  const generated = strings(body.generated);
+  const removed = strings(body.removed);
+  const absent = strings(body.absent);
+  const files = isObject(body.files) ? { set: strings(body.files.set), removed: strings(body.files.removed) } : null;
+  if (store === null || set === null || generated === null || removed === null || absent === null || typeof body.created !== "boolean") return null;
+  if (files === null || files.set === null || files.removed === null) return null;
+  return { store, created: body.created, set, generated, removed, absent, files: { set: files.set, removed: files.removed } };
+}
+
+/**
+ * A JSON body, bounded, or null. Read piece by piece: a chunked body has no
+ * length to trust. `optional`: no body at all reads as `{}`.
+ */
+async function readJson(req: Request, max: number, optional = false): Promise<Record<string, unknown> | null | "too-large"> {
   if (Number(req.headers.get("content-length") ?? 0) > max) return "too-large";
-  if (req.body === null) return null;
+  if (req.body === null) return optional ? {} : null;
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -246,6 +361,7 @@ async function readJson(req: Request, max: number): Promise<Record<string, unkno
       }
       chunks.push(read.value);
     }
+    if (total === 0 && optional) return {};
     const body: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Bun.concatArrayBuffers(chunks)));
     return isObject(body) ? body : null;
   } catch {
@@ -294,6 +410,14 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
     return `${dependencies.publicUrl}/api/v1/deployments/${id}/bundle`;
   }
 
+  /**
+   * What `{zone}` and `{contact}` become, for the client's build: as the
+   * steward last said them at a preflight, which reads the machine's own
+   * settings. Before any, or from a steward that does not say them, the
+   * zone this dashboard serves and no contact.
+   */
+  let placeholders = { zone: dependencies.zone, contact: "" };
+
   function view(row: DeploymentRow, result: InstallerResult | null, after: number): DeploymentView {
     const log = result?.log ?? [];
     const from = Math.min(Math.max(0, after), log.length);
@@ -315,6 +439,9 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
           : { code: row.message.split(":")[0] ?? "failure", message: row.message.slice(row.message.indexOf(":") + 1).trim() }),
       url: result?.url ?? null,
       allocated: result?.allocated ?? [],
+      placeholders: { ...placeholders },
+      // Names only, read again here: the result is the steward's relay of the installer's file.
+      missingSecrets: result === null || result.state === "running" ? null : readMissing(result.missingSecrets),
     };
   }
 
@@ -424,6 +551,31 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
     return { error: refusal.error, message: refusal.message, ...(refusal.wait === undefined ? {} : { wait: refusal.wait }) };
   }
 
+  const storeTooLarge = () => failure("too-large", `a change of a store is ${MAX_SECRETS_BODY_BYTES / 1024} KiB at most: split it`);
+
+  /** `restart`, absent or a boolean, or the refusal. */
+  function restartAsked(body: Record<string, unknown>): boolean | Response {
+    if (body.restart === undefined) return false;
+    return typeof body.restart === "boolean" ? body.restart : failure("invalid", "restart must be true or false");
+  }
+
+  /**
+   * A write to the store, its answer built from the fields known, then the
+   * restart asked for, two steward calls, as a change of secrets does: a
+   * refused restart leaves the write's status as it is. `withheld`: the
+   * values and the content of the request, which no answer and no message
+   * may carry back.
+   */
+  async function storeAnswer(bearer: string, slug: string, restart: boolean, withheld: string[], call: (bearer: string) => Promise<Response>): Promise<Response> {
+    const reached = await reach(() => call(bearer), [bearer, ...withheld]);
+    if (reached.kind !== "received" || (reached.status !== 200 && reached.status !== 201)) return relayedWork(reached, withheld);
+    const changed = storeChangeOf(reached.body);
+    if (changed === null) return unreadable();
+    const outcome = restart ? await restartOf(bearer, slug) : null;
+    const answer: StoreApiChangeResponse = { ...changed, restart: outcome };
+    return json(answer, changed.created ? 201 : 200);
+  }
+
   /** The deployment, if this token created it; any other id reads as unknown. */
   function ownDeployment(identity: Identity, id: string): DeploymentRow | Response {
     const row = /^[0-9a-f]{24}$/.test(id) ? store.deployment(id) : null;
@@ -482,6 +634,10 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       const preflight = await reach(() => steward.preflight(bearer, slug), [bearer]);
       if (preflight.kind !== "received" || preflight.status !== 200) return relayed(preflight);
       const creating = preflight.body.creating === true;
+      const said = preflight.body.placeholders;
+      if (isObject(said) && typeof said.zone === "string" && typeof said.contact === "string" && said.zone.length <= 253 && said.contact.length <= 254) {
+        placeholders = { zone: said.zone, contact: said.contact };
+      }
 
       const now = clock();
       const active = store.activeForSlug(slug);
@@ -696,6 +852,102 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       const verdict = verdictOf(reached.body.verdict);
       return verdict === null ? unreadable() : json({ verdict });
     },
+
+    /**
+     * The project's store: its names and where each comes from, what is
+     * missing, its files and its build secrets, never a value, a size nor
+     * what covers what. The project, the flag, and a slug the machine does
+     * not carry yet are the steward's to judge (`projectSecrets`).
+     */
+    async projectStore(req, slug) {
+      const auth = await authenticated(req);
+      if (auth instanceof Response) return auth;
+      const reached = await reach(() => steward.storeList(auth.bearer, slug), [auth.bearer]);
+      if (reached.kind !== "received" || reached.status !== 200) return relayedWork(reached);
+      const store = storeViewOf(reached.body.store);
+      return store === null ? unreadable() : json({ store });
+    },
+
+    /**
+     * Names of the store set and removed in one write, all or nothing, the
+     * store made when it is missing (201); then, with `restart`, the service
+     * restarted. The body is judged here first, every name and every value,
+     * a name that starts like a key refused unquoted: nothing malformed
+     * reaches the machine.
+     */
+    async changeProjectStore(req, slug) {
+      const auth = await authenticated(req);
+      if (auth instanceof Response) return auth;
+      const body = await readJson(req, MAX_SECRETS_BODY_BYTES);
+      if (body === "too-large") return storeTooLarge();
+      if (body === null) return failure("invalid", 'send a JSON object: { "set": { "NAME": "value" }, "remove": ["NAME"], "restart": true }, each field optional');
+      if (Object.keys(body).some((key) => key !== "set" && key !== "remove" && key !== "restart")) return failure("invalid", "unexpected field: send set, remove and restart alone");
+      const restart = restartAsked(body);
+      if (restart instanceof Response) return restart;
+      const change = readSecretsChange(body.set, body.remove, true);
+      if ("refusal" in change) return failure("invalid", change.refusal);
+      const values = change.set.map(([, value]) => value);
+      // Object.fromEntries defines each name as the object's own: `__proto__` stays a variable.
+      return storeAnswer(auth.bearer, slug, restart, values, (bearer) => steward.storeChange({ bearer, slug, set: Object.fromEntries(change.set), remove: change.remove }));
+    },
+
+    /**
+     * A value drawn on the machine for a name, hex or base64url, never sent
+     * back: the answer names it in `generated`. Without `replace`, a name
+     * already set is refused `already-present`.
+     */
+    async generateInStore(req, slug) {
+      const auth = await authenticated(req);
+      if (auth instanceof Response) return auth;
+      const body = await readJson(req, MAX_SECRETS_BODY_BYTES);
+      if (body === "too-large") return storeTooLarge();
+      if (body === null) return failure("invalid", 'send a JSON object: { "name": "NAME", "format": "hex", "bytes": 32, "replace": false, "restart": false }, the name alone required');
+      if (Object.keys(body).some((key) => !["name", "format", "bytes", "replace", "restart"].includes(key))) {
+        return failure("invalid", "unexpected field: send name, format, bytes, replace and restart alone");
+      }
+      const restart = restartAsked(body);
+      if (restart instanceof Response) return restart;
+      const asked = readGenerate(body.name, body.format, body.bytes, body.replace);
+      if ("refusal" in asked) return failure("invalid", asked.refusal);
+      return storeAnswer(auth.bearer, slug, restart, [], (bearer) => steward.storeGenerate({ bearer, slug, ...asked }));
+    },
+
+    /**
+     * A file of the store, read whole by every service of the project at
+     * `$CREDENTIALS_DIRECTORY/files_<name>`: its bytes in base64, 64 KiB at
+     * most, judged here first. Its content never comes back.
+     */
+    async setStoreFile(req, slug, name) {
+      const auth = await authenticated(req);
+      if (auth instanceof Response) return auth;
+      const named = readFileName(name);
+      if (typeof named !== "string") return failure("invalid", named.refusal);
+      const body = await readJson(req, MAX_SECRETS_BODY_BYTES);
+      if (body === "too-large") return storeTooLarge();
+      if (body === null) return failure("invalid", 'send a JSON object: { "content": "<the file in base64>", "restart": false }');
+      if (Object.keys(body).some((key) => key !== "content" && key !== "restart")) return failure("invalid", "unexpected field: send content and restart alone");
+      const restart = restartAsked(body);
+      if (restart instanceof Response) return restart;
+      const content = readFileContent(body.content);
+      if (!(content instanceof Uint8Array)) return failure("invalid", content.refusal);
+      const text = body.content as string;
+      return storeAnswer(auth.bearer, slug, restart, withheldOf([], text), (bearer) => steward.storeSetFile({ bearer, slug, name: named, content: text }));
+    },
+
+    /** A file of the store removed, that file alone, `{ "restart": true }` optional. */
+    async removeStoreFile(req, slug, name) {
+      const auth = await authenticated(req);
+      if (auth instanceof Response) return auth;
+      const named = readFileName(name);
+      if (typeof named !== "string") return failure("invalid", named.refusal);
+      const body = await readJson(req, MAX_SECRETS_BODY_BYTES, true);
+      if (body === "too-large") return storeTooLarge();
+      if (body === null) return failure("invalid", 'send nothing, or a JSON object: { "restart": true }');
+      if (Object.keys(body).some((key) => key !== "restart")) return failure("invalid", "unexpected field: send restart alone");
+      const restart = restartAsked(body);
+      if (restart instanceof Response) return restart;
+      return storeAnswer(auth.bearer, slug, restart, [], (bearer) => steward.storeRemoveFile({ bearer, slug, name: named }));
+    },
   };
 }
 
@@ -719,6 +971,38 @@ export const STEWARD_IDLE_S = Math.min(MAX_IDLE_S, Math.ceil(DEFAULT_TIMEOUTS.lo
 export const SECRETS_CHANGE_IDLE_S = Math.min(MAX_IDLE_S, Math.ceil((2 * DEFAULT_TIMEOUTS.longMs) / 1000) + 5);
 
 type Timed = { timeout: (req: Request, seconds: number) => void };
+
+/**
+ * A token's work on a project's store, as dashboard/server.ts mounts it:
+ * every write with a change's delay, which a restart asked for follows.
+ */
+export function storeRoutes(api: Pick<ApiRoutes, "projectStore" | "changeProjectStore" | "generateInStore" | "setStoreFile" | "removeStoreFile">) {
+  return {
+    "/api/v1/projects/:slug/store": {
+      GET: (req: Bun.BunRequest<"/api/v1/projects/:slug/store">) => api.projectStore(req, req.params.slug),
+      PATCH: (req: Bun.BunRequest<"/api/v1/projects/:slug/store">, server: Timed) => {
+        server.timeout(req, SECRETS_CHANGE_IDLE_S);
+        return api.changeProjectStore(req, req.params.slug);
+      },
+    },
+    "/api/v1/projects/:slug/store/generate": {
+      POST: (req: Bun.BunRequest<"/api/v1/projects/:slug/store/generate">, server: Timed) => {
+        server.timeout(req, SECRETS_CHANGE_IDLE_S);
+        return api.generateInStore(req, req.params.slug);
+      },
+    },
+    "/api/v1/projects/:slug/store/files/:name": {
+      PUT: (req: Bun.BunRequest<"/api/v1/projects/:slug/store/files/:name">, server: Timed) => {
+        server.timeout(req, SECRETS_CHANGE_IDLE_S);
+        return api.setStoreFile(req, req.params.slug, req.params.name);
+      },
+      DELETE: (req: Bun.BunRequest<"/api/v1/projects/:slug/store/files/:name">, server: Timed) => {
+        server.timeout(req, SECRETS_CHANGE_IDLE_S);
+        return api.removeStoreFile(req, req.params.slug, req.params.name);
+      },
+    },
+  };
+}
 
 /**
  * A token's secrets and restart, as dashboard/server.ts mounts them: each

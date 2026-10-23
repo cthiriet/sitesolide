@@ -17,6 +17,12 @@
  * paths (a Python virtualenv) is right once in place. Root only moves the
  * staged trees into place, after handing them to the deployment account: the
  * code stays out of the service's reach, as over SSH.
+ *
+ * **A project's store of secrets** is root's: its folders are laid here as
+ * the SSH path lays them (bin/cli/store.ts, `storePrepareCommand`), each one
+ * opened without following a link and changed through its descriptor, and
+ * its names read back for the log. Never a value: the env file is parsed
+ * for its names alone, and a file's content is never opened.
  */
 import {
   chmodSync,
@@ -24,6 +30,8 @@ import {
   closeSync,
   constants,
   existsSync,
+  fchmodSync,
+  fchownSync,
   fstatSync,
   lchownSync,
   lstatSync,
@@ -32,22 +40,26 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
   unlinkSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { join } from "node:path";
 import type { Machine } from "../gatekeeper/machine";
 import { readAccount, readBounded, writeAtomically } from "../secrets/system";
 import { LOOPBACK_TABLE, PROJECT_PORTS_SET } from "../../borrowed/loopback";
-import { isValidSchedule, isValidSlug } from "../../borrowed/manifest";
+import { isValidFileName, isValidSchedule, isValidSlug } from "../../borrowed/manifest";
+import { keys, parseEnvBytes } from "../../borrowed/envfile";
+import { MAX_STORE_ENV_BYTES, STORE_FOLDER_MODE, STORE_PREVIOUS_ROOT, storePaths } from "../../borrowed/store";
 import { GENERATOR_MARK, MARKER_DONE, readCurrentPairs, readStability } from "../../borrowed/services";
 import { isTimerUnit, systemdRunArguments, systemUser, unitArgument, unitFileName, type ProjectRun } from "../../borrowed/unit";
 import { zoneNamesScript } from "../../borrowed/zone-names";
 import { BUNDLE_NAME, DEPLOYMENT_ID_SHAPE, MAX_BUNDLE_BYTES } from "../control/protocol";
 import { SUBFOLDER_SUFFIX, type ProjectEntry } from "../secrets/scope";
 import type { ExtractOutcome } from "./extract";
-import type { Execution, Host, Part } from "./host";
+import type { Execution, Host, Part, Standing } from "./host";
 
 /**
  * One program run as the project's account, and the `systemd-run` line that
@@ -73,8 +85,13 @@ export type HostConfig = {
   sitesDir: string;
   /** /etc/systemd/system */
   unitsFolder: string;
-  /** /etc/sitesolide, whose files are checked present, never read. */
+  /** /etc/sitesolide, whose files are checked present, never read; the stores are under its `projects/`. */
   secretsFolder: string;
+  /**
+   * /var/lib/sitesolide-steward/precedents/projects, the previous versions
+   * of each store the steward keeps: `STORE_PREVIOUS_ROOT` when absent.
+   */
+  storePreviousFolder?: string;
   /** /srv/sites/dashboard/data/control */
   spoolFolder: string;
   /** /etc/passwd */
@@ -165,8 +182,31 @@ function walk(root: string, visit: (path: string) => void, max = MAX_TREE_ENTRIE
   }
 }
 
+/**
+ * The exit status of each unit's main process, from a `systemctl show` that
+ * asked for `ExecMainStatus`, by unit as named; a unit systemd says nothing
+ * of is left out.
+ */
+export function exitStatuses(output: string, units: string[]): Map<string, number> {
+  const byId = new Map(units.map((unit) => [unitFileName(unit), unit]));
+  const statuses = new Map<string, number>();
+  for (const block of output.split(/\n\s*\n/)) {
+    const fields = new Map<string, string>();
+    for (const line of block.split("\n")) {
+      const equal = line.indexOf("=");
+      if (equal > 0) fields.set(line.slice(0, equal).trim(), line.slice(equal + 1).trim());
+    }
+    const unit = byId.get(fields.get("Id") ?? "");
+    const status = Number(fields.get("ExecMainStatus"));
+    if (unit !== undefined && fields.has("ExecMainStatus") && Number.isInteger(status)) statuses.set(unit, status);
+  }
+  return statuses;
+}
+
 export function createHost(config: HostConfig): Host {
   const now = config.now ?? Date.now;
+  const storeRoot = join(config.secretsFolder, "projects");
+  const storePrevious = config.storePreviousFolder ?? STORE_PREVIOUS_ROOT;
   const root = (slug: string) => {
     if (!isValidSlug(slug)) throw new Error("invalid slug");
     return join(config.sitesDir, slug);
@@ -276,11 +316,53 @@ export function createHost(config: HostConfig): Host {
       for (const unit of units) {
         if (!/^[a-z0-9][a-z0-9.-]*$/.test(unit)) throw new Error("invalid unit");
       }
-      const shown = await config.commands.systemctl(["show", "-p", "Id", "-p", "ActiveState", "-p", "SubState", "-p", "NRestarts", ...units.map(unitArgument)], 10_000);
+      const shown = await config.commands.systemctl(
+        ["show", "-p", "Id", "-p", "ActiveState", "-p", "SubState", "-p", "NRestarts", "-p", "ExecMainStatus", ...units.map(unitArgument)],
+        10_000,
+      );
       if (shown.code !== 0) return null;
       // The marker readStability expects after a complete answer, which a
       // command that exited 0 has given.
-      return readStability(`${shown.output}\n${MARKER_DONE}\n`, units);
+      const read = readStability(`${shown.output}\n${MARKER_DONE}\n`, units);
+      if (read === null) return null;
+      const statuses = exitStatuses(shown.output, units);
+      return new Map<string, Standing>([...read].map(([unit, standing]) => [unit, { ...standing, status: statuses.get(unit) ?? null }]));
+    },
+
+    async storeNames(slug) {
+      const { env, files } = storePaths(slug, storeRoot);
+      try {
+        let variables: string[] = [];
+        const examination = readBounded(env, MAX_STORE_ENV_BYTES);
+        if (examination.kind === "present") {
+          if (examination.bytes === null) return null;
+          const parsed = parseEnvBytes(examination.bytes);
+          if (!parsed.ok) {
+            // The reason names a line and what is wrong with it, never its content.
+            config.log(`   !! the store's env does not read back (line ${parsed.line}: ${parsed.reason}): systemd may ignore all of it`);
+            return null;
+          }
+          variables = keys(parsed.document);
+        }
+        const present: string[] = [];
+        let entries: string[];
+        try {
+          entries = readdirSync(files);
+        } catch (error) {
+          if (code(error) !== "ENOENT") throw error;
+          entries = [];
+        }
+        for (const name of entries) {
+          // What LoadCredential= loads: a regular file, never a link, a dot
+          // file or a name the store refuses.
+          if (!isValidFileName(name)) continue;
+          const stat = lstatSync(join(files, name));
+          if (stat.isFile() && stat.size > 0) present.push(name);
+        }
+        return { variables, files: present.sort() };
+      } catch {
+        return null;
+      }
     },
 
     async secretFile(name) {
@@ -348,6 +430,64 @@ export function createHost(config: HostConfig): Host {
       if (owner !== null && (created || lstatSync(data).uid === 0)) chownSync(data, owner.uid, owner.gid);
       chmodSync(data, 0o750);
       return existed ? "present" : "created";
+    },
+
+    async prepareStore(slug) {
+      // storePaths throws on a slug that is not valid: no path is built from one.
+      const { folder, files } = storePaths(slug, storeRoot);
+      const previous = join(storePrevious, slug);
+      let created = false;
+      for (const path of [storeRoot, folder, files]) {
+        let stat: Stats | null = null;
+        try {
+          stat = lstatSync(path);
+        } catch (error) {
+          if (code(error) !== "ENOENT") throw error;
+        }
+        if (stat !== null && (stat.isSymbolicLink() || !stat.isDirectory())) return { kind: "refused", path };
+        if (stat === null) {
+          // A slug removed and created again must not find its predecessor's
+          // previous versions to restore.
+          if (path === folder) {
+            rmSync(previous, { recursive: true, force: true });
+            created = true;
+          }
+          mkdirSync(path, { mode: STORE_FOLDER_MODE });
+        }
+        // Changed through a descriptor opened without following a link: a
+        // link laid between the reading above and here is never followed.
+        let fd: number;
+        try {
+          fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+        } catch (error) {
+          if (code(error) === "ELOOP" || code(error) === "ENOTDIR") return { kind: "refused", path };
+          throw error;
+        }
+        try {
+          if (!fstatSync(fd).isDirectory()) return { kind: "refused", path };
+          // Root's on the machine; on the workstation, nothing is handed over.
+          if (config.deployAccount !== null) fchownSync(fd, 0, 0);
+          fchmodSync(fd, STORE_FOLDER_MODE);
+        } finally {
+          closeSync(fd);
+        }
+      }
+      return { kind: "ready", created };
+    },
+
+    async removeStore(slug) {
+      const { folder, files } = storePaths(slug, storeRoot);
+      // rmdir alone: a folder that holds anything, a file the steward wrote
+      // since, stays.
+      for (const path of [files, folder]) {
+        try {
+          rmdirSync(path);
+        } catch (error) {
+          if (code(error) === "ENOTEMPTY" || code(error) === "EEXIST") return false;
+          if (code(error) !== "ENOENT") throw error;
+        }
+      }
+      return true;
     },
 
     async stage(slug) {

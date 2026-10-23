@@ -14,11 +14,15 @@
  * **A token never reaches what is not its own.** The platform's projects are
  * reserved whatever the scope says, and so are new names of the shape of
  * their files, `dashboard-*`; a slug another token created is refused;
- * and a manifest may only declare the secret file named after its own slug, for
- * the unit reads it with `EnvironmentFile=`, as root, before dropping
- * privileges: a manifest naming `dashboard.env` would hand the dashboard's hash
- * to whoever wrote it. The slug names that file, so the installer checks it
- * is the project's own on the machine (src/installer/claims.ts).
+ * and a manifest in the old form may only declare the secret file named
+ * after its own slug, for the unit reads it with `EnvironmentFile=`, as
+ * root, before dropping privileges: a manifest naming `dashboard.env` would
+ * hand the dashboard's hash to whoever wrote it. The slug names that file, so
+ * the installer checks it is the project's own on the machine
+ * (src/installer/claims.ts). A manifest that lists names reads no flat file
+ * at all, only its project's store, `/etc/sitesolide/projects/<slug>/`, which
+ * the slug alone designates: there is nothing more to judge in it, validate()
+ * has judged the names.
  *
  * **Nor what a removed project left under its name.** `sitesolide remove`
  * releases the name for any token to create again, and its creator is made
@@ -26,8 +30,12 @@
  * grants are keyed by the slug alone, and stay. The project created again
  * would list its predecessor's snapshots and restore them into its own data
  * folder, and be lent the credential the owner granted to the one removed.
- * So no token creates a name under which the machine still keeps either
- * (`leftoversReason`); the owner, deploying over SSH, still may.
+ * A project's store of secrets is keyed by the slug too: one the owner laid
+ * ahead of a deployment, or left by a removal stopped half way, would hand
+ * its values to whatever code a token deploys under that name. So no token
+ * creates a name under which the machine still keeps any of them
+ * (`leftoversReason`), but the store it laid there itself; the owner,
+ * deploying over SSH, still may.
  *
  * Pure.
  */
@@ -115,12 +123,18 @@ export function decideSlug(identity: Identity, slug: unknown, machine: { exists:
 /**
  * What the machine still keeps under a name its project no longer carries:
  * the snapshots of that folder the backups' index holds, in the server's
- * repository or the bucket's, each counted once, and the connector grants
- * made to that slug. Counts alone: nothing of what they hold.
+ * repository or the bucket's, each counted once, the connector grants made
+ * to that slug, and `store`, true when `/etc/sitesolide/projects/<slug>/`
+ * exists, the slug is not deployed, and it is not the asking token's by
+ * record: a store the token laid ahead of its own first deployment is its
+ * own. Counts alone: nothing of what they hold.
  */
-export type Leftovers = { snapshots: number; grants: number };
+export type Leftovers = { snapshots: number; grants: number; store: boolean };
 
 const counted = (count: number, what: string) => `${count} ${what}${count === 1 ? "" : "s"}`;
+
+/** `a`, `a and b`, `a, b and c`. */
+const listed = (items: string[]) => (items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`);
 
 /**
  * Why a token may not create this slug, after decideSlug allowed the
@@ -146,11 +160,15 @@ export function leftoversReason(slug: string, left: Leftovers): string | null {
     kept.push(counted(left.grants, "connector grant"));
     clear.push(`withdraw the grant${left.grants === 1 ? "" : "s"} on the dashboard's Connectors page`);
   }
+  if (left.store) {
+    kept.push("a secrets store");
+    clear.push(`remove the store with sitesolide remove --confirm ${slug}`);
+  }
   if (left.snapshots > 0) clear.push(`forget the snapshot${left.snapshots === 1 ? "" : "s"}`);
   if (kept.length === 0) return null;
   return (
-    `the machine still keeps ${kept.join(" and ")} of a project once named ${slug}, which a project created under that name would be handed: no token creates it. ` +
-    `Pick another slug, or ask the owner of the machine, who may deploy ${slug} themselves over SSH, or ${clear.join(" and ")} first`
+    `the machine still keeps ${listed(kept)} of a project once named ${slug}, which a project created under that name would be handed: no token creates it. ` +
+    `Pick another slug, or ask the owner of the machine, who may deploy ${slug} themselves over SSH, or ${listed(clear)} first`
   );
 }
 

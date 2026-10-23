@@ -358,6 +358,7 @@ function finish(b: Bench, deployment: string, slug: string, state: "running" | "
     error: state === "failed" ? { code: "failure", message: "it broke" } : null,
     url: state === "succeeded" ? `https://${slug}.${ZONE}/` : null,
     allocated: [],
+    missingSecrets: null,
   };
   writeFileSync(join(b.root, "installer", `${deployment}.json`), `${JSON.stringify(result)}\n`);
 }
@@ -430,7 +431,7 @@ describe("ownership of what a person's token creates", () => {
     setRoles(b, ADA, { alpha: "developer" }, true);
     const { secret } = await minted(b, { create: true });
     // A project of that name deployed and removed earlier left its result, under an id a dashboard names again.
-    const earlier: InstallerResult = { deployment: DEPLOYMENT, slug: "omega", state: "succeeded", startedAt: 1, updatedAt: 2, finishedAt: 2, log: [], error: null, url: null, allocated: [] };
+    const earlier: InstallerResult = { deployment: DEPLOYMENT, slug: "omega", state: "succeeded", startedAt: 1, updatedAt: 2, finishedAt: 2, log: [], error: null, url: null, allocated: [], missingSecrets: null };
     writeFileSync(join(b.root, "installer", `${DEPLOYMENT}.json`), `${JSON.stringify(earlier)}\n`);
     const reused = await call(b, "POST", "/control/deploy", { bearer: secret, deployment: DEPLOYMENT, slug: "omega", manifest: JSON.stringify({ slug: "omega" }) });
     expect(await message(reused)).toMatchObject({ status: 400, message: expect.stringContaining("already used") });
@@ -626,7 +627,7 @@ describe("a project removed from the machine", () => {
     expect(b.journal.at(-1)).toEqual({ operation: "project.remove", result: "ok", actor: "owner", member: null, detail: `created by token ${token.id}, its name free again`, slug: "omega" });
     const team = JSON.parse(readFileSync(join(b.root, "state", "team.json"), "utf8")) as { owners: Record<string, string> };
     expect(team.owners).toEqual({});
-    expect(await (await call(b, "POST", "/control/preflight", { bearer: ci.secret, slug: "omega" })).json()).toEqual({ creating: true });
+    expect(await (await call(b, "POST", "/control/preflight", { bearer: ci.secret, slug: "omega" })).json()).toMatchObject({ creating: true });
     // Asked again: nothing left to forget, nothing journaled.
     const journaled = b.journal.length;
     expect(await (await forget(b, "omega")).json()).toEqual({ slug: "omega", forgotten: null, access: 0 });

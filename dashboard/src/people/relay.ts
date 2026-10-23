@@ -20,6 +20,14 @@
  * checks out (routes.ts, `complete`), kept here in memory by the session's
  * hash, as the owner's is, and never sent to the browser.
  *
+ * **A project's store** answers at the owner's addresses too, its writes
+ * relayed to the steward's `/people/store/*` routes, which judge each by role
+ * (a Developer and an Admin write, an Admin restores). Reading a value back
+ * is the owner's alone: there is no such route here, nor merging or
+ * retiring the old files, and server.ts answers a person 403 on them. A
+ * value set and a file's content are never sent back, whatever the steward
+ * answers.
+ *
  * **A person's own tokens** answer at the Tokens page's addresses too: their
  * tokens alone, minted under their unlock within their roles, revoked
  * without it. The steward judges and journals each (src/control/steward.ts);
@@ -29,7 +37,7 @@
  */
 import { tokenHash } from "../sessions";
 import { isAcceptableOrigin } from "../sessions";
-import { fields, reach, relay, type Extraction, type Received } from "../secrets/routes";
+import { fields, reach, relay, STORE_EXTRACTIONS, STORE_WITHHELD, type Extraction, type Received } from "../secrets/routes";
 import type { Steward } from "../secrets/client";
 import type { Tokens } from "../secrets/tokens";
 import type { BackupSteward } from "../backup/client";
@@ -70,6 +78,12 @@ export type MemberRelay = {
   readContent: Handler;
   replaceContent: Handler;
   togglePortal: Handler;
+  setStoreVariable: Handler;
+  removeStoreVariables: Handler;
+  generateStoreVariable: Handler;
+  setStoreFile: Handler;
+  removeStoreFile: Handler;
+  restoreStore: Handler;
   backups: Handler;
   backupAudit: Handler;
   restoreBackup: Handler;
@@ -169,8 +183,17 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
     return relay(received);
   }
 
-  /** A route that acts under the member's unlock: without it, 423, the steward not disturbed. */
-  function withToken<D extends object>(extract: Extraction<D>, method: "POST" | "PUT" | "DELETE", path: string, options: { max?: number; long?: boolean } = {}): Handler {
+  /**
+   * A route that acts under the member's unlock: without it, 423, the
+   * steward not disturbed. `withheld`: the strings of the request no answer
+   * may carry back, a value set, a file's content.
+   */
+  function withToken<D extends object>(
+    extract: Extraction<D>,
+    method: "POST" | "PUT" | "DELETE",
+    path: string,
+    options: { max?: number; long?: boolean; withheld?: (read: D) => string[] } = {},
+  ): Handler {
     return async (req) => {
       const open = await member(req, true);
       if (open instanceof Response) return open;
@@ -178,7 +201,11 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
       if (read instanceof Response) return read;
       const kept = tokens.read(open.session.hash);
       if (kept === null) return locked();
-      const received = await reach(() => steward.act(method, path, { ...read, session: open.token, token: kept.token }, options.long), kept.token, [open.token]);
+      const received = await reach(
+        () => steward.act(method, path, { ...read, session: open.token, token: kept.token }, options.long),
+        kept.token,
+        [open.token, ...(options.withheld?.(read) ?? [])],
+      );
       return answer(open, received, kept);
     };
   }
@@ -243,6 +270,12 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
     readContent: withToken(fields(["slug", "file"] as const), "POST", "/people/secrets/content", { long: true }),
     replaceContent: withToken(fields(["slug", "file", "content"] as const), "PUT", "/people/secrets/content", { long: true, max: MAX_CONTENT_BODY_BYTES }),
     togglePortal: withToken(extractPortal, "POST", "/people/portal", { long: true }),
+    setStoreVariable: withToken(STORE_EXTRACTIONS.set, "PUT", "/people/store/variable", { long: true, withheld: STORE_WITHHELD.set }),
+    removeStoreVariables: withToken(STORE_EXTRACTIONS.remove, "DELETE", "/people/store/variable", { long: true }),
+    generateStoreVariable: withToken(STORE_EXTRACTIONS.generate, "POST", "/people/store/generate", { long: true }),
+    setStoreFile: withToken(STORE_EXTRACTIONS.file, "PUT", "/people/store/file", { long: true, max: MAX_CONTENT_BODY_BYTES, withheld: STORE_WITHHELD.file }),
+    removeStoreFile: withToken(STORE_EXTRACTIONS.fileRemove, "DELETE", "/people/store/file", { long: true }),
+    restoreStore: withToken(STORE_EXTRACTIONS.restore, "POST", "/people/store/restore", { long: true }),
     restoreBackup: withToken(fields(["slug", "snapshot", "confirmation"] as const), "POST", "/people/backups/restore", { long: true }),
 
     async backups(req) {
