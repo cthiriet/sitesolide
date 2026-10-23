@@ -373,10 +373,11 @@ export function readScheduleCheck(output: string, schedules: string[]): string[]
 
 /**
  * How a unit stands, as stabilityCommand reads it. `status`: the exit status
- * of its main process, when the reading asked for it; 243 is a unit whose
- * secret files could not be loaded (CREDENTIALS_EXIT_STATUS in ./store).
+ * of its main process, when the reading asked for it, null for one that could
+ * not tell (the installer's); 243 is a unit whose secret files could not be
+ * loaded (CREDENTIALS_EXIT_STATUS in ./store).
  */
-export type UnitStanding = { active: string; sub: string; restarts: number; status?: number };
+export type UnitStanding = { active: string; sub: string; restarts: number; status?: number | null };
 
 /**
  * Reads how each unit stands, its state and how many times systemd restarted
