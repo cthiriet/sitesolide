@@ -18,9 +18,12 @@ import { readdirSync, readFileSync, renameSync, statfsSync, statSync, writeFileS
 import { join } from "node:path";
 import { connect, type TLSSocket } from "node:tls";
 import {
+  failingServices,
+  readExitStatuses,
   readProperties,
   readUnitList,
   readValidTo,
+  withExitStatuses,
   type BackupReading,
   type CertificateReading,
   type DiskStats,
@@ -139,7 +142,14 @@ export function createMachine(config: Config, options: MachineOptions = { system
         SYSTEMCTL_TIMEOUT_MS,
       );
       if (execution.code !== 0) return { error: `systemctl list-units: ${firstLine(execution)}` };
-      return { value: readUnitList(execution.stdout) };
+      const units = readUnitList(execution.stdout);
+      // The exit status of the failing services alone: 243 says a unit could
+      // not load its secret files, which no state tells. Unread, each is
+      // judged by its state, as before.
+      const failing = failingServices(units);
+      if (failing.length === 0) return { value: units };
+      const shown = await spawn([options.systemctl, "show", "-p", "Id", "-p", "ExecMainStatus", "--", ...failing], SYSTEMCTL_TIMEOUT_MS);
+      return { value: shown.code === 0 ? withExitStatuses(units, readExitStatuses(shown.stdout)) : units };
     },
 
     folders() {

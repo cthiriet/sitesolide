@@ -36,9 +36,11 @@ export function drawCertificate(folder: string, name: string, names: string[], d
 }
 
 /**
- * A `systemctl` in `folder` that answers `show` with the file `caddy` and
- * `list-units` with the file `units`, records every call in `calls`, refuses
- * anything else, and fails as a dead bus would while a file `broken` exists.
+ * A `systemctl` in `folder` that answers `show caddy.service` with the file
+ * `caddy`, any other `show` with the file `statuses` (empty when missing),
+ * and `list-units` with the file `units`, records every call in `calls`,
+ * refuses anything else, and fails as a dead bus would while a file `broken`
+ * exists.
  */
 export function fakeSystemctl(folder: string): string {
   mkdirSync(folder, { recursive: true });
@@ -51,7 +53,7 @@ export function fakeSystemctl(folder: string): string {
       'echo "$*" >> "$dir/calls"',
       '[ -e "$dir/broken" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }',
       'case "$1" in',
-      '  show) cat "$dir/caddy" ;;',
+      '  show) if [ "$2" = caddy.service ]; then cat "$dir/caddy"; else cat "$dir/statuses" 2>/dev/null; fi ;;',
       '  list-units) cat "$dir/units" ;;',
       '  *) echo "unexpected systemctl $*" >&2; exit 1 ;;',
       "esac",

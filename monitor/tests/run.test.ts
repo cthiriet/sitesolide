@@ -226,7 +226,7 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
 
     // Only readings were asked of systemd, never a change.
     const calls = readFileSync(join(systemd, "calls"), "utf8").trim().split("\n");
-    expect(calls.every((call) => call.startsWith("show caddy.service ") || call.startsWith("list-units "))).toBe(true);
+    expect(calls.every((call) => call.startsWith("show caddy.service ") || call.startsWith("show -p Id -p ExecMainStatus -- ") || call.startsWith("list-units "))).toBe(true);
   });
 
   test("manual DNS: the certificate of each name of the zone read under its own name, and no wildcard", async () => {
@@ -407,6 +407,27 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     expect(calls.filter((call) => call.startsWith("list-units "))).toContain(
       "list-units --type=service,timer --all --plain --no-legend --no-pager",
     );
+  });
+
+  test("a project's service that could not load its secret files is said so, its exit status read for it alone", async () => {
+    // systemd keeps restarting a server that fails with 243 before its program
+    // runs: activating (auto-restart), and a misleading "Protocol error" in
+    // its journal.
+    setUnits(["caddy.service loaded active running Caddy", "cms.service loaded activating auto-restart cms", "sitesolide-landing.service loaded active running landing"]);
+    writeFileSync(join(systemd, "statuses"), "Id=cms.service\nExecMainStatus=243\n");
+    rmSync(join(systemd, "calls"), { force: true });
+    await pass();
+    const down = await pass();
+    const summary = "cms.service could not load its secret files (243/CREDENTIALS): the store's files folder is missing, or its files are too large; sitesolide refresh cms lays the folder again";
+    expect(down.status.down.map((problem) => [problem.id, problem.summary])).toEqual([["unit:cms.service", summary]]);
+    const calls = readFileSync(join(systemd, "calls"), "utf8").trim().split("\n");
+    expect(calls.filter((call) => call.startsWith("show -p"))).toEqual(["show -p Id -p ExecMainStatus -- cms.service", "show -p Id -p ExecMainStatus -- cms.service"]);
+    // Healthy again: nothing more is asked of systemd than before.
+    setUnits(["caddy.service loaded active running Caddy", "cms.service loaded active running cms", "sitesolide-landing.service loaded active running landing"]);
+    rmSync(join(systemd, "statuses"), { force: true });
+    rmSync(join(systemd, "calls"), { force: true });
+    await pass();
+    expect(readFileSync(join(systemd, "calls"), "utf8").trim().split("\n").some((call) => call.startsWith("show -p"))).toBe(false);
   });
 
   test("a webhook that refuses keeps its notices for the next run, in one message", async () => {
