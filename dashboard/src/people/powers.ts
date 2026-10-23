@@ -6,8 +6,14 @@
  * |---|---|
  * | Can open (`visitor`) | none here: they open the site when its general access is restricted, and see nothing in the dashboard |
  * | Viewer | none: they see the project, the dashboard filters what they see |
- * | Developer | restart; list the secret files, names and metadata; write: create a declared file, set, replace or remove a variable, replace a whole file. Never a value read back. Deploy it with a token of their own |
- * | Admin | everything a Developer has, and read a value or a file back, restore a file's previous version, general access, people with access, a role at most their own, backups and their restore. A token of theirs may also deploy it in the open, declare a domain for it, and let it reach outside hosts |
+ * | Developer | restart; list the secret files, the store's names and metadata; write: create a declared file, set, replace or remove a variable, replace a whole file, set, generate or remove a store's variable or file. Never a value read back. Deploy it with a token of their own |
+ * | Admin | everything a Developer has, and restore a file's or the store's previous version, general access, people with access, a role at most their own, backups and their restore. Never a value read back either. A token of theirs may also deploy it in the open, declare a domain for it, and let it reach outside hosts |
+ *
+ * **Reading a value back is the owner's alone**, in the dashboard, unlocked:
+ * no role holds `secrets.read`, and its routes refuse every person. A value
+ * an Admin could read is a value a stolen session or a departed Admin could
+ * read, and nothing the project needs is a read: a value is set, drawn on
+ * the machine, or replaced.
  *
  * Nothing here is anyone's for the platform's own projects, the dashboard,
  * the portal and the others, nor for a file the machine keeps for root: those
@@ -49,7 +55,6 @@ const POWERS: Readonly<Record<Role, readonly Power[]>> = {
     "restart",
     "secrets.list",
     "secrets.write",
-    "secrets.read",
     "secrets.restore",
     "general",
     "access",
@@ -99,7 +104,7 @@ const WHAT: Readonly<Record<Power, string>> = {
   restart: "restarting its service takes a Developer or an Admin",
   "secrets.list": "its secret files are for a Developer or an Admin",
   "secrets.write": "changing its secrets takes a Developer or an Admin",
-  "secrets.read": "reading a value back takes an Admin: a Developer sets, replaces and removes values, and never reads one",
+  "secrets.read": "reading a value back is the owner's alone: a Developer or an Admin sets, replaces and removes values, and never reads one",
   "secrets.restore": "putting a previous version back takes an Admin",
   general: "changing its general access takes an Admin",
   access: "its people with access are its Admin's",

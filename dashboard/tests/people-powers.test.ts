@@ -40,12 +40,22 @@ describe("what each role may do", () => {
     "deploy.outbound",
   ];
 
-  test("Can open and a Viewer nothing, a Developer writes and deploys without reading, an Admin everything of the project", () => {
+  test("Can open and a Viewer nothing, a Developer writes and deploys without reading, an Admin everything of the project but reading a value back", () => {
     expect(all.filter((power) => may("visitor", power))).toEqual([]);
     expect(all.filter((power) => may("viewer", power))).toEqual([]);
     expect(all.filter((power) => may("developer", power))).toEqual(["restart", "secrets.list", "secrets.write", "deploy"]);
-    expect(all.filter((power) => may("admin", power))).toEqual(all);
+    expect(all.filter((power) => may("admin", power))).toEqual(all.filter((power) => power !== "secrets.read"));
     expect(all.filter((power) => may(null, power))).toEqual([]);
+  });
+
+  test("reading a value back is no role's: the owner's alone (I8)", () => {
+    for (const role of ["visitor", "viewer", "developer", "admin", null] as const) expect(may(role, "secrets.read")).toBe(false);
+    expect(powerRefusal("a@acme.test", "admin", "blog", "secrets.read")).toBe(
+      "a@acme.test is an Admin on blog: reading a value back is the owner's alone: a Developer or an Admin sets, replaces and removes values, and never reads one",
+    );
+    // An Admin still restores a previous version, unlocked.
+    expect(may("admin", "secrets.restore")).toBe(true);
+    expect(may("developer", "secrets.restore")).toBe(false);
   });
 
   test("a Developer and an Admin restart, Can open and a Viewer do not", () => {
@@ -66,7 +76,7 @@ describe("what each role may do", () => {
     expect(powerRefusal("a@acme.test", "visitor", "blog", "general")).toBe("a@acme.test can open blog and nothing more: changing its general access takes an Admin");
     expect(powerRefusal("a@acme.test", "viewer", "blog", "access")).toBe("a@acme.test is a Viewer on blog: its people with access are its Admin's");
     expect(powerRefusal("a@acme.test", "developer", "blog", "secrets.read")).toBe(
-      "a@acme.test is a Developer on blog: reading a value back takes an Admin: a Developer sets, replaces and removes values, and never reads one",
+      "a@acme.test is a Developer on blog: reading a value back is the owner's alone: a Developer or an Admin sets, replaces and removes values, and never reads one",
     );
     expect(powerRefusal("a@acme.test", "developer", "blog", "deploy.public")).toBe("a@acme.test is a Developer on blog: deploying it in the open, its general access public, takes an Admin");
   });
