@@ -293,7 +293,7 @@ describe("a token's transport, through the control API's store routes", () => {
       ["PATCH", "/api/v1/projects/shop/store", { set: { A: VALUE }, remove: ["B"] }],
       ["POST", "/api/v1/projects/shop/store/generate", { name: "SESSION" }],
       ["PUT", "/api/v1/projects/shop/store/files/gcp.json", { content: "AQID" }],
-      ["DELETE", "/api/v1/projects/shop/store/files/tls.key", {}],
+      ["DELETE", "/api/v1/projects/shop/store/files/tls.key", null],
       ["POST", "/api/v1/projects/shop/restart", null],
     ]);
     expect(seen.every(({ authorization }) => authorization === `Bearer ${remote.token}`)).toBe(true);

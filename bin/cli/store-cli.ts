@@ -494,7 +494,8 @@ export function apiStore(remote: Remote, fetcher: Fetch = fetch): StoreTransport
     change: (slug, asked) => change(slug, `${base(slug)}/store`, json("PATCH", { set: Object.fromEntries(asked.set), remove: asked.remove })),
     generate: (slug, request) => change(slug, `${base(slug)}/store/generate`, json("POST", request)),
     setFile: (slug, name, content) => change(slug, `${base(slug)}/store/files/${encodeURIComponent(name)}`, json("PUT", { content: content.toBase64() })),
-    removeFile: (slug, name) => change(slug, `${base(slug)}/store/files/${encodeURIComponent(name)}`, json("DELETE", {})),
+    // No body: the route takes nothing, or `{ "restart": true }`, which this CLI asks for apart.
+    removeFile: (slug, name) => change(slug, `${base(slug)}/store/files/${encodeURIComponent(name)}`, { method: "DELETE" }),
     async restart(slug) {
       const answer: ApiAnswer<{ verdict?: unknown }> = await call(remote, `${base(slug)}/restart`, { method: "POST" }, fetcher);
       if (predatesRoute(answer)) return { ok: false, failure: { ...outdated, message: `the dashboard at ${remote.api} does not carry restarts by token yet: the owner of the machine runs sitesolide upgrade` } };

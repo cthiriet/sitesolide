@@ -250,6 +250,8 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "build-secret-missing": BUILD_SECRET_MISSING,
   "build-secrets-unreadable": BUILD_SECRETS_UNREADABLE,
   "store-refused": STORE_REFUSED,
+  "store-failed":
+    "the machine could not lay the project's store of secrets, which its units load: tell the owner of the machine, with the message; nothing was served; never create anything on the machine by hand, nor deploy again in a loop",
   "store-unmanaged":
     "the project's store on the machine is in a state the steward does not rewrite, and nothing was changed: tell the owner of the machine, with the message; never work around it",
   "migrate-conflict":

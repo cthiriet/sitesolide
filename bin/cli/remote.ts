@@ -720,8 +720,9 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
         output.say(`   the machine chose port ${port}${service === null ? "" : ` for ${service}`}: write it in sitesolide.json to keep it explicit`);
       }
       // What the installer found missing once done is the word that counts;
-      // a dashboard before it says nothing, and the reading before stands.
-      let missingSecrets: StoreMissing | null = view.missingSecrets !== undefined ? view.missingSecrets : missing;
+      // one that could not say, or a dashboard before it, leaves the reading
+      // made before the deployment.
+      let missingSecrets: StoreMissing | null = view.missingSecrets ?? missing;
       if (deferred && io.terminal && !json) missingSecrets = await askAfterCreation(slug, declaration, transport, io, store, output);
       const main = view.allocated.find((entry) => entry.service === null) ?? view.allocated[0];
       output.succeeded("deploy", {

@@ -588,7 +588,7 @@ describe("secrets and restart, with a token: the project's store", () => {
     expect(sent().map((entry) => `${entry.method} ${entry.path} ${entry.body}`)).toEqual([
       'POST /api/v1/projects/shop/store/generate {"name":"SESSION_SECRET","format":"base64url","bytes":32}',
       `PUT /api/v1/projects/shop/store/files/gcp.json {"content":"${new TextEncoder().encode('{"type":"service_account"}').toBase64()}"}`,
-      "DELETE /api/v1/projects/shop/store/files/gcp.json {}",
+      "DELETE /api/v1/projects/shop/store/files/gcp.json ",
     ]);
   });
 
