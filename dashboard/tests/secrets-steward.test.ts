@@ -4457,6 +4457,26 @@ describe("the owner's socket: the store over SSH", () => {
   });
 });
 
+describe("the units this release generates read the store as the steward expects", () => {
+  test("every service unit reads the store last and loads its files: the store is in effect, migrate may run, a restart applies it", async () => {
+    const bench = await mount();
+    const lab = { slug: "lab", services: { web: { start: "/usr/local/bin/bun run server.ts", port: 3052 }, job: { start: "/bin/true", schedule: "daily" } }, secrets: ["lab.env"] };
+    mkdirSync(join(bench.sites, "lab"), { recursive: true });
+    writeFileSync(join(bench.sites, "lab", "sitesolide.json"), JSON.stringify(lab));
+    writeFileSync(join(bench.secrets, "lab.env"), "LAB_KEY=from-the-file\n", { mode: 0o600 });
+    // The units as the generator writes them, the machine's folder of secrets being the bench's.
+    for (const { unit, text } of generateUnits(lab as Manifest, { slug: "lab", zone: "test-zone.invalid", contact: "" })) {
+      if (unit.endsWith(".timer")) continue;
+      writeFileSync(join(bench.units, `${unit}.service`), text.replaceAll("/etc/sitesolide", bench.secrets));
+    }
+    expect(await storeList(bench, "lab")).toMatchObject({ unitReadsStore: true, variables: [{ name: "LAB_KEY", source: "legacy", file: "lab.env" }] });
+    const token = await unlock(bench);
+    expect(await (await bench.call("POST", "/store/migrate", { token, slug: "lab" })).json()).toMatchObject({ merged: ["LAB_KEY"], written: true });
+    expect((await storeList(bench, "lab")).variables[0]).toMatchObject({ name: "LAB_KEY", source: "store", shadows: ["lab.env"] });
+    expect((await bench.call("POST", "/restart", { token, slug: "lab" })).status).toBe(200);
+  });
+});
+
 describe("a restart applies the store", () => {
   test("a unit that reads its project's store, and no legacy file, is restarted from the Secrets section", async () => {
     const bench = await mount();
