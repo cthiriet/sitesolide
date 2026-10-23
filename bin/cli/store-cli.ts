@@ -650,25 +650,31 @@ export function withDeclared(view: StoreView, declaration: SecretsDeclaration): 
 }
 
 /**
- * What a manifest that names its variables, or none, would drop: the names a
- * legacy file the installed units read holds and the store lacks, each with
- * the files that hold it, and the legacy files they read that are not
- * managed, whose names cannot be told. The units such a manifest makes read
- * the store alone, so each of these values would be gone at the next start:
- * the service runs on without it, often without a word. Names only.
+ * What a deployment would drop of the values the service runs with today:
+ * the names a legacy file the installed units read holds, and that neither
+ * the store nor a legacy file the new manifest still declares (`kept`)
+ * supplies, each with the files that hold it; and the legacy files the
+ * units read that the manifest no longer declares and that are not managed,
+ * whose names cannot be told. A manifest that names its variables, or none,
+ * keeps no legacy file: its units read the store alone. One in the old form
+ * keeps the files it declares, and drops the others. Either way each of
+ * these values would be gone at the next start: the service runs on without
+ * it, often without a word. Names only.
  */
-export function legacyLoss(view: StoreView): { names: { name: string; files: string[] }[]; unmanaged: string[] } {
+export function legacyLoss(view: StoreView, kept: readonly string[] = []): { names: { name: string; files: string[] }[]; unmanaged: string[] } {
   const inStore = new Set(view.variables.filter((variable) => variable.source === "store").map((variable) => variable.name));
+  const stays = new Set(kept);
+  const supplied = new Set(view.legacy.filter((file) => stays.has(file.name) && file.state === "managed").flatMap((file) => file.variables));
   const names = new Map<string, string[]>();
   const unmanaged: string[] = [];
   for (const file of view.legacy) {
-    if (!file.read || file.state === "absent") continue;
+    if (!file.read || file.state === "absent" || stays.has(file.name)) continue;
     if (file.state === "unmanaged") {
       unmanaged.push(file.name);
       continue;
     }
     for (const name of file.variables) {
-      if (inStore.has(name)) continue;
+      if (inStore.has(name) || supplied.has(name)) continue;
       names.set(name, [...(names.get(name) ?? []), file.name]);
     }
   }
@@ -679,23 +685,30 @@ export function legacyLoss(view: StoreView): { names: { name: string; files: str
  * The stop of a deployment or a refresh that would drop values the service
  * reads today: before anything is sent or written, with the command that
  * carries them into the store first. A data-loss guard, not a missing
- * secret: a name set nowhere never stops anything.
+ * secret: a name set nowhere never stops anything. `declaration` is the
+ * manifest about to be deployed: in the old form, the legacy files it
+ * declares are still read.
  */
-export function legacyLossRefusal(view: StoreView, nothing: string): { message: string; details: string[] } | null {
-  const { names, unmanaged } = legacyLoss(view);
+export function legacyLossRefusal(view: StoreView, nothing: string, declaration?: SecretsDeclaration): { message: string; details: string[] } | null {
+  const legacyForm = declaration?.form === "legacy";
+  const { names, unmanaged } = legacyLoss(view, legacyForm ? declaration!.legacy : []);
   if (names.length === 0 && unmanaged.length === 0) return null;
   const listed = names.map(({ name }) => name);
   const message =
     names.length > 0
       ? `migrate first: sitesolide secrets migrate --restart; the service reads ${listed.join(", ")} from legacy files this manifest no longer reads, and the store lacks ${names.length === 1 ? "it" : "them"}`
       : `migrate first: sitesolide secrets migrate --restart; the service reads ${unmanaged.join(", ")}, which the dashboard does not manage, and this manifest no longer reads ${unmanaged.length === 1 ? "it" : "them"}`;
+  const dropped = [...new Set([...names.flatMap(({ files }) => files), ...unmanaged])];
   return {
     message,
     details: [
       ...names.map(({ name, files }) => `${name}: in ${files.join(", ")}`),
       ...unmanaged.map((file) => `${file}: read by the service, not managed by the dashboard, its variables cannot be told: fix it in the Secrets section first`),
-      "deployed as it is, the service would start without them: the units of a manifest that names its variables read the store alone",
+      legacyForm
+        ? `deployed as it is, the service would start without them: this manifest's units no longer read ${dropped.join(", ")}`
+        : "deployed as it is, the service would start without them: the units of a manifest that names its variables read the store alone",
       "sitesolide secrets migrate --restart copies them into the store and restarts the service, the owner's, over SSH; then deploy again",
+      ...(legacyForm ? [`or keep ${dropped.join(", ")} under secrets in sitesolide.json`] : []),
       nothing,
     ],
   };

@@ -136,17 +136,21 @@ folders on the machine before the units, on every deployment of an app, and
 stops there when they cannot be laid or are not root's. See
 [secrets.md](secrets.md#deploy-never-waits-on-a-runtime-secret).
 
-A name the machine does not carry yet may be a token's already: its
-deployment was accepted, or its write made the project's store ahead of one.
-Before those prompts, `deploy` asks the steward, and stops on such a name,
-naming the token by its label, id and address, and whether the store it holds
-is the token's. Deploying there would set your values in a store, and put
-your project under a name, that token may deploy code to. `--adopt` takes the
-name back, dropping the token's hold, then deploys; in a dry run it only says
-it would. A deployment of the token's still under way is waited for, with
-`--adopt` too. A project the machine carries is yours already and is not
-asked about; a steward from before claims holds none, and one that cannot say
-is warned of. `--adopt` is the owner's alone: with a token it is refused.
+A name may be a token's: its deployment was accepted, or its write made the
+project's store ahead of one, or, on a project the machine carries, a
+creation made that token its Admin. Before those prompts, on every
+deployment over SSH, `deploy` asks the steward. A deployment of the token's
+still under way is waited for first, with `--adopt` too. Then a name a token
+holds stops it, naming the token by its label, id and address, and whether
+the store it holds is the token's: deploying there would set your values in
+a store, and put your project under a name, that token may deploy code to.
+`--adopt` takes the name back, dropping the token's hold, then deploys; in a
+dry run it only says it would. A steward from before claims holds none, and
+one without an owner's socket is warned of. Claims that do not read stop
+it, unless `--adopt`: restore the file the message names from the steward's
+backups, never delete it, since a claim dropped hands the name to whoever
+deploys it next. `--adopt` is the owner's alone: with a token it is
+refused.
 
 `sitesolide remove` deletes the project's store and its previous versions,
 after its units are stopped, and the legacy secret files the folder's

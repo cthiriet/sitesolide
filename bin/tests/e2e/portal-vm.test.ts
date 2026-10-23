@@ -183,15 +183,15 @@ describe("deploy reads the door on the VM", () => {
 
     // Nothing other than the readings went through, the site's door, its
     // block in service, what systemd knows of its unit, the manifests whose
-    // ports it checks and the store's listing: the
-    // preparation of the service is the first write, and the simulated VM
-    // refused it. The lock is only taken before the first deposit of the
-    // manifest or of the block, much further on.
+    // ports it checks, whether a token holds its name, and the store's
+    // listing: the preparation of the service is the first write, and the
+    // simulated VM refused it. The lock is only taken before the first
+    // deposit of the manifest or of the block, much further on.
     expect(r.code).toBe(1);
     const logs = vm.logs();
-    expect(logs.slice(0, 5)).toEqual(["READ sample-door", "BLOCK sample-door", "UNITS sample-door", "READ *", "STORE GET sample-door"]);
-    expect(logs.slice(5).every((line) => line.startsWith("REFUSED "))).toBe(true);
-    expect(logs).toHaveLength(6);
+    expect(logs.slice(0, 6)).toEqual(["READ sample-door", "BLOCK sample-door", "UNITS sample-door", "READ *", "CLAIM GET sample-door", "STORE GET sample-door"]);
+    expect(logs.slice(6).every((line) => line.startsWith("REFUSED "))).toBe(true);
+    expect(logs).toHaveLength(7);
   });
 });
 

@@ -536,6 +536,29 @@ describe("the missing names of deploy", () => {
     expect(legacyLossRefusal(view(), "x")).toBeNull();
   });
 
+  test("the old form drops what it stops declaring: a file the units read, not declared any more, whose names nothing else supplies", () => {
+    const file = (name: string, variables: string[], over: object = {}) => ({ name, state: "managed" as const, reason: null, variables, read: true, leftover: false, covered: null, ...over });
+    // The units read shop.env and shop-smtp.env; the new manifest declares shop.env alone.
+    const listed = view({
+      variables: [{ name: "IN_STORE", source: "store", file: null, shadows: [], declared: false }],
+      legacy: [file("shop.env", ["API_KEY", "SHARED"]), file("shop-smtp.env", ["SMTP_URL", "SHARED", "IN_STORE"]), file("shop-hand.env", [], { state: "unmanaged", reason: "owned by root" })],
+    });
+    const keeping = declared(["shop.env"]);
+    expect(keeping.form).toBe("legacy");
+    // What shop.env still supplies, or the store, is not lost; SMTP_URL is, and the unmanaged file dropped too.
+    expect(legacyLoss(listed, keeping.legacy)).toEqual({ names: [{ name: "SMTP_URL", files: ["shop-smtp.env"] }], unmanaged: ["shop-hand.env"] });
+    const refusal = legacyLossRefusal(listed, "nothing was sent", keeping)!;
+    expect(refusal.message).toBe("migrate first: sitesolide secrets migrate --restart; the service reads SMTP_URL from legacy files this manifest no longer reads, and the store lacks it");
+    expect(refusal.details).toContain("deployed as it is, the service would start without them: this manifest's units no longer read shop-smtp.env, shop-hand.env");
+    expect(refusal.details).toContain("or keep shop-smtp.env, shop-hand.env under secrets in sitesolide.json");
+    expect(refusal.details.at(-1)).toBe("nothing was sent");
+    // Declaring every file the units read drops nothing.
+    expect(legacyLossRefusal(listed, "x", declared(["shop.env", "shop-smtp.env", "shop-hand.env"]))).toBeNull();
+    // The names form keeps no legacy file: every file the units read is judged, as before.
+    expect(legacyLoss(listed).names.map(({ name }) => name)).toEqual(["API_KEY", "SHARED", "SMTP_URL"]);
+    expect(legacyLossRefusal(listed, "x", declared(["API_KEY"]))!.details).toContain("deployed as it is, the service would start without them: the units of a manifest that names its variables read the store alone");
+  });
+
   test("at a terminal: set, typed without echo, then sent; generate, drawn on the server; leave; no restart asked", async () => {
     const { calls, transport } = recordingTransport();
     const { io, asked, said } = terminal(["s", "g", "l"], [VALUE]);

@@ -34,7 +34,7 @@ const BUILD_SECRETS_UNREADABLE =
 
 /** A deployment that would drop values legacy files hold and the store lacks. */
 const MIGRATE_FIRST =
-  "the service reads values from legacy files that this manifest stops reading, and the store lacks them: the owner runs `sitesolide secrets migrate --restart` over SSH (or Merge into the store in the dashboard), then deploy again, or keep the old form of `secrets` in sitesolide.json until then; never set those values yourself, and never read or print them";
+  "the service reads values from legacy files that this manifest stops reading, and the store lacks them: the owner runs `sitesolide secrets migrate --restart` over SSH (or Merge into the store in the dashboard), then deploy again, or keep those files under `secrets` in sitesolide.json, the old form, until then; never set those values yourself, and never read or print them";
 
 /** A deployment that could not list the store, which it reads to know what it would drop. */
 const STORE_UNLISTED =
@@ -164,7 +164,8 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^the build secrets file does not read: /, BUILD_SECRETS_UNREADABLE],
   [/^migrate first: /, MIGRATE_FIRST],
   [/ is being deployed by .*: wait for its deployment to end/, "a token's deployment of this name is under way, and nothing was sent: wait for it to end, then run `sitesolide deploy` again once; never retry in a loop, and never take the name back with --adopt unless the owner asked for it"],
-  [/, and the server does not carry it yet: sitesolide deploy --adopt takes the name back/, "a token holds this name, and nothing was sent: pick another slug in sitesolide.json, or ask the owner, who alone decides to take the name back with `sitesolide deploy --adopt`; never add --adopt on your own, it drops the token's hold"],
+  [/^the tokens' claims on .* do not read on the server/, "the steward's record of the names tokens hold does not read, and nothing was sent: tell the owner of the machine, who restores the file the message names from the steward's backups and never deletes it; only the owner decides to deploy all the same with `sitesolide deploy --adopt`"],
+  [/ is held by .*: sitesolide deploy --adopt takes the name back/, "a token holds this name, and nothing was sent: pick another slug in sitesolide.json, or ask the owner, who alone decides to take the name back with `sitesolide deploy --adopt`; never add --adopt on your own, it drops the token's hold"],
   [/ could not be taken back from /, "the name stays the token's, and nothing was sent: busy means its deployment runs, or the project is on the machine now, so wait and run `sitesolide deploy` again once; otherwise tell the owner of the machine, with the message"],
   [/^the store of secrets cannot be laid: /, STORE_REFUSED],
   [/store of secrets cannot be laid, which its units load/, STORE_REFUSED],

@@ -1019,9 +1019,46 @@ describe("deploy and the store of secrets", () => {
       expect(list.find((event) => event.type === "warning" && String(event.message).startsWith("/etc/sitesolide/sample-secret.env"))).toMatchObject({
         message: "/etc/sitesolide/sample-secret.env is missing: the service starts without its variables",
       });
-      // Past it: the service restarted. A legacy-form project declares no name the store is read for.
+      // Past it: the service restarted. The store is read for what deploying would drop, and nothing asked of it.
       expect(vm.logs().some((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart sample-secret"))).toBe(true);
-      expect(vm.logs().filter((line) => line.startsWith("STORE GET"))).toEqual([]);
+      expect(vm.logs().filter((line) => line.startsWith("STORE ") && !line.startsWith("STORE-PREPARE"))).toEqual(["STORE GET sample-secret"]);
+    } finally {
+      vm.cleanup();
+    }
+  }, 30_000);
+
+  test("the old form that stops declaring a file the units read, whose values the store lacks: refused before anything is pushed; a steward before the store warns", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      // The units read sample-secret.env and sample-secret-smtp.env; the manifest declares the first alone.
+      const legacy = {
+        "sample-secret": [
+          { name: "sample-secret.env", variables: ["API_KEY"], read: true },
+          { name: "sample-secret-smtp.env", variables: ["SMTP_URL"], read: true },
+        ],
+      };
+      vm.setStore({ legacy });
+      for (const asked of [["deploy", "--json"], ["deploy", "--dry-run", "--json"]]) {
+        const r = await run("projects/api-with-secret", asked, { vm });
+        expect(r.code).toBe(1);
+        expect(jsonEvents(r.output).at(-1)).toMatchObject({
+          type: "error",
+          message: "migrate first: sitesolide secrets migrate --restart; the service reads SMTP_URL from legacy files this manifest no longer reads, and the store lacks it",
+          details: expect.arrayContaining(["SMTP_URL: in sample-secret-smtp.env", "or keep sample-secret-smtp.env under secrets in sitesolide.json", "nothing was sent"]),
+          hint: expect.stringContaining("sitesolide secrets migrate --restart"),
+        });
+      }
+      expect(vm.logs().filter((line) => line.startsWith("ACCEPTED") || line.startsWith("STORE-PREPARE") || line.includes("rsync") || line.startsWith("LOCK"))).toEqual([]);
+      // Migrated, the store holds SMTP_URL: the deployment goes.
+      vm.setStore({ legacy, variables: { "sample-secret": ["SMTP_URL"] } });
+      const migrated = await run("projects/api-with-secret", ["deploy", "--dry-run", "--json"], { vm });
+      expect(migrated.code).toBe(0);
+      // A steward from before the store cannot tell: the old form deploys as it did, warned.
+      vm.setStore({ state: "old" });
+      const old = await run("projects/api-with-secret", ["deploy", "--dry-run", "--json"], { vm });
+      expect(old.code).toBe(0);
+      expect(jsonEvents(old.output)).toContainEqual(expect.objectContaining({ type: "warning", message: expect.stringContaining("cannot tell whether this deployment would drop values legacy files supply") }));
     } finally {
       vm.cleanup();
     }
@@ -1233,14 +1270,48 @@ describe("deploy and a name a token holds", () => {
     }
   });
 
-  test("a project the machine carries is the owner's already: no claim is asked", async () => {
+  test("claims that do not read stop the deployment unless --adopt, saying to restore the file, never to delete it", async () => {
     const vm = createFakeVm();
     try {
-      vm.setClaims({ state: "current", claims: { "sample-store": HELD } });
+      vm.acceptWrites();
+      vm.setClaims({ state: "unreadable", claims: {} });
+      const r = await run("projects/store-app", ["deploy", "--json"], { vm });
+      expect(r.code).toBe(1);
+      expect(jsonEvents(r.output).at(-1)).toMatchObject({
+        type: "error",
+        message: expect.stringContaining("the tokens' claims on sample-store do not read on the server: "),
+        details: expect.arrayContaining([expect.stringContaining("from the steward's backups, never delete it"), "nothing was sent"]),
+        hint: expect.stringContaining("never deletes it"),
+      });
+      expect(written(vm.logs())).toEqual([]);
+      // --adopt deploys all the same, warned, and takes nothing back: nothing can be while they do not read.
+      const adopted = await run("projects/store-app", ["deploy", "--dry-run", "--adopt", "--json"], { vm });
+      expect(adopted.code).toBe(0);
+      expect(jsonEvents(adopted.output)).toContainEqual(expect.objectContaining({ type: "warning", message: expect.stringContaining("the tokens' claims on sample-store do not read on the server") }));
+      expect(vm.logs().filter((line) => line.startsWith("CLAIM DELETE"))).toEqual([]);
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("a project the machine carries is asked about too: a token that holds it stops the deployment, a deployment of its under way first", async () => {
+    const vm = createFakeVm();
+    try {
       vm.writeManifest("sample-store", readFileSync(join(TESTS_ROOT, "projects", "store-app", "sitesolide.json"), "utf8"));
-      const r = await run("projects/store-app", ["deploy", "--dry-run"], { vm });
+      const r = await run("projects/store-app", ["deploy", "--dry-run", "--json"], { vm });
       expect(r.code).toBe(0);
-      expect(vm.logs().filter((line) => line.startsWith("CLAIM"))).toEqual([]);
+      expect(vm.logs()).toContain("CLAIM GET sample-store");
+      vm.setClaims({ state: "current", claims: { "sample-store": HELD } });
+      const held = await run("projects/store-app", ["deploy", "--dry-run", "--json"], { vm });
+      expect(held.code).toBe(1);
+      expect(jsonEvents(held.output).at(-1)).toMatchObject({
+        type: "error",
+        message: "sample-store is held by token ci (tok_ci, dev@acme.test): sitesolide deploy --adopt takes the name back",
+        details: expect.arrayContaining([expect.stringContaining("the server carries the project, and that token may still deploy it")]),
+      });
+      vm.setClaims({ state: "current", claims: { "sample-store": { ...HELD, deploying: true } } });
+      const deploying = await run("projects/store-app", ["deploy", "--dry-run", "--adopt", "--json"], { vm });
+      expect(jsonEvents(deploying.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("is being deployed by token ci") });
     } finally {
       vm.cleanup();
     }

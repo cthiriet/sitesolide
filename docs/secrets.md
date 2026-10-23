@@ -137,7 +137,7 @@ What still stops a deployment, and why:
 | a build secret missing | before anything is read on the machine or sent | the remedy is on your workstation, and nothing is half done |
 | a workstation secrets file that does not parse | the same | a guess would build with a wrong value |
 | a legacy file that is the machine's, another project's, or owned by another account | before anything is pushed | root reads whatever a unit names |
-| a manifest that names its variables, or none, while the installed units read legacy files holding values the store lacks (`migrate-first`) | the same | its units would read the store alone, and drop those values |
+| a manifest whose units would stop reading a legacy file the installed units read, holding values the store lacks (`migrate-first`): one that names its variables, or none, or one in the old form that no longer declares that file | the same | the service would start without those values |
 | over SSH, a name a token holds that the machine does not carry yet, without `--adopt` | before the prompts | your values would sit in a store, and your project under a name, that token may deploy code to ([commands.md](commands.md)) |
 | the store's folder is a link, not a folder, or not root's | before the units and the code | systemd would read through it |
 | the store's folders cannot be laid | the same | without `files/`, every start of the project fails |

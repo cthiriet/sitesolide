@@ -53,7 +53,7 @@ type Received = { method: string; path: string; authorization: string | null; bo
 const received: Received[] = [];
 let scenario: "succeeds" | "fails" | "refuses" = "succeeds";
 /** The store routes: as this release answers them, from a dashboard before them, a refusal quoting what was sent, a token that may not list, or a listing that breaks. */
-let storeScenario: "answers" | "unmigrated" | "old" | "quotes" | "out-of-scope" | "not-found" | "broken" = "answers";
+let storeScenario: "answers" | "unmigrated" | "old" | "quotes" | "out-of-scope" | "not-found" | "broken" | "spent" = "answers";
 /** What a restart's observation concludes. */
 let restartVerdict: "active" | "failure" = "active";
 /** What the finished deployment says the store lacked, and the placeholders it hands the build; undefined for a dashboard before them. */
@@ -151,6 +151,7 @@ beforeAll(() => {
       if (storeRoute && storeScenario === "old") return Response.json({ error: "not-found", message: "no such route: see docs/access.md" }, { status: 404 });
       if (url.pathname === "/api/v1/projects/shop/store" && req.method === "GET") {
         if (storeScenario === "out-of-scope") return Response.json({ error: "out-of-scope", message: "this token may not manage secrets" }, { status: 403 });
+        if (storeScenario === "spent") return Response.json({ error: "too-many-attempts", message: "too many refused requests this hour", wait: 1200 }, { status: 429 });
         if (storeScenario === "not-found") return Response.json({ error: "not-found", message: "shop is not deployed" }, { status: 404 });
         if (storeScenario === "broken") return Response.json({ error: "failure", message: "the store of shop does not read" }, { status: 500 });
         return Response.json({ store: storeScenario === "unmigrated" ? UNMIGRATED : STORE });
@@ -803,15 +804,20 @@ describe("deploy through the API: the secrets", () => {
     storeScenario = "answers";
   });
 
-  test("a store this token may not list: the machine judges what the deployment would drop, and it goes on", async () => {
+  test("a store this token may not list, or not again this hour: the machine judges what the deployment would drop, and it goes on", async () => {
     scenario = "succeeds";
-    storeScenario = "out-of-scope";
-    for (const manifest of [{ ...APP, secrets: ["API_KEY"] }, APP]) {
-      received.length = 0;
-      const r = await cli(project(manifest, APP_FILES), ["deploy"], env());
-      expect(r.code).toBe(0);
-      expect(r.all.includes("this token may not list the store: the machine judges what this deployment would drop")).toBe("secrets" in manifest);
-      expect(received.some((entry) => entry.method === "POST" && entry.path === "/api/v1/deployments")).toBe(true);
+    for (const [state, said] of [
+      ["out-of-scope", "this token may not list the store: the machine judges what this deployment would drop"],
+      ["spent", "the store cannot be listed again this hour: the machine judges what this deployment would drop"],
+    ] as const) {
+      storeScenario = state;
+      for (const manifest of [{ ...APP, secrets: ["API_KEY"] }, APP]) {
+        received.length = 0;
+        const r = await cli(project(manifest, APP_FILES), ["deploy"], env());
+        expect({ state, code: r.code }).toEqual({ state, code: 0 });
+        expect(r.all.includes(said)).toBe("secrets" in manifest);
+        expect(received.some((entry) => entry.method === "POST" && entry.path === "/api/v1/deployments")).toBe(true);
+      }
     }
     storeScenario = "answers";
   });

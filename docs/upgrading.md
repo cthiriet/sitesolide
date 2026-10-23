@@ -154,7 +154,9 @@ the processes of other accounts. A unit 0.7 or an earlier release wrote is
 the generator's own and is replaced without `--force`, and so is one the
 generator made from the manifest the previous deployment left on the
 machine: a changed manifest, the old form of `secrets` turned into names
-included, replaces it. One edited by hand stays as it is, and says so. The store being empty, the service starts with
+included, replaces it. One edited by hand stays as it is, and says so,
+even one that only names a legacy file again or in another order, which
+decides the value that wins. The store being empty, the service starts with
 the environment it had. The dashboard's and the portal's units do not change:
 their password hashes stay in their own files, and they have no store.
 
@@ -206,11 +208,18 @@ legacy file without a dot, and that nothing is already named `projects`.
   and `$(...)` is a value taken as it is, never run. A legacy manifest's files
   are loaded as before.
 - **A name a token holds stops your deploy.** A token's deployment accepted,
-  or its write that made a project's store ahead of one, holds the name
-  until the machine carries the project: `sitesolide deploy` over SSH stops
-  on such a name, naming the token, before it asks for any value, and
-  `sitesolide deploy --adopt` takes the name back, then deploys. A steward
-  from before claims holds none.
+  or its write that made a project's store ahead of one, holds the name,
+  and so does a creation that made the token Admin of a project the machine
+  carries: `sitesolide deploy` over SSH stops on such a name, naming the
+  token, before it asks for any value, and `sitesolide deploy --adopt` takes
+  the name back, then deploys. A deployment of the token's under way is
+  waited for. A steward from before claims holds none; claims that do not
+  read stop it unless `--adopt`, and are restored from the steward's
+  backups, never deleted.
+- **The old form drops nothing silently either.** A manifest in the old
+  form that stops declaring a legacy file the units read, whose values the
+  store lacks, is refused before anything is sent, `migrate first`, as one
+  that names its variables is.
 
 **Whoever works with a token installs the new CLI.** A CLI from before 0.8
 refuses a manifest that lists names before anything is pushed, and the old

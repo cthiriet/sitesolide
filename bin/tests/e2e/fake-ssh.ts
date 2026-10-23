@@ -147,12 +147,16 @@ export const DEFAULT_STORE: StoreState = { state: "current", variables: {}, file
 /**
  * The names tokens hold, or claim, while the machine does not carry their
  * project, as the steward's owner socket answers for them: this release's
- * routes, a steward from before claims (`old`, a 404 `no such route`), or no
- * owner socket at all (`down`, curl's 7). Absent, the steward is the store's,
- * holding no claim.
+ * routes, a steward from before claims (`old`, a 404 `no such route`), no
+ * owner socket at all (`down`, curl's 7), or one whose claims.json does not
+ * read (`unreadable`, its 500). Absent, the steward is the store's, holding
+ * no claim.
  */
+/** What the steward says of claims that do not read, as dashboard/src/control/steward.ts words it. */
+export const CLAIMS_UNREADABLE = "the tokens' claims on names cannot be read on the machine: the owner must check /var/lib/sitesolide-steward/claims.json";
+
 export type ClaimsState = {
-  state: "current" | "old" | "down";
+  state: "current" | "old" | "down" | "unreadable";
   claims: Record<string, { token: { id: string; label: string; email: string }; store: boolean; deploying: boolean }>;
 };
 
@@ -785,7 +789,8 @@ if (import.meta.main) {
   if (claimOf !== undefined && command === ownerReadCommand(`/tokens/claim?slug=${claimOf}`)) {
     record(`CLAIM GET ${claimOf}`);
     const current = claims();
-    answerOwner(current.state);
+    if (current.state === "unreadable") refusal(500, "failure", CLAIMS_UNREADABLE);
+    else answerOwner(current.state);
     const held = current.claims[claimOf];
     answer(200, held === undefined ? { slug: claimOf, claimed: false, token: null, store: false, deploying: false } : { slug: claimOf, claimed: true, ...held });
   }
@@ -794,7 +799,8 @@ if (import.meta.main) {
     const { slug } = JSON.parse(await Bun.stdin.text()) as { slug: string };
     record(`CLAIM DELETE ${slug}`);
     const current = claims();
-    answerOwner(current.state);
+    if (current.state === "unreadable") refusal(500, "failure", CLAIMS_UNREADABLE);
+    else answerOwner(current.state);
     const held = current.claims[slug];
     if (held?.deploying === true) refusal(409, "busy", `${held.token.id}'s deployment of ${slug} is under way: wait for it to end`);
     delete current.claims[slug];

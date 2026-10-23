@@ -1001,39 +1001,50 @@ async function buildSecretsFor(project: Project, config: Config, executor: Execu
 
 /**
  * The store, read over the owner's socket before the build and the Caddy
- * lock, for an app whose manifest names its variables, or none.
+ * lock, for every app but the dashboard and the portal.
  *
- * First, what deploying would drop: such a manifest makes units that read
- * the store alone, so a value a legacy file the installed units read holds,
- * and the store lacks, would be gone at the next start. That stops the
- * deployment before anything is sent, saying to migrate first, and so does
- * a listing that fails: what would be dropped cannot be told. A read, hence
- * in a dry run too.
+ * First, what deploying would drop: a value a legacy file the installed
+ * units read holds, that the new units no longer read, and that the store
+ * lacks, would be gone at the next start. A manifest that names its
+ * variables, or none, makes units that read the store alone; one in the old
+ * form, units that read the files it declares, so a file it stopped
+ * declaring is dropped too. That stops the deployment before anything is
+ * sent, saying to migrate first, and so does a listing that fails: what
+ * would be dropped cannot be told. In the old form, a steward from before
+ * the store is warned of instead, as before it. A read, hence in a dry run
+ * too.
  *
- * Then the declared runtime secrets the store lacks. At a terminal, each is
- * asked for: set, typed without echo, generated on the server, or left
- * unset; otherwise one warning names them, with the commands. A missing
- * secret never stops a deployment: an app that cannot live without one stops
- * at start, which the stability check reports. Not in a dry run, which asks
- * the machine nothing it would write. A steward that cannot say is a warning.
+ * Then, for a manifest that names them, the declared runtime secrets the
+ * store lacks. At a terminal, each is asked for: set, typed without echo,
+ * generated on the server, or left unset; otherwise one warning names them,
+ * with the commands. A missing secret never stops a deployment: an app that
+ * cannot live without one stops at start, which the stability check
+ * reports. Not in a dry run, which asks the machine nothing it would write.
  */
 async function runtimeSecrets(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
   if (!hasStore(manifest)) return;
   const declaration = secretsOf(manifest);
-  // The old form keeps reading its files, and declares no name of the store's.
-  if (declaration.form === "legacy") return;
-  const declares = declaration.runtime.length > 0 || declaration.files.length > 0;
+  // The old form keeps reading the files it declares, and declares no name of the store's.
+  const legacyForm = declaration.form === "legacy";
+  const declares = !legacyForm && (declaration.runtime.length > 0 || declaration.files.length > 0);
   if (declares) step("runtime secrets");
   const transport = ownerStore(config, executor);
   const listed = await transport.list(manifest.slug);
   if (!listed.ok) {
-    die(`cannot tell whether this deployment would drop values legacy files supply: ${listed.failure.message}`, [
+    const said = `cannot tell whether this deployment would drop values legacy files supply: ${listed.failure.message}`;
+    if (legacyForm && listed.failure.error === "steward-outdated") {
+      warn(said, [...(listed.failure.details ?? []), "a legacy file the units read and this manifest no longer declares would be dropped: check secrets in sitesolide.json"]);
+      return;
+    }
+    die(said, [
       ...(listed.failure.details ?? []),
-      "a manifest that names its variables, or none, makes units that read the store alone: the store is read first, to stop a deployment that would drop a value",
+      legacyForm
+        ? "the units of the old form read the legacy files the manifest declares: the store is read first, to stop a deployment that would drop a file the units read today"
+        : "a manifest that names its variables, or none, makes units that read the store alone: the store is read first, to stop a deployment that would drop a value",
       "nothing was sent",
     ]);
   }
-  const loss = legacyLossRefusal(listed.value, "nothing was sent");
+  const loss = legacyLossRefusal(listed.value, "nothing was sent", declaration);
   if (loss !== null) die(loss.message, loss.details);
   if (!declares) return;
   if (executor.simulated) {
@@ -1054,39 +1065,66 @@ async function runtimeSecrets(manifest: Manifest, config: Config, executor: Exec
 }
 
 /**
- * A name a token holds or claims while the machine does not carry its
- * project: its deployment was accepted, or its write made the project's
- * store. Deploying it over SSH would lay the owner's project, and the values
- * the owner sets in its store, under a name the token may then deploy code
- * to, so it stops, naming the token, unless the owner takes the name back
- * with `--adopt`. A deployment of the token's under way is waited for. A
- * steward from before claims holds none; one that cannot say is warned of,
- * and the deployment goes on: the machine refuses a token while its claims
- * do not read. A read, hence in a dry run too; the taking back is not done
- * there.
+ * A name a token holds, asked of the steward on every deployment over SSH,
+ * before the prompts: a token's deployment of it accepted, or its write that
+ * made the project's store, and on a project the machine carries, the token
+ * a creation made it Admin's. Deploying over it would put the owner's
+ * project, and the values the owner sets in its store, under a name that
+ * token may deploy code to read.
+ *
+ * A deployment of it under way is waited for first, --adopt or not: what it
+ * lays would land over the owner's. Then a name a token holds stops, naming
+ * the token, unless the owner takes it back with `--adopt`, which drops the
+ * token's hold before anything is written. A read, hence in a dry run too;
+ * the taking back is not done there.
+ *
+ * A steward from before claims holds none, and one without an owner's
+ * socket is warned of. Claims that do not read stop it, unless --adopt:
+ * the file is restored from the steward's backups, never deleted, a claim
+ * dropped handing the name to whoever deploys it next.
  */
-async function settleClaim(slug: string, config: Config, executor: Executor, adopt: boolean): Promise<void> {
+async function settleClaim(slug: string, carried: boolean, config: Config, executor: Executor, adopt: boolean): Promise<void> {
   const run = (command: string, input?: string) => executor.execute(config, command, input);
   const read = await sshClaim(run, slug);
   if (!read.ok) {
-    warn(`cannot tell whether a token holds ${slug}: ${read.failure.message}`, read.failure.details ?? []);
+    const { error, message, details = [] } = read.failure;
+    if (error === "steward-outdated") {
+      warn(`cannot tell whether a token holds ${slug}: ${message}`, details);
+      return;
+    }
+    // The steward's 500, or an answer that does not read: its claims, or
+    // its registry of tokens, cannot be read.
+    const unreadable = error === "failure";
+    const said = unreadable ? `the tokens' claims on ${slug} do not read on the server: ${message}` : `cannot tell whether a token holds ${slug}: ${message}`;
+    const advice = unreadable ? ["restore the file the message names from the steward's backups, never delete it: a claim dropped hands a token's name, and the store it made, to whoever deploys it next"] : details;
+    if (!adopt) die(said, [...advice, "sitesolide deploy --adopt deploys all the same, over whatever a token holds there: the owner's decision", "nothing was sent"]);
+    warn(said, [...advice, "--adopt deploys all the same: no token's hold can be dropped while the claims do not read"]);
     return;
   }
   const claim = read.value;
-  if (!claim.claimed) return;
   const holder = claim.token === null ? "a token" : `token ${claim.token.label === "" ? claim.token.id : `${claim.token.label} (${claim.token.id}${claim.token.email === "" ? "" : `, ${claim.token.email}`})`}`;
+  // First, whether it is claimed or not: what that deployment lays would land over this one's.
   if (claim.deploying) {
     die(`${slug} is being deployed by ${holder}: wait for its deployment to end, then deploy again`, [
       "its name is the token's until then, and nothing was sent",
-      "once it ended, sitesolide deploy --adopt takes the name back if the project is not on the machine",
+      "once it ended, sitesolide deploy --adopt takes the name back from that token",
     ]);
   }
+  if (!claim.claimed) return;
   if (!adopt) {
-    die(`${slug} is held by ${holder}, and the server does not carry it yet: sitesolide deploy --adopt takes the name back`, [
-      claim.store ? "the token's write made the project's store, which holds what it set there" : "the token's deployment of it was accepted",
-      "deployed as it is, your project and the values you set in its store would sit under a name that token may deploy code to",
-      "--adopt drops the token's hold on the name, then deploys; nothing was sent",
-    ]);
+    const why = carried
+      ? "the server carries the project, and that token may still deploy it: your values in its store would reach the code it deploys"
+      : "deployed as it is, your project and the values you set in its store would sit under a name that token may deploy code to";
+    die(
+      carried
+        ? `${slug} is held by ${holder}: sitesolide deploy --adopt takes the name back`
+        : `${slug} is held by ${holder}, and the server does not carry it yet: sitesolide deploy --adopt takes the name back`,
+      [
+        claim.store ? "the token's write made the project's store, which holds what it set there" : "the token's deployment of it was accepted",
+        why,
+        "--adopt drops the token's hold on the name, then deploys; nothing was sent",
+      ],
+    );
   }
   if (executor.simulated) {
     say(`   [dry-run] take ${slug} back from ${holder}`);
@@ -1282,10 +1320,9 @@ async function deploy(
   const behindPortal = isProtected(manifest);
   if (behindPortal) await requirePortal(config, executor);
 
-  // A name a token holds, the machine not carrying its project: before the
-  // prompts, which would set values in a store the token may then deploy
-  // code to read. A project the machine carries is the owner's already.
-  if (!doorConfirmed) await settleClaim(slug, config, executor, adopt);
+  // A name a token holds, before the prompts, which would set values in a
+  // store the token may then deploy code to read.
+  await settleClaim(slug, doorConfirmed, config, executor, adopt);
   // What the store lacks, before the build and before the Caddy lock: a
   // person thinking at a prompt never holds the lock the gatekeeper and every
   // other deployment wait for.

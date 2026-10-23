@@ -650,14 +650,15 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
   // store alone: what legacy files the installed units read hold, and the
   // store lacks, would be dropped. Read first, and a stop before anything is
   // sent; then what the store lacks of the declared names. A listing this
-  // token may not make leaves the judgement to the machine, which refuses
-  // such a deployment itself (migrate-first); one that fails otherwise is a
-  // stop, what would be dropped not being told.
+  // token may not make, or may not make again this hour, leaves the
+  // judgement to the machine, which refuses such a deployment itself
+  // (migrate-first); one that fails otherwise is a stop, what would be
+  // dropped not being told.
   if (hasStore(manifest) && declaration.form !== "legacy") {
     if (declares) output.say("-> runtime secrets");
     const listed = await transport.list(slug);
     if (listed.ok) {
-      const loss = store.legacyLossRefusal(listed.value, "nothing was sent");
+      const loss = store.legacyLossRefusal(listed.value, "nothing was sent", declaration);
       if (loss !== null) return report(output, { error: "migrate-first", ...loss });
       if (declares) {
         missing = await store.handleMissing(store.withDeclared(listed.value, declaration), transport, io);
@@ -665,13 +666,16 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
       }
     } else if (listed.failure.error === "out-of-scope") {
       if (declares) output.say("   this token may not list the store: the machine judges what this deployment would drop, and its log names what is missing");
+    } else if (listed.failure.error === "too-many-attempts") {
+      // Not a refusal of the deployment: its own budget is the machine's to judge.
+      if (declares) output.say("   the store cannot be listed again this hour: the machine judges what this deployment would drop, and its log names what is missing");
     } else if (listed.failure.error === "not-found") {
       // A project not deployed yet whose store this token may not hold
       // ahead: nothing installed reads a legacy file, and what the store
       // lacks is asked for once the deployment made it.
       deferred = declares;
       if (declares) output.say("   not deployed yet: what its store lacks is said once the deployment is done");
-    } else if (["unauthenticated", "too-many-attempts", "unreachable"].includes(listed.failure.error)) {
+    } else if (["unauthenticated", "unreachable"].includes(listed.failure.error)) {
       // What would refuse the deployment itself, said as it stands.
       return report(output, listed.failure);
     } else {

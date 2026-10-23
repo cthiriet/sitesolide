@@ -1280,4 +1280,28 @@ describe("a unit the previous manifest generated is the generator's own", () => 
     // A unit equal to what the new manifest makes stays present, whatever came before.
     expect(decideUnit({ installed: generated, generated, replace: false, previous })).toBe("present");
   });
+
+  test("a hand edit that only repeats or reorders the files read stays: it decides which value wins", () => {
+    const previous = unitOf(LEGACY);
+    const generated = unitOf({ ...LEGACY, port: 3041 });
+    const files = previous.split("\n").filter((line) => line.startsWith("EnvironmentFile="));
+    expect(files.length).toBeGreaterThan(2);
+    const lines = previous.split("\n");
+    // The first file named again last, so that its values win over the second's.
+    const repeated = [...lines.slice(0, lines.lastIndexOf(files.at(-1)!) + 1), files[0]!, ...lines.slice(lines.lastIndexOf(files.at(-1)!) + 1)].join("\n");
+    // The two legacy files swapped.
+    const swapped = lines.map((line) => (line === files[0] ? files[1]! : line === files[1] ? files[0]! : line)).join("\n");
+    for (const installed of [repeated, swapped]) {
+      expect(installed).not.toBe(previous);
+      expect(decideUnit({ installed, generated, replace: false, previous })).toBe("diverged");
+      expect(decideUnit({ installed, generated, replace: true, previous })).toBe("install");
+      // As a release before the store wrote it, edited the same way: kept too.
+      expect(decideUnit({ installed: withoutStoreLines(installed), generated: previous, replace: false })).toBe("diverged");
+      // The same manifest: kept as it is, nothing replaced.
+      expect(decideUnit({ installed, generated: previous, replace: false })).toBe("present");
+    }
+    // Untouched, it is still the generator's own.
+    expect(decideUnit({ installed: previous, generated, replace: false, previous })).toBe("install");
+    expect(decideUnit({ installed: withoutStoreLines(previous), generated: previous, replace: false })).toBe("install");
+  });
 });

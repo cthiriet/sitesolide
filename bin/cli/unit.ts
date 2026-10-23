@@ -8,7 +8,7 @@
  *
  * Pure: returns text, touches nothing.
  */
-import { sameDirectives } from "./comparison";
+import { sameDirectives, usefulDirectives } from "./comparison";
 import { CONNECTORS_PORT, EGRESS_PROXY_PORT, egressUnitLines } from "./egress";
 import { CADDY_ADMIN_PORT } from "./loopback";
 import {
@@ -1029,8 +1029,30 @@ export type UnitAction = "install" | "present" | "diverged";
 export function decideUnit(state: UnitState): UnitAction {
   if (state.installed.trim() === "") return "install";
   if (sameDirectives(state.installed, state.generated)) return "present";
-  if (earlierGenerations(state.generated).some((earlier) => sameDirectives(state.installed, earlier))) return "install";
+  if (earlierGenerations(state.generated).some((earlier) => generatedAs(state.installed, earlier))) return "install";
   const previous = state.previous ?? null;
-  if (previous !== null && [previous, ...earlierGenerations(previous)].some((earlier) => sameDirectives(state.installed, earlier))) return "install";
+  if (previous !== null && [previous, ...earlierGenerations(previous)].some((earlier) => generatedAs(state.installed, earlier))) return "install";
   return state.replace ? "install" : "diverged";
+}
+
+/**
+ * Whether a unit in service is what the generator wrote as `earlier`, to be
+ * replaced without --force: the same directives, and its `EnvironmentFile=`
+ * lines in the same order and number. sameDirectives compares sets, which
+ * suits a unit kept as it is; one about to be replaced is held to more,
+ * since a hand edit that names a file again last, or reorders them, adds no
+ * line and still decides which value wins, systemd reading them in order.
+ * earlierGenerations only takes lines away, so the order it leaves is the
+ * one that release wrote.
+ */
+export function generatedAs(installed: string, earlier: string): boolean {
+  if (!sameDirectives(installed, earlier)) return false;
+  const read = environmentFiles(installed);
+  const written = environmentFiles(earlier);
+  return read.length === written.length && read.every((line, i) => line === written[i]);
+}
+
+/** A unit's `EnvironmentFile=` lines in the order systemd reads them, a repeat kept. */
+function environmentFiles(text: string): string[] {
+  return usefulDirectives(text).filter((line) => line.startsWith("EnvironmentFile="));
 }
