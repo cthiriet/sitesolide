@@ -70,10 +70,12 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
 - **Personal tokens instead of root SSH.** Colleagues and agents deploy with a
   personal, scoped, revocable token, never stronger than its holder's roles;
   only the owner holds SSH.
-- **Secrets on the server**, never in git, set from the dashboard, which restarts
-  the service in one click, or with a token that may manage secrets,
-  `sitesolide secrets set API_KEY`, the value typed at a prompt and never
-  read back.
+- **Secrets on the server**, never in git: `sitesolide.json` lists their
+  names, the server keeps each project's values in its own store, set from
+  the dashboard or with `sitesolide secrets set API_KEY`, typed at a prompt,
+  or drawn on the server with `sitesolide secrets generate`. Only the owner
+  reads a value back, in the dashboard; a deploy never stops on a missing
+  one, it asks for it or says so.
 - **Backups.** Every project's data snapshotted hourly into restic, SQLite
   copied consistently, restored from the dashboard, and copied encrypted to a
   bucket once you configure one.
@@ -106,7 +108,7 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
 - [The manifest](docs/manifest.md): every key of `sitesolide.json`
 - [Commands](docs/commands.md): everything the CLI does
 - [People and tokens](docs/access.md): roles on a project, and deploying with a token instead of SSH
-- [Secrets](docs/secrets.md): where they live, and why never in git
+- [Secrets](docs/secrets.md): what goes in `env`, in the server's store, in a file, or with whoever deploys, and why never in git
 - [Agents](docs/agents.md): `--json`, the MCP server and the skill
 - [Upgrading](docs/upgrading.md): from one release to the next on a running machine
 

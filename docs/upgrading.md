@@ -120,6 +120,104 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## Secrets: names in the manifest, values in a store per project
+
+**What the release brings.** `sitesolide.json` names a project's secrets,
+`"secrets": ["API_KEY"]`, and their values live in the project's store on
+the server, `/etc/sitesolide/projects/<slug>/`: variables every service and
+backup command receives at start, and files read whole at
+`$CREDENTIALS_DIRECTORY/files_<name>`. `secrets.build` names what the build
+takes from whoever deploys. A value is set from the dashboard, with
+`sitesolide secrets set NAME`, over SSH as the owner or with a token, or
+drawn on the server with `sitesolide secrets generate NAME`, and nobody but
+the owner, in the unlocked dashboard, ever reads one back. See
+[secrets.md](secrets.md).
+
+**What `sitesolide upgrade` brings**, in its usual order: the steward first,
+which keeps the stores, judges their routes and answers the owner's
+`sitesolide secrets` over SSH; then the dashboard, whose *Secrets* section
+lists each project's store, and the installer, which lays a project's store
+before its units and no longer stops a deployment on a missing secret; the
+backups, whose backup commands receive the store; the monitor, which words a
+unit that could not load its secret files. `sitesolide upgrade --dry-run`
+lists what differs. Nothing on the machine changes form: no file of
+`/etc/sitesolide` moves, and no project's store exists until its next
+deployment or its first value.
+
+**Every app's units change at its next deployment**, or at `sitesolide
+refresh <slug>`. Each service unit of an app gains four lines: the store's
+`env`, read after the legacy files the manifest names, so that the store wins
+on a shared name; `LoadCredential=` for its `files/` folder;
+`InaccessiblePaths=-/etc/sitesolide`, which hides the folder from the service
+whether or not it reads legacy files; and `ProtectProc=invisible`, which hides
+the processes of other accounts. A unit 0.7 or an earlier release wrote is
+the generator's own and is replaced without `--force`; one edited by hand
+stays as it is, and says so. The store being empty, the service starts with
+the environment it had. The dashboard's and the portal's units do not change:
+their password hashes stay in their own files, and they have no store.
+
+**Before upgrading, on the machine**, names only, never a content:
+
+```bash
+ssh you@your-machine 'sudo find /etc/sitesolide -mindepth 1 -maxdepth 2 | sort'
+```
+
+Check there that no service reads a file of `/etc/sitesolide` by its path,
+a `<slug>-secrets/` folder for instance: the folder becomes invisible to
+every service at its next deployment. Check also that no manifest declares a
+legacy file without a dot, and that nothing is already named `projects`.
+
+**What changes for you.**
+
+- **A missing secret no longer stops a deployment.** A missing legacy file is
+  a warning, and the service starts without its variables; a declared name
+  the store lacks is asked for at a terminal, and warned otherwise. A missing
+  build secret stops it, before anything is sent.
+- **The old form is still read, with a warning.** `"secrets": ["shop.env"]`
+  keeps loading `/etc/sitesolide/shop.env`, before the store. Move each
+  project when you choose, one at a time, as
+  [migration.md](migration.md#secrets-the-per-project-store) says: deploy it,
+  merge its files into its store, restart, retire the files, then list the
+  names in its manifest. Never `sitesolide refresh --all` for that: it goes on
+  past a project it refuses.
+- **An entry without a dot is now a variable name.** A legacy file named
+  without one, `"secrets": ["token"]`, would be read as the variable `TOKEN`'s
+  name: rename the file first, or migrate.
+- **The build gets a clean environment.** It inherits only what locates things
+  and the toolchains from yours, `PATH`, `HOME`, `LANG` and their kin; a
+  variable it read from your shell, a proxy or a registry's token, now goes
+  under `secrets.build`. `NODE_ENV` from your shell no longer reaches it, and
+  the manifest's project `env` now does.
+- **`env` refuses a value that starts like a provider's key**, `sk_live_...`,
+  whatever its name, and accepts a name with a framework's public prefix,
+  `NEXT_PUBLIC_STRIPE_KEY`, which it used to refuse.
+- **Only the owner reads a value back.** An Admin of a project no longer
+  reads one, in its store or in a legacy file: their dashboard shows every
+  value write-only.
+- **`sitesolide secrets` works over SSH**, as the owner, for every project
+  but the dashboard and the portal, and with a token it changes any name of
+  the project's store, no longer `<slug>.env` alone.
+- **`sitesolide run`**, for a project whose manifest lists names, reads
+  `~/.config/sitesolide/secrets/<slug>.env` with a strict parser and never a
+  shell: `export A=b` or a space around `=` stop it, with the line number,
+  and `$(...)` is a value taken as it is, never run. A legacy manifest's files
+  are loaded as before.
+
+**Whoever works with a token installs the new CLI.** A CLI from before 0.8
+refuses a manifest that lists names before anything is pushed, and the old
+token route answers a project kept in its store `this project keeps its
+variables in its store: update your sitesolide CLI, then sitesolide secrets
+set NAME`. The new CLI facing a steward not upgraded yet warns that it cannot
+tell which runtime secrets are set, and deploys.
+
+**Going back.** `sitesolide upgrade` with the previous binary. The values in
+the stores stay on the machine, unread by the previous steward and dashboard;
+a unit written by this release still reads its store until it is written
+again, which the previous CLI does only with `--force`, reading the new lines
+as edited by hand. A project whose manifest already lists names cannot be
+deployed by the previous CLI: put its legacy files back first, see
+[migration.md](migration.md#going-back-to-the-legacy-files).
+
 ## Machines from eight clouds, and any domain
 
 **What the release brings.** `sitesolide machine` orders the machine from

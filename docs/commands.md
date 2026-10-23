@@ -66,7 +66,15 @@ sitesolide domain               where this project's own domain stands
 sitesolide remove --confirm <slug>
                                 take the project off the machine, for good, its name freed from the token that created it
    --dry-run                    show every step, remove nothing
-sitesolide run -- <command>     load the secret from the vault and run
+sitesolide secrets              this project's secrets: names, sources, states, never a value
+   set <NAME> [--stdin]         set a variable, typed at a prompt that does not echo, or piped
+   generate <NAME>              a random value drawn on the server, never shown: --format, --bytes, --replace
+   remove <NAME>...             take variables out of the store
+   set-file <NAME> < path       a file read whole, at $CREDENTIALS_DIRECTORY/files_<NAME>
+   remove-file <NAME>           take a file out of the store
+   migrate [--dry-run]          merge the legacy files into the store; --retire deletes those it covers
+   --restart                    with a change: then restart the service, and say whether it holds
+sitesolide run -- <command>     the workstation's own credentials for this project, from the vault, then run
 sitesolide mcp                  serve these commands to an agent, over MCP on stdio
 sitesolide login --url <https://dashboard.zone>
                                 a person with a token: deploy, set secrets and restart without SSH
@@ -78,7 +86,7 @@ any command --api               go through the dashboard's API even with a serve
 SITESOLIDE_CONFIG_DIR=<dir>     before any command: read that installation's configuration
 
 --json, on every command but init and run: one JSON event per line, see docs/agents.md
-secrets live on the server: manage them in the Secrets section of https://dashboard.<zone>
+secrets live on the server, never in the repository: sitesolide secrets, or the Secrets section of https://dashboard.<zone>
 general access of a deployed site is set from the dashboard too: deploy follows the server
 ```
 
@@ -95,27 +103,41 @@ generates, without sending their code, see
 than `~/.config/sitesolide`, for a second installation driven from the same
 workstation.
 
-`sitesolide run` loads the files the manifest declares from
-`~/.config/sitesolide/secrets/`, the few credentials your workstation presents
-to production itself, then runs the command. See [secrets.md](secrets.md).
+`sitesolide run` reads `~/.config/sitesolide/secrets/<slug>.env` on your
+workstation, strictly, and runs the command with every variable it holds in
+its environment, never through a shell; a line it cannot read stops it, with
+its number and reason, never its content. A manifest in the old form, file
+names, has the files it declares loaded from that folder instead. See
+[secrets.md](secrets.md#what-your-workstation-keeps).
 
-`sitesolide deploy` reads the machine before anything is pushed, and refuses
-there what a cloned folder could reach through it: a secret file that is not
-the project's, `<slug>.env` and `<slug>-<name>` being its own, never the
-machine's, never one a more specific site deployed there holds, and when
-present a plain file of `site-<slug>`, whose owner it reads through `sudo`
-without opening it; a `publicDir` that is a link out of the repository
-holding the manifest, unless that manifest is in your sites repository; and a
-link among the public files that leads out of them, which Caddy would follow
-on the machine. Each refusal names the file or the link, and nothing was
-sent. See [manifest.md](manifest.md#secrets).
+`sitesolide deploy` resolves the build secrets first, `secrets.build`, from
+your environment, else from that same workstation file, and stops before
+anything is read on the machine when one is missing. It then reads the
+machine before anything is pushed, and refuses there what a cloned folder
+could reach through it: a legacy secret file that is not the project's,
+`<slug>.env` and `<slug>-<name>` being its own, never the machine's, never
+one a more specific site deployed there holds, and when present a plain file
+of `site-<slug>`, whose owner it reads through `sudo` without opening it; a
+`publicDir` that is a link out of the repository holding the manifest,
+unless that manifest is in your sites repository; and a link among the
+public files that leads out of them, which Caddy would follow on the machine.
+Each refusal names the file or the link, and nothing was sent. See
+[manifest.md](manifest.md#secrets).
 
-`sitesolide remove` deletes the secret files the folder's manifest declares
-only when they are the project's by that same rule, and prints the others,
-`kept:` and why: the manifest is whatever the folder holds now, and a clone's
-naming `dashboard.env` had root delete the dashboard's password. It reads the
-sites on the machine and the files' owners first, and an answer that does not
-read deletes nothing. Its name is free again for a token that may create
+A runtime secret the project's store lacks never stops it. Before the build,
+at a terminal, it asks for each missing name whether to set it, generate it on
+the server, or leave it unset; otherwise it warns, and `--json`'s result
+lists them under `missingSecrets`. It lays the store's folders on the machine
+before the units, on every deployment of an app. See
+[secrets.md](secrets.md#deploy-never-waits-on-a-runtime-secret).
+
+`sitesolide remove` deletes the project's store and its previous versions,
+after its units are stopped, and the legacy secret files the folder's
+manifest declares only when they are the project's by that same rule; it
+prints the others, `kept:` and why: the manifest is whatever the folder holds
+now, and a clone's naming `dashboard.env` had root delete the dashboard's
+password. It reads the sites on the machine and the files' owners first, and
+an answer that does not read deletes nothing. Its name is free again for a token that may create
 projects, once the machine keeps neither the removed project's backup
 snapshots nor its connector grants: until then a token creating it is refused
 `reserved`, and you deploy it over SSH, or clear what was left
@@ -224,6 +246,14 @@ what switches such a unit. A main unit edited by hand, in a project of
 several services, keeps all of them, as deploy refuses that case. No unit is
 ever removed, a service no longer declared included.
 
+Before any unit is written, the project's legacy secret files are checked as
+deploy checks them, a file that is not the project's refusing the project,
+and its store's folders are laid, as deploy lays them: every unit of an app
+loads `files/`, which must exist. `refresh <slug>` is also what lays that
+folder again when it was deleted by hand, which fails every start with
+243/CREDENTIALS. After the restart, the runtime secrets the store lacks are
+named, as a warning; nothing is asked.
+
 When a unit is to be written, the project takes the Caddy lock, the one
 deploy holds from its first deposit to the end of its restart, and reads its
 manifest and units again under it: a deployment or the dashboard that changed
@@ -244,7 +274,9 @@ its earlier unit and falls under the new one hit one of its protections: its
 journal, `sitesolide logs` in its folder, says which. The run ends with a
 summary: refreshed, already current, kept (edited by hand), refused, static.
 `--dry-run` reads the manifests and the units, and prints for each project the
-units it would write, with their text, and touches nothing.
+units it would write, with their text, and touches nothing. `--all` goes on
+past a project it refuses: never use it to move projects to the store, one at
+a time, see [migration.md](migration.md#secrets-the-per-project-store).
 
 With `--json`, the `result` carries `dryRun`, `all`, `projects` (each `slug`,
 `state`: `refreshed`, `outdated` in a dry run, `current`, `kept`, `refused` or
@@ -253,6 +285,91 @@ With `--json`, the `result` carries `dryRun`, `all`, `projects` (each `slug`,
 the site answered), and the slugs by state: `refreshed`, `outdated`,
 `current`, `kept`, `refused`, `static`. It is the owner's command, like
 `upgrade`: refused with a token (`needs-ssh`), and not an MCP tool.
+
+## Secrets
+
+A project's secrets are names in its `sitesolide.json` and values on the
+server, in the project's store; [secrets.md](secrets.md) says who may read
+each kind back. `sitesolide secrets`, in the project's folder, lists and
+changes them, over the owner's SSH or with a token minted with *Manage
+secrets*, the same commands and the same answers either way:
+
+```text
+sitesolide secrets                                   this folder's project's secrets: names, sources, states, never a value
+sitesolide secrets set <NAME> [--restart]            its value typed at a prompt that does not echo it
+sitesolide secrets set <NAME> --stdin                its value from standard input, one trailing line break dropped
+sitesolide secrets generate <NAME> [--restart]       a random value drawn on the server, never shown
+   --format hex|base64url --bytes <16-64> --replace
+sitesolide secrets remove <NAME>... [--restart]      take variables out of the store
+sitesolide secrets set-file <NAME> [--restart] < path   a file read whole, 64 KiB at most
+sitesolide secrets remove-file <NAME> [--restart]
+sitesolide secrets migrate [--dry-run] [--restart]   the owner's: merge the legacy files into the store
+sitesolide secrets migrate --retire                  the owner's: delete the legacy files the store covers
+```
+
+```console
+$ sitesolide secrets
+-> secrets of shop, over SSH, as the owner
+   ADMIN_TOKEN             set
+   STRIPE_SECRET_KEY       set, overrides shop-stripe.env
+   STRIPE_WEBHOOK_SECRET   missing: sitesolide secrets set STRIPE_WEBHOOK_SECRET
+   files, read at $CREDENTIALS_DIRECTORY/files_<name>: gcp.json set, tls.key missing (sitesolide secrets set-file tls.key < tls.key)
+   legacy: shop-stripe.env, read by the service, covered by the store: sitesolide secrets migrate --retire
+   build, kept by whoever deploys: CMS_TOKEN
+   restart pending: sitesolide secrets ... --restart, or the dashboard's Restart service
+   a value is never shown here
+```
+
+The listing names every variable the services find, where its value comes
+from, the store or a legacy file, the declared names that have none, the
+files with the path the service reads them at, the legacy files, and the
+build's names, which stay with whoever deploys. No command prints a value:
+over SSH, the owner's commands go to the steward through its root socket,
+whose routes return none. With `--json`, the listing's `result` carries
+`command`, `slug` and `store`, the store as the steward lists it; a change's
+carries `command`, `action`, `slug`, `created`, `set`, `generated`,
+`removed`, `absent`, `files` and `restart`.
+
+**The value never comes from the command line**, where the shell's history
+and the process list would keep it: `set` asks for it at a prompt that does
+not echo it, or reads all of standard input with `--stdin`, one trailing line
+break dropped. `--stdin` reads a pipe: when standard input is the terminal,
+where the value would show as it is typed, it is refused, and leaving it out
+gives the prompt. At the prompt, Backspace, Ctrl-U and Ctrl-W edit the value,
+Enter ends it and Ctrl-C abandons it; an arrow key, Tab or any other control
+key is refused, and so is a paste of several lines, whose rest is read and
+dropped rather than left for the shell to run. Under `--json` nothing
+prompts, so `set` needs `--stdin`. Over SSH, the value travels in the body
+the steward reads on standard input, never as an argument.
+
+What the machine would refuse is refused before a request leaves, and the
+refusal never quotes what was typed: `NAME=value`, or anything after the
+name; a name that looks like a value, over 64 characters or starting as a
+service's key does (`sk_`, `ghp_`, `xox`, `AKIA`, `sst_` and the like), with a
+reminder that the shell's history now holds it; a value on several lines,
+with a null byte, not valid Unicode, or over 8 KiB, which belongs in a file,
+`set-file`; a value with a Unicode noncharacter, U+FDD0 to U+FDEF or the last
+two code points of a plane, for which systemd would read none of the store's
+variables. An empty value is refused too: an unset variable piped by mistake
+would empty the secret in service; `remove` takes a name out.
+
+`generate` draws the value on the server, hex of 32 bytes by default, and
+never returns it: a key the project checks itself, a session secret, a
+database password before its first use, never a provider's key. A name
+already set is refused without `--replace`. `set-file` reads standard input
+as bytes, from a pipe or a redirect, never the terminal. `--restart` restarts
+the project's service once the change is written, and says whether it holds.
+
+`migrate` and `migrate --retire` are the owner's, over SSH: they merge a
+project's legacy files into its store without anyone seeing a value, then
+delete the files the store covers, and print names and files alone: merged,
+already there, overridden by the store, conflicts (`NAME: in a.env and b.env,
+with different values`), retired, kept and why. The steps are in
+[secrets.md](secrets.md#legacy-files-and-moving-to-the-store).
+
+The dashboard and the portal keep their password hashes in their own files,
+and have no store: for them, `sitesolide secrets` points to the dashboard's
+*Secrets* section.
 
 ## Access to a project
 
@@ -494,9 +611,11 @@ install can be run again without questions. See [setup.md](setup.md).
 
 `--json` prints one JSON event per line on standard output, nothing else, and
 ends with a `result` or an `error` carrying a `hint`. `sitesolide mcp` serves
-`detect`, `deploy`, `status`, `logs`, `share` (and `access`, its read alone)
-and `lock --status` as tools to an MCP client; `setup`, `upgrade` and
-`refresh`, which change the machine itself or every app on it, are not tools.
+`detect`, `deploy`, `status`, `logs`, `share` (and `access`, its read alone),
+`lock --status`, `secrets`, the listing, and `secrets_generate`, a value
+drawn on the server, as tools to an MCP client; no tool sets a value, which
+would come from the conversation. `setup`, `upgrade` and `refresh`, which
+change the machine itself or every app on it, are not tools.
 Both are described in [agents.md](agents.md).
 
 ## With a token
@@ -514,11 +633,16 @@ sitesolide logs [--follow]                        the journal of this folder's p
 sitesolide share                                  this folder's project's general access and people with access
    <email|@domain>...                             give them Can open: people inside the company's domains, or one of them
    --remove <email|@domain>...                    take their Can open away
-sitesolide secrets                                this folder's project's secret files and variable names, never a value
-sitesolide secrets set <NAME>                     set a variable of <slug>.env, typed at a prompt that does not echo it
+sitesolide secrets                                this folder's project's secrets: names, sources, states, never a value
+sitesolide secrets set <NAME>                     set a variable in the project's store, typed at a prompt that does not echo it
    --stdin                                        the value from standard input, one trailing line break dropped
-sitesolide secrets remove <NAME>...               take variables out of <slug>.env
-   --restart                                      with set or remove: then restart the service, and say whether it holds
+sitesolide secrets generate <NAME>                a random value drawn on the server, never shown
+   --format hex|base64url --bytes <16-64>         hex and 32 bytes by default
+   --replace                                      draw a new one over a value already set
+sitesolide secrets remove <NAME>...               take variables out of the store
+sitesolide secrets set-file <NAME> < path         a file read whole, 64 KiB at most, read at $CREDENTIALS_DIRECTORY/files_<NAME>
+sitesolide secrets remove-file <NAME>             take a file out of the store
+   --restart                                      with any change: then restart the service, and say whether it holds
 sitesolide restart                                restart this folder's project's service, and say whether it holds
 
 --json, on every one of them: one JSON event per line, see docs/agents.md
@@ -547,35 +671,15 @@ would have sent, and follows the machine's log until the end; it exits
 non-zero when the deployment fails. A manifest with a `start` and no `port`
 gets one chosen on the machine.
 
-`secrets` lists the secret files of the project in the folder, with their
-variable names and whether a restart is pending, and never a value: no route
-reads one back. `secrets set NAME` and `secrets remove NAME...` change
-`<slug>.env`, the one file a token changes, and only when the deployed
-`sitesolide.json` declares it; `set` creates the file when it is missing. All
-three, the listing included, need a token minted with *Manage secrets*.
-
-The value never comes from the command line, where the shell's history and
-the process list would keep it: `set` asks for it at a prompt that does not
-echo it, or reads all of standard input with `--stdin`, one trailing line
-break dropped. `--stdin` reads a pipe: when standard input is the terminal,
-where the value would show as it is typed, it is refused, and leaving it out
-gives the prompt. At the prompt, Backspace, Ctrl-U and Ctrl-W edit the value,
-Enter ends it and Ctrl-C abandons it; an arrow key, Tab or any other control
-key is refused, and so is a paste of several lines, whose rest is read and
-dropped rather than left for the shell to run. Under `--json` nothing
-prompts, so `set` needs `--stdin`.
-
-What the machine would refuse is refused before a request leaves, and the
-refusal never quotes what was typed: `NAME=value`, or anything after the
-name; a name that looks like a value, over 64 characters or starting as a
-service's key does (`sk_`, `ghp_`, `xox`, `AKIA`, `sst_` and the like), with a
-reminder that the shell's history now holds it (a variable really named so is
-set from the dashboard); a value on several lines, with a null byte, not valid
-Unicode, or over 8 KiB, which belongs in a file read whole, from the
-dashboard; a value with a Unicode noncharacter, U+FDD0 to U+FDEF or the last
-two code points of a plane, for which systemd would read none of the file's
-variables. An empty value is refused too: an unset variable piped by mistake
-would empty the secret in service; `remove` takes a variable out.
+`secrets` lists the project in the folder's secret names, where each value
+comes from, what is missing and whether a restart is pending, and never a
+value: no route reads one back. `set`, `generate` and `remove` change any
+name of the project's store, `set-file` and `remove-file` its files; the
+first write makes the store when it does not exist yet. All of them, the
+listing included, need a token minted with *Manage secrets*; `migrate` is the
+owner's, over SSH. They take the values exactly as over SSH, see
+[Secrets](#secrets): never on the command line, at a prompt that does not
+echo them or from a pipe with `--stdin`, which `--json` requires.
 
 When the connection drops once a change has left, the run says it may have
 been written, rather than that the dashboard is unreachable: `sitesolide
@@ -583,9 +687,9 @@ secrets` shows the names, and the same command run again makes the same
 change once more, harmlessly.
 
 ```bash
-sitesolide secrets                              # files and variable names
+sitesolide secrets                              # names, sources, what is missing
 sitesolide secrets set API_KEY                  # typed at the prompt, no echo
-openssl rand -hex 32 | sitesolide secrets set SESSION_SECRET --stdin --restart
+sitesolide secrets generate SESSION_SECRET --restart
 sitesolide secrets remove OLD_KEY LEGACY_URL
 sitesolide restart
 ```
@@ -593,9 +697,8 @@ sitesolide restart
 `--restart` restarts the service once the change is written. `restart`, which
 any token that deploys the project may run, restarts its service and watches
 it for eight seconds: it exits non-zero unless the service holds. Over the
-owner's SSH, both point to the dashboard instead: *Secrets* manages the files
-there, and *Restart service*, in a project's *Overview*, restarts it. See
-[access.md](access.md#secrets-with-a-token).
+owner's SSH, `restart` points to *Restart service*, in a project's
+*Overview*. See [access.md](access.md#secrets-with-a-token).
 
 Any other option is refused before a request leaves, `deploy --dry-run` first:
 a dry run reads the machine over the owner's SSH access, which a token does

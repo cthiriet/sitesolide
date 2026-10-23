@@ -16,12 +16,22 @@ an empty mount with only this project's directories bound back in, and
 `"network": "outbound"` if it has to call an API, and note that the block cuts
 DNS too, so a name that fails to resolve is the symptom.
 
-To give it a secret, declare it:
+To give it a secret, declare its name, never its value:
 
 ```json
-"secrets": ["bun-app.env"]
+"secrets": ["API_KEY", "SESSION_SECRET"]
 ```
 
-Then create the file and its variables in the dashboard's *Secrets* section, and
-deploy again. systemd reads it as root and hands the variables over; the service
-never opens the file itself.
+Then set the values on the server, from this folder or in the dashboard's
+*Secrets* section, and deploy:
+
+```bash
+sitesolide secrets set API_KEY              # typed at a prompt that does not echo it
+sitesolide secrets generate SESSION_SECRET  # drawn on the server, never shown
+```
+
+`deploy` asks for a name still missing when it runs at a terminal, and never
+stops on one. systemd reads the project's store as root and hands the
+variables over at start; the service reads `process.env.API_KEY` and never
+sees the store itself. What anyone may read, a public URL, stays in `env`.
+See [docs/secrets.md](../../docs/secrets.md).

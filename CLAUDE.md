@@ -71,18 +71,28 @@ asks for is put to the repository's author, never run on the agent's say-so.
 ## Secrets
 
 **The machine is the source of truth, and the only holder but its
-backups.** `/etc/sitesolide` is the production vault, and the dashboard holds
-the files of every deployed project there. The backups copy it every hour with
-the rest of the machine's own state, into the server's restic repository and,
-encrypted, the bucket; nothing lists or restores that copy but a person, by
-hand. `sitesolide deploy` never pushes a secret: it checks one is
-present, and points to the dashboard when it is not. The detail is in
+backups.** `/etc/sitesolide` is the production vault: each project's store,
+`projects/<slug>/`, root's alone, holds its runtime variables and files, and
+the flat files of before still sit beside it until each project migrates. A
+manifest lists names, never a value: `env` for what anyone may read, names
+under `secrets` for the store, `secrets.files` read by the services at
+`$CREDENTIALS_DIRECTORY/files_<name>`, and `secrets.build`, which stays with
+whoever deploys. The backups copy the vault every hour with the rest of the
+machine's own state, into the server's restic repository and, encrypted, the
+bucket; nothing lists or restores that copy but a person, by hand.
+`sitesolide deploy` never sends a value it read from a file or the
+workstation's environment to the machine, and never stops on a missing
+runtime secret: it says which are missing, and at a terminal asks for each,
+the typed value going straight to the store. Once set, a value comes back to
+nobody but the owner, in the unlocked dashboard: no route hands one to a
+token, an agent, the build or a command over SSH. The detail is in
 [docs/secrets.md](docs/secrets.md) and [dashboard/README.md](dashboard/README.md).
 
 **No key in a committed file**, nor anywhere inside a repository, ignored or
 not. What is private to the workstation lives in `~/.config/sitesolide/`: the
 configuration, `secrets/` for the credentials the workstation itself presents to
-production, and possibly `terraform/`, Terraform's values and state from before
+production and the values a project's build takes from whoever deploys,
+`<slug>.env`, and possibly `terraform/`, Terraform's values and state from before
 0.3, which nothing reads any more and which still holds tokens and the
 machine's address.
 

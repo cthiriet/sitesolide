@@ -14,8 +14,9 @@ does not keep the previous version of a project's code: see
 [what a deploy costs](#what-a-deploy-costs).
 
 **The server is the source of truth.** For a deployed project, its general
-access and its secrets are what the machine carries, not what the repository
-says. The CLI reads the machine, and refuses to contradict it.
+access and its secrets' values are what the machine carries, not what the
+repository says: the repository names a secret, the machine holds it. The
+CLI reads the machine, and refuses to contradict it.
 
 **Nothing in the repository names a machine.** The server, the zone and the
 contact address have no defaults at all: the CLI stops and points at
@@ -76,8 +77,14 @@ Each project gets a system account, a directory under `/srv/sites/<slug>` and a
 systemd unit that confines it. `/srv` is replaced by an empty mount and only
 that project's own directories are bound back in, so a compromised project
 cannot read another one's files even if Unix permissions would have allowed it.
-An app that declares no secret has `/etc/sitesolide` made inaccessible, which
-hides even the names of the files.
+Every app has `/etc/sitesolide` made inaccessible, the dashboard and the
+portal aside, which hides even the names of the files there: its service
+receives its secrets from systemd at start, the variables in its environment
+and the files as a private copy under `$CREDENTIALS_DIRECTORY`, and never
+opens the vault itself. It does not
+see the processes of other accounts either (`ProtectProc=invisible`). The
+services of one project share its account, and so its variables and files:
+they trust each other, and no secret is scoped to one of them.
 
 Its system calls are those of systemd's `@system-service` set, what a Bun,
 Node, Python or Go server needs: none that mounts, loads a kernel module,
@@ -105,11 +112,11 @@ more.
 | Component | Runs as | May |
 |---|---|---|
 | Caddy | `caddy` | serve, and ask the shared service whether a domain is allowed |
-| A project's service | `site-<slug>` | read its own directory, write its own data directory |
+| A project's service | `site-<slug>` | read its own directory, write its own data directory, receive its project's secrets from systemd at start |
 | The shared service (`api/`) | its own account | answer `ask` for on-demand TLS; its `src/locks.ts` decides the preview locks the gatekeeper writes |
 | The dashboard | `site-dashboard` | read a snapshot file, relay to the steward, ask the portal for sign-ins and its audit |
 | The portal | `site-portal` | answer Caddy's `forward_auth` from the projection the steward writes, sign people in with the identity provider or password access, sign the dashboard's identity assertions; keep no list of who may open a site |
-| The steward | root | write `/etc/sitesolide`, restart services, command the gatekeeper, keep the access registry and write its projection for the portal, judge what each person and each token does, ask the portal through its relay what it decides from |
+| The steward | root | write `/etc/sitesolide`, each project's store included, and read a value back to the owner alone, restart services, command the gatekeeper, keep the access registry and write its projection for the portal, judge what each person and each token does, ask the portal through its relay what it decides from |
 | The portal relay | root, no capability, on demand | forward the steward's connections to the portal's admin API, and to nothing else; the steward asks it `GET /admin/access` alone |
 | The gatekeeper | root, one-shot | change one project's general access: its manifest, its block, the preview locks; reload Caddy, probe, roll back |
 | The installer | root, one-shot | deploy one project for a token, the archive read by the project's own account |
@@ -118,7 +125,7 @@ more.
 | The egress proxy | `sitesolide-egress` | let each project reach the hosts its manifest lists, lend it the connectors granted to it |
 | The backup run | root, on a timer | list the projects, store the archives their own accounts hand it, prune, upload |
 | A backup copy or extraction | `site-<slug>`, one-shot | read or write that project's data, nothing else, no network |
-| A service's backup command | `site-<slug>`, one-shot | in its service's walls, with its secrets and the loopback alone, leave a consistent copy of the folder its server keeps live |
+| A service's backup command | `site-<slug>`, one-shot | in its service's walls, with its project's variables and files and the loopback alone, leave a consistent copy of the folder its server keeps live |
 | A restore | root, one-shot | swap one project's data folder, restart its services, put the data back if they fail |
 
 **The dashboard reads nothing itself.** Its unit replaces `/srv` with an empty
@@ -140,8 +147,9 @@ a site's general access, whoever asks.
 domain with access holds a role, each including the ones below it: *Can open*
 opens the site when its general access is restricted; *Viewer* also sees the
 project in the dashboard; *Developer* also deploys it, restarts it and writes
-its secrets without ever reading one back; *Admin* also reads its secrets,
-chooses its general access, gives and takes away access to it, a role at
+its secrets without ever reading one back; *Admin* also restores its
+secrets' previous version, without reading them back either, chooses its
+general access, gives and takes away access to it, a role at
 most their own, and restores its backups. The steward keeps them in one
 registry, `/var/lib/sitesolide-steward/access.json`, root's alone, judges
 every change by its rules, and writes after each one the projection the portal
@@ -165,9 +173,9 @@ dashboard acts only for the people whose sessions pass through it, within
 their roles, and raises nobody above Can open without an unlock. What a person
 sees, the dashboard filters from data it already holds.
 
-**A secret read, a site made public, opened with a code or given a new code, a
-restore, a role above Can open given, password access given, a token minted,
-each waits for the person's own unlock**: a forced sign-in at the provider, which the portal asks for
+**A secret written, a site made public, opened with a code or given a new
+code, a restore, a role above Can open given, password access given, a token
+minted, each waits for the person's own unlock**: a forced sign-in at the provider, which the portal asks for
 (`prompt=login`, `max_age=0`) and reads back in the provider's own ID token,
 and the steward checks again, for ten minutes and that person's session
 alone. The owner's unlock is the dashboard's password, retyped. Password
@@ -177,11 +185,13 @@ of the company's listed domains, restricting a site, and taking access away,
 never wait for either: closing someone out must not wait for a password. A
 whole domain waits while the company's domains are not listed, since anyone
 the provider vouches for would then come in.
-The steward never hands a Developer a value, whatever the dashboard relays.
+**Reading a secret back is the owner's alone**, in the dashboard, unlocked:
+the steward never hands a value to a person, Admin included, to a token, to
+the build or to a command over SSH, whatever the dashboard relays.
 **A token minted with *Manage secrets* writes without an unlock**, and that is
 the opt-in: minting it took its maker's unlock, and ticking the permission is
-the decision to let whoever holds the token set the variables of `<slug>.env`
-until it expires or is revoked. It never reads a value back, whoever made it,
+the decision to let whoever holds the token set, generate and remove any
+variable and file of its project's store until it expires or is revoked. It never reads a value back, whoever made it,
 and the steward bounds it per hour, 120 changes, 30 restarts and 60 refused
 requests, its refused changes of access among them, every change and every
 refusal within the bound journaled under the token. What a token lets in
@@ -198,7 +208,7 @@ that project's deployments at the next request, and someone who no longer
 signs in to the dashboard takes their tokens with them. A token gives Can open
 alone, to the company's people and domains, never password access. A
 Developer's token may also manage secrets, *Manage secrets* in the dialog: it
-lists variable names and sets and removes the variables of `<slug>.env`, on
+lists secret names and sets, generates and removes the project's secrets, on
 each project while they are Developer or Admin there, and any token that
 deploys a project restarts it. See
 [dashboard/README.md](../dashboard/README.md#a-persons-own-tokens) and
@@ -316,28 +326,54 @@ down certificate issuance for everyone at once.
 
 ## Secrets
 
-The machine is the source of truth. `/etc/sitesolide` holds the environment
-files, and they are read, placed and replaced from the dashboard's *Secrets*
-section, which also restarts the service.
+**A value lives where the people who may read it back are.** The manifest
+names every secret and never holds one:
 
-systemd reads a project's environment file as root, before dropping
-privileges, and hands the variables to the process. The file is `0600` and
-owned by `site-<slug>`, the account the project's service runs as: no other
-project's account reads it, and `deploy` and the installer tell a file that is
-the project's by that owner. See [secrets.md](secrets.md).
+| Who reads the value back | Where it lives | In `sitesolide.json` | Received by |
+|---|---|---|---|
+| anyone, it is in git | the manifest | `env`, the value itself | the build and every service |
+| nobody once set, but the owner in the unlocked dashboard | the project's store on the server | a name under `secrets` | every service and backup command of the project, at start |
+| the same | a file of the store | a name under `secrets.files` | every service and backup command, at `$CREDENTIALS_DIRECTORY/files_<name>` |
+| whoever deploys | their environment, else `~/.config/sitesolide/secrets/<slug>.env` on their workstation | a name under `secrets.build` | the build alone |
 
-`deploy` never pushes a secret. It checks that each file the manifest declares
-is the project's, `<slug>.env` or `<slug>-<name>`, never the machine's own nor
-another site's, and, when it is on the machine, that it belongs to
-`site-<slug>`: the unit reads every declared file as root, so a file declared
-is a file handed to whoever wrote the manifest. When one is missing, it stops
-and says where to create it in the dashboard. Where a file lands, whom it belongs to and under which mode
-follow from its name and its site. See [secrets.md](secrets.md).
+The machine is the source of truth for everything but the build's.
+`/etc/sitesolide/projects/<slug>/` is the project's store, root's alone,
+`0700`, its `env` file and every file of `files/` `0600`: no account but root
+reads it, so a store may exist before its project is first deployed, and a
+compromised project reads none of another's. systemd, as root, reads the
+store when a service starts: its variables after any file of before, so that
+the store wins, and its files through `LoadCredential=`, which hands the
+service a private copy owned by its account. A value reaches a service at
+its next start, never while it runs.
+
+Values are set from the dashboard's *Secrets* section, which also restarts
+the service, or with `sitesolide secrets`, over the owner's SSH or with a
+token minted with *Manage secrets*: typed at a prompt that does not echo
+them, or drawn on the server by `sitesolide secrets generate`, which nobody
+sees. Once set, a value comes back to nobody but the owner. See
+[secrets.md](secrets.md).
+
+`deploy` never sends a value it read from a file or from the workstation's
+environment to the machine, and **never stops on a missing runtime secret**:
+it says which are missing, and at a terminal asks for each, the typed value
+going straight to the store. What stops it is a build secret missing on the
+workstation, before anything is sent, and what would hand a project a file
+that is not its own.
+
+**The flat files of before** (`"secrets": ["<slug>.env"]`, each file under
+`/etc/sitesolide` owned by `site-<slug>`) still load, before the store, until
+the owner merges them into it and retires them, `sitesolide secrets
+migrate`. `deploy` and the installer still check that each such file is the
+project's, `<slug>.env` or `<slug>-<name>`, never the machine's own nor
+another site's, and that it belongs to `site-<slug>`: the unit reads every
+declared file as root, so a file declared is a file handed to whoever wrote
+the manifest. A store, whose folder carries the slug, never needs that check.
 
 Two guard rails do not bend. Any `PASSWORD_HASH`, in any file, changes only
 through *Change password*: the hash is never read back and never restored. And
 `dashboard.env` is owned by root, so the dashboard's own service cannot rewrite
-the hash that unlocks the secrets.
+the hash that unlocks the secrets. The dashboard and the portal have no store:
+their hashes stay in their own flat files.
 
 ## Backups
 
@@ -519,9 +555,11 @@ rotates by line count: a refusal stays in the journal.
 | `backup.restore` | steward | a person's email | slug | a restore refused by role before it reached the backups |
 | `member.invite`, `member.role`, `member.remove`, `member.signin`, `member.signin_failed`, `member.signout` | steward | as they were written | as they were written | written before the access registry only: the dashboard's people of then, their roles and sign-ins |
 | `secrets.unlock`, `secrets.lock` | steward | `owner`, or a person's email | none, or the person's email | changes unlocked, or the password or the forced sign-in refused, and locked again |
-| `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner`, a person's email, or `token:<id>` | slug | a variable read, set or removed, by its name; a person's refused by role, with that role; a token's set or removed through the API, the person in `member` for their own, its refusals with their reason, `no secrets permission` among them, 60 an hour at most |
-| `secrets.list` | steward | `token:<id>` | slug | a token's listing of a project's files and names refused, with its reason; a listing reads no value, and one that goes through is not journaled |
-| `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner`, a person's email, or `token:<id>` | slug | a secret file created, put back to its previous version, or replaced; a token only creates `<slug>.env` |
+| `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner`, a person's email, or `token:<id>` | slug | a variable read back, set or removed, by its name, or a file of the store removed; the place in `file`, a legacy file's name, `store` for the project's store, `store/<name>` for one of its files; a read is the owner's alone, a person's refused by role, with that role; a token's set or removed through the API, the person in `member` for their own, its refusals with their reason, `no secrets permission` among them, 60 an hour at most |
+| `secrets.generate` | steward | `owner`, a person's email, or `token:<id>` | slug | a value drawn on the server for a name, in `store`; never the value, nor its length |
+| `secrets.list` | steward | `token:<id>` | slug | a token's listing of a project's names refused, with its reason; a listing reads no value, and one that goes through is not journaled |
+| `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner`, a person's email, or `token:<id>` | slug | a secret file created, or a project's store made (`store`); a file or the store's variables put back to their previous version; a file read whole replaced, or a file of the store set (`store/<name>`) |
+| `secrets.migrate`, `secrets.retire` | steward | `owner` | slug | a project's legacy files merged into its store, how many names from which files in the detail; a legacy file the store covers deleted, its name in `file`, kept as its previous version; never a value |
 | `secrets.password` | steward | `owner` | slug | a password hash changed |
 | `access.general` | steward | `owner`, or an Admin's email | slug | a site's general access chosen, Public, Restricted or Anyone with the code, `off`, `on` or `code` in the detail; listed as `door.update` before, the rows themselves unchanged |
 | `access.code` | steward | `owner`, or an Admin's email | slug | a site that opens with a code given a new one; never the code, which no row holds |

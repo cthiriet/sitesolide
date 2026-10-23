@@ -47,8 +47,9 @@ In particular:
 - getting past the portal, a preview lock or a site's general access, or
   forging the identity headers a restricted site trusts;
 - a person, a token or a password access doing more than its role allows:
-  reading a secret as a Developer, giving a role above one's own, a token
-  reaching a project it was not granted;
+  reading a secret's value back as anyone but the owner in the unlocked
+  dashboard, an Admin, a token, an agent or the build included, giving a
+  role above one's own, a token reaching a project it was not granted;
 - a compromised component, the dashboard, the portal, a project, reaching
   further than its section of the threat model says;
 - a project reaching a host its manifest does not list, or a connector it
@@ -79,6 +80,11 @@ proving them:
   keeps a passing visitor out, not an adversary, see
   [api/src/locks.ts](api/src/locks.ts); use Restricted for anything that
   deserves authentication.
+- **The services of one project trust each other.** They run as the same
+  account and receive the same secrets, variables and files, and each can
+  read the other's environment and copy of the files through `/proc`: no
+  secret is scoped to one service. Between projects, those reads are
+  denied.
 - **A project can slow its neighbours.** Workers and scheduled services yield
   the processor to the sites, but a server has no CPU cap unless its manifest
   sets `cpu`.

@@ -132,9 +132,18 @@ A command run on your workstation before anything is sent. Typically
 It runs locally on purpose: the machine has no toolchain, no `node_modules` and
 no compiler, and does not need any.
 
-It runs with your environment, less every variable whose name starts with
-`SITESOLIDE_`: a token exported as `SITESOLIDE_TOKEN` or a DNS provider's
-credentials never reach the folder's code, over SSH as with a token.
+It runs with a clean environment, over SSH as with a token, never with your
+whole one: from your environment, only what locates things and the
+toolchains (`PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `LANG`, `TZ`, `TMPDIR`,
+`SSH_AUTH_SOCK`, `CI`, `BUN_INSTALL`, `NVM_DIR`, `GOPATH`, `CARGO_HOME`,
+`JAVA_HOME` and their kin, every `LC_*` and `XDG_*`); then the project's
+[`env`](#env), its placeholders replaced; then the names of
+[`secrets.build`](#secrets), taken from whoever deploys. Never a variable
+whose name starts with `SITESOLIDE_`: a token exported as `SITESOLIDE_TOKEN`
+or a DNS provider's credentials never reach the folder's code. `NODE_ENV`
+is not inherited either: the manifest sets it, and a workstation's
+`development` must not reach a production build. The full list, and where a
+build secret is read, is in [secrets.md](secrets.md#build-secrets).
 
 `deploy --dry-run` shows it and does not run it: it is the folder's own code, and
 a dry run is what an agent tries first on a folder it may have just cloned.
@@ -171,7 +180,9 @@ itself: a letter, a digit, `/`, `.` or `_` first. systemd reads a leading `+`,
 `!`, `@`, `-`, `:` or `|` as an instruction, `+` and `!` as "run as root", and
 these are refused, as a line break or a trailing backslash is. Quotes and
 `$PORT` keep their systemd meaning; a `%` is written as `%%`, so it reaches the
-program as it is.
+program as it is. A file of [`secrets.files`](#secrets) is named
+`${CREDENTIALS_DIRECTORY}/files_<name>` there, which systemd expands;
+`{credentials}` is refused, being no placeholder.
 
 **The site's root has to answer.** `deploy` ends by requesting
 `https://<slug>.<zone>/`, and only a 200 counts, or the 401 of a locked
@@ -463,15 +474,37 @@ consistently.
 
 ### `env`
 
-Environment variables for the service. Never a secret: this file is committed,
-and validation refuses names that announce one.
+Environment variables for every service and for the build: what anyone may
+read. Never a secret: this file is committed. A secret's name goes under
+[`secrets`](#secrets), its value on the server.
 
 ```json
-"env": { "NODE_ENV": "production", "PUBLIC_URL": "https://{slug}.{zone}" }
+"env": { "NODE_ENV": "production", "VITE_STRIPE_KEY": "pk_live_51Hx", "PUBLIC_URL": "https://{slug}.{zone}" }
 ```
 
 Three markers are replaced at deploy time: `{slug}`, `{zone}` and `{contact}`.
 They are what let a committed manifest avoid naming your machine.
+
+- **The build receives the project's `env`**, never a service's own, and
+  never a name starting with `SITESOLIDE_`, which reaches the services alone.
+  A static site may declare `env` once it has a `build`; without `start` nor
+  `build`, nothing reads it, and it is refused.
+- **A name that announces a secret is refused**, `*_KEY`, `*_SECRET`,
+  `*_TOKEN`, `*_PASSWORD`, `*_PASSWD`, `*_CREDENTIALS`, unless it starts with
+  a framework's public prefix, which the framework publishes to every visitor
+  anyway: `NEXT_PUBLIC_`, `NUXT_PUBLIC_`, `EXPO_PUBLIC_`, `REACT_APP_`,
+  `VITE_`, `PUBLIC_`, `GATSBY_`. `NEXT_PUBLIC_STRIPE_KEY` passes,
+  `STRIPE_KEY` does not. The platform imposes no prefix of its own.
+- **A value that starts like a provider's secret key is refused**, whatever
+  its name: `sk_`, `sk-proj-`, `sk-ant-`, `rk_`, `whsec_`, `ghp_`,
+  `github_pat_`, `glpat-`, `xox`, `AKIA`, `ASIA`, `npm_`, `SG.`, `hf_` and the
+  like. `pk_live` and `pk_test`, publishable by design, pass. This guards
+  against a slip; the boundary is that the server never returns a value.
+- **`{credentials}` is refused**: it is not a placeholder, nothing replaces
+  it. A service reads its files at `$CREDENTIALS_DIRECTORY/files_<name>`, see
+  [`secrets`](#secrets).
+- A name set in `env` may not be listed under `secrets` too: a name lives in
+  one place.
 
 A value is one word for systemd: no space, quote, backslash or line break.
 `Environment=` splits on spaces and unquotes, so `"x DATA_DIR=/elsewhere"`
@@ -619,28 +652,75 @@ deployment.
 
 ### `secrets`
 
-The environment files the service reads, from `/etc/sitesolide`.
+The names of the project's secrets, never their values, which live on the
+server. Who may read each kind back, and how a value is set, is in
+[secrets.md](secrets.md).
+
+The short form, a list of variable names, for an app:
 
 ```json
-"secrets": ["<slug>.env"]
+"secrets": ["ADMIN_TOKEN", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"]
 ```
 
-Plain file names, no path: letters, digits, `.`, `_` and `-`, starting with a
-letter or a digit. systemd reads them as root before dropping
-privileges, so the service receives the variables without ever being able to
-read the files. A project that declares none has the whole directory made
-inaccessible, which hides even the file names.
+The long form, when a file or a build secret is needed, each list optional:
 
+```json
+"secrets": {
+  "runtime": ["POSTGRES_PASSWORD"],
+  "files": ["gcp.json", "tls.key"],
+  "build": ["CMS_TOKEN"]
+}
+```
+
+- **`runtime`**, or the short form: variables every service and backup
+  command of the project receives at start, from the project's store,
+  `/etc/sitesolide/projects/<slug>/env`. Each a variable name, letters,
+  digits and `_`, not starting with a digit, 128 characters at most; listed
+  once; never a name systemd or the runtime reserves (`PATH`, `LD_*`,
+  `NODE_*`, `PORT`, `DATA_DIR`...), never `PASSWORD_HASH`, never a name `env`
+  sets, and, beside a backup command, never a `BACKUP_*`.
+- **`files`**: files read whole, each at `$CREDENTIALS_DIRECTORY/files_<name>`
+  in every service and backup command. A name is a letter or a digit, then
+  letters, digits, `.`, `_` and `-`, 64 characters at most, no `..`; 32 at
+  most.
+- **`build`**: variables the build alone receives, taken from whoever deploys:
+  their environment, else `~/.config/sitesolide/secrets/<slug>.env`. Never a
+  `SITESOLIDE_*` name, a name every build inherits already (`PATH`, `HOME`...),
+  or one `env` sets. Refused without `build`: nothing would read them.
+
+A static site, with neither `start` nor `services`, has no service to read a
+runtime secret: `runtime`, `files` and the short form are refused there, and
+`build` alone is accepted. A name the store lacks never stops a deployment:
+`deploy` asks for it at a terminal and warns otherwise, see
+[secrets.md](secrets.md#deploy-never-waits-on-a-runtime-secret). A missing
+build secret does, before anything is sent.
+
+`sitesolide detect` writes the names the code reads that look like secrets
+under `secrets`, never a value, and those of a static site's build under
+`secrets.build`.
+
+**The old form, file names.** A list whose every entry holds a dot names
+flat files of `/etc/sitesolide`, as before the store:
+
+```json
+"secrets": ["shop.env", "shop-stripe.env"]
+```
+
+It is still read, the files loaded before the store, and `deploy` warns that
+it is the old form. A list mixing file names and variable names is refused:
+migrate the files first, `sitesolide secrets migrate`, then list the names.
 **A project declares its own files alone**, since root reads whatever it
 declares: `<slug>.env` and `<slug>-<name>`, never the machine's own,
 `dashboard.env`, `dashboard-monitor.env`, `dashboard-backup.env`, nor one a
 more specific site deployed on the machine holds, `acme-crm.env` for `acme`
 when `acme-crm` is there; and a file already on the machine must be a plain
 file of `site-<slug>`. `deploy` refuses the others before anything is pushed,
-naming them. A token's project declares `<slug>.env` alone.
+naming them. An entry without a dot now reads as a variable name: no known
+manifest has one, and [upgrading.md](upgrading.md) says what to check.
 
-Their values live on the machine and are managed from the dashboard. The
-repository declares that a secret is expected, never what it contains.
+`dashboard` and `portal` keep `["dashboard.env"]` and `["portal.env"]` for
+good, with no warning: their password hashes stay in their own files, and the
+names form is refused for them.
 
 ### `domain`
 
@@ -781,8 +861,10 @@ the same `app/` and `public/` read-only and `data/` writable, the same working
 directory, `app/`, and its service's environment, `PORT`, `DATA_DIR`,
 `PUBLIC_DIR` and `env` with its placeholders replaced, plus `BACKUP_DIR`,
 which `env` may not set beside a backup command. Its secrets arrive as its
-service's do, read by systemd from `/etc/sitesolide`, the folder itself hidden
-from it. It reaches the loopback alone, whatever `network` says: enough to
+service's do, read by systemd as root: the legacy files, then the project's
+store, and its files at `${CREDENTIALS_DIRECTORY}/files_<name>`, the folder
+itself hidden from it. `CREDENTIALS_DIRECTORY` is expanded on its command
+line like any `$NAME`, and `{credentials}` is refused there, no placeholder. It reaches the loopback alone, whatever `network` says: enough to
 talk to its service on its port, which the machine's loopback rule lets a
 project's account do for its own ports and nobody else's; never the egress
 proxy's variables. It listens on none of the machine's ports, its service's
@@ -859,11 +941,13 @@ The manifest:
     "backup": { "folder": "postgres", "command": "/bin/sh /srv/sites/shop/app/postgres-backup.sh" }
   }
 },
-"secrets": ["shop.env"]
+"secrets": ["POSTGRES_PASSWORD"]
 ```
 
-`shop.env`, from the dashboard's *Secrets*, holds `POSTGRES_PASSWORD`. The
-web service reaches the database at `127.0.0.1:3081`.
+`POSTGRES_PASSWORD` is drawn on the server before the first start,
+`sitesolide secrets generate POSTGRES_PASSWORD`, and nobody needs to know it:
+both services read it from the project's store. The web service reaches the
+database at `127.0.0.1:3081`.
 
 `postgres.sh`, the service: the cluster in `data/postgres`, made at the first
 start, TCP on the loopback only, no unix socket and no shared memory segment,
