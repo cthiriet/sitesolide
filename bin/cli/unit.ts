@@ -13,11 +13,13 @@ import { CONNECTORS_PORT, EGRESS_PROXY_PORT, egressUnitLines } from "./egress";
 import { CADDY_ADMIN_PORT } from "./loopback";
 import {
   commandErrors,
+  hasStore,
   isAnchored,
   isValidCpu,
   isValidDescription,
   isValidEnvName,
   isValidEnvValue,
+  isValidFileName,
   isValidMemory,
   isValidSchedule,
   isValidSecretName,
@@ -25,6 +27,7 @@ import {
   isValidSlug,
   isValidTimeout,
   legacySecretFiles,
+  secretsOf,
   SERVICE_PORTS,
   servedContact,
   servedZone,
@@ -32,6 +35,7 @@ import {
   type Manifest,
   type ServiceView,
 } from "./manifest";
+import { SECRETS_FOLDER, STORE_ROOT, STORE_UNIT_LINES_AFTER, storeCredentials, storeEnvironmentFile } from "./store";
 
 export type ProjectPaths = {
   root: string;
@@ -152,6 +156,11 @@ function assertWritable(manifest: Manifest, service: ServiceView): void {
   }
   for (const secret of legacySecretFiles(manifest)) {
     if (!isValidSecretName(secret)) throw refused(`secrets ${JSON.stringify(secret)}`);
+  }
+  // No file's name goes into the unit, which loads the whole folder: still,
+  // a name systemd would skip or flatten is refused here as in validate().
+  for (const file of secretsOf(manifest).files) {
+    if (!isValidFileName(file)) throw refused(`secrets.files ${JSON.stringify(file)}`);
   }
 }
 
@@ -368,6 +377,28 @@ function renderTimer(manifest: Manifest, service: ServiceView, mainUnit: string)
   ].join("\n");
 }
 
+/** What 0.7 wrote above InaccessiblePaths in a unit reading no secret, and still writes for dashboard and portal. */
+const NO_SECRET_COMMENT: readonly string[] = [
+  "# No secret for this project: the whole folder is closed to it, which",
+  "# hides from it even the names of the files.",
+];
+
+/** What 0.7 wrote in place of InaccessiblePaths in a unit reading a flat file, and still writes for dashboard and portal. */
+const LEGACY_SECRET_COMMENT: readonly string[] = [
+  "# This project reads its own file in /etc/sitesolide: InaccessiblePaths",
+  "# is not laid here, or systemd could not hand the file to it.",
+];
+
+/** Above the lines every unit of a project with a store ends its walls with, STORE_UNIT_LINES_AFTER. */
+const STORE_UNIT_COMMENT: readonly string[] = [
+  "# Its secrets reach it from PID 1, read before the walls go up: the",
+  "# store's variables last, so that they win over a file named above, and",
+  "# its files, each a private copy at $CREDENTIALS_DIRECTORY/files_<name>.",
+  "# /etc/sitesolide is closed to it, the names of its files included. The",
+  "# processes of other accounts are hidden from it; those of the project's",
+  "# other services, which share its account, are not.",
+];
+
 function renderUnit(
   manifest: Manifest,
   service: ServiceView,
@@ -379,6 +410,7 @@ function renderUnit(
   const account = systemUser(slug);
   const paths = projectPaths(slug);
   const secrets = legacySecretFiles(manifest);
+  const store = hasStore(manifest);
   const isOutbound = manifest.network === "outbound";
   const description = escapeSpecifiers(manifest.description ?? `Project ${slug}`);
 
@@ -440,8 +472,8 @@ function renderUnit(
 
   // The variables declared by the project. They never carry a secret, this file
   // being versioned: validate() refuses the names that announce one. What does
-  // hide arrives through EnvironmentFile, from /etc/sitesolide, which the
-  // dashboard's Secrets section holds on the VM.
+  // hide arrives from /etc/sitesolide, read by PID 1, see below: the
+  // dashboard's Secrets section holds it on the VM.
   //
   // `{zone}` and `{slug}` are replaced there, so that a versioned manifest
   // never writes a machine's domain: a project declares
@@ -453,13 +485,33 @@ function renderUnit(
     lines.push(`Environment=${key}=${escapeSpecifiers(value)}`);
   }
 
-  // The secrets arrive through the environment, never through a file the
-  // service could read: systemd reads EnvironmentFile before entering the
-  // namespace. The dash lets the service start if the file is missing, and it
-  // is bin/sitesolide.ts that then refuses to restart, failing which the
-  // service would run without saying anything.
+  // The secrets are read by PID 1, as root, before the service enters its
+  // namespace, never by the service from a file: EnvironmentFile hands it
+  // variables, LoadCredential a private copy of each file, owned by its
+  // account, 0400, at $CREDENTIALS_DIRECTORY/files_<name> (measured on
+  // systemd 257, the store's bench, Q1 and Q3).
+  //
+  // The old form's flat files first, in the manifest's order, then the
+  // project's store, last: systemd lets a later EnvironmentFile win, so the
+  // store's value is the one in force on a name both hold, and the steward
+  // never lets a removal from the store bring a file's value back. The dash
+  // lets the service start without a file or a store not written yet: deploy
+  // warns of a missing variable, and an app that cannot do without it stops
+  // at its start, which the stability check reports.
+  //
+  // The files' folder has no optional form: missing, it fails every start of
+  // every service of the project with 243/CREDENTIALS (bench Q2). Every path
+  // that lays this unit lays the folder first, and only `sitesolide remove`,
+  // after stopping the units, takes it away (see ./store).
+  //
+  // The lines depend on the manifest alone, never on what the store holds:
+  // setting or removing a variable or a file never rewrites a unit. dashboard
+  // and portal keep their flat file, and the unit of 0.7, line for line.
   for (const secret of secrets) {
     lines.push(`EnvironmentFile=-${secretPath(secret)}`);
+  }
+  if (store) {
+    lines.push(`EnvironmentFile=${storeEnvironmentFile(slug)}`, `LoadCredential=${storeCredentials(slug)}`);
   }
 
   lines.push(
@@ -488,27 +540,25 @@ function renderUnit(
     "",
   );
 
-  if (secrets.length === 0) {
+  if (store) {
+    // Every project with a store, whether it reads old files or not:
+    // EnvironmentFile and LoadCredential are both delivered behind
+    // InaccessiblePaths, the service seeing /etc/sitesolide as a folder it
+    // can neither list nor read (bench Q3). ProtectProc hides the processes
+    // of other accounts; a project's services share one account and see
+    // each other, which the model accepts: they receive the same secrets
+    // (bench Q4). See withoutStoreLines for the units laid before this.
+    lines.push(...STORE_UNIT_COMMENT, ...STORE_UNIT_LINES_AFTER, "");
+  } else if (secrets.length === 0) {
     // A service with no secret must not even learn which other sites have one.
     // The dash avoids the 226/NAMESPACE failure if the directory does not exist
     // yet, which Restart=always would turn into a loop.
-    lines.push(
-      "# No secret for this project: the whole folder is closed to it, which",
-      "# hides from it even the names of the files.",
-      "InaccessiblePaths=-/etc/sitesolide",
-      "",
-    );
+    lines.push(...NO_SECRET_COMMENT, `InaccessiblePaths=-${SECRETS_FOLDER}`, "");
   } else {
-    // Putting InaccessiblePaths back here assumes that systemd reads
-    // EnvironmentFile before applying the namespace. The steward's bench
-    // measured it on 16 September 2026, on arm64 and inside a container
-    // to be confirmed on x86_64 before changing the units already in service,
-    // whose rule we follow until then.
-    lines.push(
-      "# This project reads its own file in /etc/sitesolide: InaccessiblePaths",
-      "# is not laid here, or systemd could not hand the file to it.",
-      "",
-    );
+    // dashboard and portal alone (STORELESS_SLUGS), whose flat file holds
+    // the owner's password hash: their unit stays as 0.7 wrote it, line for
+    // line, without InaccessiblePaths, the rule of every unit then.
+    lines.push(...LEGACY_SECRET_COMMENT, "");
   }
 
   lines.push(
@@ -673,16 +723,70 @@ export function withoutSyscallLines(text: string): string {
   return kept.join("\n");
 }
 
+/** `EnvironmentFile=-/etc/sitesolide/projects/<slug>/env`, whatever the slug. */
+function isStoreEnvironmentLine(line: string): boolean {
+  return line.startsWith(`EnvironmentFile=-${STORE_ROOT}/`) && line.endsWith("/env");
+}
+
+/** A `LoadCredential=` whose path, after the credential's id, lies in the stores' folder. */
+function isStoreCredentialLine(line: string): boolean {
+  if (!line.startsWith("LoadCredential=")) return false;
+  const value = line.slice("LoadCredential=".length);
+  return value.slice(value.indexOf(":") + 1).startsWith(`${STORE_ROOT}/`);
+}
+
+/** `EnvironmentFile=-/etc/sitesolide/<name>`, a flat file of the old form. */
+function isLegacyEnvironmentLine(line: string): boolean {
+  const prefix = `EnvironmentFile=-${SECRETS_FOLDER}/`;
+  return line.startsWith(prefix) && !line.slice(prefix.length).includes("/");
+}
+
+/**
+ * A unit as 0.7 generated it, from what this release generates.
+ *
+ * Every project but dashboard and portal now reads its store, and every
+ * unit in service would otherwise read as edited by hand at its next
+ * deployment. Taken off: the store's `EnvironmentFile=` and
+ * `LoadCredential=`, `ProtectProc=invisible`, and `InaccessiblePaths` when a
+ * flat file is still read, which 0.7 laid only for a project without one.
+ * The comment above them becomes the one 0.7 wrote there, so that a text
+ * this release generated comes back as 0.7 wrote it, byte for byte; the
+ * comparison ignores comments anyway, and a text of another making only
+ * loses those directives.
+ */
+export function withoutStoreLines(text: string): string {
+  const lines = text.split("\n");
+  const legacy = lines.some(isLegacyEnvironmentLine);
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (STORE_UNIT_COMMENT.every((comment, offset) => lines[i + offset] === comment)) {
+      kept.push(...(legacy ? LEGACY_SECRET_COMMENT : NO_SECRET_COMMENT));
+      i += STORE_UNIT_COMMENT.length - 1;
+      continue;
+    }
+    if (isStoreEnvironmentLine(line) || isStoreCredentialLine(line) || line === "ProtectProc=invisible") continue;
+    if (legacy && line === `InaccessiblePaths=-${SECRETS_FOLDER}`) continue;
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
 /**
  * What earlier releases generated where this one generates `text`, newest
- * first: without the system-call filter, as 0.6 wrote it, then without the
- * bind lines either, as every release before. A unit in service that reads
- * as one of them was never edited by hand, and is replaced at the project's
- * next deployment without `--force`, by `deploy` and by the installer alike.
+ * first: without the store's lines, as 0.7 wrote it, then also without the
+ * system-call filter, as 0.6 did, then also without the bind lines, as
+ * every release before; and the two this list held before the store,
+ * without the filter, then without the bind lines either. A unit in service
+ * that reads as one of them was never edited by hand, and is replaced at the
+ * project's next deployment without `--force`, by `deploy`, `refresh` and
+ * the installer alike.
  */
 export function earlierGenerations(text: string): string[] {
+  const beforeStore = withoutStoreLines(text);
+  const beforeStoreAndFilter = withoutSyscallLines(beforeStore);
   const beforeFilter = withoutSyscallLines(text);
-  return [beforeFilter, withoutBindLines(beforeFilter)];
+  return [beforeStore, beforeStoreAndFilter, withoutBindLines(beforeStoreAndFilter), beforeFilter, withoutBindLines(beforeFilter)];
 }
 
 /**
@@ -904,10 +1008,10 @@ export type UnitAction = "install" | "present" | "diverged";
  * hand-written unit would be declared divergent at every deployment for its
  * comments alone, while running exactly the same service. See comparison.ts.
  *
- * A unit an earlier release generated, before the bind lines or before the
- * system-call filter, is the generator's own, not one edited by hand:
- * installed, so that every project takes them at its next deployment. See
- * earlierGenerations.
+ * A unit an earlier release generated, before the store's lines, the bind
+ * lines or the system-call filter, is the generator's own, not one edited by
+ * hand: installed, so that every project takes them at its next deployment.
+ * See earlierGenerations.
  */
 export function decideUnit(state: UnitState): UnitAction {
   if (state.installed.trim() === "") return "install";

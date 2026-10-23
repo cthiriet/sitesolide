@@ -3,10 +3,13 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { knownManifests } from "./manifests";
-import { isApp, readManifest, servicesOf, type Manifest } from "../cli/manifest";
+import { compareDirectives, sameDirectives } from "../cli/comparison";
+import { hasStore, isApp, legacySecretFiles, readManifest, servicesOf, validate, type Manifest } from "../cli/manifest";
+import { STORE_UNIT_LINES_AFTER, storeCredentials, storeEnvironmentFile } from "../cli/store";
 import {
   projectPaths,
   decideUnit,
+  earlierGenerations,
   generateUnit,
   generateUnits,
   isTimerUnit,
@@ -24,6 +27,7 @@ import {
   unitNames,
   watchedUnits,
   withoutBindLines,
+  withoutStoreLines,
   withoutSyscallLines,
 } from "../cli/unit";
 
@@ -138,19 +142,494 @@ describe("secrets", () => {
     expect(generateUnit(APP)).toInclude("InaccessiblePaths=-/etc/sitesolide");
   });
 
-  test("with a secret, the file is loaded and the directive removed", () => {
+  test("with a file of the old form, the file is loaded, the store after it, and the folder closed all the same", () => {
+    // PID 1 reads EnvironmentFile before the walls go up (bench Q3): the
+    // folder no longer has to stay visible to a project that reads a file.
     const unit = generateUnit({ ...APP, secrets: ["budget.env"] });
-    expect(unit).toInclude("EnvironmentFile=-/etc/sitesolide/budget.env");
-    expect(unit).not.toInclude("InaccessiblePaths=-/etc/sitesolide");
+    expect(unit).toInclude("\nEnvironmentFile=-/etc/sitesolide/budget.env\nEnvironmentFile=-/etc/sitesolide/projects/budget/env\n");
+    expect(unit).toInclude("\nInaccessiblePaths=-/etc/sitesolide\n");
   });
 
-  test("the dash of EnvironmentFile is kept", () => {
+  test("the dash of EnvironmentFile is kept, on a flat file as on the store", () => {
     // Without it, a missing file makes the start fail and Restart=always makes
-    // it loop. It is bin/sitesolide.ts that then refuses to restart.
+    // it loop. deploy warns of a missing variable instead, and an app that
+    // cannot do without it stops at its start, which the stability check says.
     const unit = generateUnit({ ...APP, secrets: ["budget.env"] });
-    expect(unit).toInclude("EnvironmentFile=-");
+    for (const line of unit.split("\n").filter((line) => line.startsWith("EnvironmentFile="))) expect(line).toStartWith("EnvironmentFile=-/");
+  });
+});
+
+/**
+ * Synthetic manifests, one per shape a project can take, each valid: what the
+ * store's lines are judged on, and what the earlier generations below were
+ * captured from.
+ */
+const START = "/usr/local/bin/bun run server.ts";
+const SYNTHETIC: Record<string, Manifest> = {
+  none: { slug: "shop", start: START, port: 3022, env: { PUBLIC_URL: "https://{slug}.{zone}" } },
+  legacy: { slug: "mail", start: START, port: 3023, network: "outbound", secrets: ["mail-ses.env", "mail-stripe.env"] },
+  names: { slug: "cart", start: START, port: 3024, secrets: ["ADMIN_TOKEN", "STRIPE_SECRET_KEY"] },
+  long: {
+    slug: "engine",
+    build: "bun run build",
+    services: {
+      api: { start: "/srv/sites/engine/app/api", port: 3040 },
+      postgres: { start: "/usr/lib/postgresql/17/bin/postgres -D /srv/sites/engine/data/pg", internal: true, backup: { folder: "pg", command: "/bin/sh /srv/sites/engine/app/backup.sh" } },
+    },
+    secrets: { runtime: ["POSTGRES_PASSWORD"], files: ["gcp.json", "tls.key"], build: ["CMS_TOKEN"] },
+  },
+  multi: {
+    slug: "lab",
+    services: {
+      web: { start: "/srv/sites/lab/app/web", port: 3050 },
+      api: { start: "/srv/sites/lab/app/api", port: 3051, routes: ["/api/*"] },
+      worker: { start: "/srv/sites/lab/app/worker", internal: true },
+    },
+    secrets: ["lab.env"],
+  },
+  scheduled: {
+    slug: "news",
+    services: {
+      web: { start: "/srv/sites/news/app/web", port: 3060 },
+      sync: { start: "/srv/sites/news/app/sync", schedule: "*:0/15", timeout: "15m" },
+      queue: { start: "/srv/sites/news/app/queue", internal: true, cpu: "50%" },
+    },
+    secrets: ["FEED_TOKEN"],
+  },
+  anchored: {
+    slug: "jobs",
+    services: {
+      report: { start: "/srv/sites/jobs/app/report", schedule: "daily" },
+      cleanup: { start: "/srv/sites/jobs/app/cleanup", schedule: "Sun 03:00" },
+    },
+    secrets: { files: ["report.key"] },
+  },
+  dashboard: { slug: "dashboard", start: START, port: 3005, network: "outbound", env: { SITESOLIDE_ZONE: "{zone}" }, secrets: ["dashboard.env"] },
+  portal: { slug: "portal", start: START, port: 3006, secrets: ["portal.env"] },
+  static: { slug: "blog", build: "bun run build", publicDir: "dist", env: { PUBLIC_SITE_URL: "https://{slug}.{zone}" }, secrets: { build: ["CMS_TOKEN"] } },
+} as Record<string, Manifest>;
+
+const WITH_STORE = ["none", "legacy", "names", "long", "multi", "scheduled", "anchored"];
+const STORELESS = ["dashboard", "portal"];
+const placeholdersOf = (manifest: Manifest) => ({ slug: manifest.slug, zone: "test-zone.invalid", contact: "" });
+const unitsOf = (name: string) => generateUnits(SYNTHETIC[name]!, placeholdersOf(SYNTHETIC[name]!));
+/** The units that run a program of the project's: neither an anchor nor a timer. */
+const serviceUnitsOf = (name: string) => {
+  const manifest = SYNTHETIC[name]!;
+  const services = new Set(servicesOf(manifest).map((service) => service.unit));
+  return unitsOf(name).filter(({ unit }) => services.has(unit));
+};
+const sha256 = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
+
+describe("the project's store, in every service unit", () => {
+  test("the synthetic manifests are each what validate() accepts", () => {
+    for (const [name, manifest] of Object.entries(SYNTHETIC)) expect({ name, errors: validate(manifest, "test-zone.invalid") }).toEqual({ name, errors: [] });
   });
 
+  test.each(WITH_STORE)("%s: each service carries the four lines once, the store's env file after the old form's", (name) => {
+    const slug = SYNTHETIC[name]!.slug;
+    const services = serviceUnitsOf(name);
+    expect(services.length).toBeGreaterThan(0);
+    for (const { unit, text } of services) {
+      const lines = text.split("\n");
+      const once = (line: string) => lines.filter((written) => written === line).length;
+      for (const line of [
+        `EnvironmentFile=-/etc/sitesolide/projects/${slug}/env`,
+        `LoadCredential=files:/etc/sitesolide/projects/${slug}/files`,
+        "InaccessiblePaths=-/etc/sitesolide",
+        "ProtectProc=invisible",
+      ]) {
+        expect({ unit, line, count: once(line) }).toEqual({ unit, line, count: 1 });
+      }
+      // The old form's files first, in the manifest's order, the store last:
+      // systemd lets a later EnvironmentFile win (I4).
+      const files = lines.filter((line) => line.startsWith("EnvironmentFile="));
+      expect(files).toEqual([...legacySecretFiles(SYNTHETIC[name]!).map((file) => `EnvironmentFile=-/etc/sitesolide/${file}`), `EnvironmentFile=-/etc/sitesolide/projects/${slug}/env`]);
+      expect(lines.filter((line) => line.startsWith("LoadCredential"))).toEqual([`LoadCredential=files:/etc/sitesolide/projects/${slug}/files`]);
+    }
+  });
+
+  test("the lines come from the store module, in its words", () => {
+    const text = serviceUnitsOf("long")[0]!.text;
+    expect(text).toInclude(`\nEnvironmentFile=${storeEnvironmentFile("engine")}\nLoadCredential=${storeCredentials("engine")}\n`);
+    expect(text).toInclude(`\n${STORE_UNIT_LINES_AFTER.join("\n")}\n`);
+  });
+
+  test("a project's units do not depend on its names or its files: setting one, or declaring one later, rewrites no unit", () => {
+    const base = SYNTHETIC.long!;
+    const without = generateUnits({ ...base, secrets: { build: ["CMS_TOKEN"] } } as Manifest, placeholdersOf(base));
+    const other = generateUnits({ ...base, secrets: { runtime: ["OTHER", "MORE"], files: ["other.pem"], build: ["CMS_TOKEN"] } } as Manifest, placeholdersOf(base));
+    expect(unitsOf("long")).toEqual(without);
+    expect(other).toEqual(without);
+    // The short form and none at all, alike.
+    const shop = SYNTHETIC.none!;
+    expect(generateUnits({ ...shop, secrets: ["API_KEY"] } as Manifest, placeholdersOf(shop))).toEqual(generateUnits(shop, placeholdersOf(shop)));
+  });
+
+  test.each([...WITH_STORE, ...STORELESS])("%s: no %%d, no credentials path, no PrivatePIDs, no ProcSubset, anywhere", (name) => {
+    for (const { text } of unitsOf(name)) {
+      expect(text).not.toInclude("%d");
+      expect(text).not.toInclude("/run/credentials");
+      expect(text).not.toMatch(/^(PrivatePIDs|ProcSubset|SetCredential|ImportCredential|LoadCredentialEncrypted)=/m);
+      expect(text).not.toMatch(/^Environment=CREDENTIALS_DIRECTORY/m);
+    }
+  });
+
+  test("an anchor and a timer run no program of the project's: they carry none of it, as before", () => {
+    const anchored = Object.fromEntries(unitsOf("anchored").map(({ unit, text }) => [unit, text]));
+    for (const unit of ["jobs", "jobs.report.timer", "jobs.cleanup.timer"]) {
+      expect(anchored[unit]!).not.toMatch(/^(EnvironmentFile|LoadCredential|ProtectProc|InaccessiblePaths)=/m);
+      expect(sha256(anchored[unit]!)).toBe(FINGERPRINTS_07.anchored![unit]!);
+    }
+    expect(anchored["jobs.report"]!).toInclude("\nLoadCredential=files:/etc/sitesolide/projects/jobs/files\n");
+    const scheduled = Object.fromEntries(unitsOf("scheduled").map(({ unit, text }) => [unit, text]));
+    expect(sha256(scheduled["news.sync.timer"]!)).toBe(FINGERPRINTS_07.scheduled!["news.sync.timer"]!);
+    expect(scheduled["news.sync"]!).toInclude("\nProtectProc=invisible\n");
+  });
+
+  test.each(STORELESS)("%s keeps its flat file and its unit of 0.7, byte for byte (I10)", (name) => {
+    const units = unitsOf(name);
+    expect(Object.fromEntries(units.map(({ unit, text }) => [unit, sha256(text)]))).toEqual(FINGERPRINTS_07[name]!);
+    for (const { text } of units) {
+      expect(text).not.toMatch(/\/projects\/|^(LoadCredential|ProtectProc|InaccessiblePaths)=/m);
+      expect(text).toInclude(`\nEnvironmentFile=-/etc/sitesolide/${name}.env\n`);
+      expect(withoutStoreLines(text)).toBe(text);
+    }
+  });
+
+  test("the platform's own dashboard and portal, as deployed, read no store", () => {
+    const storeless = knownManifests().filter((known) => known.slug === "dashboard" || known.slug === "portal");
+    expect(storeless.map((manifest) => manifest.slug).toSorted()).toEqual(["dashboard", "portal"]);
+    for (const manifest of storeless) {
+      for (const { text } of generateUnits(manifest, placeholdersOf(manifest))) expect(text).not.toMatch(/\/projects\/|^(LoadCredential|ProtectProc)=/m);
+    }
+  });
+
+  test("a static site has no unit, and so nothing reads a store for it", () => {
+    expect(unitsOf("static")).toEqual([]);
+    expect(unitNames(SYNTHETIC.static!)).toEqual([]);
+  });
+
+  test("every known manifest's units render, each app's services reading its store unless storeless", () => {
+    for (const manifest of knownManifests().filter(isApp)) {
+      const services = new Set(servicesOf(manifest).map((service) => service.unit));
+      const units = generateUnits(manifest, placeholdersOf(manifest));
+      for (const { unit, text } of units.filter(({ unit }) => services.has(unit))) {
+        expect({ unit, store: text.includes(`\nLoadCredential=files:/etc/sitesolide/projects/${manifest.slug}/files\n`) }).toEqual({ unit, store: hasStore(manifest) });
+      }
+    }
+  });
+
+  test("a file's name validate() refuses is never accepted by the generator, even past validate()", () => {
+    // No file's name is written into the unit, which loads the whole folder:
+    // the second barrier refuses what systemd would skip, flatten or misread.
+    for (const files of [[".env"], ["sub/key.pem"], ["a..b"], ["key.pem\nUser=root"], ["x".repeat(65)]]) {
+      expect(() => generateUnits({ ...APP, secrets: { files } } as Manifest)).toThrow("never written into a unit");
+    }
+    expect(() => generateUnits({ ...APP, secrets: { files: ["gcp.json", "tls.key"] } } as Manifest)).not.toThrow();
+  });
+});
+
+/**
+ * The units of 0.7, captured once from main (7534d29) before the store's
+ * lines, for the synthetic manifests above: a sha256 of each unit's text.
+ * withoutStoreLines must give each back from this release's text, byte for
+ * byte, and decideUnit replace it without --force.
+ */
+const FINGERPRINTS_07: Record<string, Record<string, string>> = {
+  none: { shop: "f4afd1acc3c4365c2d29d5f2df76f6599a6f268e0afefea95c487dcec454bb8c" },
+  legacy: { mail: "e8dead339dfed7f8f3e148632db6957daf3d4ea351907f215dc8cc902f6ba2ef" },
+  names: { cart: "d9b80c6ccdb6e88fe2410f5f9b790cf1f703728b0c028e6398916259f5b2491a" },
+  long: {
+    engine: "5340dc2c4d30549615200a19c8e688d0eee430a172d54096ad57dff2a13eb59e",
+    "engine.postgres": "f929641b5597418610cfbe38f317a0b9c4de7a3be4f8c963ff64542c6a36682c",
+  },
+  multi: {
+    lab: "de823e571f413d68340c4a63f696b44515c8c83f94a368de12f31e4699e0872d",
+    "lab.api": "251d694fafa6ba127a3b9822dabfc340356bad7686b0290b2ad75705b95ebdd8",
+    "lab.worker": "4896392ca0dd5cbdfc9509ebf318845d951b1eadc85e046c10ed29ce9cf9e654",
+  },
+  scheduled: {
+    news: "77663103623921967dd4907048539932267fd99eeefafaf0f67a11af39e02a6d",
+    "news.sync": "700e3ea8af84558d0b195e8befc5458d7d1c051ccc5aa4b4dcf052e8bbb406fb",
+    "news.sync.timer": "eea89b8649ef39d9185df88bd426db79bd64939fb18a14ad79b820107018271e",
+    "news.queue": "b4be4b13b726f492ab11af6c1e0d49dfcd9f5fc784676a34a67a28db22476bb3",
+  },
+  anchored: {
+    jobs: "ba386ab3f1d5dd5622cb8f5c4f164264b2941f1a03941f6fc03d20d9d2b29406",
+    "jobs.report": "4b15c764718610174e5680412ea3bf057e9794c6ccf9fa810e5856c08c247ae5",
+    "jobs.report.timer": "f7c74e814067b7c1e5d757d28a7eff2bcbdae0a0f84bf8396e175932f600d09c",
+    "jobs.cleanup": "90337f8d640892802e58f6f5655cc68149d365f8582a19f1657c96f96bc689fc",
+    "jobs.cleanup.timer": "8dedc11e15de8e16fd1db2138add223c307dbfbb015a31755c49d2b6623c0617",
+  },
+  dashboard: { dashboard: "359ed49aa656ef7a1446c316c6bd6360ef57abb046110cbaf1478686c7f2b1ab" },
+  portal: { portal: "8889d093cd3908cbdcc3df5c132980021cd047b33243d9e4c87183ef0b332de0" },
+  static: {},
+};
+
+/** The 0.7 unit of `legacy` above, as main generated it: a flat file read, and /etc/sitesolide left visible. */
+const MAIL_07 = `# Service of project mail, generated by bin/sitesolide.ts from its
+# sitesolide.json. Do not edit by hand: the next deployment overwrites it.
+#
+# Isolation: dedicated user with no shell, system mounted read only,
+# writing allowed in the project's data folder alone. A compromised
+# project can read neither the landing nor the other sites.
+
+[Unit]
+Description=Project mail
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=site-mail
+Group=site-mail
+WorkingDirectory=/srv/sites/mail/app
+
+Environment=PORT=3023
+Environment=DATA_DIR=/srv/sites/mail/data
+Environment=PUBLIC_DIR=/srv/sites/mail/public
+EnvironmentFile=-/etc/sitesolide/mail-ses.env
+EnvironmentFile=-/etc/sitesolide/mail-stripe.env
+
+ExecStart=/usr/local/bin/bun run server.ts
+Restart=always
+RestartSec=2
+
+# What the service writes belongs to it alone.
+UMask=0077
+
+# Confinement
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/sites/mail/data
+
+# /srv is replaced by an empty mount, then only this project's folders
+# are exposed again in it: the service cannot read the landing nor the
+# other sites, even if their Unix permissions allowed it.
+TemporaryFileSystem=/srv:ro
+BindReadOnlyPaths=/srv/sites/mail/app
+BindReadOnlyPaths=/srv/sites/mail/public
+BindPaths=/srv/sites/mail/data
+
+# This project reads its own file in /etc/sitesolide: InaccessiblePaths
+# is not laid here, or systemd could not hand the file to it.
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+# The system calls of a service, and none that changes the machine: no
+# mount, module, reboot, swap, clock or tracing. Any other fails with EPERM.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+MemoryMax=256M
+
+# network: outbound. This project reaches an outside API; the network
+# confinement is lifted, everything else holds.
+
+# Listens on its own port, and on none of the machine's others.
+SocketBindAllow=tcp:3023
+SocketBindDeny=2019
+SocketBindDeny=3000-3099
+SocketBindDeny=3128-3129
+
+[Install]
+WantedBy=multi-user.target
+`;
+
+/** The 0.7 unit of `none` above: no secret, /etc/sitesolide closed. */
+const SHOP_07 = `# Service of project shop, generated by bin/sitesolide.ts from its
+# sitesolide.json. Do not edit by hand: the next deployment overwrites it.
+#
+# Isolation: dedicated user with no shell, system mounted read only,
+# writing allowed in the project's data folder alone. A compromised
+# project can read neither the landing nor the other sites.
+
+[Unit]
+Description=Project shop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=site-shop
+Group=site-shop
+WorkingDirectory=/srv/sites/shop/app
+
+Environment=PORT=3022
+Environment=DATA_DIR=/srv/sites/shop/data
+Environment=PUBLIC_DIR=/srv/sites/shop/public
+Environment=PUBLIC_URL=https://shop.test-zone.invalid
+
+ExecStart=/usr/local/bin/bun run server.ts
+Restart=always
+RestartSec=2
+
+# What the service writes belongs to it alone.
+UMask=0077
+
+# Confinement
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/sites/shop/data
+
+# /srv is replaced by an empty mount, then only this project's folders
+# are exposed again in it: the service cannot read the landing nor the
+# other sites, even if their Unix permissions allowed it.
+TemporaryFileSystem=/srv:ro
+BindReadOnlyPaths=/srv/sites/shop/app
+BindReadOnlyPaths=/srv/sites/shop/public
+BindPaths=/srv/sites/shop/data
+
+# No secret for this project: the whole folder is closed to it, which
+# hides from it even the names of the files.
+InaccessiblePaths=-/etc/sitesolide
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+# The system calls of a service, and none that changes the machine: no
+# mount, module, reboot, swap, clock or tracing. Any other fails with EPERM.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+MemoryMax=256M
+
+# The only client of this service is Caddy, on the loopback.
+#
+# THIS BLOCKING ALSO CUTS DNS OFF. This machine's resolvers are those
+# of the hosting provider, hence external. Measured on 19 August 2026
+# in a transient unit carrying these very two lines:
+#
+#   to a name        curl: (6) Could not resolve host
+#   to an IP         curl: (28) Connection timed out, after the full delay
+#   to 127.0.0.1     200, the loopback goes through
+#
+# Both messages mislead: the first sends one hunting a DNS outage, the
+# second a slowness of the remote service. The cure is neither to tinker
+# with /etc/resolv.conf nor to lengthen a delay, it is network: outbound
+# in the project's sitesolide.json.
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+# Listens on its own port, and on none of the machine's others.
+SocketBindAllow=tcp:3022
+SocketBindDeny=2019
+SocketBindDeny=3000-3099
+SocketBindDeny=3128-3129
+
+[Install]
+WantedBy=multi-user.target
+`;
+
+describe("the units 0.7 laid, replaced without --force", () => {
+  test("the inline units are what the fingerprints say: captured from main, not from this generator", () => {
+    expect(sha256(MAIL_07)).toBe(FINGERPRINTS_07.legacy!.mail!);
+    expect(sha256(SHOP_07)).toBe(FINGERPRINTS_07.none!.shop!);
+  });
+
+  test("a unit 0.7 laid is installed against this release's, with and without a flat file", () => {
+    const [mail] = unitsOf("legacy");
+    const [shop] = unitsOf("none");
+    expect(decideUnit({ installed: MAIL_07, generated: mail!.text, replace: false })).toBe("install");
+    expect(decideUnit({ installed: SHOP_07, generated: shop!.text, replace: false })).toBe("install");
+    // What 0.7 lacks and this release adds, directive by directive.
+    expect(compareDirectives(MAIL_07, mail!.text)).toEqual({
+      lost: [],
+      added: ["EnvironmentFile=-/etc/sitesolide/projects/mail/env", "LoadCredential=files:/etc/sitesolide/projects/mail/files", "InaccessiblePaths=-/etc/sitesolide", "ProtectProc=invisible"],
+    });
+    expect(compareDirectives(SHOP_07, shop!.text)).toEqual({
+      lost: [],
+      added: ["EnvironmentFile=-/etc/sitesolide/projects/shop/env", "LoadCredential=files:/etc/sitesolide/projects/shop/files", "ProtectProc=invisible"],
+    });
+  });
+
+  test.each(Object.keys(FINGERPRINTS_07))("%s: withoutStoreLines gives back each unit of 0.7, byte for byte", (name) => {
+    expect(Object.fromEntries(unitsOf(name).map(({ unit, text }) => [unit, sha256(withoutStoreLines(text))]))).toEqual(FINGERPRINTS_07[name]!);
+  });
+
+  test.each(Object.keys(FINGERPRINTS_07))("%s: each unit of 0.7, of 0.6 and from before is the generator's own", (name) => {
+    for (const { unit, text } of unitsOf(name)) {
+      // Byte for byte the 0.7 text, by the fingerprints above.
+      const of07 = withoutStoreLines(text);
+      for (const earlier of [of07, withoutSyscallLines(of07), withoutBindLines(withoutSyscallLines(of07))]) {
+        // Never diverged: present when nothing changed for this unit, a timer or an anchor.
+        const action = decideUnit({ installed: earlier, generated: text, replace: false });
+        expect({ unit, action }).toEqual({ unit, action: sameDirectives(earlier, text) ? "present" : "install" });
+      }
+    }
+  });
+
+  test("a unit 0.7 laid and edited by hand since still stops the deployment", () => {
+    const [mail] = unitsOf("legacy");
+    const [shop] = unitsOf("none");
+    expect(decideUnit({ installed: `${MAIL_07}LimitNOFILE=4096\n`, generated: mail!.text, replace: false })).toBe("diverged");
+    expect(decideUnit({ installed: SHOP_07.replace("PrivateDevices=true\n", ""), generated: shop!.text, replace: false })).toBe("diverged");
+    // Its flat file dropped by hand, or one added, is no release's either.
+    expect(decideUnit({ installed: MAIL_07.replace("EnvironmentFile=-/etc/sitesolide/mail-stripe.env\n", ""), generated: mail!.text, replace: false })).toBe("diverged");
+    expect(decideUnit({ installed: SHOP_07.replace("Environment=PUBLIC_URL", "EnvironmentFile=-/etc/sitesolide/other.env\nEnvironment=PUBLIC_URL"), generated: shop!.text, replace: false })).toBe("diverged");
+    expect(decideUnit({ installed: `${MAIL_07}LimitNOFILE=4096\n`, generated: mail!.text, replace: true })).toBe("install");
+  });
+
+  test("a unit of this release with one of the store's lines taken off by hand is no release's", () => {
+    const [mail] = unitsOf("legacy");
+    for (const line of ["ProtectProc=invisible", "LoadCredential=files:/etc/sitesolide/projects/mail/files", "EnvironmentFile=-/etc/sitesolide/projects/mail/env", "InaccessiblePaths=-/etc/sitesolide"]) {
+      const edited = mail!.text.replace(`${line}\n`, "");
+      expect({ line, action: decideUnit({ installed: edited, generated: mail!.text, replace: false }) }).toEqual({ line, action: "diverged" });
+    }
+  });
+
+  test("a unit this release laid is present: nothing is laid again", () => {
+    for (const name of [...WITH_STORE, ...STORELESS]) {
+      for (const { unit, text } of unitsOf(name)) expect({ unit, action: decideUnit({ installed: text, generated: text, replace: false }) }).toEqual({ unit, action: "present" });
+    }
+  });
+
+  test("the generations, newest first, the two of before the store last", () => {
+    const [mail] = unitsOf("legacy");
+    const text = mail!.text;
+    const generations = earlierGenerations(text);
+    expect(generations).toEqual([
+      withoutStoreLines(text),
+      withoutSyscallLines(withoutStoreLines(text)),
+      withoutBindLines(withoutSyscallLines(withoutStoreLines(text))),
+      withoutSyscallLines(text),
+      withoutBindLines(withoutSyscallLines(text)),
+    ]);
+    expect(generations[0]).toBe(MAIL_07);
+  });
+
+  test("withoutStoreLines takes off the store's lines and nothing else, and once", () => {
+    const [mail] = unitsOf("legacy");
+    const [shop] = unitsOf("none");
+    for (const text of [mail!.text, shop!.text]) {
+      const before = withoutStoreLines(text);
+      expect(before).not.toMatch(/projects\/|LoadCredential|ProtectProc|PID 1/);
+      expect(withoutStoreLines(before)).toBe(before);
+    }
+    // A text of another making loses those directives alone, its comments kept.
+    const handWritten = "[Service]\n# mine\nEnvironmentFile=-/etc/sitesolide/projects/x/env\nLoadCredential=files:/etc/sitesolide/projects/x/files\nLoadCredential=key:/etc/ssl/key.pem\nProtectProc=invisible\nInaccessiblePaths=-/etc/sitesolide\n";
+    expect(withoutStoreLines(handWritten)).toBe("[Service]\n# mine\nLoadCredential=key:/etc/ssl/key.pem\nInaccessiblePaths=-/etc/sitesolide\n");
+    // With a flat file still read, InaccessiblePaths goes too: 0.7 laid it only without one.
+    expect(withoutStoreLines(`${handWritten}EnvironmentFile=-/etc/sitesolide/x.env\n`)).toBe("[Service]\n# mine\nLoadCredential=key:/etc/ssl/key.pem\nEnvironmentFile=-/etc/sitesolide/x.env\n");
+    // A file under a folder of the old form is not a flat one.
+    expect(withoutStoreLines(`${handWritten}EnvironmentFile=-/etc/sitesolide/x-secrets/y.env\n`)).toInclude("InaccessiblePaths=-/etc/sitesolide\n");
+  });
 });
 
 describe("start-up", () => {
@@ -590,10 +1069,11 @@ describe("the units of servers, as they were before workers existed", () => {
    * with the generator of the release before them; a change here is a change
    * to every unit on every machine, to be made on purpose.
    *
-   * The bind lines and the system-call filter are the only such changes
-   * since, and decideUnit and the installer replace a unit that lacks them
-   * alone: the fingerprints are those of the text without either, which is
-   * what a machine carries until each project's next deployment.
+   * The bind lines, the system-call filter and the store's lines are the
+   * only such changes since, and decideUnit and the installer replace a unit
+   * that lacks them alone: the fingerprints are those of the text without
+   * any of them, which is what a machine carries until each project's next
+   * deployment.
    */
   const FINGERPRINTS: Record<string, Record<string, string>> = {
     "bun-mixed": { "sample-bun": "add7fdc8d713e6954cf1e1456d63ff2a5a97b8f49c80149a9eac2a450900ca46" },
@@ -608,12 +1088,12 @@ describe("the units of servers, as they were before workers existed", () => {
     const { manifest } = readManifest(readFileSync(join(REPO_ROOT, "bin", "tests", "e2e", "projects", fixture, "sitesolide.json"), "utf8"));
     const generated = generateUnits(manifest!, { slug: manifest!.slug, zone: "test-zone.invalid", contact: "sample@test-zone.invalid" });
     const fingerprints = Object.fromEntries(
-      generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutBindLines(withoutSyscallLines(text))).digest("hex")]),
+      generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutBindLines(withoutSyscallLines(withoutStoreLines(text)))).digest("hex")]),
     );
     expect(fingerprints).toEqual(FINGERPRINTS[fixture]!);
   });
 
-  /** The same units as 0.6 wrote them, with the bind lines: taken with the generator of v0.6.1. */
+  /** The same units as 0.6 wrote them, with the bind lines: taken with the generator of v0.6.1, and 0.7 wrote the same. */
   const FINGERPRINTS_06: Record<string, Record<string, string>> = {
     "bun-mixed": { "sample-bun": "a313ca46ef19bc85bcc16e984acd26825319a4e7a9ce8e1b0d3aaed22e231490" },
     "multi-service": {
@@ -623,10 +1103,10 @@ describe("the units of servers, as they were before workers existed", () => {
     },
   };
 
-  test.each(Object.keys(FINGERPRINTS_06))("projects/%s, without the system-call filter, is what 0.6 generated, to the byte", (fixture) => {
+  test.each(Object.keys(FINGERPRINTS_06))("projects/%s, without the store's lines and the system-call filter, is what 0.6 generated, to the byte", (fixture) => {
     const { manifest } = readManifest(readFileSync(join(REPO_ROOT, "bin", "tests", "e2e", "projects", fixture, "sitesolide.json"), "utf8"));
     const generated = generateUnits(manifest!, { slug: manifest!.slug, zone: "test-zone.invalid", contact: "sample@test-zone.invalid" });
-    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutSyscallLines(text)).digest("hex")]));
+    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutSyscallLines(withoutStoreLines(text))).digest("hex")]));
     expect(fingerprints).toEqual(FINGERPRINTS_06[fixture]!);
   });
 });
