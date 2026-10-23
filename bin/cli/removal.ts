@@ -12,8 +12,10 @@
  */
 
 import { OWNER_SOCKET, readCurlAnswer } from "./access";
+import { isValidSlug } from "./manifest";
 import { ownerRefusal, secretFileRefusal, type SecretOwner } from "./secrets";
 import { removeUnitsCommand } from "./services";
+import { storeRemovalActions } from "./store";
 import { secretPath, projectPaths, systemUser } from "./unit";
 
 /**
@@ -60,7 +62,7 @@ export type Action = {
 export type ProjectToRemove = {
   slug: string;
   isApplication: boolean;
-  /** The manifest's `secrets` files, each at /etc/sitesolide/<name>. */
+  /** The manifest's flat files of the old form, each at /etc/sitesolide/<name>: legacySecretFiles, those removableSecrets keeps. */
   secrets: readonly string[];
   /**
    * The project's units as unitNames in unit.ts names them, the main one
@@ -83,6 +85,10 @@ const UNIT_TITLE = "stop and remove the systemd unit";
  */
 export function removalActions(project: ProjectToRemove): Action[] {
   const { slug, isApplication } = project;
+  // Every path below is built from the slug, `rm -rf` the first of them: one
+  // that is not a project's, empty or with a `/`, could name a folder above
+  // the project's own.
+  if (typeof slug !== "string" || !isValidSlug(slug)) throw new Error("not a project's slug: nothing is removed for it");
   const paths = projectPaths(slug);
   const account = systemUser(slug);
   const actions: Action[] = [];
@@ -122,6 +128,14 @@ export function removalActions(project: ProjectToRemove): Action[] {
       command: `sudo rm -f ${PREVIOUS_DIR}/${secret}`,
     });
   }
+
+  // The project's store of secrets and the previous versions the dashboard
+  // keeps of it, whatever the manifest says, a static site's included: the
+  // dashboard may hold a store for a slug before its first deployment. The
+  // units are stopped by now, so none starts without its `files/` folder;
+  // and a project created again under this name finds none of its
+  // predecessor's values.
+  actions.push(...storeRemovalActions(slug));
 
   if (isApplication) {
     // After the directory, never before: see the header of Action.

@@ -11,6 +11,7 @@ import {
   type RemovalStep,
   type ProjectToRemove,
 } from "../cli/removal";
+import { storeRemovalActions } from "../cli/store";
 
 /**
  * What this file protects: the order and the reach of a removal.
@@ -79,11 +80,16 @@ describe("removalActions", () => {
 
   test("a showcase has neither a unit nor a user to remove", () => {
     // It is served by the wildcard block from its publicDir: there never was a
-    // service nor an account in its name.
+    // service nor an account in its name. A store may have been made for its
+    // slug all the same, before a first deployment: it goes too.
     const actions = removalActions(project({ isApplication: false }));
     expect(actions.some((g) => g.command.includes("systemctl"))).toBe(false);
     expect(actions.some((g) => g.command.includes("userdel"))).toBe(false);
-    expect(actions.map((g) => g.command)).toEqual(["sudo rm -rf /srv/sites/sample"]);
+    expect(actions.map((g) => g.command)).toEqual([
+      "sudo rm -rf /srv/sites/sample",
+      "sudo rm -rf /etc/sitesolide/projects/sample",
+      "sudo rm -rf /var/lib/sitesolide-steward/precedents/projects/sample",
+    ]);
   });
 
   test("every declared secret is removed, at its path under /etc/sitesolide", () => {
@@ -93,10 +99,50 @@ describe("removalActions", () => {
     expect(commands).toContain("sudo rm -f /etc/sitesolide/sample-ses.env");
   });
 
-  test("no declared secret, no file touched in /etc/sitesolide", () => {
+  test("no declared file, no flat file touched in /etc/sitesolide: the project's store alone", () => {
     const actions = removalActions(project());
-    expect(actions.some((g) => g.command.includes("/etc/sitesolide"))).toBe(false);
-    expect(actions.some((g) => g.command.includes("sitesolide-steward"))).toBe(false);
+    expect(actions.filter((g) => g.command.includes("/etc/sitesolide")).map((g) => g.command)).toEqual(["sudo rm -rf /etc/sitesolide/projects/sample"]);
+    expect(actions.filter((g) => g.command.includes("sitesolide-steward")).map((g) => g.command)).toEqual(["sudo rm -rf /var/lib/sitesolide-steward/precedents/projects/sample"]);
+  });
+
+  test("the project's store and its previous versions go after the served folder, before the account, whatever the manifest says", () => {
+    for (const shape of [project(), project({ secrets: ["sample.env", "sample-ses.env"] }), project({ isApplication: false })]) {
+      const commands = removalActions(shape).map((g) => g.command);
+      const folder = commands.indexOf("sudo rm -rf /srv/sites/sample");
+      const store = commands.indexOf("sudo rm -rf /etc/sitesolide/projects/sample");
+      const previous = commands.indexOf("sudo rm -rf /var/lib/sitesolide-steward/precedents/projects/sample");
+      const units = commands.findIndex((c) => c.includes("systemctl disable"));
+      const account = commands.findIndex((c) => c.includes("userdel"));
+      expect(store).toBeGreaterThan(folder);
+      expect(previous).toBe(store + 1);
+      // The units stopped first: none starts again without its files/ folder (I3').
+      if (shape.isApplication) {
+        expect(units).toBe(0);
+        expect(account).toBe(commands.length - 1);
+        expect(account).toBeGreaterThan(previous);
+      }
+      // Exactly the store module's two actions, titles included.
+      const actions = removalActions(shape);
+      expect(actions.slice(store, store + 2)).toEqual(storeRemovalActions("sample"));
+    }
+  });
+
+  test("the store's paths are the project's own, and nothing above them", () => {
+    const commands = removalActions(project({ slug: "green-garden" })).map((g) => g.command);
+    expect(commands).toContain("sudo rm -rf /etc/sitesolide/projects/green-garden");
+    expect(commands).toContain("sudo rm -rf /var/lib/sitesolide-steward/precedents/projects/green-garden");
+    expect(commands.some((c) => /rm -rf? \/etc\/sitesolide(\/projects)?\/?$/.test(c))).toBe(false);
+    expect(commands.some((c) => /rm -rf? \/var\/lib\/sitesolide-steward(\/precedents(\/projects)?)?\/?$/.test(c))).toBe(false);
+  });
+
+  test("a slug that is not a project's is refused before a single command is built", () => {
+    // Each path is built from the slug, `rm -rf` the first: an empty slug
+    // would name /srv/sites itself, a `..` the folder above it.
+    for (const slug of ["", "..", "../etc", "a/b", "Sample", "sample ", "sample\nreboot", "-sample", "sample.env", "sample;reboot"]) {
+      expect(() => removalActions(project({ slug }))).toThrow("not a project's slug");
+      expect(() => removalSteps(project({ slug }), { block: true, isProtected: true })).toThrow("not a project's slug");
+    }
+    expect(() => removalActions(project({ slug: 42 as unknown as string }))).toThrow("not a project's slug");
   });
 
   test("the previous version of each secret goes with it", () => {
@@ -176,7 +222,23 @@ describe("removalSteps", () => {
 
   test("a showcase behind the portal also removes its public files before the block", () => {
     const steps = read(removalSteps(project({ isApplication: false }), { block: true, isProtected: true }));
-    expect(steps).toEqual(["sudo rm -rf /srv/sites/sample/public", "BLOCK", "sudo rm -rf /srv/sites/sample"]);
+    expect(steps).toEqual([
+      "sudo rm -rf /srv/sites/sample/public",
+      "BLOCK",
+      "sudo rm -rf /srv/sites/sample",
+      "sudo rm -rf /etc/sitesolide/projects/sample",
+      "sudo rm -rf /var/lib/sitesolide-steward/precedents/projects/sample",
+    ]);
+  });
+
+  test("behind the portal, the store goes after the block, with the data, and before the account", () => {
+    const steps = read(removalSteps(project({ secrets: ["sample.env"] }), { block: true, isProtected: true }));
+    const block = steps.indexOf("BLOCK");
+    const store = steps.indexOf("sudo rm -rf /etc/sitesolide/projects/sample");
+    expect(store).toBeGreaterThan(block);
+    expect(store).toBeGreaterThan(steps.indexOf("sudo rm -rf /srv/sites/sample"));
+    expect(steps.indexOf("sudo rm -rf /var/lib/sitesolide-steward/precedents/projects/sample")).toBe(store + 1);
+    expect(indexIn(steps, "userdel")).toBe(steps.length - 1);
   });
 
   test("with no block to remove, the gestures follow their ordinary order", () => {
@@ -252,6 +314,6 @@ describe("the secret files a removal deletes", () => {
     const owned = removableSecrets("shop", ["shop.env", "shop-mail.env"], [], new Map([["shop-mail.env", { kind: "file", owner: "site-shopkeeper" } as const]]));
     expect(owned).toEqual({ removed: ["shop.env"], kept: ["kept: /etc/sitesolide/shop-mail.env is already on the machine and belongs to site-shopkeeper, not site-shop: a project reads its own files alone"] });
     const commands = removalActions(project({ slug: "shop", secrets: chosen.removed })).map((action) => action.command);
-    expect(commands.filter((command) => command.includes("/etc/sitesolide/"))).toEqual(["sudo rm -f /etc/sitesolide/shop.env", "sudo rm -f /etc/sitesolide/shop-smtp.env"]);
+    expect(commands.filter((command) => command.includes("/etc/sitesolide/"))).toEqual(["sudo rm -f /etc/sitesolide/shop.env", "sudo rm -f /etc/sitesolide/shop-smtp.env", "sudo rm -rf /etc/sitesolide/projects/shop"]);
   });
 });
