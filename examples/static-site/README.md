@@ -14,5 +14,6 @@ Add a `build` key to the manifest if your files are generated, a static site
 generator, a Tailwind compilation, and the command runs on your workstation
 before anything is sent. It sees the manifest's `env`, and a token it needs,
 a private CMS's, is named under `"secrets": { "build": ["CMS_TOKEN"] }` and
-taken from your environment; beyond `PATH`, `HOME` and their kin, the rest of
+taken from your environment, else from
+`~/.config/sitesolide/secrets/<slug>.env`; beyond `PATH`, `HOME` and their kin, the rest of
 your workstation's variables never reach it.

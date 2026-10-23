@@ -164,16 +164,19 @@ The refusals of their own, each carrying its `hint`:
 | `looks-like-value` | a name over 64 characters, or starting like a service's key (`sk_`, `rk_`, `pk_live`, `whsec_`, `ghp_`, `gho_`, `github_pat_`, `xox`, `AKIA`, `sst_`, `glpat-` and their kind): refused before anything is sent, never quoted | tell the user it may be in the shell's history and to change it at its source; then the variable's real name |
 | `already-present` | `generate` over a name already set, in the store or a legacy file the service reads | leave it: rotating a live key is the user's decision, `sitesolide secrets generate NAME --replace` in their terminal |
 | `build-secret-missing` | a name under `secrets.build` is neither in the environment nor in the workstation's file: nothing was read on the server or sent | tell the user to export it, or to add it to `~/.config/sitesolide/secrets/<slug>.env`; never read that file, never ask for the value |
+| `build-secrets-unreadable` | the workstation's `~/.config/sitesolide/secrets/<slug>.env` has a line it cannot read, named by its number and reason, never its content: nothing was sent | tell the user to fix that line; never open the file |
 | `out-of-scope` | a token without *Manage secrets*, listing included, `PASSWORD_HASH`, a static site, a person's role below Developer; an owner's token without public sites on a project not Restricted or one it could not deploy as it stands | ask the user; never another token or project |
 | `invalid` | a name the machine keeps for itself or the unit sets, an empty value; a value on several lines, with a null byte, not valid Unicode, with a Unicode noncharacter or over 8 KiB, refused before it is sent; a file over its bounds; a name a legacy file still holds asked to be removed; at the prompt, a control key or a pasted block of several lines | fix what the message names; a legacy file is the owner's to retire |
-| `unmanaged`, `store-unmanaged` | the store, a file of it or a legacy file is not in a form the steward rewrites: nothing changed | tell the owner of the machine |
+| `unmanaged` | the store, a file of it or a legacy file is not in a form the steward rewrites: nothing changed | tell the owner of the machine |
 | `store-refused` | a deploy found the project's store on the machine not a folder root owns: it stopped before anything was laid | tell the owner of the machine, who looks at it; never retry with `--force` |
+| `store-failed` | a deployment with a token could not lay the project's store on the machine, which its units load: nothing was served | tell the owner of the machine, with the message; never deploy again in a loop |
 | `migrate-conflict` | the owner's `secrets migrate` found a name in two legacy files with different values: nothing was written | the user fixes the file named, in the dashboard, then runs migrate again; never read or print a value |
 | `busy` | a deployment of the project runs, the token's previous restart is still under way, or the machine is busy with other changes | wait, then run the same command once |
 | `too-many-attempts` | the token's hour used up: 120 changes, 30 restarts, 60 refused requests, refused changes of access included | wait the seconds `details` names; never retry in a loop |
 | `unconfirmed` | the change was sent and no answer came: it may be written | run `sitesolide secrets --json`, then the same command once; never in a loop |
 | `restart-failed` | the service did not hold after its restart; a change made with it is written | read `logs`, fix the cause, then `sitesolide restart` once |
 | `steward-outdated`, `not-available` | over SSH, the steward does not keep stores yet; with a token, the dashboard or its steward does not | tell the user: the owner runs `sitesolide upgrade` when they decide to |
+| `needs-ssh` | `secrets migrate` or `migrate --retire` with a token: they read the project's legacy files, which no token may | the owner runs them over SSH, or merges from the dashboard |
 
 ## Zero configuration
 
@@ -342,7 +345,7 @@ What `result` carries:
 
 | Command | Fields |
 |---|---|
-| `deploy` | `slug`, `kind` (`static`, `service`, `services`), `runs` for an app (`servers`, `workers`, `scheduled`, how many of each), `dryRun`, `port` (null when the main service listens on nothing), `portChosen` (`kept`, `free`) when chosen, `portal`, `inferred` when the manifest was, `manifestWritten`, `url`, `status` (HTTP, null in a dry run), `headless` (true for a project that serves no page), `missingSecrets` (`runtime` and `files`, the declared names the server lacks, empty lists when none), `buildSecrets` (each `name` and `source`, `environment` or `workstation`, never a value); with `--compare`, `compared`, `changes` (what would change on the server, empty when nothing would) and `kept` (units edited on the machine, which deploy leaves) |
+| `deploy` | `slug`, `kind` (`static`, `service`, `services`), `runs` for an app (`servers`, `workers`, `scheduled`, how many of each), `dryRun`, `port` (null when the main service listens on nothing), `portChosen` (`kept`, `free`) when chosen, `portal`, `inferred` when the manifest was, `manifestWritten`, `url`, `status` (HTTP, null in a dry run), `headless` (true for a project that serves no page), `missingSecrets` (`runtime` and `files`, the declared names the server lacks, empty lists when none, null in a dry run or when the store could not be listed), `buildSecrets` (each `name` and `source`, `environment` or `workstation`, never a value); with `--compare`, `compared`, `changes` (what would change on the server, empty when nothing would) and `kept` (units edited on the machine, which deploy leaves) |
 | `detect` | `kind`, `manifest`, `reasons`, `notes`, `written` |
 | `status` | `projects` (each with its `services`), `ports`, `memory`, in megabytes; a scheduled service between two runs reads `waiting`, and carries `schedule`, `lastRun`, `lastResult` and `nextRun` |
 | `logs` | `slug`, `units`, `entries` |
@@ -350,7 +353,7 @@ What `result` carries:
 | `lock`, `unlock` | `slug`, `access` (`code` or `public`), `code` and `url` (null once Public), `manifestWritten`; in a dry run `dryRun` alone |
 | `domain` | `slug`, `domain`: `name`, `aliases`, `active`, `table`, `dns`, `https` |
 | `remove` | `slug`, `dryRun` |
-| `secrets` | listing: `slug`, `store`: `variables` (each `name`, `source`, `store`, `legacy` or `none`, `file`, `shadows`, `declared`), `missing`, `files` (each `name`, `state`, `declared`, `restartPending`), `legacy`, `build`, `public`, `unitReadsStore`, `restartPending`, `may`, never a value; a change: `action`, `slug`, `created`, `set`, `generated`, `removed`, `absent`, `files` (`set`, `removed`), `restart` (null, or `{ verdict }`) |
+| `secrets` | listing: `slug`, `store`: `variables` (each `name`, `source`, `store`, `legacy` or `none`, `file`, `shadows`, `declared`), `missing`, `files` (each `name`, `state`, `declared`, `restartPending`), `legacy`, `build`, `public`, `unitReadsStore`, `restartPending`, `may`, never a value; a change: `action`, `slug`, `created`, `set`, `generated`, `removed`, `absent`, `files` (`set`, `removed`), `restart` (null, or the restart's verdict: `kind`, `state`, `subState`, `restarts`); `migrate`: `action`, `slug`, `dryRun`, `sources`, `skipped`, `merged`, `already`, `overridden`, `conflicts`, `written`, `restart`; `migrate --retire`: `action`, `slug`, `retired`, `kept` |
 | `restart`, with a token | `slug`, `verdict` (`kind`, `state`, `subState`, `restarts`): a `kind` other than `active` ends in an `error` instead |
 | `share` | `slug`, `url`, `general` (`public`, `restricted`, `code`, or null for a project not deployed), `entries` (each `who`, `kind`, `role`, `by`, `createdAt`, `updatedAt`, `password`), `signIn` (`configured`, `allowedDomains`), `message` (null until signing in with a company account is set up), `changed`, and after a change `changes` (each `who`, `change`: `add`, `role`, `none` or `remove`, `role`, and `password` for password access just given) |
 | `people` | listing: `people` (each `who`, `roles` by project, `create`, `passwords`, `admin`), `domains` (each `slug`, `domain`), `signIn`, `changed: false`; `--may-create` and `--no-create`: `email`, `create`, `roles`, `change` (`create`, `none`), `changed` |
@@ -371,7 +374,9 @@ reports `missing` is `setup`'s to install, on the same decision.
 **`refresh` restarts the apps in service.** `--dry-run` only reads the
 manifests and the units on the machine; the run writes each project's units
 again, without its code, and restarts its services, one project at a time,
-stopping at the first that does not hold. It is the user's decision, after an
+stopping at the first that does not hold; with `--all`, a project it refuses,
+a legacy secret file not its own or a store it cannot lay among the reasons,
+is warned about and skipped, and the run goes on. It is the user's decision, after an
 upgrade whose notes say the generated units changed. A unit edited by hand is
 `kept`, never replaced: switching it is `deploy --force`, the owner's.
 

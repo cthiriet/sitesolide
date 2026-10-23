@@ -764,8 +764,9 @@ a dot, which now reads as a variable name; and nothing may already be named
 Every step can be run again and changes nothing the second time. Step 5 may
 come before step 4: the files are then no longer declared, and the store
 lists them as leftovers, which retire still reaches and nothing else writes.
-**Never `sitesolide refresh --all`** for any of them: it goes on past a
-project it refuses, and a value lost in silence is no refusal.
+**Never `sitesolide refresh --all`** for any of them: it skips a project it
+refuses, with a warning, and goes on to the next, and a value lost in silence
+is no refusal.
 
 The order is what keeps a running service whole. The store is read only once
 the units say so, so the merge comes after step 1 and never changes what a
@@ -842,11 +843,14 @@ and files alone.
 
 ### Going back to the legacy files
 
-**Before step 4**, the legacy files are all there: *Restore previous version*
-in the dashboard puts the store back as it was before the merge, and at its
-next restart the service runs on the legacy files alone. The restore is
-allowed, since every name it takes out of the store is still held by a legacy
-file.
+**Before step 4**, the legacy files are all there: *Restore previous version*,
+by the owner in the dashboard, puts the store back as it was before the
+merge, and at its next restart the service runs on the legacy files alone.
+The owner's restore is allowed because every name it takes out of the store
+is held by a legacy file with the store's very value, so nothing in force
+changes. An Admin's is refused: for anyone but the owner, a name a legacy
+file holds never leaves the store, whatever its value, since the answer
+would tell them whether two values are equal.
 
 **After step 4**, each retired file is the legacy previous version kept by
 the steward, `/var/lib/sitesolide-steward/precedents/<name>`, and in the

@@ -126,9 +126,13 @@ Each refusal names the file or the link, and nothing was sent. See
 
 A runtime secret the project's store lacks never stops it. Before the build,
 at a terminal, it asks for each missing name whether to set it, generate it on
-the server, or leave it unset; otherwise it warns, and `--json`'s result
-lists them under `missingSecrets`. It lays the store's folders on the machine
-before the units, on every deployment of an app. See
+the server, or leave it unset, and names each missing file with the
+`set-file` command; under `--json` or without a terminal it warns, the
+commands that set each name in the warning's details, and `--json`'s result
+lists them under `missingSecrets`, beside `buildSecrets`, each build secret
+and where it came from, `environment` or `workstation`. It lays the store's
+folders on the machine before the units, on every deployment of an app, and
+stops there when they cannot be laid or are not root's. See
 [secrets.md](secrets.md#deploy-never-waits-on-a-runtime-secret).
 
 `sitesolide remove` deletes the project's store and its previous versions,
@@ -265,8 +269,12 @@ later, never restarted by systemd meanwhile. A project with nothing to write
 takes no lock and restarts nothing, and a second run right after the first
 changes nothing on the machine. A static project has nothing to refresh.
 
-`--all` takes the projects one at a time, in the order of their names, and
-stops at the first whose restart or check fails: one site down at most, its
+`--all` takes the projects one at a time, in the order of their names. A
+project it refuses, its manifest refused, a legacy secret file not its own,
+a store it cannot lay or that is not root's folder, a unit that is not the
+platform's, is warned about and skipped, nothing changed for it, and the run
+goes on. It stops at the first project whose restart or check fails: one
+site down at most, its
 units written and its services restarted under them, the projects after it
 left as they are. The refusal names the project, what was written for it, what
 the run did before it and what it never reached. A service that held under
@@ -274,9 +282,10 @@ its earlier unit and falls under the new one hit one of its protections: its
 journal, `sitesolide logs` in its folder, says which. The run ends with a
 summary: refreshed, already current, kept (edited by hand), refused, static.
 `--dry-run` reads the manifests and the units, and prints for each project the
-units it would write, with their text, and touches nothing. `--all` goes on
-past a project it refuses: never use it to move projects to the store, one at
-a time, see [migration.md](migration.md#secrets-the-per-project-store).
+units it would write, with their text, and touches nothing. Since `--all`
+goes on past a project it refuses, never use it to move projects to the
+store: one at a time, see
+[migration.md](migration.md#secrets-the-per-project-store).
 
 With `--json`, the `result` carries `dryRun`, `all`, `projects` (each `slug`,
 `state`: `refreshed`, `outdated` in a dry run, `current`, `kept`, `refused` or
@@ -313,22 +322,28 @@ $ sitesolide secrets
    ADMIN_TOKEN             set
    STRIPE_SECRET_KEY       set, overrides shop-stripe.env
    STRIPE_WEBHOOK_SECRET   missing: sitesolide secrets set STRIPE_WEBHOOK_SECRET
-   files, read at $CREDENTIALS_DIRECTORY/files_<name>: gcp.json set, tls.key missing (sitesolide secrets set-file tls.key < tls.key)
+   files, read at $CREDENTIALS_DIRECTORY/files_<name>: gcp.json set (2318 bytes), tls.key missing (sitesolide secrets set-file tls.key < tls.key)
    legacy: shop-stripe.env, read by the service, covered by the store: sitesolide secrets migrate --retire
    build, kept by whoever deploys: CMS_TOKEN
+   public, from sitesolide.json's env: NODE_ENV, VITE_STRIPE_KEY, PUBLIC_URL
    restart pending: sitesolide secrets ... --restart, or the dashboard's Restart service
    a value is never shown here
 ```
 
 The listing names every variable the services find, where its value comes
-from, the store or a legacy file, the declared names that have none, the
-files with the path the service reads them at, the legacy files, and the
-build's names, which stay with whoever deploys. No command prints a value:
+from, the store (`set`) or a legacy file (`from shop-stripe.env`), the
+declared names that have none, the files with the path the service reads
+them at, the legacy files, the build's names, which stay with whoever
+deploys, and the names of the manifest's `env`. A file's size is the
+owner's alone: with a token, `gcp.json set`. No command prints a value:
 over SSH, the owner's commands go to the steward through its root socket,
 whose routes return none. With `--json`, the listing's `result` carries
 `command`, `slug` and `store`, the store as the steward lists it; a change's
 carries `command`, `action`, `slug`, `created`, `set`, `generated`,
-`removed`, `absent`, `files` and `restart`.
+`removed`, `absent`, `files` and `restart`; `migrate`'s carries `action`,
+`slug`, `dryRun`, `sources`, `skipped`, `merged`, `already`, `overridden`,
+`conflicts`, `written` and `restart`, and `--retire`'s `action`, `slug`,
+`retired` and `kept`.
 
 **The value never comes from the command line**, where the shell's history
 and the process list would keep it: `set` asks for it at a prompt that does
@@ -360,11 +375,14 @@ already set is refused without `--replace`. `set-file` reads standard input
 as bytes, from a pipe or a redirect, never the terminal. `--restart` restarts
 the project's service once the change is written, and says whether it holds.
 
-`migrate` and `migrate --retire` are the owner's, over SSH: they merge a
-project's legacy files into its store without anyone seeing a value, then
-delete the files the store covers, and print names and files alone: merged,
-already there, overridden by the store, conflicts (`NAME: in a.env and b.env,
-with different values`), retired, kept and why. The steps are in
+`migrate` and `migrate --retire` are the owner's, over SSH, refused
+`needs-ssh` with a token: they merge a project's legacy files into its store
+without anyone seeing a value, then delete the files the store covers, and
+print names and files alone: read, skipped, merged, already in the store,
+kept with the store's own value, retired, kept and why. A name two legacy
+files give different values stops the merge, nothing written, the
+`migrate-conflict` error listing each as `NAME: in a.env and b.env, with
+different values`. The steps are in
 [secrets.md](secrets.md#legacy-files-and-moving-to-the-store).
 
 The dashboard and the portal keep their password hashes in their own files,

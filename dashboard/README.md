@@ -260,7 +260,8 @@ a value back to the owner alone. No copy waits on the workstation: see
 In a site's *Secrets*, for an app with a store, one list. At the top, the
 restart pending and *Restart service*, and a banner while a unit of the
 project does not read the store yet: deploy or refresh it. Then the declared
-names the store holds no value for, each with *Set* and *Generate*; then:
+names the store holds no value for, each with *Set* and *Generate*, and the
+declared files it lacks, each with *Upload*; then:
 
 - **Variables**: each name, where its value in force comes from, the store,
   a legacy file, or nowhere yet, the legacy files it overrides, and whether
@@ -540,10 +541,17 @@ surface's own authentication and the role:
    noncharacter, 8 KiB.
 5. **S1, a removal**: a name a flat file of the project holds, declared, read
    by a unit or left over, may not leave the store, since that file's value
-   would come back at the next start: `invalid`, naming the file and saying
-   to retire it first.
+   would come back at the next start, nor while such a file cannot be read to
+   tell: `invalid`, naming the file and saying to retire it first. The owner
+   alone, on the dashboard or over SSH, who reads every value anyway, may
+   remove a name every flat file holding it carries with the store's very
+   value: nothing in force changes, which is what going back after a merge
+   does. For anyone else the answer never depends on a value, which would
+   tell whoever writes the store whether a guess equals a flat file's
+   (src/secrets/store.ts, `removalRefusal`).
 6. **S1', a restore or a batch**: a restore whose previous version lacks such
-   a name, and a batch that removes one, are refused the same way.
+   a name, and a batch that removes one, are judged the same way, the
+   owner's exception included (`restoreRemovalRefusal`).
 7. **S2, a write of before**: setting, through the routes of before, a name
    the store holds is refused, since the store overrides that file: change it
    there.
@@ -576,8 +584,9 @@ asked again; a write that made the store answers `created`.
   unit reads. A source not `site-<slug>`'s, not `0600` or that does not
   parse refuses the whole migration, and so does one carrying
   `PASSWORD_HASH` or a name the store refuses. Two files giving a name
-  different values is a conflict, which refuses it whole, naming the name
-  and the files, never a value. Against the store, a name is `merged`,
+  different values is a conflict, naming the name and the files, never a
+  value: a dry run lists it in `conflicts`, and a run is refused whole, 409
+  `unmanaged`, the same lists in its answer. Against the store, a name is `merged`,
   `already` there with the same value, or `overridden`, the store keeping its
   own, the one in effect. `dryRun` writes nothing; a run writes `env` once,
   its previous version kept, journaled `migrate`, and running it again writes
@@ -601,7 +610,8 @@ asked again; a write that made the store answers `created`.
   units and the service's start: each variable with its `source`, `store`,
   `legacy`, the last flat file read that holds it, or `none`, the files it
   `shadows`, and `declared`; `missing`, the declared names with no value; the
-  files, `set`, `missing` or `unmanaged`; the flat files, `read`, `leftover`,
+  files, `set`, `missing`, an empty one included with the reason `empty`, or
+  `unmanaged`; the flat files, `read`, `leftover`,
   and `covered` to the owner alone, since someone who writes the store could
   otherwise test a guess against a flat file's value, set, look, repeat; the
   build's names and `env` as written; `unitReadsStore`, `restartPending`,
@@ -609,7 +619,9 @@ asked again; a write that made the store answers `created`.
   else gives one.
 - **The journal**: `set` and `remove` of a variable, `create` when the store
   is made, `replace` and `remove` of a file, `restore`, `read` for a reveal,
-  `generate`, `migrate` and `retire`; `file` reads `store` for `env` and
+  `generate`, its format in the detail, `migrate`, how many names from which
+  files in the detail, or `conflicts` for one refused, and `retire`, the
+  flat file's name in `file`; otherwise `file` reads `store` for `env` and
   `store/<name>` for a file, `variable` the name; never a value, nor its
   length.
 - **The restart verdict** counts the store as a file the unit reads: a store

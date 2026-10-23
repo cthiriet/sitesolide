@@ -61,12 +61,14 @@ dashboard, for thirty seconds:
   token minted with *Manage secrets* ([access.md](access.md#secrets-with-a-token)):
 
   ```text
-  sitesolide secrets                                   names, sources, states; never a value
-  sitesolide secrets set NAME [--stdin] [--restart]    typed without echo, or read from a pipe
-  sitesolide secrets generate NAME [--format hex|base64url] [--bytes N] [--replace] [--restart]
-  sitesolide secrets remove NAME... [--restart]
-  sitesolide secrets set-file NAME [--restart] < path  a file read whole, from a pipe or a redirect, 64 KiB at most
-  sitesolide secrets remove-file NAME [--restart]
+  sitesolide secrets                                   this folder's project's secrets: names, sources, states, never a value
+  sitesolide secrets set <NAME> [--restart]            its value typed at a prompt that does not echo it
+  sitesolide secrets set <NAME> --stdin                its value from standard input, one trailing line break dropped
+  sitesolide secrets generate <NAME> [--restart]       a random value drawn on the server, never shown
+     --format hex|base64url --bytes <16-64> --replace
+  sitesolide secrets remove <NAME>... [--restart]      take variables out of the store
+  sitesolide secrets set-file <NAME> [--restart] < path   a file read whole, 64 KiB at most
+  sitesolide secrets remove-file <NAME> [--restart]
   ```
 
   A value never goes on the command line, where the shell's history and the
@@ -84,12 +86,17 @@ The listing says where each name comes from and what is missing:
    ADMIN_TOKEN             set
    STRIPE_SECRET_KEY       set, overrides shop-stripe.env
    STRIPE_WEBHOOK_SECRET   missing: sitesolide secrets set STRIPE_WEBHOOK_SECRET
-   files, read at $CREDENTIALS_DIRECTORY/files_<name>: gcp.json set, tls.key missing (sitesolide secrets set-file tls.key < tls.key)
+   files, read at $CREDENTIALS_DIRECTORY/files_<name>: gcp.json set (2318 bytes), tls.key missing (sitesolide secrets set-file tls.key < tls.key)
    legacy: shop-stripe.env, read by the service, covered by the store: sitesolide secrets migrate --retire
    build, kept by whoever deploys: CMS_TOKEN
+   public, from sitesolide.json's env: NODE_ENV, VITE_STRIPE_KEY, PUBLIC_URL
    restart pending: sitesolide secrets ... --restart, or the dashboard's Restart service
    a value is never shown here
 ```
+
+A name a legacy file alone supplies reads `from shop-stripe.env` rather than
+`set`, and a file's size is said to the owner alone, over SSH as in the
+dashboard.
 
 **A service reads its values when it starts**, and a running process never
 sees a change: a restart, an automatic restart after a crash, or the next
@@ -110,10 +117,11 @@ STRIPE_WEBHOOK_SECRET is not set on the server. [s]et it now (typed, not shown),
 Without a terminal, or with `--json`, it warns once, `runtime secrets not set
 on the server: A, B`, with the commands that set them, and the final result
 lists them under `missingSecrets`. A missing file is never prompted for: one
-line gives the `set-file` command. With a token, the questions of a project's
-first deployment may come once it is deployed, followed by one restart; a
-token without *Manage secrets* is asked nothing, and the machine's log names
-what is missing.
+line gives the `set-file` command. With a token, a project it may create is
+asked about before its first deployment, as any other; one whose store the
+machine does not let it hold ahead is asked about once the deployment made
+it, then one restart is offered. A token without *Manage secrets* is asked
+nothing, and the machine's log names what is missing.
 
 An app that cannot live without a value stops at start, and the deployment
 fails on its stability check, naming the unit; `sitesolide logs` says why.
@@ -132,8 +140,8 @@ What still stops a deployment, and why:
 **243/CREDENTIALS.** systemd fails every start of a project whose
 `files/` folder is missing, or whose files exceed what it loads for a unit,
 and logs it as "Failed to set up credentials: Protocol error", which sends
-one looking elsewhere. `deploy`, `refresh`, a token's deployment and the
-monitor word it instead: `<unit> could not load its secret files
+one looking elsewhere. `deploy`, `refresh`, a token's deployment, a backup
+command's run and the monitor word it instead: `<unit> could not load its secret files
 (243/CREDENTIALS): the store's files folder is missing, or its files are too
 large; sitesolide refresh <slug> lays the folder again`.
 
@@ -190,7 +198,8 @@ also checks systemd's own budget for a unit's credentials, past which every
 start would fail. A file the manifest does not declare may be set ahead,
 before the first deployment or before the manifest names it: every unit loads
 the whole folder, and the listing marks it *not declared*. A declared file not
-set yet leaves the service starting without it, and is listed *missing*.
+set yet leaves the service starting without it, and is listed *missing*; an
+empty file is listed *missing* too.
 
 ## Who reads and who writes
 
@@ -200,7 +209,7 @@ set yet leaves the service starting without it, and is listed *missing*.
 | The owner over SSH, `sitesolide secrets` | lists the names, sets, generates, removes, sets and removes files, merges and retires legacy files, for a project not deployed yet too; never a value back |
 | An Admin of the project | lists the names; sets, generates, removes, uploads, removes files and restores the previous version after unlocking; never a value back |
 | A Developer of the project | lists the names; sets, generates, removes, uploads and removes files after unlocking; never a value back, no restore |
-| A token with *Manage secrets* | lists the names; sets, generates and removes any name of its project's store, and its files, with no unlock: ticking the box was that decision. Never a value back, whoever holds it |
+| A token with *Manage secrets* | lists the names; sets, generates and removes any name of its project's store, and its files, with no unlock: ticking the box was that decision; for a project it may create, before its first deployment too, which makes the name its own. Never a value back, whoever holds it |
 | A token without it | nothing: `deploy` says it may not list secrets, and the machine's log names any that is missing |
 | A Viewer, or someone who can only open the site | nothing: the Secrets section is not theirs |
 
@@ -208,7 +217,8 @@ set yet leaves the service starting without it, and is listed *missing*.
 Admin no longer does, in a store or in a legacy file: a Developer's or an
 Admin's dashboard shows every value write-only. Nothing of the token API, the
 CLI, the MCP tools or the build returns one. Even what tells a value apart is
-the owner's: whether a legacy file is covered by the store, and a file's size.
+the owner's, in the dashboard and over SSH: whether a legacy file is covered
+by the store, and a file's size.
 
 The steward decides every one of these, as root, on its own access registry,
 and a compromised dashboard, which relays the requests, cannot make one pass.
@@ -254,13 +264,16 @@ never deletes `files/` nor the project's folder, only files inside them; a
 folder deleted by hand is laid again by the next deploy or
 `sitesolide refresh <slug>`. The first write also makes the store, which is
 how the owner fills one with `sitesolide secrets` before the project's first
-deployment. Static sites and the storeless projects, the dashboard and
+deployment, and a token with *Manage secrets* one for a project it may
+create. Static sites and the storeless projects, the dashboard and
 the portal, have none.
 
 **One previous version** of `env` and of each file is kept before every
-write. *Restore previous version*, for the owner and an Admin, swaps it back,
-after listing the names that would appear and disappear. A store made fresh,
-for a slug removed and created again, starts with none.
+write. *Restore previous version*, for the owner and an Admin, swaps the
+variables' previous version back, after listing the names that would appear
+and disappear; a file's previous version is kept for the owner to put back
+by hand. A store made fresh, for a slug removed and created again, starts
+with none.
 
 **`sitesolide remove`** deletes the project's store and its previous
 versions, after its units are stopped.
@@ -370,12 +383,20 @@ manifest's order, then the store last, so **the store wins on a shared
 name**. Two rules keep what the dashboard shows as the value in force the one
 the next start gets:
 
-- a name may not be removed from the store while a legacy file of the project
-  holds it, since that file's value would come back; a restore, or a removal
-  in a batch, that would do so is refused the same way. Retire the file
-  first, or remove the name from it;
+- a name may not leave the store while a legacy file of the project, read by
+  a unit, declared, or kept as a leftover, holds it, since that file's value
+  would come back, nor while such a file cannot be read to tell; a restore,
+  or a removal in a batch, that would take it out is refused the same way:
+  `NAME is also in shop-stripe.env, which the service reads before the
+  store: removing it here would bring that file's value back. Retire the file
+  first (sitesolide secrets migrate --retire), or remove NAME from it`. The
+  owner alone, who reads every value anyway, may still take out a name every
+  such file holds with the store's very value, which changes nothing in
+  force: that is how a merge is undone before its files are retired. For
+  anyone else the answer never depends on a value;
 - a name the store holds may not be set in a legacy file, where it would have
-  no effect: change it in the store.
+  no effect: `NAME is set in the project's store, which overrides
+  shop-stripe.env: change it there`.
 
 A legacy file is owned by `site-<slug>`, mode `0600`, and its name is the
 project's: `<slug>.env`, `<slug>-<name>`, or `<slug>-secrets/<name>`. `deploy`

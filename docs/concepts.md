@@ -357,8 +357,9 @@ sees. Once set, a value comes back to nobody but the owner. See
 environment to the machine, and **never stops on a missing runtime secret**:
 it says which are missing, and at a terminal asks for each, the typed value
 going straight to the store. What stops it is a build secret missing on the
-workstation, before anything is sent, and what would hand a project a file
-that is not its own.
+workstation, before anything is sent, what would hand a project a file that
+is not its own, and a store the machine cannot lay before the units, or that
+is not a folder root owns.
 
 **The flat files of before** (`"secrets": ["<slug>.env"]`, each file under
 `/etc/sitesolide` owned by `site-<slug>`) still load, before the store, until
@@ -556,10 +557,10 @@ rotates by line count: a refusal stays in the journal.
 | `member.invite`, `member.role`, `member.remove`, `member.signin`, `member.signin_failed`, `member.signout` | steward | as they were written | as they were written | written before the access registry only: the dashboard's people of then, their roles and sign-ins |
 | `secrets.unlock`, `secrets.lock` | steward | `owner`, or a person's email | none, or the person's email | changes unlocked, or the password or the forced sign-in refused, and locked again |
 | `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner`, a person's email, or `token:<id>` | slug | a variable read back, set or removed, by its name, or a file of the store removed; the place in `file`, a legacy file's name, `store` for the project's store, `store/<name>` for one of its files; a read is the owner's alone, a person's refused by role, with that role; a token's set or removed through the API, the person in `member` for their own, its refusals with their reason, `no secrets permission` among them, 60 an hour at most |
-| `secrets.generate` | steward | `owner`, a person's email, or `token:<id>` | slug | a value drawn on the server for a name, in `store`; never the value, nor its length |
+| `secrets.generate` | steward | `owner`, a person's email, or `token:<id>` | slug | a value drawn on the server for a name, in `store`, its format, `hex` or `base64url`, in the detail; never the value, nor its length |
 | `secrets.list` | steward | `token:<id>` | slug | a token's listing of a project's names refused, with its reason; a listing reads no value, and one that goes through is not journaled |
 | `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner`, a person's email, or `token:<id>` | slug | a secret file created, or a project's store made (`store`); a file or the store's variables put back to their previous version; a file read whole replaced, or a file of the store set (`store/<name>`) |
-| `secrets.migrate`, `secrets.retire` | steward | `owner` | slug | a project's legacy files merged into its store, how many names from which files in the detail; a legacy file the store covers deleted, its name in `file`, kept as its previous version; never a value |
+| `secrets.migrate`, `secrets.retire` | steward | `owner` | slug | a project's legacy files merged into its store, how many names from which files in the detail, or `conflicts` for a merge refused; a legacy file the store covers deleted, its name in `file`, kept as its previous version; never a value |
 | `secrets.password` | steward | `owner` | slug | a password hash changed |
 | `access.general` | steward | `owner`, or an Admin's email | slug | a site's general access chosen, Public, Restricted or Anyone with the code, `off`, `on` or `code` in the detail; listed as `door.update` before, the rows themselves unchanged |
 | `access.code` | steward | `owner`, or an Admin's email | slug | a site that opens with a code given a new one; never the code, which no row holds |

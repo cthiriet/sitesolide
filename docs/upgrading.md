@@ -142,7 +142,7 @@ backups, whose backup commands receive the store; the monitor, which words a
 unit that could not load its secret files. `sitesolide upgrade --dry-run`
 lists what differs. Nothing on the machine changes form: no file of
 `/etc/sitesolide` moves, and no project's store exists until its next
-deployment or its first value.
+deployment, a `sitesolide refresh` of it, or its first value.
 
 **Every app's units change at its next deployment**, or at `sitesolide
 refresh <slug>`. Each service unit of an app gains four lines: the store's
@@ -178,11 +178,11 @@ legacy file without a dot, and that nothing is already named `projects`.
   project when you choose, one at a time, as
   [migration.md](migration.md#secrets-the-per-project-store) says: deploy it,
   merge its files into its store, restart, retire the files, then list the
-  names in its manifest. Never `sitesolide refresh --all` for that: it goes on
-  past a project it refuses.
+  names in its manifest. Never `sitesolide refresh --all` for that: it skips a
+  project it refuses, with a warning, and goes on to the next.
 - **An entry without a dot is now a variable name.** A legacy file named
-  without one, `"secrets": ["token"]`, would be read as the variable `TOKEN`'s
-  name: rename the file first, or migrate.
+  without one, `"secrets": ["token"]`, would be read as the name of a
+  variable, `token`: rename the file first, or migrate.
 - **The build gets a clean environment.** It inherits only what locates things
   and the toolchains from yours, `PATH`, `HOME`, `LANG` and their kin; a
   variable it read from your shell, a proxy or a registry's token, now goes
@@ -194,9 +194,10 @@ legacy file without a dot, and that nothing is already named `projects`.
 - **Only the owner reads a value back.** An Admin of a project no longer
   reads one, in its store or in a legacy file: their dashboard shows every
   value write-only.
-- **`sitesolide secrets` works over SSH**, as the owner, for every project
-  but the dashboard and the portal, and with a token it changes any name of
-  the project's store, no longer `<slug>.env` alone.
+- **`sitesolide secrets` works over SSH**, as the owner, for every app but
+  the dashboard and the portal, and with a token it changes any name of the
+  project's store, no longer `<slug>.env` alone. A static site has no store:
+  its build secrets stay with whoever deploys.
 - **`sitesolide run`**, for a project whose manifest lists names, reads
   `~/.config/sitesolide/secrets/<slug>.env` with a strict parser and never a
   shell: `export A=b` or a space around `=` stop it, with the line number,

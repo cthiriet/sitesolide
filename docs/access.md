@@ -377,8 +377,9 @@ dashboard's *Secrets* section, or a token that may manage secrets with
 the service reads them at its next restart. A project deployed before the
 store that still declares files, `"secrets": ["<slug>.env"]`, deploys with a
 warning, and with another when a file is missing. What still stops: a build
-secret missing on your workstation, and a declared file that is not the
-project's (`secret-taken`, below).
+secret missing on your workstation, before anything is sent, a declared file
+that is not the project's (`secret-taken`, below), and a store the machine
+cannot lay before the units (`store-refused`, `store-failed`).
 
 **`install` runs on the machine** as the project's account, with the network
 but not the loopback, none of the machine's ports to listen on, a throwaway
@@ -523,9 +524,10 @@ yet may be set too; every service loads every file of the project's store.
 - **Removing never brings an old value back.** A project deployed before the
   store may still have legacy files, flat files under `/etc/sitesolide` that
   its service reads before the store, which wins on a shared name. While one
-  of them holds a name, removing that name from the store is refused, naming
-  the file: the value it holds would come back at the next restart. The
-  owner merges and retires those files ([secrets.md](secrets.md)).
+  of them holds a name, or cannot be read to tell, removing that name from
+  the store is refused, naming the file: the value it holds would come back
+  at the next restart. The owner merges and retires those files
+  ([secrets.md](secrets.md)).
 - **Ahead of the first deployment.** A token that may create a project may
   set its secrets before deploying it, so that the first start finds them.
   The first write records the project as the token's, and a person's own
@@ -821,10 +823,15 @@ would be sent, an empty `publicDir`), the manifest first, the build on the
 workstation, the archive with the CLI's exclusions, then the machine's log
 to the end. It exits 0 only once the machine says `succeeded`. curl reads the
 token's header from a file descriptor, never from its arguments, and the
-build runs without `SITESOLIDE_TOKEN`, or any other `SITESOLIDE_` variable,
-in its environment, but as you all the same, with what you may read: deploy,
-and run `--archive`, which builds too,
-only a project whose build you would run yourself. `bin/tests/deploy-script.test.ts` holds
+build runs in a clean environment, as the CLI's does: of yours, only the
+variables every build inherits and the build secrets the manifest names under
+`secrets.build`, then the manifest's own `env`, never `SITESOLIDE_TOKEN` nor
+any other `SITESOLIDE_` variable. A build secret comes from the environment
+alone, exported before the run, never from the workstation's file: one the
+environment lacks stops the run before anything is sent, and its value never
+goes on a command line. The build runs as you all the same, with what you may
+read: deploy, and run `--archive`, which builds too, only a project whose
+build you would run yourself. `bin/tests/deploy-script.test.ts` holds
 its archive to the CLI's on the same folder, read back by the installer's own
 reader, with each of the four JSON readers.
 
