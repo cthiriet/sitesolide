@@ -36,6 +36,10 @@ const BUILD_SECRETS_UNREADABLE =
 const MIGRATE_FIRST =
   "the service reads values from legacy files that this manifest stops reading, and the store lacks them: the owner runs `sitesolide secrets migrate --restart` over SSH (or Merge into the store in the dashboard), then deploy again, or keep the old form of `secrets` in sitesolide.json until then; never set those values yourself, and never read or print them";
 
+/** A deployment that could not list the store, which it reads to know what it would drop. */
+const STORE_UNLISTED =
+  "the project's store could not be listed, and a manifest that names its variables, or none, is only deployed once it is: over SSH, if the message says the steward predates the store, the owner runs `sitesolide upgrade` first, otherwise run the same command again; with a token, a token minted with Manage secrets lists it, or the owner deploys";
+
 /** A store folder that is a link or no folder. */
 const STORE_REFUSED =
   "a folder of the project's store on the machine is a link or a file: tell the owner of the machine, who looks at the path named; never move, delete or replace it yourself; nothing was installed";
@@ -135,6 +139,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^cannot read who owns the secret files on the server/, READ_FAILED],
   [/^cannot read the system users/, READ_FAILED],
   [/^cannot read the loopback's project set/, READ_FAILED],
+  [/^cannot tell whether this deployment would drop values legacy files supply/, STORE_UNLISTED],
   [/^cannot tell whether/, READ_FAILED],
   [/^systemd does not read the schedule/, "fix `schedule` of each service `details` names in sitesolide.json: a systemd calendar expression such as hourly, daily, *:0/15 or \"Mon..Fri 08:00\" (man systemd.time, CALENDAR EVENTS); then deploy again"],
   [/^cannot compare .* with the server/, READ_FAILED],
@@ -256,6 +261,7 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "build-secrets-unreadable": BUILD_SECRETS_UNREADABLE,
   "store-refused": STORE_REFUSED,
   "migrate-first": MIGRATE_FIRST,
+  "store-unlisted": STORE_UNLISTED,
   "store-failed":
     "the machine could not lay the project's store of secrets, which its units load: tell the owner of the machine, with the message; nothing was served; never create anything on the machine by hand, nor deploy again in a loop",
   "store-unmanaged":

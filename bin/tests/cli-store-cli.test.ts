@@ -839,10 +839,28 @@ describe("what the steward added for removal, migration, retirement and restarts
     expect(verdictWords({ ...failed, reason })).toBe(`activating, auto-restart, 4 restart(s) by systemd: the service restarts in a loop; ${reason}`);
   });
 
-  test("a leftover whose value the store overrides points to retiring it with force; one a unit reads, to migrate", () => {
-    const file = (name: string, over: object) => ({ name, state: "managed" as const, reason: null, variables: ["A"], read: false, leftover: false, covered: false, ...over });
-    const lines = storeLines(view({ legacy: [file("shop-old.env", { leftover: true }), file("shop.env", { read: true })] }));
-    expect(lines).toContain("   legacy: shop-old.env, no longer declared, a value differs from the store's, which overrides it: sitesolide secrets migrate --retire --force lets the store's stand alone");
-    expect(lines).toContain("   legacy: shop.env, read by the service, not covered by the store: sitesolide secrets migrate");
+  test("a legacy file the store does not cover: --force only when the store holds every name, migrate or a set by hand when it lacks one", () => {
+    const file = (name: string, variables: string[], over: object) => ({ name, state: "managed" as const, reason: null, variables, read: false, leftover: false, covered: false, ...over });
+    const stored = (...names: string[]) => names.map((name) => ({ name, source: "store" as const, file: null, shadows: [], declared: true }));
+    const lines = storeLines(
+      view({
+        variables: stored("A"),
+        legacy: [
+          // Every name in the store, its value overriding the file's: force lets the store's stand.
+          file("shop-old.env", ["A"], { leftover: true }),
+          // R6: the store lacks STRIPE_SECRET_KEY, this leftover holds its only copy.
+          file("shop-keys.env", ["A", "STRIPE_SECRET_KEY"], { leftover: true }),
+          // A file the unit reads, a name the store lacks: migrate.
+          file("shop.env", ["SMTP_URL"], { read: true }),
+        ],
+      }),
+    );
+    expect(lines).toContain("   legacy: shop-old.env, no longer declared, its values differ from the store's, which overrides them: sitesolide secrets migrate --retire --force lets the store's stand alone");
+    expect(lines).toContain(
+      "   legacy: shop-keys.env, no longer declared, holds STRIPE_SECRET_KEY, which the store lacks and no unit reads: set it in the store first if the service needs it, the owner reads this file in the dashboard; --retire --force would delete the only copy",
+    );
+    expect(lines).toContain("   legacy: shop.env, read by the service, holds SMTP_URL, which the store lacks: sitesolide secrets migrate first, never --retire --force, which would drop it");
+    // Never pointed to --force while a name is missing from the store.
+    for (const line of lines.filter((one) => one.includes("shop-keys.env") || one.includes("shop.env,"))) expect(line).not.toContain("lets the store's stand alone");
   });
 });

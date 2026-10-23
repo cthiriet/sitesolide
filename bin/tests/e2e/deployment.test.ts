@@ -944,17 +944,25 @@ describe("deploy and the store of secrets", () => {
     }
   }, 30_000);
 
-  test("a steward from before the store: one warning, and the deployment goes on", async () => {
-    const vm = createFakeVm();
-    try {
-      vm.acceptWrites();
-      vm.setStore({ state: "old" });
-      const r = await run("projects/store-app", ["deploy", "--json"], { vm });
-      const list = jsonEvents(r.output);
-      expect(list.filter((event) => event.type === "warning" && String(event.message).startsWith("cannot tell which runtime secrets are set"))).toHaveLength(1);
-      expect(vm.logs().some((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart sample-store"))).toBe(true);
-    } finally {
-      vm.cleanup();
+  test("a steward from before the store, or one that does not answer: what would be dropped cannot be told, a stop before anything is pushed", async () => {
+    for (const state of ["old", "down"] as const) {
+      const vm = createFakeVm();
+      try {
+        vm.acceptWrites();
+        vm.setStore({ state });
+        for (const project of ["projects/store-app", "projects/bun-mixed"]) {
+          const r = await run(project, ["deploy", "--json"], { vm });
+          expect({ state, project, code: r.code }).toEqual({ state, project, code: 1 });
+          expect(jsonEvents(r.output).at(-1)).toMatchObject({
+            type: "error",
+            message: expect.stringContaining("cannot tell whether this deployment would drop values legacy files supply: "),
+            hint: expect.stringContaining("sitesolide upgrade"),
+          });
+        }
+        expect(vm.logs().filter((line) => line.startsWith("ACCEPTED") || line.includes("rsync") || line.startsWith("LOCK"))).toEqual([]);
+      } finally {
+        vm.cleanup();
+      }
     }
   }, 30_000);
 

@@ -38,6 +38,13 @@
 # run: one the manifest names and the environment lacks stops the run before
 # anything is sent. Its value never goes on a command line either.
 #
+# This script reads no project's store. A manifest that names its variables,
+# or none, makes units that read the store alone: over a project whose units
+# still read legacy files holding values the store lacks, the machine refuses
+# the deployment, `migrate-first`, which this script prints as it comes, and
+# the owner runs `sitesolide secrets migrate --restart` before deploying
+# again. The CLI reads the store and says so before anything is sent.
+#
 # The archive's rules are bin/cli/remote.ts and bin/cli/bundle.ts, and
 # bin/tests/deploy-script.test.ts holds this script to them: change one, and
 # that test says whether the other followed.

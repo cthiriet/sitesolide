@@ -799,19 +799,39 @@ describe("deploy through the API: the secrets", () => {
     storeScenario = "answers";
   });
 
-  test("a token that may not list secrets, a project not deployed yet, a dashboard before the store: said, and the deployment goes on", async () => {
+  test("a store this token may not list, or a dashboard before the store: what would be dropped cannot be told, a stop before anything is sent", async () => {
     scenario = "succeeds";
     for (const [state, said] of [
-      ["out-of-scope", "this token may not list secrets"],
-      ["not-found", "not deployed yet"],
-      ["old", "cannot tell which runtime secrets are set"],
+      ["out-of-scope", "this token may not list the project's store, which a token minted with Manage secrets may"],
+      ["old", "does not carry the store of secrets by token yet"],
     ] as const) {
-      storeScenario = state;
-      const r = await cli(project({ ...APP, secrets: ["API_KEY"] }, APP_FILES), ["deploy"], env());
-      expect({ state, code: r.code }).toEqual({ state, code: 0 });
-      expect(r.all).toContain(said);
+      for (const manifest of [{ ...APP, secrets: ["API_KEY"] }, APP]) {
+        storeScenario = state;
+        received.length = 0;
+        const r = await cli(project(manifest, APP_FILES), ["deploy", "--json"], env());
+        expect({ state, code: r.code }).toEqual({ state, code: 1 });
+        expect(events(r.output).at(-1)).toMatchObject({
+          type: "error",
+          message: expect.stringContaining(`cannot tell whether this deployment would drop values legacy files supply: `),
+          hint: expect.stringContaining("Manage secrets"),
+        });
+        expect(r.output).toContain(said);
+        expect(received.filter((entry) => entry.method !== "GET")).toEqual([]);
+      }
     }
+    // The old form keeps reading its files: nothing to tell, nothing asked.
+    storeScenario = "out-of-scope";
+    expect((await cli(project({ ...APP, secrets: ["shop.env"] }, APP_FILES), ["deploy"], env())).code).toBe(0);
     storeScenario = "answers";
+  });
+
+  test("a project not deployed yet: nothing installed reads a legacy file, and the deployment goes on", async () => {
+    scenario = "succeeds";
+    storeScenario = "not-found";
+    const r = await cli(project({ ...APP, secrets: ["API_KEY"] }, APP_FILES), ["deploy"], env());
+    storeScenario = "answers";
+    expect(r.code).toBe(0);
+    expect(r.all).toContain("not deployed yet");
   });
 
   test("the placeholders a dashboard before them does not send: the zone its address names, no contact", () => {

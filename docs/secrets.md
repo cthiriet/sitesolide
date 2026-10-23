@@ -95,8 +95,12 @@ The listing says where each name comes from and what is missing:
 ```
 
 A name a legacy file alone supplies reads `from shop-stripe.env` rather than
-`set`, and a file's size is said to the owner alone, over SSH as in the
-dashboard.
+`set`, and a file's size is listed to the owner alone, over SSH as in the
+dashboard. Not a secret all the same from whoever may write the store: the
+size refusals, 64 KiB for a file, 512 KiB for all of them, 256 KiB for the
+variables, let a writer, a Developer, an Admin or a token with *Manage
+secrets*, narrow a size down by trying writes. That gives them nothing
+more: a writer can deploy code that reads the values themselves.
 
 **A service reads its values when it starts**, and a running process never
 sees a change: a restart, an automatic restart after a crash, or the next
@@ -218,7 +222,9 @@ Admin no longer does, in a store or in a legacy file: a Developer's or an
 Admin's dashboard shows every value write-only. Nothing of the token API, the
 CLI, the MCP tools or the build returns one. Even what tells a value apart is
 the owner's, in the dashboard and over SSH: whether a legacy file is covered
-by the store, and a file's size.
+by the store, and a file's size, which the listing shows the owner alone. A
+writer may still narrow a size down through the size refusals, by trying
+writes; that is no more than the code a writer may deploy already reads.
 
 The steward decides every one of these, as root, on its own access registry,
 and a compromised dashboard, which relays the requests, cannot make one pass.
@@ -333,7 +339,11 @@ code. A build that needs another variable of yours, a proxy, or the agent to
 fetch a private dependency, names it under `secrets.build`: that is what
 "taken from whoever deploys" means.
 `deploy.sh`, the script that deploys without the CLI, takes build secrets
-from the environment alone, and never puts a value on a command line.
+from the environment alone, and never puts a value on a command line. It
+reads no store: a manifest that names its variables, or none, deployed over
+a project whose units still read legacy files holding values the store
+lacks, is refused by the machine, `migrate-first`, and the owner migrates
+first.
 
 A static site may have build secrets, and `env` once it has a `build`: no
 service reads anything at runtime there, so `secrets.runtime` and
@@ -436,7 +446,9 @@ landing or a service made by hand, keeps its files by name, as before.
    that names its variables would drop the values the legacy files still
    supply, its units reading the store alone: `deploy` stops before anything
    is sent, `migrate first: sitesolide secrets migrate --restart`, naming
-   them.
+   them. A deployment that cannot list the store stops too, since what it
+   would drop cannot be told: a token needs *Manage secrets* to deploy such a
+   manifest, and over SSH a steward from before the store is upgraded first.
 
 Merging and retiring are the owner's alone. Steps 4 and 5 may come in either
 order. Never `sitesolide refresh --all` for any of them. The detail, and how
@@ -452,7 +464,7 @@ dashboard's and the portal's own *Secrets*, the owner alone:
 
 | Rule | Files | Why |
 |---|---|---|
-| **write-only**: replaced, never read back, size not shown | legacy files read whole and closed to other accounts | a private key never comes back to the screen, and its size would already give away its algorithm |
+| **write-only**: replaced, never read back, size not shown | legacy files read whole and closed to other accounts | a private key never comes back to the screen, and its size would already give away its algorithm; a writer may narrow a size down through the size refusals by trying writes, which tells them nothing the code they may deploy cannot read |
 | **Change password only**: never read, never set by hand, never restored, the old one erased | any `PASSWORD_HASH`, in any file | a hash is cracked offline, and restoring would revalidate the password you changed because it had leaked |
 | **hash only**: no other variable | `dashboard.env`, `portal.env` | one more variable there would change what the service does: a socket path would send the next password typed to another socket |
 

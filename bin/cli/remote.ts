@@ -649,7 +649,9 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
   // A manifest that names its variables, or none, makes units that read the
   // store alone: what legacy files the installed units read hold, and the
   // store lacks, would be dropped. Read first, and a stop before anything is
-  // sent; then what the store lacks of the declared names.
+  // sent, a listing this token may not make or that fails included, since
+  // what would be dropped cannot be told then; then what the store lacks of
+  // the declared names.
   if (hasStore(manifest) && declaration.form !== "legacy") {
     if (declares) output.say("-> runtime secrets");
     const listed = await transport.list(slug);
@@ -660,15 +662,27 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
         missing = await store.handleMissing(store.withDeclared(listed.value, declaration), transport, io);
         if (missing.runtime.length === 0 && missing.files.length === 0) output.say("   every declared runtime secret is set");
       }
-    } else if (listed.failure.error === "out-of-scope") {
-      if (declares) output.say("   this token may not list secrets: the machine's log names any that is missing");
     } else if (listed.failure.error === "not-found") {
       // A project not deployed yet whose store this token may not hold
       // ahead: nothing installed reads a legacy file, and what the store
       // lacks is asked for once the deployment made it.
       deferred = declares;
       if (declares) output.say("   not deployed yet: what its store lacks is said once the deployment is done");
-    } else if (declares) warnOn(output, `cannot tell which runtime secrets are set: ${listed.failure.message}`, []);
+    } else if (["unauthenticated", "too-many-attempts", "unreachable"].includes(listed.failure.error)) {
+      // What would refuse the deployment itself, said as it stands.
+      return report(output, listed.failure);
+    } else {
+      const why =
+        listed.failure.error === "out-of-scope" ? "this token may not list the project's store, which a token minted with Manage secrets may" : listed.failure.message;
+      return report(output, {
+        error: "store-unlisted",
+        message: `cannot tell whether this deployment would drop values legacy files supply: ${why}`,
+        details: [
+          "a manifest that names its variables, or none, makes units that read the store alone: the store is read first, to stop a deployment that would drop a value",
+          "nothing was sent",
+        ],
+      });
+    }
   }
 
   // The manifest first: the dashboard and the steward judge it, so that a

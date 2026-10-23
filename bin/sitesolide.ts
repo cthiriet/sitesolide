@@ -1006,7 +1006,8 @@ async function buildSecretsFor(project: Project, config: Config, executor: Execu
  * First, what deploying would drop: such a manifest makes units that read
  * the store alone, so a value a legacy file the installed units read holds,
  * and the store lacks, would be gone at the next start. That stops the
- * deployment before anything is sent, saying to migrate first. A read, hence
+ * deployment before anything is sent, saying to migrate first, and so does
+ * a listing that fails: what would be dropped cannot be told. A read, hence
  * in a dry run too.
  *
  * Then the declared runtime secrets the store lacks. At a terminal, each is
@@ -1026,10 +1027,11 @@ async function runtimeSecrets(manifest: Manifest, config: Config, executor: Exec
   const transport = ownerStore(config, executor);
   const listed = await transport.list(manifest.slug);
   if (!listed.ok) {
-    const what = declares ? "which runtime secrets are set" : "whether the service reads values this manifest would drop";
-    warn(`cannot tell ${what}: ${listed.failure.message}`, listed.failure.details ?? []);
-    if (declares) note({ missingSecrets: null });
-    return;
+    die(`cannot tell whether this deployment would drop values legacy files supply: ${listed.failure.message}`, [
+      ...(listed.failure.details ?? []),
+      "a manifest that names its variables, or none, makes units that read the store alone: the store is read first, to stop a deployment that would drop a value",
+      "nothing was sent",
+    ]);
   }
   const loss = legacyLossRefusal(listed.value, "nothing was sent");
   if (loss !== null) die(loss.message, loss.details);

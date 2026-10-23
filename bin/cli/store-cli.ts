@@ -39,6 +39,7 @@ import { isApp, isLegacySecretName, isValidFileName, isValidSlug, STORELESS_SLUG
 import { call, type Answer as ApiAnswer, type Failure, type Fetch, type Output, type Remote, type Typed } from "./remote";
 import { credentialName, GENERATE_DEFAULT_BYTES, GENERATE_FORMATS, GENERATE_MAX_BYTES, GENERATE_MIN_BYTES, MAX_STORE_FILE_BYTES, type GenerateFormat } from "./store";
 import type {
+  LegacyFileView,
   RestartVerdict,
   StoreChangeResponse,
   StoreFileView,
@@ -572,6 +573,23 @@ function fileWords(file: StoreFileView): string {
 }
 
 /**
+ * What to do with a legacy file the store does not cover, told by the cause.
+ * A name it holds that the store lacks is a value the store does not have:
+ * migrate carries it over when a unit reads the file; a leftover no unit
+ * reads is not migrated, and its value is set in the store by hand first if
+ * the service needs it. Never --force then: retiring would delete the only
+ * copy. Only when the store holds every name, its values overriding the
+ * file's, does `--retire --force` let the store's stand alone.
+ */
+function uncovered(legacy: LegacyFileView, inStore: ReadonlySet<string>): string {
+  const lacking = legacy.variables.filter((name) => !inStore.has(name));
+  if (lacking.length === 0) return "its values differ from the store's, which overrides them: sitesolide secrets migrate --retire --force lets the store's stand alone";
+  const names = `${lacking.join(", ")}, which the store lacks`;
+  if (legacy.read) return `holds ${names}: sitesolide secrets migrate first, never --retire --force, which would drop ${lacking.length === 1 ? "it" : "them"}`;
+  return `holds ${names} and no unit reads: set ${lacking.length === 1 ? "it" : "them"} in the store first if the service needs ${lacking.length === 1 ? "it" : "them"}, the owner reads this file in the dashboard; --retire --force would delete the only copy`;
+}
+
+/**
  * The listing, the lines under its title: each variable and where its value
  * comes from, the files and the path the service reads them at, the legacy
  * files and what retiring them takes, the build's names, and whether a
@@ -595,19 +613,13 @@ export function storeLines(view: StoreView): string[] {
   }
   if (view.variables.length === 0) lines.push("   no variable yet: sitesolide secrets set NAME, or sitesolide secrets generate NAME");
   if (view.files.length > 0) lines.push(`   files, read at ${filePath("<name>")}: ${view.files.map(fileWords).join(", ")}`);
+  const inStore = new Set(view.variables.filter((variable) => variable.source === "store").map((variable) => variable.name));
   for (const legacy of view.legacy) {
     const parts = [
       legacy.state === "absent" ? "missing" : legacy.state === "unmanaged" ? `not managed${legacy.reason === null ? "" : `, ${legacy.reason}`}` : null,
       legacy.read ? "read by the service" : null,
       legacy.leftover ? "no longer declared" : null,
-      legacy.covered === true
-        ? "covered by the store: sitesolide secrets migrate --retire"
-        : legacy.covered === false
-          ? // Migrate reads only what a unit reads; a leftover whose value the store overrides is retired with force.
-            legacy.read
-            ? "not covered by the store: sitesolide secrets migrate"
-            : "a value differs from the store's, which overrides it: sitesolide secrets migrate --retire --force lets the store's stand alone"
-          : null,
+      legacy.covered === true ? "covered by the store: sitesolide secrets migrate --retire" : legacy.covered === false ? uncovered(legacy, inStore) : null,
     ].filter((part): part is string => part !== null);
     lines.push(`   legacy: ${legacy.name}${parts.length === 0 ? "" : `, ${parts.join(", ")}`}`);
   }
