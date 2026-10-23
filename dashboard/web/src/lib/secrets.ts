@@ -12,8 +12,10 @@
  */
 import { duration, size } from "./format"
 import { serviceWord } from "./sites"
+import { missingLabel, storeMissing, storePending, withStore } from "./store"
 import type { Tone } from "./tones"
 import type {
+  ArrivingProjectView,
   ErrorCode,
   LogEntry,
   FileView,
@@ -145,9 +147,12 @@ export function refusalOf(status: number, body: unknown): Refusal {
 
 // --- The projects, the services, the files -------------------------------------
 
-/** By slug, in alphabetical order, like the sites table. A copy: the original does not move. */
-export function sortProjects(projects: readonly ProjectView[]): ProjectView[] {
-  return [...projects].sort((a, b) => a.slug.localeCompare(b.slug, "en"))
+/**
+ * By slug, in alphabetical order, like the sites table, each with its store
+ * made sure of (`withStore`). A copy: the original does not move.
+ */
+export function sortProjects(projects: readonly ArrivingProjectView[]): ProjectView[] {
+  return projects.map(withStore).sort((a, b) => a.slug.localeCompare(b.slug, "en"))
 }
 
 /** "failed", or "activating (auto-restart)" when the substate says something else. */
@@ -257,9 +262,26 @@ export function restorableFiles(project: ProjectView): FileView[] {
     .sort((a, b) => (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0))
 }
 
-/** The files changed since the last startup, which the next one will apply. */
+/**
+ * The files changed since the last startup, which the next one will apply:
+ * the legacy files, then the store's own files, by name.
+ */
 export function pendingFiles(project: ProjectView): string[] {
-  return project.files.filter((file) => file.restartPending).map((file) => file.name)
+  const legacy = project.files.filter((file) => file.restartPending).map((file) => file.name)
+  const store = project.store === null ? [] : storePending(project.store, project.service?.startedAt ?? null).files
+  return [...legacy, ...store]
+}
+
+/** The store's variables changed since the last startup: said beside the files, since they have no file name of their own. */
+export function pendingVariables(project: ProjectView): boolean {
+  return project.store !== null && storePending(project.store, project.service?.startedAt ?? null).variables
+}
+
+/** "The variables on the server and gcp.json", "cms.env": what a restart applies, in one phrase. */
+export function pendingPhrase(files: readonly string[], variables: boolean): string {
+  const pieces = [...(variables ? ["the variables on the server"] : []), ...files]
+  if (pieces.length <= 1) return pieces.join("")
+  return `${pieces.slice(0, -1).join(", ")} and ${pieces[pieces.length - 1]}`
 }
 
 // --- What is wrong in a project ------------------------------------------------
@@ -268,15 +290,23 @@ export type Problem =
   | { key: "service"; tone: Tone; label: string; systemd: string | null }
   | { key: "absent"; tone: Tone; label: string; file: string }
   | { key: "unmanaged"; tone: Tone; label: string; file: string }
-  | { key: "pending"; tone: Tone; label: string; files: string[] }
+  /** Declared in the manifest, with no value on the server: the store's names and files. */
+  | { key: "missing"; tone: Tone; label: string; names: string[]; files: string[] }
+  /** The store's folder or its env file is not as the steward writes them: it refuses every write. */
+  | { key: "store-unmanaged"; tone: Tone; label: string }
+  /** An installed unit does not read the store yet: what is set there does not reach the service. */
+  | { key: "store-unread"; tone: Tone; label: string }
+  | { key: "pending"; tone: Tone; label: string; files: string[]; variables: boolean }
 
 const TONE_RANK: Record<Tone, number> = { error: 0, attention: 1, neutral: 2, ok: 3 }
 
 /**
  * What makes a project worth looking at, the most serious first: its service if
- * it is not running, its missing files, the unmanaged ones, and the restart
- * pending, stated once for the whole project since it is the service that
- * restarts. At equal severity, the order of this list.
+ * it is not running, what it declares and lacks (its store's names and files,
+ * once for the store, then each legacy file), the unmanaged ones, a unit that
+ * does not read its store yet, and the restart pending, stated once for the
+ * whole project since it is the service that restarts. At equal severity, the
+ * order of this list.
  */
 export function projectProblems(project: ProjectView, serverNow: number): Problem[] {
   const problems: Problem[] = []
@@ -284,16 +314,34 @@ export function projectProblems(project: ProjectView, serverNow: number): Proble
   if (service.tone === "error" || service.tone === "attention") {
     problems.push({ key: "service", tone: service.tone, label: service.text, systemd: service.systemd })
   }
+  const store = project.store
+  const missing = store === null ? null : missingLabel(store)
+  if (store !== null && missing !== null) {
+    const { variables, files } = storeMissing(store)
+    problems.push({ key: "missing", tone: "error", label: missing, names: variables, files })
+  }
   for (const file of project.files) {
     if (file.state === "absent") problems.push({ key: "absent", tone: "error", label: "Missing", file: file.name })
   }
+  if (store !== null && store.state === "unmanaged") problems.push({ key: "store-unmanaged", tone: "attention", label: "Unmanaged" })
   for (const file of project.files) {
     if (file.state === "unmanaged") {
       problems.push({ key: "unmanaged", tone: "attention", label: "Unmanaged", file: file.name })
     }
   }
+  if (store !== null) {
+    for (const file of store.files) {
+      if (file.state === "unmanaged") problems.push({ key: "unmanaged", tone: "attention", label: "Unmanaged", file: file.name })
+    }
+  }
+  if (store !== null && store.unitReadsStore === false) {
+    problems.push({ key: "store-unread", tone: "attention", label: "Store not read yet" })
+  }
   const pending = pendingFiles(project)
-  if (pending.length > 0) problems.push({ key: "pending", tone: "attention", label: PENDING_LABEL, files: pending })
+  const variables = pendingVariables(project)
+  if (pending.length > 0 || variables) {
+    problems.push({ key: "pending", tone: "attention", label: PENDING_LABEL, files: pending, variables })
+  }
   // `sort` is stable: at equal severity, the order above.
   return problems.sort((a, b) => TONE_RANK[a.tone] - TONE_RANK[b.tone])
 }
@@ -468,6 +516,9 @@ const OPERATION_NAMES: Record<Operation, string> = {
   "token.revoke": "Revoke token",
   "project.create": "Create project",
   "project.remove": "Remove project",
+  generate: "Generate",
+  migrate: "Merge into the store",
+  retire: "Retire",
 }
 
 /**
@@ -483,21 +534,48 @@ function generalVerb(detail: string | null): string {
   return direction === "on" ? "Restrict" : direction === "off" ? "Make public" : direction === "code" ? "Use a code" : OPERATION_NAMES.portal
 }
 
+/**
+ * The journal's place for a project's store: `store` for its variables,
+ * `store/<name>` for one of its files. Never a legacy name, which is flat or
+ * under a folder ending in `-secrets`.
+ */
+export const STORE_PLACE = "store"
+
+/** A file of the store, by its name alone: `store/gcp.json` is `gcp.json`; anything else is null. */
+export function storeFileOf(place: string | null): string | null {
+  if (place === null || !place.startsWith(`${STORE_PLACE}/`)) return null
+  const name = place.slice(STORE_PLACE.length + 1)
+  return name === "" ? null : name
+}
+
 export function operationParts(entry: LogEntry): OperationParts {
-  const verb = entry.operation === "portal" ? generalVerb(entry.detail) : OPERATION_NAMES[entry.operation]
-  switch (entry.operation) {
+  const operation = entry.operation
+  const name = Object.hasOwn(OPERATION_NAMES, operation) ? OPERATION_NAMES[operation] : operation
+  const verb = operation === "portal" ? generalVerb(entry.detail) : name
+  switch (operation) {
+    case "remove": {
+      // A file of the store removed carries its place, and no variable.
+      const file = entry.variable === null ? storeFileOf(entry.file) : null
+      if (file !== null) return { verb, object: file, kind: "file" }
+      return { verb, object: entry.variable, kind: entry.variable === null ? null : "variable" }
+    }
     case "read":
     case "set":
-    case "remove":
     case "password":
+    case "generate":
       return { verb, object: entry.variable, kind: entry.variable === null ? null : "variable" }
     case "create":
     case "restore":
     case "replace":
-      return { verb, object: entry.file, kind: entry.file === null ? null : "file" }
+    case "retire": {
+      // The store made, or its variables restored, read as the store itself.
+      const file = storeFileOf(entry.file) ?? entry.file
+      return { verb, object: file, kind: file === null ? null : "file" }
+    }
     case "restart":
     case "portal":
     case "code":
+    case "migrate":
       return { verb, object: entry.slug, kind: entry.slug === null ? null : "project" }
     default:
       return { verb, object: null, kind: null }
@@ -512,12 +590,18 @@ export function operationPlace(entry: LogEntry): { project: string | null; file:
     case "set":
     case "remove":
     case "password":
-      return { project: clean(entry.slug), file: clean(entry.file) }
+    case "generate":
+      // `store`, or `store/<name>` for a file of it removed: the place, the
+      // label naming the file already.
+      return { project: clean(entry.slug), file: storeFileOf(entry.file) !== null ? STORE_PLACE : clean(entry.file) }
     case "list":
     case "create":
     case "restore":
     case "replace":
+    case "retire":
       return { project: clean(entry.slug), file: null }
+    case "migrate":
+      return { project: clean(entry.slug), file: STORE_PLACE }
     default:
       return { project: null, file: null }
   }
@@ -569,6 +653,8 @@ export function operationOutcome(entry: LogEntry): OperationOutcome {
   const detail = entry.detail
   const read = detail === null ? null : translate(detail, entry.operation)
   if (entry.result === "ok") {
+    // A merge says how many names it brought, and from which files: "2 merged from a.env, b.env".
+    if (entry.operation === "migrate" && read !== null && read !== "") return { tone: "ok", text: read.charAt(0).toUpperCase() + read.slice(1) }
     if (entry.operation !== "restart" || read === null || read === "") return { tone: "ok", text: null }
     // Alone in its column, the verdict takes its capital, like the dialog's word.
     const text = read.charAt(0).toUpperCase() + read.slice(1)
@@ -587,16 +673,19 @@ export function operationOutcome(entry: LogEntry): OperationOutcome {
 export type SiteSecretsPanel = { variables: string[]; restartPending: boolean }
 
 /**
- * What the sites table learns from the page: the names of the variables, which
- * the search knows, and the restart pending, which shows on the row. Never a
- * value, which the page does not have anyway.
+ * What the sites table learns from the page: the names of the variables, the
+ * legacy files' and the store's, which the search knows, and the restart
+ * pending, which shows on the row. Never a value, which the page does not have
+ * anyway.
  */
 export function secretsBySite(projects: readonly ProjectView[] | null): Map<string, SiteSecretsPanel> {
   const bySite = new Map<string, SiteSecretsPanel>()
   for (const project of projects ?? []) {
+    const store = project.store
+    const names = [...project.files.flatMap((file) => file.variables), ...(store?.variables.map((variable) => variable.name) ?? [])]
     bySite.set(project.slug, {
-      variables: project.files.flatMap((file) => file.variables),
-      restartPending: project.files.some((file) => file.restartPending),
+      variables: [...new Set(names)],
+      restartPending: project.files.some((file) => file.restartPending) || (store?.restartPending ?? false),
     })
   }
   return bySite

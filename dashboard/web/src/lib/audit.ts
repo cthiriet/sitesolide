@@ -281,6 +281,9 @@ const STEWARD_OPERATIONS: Readonly<Record<string, StewardOperation>> = {
   "secrets.restore": "restore",
   "secrets.replace": "replace",
   "secrets.password": "password",
+  "secrets.generate": "generate",
+  "secrets.migrate": "migrate",
+  "secrets.retire": "retire",
   "access.general": "portal",
   "access.code": "code",
   "service.restart": "restart",
@@ -300,6 +303,9 @@ const DONE: Readonly<Record<StewardOperation, string>> = {
   portal: "Changed general access",
   code: "Gave a new code",
   restart: "Restarted",
+  generate: "Generated",
+  migrate: "Merged the legacy files into the store",
+  retire: "Retired",
 }
 
 const TRIED: Readonly<Record<StewardOperation, string>> = {
@@ -316,6 +322,9 @@ const TRIED: Readonly<Record<StewardOperation, string>> = {
   portal: "Tried to change general access",
   code: "Tried to give a new code",
   restart: "Tried to restart",
+  generate: "Tried to generate",
+  migrate: "Tried to merge the legacy files into the store",
+  retire: "Tried to retire",
 }
 
 /** Why the steward refused a person's sign-in, in words. An unknown reason is shown as it is. */

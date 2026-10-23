@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { generateFragment } from "../borrowed/fragment";
+import type { Manifest } from "../borrowed/manifest";
 import {
   LANDING_FOLDER,
   LANDING_UNIT,
   addressOf,
   codeAddress,
   buildSnapshot,
+  declaredSecrets,
   computeCpuShare,
   readTable,
   unitOf,
@@ -656,6 +658,28 @@ describe("the machine's special cases", () => {
       raw([folder("tool", manifest, { unit: unit() })], { ports: [3030] }),
     );
     expect(sites[0]?.secrets).toEqual(["tool.env"]);
+  });
+
+  test("a project whose values live in its store is named by its runtime variables, then its files; never its build secrets", () => {
+    const short = { slug: "shop", port: 3030, start: "bun run server.ts", secrets: ["ADMIN_TOKEN", "STRIPE_SECRET_KEY"] };
+    const long = {
+      slug: "engine",
+      port: 3040,
+      start: "bun run server.ts",
+      build: "bun run build",
+      secrets: { runtime: ["POSTGRES_PASSWORD"], files: ["gcp.json"], build: ["CMS_TOKEN"] },
+    };
+    const blog = { slug: "blog", build: "bun run build", publicDir: "dist", secrets: { build: ["CMS_TOKEN"] } };
+    const { sites } = buildSnapshot(
+      raw([folder("shop", short, { unit: unit() }), folder("engine", long, { unit: unit() }), folder("blog", blog)], { ports: [3030, 3040] }),
+    );
+    const bySlug = Object.fromEntries(sites.map((site) => [site.slug, site.secrets]));
+    expect(bySlug).toEqual({ blog: [], engine: ["POSTGRES_PASSWORD", "gcp.json"], shop: ["ADMIN_TOKEN", "STRIPE_SECRET_KEY"] });
+  });
+
+  test("declaredSecrets never throws on a manifest it cannot read", () => {
+    expect(declaredSecrets({ slug: "odd", secrets: 42 } as unknown as Manifest)).toEqual([]);
+    expect(declaredSecrets({ slug: "none" } as Manifest)).toEqual([]);
   });
 });
 

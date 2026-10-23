@@ -1,16 +1,25 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import {
   createToken,
+  generateStoreVariable,
+  migrateStore,
   putAccess,
   readAccess,
   readPeople,
   readTokens,
   removeAccess,
   removePerson,
+  removeStoreFile,
+  removeStoreVariables,
   restartService,
+  restoreStore,
+  retireLegacyFiles,
+  revealStoreValue,
   revokeToken,
   setCreate,
   setGeneralAccess,
+  setStoreFile,
+  setStoreVariable,
 } from "../src/lib/api"
 
 /**
@@ -86,6 +95,47 @@ describe("the tokens and the restart", () => {
       'POST /api/tokens {"label":"agent","expiresAt":null,"scope":{"slugs":[],"create":true,"outbound":false,"domain":false,"public":false}} same-origin',
       'POST /api/tokens/revoke {"id":"abc"} same-origin',
       'POST /api/secrets/restart {"slug":"blog"} same-origin',
+    ])
+  })
+})
+
+describe("a project's store", () => {
+  test("each route under /api/secrets/store, its method and its body, the value in the body and never in the address", async () => {
+    await setStoreVariable({ slug: "shop", name: "STRIPE_SECRET_KEY", value: "typed-by-hand" })
+    await removeStoreVariables({ slug: "shop", names: ["OLD_KEY"] })
+    await generateStoreVariable({ slug: "shop", name: "SESSION_SECRET" })
+    await generateStoreVariable({ slug: "shop", name: "SESSION_SECRET", format: "base64url", bytes: 48, replace: true })
+    await setStoreFile({ slug: "shop", name: "gcp.json", content: "e30=" })
+    await removeStoreFile({ slug: "shop", name: "gcp.json" })
+    await restoreStore({ slug: "shop", dryRun: true })
+    await restoreStore({ slug: "shop", dryRun: false })
+    await revealStoreValue({ slug: "shop", name: "STRIPE_SECRET_KEY" })
+    await migrateStore({ slug: "shop", dryRun: true })
+    await migrateStore({ slug: "shop", dryRun: false })
+    await retireLegacyFiles({ slug: "shop", files: ["shop-stripe.env"] })
+    expect(requests).toEqual([
+      'PUT /api/secrets/store/variable {"slug":"shop","name":"STRIPE_SECRET_KEY","value":"typed-by-hand"} same-origin',
+      'DELETE /api/secrets/store/variable {"slug":"shop","names":["OLD_KEY"]} same-origin',
+      'POST /api/secrets/store/generate {"slug":"shop","name":"SESSION_SECRET"} same-origin',
+      'POST /api/secrets/store/generate {"slug":"shop","name":"SESSION_SECRET","format":"base64url","bytes":48,"replace":true} same-origin',
+      'PUT /api/secrets/store/file {"slug":"shop","name":"gcp.json","content":"e30="} same-origin',
+      'DELETE /api/secrets/store/file {"slug":"shop","name":"gcp.json"} same-origin',
+      'POST /api/secrets/store/restore {"slug":"shop","dryRun":true} same-origin',
+      'POST /api/secrets/store/restore {"slug":"shop"} same-origin',
+      'POST /api/secrets/store/value {"slug":"shop","name":"STRIPE_SECRET_KEY"} same-origin',
+      'POST /api/secrets/store/migrate {"slug":"shop","dryRun":true} same-origin',
+      'POST /api/secrets/store/migrate {"slug":"shop"} same-origin',
+      'POST /api/secrets/store/retire {"slug":"shop","files":["shop-stripe.env"]} same-origin',
+    ])
+  })
+
+  test("a body is rebuilt key by key: a field the contract does not name never leaves, whatever the caller passed", async () => {
+    const extra = { slug: "shop", name: "A", value: "v", token: "kept-by-the-service", restart: true } as never
+    await setStoreVariable(extra)
+    await generateStoreVariable({ slug: "shop", name: "A", replace: false, value: "never" } as never)
+    expect(requests).toEqual([
+      'PUT /api/secrets/store/variable {"slug":"shop","name":"A","value":"v"} same-origin',
+      'POST /api/secrets/store/generate {"slug":"shop","name":"A"} same-origin',
     ])
   })
 })

@@ -33,6 +33,12 @@ import type {
   GeneralResponse,
   PeoplePageResponse,
   PersonResponse,
+  GenerateFormat,
+  StoreChangeResponse,
+  StoreMigrateResponse,
+  StoreRestoreResponse,
+  StoreRetireResponse,
+  StoreRevealResponse,
 } from "./types"
 
 /** `status` is 0 when no answer arrived: network down, service stopped. */
@@ -219,6 +225,74 @@ export function replaceSecretContent({ slug, file, content }: WithoutToken<Conte
  */
 export function changePassword({ slug, file, variable, dashboardPassword, newPassword }: WithoutToken<PasswordRequest>) {
   return sendSecrets<PasswordResponse>("POST", "/password", { slug, file, variable, dashboardPassword, newPassword })
+}
+
+// --- A project's store ------------------------------------------------------------
+//
+// The routes `/api/secrets/store/*`, relayed to the steward with the owner's
+// token or a person's unlock. A value and a file's content travel in the body
+// alone. None of these answers carries a value, but the reveal's, which only
+// the owner's unlocked dashboard receives: a person has no such route.
+
+/** Sets one variable in the store, created on the way if the project had none. */
+export function setStoreVariable({ slug, name, value }: { slug: string; name: string; value: string }) {
+  return sendSecrets<StoreChangeResponse>("PUT", "/store/variable", { slug, name, value })
+}
+
+export function removeStoreVariables({ slug, names }: { slug: string; names: string[] }) {
+  return sendSecrets<StoreChangeResponse>("DELETE", "/store/variable", { slug, names: [...names] })
+}
+
+/** Draws a value on the server. The answer names it in `generated`, never with its value. */
+export function generateStoreVariable({
+  slug,
+  name,
+  format,
+  bytes,
+  replace,
+}: {
+  slug: string
+  name: string
+  format?: GenerateFormat
+  bytes?: number
+  replace?: boolean
+}) {
+  return sendSecrets<StoreChangeResponse>("POST", "/store/generate", {
+    slug,
+    name,
+    ...(format === undefined ? {} : { format }),
+    ...(bytes === undefined ? {} : { bytes }),
+    ...(replace === true ? { replace: true } : {}),
+  })
+}
+
+/** `content`: the file's bytes in base64, read in the browser. */
+export function setStoreFile({ slug, name, content }: { slug: string; name: string; content: string }) {
+  return sendSecrets<StoreChangeResponse>("PUT", "/store/file", { slug, name, content })
+}
+
+export function removeStoreFile({ slug, name }: { slug: string; name: string }) {
+  return sendSecrets<StoreChangeResponse>("DELETE", "/store/file", { slug, name })
+}
+
+/** With `dryRun`, what would appear and disappear, for the confirmation; without, the swap. */
+export function restoreStore({ slug, dryRun }: { slug: string; dryRun: boolean }) {
+  return sendSecrets<StoreRestoreResponse>("POST", "/store/restore", { slug, ...(dryRun ? { dryRun: true } : {}) })
+}
+
+/** The owner's alone: a person's dashboard has no such route, and the steward refuses anyone else. */
+export function revealStoreValue({ slug, name }: { slug: string; name: string }) {
+  return sendSecrets<StoreRevealResponse>("POST", "/store/value", { slug, name })
+}
+
+/** The owner's alone. With `dryRun`, the merge as it would go, written nowhere. */
+export function migrateStore({ slug, dryRun }: { slug: string; dryRun: boolean }) {
+  return sendSecrets<StoreMigrateResponse>("POST", "/store/migrate", { slug, ...(dryRun ? { dryRun: true } : {}) })
+}
+
+/** The owner's alone: deletes the legacy files the store covers, each kept as its previous version first. */
+export function retireLegacyFiles({ slug, files }: { slug: string; files: string[] }) {
+  return sendSecrets<StoreRetireResponse>("POST", "/store/retire", { slug, files: [...files] })
 }
 
 /**

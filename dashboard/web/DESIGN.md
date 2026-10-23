@@ -233,8 +233,9 @@ empty state rather than an error, and a section their role does not open,
 Indicators (`lib/sidebar.ts`). Machine: *Sites* the number of discrepancies (error
 if there is one, otherwise attention); Activity, People, Tokens and
 Connectors report nothing. Site: *Overview* its discrepancies; *Secrets* what
-its files ask for, missing as an error, unmanaged or restart pending as
-attention; *Access* its general access disagreeing with `sitesolide.json`
+its store and its files ask for, a declared name or file not set and a missing
+file as an error, unmanaged, a unit that does not read its store yet or a
+restart pending as attention; *Access* its general access disagreeing with `sitesolide.json`
 (error), and nothing else: who has access is a choice, not a problem.
 *Audience* and *Backups* report nothing. Zero is not shown.
 
@@ -426,7 +427,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | People | People, May create projects, Let someone create projects, Allow, Unlock to allow, Remove from every project, Remove expired, Domains; Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
 | Tokens | Tokens, New token, Unlock to create, Create token, Name, Whose token, Mine, For someone in People, Projects it may deploy, New projects, Permissions, Manage secrets, Needed by cms, Expires; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network, Can manage secrets, Can create projects (paused: no longer allowed), Can manage secrets (paused: no project to deploy now); calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only, Write secrets, Secrets access |
 | The lock | Unlock changes, Lock, Changes unlocked, 9 min left; in its dialog, Unlock, Sign in again; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked |
-| Secrets | Restart pending, Unmanaged, Missing, Write-only, Restart service, Restore previous, Add variable, Create file, Replace, Reveal | Vault, Decrypt, Edit file |
+| Secrets | Restart pending, Unmanaged, Missing, Write-only, Restart service, Restore previous, Add variable, Create file, Replace, Reveal; a store's: Variables, Files, Server, Legacy file cms.env, Not set, Overrides cms.env, Declared, Not declared, Set, Generate, Type a value, Generate on the server, Upload, Upload file, Remove, Restore previous version, Build, kept by whoever deploys, Public, from the repository, Legacy files, Merge into the store, Retire, No longer declared, Covered by the store | Vault, Decrypt, Edit file, Rotate, Secret store, Environment |
 | Passwords | Change password, Dashboard password, Generate a strong one, Set my own, New password, Copy password | Set hash, Regenerate |
 | Backups | Snapshot, Scheduled, Before restore, Server, Offsite only, Restore, Restoring..., Restored, Offsite copy, Show all | Backup file, Revert, Rollback, Recover |
 | Activity | Event, Actor, Action, Target, Source, Site or host, From, To, Details, Load older, Export, CSV, JSON lines, Clear filters, Access changes; a source is Read, Latest 50, Can't read, Needs updating, Not installed; an actor is Owner, The server, Someone, alice@example.com (token), Example Accounting (password access) | Log entry, Audit trail, Download, Reset |
@@ -656,6 +657,34 @@ states its size and offers *Replace*, and *Reveal* if it is readable. Then
 **Activity**, that site's operations. Restarting the dashboard itself gives the
 *Restarting* verdict: the dialog waits out the cut, reconnects by itself, then
 asks you to unlock again.
+
+A project with a store, every app but the dashboard and the portal, shows it
+instead of the files alone, in one column (`components/secrets-store.tsx`):
+**Variables**, its service and *Restart service* in the header with *Restore
+previous version* for the owner and an Admin, then what needs attention, the
+names and files `sitesolide.json` declares and the server lacks, flagged
+first in red with *Set*, *Generate* or *Upload* each, then one row per
+variable: its name, where its value comes from (*Server*, *Legacy file
+cms.env*), the legacy files it overrides, *Declared* or *Not declared*, and
+*Set*, *Generate* and *Remove* by the steward's `may`; *Add variable* at the
+foot. A value is typed into *Set*'s dialog, never prefilled, or drawn on the
+server by *Generate*, format and size chosen, never shown; over a value in
+force, *Generate* reads *Replace* and says the old one stops working at the
+next restart. Only the owner has *Reveal* and *Copy* on a row, the thirty
+seconds of a legacy row: an Admin and a Developer read no value back, and the
+intro says so. **Files**: each file, *Set*, *Missing* or *Unmanaged*, its size
+to the owner alone, and the path every service reads it at,
+`$CREDENTIALS_DIRECTORY/files_<name>`, with its copy button; *Upload* reads a
+file in the browser and sends it base64. **Build, kept by whoever deploys**
+and **Public, from the repository** list names, and the public values, for
+reference, with no action. **Legacy files**, while there are any: each file
+as above, editable by the routes of before, with whether a unit reads it,
+whether it is still declared, and to the owner whether the store covers it,
+*Retire* once it does; *Merge into the store*, the owner's, opens on a dry run
+that names what it would merge and any conflict, never a value. A unit that
+does not read the store yet says, as attention, to deploy or refresh the
+project. The Overview's **Secrets** sums a store up in rows, its variables
+counted set and not set, its files by name, never a variable's name.
 
 **A site's Access.** Who can open the site, and what each person can do with
 it, in one place, laid out like a "Share" dialog, in one column. Under the

@@ -415,7 +415,7 @@ describe("what is wrong in a project", () => {
       { key: "service", tone: "error", label: "Restarting", systemd: "activating (auto-restart)" },
       { key: "absent", tone: "error", label: "Missing", file: "cms-api.env" },
       { key: "unmanaged", tone: "attention", label: "Unmanaged", file: "cms-smtp.env" },
-      { key: "pending", tone: "attention", label: PENDING_LABEL, files: ["cms.env"] },
+      { key: "pending", tone: "attention", label: PENDING_LABEL, files: ["cms.env"], variables: false },
     ])
     expect(fileProblems(project, NOW).map((problem) => problem.key)).toEqual(["absent", "unmanaged", "pending"])
   })

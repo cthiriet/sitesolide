@@ -7,7 +7,8 @@ import { ErrorState, Panel, RowsSkeleton, Status } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { SectionLink } from "@/components/site"
 import { ago } from "@/lib/format"
-import { UNREACHABLE, PENDING_LABEL, splitReason, pendingFiles, fileOffer, fileSummary } from "@/lib/secrets"
+import { UNREACHABLE, PENDING_LABEL, splitReason, pendingFiles, pendingVariables, pendingPhrase, fileOffer, fileSummary } from "@/lib/secrets"
+import { storeOverview } from "@/lib/store"
 import type { ProjectView } from "@/lib/types"
 
 /**
@@ -18,22 +19,18 @@ import type { ProjectView } from "@/lib/types"
 function Content({ project }: { project: ProjectView }) {
   const actions = useSecretsActions()
   const wait = pendingFiles(project)
+  const variables = pendingVariables(project)
+  const phrase = pendingPhrase(wait, variables)
 
   return (
     <>
-      {wait.length > 0 && (
+      {phrase !== "" && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3">
           <Status tone="attention" shape="pill">
             {PENDING_LABEL}
           </Status>
           <p className="min-w-0 flex-1 basis-48 text-xs text-pretty text-muted-foreground">
-            {wait.map((name, index) => (
-              <span key={name}>
-                {index > 0 && ", "}
-                <span className="font-mono">{name}</span>
-              </span>
-            ))}{" "}
-            changed after {project.slug} last started.
+            {phrase.charAt(0).toUpperCase() + phrase.slice(1)} changed after {project.slug} last started.
           </p>
           {project.service !== null && (
             <Button variant="outline" size="sm" onClick={() => actions.restart(project.slug)} className="max-md:h-10">
@@ -49,6 +46,20 @@ function Content({ project }: { project: ProjectView }) {
         section, where Manage leads. Here, one file per row, what it holds in
         one sentence, and its state only if it calls for an action.
       */}
+      {project.store !== null && (
+        <ul aria-label={`Secrets of ${project.slug}`} className="divide-y divide-divider">
+          {storeOverview(project.store).map((row) => (
+            <li key={row.label} className="flex items-center justify-between gap-3 px-4 py-3">
+              <div className="grid min-w-0 gap-0.5">
+                <span className="text-sm font-medium">{row.label}</span>
+                {row.detail !== "" && <span className="text-xs text-pretty text-muted-foreground wrap-anywhere">{row.detail}</span>}
+              </div>
+              {row.state !== null && <Status tone={row.state.tone}>{row.state.text}</Status>}
+            </li>
+          ))}
+        </ul>
+      )}
+
       <ul aria-label={`Secret files of ${project.slug}`} className="divide-y divide-divider">
         {project.files.map((file) => {
           const count = fileSummary(file)
@@ -59,6 +70,8 @@ function Content({ project }: { project: ProjectView }) {
               : reason !== null
                 ? reason
                 : [
+                    // Beside a store, a flat file is one of before: said first.
+                    project.store !== null ? "Legacy file" : null,
                     fileOffer(file).writeOnly ? "Write-only" : null,
                     count,
                     file.modifiedAt !== null ? `changed ${ago(actions.serverNow - file.modifiedAt)}` : null,
@@ -82,14 +95,15 @@ function Content({ project }: { project: ProjectView }) {
 }
 
 /**
- * A site's secrets, on its Overview: its files, what they hold in one sentence,
- * their state and the restart pending. No value and no variable name: the
- * inventory belongs to the Secrets section. The only action is the restart;
- * everything else is done in the Secrets section, where *Manage* leads.
+ * A site's secrets, on its Overview: its store in a few rows (variables,
+ * files, legacy files), then its legacy files, what they hold in one sentence,
+ * their state and the restart pending. No value: the inventory belongs to the
+ * Secrets section. The only action is the restart; everything else is done in
+ * the Secrets section, where *Manage* leads.
  *
- * Nothing for a site with no secret file. As long as the secrets have not been
- * read, or if the steward does not answer, the panel is only shown for a site
- * that declares secrets in its manifest.
+ * Nothing for a site with no secret at all. As long as the secrets have not
+ * been read, or if the steward does not answer, the panel is only shown for a
+ * site whose manifest declares something its services read (`Site.secrets`).
  */
 export function SiteSecretsPanel({ slug }: { slug: string }) {
   const { secrets, snapshot, identity } = useData()
@@ -134,10 +148,11 @@ export function SiteSecretsPanel({ slug }: { slug: string }) {
     )
   }
 
-  if (project.files.length === 0) return null
+  const rows = project.store === null ? 0 : storeOverview(project.store).length
+  if (project.files.length === 0 && rows === 0) return null
 
   return (
-    <Panel title="Secrets" count={project.files.length} full actions={<SectionLink slug={slug} section="secrets" />}>
+    <Panel title="Secrets" full actions={<SectionLink slug={slug} section="secrets" />}>
       <Content project={project} />
     </Panel>
   )

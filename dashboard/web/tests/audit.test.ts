@@ -175,6 +175,15 @@ describe("a row in words", () => {
     expect(steward("secrets.unlock", { result: "ok" }, null)).toEqual({ summary: "Unlocked changes", note: null, tone: "neutral" })
     expect(steward("secrets.unlock", { result: "rejects", note: "wrong password" }, null)).toEqual({ summary: "Tried to unlock changes", note: "Refused: wrong password", tone: "attention" })
     expect(steward("secrets.replace", { result: "ok", file: "builder-secrets/registry" }).summary).toBe("Replaced builder-secrets/registry")
+    // A project's store: a value drawn on the server, legacy files merged into it and retired, never a value.
+    expect(steward("secrets.generate", { result: "ok", file: "store", variable: "SESSION_SECRET" }).summary).toBe("Generated SESSION_SECRET")
+    expect(steward("secrets.migrate", { result: "ok", file: "store", note: "2 merged from a.env, b.env" })).toEqual({
+      summary: "Merged the legacy files into the store",
+      note: "2 merged from a.env, b.env",
+      tone: "neutral",
+    })
+    expect(steward("secrets.retire", { result: "rejects", file: "cms.env", note: "invalid" })).toEqual({ summary: "Tried to retire cms.env", note: "Refused: invalid", tone: "attention" })
+    expect(steward("secrets.remove", { result: "ok", file: "store/gcp.json" }).summary).toBe("Removed gcp.json")
     expect(steward("service.restart", { result: "failure", note: "looping" })).toEqual({ summary: "Tried to restart", note: "Failed: crash loop", tone: "error" })
     expect(steward("access.general", { result: "ok", note: "on, ok" })).toEqual({ summary: "Restricted cms", note: null, tone: "neutral" })
     expect(steward("access.general", { result: "failure", note: "off, failure" })).toEqual({ summary: "Tried to make cms public", note: "Failed", tone: "error" })

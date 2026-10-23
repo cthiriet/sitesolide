@@ -6,8 +6,12 @@ import type {
   LogEntry,
   Discrepancy,
   FileView,
+  LegacyFileView,
   PortalView,
   ProjectView,
+  StoreFileView,
+  StoreVariableView,
+  StoreView,
   Service,
   ServiceView,
   Site,
@@ -126,7 +130,41 @@ export function portalView(partial: Partial<PortalView> = {}): PortalView {
 }
 
 export function secretProject(partial: Partial<ProjectView> = {}): ProjectView {
-  return { slug: "cms", service: secretService(), files: [secretFile()], portal: portalView(), ...partial }
+  return { slug: "cms", service: secretService(), files: [secretFile()], portal: portalView(), store: null, ...partial }
+}
+
+/** A project's store as the steward lists it to the owner: managed, read by its unit, nothing pending. */
+export function storeView(partial: Partial<StoreView> = {}): StoreView {
+  return {
+    slug: "cms",
+    exists: true,
+    state: "managed",
+    reason: null,
+    variables: [],
+    missing: [],
+    files: [],
+    legacy: [],
+    build: [],
+    public: [],
+    unitReadsStore: true,
+    modifiedAt: 1_800_000_000_000,
+    restartPending: false,
+    previous: false,
+    may: { write: true, reveal: true, restore: true, migrate: true },
+    ...partial,
+  }
+}
+
+export function storeVariable(partial: Partial<StoreVariableView> = {}): StoreVariableView {
+  return { name: "ADMIN_TOKEN", source: "store", file: null, shadows: [], declared: true, ...partial }
+}
+
+export function storeFile(partial: Partial<StoreFileView> = {}): StoreFileView {
+  return { name: "gcp.json", state: "set", declared: true, reason: null, bytes: 2_300, modifiedAt: 1_800_000_000_000, restartPending: false, ...partial }
+}
+
+export function legacyFile(partial: Partial<LegacyFileView> = {}): LegacyFileView {
+  return { name: "cms.env", state: "managed", reason: null, variables: ["CMS_TOKEN"], read: true, leftover: false, covered: true, ...partial }
 }
 
 export function logEntry(partial: Partial<LogEntry> = {}): LogEntry {

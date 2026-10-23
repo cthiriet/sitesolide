@@ -30,6 +30,7 @@ import {
   cutsTheDashboard,
   unlockStatus,
   pendingFiles,
+  pendingVariables,
   restorableFiles,
   refusalOf,
   readVerdict,
@@ -90,6 +91,16 @@ export type SecretsActions = {
    */
   unlock: (options?: { then?: () => void; beforeLeave?: () => void }) => void
   lock: () => void
+  /**
+   * An action that needs the unlock: run now when unlocked, otherwise once
+   * unlocked here; a person's unlock leaves for their provider and the
+   * gesture is made again on the way back, never replayed.
+   */
+  require: (action: () => void) => void
+  /** After a change made elsewhere on the page, a store's: the secrets and the log are read again. */
+  changed: () => void
+  /** A restart with no confirmation, its verdict in the dialog: after *Save & restart*. */
+  restartNow: (slug: string) => void
   read: (target: VariableTarget) => Promise<ReadResult>
   readContent: (target: FileTarget) => Promise<ReadResult>
   add: (target: FileTarget) => void
@@ -620,6 +631,12 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
       askUnlock(options?.then ?? null, options?.beforeLeave ?? null)
     },
     lock: () => void lock(),
+    require,
+    changed: afterAction,
+    restartNow: (slug) => {
+      restartShown.current = true
+      void runRestart(slug)
+    },
     read,
     readContent,
     add: (target) => openEditor(target, null),
@@ -740,7 +757,9 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
       <RestartDialog
         state={restartState}
         pending={restartedProject === null ? [] : pendingFiles(restartedProject)}
+        pendingVariables={restartedProject !== null && pendingVariables(restartedProject)}
         restorable={restartedProject === null ? [] : restorableFiles(restartedProject)}
+        storePrevious={restartedProject?.store?.previous === true && restartedProject.store.may.restore}
         onConfirm={(slug) => void runRestart(slug, restartState?.phase === "error" ? restartState.restored : null)}
         onRestore={(slug, file) => void restoreAndRestart(slug, file)}
         onClose={() => setRestartState((before) => before && { ...before, open: false })}

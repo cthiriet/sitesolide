@@ -23,9 +23,9 @@ import {
   isApp,
   isHeadless,
   isProtected,
-  legacySecretFiles,
   mainPort,
   PORTAL_SLUG,
+  secretsOf,
   servicesOf,
   type Manifest,
   type ServiceKind,
@@ -282,7 +282,13 @@ export type Site = {
   services: SiteService[];
   bytes: number | null;
   deployed: number | null;
-  /** Names of the declared secrets. Never their content, which does not come in here. */
+  /**
+   * What the deployed manifest says its services read, names only, never a
+   * value, which does not come in here: for the old form, the legacy files'
+   * names (`crm.env`); otherwise the runtime variables' names, then the
+   * store's files'. Build secrets are not among them: no service reads them.
+   * Empty when the manifest declares nothing a service reads, or is unreadable.
+   */
   secrets: string[];
 };
 
@@ -632,6 +638,16 @@ function readPortal(manifest: Manifest | null, fragment: string | undefined): Po
   };
 }
 
+/**
+ * The names `Site.secrets` carries: the legacy files of an old-form manifest,
+ * otherwise its runtime variables then its files. Read tolerantly, as every
+ * deployed manifest is (`secretsOf` never throws).
+ */
+export function declaredSecrets(manifest: Manifest): string[] {
+  const declaration = secretsOf(manifest);
+  return declaration.form === "legacy" ? declaration.legacy : [...declaration.runtime, ...declaration.files];
+}
+
 /** The complete snapshot, sites sorted by slug and discrepancies sorted by severity. */
 export function buildSnapshot(raw: Raw): Snapshot {
   const table = readTable(raw.domains);
@@ -714,7 +730,7 @@ export function buildSnapshot(raw: Raw): Snapshot {
       services,
       bytes: folder.bytes,
       deployed: folder.deployed,
-      secrets: manifest === null ? [] : legacySecretFiles(manifest),
+      secrets: manifest === null ? [] : declaredSecrets(manifest),
     });
   }
 

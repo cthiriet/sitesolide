@@ -691,7 +691,9 @@ function Reconnect({ phase, start }: { phase: "waiting" | "back"; start: number 
 export function RestartDialog({
   state,
   pending,
+  pendingVariables = false,
   restorable,
+  storePrevious = false,
   onConfirm,
   onRestore,
   onClose,
@@ -700,7 +702,11 @@ export function RestartDialog({
   state: RestartState | null
   /** The files changed since the last startup, which this restart will apply. */
   pending: string[]
+  /** The store's variables changed since then too. */
+  pendingVariables?: boolean
   restorable: FileView[]
+  /** The store keeps a previous version of its variables, which this viewer may restore from the Variables panel. */
+  storePrevious?: boolean
   onConfirm: (slug: string) => void
   onRestore: (slug: string, file: string) => void
   onClose: () => void
@@ -740,12 +746,12 @@ export function RestartDialog({
                 seconds in between.
               </AlertDialogDescription>
             </AlertDialogHeader>
-            {phase === "confirmation" && pending.length > 0 && (
+            {phase === "confirmation" && (pending.length > 0 || pendingVariables) && (
               <p className="text-sm text-pretty">
-                Applies the changes to{" "}
+                Applies the changes to {pendingVariables && (pending.length === 0 ? "the variables on the server" : "the variables on the server, ")}
                 {pending.map((name, index) => (
                   <span key={name}>
-                    {index > 0 && ", "}
+                    {index > 0 && (index === pending.length - 1 ? " and " : ", ")}
                     <span className="font-mono">{name}</span>
                   </span>
                 ))}
@@ -793,8 +799,14 @@ export function RestartDialog({
                 {verdictText.restore && " It still fails: check its logs on the server before changing anything else."}
               </p>
             )}
-            {offerRestore && restorable.length === 0 && (
+            {offerRestore && restorable.length === 0 && !storePrevious && (
               <p className="text-sm text-muted-foreground">No previous version of its secret files is kept.</p>
+            )}
+            {offerRestore && storePrevious && (
+              <p className="text-sm text-pretty text-muted-foreground">
+                The variables on the server keep their previous version: <span className="font-medium">Restore previous version</span>, above
+                the variables, shows what it would bring back before it does.
+              </p>
             )}
             {offerRestore && restorable.length > 0 && (
               <p className="text-sm text-pretty text-muted-foreground">

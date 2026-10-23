@@ -86,7 +86,7 @@ function Terminal({ children }: { children: ReactNode }) {
  * table, two files read as one, the column header weighing more than the name
  * that starts the next file.
  */
-function FileBlock({ slug, file }: { slug: string; file: FileView }) {
+export function FileBlock({ slug, file, children }: { slug: string; file: FileView; children?: ReactNode }) {
   const actions = useSecretsActions()
   const target: FileTarget = { slug, file: file.name }
   const key = fileKey(target)
@@ -224,6 +224,8 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
           {error}
         </p>
       )}
+
+      {children}
     </section>
   )
 }
@@ -234,13 +236,18 @@ function Mono({ children }: { children: ReactNode }) {
   return <span className="font-mono">{children}</span>
 }
 
-function ListState({ names }: { names: string[] }) {
+/** Names in a sentence, "a, b and c", after `lead` when there is one: words, not a file name. */
+function ListState({ names, lead = null }: { names: string[]; lead?: string | null }) {
+  const items: { key: string; node: ReactNode }[] = [
+    ...(lead === null ? [] : [{ key: " lead", node: lead }]),
+    ...names.map((name) => ({ key: name, node: <Mono>{name}</Mono> })),
+  ]
   return (
     <>
-      {names.map((name, index) => (
-        <span key={name}>
-          {index > 0 && (index === names.length - 1 ? " and " : ", ")}
-          <Mono>{name}</Mono>
+      {items.map((item, index) => (
+        <span key={item.key}>
+          {index > 0 && (index === items.length - 1 ? " and " : ", ")}
+          {item.node}
         </span>
       ))}
     </>
@@ -248,7 +255,7 @@ function ListState({ names }: { names: string[] }) {
 }
 
 /** What is wrong at the project level: its service, and the restart that is pending. The files say the rest. */
-function ProblemRow({ problem, slug }: { problem: Problem; slug: string }) {
+export function ProblemRow({ problem, slug }: { problem: Problem; slug: string }) {
   const severity = problem.tone === "error" ? "error" : "warning"
   let text: ReactNode = null
   if (problem.key === "service") {
@@ -276,8 +283,16 @@ function ProblemRow({ problem, slug }: { problem: Problem; slug: string }) {
   } else if (problem.key === "pending") {
     text = (
       <>
-        <strong className="font-medium">Restart pending.</strong> <ListState names={problem.files} /> changed after {slug} last
-        started, so it still runs with the old values.
+        <strong className="font-medium">Restart pending.</strong>{" "}
+        <ListState names={problem.files} lead={problem.variables ? "The variables on the server" : null} /> changed after {slug}{" "}
+        last started, so it still runs with the old values.
+      </>
+    )
+  } else if (problem.key === "store-unread") {
+    text = (
+      <>
+        <strong className="font-medium">{slug} does not read its store yet.</strong> What is set here reaches it once it
+        is deployed again, or refreshed: <code className="font-mono text-xs whitespace-nowrap">sitesolide refresh {slug}</code>
       </>
     )
   } else {

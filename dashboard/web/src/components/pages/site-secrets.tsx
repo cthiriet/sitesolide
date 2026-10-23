@@ -6,6 +6,7 @@ import { Banner, ErrorState, EmptyState, Panel, PanelSkeleton } from "@/componen
 import { FilesPanel, SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { SecretsLog } from "@/components/secrets-log"
+import { StoreSection } from "@/components/secrets-store"
 import { SitePage, useSite } from "@/components/site"
 import { UNREACHABLE } from "@/lib/secrets"
 import { isPerson, roleOn } from "@/lib/identity"
@@ -21,32 +22,28 @@ function Code({ children }: { children: string }) {
   return <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-xs whitespace-nowrap">{children}</code>
 }
 
-/** What unlocking means, for whoever is signed in. */
-function Intro({ slug }: { slug: string }) {
+/**
+ * What unlocking means, for whoever is signed in. Only the owner reads a value
+ * back: a Developer and an Admin set, generate and remove, and see names alone.
+ */
+function Intro({ slug, store }: { slug: string; store: boolean }) {
   const { identity, sso } = useData()
   const role = roleOn(identity, slug)
   const provider = sso.providerName ?? "your identity provider"
-  if (role === "developer") {
+  const reads = store ? "Its services read these values when they start" : `${slug} reads these files when it starts`
+  if (role === "developer" || role === "admin") {
     return (
       <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-        As a Developer on {slug}, you set, replace and remove its values, and never read one back: the server shows you
-        names alone. To change one, unlock by signing in again with {provider}; a change reaches {slug} only after a
-        restart.
-      </p>
-    )
-  }
-  if (role === "admin") {
-    return (
-      <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-        {slug} reads these files when it starts. Values stay hidden until you unlock by signing in again with {provider},
-        and a change reaches {slug} only after a restart.
+        As {role === "admin" ? "an Admin" : "a Developer"} on {slug}, you set, generate and remove its values, and never
+        read one back: only the owner of the server does. {reads}. To change one, unlock by signing in again with{" "}
+        {provider}; a change reaches {slug} only after a restart.
       </p>
     )
   }
   return (
     <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-      {slug} reads these files when it starts. Values stay hidden until you unlock with the dashboard password, and a
-      change reaches {slug} only after a restart.
+      {reads}. Values stay hidden: unlock with the dashboard password to change one, or to reveal one for thirty
+      seconds, which nobody but you can do. A change reaches {slug} only after a restart.
     </p>
   )
 }
@@ -55,7 +52,9 @@ function Content({ slug }: { slug: string }) {
   const { secrets, identity } = useData()
   const person = isPerson(identity)
   const actions = useSecretsActions()
-  const { project } = useSite(slug)
+  const { project, site } = useSite(slug)
+  const store = project?.store ?? null
+  const shown = store !== null || (project !== null && project.files.length > 0)
   const { projects, problem, reload } = secrets
   const [rereading, setRereading] = useState(false)
 
@@ -70,7 +69,7 @@ function Content({ slug }: { slug: string }) {
 
   return (
     <>
-      {(project === null || project.files.length > 0) && <Intro slug={slug} />}
+      {(project === null || shown) && <Intro slug={slug} store={store !== null} />}
 
       {actions.unlockNotice !== null && <Banner tone="error">{actions.unlockNotice}</Banner>}
       {actions.lockError !== "" && <Banner tone="error">Couldn't lock secrets. {actions.lockError}</Banner>}
@@ -124,11 +123,16 @@ function Content({ slug }: { slug: string }) {
         </Panel>
       )}
 
-      {projects !== null && (project === null || project.files.length === 0) && (
+      {projects !== null && (project === null || !shown) && (
         <Panel>
           <EmptyState icon={FileText} title={`${slug} has no secret files`}>
             {project === null ? (
               <>The server doesn't list {slug}. A site is listed once it is deployed.</>
+            ) : site?.type === "static" ? (
+              <>
+                A static site has no service to read a secret when it runs. A value its build needs is named under{" "}
+                <Code>secrets.build</Code> in its <Code>sitesolide.json</Code>, and stays with whoever deploys.
+              </>
             ) : (
               <>
                 To give it some, declare them under <Code>secrets</Code> in its <Code>sitesolide.json</Code>, then run{" "}
@@ -139,8 +143,13 @@ function Content({ slug }: { slug: string }) {
         </Panel>
       )}
 
-      {project !== null && project.files.length > 0 && (
-        // The key unmounts the rows on every project: no revealed value carries over.
+      {project !== null && store !== null && (
+        // The key unmounts the rows and dialogs on every project: no value revealed or typed carries over.
+        <StoreSection key={project.slug} project={project} store={store} />
+      )}
+
+      {project !== null && store === null && project.files.length > 0 && (
+        // A project whose files stay flat, the dashboard and the portal, or a steward from before stores.
         <FilesPanel key={project.slug} project={project} />
       )}
 
@@ -151,8 +160,10 @@ function Content({ slug }: { slug: string }) {
 
 /**
  * A site's secrets, under `/site/secrets/?s=<slug>`: the lock in the header,
- * its service and what is wrong, each file and its actions, then its activity,
- * with no values at all.
+ * its service and what is wrong, then its store (variables, what is missing,
+ * files, the build's names, the public values, the legacy files) or, for a
+ * project with none, each file and its actions; then its activity. No value
+ * at all, but the one the owner reveals.
  */
 export function SecretsSection({ slug }: { slug: string }) {
   const { secrets } = useData()
