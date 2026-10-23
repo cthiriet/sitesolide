@@ -12,6 +12,7 @@
  * A value travels in a body, never in a URL: a URL ends up in a log, a body
  * does not.
  */
+import type { StoreView } from "../../borrowed/store-protocol";
 
 /** The steward's Unix socket. The directory is 0750 root:site-dashboard. */
 export const DEFAULT_SOCKET = "/run/sitesolide-steward/secretaire.sock";
@@ -145,6 +146,8 @@ export type ProjectView = {
   service: ServiceView | null;
   files: FileView[];
   portal: PortalView;
+  /** The project's store, null for a static site and a storeless project. */
+  store: StoreView | null;
 };
 
 export type Operation =
@@ -197,7 +200,14 @@ export type Operation =
   | "token.revoke"
   | "project.create"
   // A project removed from the machine: the name its token owned, free again.
-  | "project.remove";
+  | "project.remove"
+  // A value drawn on the machine into a project's store, never shown: the
+  // name alone is journaled.
+  | "generate"
+  // A project's legacy files merged into its store, values never shown; and
+  // a legacy file deleted once the store covers it.
+  | "migrate"
+  | "retire";
 
 export type OperationResult = "ok" | "rejects" | "failure";
 
@@ -286,6 +296,26 @@ export type Failure = { error: ErrorCode; message: string; wait?: number };
 //   POST   /password     PasswordRequest     -> PasswordResponse
 //   POST   /portal        PortalRequest        -> PortalResponse
 //   POST   /restart     ProjectRequest         -> RestartResponse
+//
+// A project's store, `/etc/sitesolide/projects/<slug>/`, its shapes in
+// bin/cli/store-protocol.ts (borrowed). No route but `/store/value` returns
+// a value, and it only to the owner's live unlock:
+//
+//   GET    /store?slug=<s>                    -> StoreListResponse
+//   PUT    /store/variable   WithToken & StoreSetRequest       -> StoreChangeResponse
+//   DELETE /store/variable   WithToken & StoreRemoveRequest    -> StoreChangeResponse
+//   PATCH  /store            WithToken & StoreChangeRequest    -> StoreChangeResponse
+//   POST   /store/generate   WithToken & StoreGenerateRequest  -> StoreChangeResponse
+//   PUT    /store/file       WithToken & StoreFileRequest      -> StoreChangeResponse
+//   DELETE /store/file       WithToken & StoreFileRemoveRequest -> StoreChangeResponse
+//   POST   /store/restore    WithToken & StoreRestoreRequest   -> StoreRestoreResponse
+//   POST   /store/value      WithToken & StoreRevealRequest    -> StoreRevealResponse
+//   POST   /store/migrate    WithToken & StoreMigrateRequest   -> StoreMigrateResponse
+//   POST   /store/retire     WithToken & StoreRetireRequest    -> StoreRetireResponse
+//
+// A write answers 201 when it made the store's folder. The owner's socket,
+// root's alone, answers the same routes without a token, but `/store/value`,
+// and `POST /restart { slug }`.
 //
 // Any error returns `Failure`.
 

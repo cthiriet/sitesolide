@@ -31,6 +31,20 @@
  *   POST   /people/portal            { session, token?, slug, active, confirmation }  -> PortalResponse    Admin, the unlock to make it public
  *   POST   /people/general           { session, token?, slug, access, renew?, confirmation } -> GeneralResponse  Admin, the unlock but to restrict
  *   POST   /people/backups/restore   { session, token, slug, snapshot, confirmation } -> 202 RestoreResponse  Admin
+ *
+ * And the project's store (src/secrets/store.ts), its shapes those of
+ * bin/cli/store-protocol.ts, listed with the projects (`ProjectView.store`):
+ *
+ *   PUT    /people/store/variable    { session, token, slug, name, value }            -> StoreChangeResponse   Developer
+ *   DELETE /people/store/variable    { session, token, slug, names }                  -> StoreChangeResponse   Developer
+ *   POST   /people/store/generate    { session, token, slug, name, format?, bytes?, replace? } -> StoreChangeResponse  Developer
+ *   PUT    /people/store/file        { session, token, slug, name, content }          -> StoreChangeResponse   Developer
+ *   DELETE /people/store/file        { session, token, slug, name }                   -> StoreChangeResponse   Developer
+ *   POST   /people/store/restore     { session, token, slug, dryRun? }                -> StoreRestoreResponse  Admin
+ *
+ * `/people/secrets/value` and `/people/secrets/content` stay and refuse
+ * everyone: reading a value back is the owner's alone (powers.ts). No route
+ * here reads a store's value, migrates or retires: the owner's too.
  */
 import type { ProjectView } from "../secrets/protocol";
 import { generalNeedsUnlock, machineRefusal, may, needsUnlock, powerRefusal, roleDetail, type Power } from "./powers";
@@ -43,14 +57,16 @@ export type Routes = Record<string, Record<string, Handler>>;
 
 /**
  * Who the steward acts for: the email it verified, as the journal writes it.
- * `readsBack`: a member whose role reads values back, an Admin; a
- * Developer's answers show every file write-only. `token`: the id of the
+ * `readsBack`: a member whose role reads values back, which no role does any
+ * more (src/people/powers.ts): every person's answers show every file
+ * write-only. `restores`: a member whose role puts a previous version back,
+ * an Admin, who is told one is kept. `token`: the id of the
  * token the control routes judged (src/control/steward.ts), `actor` then
  * `token:<id>` and `member` the person it belongs to, null for the owner's
  * own. A token is held to what a person is held to, the owner's own
  * included: never the machine's files, never a value read back.
  */
-export type Who = { actor: string; member: string | null; readsBack?: boolean; token?: string };
+export type Who = { actor: string; member: string | null; readsBack?: boolean; restores?: boolean; token?: string };
 
 /** The owner's operations, taken with the member as `who`. They run under the steward's lock. */
 export type MemberOps = {
@@ -66,6 +82,13 @@ export type MemberOps = {
   portal: (req: Request, body: Body, who: Who) => Promise<Response>;
   /** General access, any of the three, or a new code: `access`, `renew`, `confirmation`. */
   general: (req: Request, body: Body, who: Who) => Promise<Response>;
+  /** The project's store: `slug` and the request's fields, as bin/cli/store-protocol.ts names them. */
+  storeSet: (req: Request, body: Body, who: Who) => Promise<Response>;
+  storeRemove: (req: Request, body: Body, who: Who) => Promise<Response>;
+  storeGenerate: (req: Request, body: Body, who: Who) => Promise<Response>;
+  storeSetFile: (req: Request, body: Body, who: Who) => Promise<Response>;
+  storeRemoveFile: (req: Request, body: Body, who: Who) => Promise<Response>;
+  storeRestore: (req: Request, body: Body, who: Who) => Promise<Response>;
 };
 
 export type MemberActionsDependencies = {
@@ -155,7 +178,8 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
       const refusal = await judge(principal, body.slug, spec.power, spec.operation);
       if (refusal !== null) return refusal;
       const slug = body.slug as string;
-      const who: Who = { actor: principal.email, member: principal.email, readsBack: may(roleOn(principal, slug), "secrets.read") };
+      const role = roleOn(principal, slug);
+      const who: Who = { actor: principal.email, member: principal.email, readsBack: may(role, "secrets.read"), restores: may(role, "secrets.restore") };
       // Asked again once the turn has come: removed, locked or demoted while
       // the request waited behind a restart, nothing is done.
       const still = async (): Promise<Response | null> => {
@@ -180,6 +204,9 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
   }
 
   const startRestore = dependencies.startRestore;
+
+  const boolean = (field: string) => (body: Body) => (body[field] === undefined || typeof body[field] === "boolean" ? null : fail("invalid", `${field} must be a boolean`));
+  const STORE_NAME = ["slug", "name"] as const;
 
   return {
     "/people/secrets/projects": { POST: projects },
@@ -223,6 +250,28 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
         unlockFor: (body) => generalNeedsUnlock(body.access as "public" | "restricted" | "code"),
         run: ops.general,
       }),
+    },
+    "/people/store/variable": {
+      PUT: action({ operation: "set", power: "secrets.write", texts: [...STORE_NAME, "value"], run: ops.storeSet }),
+      DELETE: action({
+        operation: "remove",
+        power: "secrets.write",
+        texts: ["slug"],
+        others: ["names"],
+        check: (body) => (Array.isArray(body.names) ? null : fail("invalid", "names: a list of variable names")),
+        run: ops.storeRemove,
+      }),
+    },
+    // A value drawn on the machine is a set: refused by role as one.
+    "/people/store/generate": {
+      POST: action({ operation: "set", power: "secrets.write", texts: STORE_NAME, others: ["format", "bytes", "replace"], check: boolean("replace"), run: ops.storeGenerate }),
+    },
+    "/people/store/file": {
+      PUT: action({ operation: "replace", power: "secrets.write", texts: [...STORE_NAME, "content"], max: dependencies.maxContentBytes, run: ops.storeSetFile }),
+      DELETE: action({ operation: "remove", power: "secrets.write", texts: STORE_NAME, run: ops.storeRemoveFile }),
+    },
+    "/people/store/restore": {
+      POST: action({ operation: "restore", power: "secrets.restore", texts: ["slug"], others: ["dryRun"], check: boolean("dryRun"), run: ops.storeRestore }),
     },
     "/people/backups/restore": {
       POST: action({

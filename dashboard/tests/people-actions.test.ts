@@ -359,8 +359,9 @@ describe("secrets, by role", () => {
       ["alpha-signing.pub", false, null, false],
     ]);
     expect(alpha.files[0]!.variables).toEqual(["API_KEY", "PASSWORD_HASH"]);
+    // Not even an Admin reads a file back any more: write-only to every person.
     const beta = projects.find((project) => project.slug === "beta")!;
-    expect(beta.files.find((file) => file.name === "beta-signing.pub")).toMatchObject({ readable: true, bytes: 22 });
+    expect(beta.files.find((file) => file.name === "beta-signing.pub")).toMatchObject({ readable: false, bytes: null });
     expect(JSON.stringify(listed)).not.toContain(SECRET_VALUE);
     expect(listed.until).toBeNull();
   });
@@ -393,23 +394,41 @@ describe("secrets, by role", () => {
     const value = await bench.call("POST", "/people/secrets/value", { session: alice, token, slug: "alpha", file: "alpha.env", variable: "API_KEY" });
     expect(value.status).toBe(403);
     const refusal = await body(value);
-    expect(refusal).toEqual({ error: "out-of-scope", message: `${ALICE} is a Developer on alpha: reading a value back takes an Admin: a Developer sets, replaces and removes values, and never reads one` });
+    expect(refusal).toEqual({
+      error: "out-of-scope",
+      message: `${ALICE} is a Developer on alpha: reading a value back is the owner's alone: a Developer or an Admin sets, replaces and removes values, and never reads one`,
+    });
     expect(JSON.stringify(refusal)).not.toContain(SECRET_VALUE);
     expect(bench.journal().at(-1)).toMatchObject({ operation: "read", result: "rejects", actor: ALICE, slug: "alpha", detail: "role developer" });
     expect((await bench.call("POST", "/people/secrets/content", { session: alice, token, slug: "alpha", file: "alpha-signing.pub" })).status).toBe(403);
     expect((await bench.call("POST", "/people/secrets/restore", { session: alice, token, slug: "alpha", file: "alpha.env" })).status).toBe(403);
   });
 
-  test("an Admin reads their project's values, and the journal names them", async () => {
+  test("an Admin no longer reads a value back either (I8): refused by role, before any file is read, and journaled", async () => {
     const bench = await mount();
     const { alice } = await team(bench);
     const token = await unlockAs(bench, alice, ALICE);
     const value = await bench.call("POST", "/people/secrets/value", { session: alice, token, slug: "beta", file: "beta.env", variable: "API_KEY" });
-    expect(value.status).toBe(200);
-    expect(await body(value)).toEqual({ value: SECRET_VALUE });
-    expect(bench.journal().at(-1)).toMatchObject({ operation: "read", result: "ok", actor: ALICE, slug: "beta", variable: "API_KEY" });
+    expect(value.status).toBe(403);
+    const refusal = await body(value);
+    expect(refusal).toEqual({
+      error: "out-of-scope",
+      message: `${ALICE} is an Admin on beta: reading a value back is the owner's alone: a Developer or an Admin sets, replaces and removes values, and never reads one`,
+    });
+    expect(JSON.stringify(refusal)).not.toContain(SECRET_VALUE);
+    expect(bench.journal().at(-1)).toMatchObject({ operation: "read", result: "rejects", actor: ALICE, slug: "beta", detail: "role admin" });
     const content = await bench.call("POST", "/people/secrets/content", { session: alice, token, slug: "beta", file: "beta-signing.pub" });
-    expect(await body(content)).toEqual({ content: "ssh-ed25519 AAAA beta\n" });
+    expect(content.status).toBe(403);
+    expect(JSON.stringify(await body(content))).not.toContain("ssh-ed25519");
+    // The listing tells her a previous version is kept, which she may put back, and nothing she may read.
+    await bench.call("PUT", "/people/secrets/variable", { session: alice, token, slug: "beta", file: "beta.env", variable: "FLAG", value: "on" });
+    const listed = await body(await bench.call("POST", "/people/secrets/projects", { session: alice }));
+    const beta = (listed.projects as { slug: string; files: { name: string; readable: boolean; bytes: number | null; previous: boolean }[] }[]).find((project) => project.slug === "beta")!;
+    expect(beta.files.find((file) => file.name === "beta.env")).toMatchObject({ readable: false, bytes: null, previous: true });
+    expect((await bench.call("POST", "/people/secrets/restore", { session: alice, token, slug: "beta", file: "beta.env" })).status).toBe(200);
+    // The owner, unlocked, still reads it.
+    const owner = await ownerUnlock(bench);
+    expect(await body(await bench.call("POST", "/value", { token: owner, slug: "beta", file: "beta.env", variable: "API_KEY" }))).toEqual({ value: SECRET_VALUE });
   });
 
   test("every unlocked write needs the person's own unlock, the session alone is not enough", async () => {
@@ -575,5 +594,140 @@ describe("an Admin's project", () => {
     const refused = await bench.call("POST", "/people/backups/restore", { session: bob, token: bobToken, slug: "alpha", snapshot, confirmation: "alpha" });
     expect(await body(refused)).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("backups") });
     expect(bench.journal().at(-1)).toMatchObject({ operation: "backup.restore", result: "rejects", actor: BOB });
+  });
+});
+
+describe("a project's store, by role (spec §6.3)", () => {
+  const STORE_VALUE = "a-store-value-no-person-reads-3c1f";
+  const b64 = (text: string) => new TextEncoder().encode(text).toBase64();
+  const storeEnv = (bench: Bench, slug: string) => readFileSync(join(bench.root, "secrets", "projects", slug, "env"), "utf8");
+
+  test("a Developer sets, generates, removes, sets and removes a file; never restores, never reads; answers carry names alone", async () => {
+    const printed: string[] = [];
+    const original = { log: console.log, error: console.error };
+    console.log = (...parts: unknown[]) => printed.push(parts.map(String).join(" "));
+    console.error = (...parts: unknown[]) => printed.push(parts.map(String).join(" "));
+    try {
+      await developerWorksOnTheStore(printed);
+    } finally {
+      console.log = original.log;
+      console.error = original.error;
+    }
+    for (const line of printed) expect(line).not.toContain(STORE_VALUE);
+  });
+
+  async function developerWorksOnTheStore(printed: string[]): Promise<void> {
+    const bench = await mount();
+    const { alice } = await team(bench);
+    const token = await unlockAs(bench, alice, ALICE);
+    const base = { session: alice, token, slug: "alpha" };
+    const answers: string[] = [];
+    const call = async (method: string, path: string, body: Record<string, unknown>) => {
+      const response = await bench.call(method, path, { ...base, ...body });
+      answers.push(await response.clone().text());
+      return response;
+    };
+    expect((await call("PUT", "/people/store/variable", { name: "STORE_KEY", value: STORE_VALUE })).status).toBe(201);
+    expect((await call("POST", "/people/store/generate", { name: "SESSION_KEY", format: "base64url" })).status).toBe(200);
+    expect((await call("PUT", "/people/store/file", { name: "gcp.json", content: b64(STORE_VALUE) })).status).toBe(200);
+    expect((await call("DELETE", "/people/store/file", { name: "gcp.json" })).status).toBe(200);
+    expect((await call("DELETE", "/people/store/variable", { names: ["SESSION_KEY"] })).status).toBe(200);
+    expect(storeEnv(bench, "alpha")).toBe(`STORE_KEY=${STORE_VALUE}\n`);
+    for (const text of answers) expect(text).not.toContain(STORE_VALUE);
+    const view = JSON.parse(answers[0]!) as { store: { may: unknown; previous: boolean } };
+    expect(view.store.may).toEqual({ write: true, reveal: false, restore: false, migrate: false });
+
+    const restore = await call("POST", "/people/store/restore", { dryRun: true });
+    expect(await body(restore)).toEqual({ error: "out-of-scope", message: `${ALICE} is a Developer on alpha: putting a previous version back takes an Admin` });
+    expect(bench.journal().at(-1)).toMatchObject({ operation: "restore", result: "rejects", actor: ALICE, detail: "role developer" });
+    expect(bench.journal().filter((entry) => entry.slug === "alpha" && entry.result === "ok").map((entry) => [entry.operation, entry.actor, entry.file, entry.variable])).toEqual([
+      ["create", ALICE, "store", null],
+      ["set", ALICE, "store", "STORE_KEY"],
+      ["generate", ALICE, "store", "SESSION_KEY"],
+      ["replace", ALICE, "store/gcp.json", null],
+      ["remove", ALICE, "store/gcp.json", null],
+      ["remove", ALICE, "store", "SESSION_KEY"],
+    ]);
+    expect(JSON.stringify(bench.journal())).not.toContain(STORE_VALUE);
+
+    // No person's route reads a store value, migrates or retires: they do not exist.
+    for (const [path, extra] of [
+      ["/people/store/value", { name: "STORE_KEY" }],
+      ["/people/store/migrate", {}],
+      ["/people/store/retire", { files: ["alpha.env"] }],
+    ] as const) {
+      expect((await bench.call("POST", path, { ...base, ...extra })).status).toBe(404);
+    }
+    expect(printed.length).toBeGreaterThan(0);
+  }
+
+  test("the listing: names and states to a Developer, never a size nor a coverage; a previous version to an Admin", async () => {
+    const bench = await mount();
+    const { alice } = await team(bench);
+    const token = await unlockAs(bench, alice, ALICE);
+    for (const slug of ["alpha", "beta"]) {
+      await bench.call("PUT", "/people/store/variable", { session: alice, token, slug, name: "API_KEY", value: SECRET_VALUE });
+      await bench.call("PUT", "/people/store/file", { session: alice, token, slug, name: "gcp.json", content: b64("{}") });
+    }
+    const listed = await body(await bench.call("POST", "/people/secrets/projects", { session: alice }));
+    const stores = Object.fromEntries((listed.projects as { slug: string; store: Record<string, unknown> }[]).map((project) => [project.slug, project.store]));
+    for (const slug of ["alpha", "beta"]) {
+      const store = stores[slug] as { legacy: { covered: unknown }[]; files: { bytes: unknown }[]; variables: { name: string; source: string }[] };
+      expect(store.legacy.map((file) => file.covered)).toEqual(store.legacy.map(() => null));
+      expect(store.files.map((file) => file.bytes)).toEqual([null]);
+      expect(store.variables.find((variable) => variable.name === "API_KEY")).toMatchObject({ source: "store" });
+    }
+    expect(stores.alpha).toMatchObject({ previous: false, may: { restore: false } });
+    expect(stores.beta).toMatchObject({ previous: true, may: { write: true, reveal: false, restore: true, migrate: false } });
+    expect(JSON.stringify(listed)).not.toContain(SECRET_VALUE);
+  });
+
+  test("an Admin puts the previous version back, unlocked; a dry run first", async () => {
+    const bench = await mount();
+    const { alice } = await team(bench);
+    const token = await unlockAs(bench, alice, ALICE);
+    const base = { session: alice, token, slug: "beta" };
+    await bench.call("PUT", "/people/store/variable", { ...base, name: "A", value: "1" });
+    await bench.call("PUT", "/people/store/variable", { ...base, name: "B", value: "2" });
+    expect(await body(await bench.call("POST", "/people/store/restore", { ...base, dryRun: true }))).toMatchObject({ disappeared: ["B"], restored: false });
+    expect(await body(await bench.call("POST", "/people/store/restore", base))).toMatchObject({ restored: true });
+    expect(storeEnv(bench, "beta")).toBe("A=1\n");
+    expect(bench.journal().at(-1)).toMatchObject({ operation: "restore", result: "ok", actor: ALICE, slug: "beta", file: "store" });
+    expect((await bench.call("POST", "/people/store/restore", { ...base, dryRun: "yes" })).status).toBe(400);
+  });
+
+  test("a Viewer, Can open, no role, a platform project, a project not deployed: refused, nothing made", async () => {
+    const bench = await mount();
+    bench.seed({ [ALICE]: { alpha: "developer", shop: "viewer", beta: "visitor", ghost: "admin", dashboard: "admin" } });
+    const alice = await sessionOf(bench, ALICE);
+    const token = await unlockAs(bench, alice, ALICE);
+    const set = (slug: string) => bench.call("PUT", "/people/store/variable", { session: alice, token, slug, name: "A", value: "1" });
+    expect(await body(await set("shop"))).toEqual({ error: "out-of-scope", message: `${ALICE} is a Viewer on shop: changing its secrets takes a Developer or an Admin` });
+    // Can open is no role in the dashboard.
+    expect(await body(await set("beta"))).toEqual({ error: "out-of-scope", message: `${ALICE} holds no role on beta` });
+    expect(await body(await set("nobody"))).toEqual({ error: "out-of-scope", message: `${ALICE} holds no role on nobody` });
+    expect(await body(await set("dashboard"))).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("belongs to the platform") });
+    // A role on a project the machine no longer carries opens no store ahead of a deployment.
+    expect(await body(await set("ghost"))).toEqual({ error: "not-found", message: "ghost is not a project deployed on this machine" });
+    expect(existsSync(join(bench.root, "secrets", "projects"))).toBe(false);
+    // The store's routes ask for the person's own unlock.
+    expect(await body(await bench.call("PUT", "/people/store/variable", { session: alice, slug: "alpha", name: "A", value: "1" }))).toMatchObject({ error: "locked" });
+  });
+
+  test("demoted while the write waited for its turn: nothing written", async () => {
+    const bench = await mount();
+    const { alice } = await team(bench);
+    const token = await unlockAs(bench, alice, ALICE);
+    let release!: () => void;
+    bench.barrier.promise = new Promise((resolve) => (release = resolve));
+    const restart = bench.call("POST", "/people/restart", { session: alice, slug: "alpha" });
+    await Bun.sleep(20);
+    const write = bench.call("PUT", "/people/store/variable", { session: alice, token, slug: "alpha", name: "LATE", value: "never-written" });
+    await Bun.sleep(20);
+    bench.seed({ [ALICE]: { alpha: "viewer" } });
+    release();
+    await restart;
+    expect((await write).status).toBe(403);
+    expect(existsSync(join(bench.root, "secrets", "projects", "alpha"))).toBe(false);
   });
 });

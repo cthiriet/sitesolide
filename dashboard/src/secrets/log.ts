@@ -50,6 +50,9 @@ export const OPERATIONS: Operation[] = [
   "token.revoke",
   "project.create",
   "project.remove",
+  "generate",
+  "migrate",
+  "retire",
 ];
 
 /**

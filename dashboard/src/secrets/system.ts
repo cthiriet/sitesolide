@@ -29,6 +29,7 @@
  */
 import {
   appendFileSync,
+  chmodSync,
   closeSync,
   constants,
   fchmodSync,
@@ -41,6 +42,7 @@ import {
   readdirSync,
   readSync,
   renameSync,
+  rmSync,
   unlinkSync,
   writeSync,
   type Dirent,
@@ -76,6 +78,8 @@ import {
 } from "./scope";
 import { BACKUPS_NAME } from "../gatekeeper/instance";
 import { MAX_RESULT_BYTES } from "./portal";
+import { isValidFileName } from "../../borrowed/manifest";
+import { MAX_STORE_ENV_BYTES, MAX_STORE_FILE_BYTES, storeFilePath, storePaths } from "../../borrowed/store";
 
 export type SystemConfig = {
   sitesDir: string;
@@ -191,7 +195,44 @@ export type System = {
   /** The temporary files left behind by an abrupt stop, and them alone. Returns their number. */
   cleanTemporaries: () => Promise<number>;
   systemctl: (arguments_: string[], timeoutMs: number) => Promise<Command>;
+
+  // --- A project's store, `<secrets>/projects/<slug>/` ------------------------
+  //
+  // Every path is built from a slug and a file name that storePaths and
+  // storeFilePath (bin/cli/store.ts) throw on, and each of the three folders
+  // is checked a real folder before anything is read or written below it:
+  // `O_NOFOLLOW` guards the last component alone, and a link in the place of
+  // `projects/<slug>` would make root read or write elsewhere.
+
+  /**
+   * The store's root, `projects`, its project folder, or its `files/`,
+   * without following a link: null if missing.
+   */
+  examineStoreFolder: (slug: string, part: StoreFolderPart) => Promise<FolderInfo | null>;
+  /** Makes the missing folders, root 0700, the previous versions dropped when the project's folder is new; "refused" with a path on a link or a non-folder. */
+  ensureStore: (slug: string) => Promise<{ kind: "created" } | { kind: "present" } | { kind: "refused"; path: string }>;
+  readStoreEnv: (slug: string) => Promise<Examination>;
+  writeStoreEnv: (slug: string, bytes: Uint8Array) => Promise<void>;
+  /** Every entry of `files/` but dot files, which systemd skips and this steward's temporaries are. */
+  listStoreFiles: (slug: string) => Promise<string[]>;
+  readStoreFile: (slug: string, name: string) => Promise<Examination>;
+  /** The same entry without reading it, its link not followed: a listing reads no file's bytes. null if missing. */
+  examineStoreFile: (slug: string, name: string) => Promise<FileInfo | null>;
+  /** Written through a dot-named temporary in files/, renamed: LoadCredential= skips dot files (bench Q1). */
+  writeStoreFile: (slug: string, name: string, bytes: Uint8Array) => Promise<void>;
+  /** Unlinks that file alone; never the folder (I3'). */
+  removeStoreFile: (slug: string, name: string) => Promise<void>;
+  readStorePrevious: (slug: string, part: StorePreviousPart) => Promise<Examination>;
+  writeStorePrevious: (slug: string, part: StorePreviousPart, bytes: Uint8Array) => Promise<void>;
+  /** A legacy flat file removed, fsync of the folder included: retire. */
+  removeLegacy: (name: string) => Promise<void>;
 };
+
+/** The store's three folders: `projects`, `projects/<slug>`, `projects/<slug>/files`. */
+export type StoreFolderPart = "root" | "folder" | "files";
+
+/** A version the steward keeps of a store's env or of one of its files. */
+export type StorePreviousPart = "env" | `files/${string}`;
 
 /** A manifest, a unit, a hash: none of them has any reason to be bigger. */
 const MAX_TEXT_BYTES = 256 * 1024;
@@ -591,8 +632,72 @@ export function readGroup(text: string, name: string): number | null {
   return null;
 }
 
+/**
+ * The path of a folder of the store, after checking it and every store folder
+ * above it is a real folder or missing, never a link nor a file: the second
+ * lock, which holds even if the steward's own judgement gave way. Throws
+ * otherwise.
+ */
+function realFolders(paths: readonly string[]): void {
+  for (const path of paths) {
+    let stat: Stats;
+    try {
+      stat = lstatSync(path);
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "ENOENT" || code === "ENOTDIR") return;
+      throw error;
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("a store folder is not a plain folder");
+  }
+}
+
+/** Does this folder exist, as a real folder? Throws on a link or a file in its place. */
+function folderExists(path: string): boolean {
+  try {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("a store folder is not a plain folder");
+    return true;
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
+/**
+ * A name systemd would load from `files/`, as the steward reads it to list it
+ * and count it: one path component, no dot first. Only a valid file name is
+ * ever written (storeFilePath).
+ */
+function storeEntry(name: string): string {
+  if (typeof name !== "string" || name === "" || name.length > 255 || name.startsWith(".") || name.includes("/") || name.includes("\0")) {
+    throw new Error("not an entry of a store's files");
+  }
+  return name;
+}
+
 export function createSystem(config: SystemConfig): System {
   const previousFolder = join(config.stateFolder, "precedents");
+  const storeRoot = join(config.secretsFolder, "projects");
+  const storePreviousRoot = join(previousFolder, "projects");
+  /** The three folders of a slug's store, the slug validated (storePaths throws). */
+  const storeFolders = (slug: string) => {
+    const { folder, env, files } = storePaths(slug, storeRoot);
+    return { root: storeRoot, folder, env, files };
+  };
+  /** The folders of the versions kept of a slug's store, the slug validated. */
+  const previousFolders = (slug: string) => {
+    const { folder, env, files } = storePaths(slug, storePreviousRoot);
+    return { root: storePreviousRoot, folder, env, files };
+  };
+  /** The path of a kept version, its part validated: `env`, or `files/<valid name>`. */
+  const previousPath = (slug: string, part: StorePreviousPart): string => {
+    const folders = previousFolders(slug);
+    if (part === "env") return folders.env;
+    if (!part.startsWith("files/")) throw new Error("not a part of a store");
+    return storeFilePath(slug, part.slice("files/".length), storePreviousRoot);
+  };
   const logFile = join(config.stateFolder, "journal.jsonl");
   const accessLogFile = join(config.stateFolder, ACCESS_LOG_NAME);
   const rateLimitFile = join(config.stateFolder, "rate-limit.json");
@@ -687,22 +792,46 @@ export function createSystem(config: SystemConfig): System {
     return accessPrunedAt === null || now - accessPrunedAt >= ACCESS_PRUNE_INTERVAL_MS || now < accessPrunedAt;
   }
 
-  /** The directories where a temporary file of ours can remain: each root, and its secrets subdirectories. */
+  /**
+   * The directories where a temporary file of ours can remain: each root, its
+   * secrets subdirectories, and every project's store and its `files/`, with
+   * the versions kept of them. `withFileTypes` does not follow links: a link
+   * in a store's place is never walked into.
+   */
   function tempFolders(): string[] {
+    const read = (folder: string): Dirent[] => {
+      try {
+        return readdirSync(folder, { withFileTypes: true });
+      } catch {
+        return [];
+      }
+    };
     const folders: string[] = [];
     for (const root of [config.secretsFolder, previousFolder]) {
       folders.push(root);
-      let entries: Dirent[] = [];
-      try {
-        entries = readdirSync(root, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const entry of entries) {
+      for (const entry of read(root)) {
         if (entry.isDirectory() && entry.name.endsWith(SUBFOLDER_SUFFIX)) folders.push(join(root, entry.name));
       }
     }
+    for (const root of [storeRoot, storePreviousRoot]) {
+      for (const entry of read(root)) {
+        if (!entry.isDirectory()) continue;
+        const folder = join(root, entry.name);
+        folders.push(folder);
+        if (read(folder).some((inner) => inner.isDirectory() && inner.name === "files")) folders.push(join(folder, "files"));
+      }
+    }
     folders.push(config.stateFolder);
+    return folders;
+  }
+
+  /** The kept versions' folders of a store laid, 0700, root's, never through a link. */
+  function preparePrevious(slug: string): ReturnType<typeof previousFolders> {
+    const folders = previousFolders(slug);
+    prepareState();
+    realFolders([folders.root, folders.folder, folders.files]);
+    mkdirSync(folders.files, { recursive: true, mode: 0o700 });
+    realFolders([folders.root, folders.folder, folders.files]);
     return folders;
   }
 
@@ -970,6 +1099,140 @@ export function createSystem(config: SystemConfig): System {
         }
       }
       return removed;
+    },
+
+    async examineStoreFolder(slug, part) {
+      const folders = storeFolders(slug);
+      const path = folders[part];
+      try {
+        const stat = lstatSync(path);
+        return { link: stat.isSymbolicLink(), folder: stat.isDirectory(), uid: stat.uid, mode: stat.mode & 0o7777 };
+      } catch (error) {
+        const code = errorCode(error);
+        if (code === "ENOENT" || code === "ENOTDIR") return null;
+        throw error;
+      }
+    },
+
+    async ensureStore(slug) {
+      const folders = storeFolders(slug);
+      let created = false;
+      for (const path of [folders.root, folders.folder, folders.files]) {
+        let stat: Stats | null = null;
+        try {
+          stat = lstatSync(path);
+        } catch (error) {
+          if (errorCode(error) !== "ENOENT") throw error;
+        }
+        if (stat !== null) {
+          if (stat.isSymbolicLink() || !stat.isDirectory()) return { kind: "refused", path };
+          continue;
+        }
+        if (path === folders.folder) {
+          // A slug removed then created again must not find its
+          // predecessor's previous versions to restore (createFresh in
+          // steward.ts gives the same reason for a legacy file).
+          realFolders([storePreviousRoot]);
+          rmSync(previousFolders(slug).folder, { recursive: true, force: true });
+          created = true;
+        }
+        mkdirSync(path, { mode: 0o700 });
+        // The mode the umask may have narrowed or not, said once.
+        chmodSync(path, 0o700);
+        syncFolder(dirname(path));
+      }
+      return created ? { kind: "created" } : { kind: "present" };
+    },
+
+    async readStoreEnv(slug) {
+      const folders = storeFolders(slug);
+      realFolders([folders.root, folders.folder]);
+      return readBounded(folders.env, MAX_STORE_ENV_BYTES);
+    },
+
+    async writeStoreEnv(slug, bytes) {
+      const folders = storeFolders(slug);
+      realFolders([folders.root, folders.folder]);
+      if (!folderExists(folders.folder)) throw new Error("the store's folder is missing");
+      writeAtomically(folders.folder, "env", bytes, aRoot);
+    },
+
+    async listStoreFiles(slug) {
+      const folders = storeFolders(slug);
+      realFolders([folders.root, folders.folder, folders.files]);
+      let names: string[];
+      try {
+        names = readdirSync(folders.files);
+      } catch (error) {
+        const code = errorCode(error);
+        if (code === "ENOENT" || code === "ENOTDIR") return [];
+        throw error;
+      }
+      return names.filter((name) => !name.startsWith(".")).sort();
+    },
+
+    async readStoreFile(slug, name) {
+      const folders = storeFolders(slug);
+      realFolders([folders.root, folders.folder, folders.files]);
+      return readBounded(join(folders.files, storeEntry(name)), MAX_STORE_FILE_BYTES);
+    },
+
+    async examineStoreFile(slug, name) {
+      const folders = storeFolders(slug);
+      realFolders([folders.root, folders.folder, folders.files]);
+      try {
+        return toInfo(lstatSync(join(folders.files, storeEntry(name))));
+      } catch (error) {
+        const code = errorCode(error);
+        if (code === "ENOENT" || code === "ENOTDIR") return null;
+        throw error;
+      }
+    },
+
+    async writeStoreFile(slug, name, bytes) {
+      const folders = storeFolders(slug);
+      // Throws on a name that is not valid: no other name is ever written.
+      storeFilePath(slug, name, storeRoot);
+      realFolders([folders.root, folders.folder, folders.files]);
+      if (!folderExists(folders.files)) throw new Error("the store's files folder is missing");
+      writeAtomically(folders.files, name, bytes, aRoot);
+    },
+
+    async removeStoreFile(slug, name) {
+      const folders = storeFolders(slug);
+      const path = storeFilePath(slug, name, storeRoot);
+      realFolders([folders.root, folders.folder, folders.files]);
+      try {
+        // The entry alone: a link in its place is removed, never followed,
+        // and the folder stays, empty or not.
+        unlinkSync(path);
+      } catch (error) {
+        const code = errorCode(error);
+        if (code === "ENOENT" || code === "ENOTDIR") return;
+        throw error;
+      }
+      syncFolder(folders.files);
+    },
+
+    async readStorePrevious(slug, part) {
+      const folders = previousFolders(slug);
+      const path = previousPath(slug, part);
+      realFolders([folders.root, folders.folder, folders.files]);
+      return readBounded(path, part === "env" ? MAX_STORE_ENV_BYTES : MAX_STORE_FILE_BYTES);
+    },
+
+    async writeStorePrevious(slug, part, bytes) {
+      const path = previousPath(slug, part);
+      preparePrevious(slug);
+      writeAtomically(dirname(path), basename(path), bytes, aRoot);
+    },
+
+    async removeLegacy(name) {
+      // A flat name, as retire takes: never a subfolder's file, never a hidden one.
+      if (typeof name !== "string" || name.includes("/") || name.startsWith(".")) throw new Error("not a legacy file's name");
+      const path = subState(config.secretsFolder, name);
+      unlinkSync(path);
+      syncFolder(config.secretsFolder);
     },
 
     /**

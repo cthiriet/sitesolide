@@ -381,7 +381,27 @@ describe("what the unit sets and reads", () => {
 
   test("an empty assignment resets the list, as systemd does", () => {
     const text = "[Service]\nEnvironment=A=1\nEnvironment=\nEnvironment=B=2\nEnvironmentFile=/x\nEnvironmentFile=\n";
-    expect(unitEnvironment(text)).toEqual({ keys: ["B"], values: ["2"], files: [] });
+    expect(unitEnvironment(text)).toEqual({ keys: ["B"], values: ["2"], files: [], credentials: [] });
+    expect(unitEnvironment("[Service]\nLoadCredential=files:/x\nLoadCredential=\n").credentials).toEqual([]);
+  });
+
+  test("the credentials a unit loads: a project's store hands its files so, read in their order", () => {
+    const text = [
+      "[Service]",
+      "EnvironmentFile=-/etc/sitesolide/nis2-ses.env",
+      "EnvironmentFile=-/etc/sitesolide/projects/nis2/env",
+      "LoadCredential=files:/etc/sitesolide/projects/nis2/files",
+      "LoadCredential=token",
+      "[Install]",
+      "LoadCredential=ignored:/elsewhere",
+    ].join("\n");
+    const environment = unitEnvironment(text);
+    expect(environment.credentials).toEqual([
+      { id: "files", path: "/etc/sitesolide/projects/nis2/files" },
+      { id: "token", path: null },
+    ]);
+    // The store's env, last: it wins over every legacy file before it.
+    expect(environment.files.at(-1)).toEqual({ path: "/etc/sitesolide/projects/nis2/env", optional: true });
   });
 
   test("the values, which say where a service opens its own secrets", () => {

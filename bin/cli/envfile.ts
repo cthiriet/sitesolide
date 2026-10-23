@@ -305,6 +305,14 @@ export function serialise(document: EnvDocument): string {
 
 export type UnitEnvFile = { path: string; optional: boolean };
 
+/**
+ * A `LoadCredential=ID:PATH` line: systemd reads PATH as root and hands the
+ * service a private copy under `$CREDENTIALS_DIRECTORY`, a file as `ID`, a
+ * folder's every regular file as `ID_<name>`. `path` null: the credential is
+ * looked up by its id alone, in systemd's own credential stores.
+ */
+export type UnitCredential = { id: string; path: string | null };
+
 export type UnitEnvironment = {
   /** The names set by `Environment=`, in the [Service] section. */
   keys: string[];
@@ -315,6 +323,8 @@ export type UnitEnvironment = {
    */
   values: string[];
   files: UnitEnvFile[];
+  /** The `LoadCredential=` lines, in order: a project's store hands its files so. */
+  credentials: UnitCredential[];
 };
 
 /**
@@ -329,6 +339,7 @@ export function unitEnvironment(text: string): UnitEnvironment {
   const keys = new Set<string>();
   const values: string[] = [];
   const files: UnitEnvFile[] = [];
+  const credentials: UnitCredential[] = [];
   let section = "";
 
   // A line ending with `\` is continued on the next one.
@@ -369,10 +380,17 @@ export function unitEnvironment(text: string): UnitEnvironment {
       }
       const optional = value.startsWith("-");
       files.push({ path: optional ? value.slice(1) : value, optional });
+    } else if (directive === "LoadCredential") {
+      if (value === "") {
+        credentials.length = 0;
+        continue;
+      }
+      const colon = value.indexOf(":");
+      credentials.push(colon === -1 ? { id: value, path: null } : { id: value.slice(0, colon), path: value.slice(colon + 1) });
     }
   }
 
-  return { keys: [...keys], values, files };
+  return { keys: [...keys], values, files, credentials };
 }
 
 /** The words of a directive, single and double quotes removed, `\` taking the next letter. */

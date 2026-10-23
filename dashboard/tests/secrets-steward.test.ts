@@ -48,6 +48,7 @@ import {
   type StewardOptions,
 } from "../src/secrets/steward";
 import { createSystem, isTemporary, readAccount, readGroup, type Command, type SystemConfig, type System } from "../src/secrets/system";
+import type { StoreChangeResponse, StoreListResponse, StoreMigrateResponse, StoreRetireResponse, StoreRevealResponse, StoreView } from "../borrowed/store-protocol";
 import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_RETENTION_MS, createHistory, encodeEntry, inWindow, latest, MAX_ENTRY_BYTES, mergeLogs, page, reread, type AccessWindow } from "../src/secrets/log";
 
 /**
@@ -358,7 +359,7 @@ async function mount(options: Mount = {}): Promise<Bench> {
       // Every body returned is kept for the final test: no value must appear
       // in it, except in what /value, /content and /password return.
       const text = await response.clone().text();
-      if (!["/value", "/content", "/password"].includes(path)) renderedTexts.push(text);
+      if (!["/value", "/content", "/password", "/store/value"].includes(path)) renderedTexts.push(text);
       return response;
     },
   };
@@ -3030,6 +3031,95 @@ describe("the real system", () => {
     expect(readdirSync(join(root, "state")).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
+  describe("a project's store", () => {
+    test("ensureStore lays the three folders 0700, drops a predecessor's previous versions once, then answers present", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "secrets"));
+      const previous = join(root, "state", "precedents", "projects", "shop");
+      mkdirSync(join(previous, "files"), { recursive: true });
+      writeFileSync(join(previous, "env"), "A=from-a-removed-project\n");
+      const system = systemOn(root);
+      expect(await system.ensureStore("shop")).toEqual({ kind: "created" });
+      for (const part of ["", "/shop", "/shop/files"]) expect(statSync(join(root, "secrets", `projects${part}`)).mode & 0o777).toBe(0o700);
+      expect(existsSync(previous)).toBe(false);
+      writeFileSync(join(root, "state", "precedents", "projects", "kept"), "");
+      // files/ deleted by hand: laid again, and the project's folder being there, nothing else is dropped.
+      rmSync(join(root, "secrets", "projects", "shop", "files"), { recursive: true });
+      await system.writeStorePrevious("shop", "env", new TextEncoder().encode("A=1\n"));
+      expect(await system.ensureStore("shop")).toEqual({ kind: "present" });
+      expect(existsSync(join(root, "secrets", "projects", "shop", "files"))).toBe(true);
+      expect(readFileSync(join(previous, "env"), "utf8")).toBe("A=1\n");
+      expect(await system.ensureStore("shop")).toEqual({ kind: "present" });
+      expect(await system.examineStoreFolder("shop", "files")).toMatchObject({ link: false, folder: true, mode: 0o700 });
+      expect(await system.examineStoreFolder("other", "folder")).toBeNull();
+    });
+
+    test("a link or a file at any of the three folders: refused, and nothing is read or written through it", async () => {
+      for (const part of ["projects", "projects/shop", "projects/shop/files"]) {
+        const root = throwawayRoot();
+        const elsewhere = join(root, "elsewhere");
+        mkdirSync(elsewhere);
+        mkdirSync(join(root, "secrets", part, ".."), { recursive: true });
+        symlinkSync(elsewhere, join(root, "secrets", part));
+        const system = systemOn(root);
+        expect(await system.ensureStore("shop")).toEqual({ kind: "refused", path: join(root, "secrets", part) });
+        if (part !== "projects/shop/files") await expect(system.writeStoreEnv("shop", new TextEncoder().encode("A=1\n"))).rejects.toThrow();
+        await expect(system.writeStoreFile("shop", "gcp.json", new Uint8Array([1]))).rejects.toThrow();
+        await expect(system.listStoreFiles("shop")).rejects.toThrow();
+        expect(readdirSync(elsewhere)).toEqual([]);
+      }
+      const root = throwawayRoot();
+      mkdirSync(join(root, "secrets"));
+      writeFileSync(join(root, "secrets", "projects"), "");
+      expect(await systemOn(root).ensureStore("shop")).toEqual({ kind: "refused", path: join(root, "secrets", "projects") });
+    });
+
+    test("no path from a slug or a name that is not valid; a file written through a dot-named temporary; removing one leaves the folder", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "secrets"));
+      const system = systemOn(root);
+      for (const slug of ["../x", "", "a/b", "Shop", "x.y"]) await expect(system.ensureStore(slug)).rejects.toThrow();
+      await system.ensureStore("shop");
+      for (const name of ["../env", ".hidden", "a/b", "a..b", "x".repeat(65)]) {
+        await expect(system.writeStoreFile("shop", name, new Uint8Array([1]))).rejects.toThrow();
+        await expect(system.removeStoreFile("shop", name)).rejects.toThrow();
+      }
+      for (const part of ["files/../env", "files/.x", "env/../x", "other"] as const) {
+        await expect(system.readStorePrevious("shop", part as "env")).rejects.toThrow();
+      }
+      for (const name of ["../env", ".x", "a/b", ""]) await expect(system.readStoreFile("shop", name)).rejects.toThrow();
+
+      await system.writeStoreFile("shop", "gcp.json", new TextEncoder().encode("{}"));
+      const files = join(root, "secrets", "projects", "shop", "files");
+      expect(readdirSync(files)).toEqual(["gcp.json"]);
+      expect(statSync(join(files, "gcp.json")).mode & 0o777).toBe(0o600);
+      // A temporary left by an abrupt stop is a dot file, which LoadCredential= skips, and goes at the next start.
+      writeFileSync(join(files, ".gcp.json.0123456789abcdef.tmp"), "{");
+      writeFileSync(join(root, "secrets", "projects", "shop", ".env.0123456789abcdef.tmp"), "A=");
+      expect(await system.listStoreFiles("shop")).toEqual(["gcp.json"]);
+      expect(await system.cleanTemporaries()).toBe(2);
+      await system.removeStoreFile("shop", "gcp.json");
+      await system.removeStoreFile("shop", "gcp.json");
+      expect(readdirSync(files)).toEqual([]);
+    });
+
+    test("removeLegacy unlinks a flat file alone", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "secrets", "cms-secrets"), { recursive: true });
+      writeFileSync(join(root, "secrets", "cms.env"), "A=1\n");
+      writeFileSync(join(root, "secrets", "cms-secrets", "x.env"), "A=1\n");
+      const system = systemOn(root);
+      for (const name of ["cms-secrets/x.env", ".cms.env", "../cms.env"]) await expect(system.removeLegacy(name)).rejects.toThrow();
+      await system.removeLegacy("cms.env");
+      expect(readdirSync(join(root, "secrets"))).toEqual(["cms-secrets"]);
+      // The store's folder is never a legacy file, nor are its files.
+      await system.ensureStore("cms");
+      await system.writeStoreEnv("cms", new TextEncoder().encode("A=1\n"));
+      await system.writeStoreFile("cms", "x.env", new TextEncoder().encode("A=1\n"));
+      expect(await system.listSecrets()).toEqual(["cms-secrets/x.env"]);
+    });
+  });
+
   describe("the access log", () => {
     const NOW = 1_800_000_000_000;
     const DAY = 24 * 3600 * 1000;
@@ -3493,9 +3583,13 @@ describe("unit and capabilities", () => {
       expect(body.indexOf("fchmodSync(")).toBeGreaterThan(0);
       expect(body.indexOf("fchmodSync(")).toBeLessThan(body.indexOf("fchownSync("));
     }
-    // The steward creates no directory in /etc/sitesolide: only its previous
-    // versions get a mkdir.
-    expect(source.match(/mkdirSync\(/g)?.length).toBe(2);
+    // The steward creates no directory in /etc/sitesolide but a project's
+    // store, its three folders root's 0700 (ensureStore); the others are its
+    // previous versions'.
+    expect(source.match(/mkdirSync\(/g)?.length).toBe(4);
+    const ensure = source.slice(source.indexOf("async ensureStore("), source.indexOf("async readStoreEnv("));
+    expect(ensure.match(/mkdirSync\(/g)?.length).toBe(1);
+    expect(ensure).toContain("mkdirSync(path, { mode: 0o700 })");
   });
 });
 
@@ -3689,5 +3783,849 @@ describe("a token's secrets, handed over by the control routes", () => {
     const token = await unlock(bench);
     expect((await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "BROKEN", value: "\ufdd0" })).status).toBe(400);
     expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+  });
+});
+
+// --- A project's store -------------------------------------------------------
+
+/** A value set into a store, that no answer, journal line or log may ever carry but `/store/value`'s. */
+const STORE_CANARY = "store-canary-VALUE-4b19e7d2";
+/** A file's bytes, the same rule. */
+const FILE_CANARY = "-----BEGIN FAKE KEY-----\nfile-canary-CONTENT-82ac\n-----END FAKE KEY-----\n";
+/** The draws of `generate` on the bench: every byte known, so that the value drawn is too. */
+const drawn = (bytes: number) => Uint8Array.from({ length: bytes }, (_, i) => (i * 29 + 7) % 256);
+const DRAWN_HEX = drawn(32).toHex();
+
+type StorePaths = { root: string; folder: string; env: string; files: string };
+const storeOf = (bench: Bench, slug: string): StorePaths => ({
+  root: join(bench.secrets, "projects"),
+  folder: join(bench.secrets, "projects", slug),
+  env: join(bench.secrets, "projects", slug, "env"),
+  files: join(bench.secrets, "projects", slug, "files"),
+});
+
+/** A unit as this release generates it: legacy files, then the store last, its files loaded, the folder hidden. */
+function storeUnit(bench: Bench, slug: string, legacy: string[] = [], extra: string[] = []): string {
+  const store = storeOf(bench, slug);
+  return [
+    "[Service]",
+    "Environment=PORT=3050",
+    ...extra,
+    ...legacy.map((file) => `EnvironmentFile=-${bench.secrets}/${file}`),
+    `EnvironmentFile=-${store.env}`,
+    `LoadCredential=files:${store.files}`,
+    "ExecStart=/usr/local/bin/bun run server.ts",
+    "InaccessiblePaths=-/etc/sitesolide",
+    "ProtectProc=invisible",
+    "",
+  ].join("\n");
+}
+
+const SHOP = {
+  start: "/usr/local/bin/bun run server.ts",
+  port: 3050,
+  publicDir: "public",
+  env: { NODE_ENV: "production", DEFAULT_SENDER: "shop@test-zone.invalid" },
+  secrets: { runtime: ["API_KEY", "SESSION_KEY"], files: ["gcp.json"], build: ["CMS_TOKEN"] },
+};
+
+/** A store-form app deployed on the bench: its manifest and its unit, as this release lays them. */
+function addStoreProject(bench: Bench, slug = "shop", manifest: Record<string, unknown> = SHOP): void {
+  mkdirSync(join(bench.sites, slug), { recursive: true });
+  writeFileSync(join(bench.sites, slug, "sitesolide.json"), JSON.stringify({ slug, ...manifest }));
+  writeFileSync(join(bench.units, `${slug}.service`), storeUnit(bench, slug));
+}
+
+/** cms, deployed again by this release (M1): its legacy files first, then its store. */
+function cmsReadsStore(bench: Bench): void {
+  writeFileSync(join(bench.units, "cms.service"), storeUnit(bench, "cms", ["cms.env", "cms-webhook.env"], ["Environment=DATA_DIR=/srv/sites/cms/data"]));
+}
+
+async function storeList(bench: Bench, slug: string): Promise<StoreView> {
+  const response = await bench.call("GET", `/store?slug=${slug}`);
+  expect(response.status).toBe(200);
+  return ((await response.json()) as StoreListResponse).store;
+}
+
+const b64 = (text: string) => new TextEncoder().encode(text).toBase64();
+const modeOf = (path: string) => statSync(path).mode & 0o777;
+/** The bench's clock moved past the cache of `systemctl show`, so that the next reading is fresh. */
+const freshReadings = (bench: Bench) => {
+  bench.clock.t += 3_000;
+};
+
+describe("a project's store: the owner's routes on the dashboard's socket", () => {
+  test("GET /store lists names, sources and states, never a value; a store not made yet reads absent", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const store = await storeList(bench, "shop");
+    expect(store).toMatchObject({
+      slug: "shop",
+      exists: false,
+      state: "absent",
+      missing: ["API_KEY", "SESSION_KEY"],
+      build: ["CMS_TOKEN"],
+      unitReadsStore: true,
+      previous: false,
+      may: { write: true, reveal: true, restore: true, migrate: true },
+    });
+    expect(store.variables.map((variable) => [variable.name, variable.source, variable.declared])).toEqual([
+      ["API_KEY", "none", true],
+      ["SESSION_KEY", "none", true],
+    ]);
+    expect(store.files).toEqual([{ name: "gcp.json", state: "missing", declared: true, reason: null, bytes: null, modifiedAt: null, restartPending: false }]);
+    expect(store.public).toEqual([
+      { name: "NODE_ENV", value: "production" },
+      { name: "DEFAULT_SENDER", value: "shop@test-zone.invalid" },
+    ]);
+    // Reading it creates nothing.
+    expect(existsSync(storeOf(bench, "shop").root)).toBe(false);
+    expect((await bench.call("GET", "/store")).status).toBe(400);
+    expect((await bench.call("GET", "/store?slug=shop&slug=cms")).status).toBe(400);
+  });
+
+  test("PUT /store/variable lays the store, root's folders 0700 and its env 0600, and answers names alone, 201 when it made it", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    const first = await bench.call("PUT", "/store/variable", { token, slug: "shop", name: "API_KEY", value: STORE_CANARY });
+    expect(first.status).toBe(201);
+    const answer = (await first.json()) as StoreChangeResponse;
+    expect(answer).toMatchObject({ created: true, set: ["API_KEY"], generated: [], removed: [], absent: [], files: { set: [], removed: [] } });
+    expect(answer.store.variables.find((variable) => variable.name === "API_KEY")).toMatchObject({ source: "store" });
+    expect(JSON.stringify(answer)).not.toContain(STORE_CANARY);
+    const store = storeOf(bench, "shop");
+    expect([modeOf(store.root), modeOf(store.folder), modeOf(store.files), modeOf(store.env)]).toEqual([0o700, 0o700, 0o700, 0o600]);
+    expect(readFileSync(store.env, "utf8")).toBe(`API_KEY=${STORE_CANARY}\n`);
+    expect(readdirSync(store.files)).toEqual([]);
+    expect(log(bench).slice(-2)).toMatchObject([
+      { operation: "create", result: "ok", slug: "shop", file: "store", variable: null },
+      { operation: "set", result: "ok", slug: "shop", file: "store", variable: "API_KEY" },
+    ]);
+
+    const second = await bench.call("PUT", "/store/variable", { token, slug: "shop", name: "SESSION_KEY", value: "x" });
+    expect(second.status).toBe(200);
+    expect(((await second.json()) as StoreChangeResponse).created).toBe(false);
+    // Without the live unlock, nothing.
+    expect((await bench.call("PUT", "/store/variable", { token: "x".repeat(43), slug: "shop", name: "A", value: "b" })).status).toBe(401);
+    expect((await bench.call("PUT", "/store/variable", { slug: "shop", name: "A", value: "b" })).status).toBe(401);
+    expect(readFileSync(store.env, "utf8")).toBe(`API_KEY=${STORE_CANARY}\nSESSION_KEY=x\n`);
+  });
+
+  test("DELETE /store/variable removes, says what the store did not hold, and keeps the version before", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    await bench.call("PATCH", "/store", { token, slug: "shop", set: { A: "1", B: "2" }, remove: [] });
+    const removed = await bench.call("DELETE", "/store/variable", { token, slug: "shop", names: ["A", "NEVER_SET"] });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toMatchObject({ removed: ["A"], absent: ["NEVER_SET"], set: [] });
+    expect(readFileSync(storeOf(bench, "shop").env, "utf8")).toBe("B=2\n");
+    expect(readFileSync(join(bench.state, "precedents", "projects", "shop", "env"), "utf8")).toBe("A=1\nB=2\n");
+    expect(log(bench).at(-1)).toMatchObject({ operation: "remove", result: "ok", file: "store", variable: "A" });
+    // Removing every name leaves an empty env and every folder in place.
+    await bench.call("DELETE", "/store/variable", { token, slug: "shop", names: ["B"] });
+    expect(readFileSync(storeOf(bench, "shop").env, "utf8")).toBe("");
+    expect(existsSync(storeOf(bench, "shop").files)).toBe(true);
+    // Nothing to remove from a store that does not exist: nothing is made.
+    addStoreProject(bench, "other");
+    expect(await (await bench.call("DELETE", "/store/variable", { token, slug: "other", names: ["A"] })).json()).toMatchObject({ created: false, absent: ["A"] });
+    expect(existsSync(storeOf(bench, "other").folder)).toBe(false);
+  });
+
+  test("PATCH /store is all or nothing: one name refused, nothing written, nothing made", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    for (const [set, remove, message] of [
+      [{ OK: "1", PATH: "x" }, [], "set: PATH changes how the runtime behaves, not what the site does, and cannot be set here"],
+      [{ OK: "1", NODE_ENV: "development" }, [], "set: NODE_ENV changes how the runtime behaves, not what the site does, and cannot be set here"],
+      [{ OK: "1", DEFAULT_SENDER: "x" }, [], "set: DEFAULT_SENDER is set by the service unit, a secret would silently override it"],
+      [{ OK: "1", PASSWORD_HASH: "$argon2id$x" }, [], "PASSWORD_HASH is changed with Change password, in the dashboard's and the portal's files alone"],
+      [{ OK: `${STORE_CANARY}\nINJECTED=1` }, [], "set: OK: the value must fit on one line"],
+      [{ OK: "1" }, ["OK"], "OK is both set and removed: name it in one list"],
+    ] as const) {
+      const response = await bench.call("PATCH", "/store", { token, slug: "shop", set, remove });
+      const failure = await errorOf(response);
+      expect([response.status, failure.message]).toEqual([response.status === 403 ? 403 : 400, message]);
+      expect(JSON.stringify(failure)).not.toContain(STORE_CANARY);
+    }
+    expect(existsSync(storeOf(bench, "shop").folder)).toBe(false);
+    expect(log(bench).filter((entry) => entry.result === "rejects").every((entry) => entry.variable === null && entry.file === "store")).toBe(true);
+  });
+
+  test("POST /store/generate draws on the machine and answers the name alone; hex or base64url; never twice without replace", async () => {
+    const bench = await mount({ random: drawn });
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    const made = await bench.call("POST", "/store/generate", { token, slug: "shop", name: "SESSION_KEY" });
+    expect(made.status).toBe(201);
+    const answer = (await made.json()) as StoreChangeResponse;
+    expect(answer).toMatchObject({ created: true, generated: ["SESSION_KEY"], set: [] });
+    expect(readFileSync(storeOf(bench, "shop").env, "utf8")).toBe(`SESSION_KEY=${DRAWN_HEX}\n`);
+    expect(JSON.stringify(answer)).not.toContain(DRAWN_HEX);
+    expect(log(bench).at(-1)).toMatchObject({ operation: "generate", result: "ok", file: "store", variable: "SESSION_KEY", detail: "hex" });
+    expect(readFileSync(join(bench.state, "journal.jsonl"), "utf8")).not.toContain(DRAWN_HEX);
+
+    const again = await bench.call("POST", "/store/generate", { token, slug: "shop", name: "SESSION_KEY" });
+    expect(again.status).toBe(409);
+    expect(await errorOf(again)).toEqual({ error: "already-present", message: "SESSION_KEY is already set; --replace draws a new value in the store, which overrides it" });
+    const replaced = await bench.call("POST", "/store/generate", { token, slug: "shop", name: "SESSION_KEY", format: "base64url", bytes: 16, replace: true });
+    expect(replaced.status).toBe(200);
+    expect(readFileSync(storeOf(bench, "shop").env, "utf8")).toBe(`SESSION_KEY=${drawn(16).toBase64({ alphabet: "base64url", omitPadding: true })}\n`);
+    for (const extra of [{ format: "base64" }, { bytes: 8 }, { bytes: 65 }, { replace: "yes" }]) {
+      expect((await bench.call("POST", "/store/generate", { token, slug: "shop", name: "OTHER", ...extra })).status).toBe(400);
+    }
+    // A name a legacy file the service reads sets is set already.
+    cmsReadsStore(bench);
+    expect((await errorOf(await bench.call("POST", "/store/generate", { token, slug: "cms", name: "TOKEN" }))).error).toBe("already-present");
+  });
+
+  test("PUT /store/file and DELETE /store/file: a file read whole, root's 0600, its last version kept; the folder never removed", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    const store = storeOf(bench, "shop");
+    const set = await bench.call("PUT", "/store/file", { token, slug: "shop", name: "gcp.json", content: b64(FILE_CANARY) });
+    expect(set.status).toBe(201);
+    const answer = (await set.json()) as StoreChangeResponse;
+    expect(answer.files).toEqual({ set: ["gcp.json"], removed: [] });
+    expect(answer.store.files[0]).toMatchObject({ name: "gcp.json", state: "set", declared: true, bytes: FILE_CANARY.length });
+    expect(JSON.stringify(answer)).not.toContain("file-canary");
+    expect(readFileSync(join(store.files, "gcp.json"), "utf8")).toBe(FILE_CANARY);
+    expect(modeOf(join(store.files, "gcp.json"))).toBe(0o600);
+    // No temporary left where LoadCredential= reads.
+    expect(readdirSync(store.files)).toEqual(["gcp.json"]);
+    expect(log(bench).at(-1)).toMatchObject({ operation: "replace", result: "ok", file: "store/gcp.json", variable: null });
+
+    // An undeclared file may be set: every unit loads the whole folder.
+    expect((await bench.call("PUT", "/store/file", { token, slug: "shop", name: "extra.pem", content: b64("x") })).status).toBe(200);
+    await bench.call("PUT", "/store/file", { token, slug: "shop", name: "gcp.json", content: b64("{}") });
+    expect(readFileSync(join(bench.state, "precedents", "projects", "shop", "files", "gcp.json"), "utf8")).toBe(FILE_CANARY);
+
+    for (const name of ["gcp.json", "extra.pem"]) {
+      const removed = await bench.call("DELETE", "/store/file", { token, slug: "shop", name });
+      expect(removed.status).toBe(200);
+      expect(((await removed.json()) as StoreChangeResponse).files.removed).toEqual([name]);
+    }
+    // The last file gone, files/ stays, empty: every start of the project needs it (I3').
+    expect(readdirSync(store.files)).toEqual([]);
+    expect(existsSync(store.folder)).toBe(true);
+    expect(log(bench).at(-1)).toMatchObject({ operation: "remove", result: "ok", file: "store/extra.pem" });
+    expect(await errorOf(await bench.call("DELETE", "/store/file", { token, slug: "shop", name: "gcp.json" }))).toEqual({ error: "not-found", message: "gcp.json is not in the store" });
+  });
+
+  test("a file's name and size refused at each limit, the name never quoted", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    for (const name of [".env", ".hidden.json", "sub/x.json", "../shop.env", "a..b", "x".repeat(65), "sk_live_pasted-as-a-file"]) {
+      const response = await bench.call("PUT", "/store/file", { token, slug: "shop", name, content: b64("x") });
+      if (name === "sk_live_pasted-as-a-file") {
+        // A valid file name, whatever it looks like: a file name is no variable.
+        expect(response.status).toBe(201);
+        continue;
+      }
+      expect(response.status).toBe(400);
+      expect((await errorOf(response)).message).not.toContain(name);
+    }
+    await bench.call("DELETE", "/store/file", { token, slug: "shop", name: "sk_live_pasted-as-a-file" });
+    const full = new Uint8Array(64 * 1024).fill(65);
+    expect((await bench.call("PUT", "/store/file", { token, slug: "shop", name: "k0", content: full.toBase64() })).status).toBe(200);
+    expect((await errorOf(await bench.call("PUT", "/store/file", { token, slug: "shop", name: "big", content: new Uint8Array(64 * 1024 + 1).toBase64() }))).message).toBe(
+      "content: a file is 64 KiB at most",
+    );
+    // 512 KiB in all: eight files of 64 KiB, and not one byte more.
+    for (let i = 1; i < 8; i++) expect((await bench.call("PUT", "/store/file", { token, slug: "shop", name: `k${i}`, content: full.toBase64() })).status).toBe(200);
+    expect(await errorOf(await bench.call("PUT", "/store/file", { token, slug: "shop", name: "one-more", content: b64("x") }))).toEqual({
+      error: "invalid",
+      message: "the store's files would weigh more than 512 KiB in all: remove one first",
+    });
+    // Replacing one by a smaller one still fits.
+    expect((await bench.call("PUT", "/store/file", { token, slug: "shop", name: "k7", content: b64("small") })).status).toBe(200);
+    // 32 files, and not one more.
+    for (let i = 0; i < 8; i++) await bench.call("DELETE", "/store/file", { token, slug: "shop", name: `k${i}` });
+    for (let i = 0; i < 32; i++) expect((await bench.call("PUT", "/store/file", { token, slug: "shop", name: `f${i}`, content: b64("x") })).status).toBe(200);
+    expect((await errorOf(await bench.call("PUT", "/store/file", { token, slug: "shop", name: "f32", content: b64("x") }))).message).toBe(
+      "the store would hold more than 32 files: remove one first",
+    );
+    expect(readdirSync(storeOf(bench, "shop").files).length).toBe(32);
+  });
+
+  test("POST /store/restore swaps the env and its previous version; a dry run says what would appear and disappear", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    expect(await errorOf(await bench.call("POST", "/store/restore", { token, slug: "shop" }))).toMatchObject({ error: "not-found" });
+    await bench.call("PUT", "/store/variable", { token, slug: "shop", name: "A", value: "1" });
+    await bench.call("PUT", "/store/variable", { token, slug: "shop", name: "B", value: "2" });
+    const dry = await bench.call("POST", "/store/restore", { token, slug: "shop", dryRun: true });
+    expect(await dry.json()).toMatchObject({ appeared: [], disappeared: ["B"], restored: false });
+    expect(readFileSync(storeOf(bench, "shop").env, "utf8")).toBe("A=1\nB=2\n");
+    expect(await (await bench.call("POST", "/store/restore", { token, slug: "shop" })).json()).toMatchObject({ disappeared: ["B"], restored: true });
+    expect(readFileSync(storeOf(bench, "shop").env, "utf8")).toBe("A=1\n");
+    expect(log(bench).at(-1)).toMatchObject({ operation: "restore", result: "ok", file: "store" });
+    // Twice comes back to the start.
+    await bench.call("POST", "/store/restore", { token, slug: "shop" });
+    expect(readFileSync(storeOf(bench, "shop").env, "utf8")).toBe("A=1\nB=2\n");
+    // The first version of an env had none before it: restoring it empties the store.
+    addStoreProject(bench, "fresh-app");
+    await bench.call("PUT", "/store/variable", { token, slug: "fresh-app", name: "A", value: "1" });
+    expect(await (await bench.call("POST", "/store/restore", { token, slug: "fresh-app", dryRun: true })).json()).toMatchObject({ disappeared: ["A"] });
+  });
+
+  test("POST /store/value: the owner's live unlock alone, journaled as a read, never over SSH", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    await bench.call("PUT", "/store/variable", { token, slug: "shop", name: "API_KEY", value: STORE_CANARY });
+    const read = await bench.call("POST", "/store/value", { token, slug: "shop", name: "API_KEY" });
+    expect(await read.json()).toEqual({ value: STORE_CANARY });
+    expect(log(bench).at(-1)).toMatchObject({ operation: "read", result: "ok", slug: "shop", file: "store", variable: "API_KEY" });
+    expect((await bench.call("POST", "/store/value", { token: "x".repeat(43), slug: "shop", name: "API_KEY" })).status).toBe(401);
+    expect(await errorOf(await bench.call("POST", "/store/value", { token, slug: "shop", name: "OTHER" }))).toEqual({ error: "not-found", message: "no such variable in the store of shop" });
+    expect((await bench.owner("POST", "/store/value", { slug: "shop", name: "API_KEY" })).status).toBe(404);
+  });
+
+  test("a store laid ahead of the first deployment, for the owner", async () => {
+    const bench = await mount();
+    const token = await unlock(bench);
+    const made = await bench.call("PUT", "/store/variable", { token, slug: "not-yet", name: "API_KEY", value: "x" });
+    expect(made.status).toBe(201);
+    expect(await storeList(bench, "not-yet")).toMatchObject({ exists: true, state: "managed", unitReadsStore: null, variables: [{ name: "API_KEY", source: "store", declared: false }] });
+  });
+
+  test("storeless, static, the landing, a unit of the machine, a slug that is none: refused, nothing made", async () => {
+    const bench = await mount();
+    const token = await unlock(bench);
+    for (const [slug, status, message] of [
+      ["dashboard", 403, "dashboard keeps its hash in dashboard.env, read by its own unit: it has no store"],
+      ["portal", 403, "portal keeps its hash in portal.env, read by its own unit: it has no store"],
+      ["showcase", 403, "a static site has no service to read a store; its build secrets stay with whoever deploys"],
+      ["landing", 403, "landing names the landing's files, never a project's store"],
+      ["caddy", 403, "caddy names a unit of the machine, never a project"],
+      ["test-zone.invalid", 400, "slug: a project's slug, lowercase letters, digits and dashes"],
+      ["sk_live_pasted", 400, "slug: a project's slug, lowercase letters, digits and dashes"],
+    ] as const) {
+      const response = await bench.call("PUT", "/store/variable", { token, slug, name: "A", value: "1" });
+      expect([slug, response.status, (await errorOf(response)).message]).toEqual([slug, status, message]);
+    }
+    expect(existsSync(join(bench.secrets, "projects"))).toBe(false);
+    // The journal keeps a slug only when it has a site folder's shape, the landing's included.
+    expect(log(bench).filter((entry) => entry.result === "rejects").map((entry) => entry.slug)).toEqual(["dashboard", "portal", "showcase", "landing", "caddy", "test-zone.invalid", null]);
+  });
+
+  test("the platform's own projects: the owner's", async () => {
+    const bench = await mount();
+    addStoreProject(bench, "analytics", { start: "/usr/local/bin/bun run server.ts", port: 3030 });
+    const token = await unlock(bench);
+    expect((await bench.call("PUT", "/store/variable", { token, slug: "analytics", name: "SALT_KEY", value: "x" })).status).toBe(201);
+    expect((await bench.owner("PUT", "/store/variable", { slug: "analytics", name: "OTHER", value: "x" })).status).toBe(200);
+  });
+});
+
+describe("a project's store: what refuses every write", () => {
+  test("a symbolic link at each of its three folders refuses every write, and nothing lands through it", async () => {
+    for (const part of ["root", "folder", "files"] as const) {
+      const bench = await mount();
+      addStoreProject(bench);
+      const token = await unlock(bench);
+      const store = storeOf(bench, "shop");
+      const elsewhere = join(bench.root, "elsewhere");
+      mkdirSync(elsewhere);
+      if (part !== "root") mkdirSync(store.root, { mode: 0o700 });
+      if (part === "files") mkdirSync(store.folder, { mode: 0o700 });
+      symlinkSync(elsewhere, store[part]);
+      const writes = [
+        bench.call("PUT", "/store/variable", { token, slug: "shop", name: "A", value: STORE_CANARY }),
+        bench.call("PATCH", "/store", { token, slug: "shop", set: { A: "1" }, remove: [] }),
+        bench.call("POST", "/store/generate", { token, slug: "shop", name: "SESSION_KEY" }),
+        bench.call("PUT", "/store/file", { token, slug: "shop", name: "gcp.json", content: b64(FILE_CANARY) }),
+        bench.owner("PUT", "/store/variable", { slug: "shop", name: "A", value: STORE_CANARY }),
+      ];
+      for (const response of await Promise.all(writes)) {
+        expect([part, response.status]).toEqual([part, 409]);
+        expect((await errorOf(response)).message).toContain("is a symbolic link");
+      }
+      expect([part, readdirSync(elsewhere)]).toEqual([part, []]);
+      expect((await storeList(bench, "shop")).state).toBe("unmanaged");
+    }
+  });
+
+  test("a file where a folder goes, an env that is a link, open to others, or that does not parse: refused, the reason said", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    const store = storeOf(bench, "shop");
+    writeFileSync(store.root, "");
+    expect((await errorOf(await bench.call("PUT", "/store/variable", { token, slug: "shop", name: "A", value: "1" }))).message).toContain("is not a folder");
+    rmSync(store.root);
+
+    await bench.call("PUT", "/store/variable", { token, slug: "shop", name: "A", value: "1" });
+    chmodSync(store.env, 0o644);
+    const open = await bench.call("PUT", "/store/variable", { token, slug: "shop", name: "B", value: "2" });
+    expect(open.status).toBe(409);
+    expect((await errorOf(open)).message).toContain("mode 644, expected 600");
+    expect((await storeList(bench, "shop")).reason).toContain("env: mode 644");
+    chmodSync(store.env, 0o600);
+    writeFileSync(store.env, "export A=1\n", { mode: 0o600 });
+    expect((await errorOf(await bench.call("PUT", "/store/variable", { token, slug: "shop", name: "B", value: "2" }))).message).toContain("line 1");
+    rmSync(store.env);
+    symlinkSync(join(bench.secrets, "cms.env"), store.env);
+    expect((await errorOf(await bench.call("POST", "/store/generate", { token, slug: "shop", name: "B" }))).message).toContain("symbolic link");
+    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+  });
+
+  test("a file of the store that is a link or open to others is not managed: its name refuses writes, the others do not", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    await bench.call("PUT", "/store/file", { token, slug: "shop", name: "ok.pem", content: b64("x") });
+    const store = storeOf(bench, "shop");
+    symlinkSync(join(bench.secrets, "builder-ssh"), join(store.files, "gcp.json"));
+    const refused = await bench.call("PUT", "/store/file", { token, slug: "shop", name: "gcp.json", content: b64("y") });
+    expect(refused.status).toBe(409);
+    expect((await errorOf(refused)).message).toBe("gcp.json in the store is not managed here: symbolic link");
+    expect((await bench.call("DELETE", "/store/file", { token, slug: "shop", name: "gcp.json" })).status).toBe(409);
+    expect((await bench.call("PUT", "/store/file", { token, slug: "shop", name: "ok.pem", content: b64("z") })).status).toBe(200);
+    expect(readFileSync(join(bench.secrets, "builder-ssh"), "utf8")).toBe(PRIVATE_KEY);
+    expect((await storeList(bench, "shop")).files.find((file) => file.name === "gcp.json")).toMatchObject({ state: "unmanaged", reason: "symbolic link", bytes: null });
+  });
+});
+
+describe("a project's store never brings a legacy value back (S1, S1', S2)", () => {
+  test("S1: a name a legacy file the service reads holds cannot leave the store, alone or in a batch", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    const token = await unlock(bench);
+    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "TOKEN", value: "the-store-s-own" });
+    const message =
+      "TOKEN is also in cms.env, which the service reads before the store: removing it here would bring that file's value back. Retire the file first (sitesolide secrets migrate --retire), or remove TOKEN from it";
+    expect(await errorOf(await bench.call("DELETE", "/store/variable", { token, slug: "cms", names: ["TOKEN"] }))).toEqual({ error: "invalid", message });
+    expect(await errorOf(await bench.call("PATCH", "/store", { token, slug: "cms", set: { OTHER: "1" }, remove: ["TOKEN"] }))).toEqual({ error: "invalid", message });
+    expect(await errorOf(await bench.owner("DELETE", "/store/variable", { slug: "cms", names: ["TOKEN"] }))).toEqual({ error: "invalid", message });
+    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe("TOKEN=the-store-s-own\n");
+  });
+
+  test("the owner removes a name every legacy file carries with the very same value: nothing in force changes", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    const token = await unlock(bench);
+    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "TOKEN", value: SECRET_TOKEN });
+    expect((await bench.call("DELETE", "/store/variable", { token, slug: "cms", names: ["TOKEN"] })).status).toBe(200);
+    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe("");
+  });
+
+  test("S1': a restore that would drop a name a legacy file holds is refused, the same", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    const token = await unlock(bench);
+    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "OWN", value: "1" });
+    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "SID", value: "the-store-s-own" });
+    const refused = await bench.call("POST", "/store/restore", { token, slug: "cms", dryRun: true });
+    expect(refused.status).toBe(400);
+    expect((await errorOf(refused)).message).toStartWith("SID is also in cms.env, which the service reads before the store");
+    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe("OWN=1\nSID=the-store-s-own\n");
+  });
+
+  test("S2: a name the store holds is not set in a legacy file, where it would change nothing", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    const token = await unlock(bench);
+    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "TOKEN", value: "the-store-s-own" });
+    const refused = await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN", value: "x" });
+    expect(await errorOf(refused)).toEqual({ error: "invalid", message: "TOKEN is set in the project's store, which overrides cms.env: change it there" });
+    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+    // A token's change of the old file, the same.
+    const ops = bench.current().secretsForToken!;
+    const tokenWho = { actor: "token:0123456789ab", member: null, token: "0123456789ab" };
+    const byToken = await ops.change(new Request("http://steward/control/secrets", { method: "PATCH" }), { slug: "cms", file: "cms.env", set: [["TOKEN", "y"]], remove: [] }, tokenWho, async () => null);
+    expect(await errorOf(byToken)).toMatchObject({ message: "TOKEN is set in the project's store, which overrides cms.env: change it there" });
+    // A name the store does not hold is written as before; removing one it holds from the old file is allowed.
+    expect((await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "OTHER", value: "1" })).status).toBe(200);
+    expect((await bench.call("DELETE", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN" })).status).toBe(200);
+  });
+
+  test("the listing says where each value in force comes from, and what the store overrides", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    const token = await unlock(bench);
+    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "TOKEN", value: "the-store-s-own" });
+    const store = await storeList(bench, "cms");
+    expect(store.variables).toEqual([
+      { name: "TOKEN", source: "store", file: null, shadows: ["cms.env"], declared: false },
+      { name: "SID", source: "legacy", file: "cms.env", shadows: [], declared: false },
+    ]);
+    expect(store.legacy).toEqual([
+      { name: "cms.env", state: "managed", reason: null, variables: ["SID", "TOKEN"], read: true, leftover: false, covered: false },
+      { name: "cms-webhook.env", state: "absent", reason: null, variables: [], read: true, leftover: false, covered: null },
+    ]);
+    expect(store.missing).toEqual([]);
+  });
+});
+
+describe("migrate and retire (spec §6.8, §6.9, §8.1)", () => {
+  test("migrate waits for every unit to read the store; then merges without anyone seeing a value, idempotent", async () => {
+    const bench = await mount();
+    const token = await unlock(bench);
+    const before = await bench.call("POST", "/store/migrate", { token, slug: "cms" });
+    expect(await errorOf(before)).toEqual({ error: "out-of-scope", message: "deploy or refresh cms first, so that its units read the store: sitesolide refresh cms" });
+
+    cmsReadsStore(bench);
+    const dry = (await (await bench.call("POST", "/store/migrate", { token, slug: "cms", dryRun: true })).json()) as StoreMigrateResponse;
+    expect(dry).toMatchObject({ sources: ["cms.env"], skipped: [{ file: "cms-webhook.env", reason: "absent" }], merged: ["SID", "TOKEN"], already: [], overridden: [], conflicts: [], written: false });
+    expect(existsSync(storeOf(bench, "cms").env)).toBe(false);
+
+    const done = await bench.call("POST", "/store/migrate", { token, slug: "cms" });
+    const answer = (await done.json()) as StoreMigrateResponse;
+    expect(answer).toMatchObject({ merged: ["SID", "TOKEN"], written: true });
+    for (const value of [SECRET_SID, SECRET_TOKEN]) expect(JSON.stringify(answer)).not.toContain(value);
+    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe(`SID=${SECRET_SID}\nTOKEN=${SECRET_TOKEN}\n`);
+    expect(log(bench).at(-1)).toMatchObject({ operation: "migrate", result: "ok", file: "store", detail: "2 merged from cms.env" });
+    // The legacy file is untouched, and now covered.
+    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+    expect(answer.store.legacy[0]).toMatchObject({ name: "cms.env", covered: true });
+
+    const again = (await (await bench.call("POST", "/store/migrate", { token, slug: "cms" })).json()) as StoreMigrateResponse;
+    expect(again).toMatchObject({ merged: [], already: ["SID", "TOKEN"], written: false });
+    // Going back before retiring: the owner restores the version before the merge.
+    expect(await (await bench.call("POST", "/store/restore", { token, slug: "cms" })).json()).toMatchObject({ restored: true, disappeared: ["SID", "TOKEN"] });
+  });
+
+  test("a name the store holds with another value stays the store's: overridden", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    const token = await unlock(bench);
+    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "TOKEN", value: "the-store-s-own" });
+    const answer = (await (await bench.call("POST", "/store/migrate", { token, slug: "cms" })).json()) as StoreMigrateResponse;
+    expect(answer).toMatchObject({ merged: ["SID"], overridden: ["TOKEN"], written: true });
+    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe(`TOKEN=the-store-s-own\nSID=${SECRET_SID}\n`);
+  });
+
+  test("two legacy files that disagree on a name: refused whole, the name and the files said, never a value", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    writeFileSync(join(bench.secrets, "cms-webhook.env"), `TOKEN=${STORE_CANARY}\nHOOK=1\n`, { mode: 0o600 });
+    const token = await unlock(bench);
+    const response = await bench.call("POST", "/store/migrate", { token, slug: "cms" });
+    expect(response.status).toBe(409);
+    const text = await response.text();
+    const answer = JSON.parse(text) as StoreMigrateResponse & { error: string; message: string };
+    expect(answer).toMatchObject({
+      error: "unmanaged",
+      conflicts: [{ name: "TOKEN", files: ["cms.env", "cms-webhook.env"] }],
+      merged: ["SID", "HOOK"],
+      written: false,
+    });
+    expect(answer.message).toStartWith("TOKEN: in cms.env and cms-webhook.env, with different values");
+    for (const value of [SECRET_TOKEN, STORE_CANARY]) expect(text).not.toContain(value);
+    expect(existsSync(storeOf(bench, "cms").env)).toBe(false);
+    expect(log(bench).at(-1)).toMatchObject({ operation: "migrate", result: "rejects", detail: "conflicts" });
+    // The dry run lists the conflict too, and writes nothing.
+    expect(await (await bench.call("POST", "/store/migrate", { token, slug: "cms", dryRun: true })).json()).toMatchObject({ conflicts: [{ name: "TOKEN" }], written: false });
+  });
+
+  test("a legacy file carrying PASSWORD_HASH, or not managed, refuses the whole migration", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    const token = await unlock(bench);
+    writeFileSync(join(bench.secrets, "cms-webhook.env"), "PASSWORD_HASH=$argon2id$x\n", { mode: 0o600 });
+    expect(await errorOf(await bench.call("POST", "/store/migrate", { token, slug: "cms" }))).toEqual({
+      error: "invalid",
+      message: "cms-webhook.env holds PASSWORD_HASH, which a store does not take: remove them from cms-webhook.env first, then migrate again",
+    });
+    chmodSync(join(bench.secrets, "cms-webhook.env"), 0o644);
+    expect((await errorOf(await bench.call("POST", "/store/migrate", { token, slug: "cms" }))).message).toStartWith("cms-webhook.env is not managed here: mode 644");
+    expect(existsSync(storeOf(bench, "cms").env)).toBe(false);
+  });
+
+  test("retire deletes a covered file once a restart has loaded the store, keeping it as its previous version", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    const token = await unlock(bench);
+    // Not covered yet: kept.
+    const early = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env"] })).json()) as StoreRetireResponse;
+    expect(early).toMatchObject({ retired: [], kept: [{ file: "cms.env", reason: "not covered: SID is not in the store; sitesolide secrets migrate first" }] });
+    await bench.call("POST", "/store/migrate", { token, slug: "cms" });
+    // Covered, but the service started before the merge: its store values are not loaded yet.
+    const unloaded = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env"] })).json()) as StoreRetireResponse;
+    expect(unloaded.kept).toEqual([{ file: "cms.env", reason: "the service has not restarted since the store was last written: restart it, then retire" }]);
+    expect(existsSync(join(bench.secrets, "cms.env"))).toBe(true);
+
+    // A restart that loaded the store.
+    bench.scenario.current = () => showA("active", "running", 0, Date.now() + 1_000);
+    freshReadings(bench);
+    const done = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env", "cms-webhook.env", "library.env", "dashboard.env"] })).json()) as StoreRetireResponse;
+    expect(done.retired).toEqual(["cms.env"]);
+    expect(done.kept).toEqual([
+      { file: "cms-webhook.env", reason: "absent: nothing to retire" },
+      { file: "library.env", reason: "not a legacy file of this project" },
+      { file: "dashboard.env", reason: "not a legacy file of this project" },
+    ]);
+    expect(existsSync(join(bench.secrets, "cms.env"))).toBe(false);
+    expect(readFileSync(join(bench.state, "precedents", "cms.env"), "utf8")).toBe(CMS_ENV);
+    expect(log(bench).at(-1)).toMatchObject({ operation: "retire", result: "ok", slug: "cms", file: "cms.env" });
+    // The store still holds every value: nothing the service had was lost.
+    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe(`SID=${SECRET_SID}\nTOKEN=${SECRET_TOKEN}\n`);
+    expect((await errorOf(await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["../cms.env"] }))).message).toBe("files: entry 1 is not a legacy file's name");
+  });
+
+  test("a leftover, once its project names its secrets, is retired the same; a file another value holds is kept", async () => {
+    const bench = await mount();
+    // cms moved to names (M5 before M4): its files are leftovers now.
+    writeFileSync(join(bench.sites, "cms", "sitesolide.json"), JSON.stringify({ slug: "cms", start: "/usr/local/bin/bun run server.ts", port: 3048, publicDir: "public", secrets: ["SID", "TOKEN"] }));
+    writeFileSync(join(bench.units, "cms.service"), storeUnit(bench, "cms"));
+    writeFileSync(join(bench.secrets, "cms-old.env"), "SID=another\n", { mode: 0o600 });
+    const token = await unlock(bench);
+    await bench.call("PATCH", "/store", { token, slug: "cms", set: { SID: SECRET_SID, TOKEN: SECRET_TOKEN }, remove: [] });
+    const listed = await storeList(bench, "cms");
+    expect(listed.legacy.map((file) => [file.name, file.leftover, file.read, file.covered])).toEqual([
+      ["cms-old.env", true, false, false],
+      ["cms.env", true, false, true],
+    ]);
+    // A leftover is never written through the old routes.
+    expect((await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "X", value: "1" })).status).toBe(403);
+    bench.scenario.current = () => showA("active", "running", 0, Date.now() + 1_000);
+    freshReadings(bench);
+    const done = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env", "cms-old.env"] })).json()) as StoreRetireResponse;
+    expect(done.retired).toEqual(["cms.env"]);
+    expect(done.kept).toEqual([{ file: "cms-old.env", reason: "not covered: the value of SID differs from the store's" }]);
+  });
+
+  test("migrate and retire are the owner's: refused for a project not deployed, nowhere for a person or a token", async () => {
+    const bench = await mount();
+    const token = await unlock(bench);
+    expect(await errorOf(await bench.call("POST", "/store/migrate", { token, slug: "not-yet" }))).toMatchObject({ error: "out-of-scope" });
+    expect((await bench.call("POST", "/people/store/migrate", { session: "x", token, slug: "cms" })).status).toBe(404);
+    expect((await bench.call("POST", "/people/store/retire", { session: "x", token, slug: "cms", files: ["cms.env"] })).status).toBe(404);
+    expect((await bench.call("POST", "/people/store/value", { session: "x", token, slug: "cms", name: "TOKEN" })).status).toBe(404);
+    const ops = bench.current().storeForToken!;
+    expect(Object.keys(ops).sort()).toEqual(["change", "generate", "list", "removeFile", "setFile"]);
+  });
+});
+
+describe("the owner's socket: the store over SSH", () => {
+  test("every route but the value, no unlock asked: root has asked", async () => {
+    const bench = await mount({ random: drawn });
+    addStoreProject(bench);
+    expect((await bench.owner("PUT", "/store/variable", { slug: "shop", name: "API_KEY", value: STORE_CANARY })).status).toBe(201);
+    expect((await bench.owner("PATCH", "/store", { slug: "shop", set: { A: "1" }, remove: [] })).status).toBe(200);
+    expect((await bench.owner("POST", "/store/generate", { slug: "shop", name: "SESSION_KEY" })).status).toBe(200);
+    expect((await bench.owner("PUT", "/store/file", { slug: "shop", name: "gcp.json", content: b64(FILE_CANARY) })).status).toBe(200);
+    expect((await bench.owner("DELETE", "/store/file", { slug: "shop", name: "gcp.json" })).status).toBe(200);
+    expect((await bench.owner("DELETE", "/store/variable", { slug: "shop", names: ["A"] })).status).toBe(200);
+    expect(await (await bench.owner("POST", "/store/restore", { slug: "shop", dryRun: true })).json()).toMatchObject({ appeared: ["A"] });
+    const listed = (await (await bench.owner("GET", "/store?slug=shop")).json()) as StoreListResponse;
+    expect(listed.store.may).toEqual({ write: true, reveal: false, restore: true, migrate: true });
+    expect(JSON.stringify(listed)).not.toContain(STORE_CANARY);
+    expect(JSON.stringify(listed)).not.toContain(DRAWN_HEX);
+    // Unknown fields refused, the token's place included.
+    expect((await bench.owner("PUT", "/store/variable", { slug: "shop", name: "A", value: "1", token: "x" })).status).toBe(400);
+    expect(log(bench).find((entry) => entry.operation === "set" && entry.variable === "API_KEY")).toMatchObject({ actor: "owner" });
+  });
+
+  test("migrate and retire over SSH, and a store laid ahead of a deployment", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    expect(await (await bench.owner("POST", "/store/migrate", { slug: "cms", dryRun: true })).json()).toMatchObject({ merged: ["SID", "TOKEN"], written: false });
+    expect(await (await bench.owner("POST", "/store/migrate", { slug: "cms" })).json()).toMatchObject({ written: true });
+    bench.scenario.current = () => showA("active", "running", 0, Date.now() + 1_000);
+    freshReadings(bench);
+    expect(await (await bench.owner("POST", "/store/retire", { slug: "cms", files: ["cms.env"] })).json()).toMatchObject({ retired: ["cms.env"], kept: [] });
+    expect(existsSync(join(bench.secrets, "cms.env"))).toBe(false);
+    expect((await bench.owner("PUT", "/store/variable", { slug: "not-yet", name: "A", value: "1" })).status).toBe(201);
+    expect(log(bench).filter((entry) => ["migrate", "retire", "create"].includes(entry.operation)).map((entry) => [entry.operation, entry.actor])).toEqual([
+      ["create", "owner"],
+      ["migrate", "owner"],
+      ["retire", "owner"],
+      ["create", "owner"],
+    ]);
+  });
+
+  test("POST /restart restarts a project's service, whatever files it reads, the platform's too", async () => {
+    const bench = await mount();
+    const restarted = await bench.owner("POST", "/restart", { slug: "library" });
+    expect(restarted.status).toBe(200);
+    expect(((await restarted.json()) as RestartResponse).verdict.kind).toBe("active");
+    expect(bench.systemctlCalls.slice(0, 2)).toEqual([
+      ["reset-failed", "library"],
+      ["restart", "library"],
+    ]);
+    expect(log(bench).at(-1)).toMatchObject({ operation: "restart", result: "ok", actor: "owner", slug: "library" });
+    expect((await bench.owner("POST", "/restart", { slug: "showcase" })).status).toBe(404);
+    expect((await bench.owner("POST", "/restart", { slug: 42 })).status).toBe(400);
+  });
+});
+
+describe("a restart applies the store", () => {
+  test("a unit that reads its project's store, and no legacy file, is restarted from the Secrets section", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    expect((await bench.call("POST", "/restart", { token, slug: "shop" })).status).toBe(200);
+    // Its files alone are enough too.
+    writeFileSync(join(bench.units, "shop.service"), `[Service]\nLoadCredential=files:${storeOf(bench, "shop").files}\n`);
+    expect((await bench.call("POST", "/restart", { token, slug: "shop" })).status).toBe(200);
+    // Another project's store is not its own.
+    writeFileSync(join(bench.units, "shop.service"), `[Service]\nEnvironmentFile=-${storeOf(bench, "cms").env}\n`);
+    expect((await errorOf(await bench.call("POST", "/restart", { token, slug: "shop" }))).message).toContain("reads none of the managed files nor its project's store");
+  });
+
+  test("a change after the service started is pending; the anchor of a scheduled project waits for nothing", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    await bench.call("PUT", "/store/variable", { token, slug: "shop", name: "API_KEY", value: "x" });
+    expect((await storeList(bench, "shop")).restartPending).toBe(true);
+    bench.scenario.current = () => showA("active", "running", 0, Date.now() + 1_000);
+    freshReadings(bench);
+    expect((await storeList(bench, "shop")).restartPending).toBe(false);
+  });
+});
+
+describe("GET /projects carries each project's store", () => {
+  test("an app's, legacy form or not; null for a static site, a storeless project and the landing", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const all = await projects(bench);
+    const store = (slug: string) => all.find((project) => project.slug === slug)!.store;
+    expect(store("shop")).toMatchObject({ slug: "shop", exists: false, missing: ["API_KEY", "SESSION_KEY"] });
+    expect(store("cms")).toMatchObject({ slug: "cms", unitReadsStore: false, legacy: [{ name: "cms.env", read: true }, { name: "cms-webhook.env", read: true }] });
+    for (const slug of ["showcase", "dashboard", "portal", "test-zone.invalid"]) expect([slug, store(slug)]).toEqual([slug, null]);
+  });
+});
+
+describe("a token's store, handed over by the control routes", () => {
+  const TOKEN = { actor: "token:0123456789ab", member: null, token: "0123456789ab" };
+  const still = async () => null;
+  const request = () => new Request("http://steward/control/store", { method: "PATCH" });
+
+  test("lists, sets, generates, sets and removes a file: a Developer's view, names alone, journaled under the token", async () => {
+    const bench = await mount({ random: drawn });
+    addStoreProject(bench);
+    const ops = bench.current().storeForToken!;
+    const changed = await ops.change(request(), { slug: "shop", set: [["API_KEY", STORE_CANARY]], remove: [] }, TOKEN, false, still);
+    expect(changed.status).toBe(201);
+    const generated = await ops.generate(request(), { slug: "shop", name: "SESSION_KEY" }, TOKEN, false, still);
+    expect(generated.status).toBe(200);
+    const filed = await ops.setFile(request(), { slug: "shop", name: "gcp.json", content: b64(FILE_CANARY) }, TOKEN, false, still);
+    expect(filed.status).toBe(200);
+    const listed = (await (await ops.list("shop", TOKEN, false)).json()) as StoreListResponse;
+    expect(listed.store.may).toEqual({ write: true, reveal: false, restore: false, migrate: false });
+    expect(listed.store.previous).toBe(false);
+    expect(listed.store.files[0]).toMatchObject({ name: "gcp.json", state: "set", bytes: null });
+    const removed = await ops.removeFile(request(), { slug: "shop", name: "gcp.json" }, TOKEN, still);
+    expect(removed.status).toBe(200);
+    const texts = await Promise.all([changed, generated, filed, removed].map((response) => response.text()));
+    for (const text of [...texts, JSON.stringify(listed)]) {
+      for (const value of [STORE_CANARY, DRAWN_HEX, "file-canary"]) expect(text).not.toContain(value);
+    }
+    expect(log(bench).filter((entry) => entry.slug === "shop").map((entry) => [entry.operation, entry.actor, entry.file, entry.variable])).toEqual([
+      ["create", TOKEN.actor, "store", null],
+      ["set", TOKEN.actor, "store", "API_KEY"],
+      ["generate", TOKEN.actor, "store", "SESSION_KEY"],
+      ["replace", TOKEN.actor, "store/gcp.json", null],
+      ["remove", TOKEN.actor, "store/gcp.json", null],
+    ]);
+  });
+
+  test("ahead of a deployment only when the control routes let it create the slug; never the platform's", async () => {
+    const bench = await mount();
+    const ops = bench.current().storeForToken!;
+    const refused = await ops.change(request(), { slug: "fresh", set: [["A", "1"]], remove: [] }, TOKEN, false, still);
+    expect(await errorOf(refused)).toEqual({ error: "not-found", message: "fresh is not a project deployed on this machine" });
+    expect(log(bench).at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: TOKEN.actor, slug: "fresh" });
+    expect(await errorOf(await ops.list("fresh", TOKEN, false))).toMatchObject({ error: "not-found" });
+    expect(log(bench).at(-1)).toMatchObject({ operation: "list", result: "rejects", actor: TOKEN.actor });
+    const made = await ops.change(request(), { slug: "fresh", set: [["A", "1"]], remove: [] }, TOKEN, true, still);
+    expect(made.status).toBe(201);
+    expect(readFileSync(storeOf(bench, "fresh").env, "utf8")).toBe("A=1\n");
+    addStoreProject(bench, "analytics", { start: "/usr/local/bin/bun run server.ts", port: 3030 });
+    for (const slug of ["analytics", "dashboard"]) {
+      expect((await ops.change(request(), { slug, set: [["A", "1"]], remove: [] }, TOKEN, true, still)).status).toBe(403);
+    }
+    expect(existsSync(storeOf(bench, "analytics").folder)).toBe(false);
+  });
+
+  test("a refusal under the lock comes back as it stands, and nothing is written", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const ops = bench.current().storeForToken!;
+    const revoked = async () => Response.json({ error: "unauthenticated", message: "this token was revoked" }, { status: 401 });
+    expect((await ops.change(request(), { slug: "shop", set: [["A", "1"]], remove: [] }, TOKEN, false, revoked)).status).toBe(401);
+    expect((await ops.generate(request(), { slug: "shop", name: "A" }, TOKEN, false, revoked)).status).toBe(401);
+    expect((await ops.setFile(request(), { slug: "shop", name: "a.pem", content: b64("x") }, TOKEN, false, revoked)).status).toBe(401);
+    expect(existsSync(storeOf(bench, "shop").folder)).toBe(false);
+  });
+});
+
+describe("no store value outside /store/value (I1): the canary", () => {
+  test("a value set through every write route never appears in an answer, a journal line, the access log or the console", async () => {
+    const printed: string[] = [];
+    const original = { log: console.log, error: console.error, warn: console.warn };
+    const capture = (...parts: unknown[]) => {
+      printed.push(parts.map(String).join(" "));
+    };
+    console.log = capture;
+    console.error = capture;
+    console.warn = capture;
+    try {
+      const bench = await mount({ random: drawn });
+      addStoreProject(bench);
+      cmsReadsStore(bench);
+      const token = await unlock(bench);
+      const TOKEN = { actor: "token:0123456789ab", member: null, token: "0123456789ab" };
+      const ops = bench.current().storeForToken!;
+      const request = () => new Request("http://steward/control/store", { method: "PATCH" });
+      const answers: string[] = [];
+      const keep = async (response: Response | Promise<Response>) => answers.push(await (await response).text());
+
+      // Every write route, the owner's, root's and a token's; set, refused, removed.
+      await keep(bench.call("PUT", "/store/variable", { token, slug: "shop", name: "API_KEY", value: STORE_CANARY }));
+      await keep(bench.call("PATCH", "/store", { token, slug: "shop", set: { SESSION_KEY: `${STORE_CANARY}-2`, PATH: STORE_CANARY }, remove: [] }));
+      await keep(bench.call("PATCH", "/store", { token, slug: "shop", set: { SESSION_KEY: `${STORE_CANARY}-2` }, remove: [] }));
+      await keep(bench.call("PUT", "/store/variable", { token, slug: "shop", name: STORE_CANARY.replace(/-/g, "_"), value: STORE_CANARY }));
+      await keep(bench.call("PUT", "/store/variable", { token, slug: "shop", name: "BROKEN", value: `${STORE_CANARY}\n` }));
+      await keep(bench.call("POST", "/store/generate", { token, slug: "shop", name: "GENERATED" }));
+      await keep(bench.call("PUT", "/store/file", { token, slug: "shop", name: "gcp.json", content: b64(FILE_CANARY) }));
+      await keep(bench.owner("PUT", "/store/variable", { slug: "shop", name: "BY_ROOT", value: `${STORE_CANARY}-root` }));
+      await keep(bench.owner("PUT", "/store/file", { slug: "shop", name: "root.pem", content: b64(FILE_CANARY) }));
+      await keep(ops.change(request(), { slug: "shop", set: [["BY_TOKEN", `${STORE_CANARY}-token`]], remove: [] }, TOKEN, false, async () => null));
+      await keep(ops.setFile(request(), { slug: "shop", name: "token.pem", content: b64(FILE_CANARY) }, TOKEN, false, async () => null));
+      await keep(ops.generate(request(), { slug: "shop", name: "TOKEN_DRAWN", replace: true }, TOKEN, false, async () => null));
+      await keep(bench.call("POST", "/store/migrate", { token, slug: "cms" }));
+      await keep(bench.call("POST", "/store/restore", { token, slug: "shop", dryRun: true }));
+      await keep(bench.call("POST", "/store/restore", { token, slug: "shop" }));
+      await keep(bench.call("POST", "/store/restore", { token, slug: "shop" }));
+      await keep(bench.call("DELETE", "/store/variable", { token, slug: "shop", names: ["API_KEY"] }));
+      await keep(bench.call("DELETE", "/store/file", { token, slug: "shop", name: "gcp.json" }));
+      await keep(bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env"] }));
+      // Every listing.
+      await keep(bench.call("GET", "/store?slug=shop"));
+      await keep(bench.call("GET", "/store?slug=cms"));
+      await keep(bench.call("GET", "/projects"));
+      await keep(bench.owner("GET", "/store?slug=shop"));
+      await keep(ops.list("shop", TOKEN, false));
+      await keep(bench.call("GET", "/log"));
+
+      // The one read: the owner's, unlocked.
+      const revealed = (await (await bench.call("POST", "/store/value", { token, slug: "shop", name: "BY_ROOT" })).json()) as StoreRevealResponse;
+      expect(revealed.value).toBe(`${STORE_CANARY}-root`);
+      const generated = (await (await bench.call("POST", "/store/value", { token, slug: "shop", name: "GENERATED" })).json()) as StoreRevealResponse;
+      expect(generated.value).toBe(DRAWN_HEX);
+
+      const journal = readFileSync(join(bench.state, "journal.jsonl"), "utf8");
+      const accessLog = existsSync(join(bench.state, "access-log.jsonl")) ? readFileSync(join(bench.state, "access-log.jsonl"), "utf8") : "";
+      for (const forbidden of [STORE_CANARY, DRAWN_HEX, "file-canary", SECRET_SID, SECRET_TOKEN]) {
+        for (const text of [...answers, ...bench.renderedTexts, journal, accessLog, ...printed]) expect(text).not.toContain(forbidden);
+      }
+      // The journal has what was done, by name.
+      const operations = log(bench).map((entry) => entry.operation);
+      for (const operation of ["create", "set", "generate", "replace", "remove", "migrate", "restore", "read"] as const) expect(operations).toContain(operation);
+    } finally {
+      console.log = original.log;
+      console.error = original.error;
+      console.warn = original.warn;
+    }
   });
 });
