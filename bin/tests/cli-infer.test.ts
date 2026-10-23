@@ -203,8 +203,11 @@ describe("an app run by Bun", () => {
       start: `${BUN} run server.ts`,
       env: { NODE_ENV: "production" },
       exclude: ["node_modules"],
+      secrets: ["API_KEY"],
     });
-    expect(notes.find((line) => line.includes("API_KEY"))).toContain('"secrets": ["sample-secret.env"]');
+    expect(notes.find((line) => line.includes("API_KEY"))).toBe(
+      'the code reads API_KEY: declared under "secrets"; set their values with sitesolide secrets set NAME, or sitesolide secrets generate NAME for a random key',
+    );
   });
 
   test("a Node server runs under Bun, the runtime the machine carries, from the file its start script names", () => {
@@ -225,14 +228,35 @@ describe("what the code says, and what is never decided for it", () => {
     expect(note).toContain("server.js:");
   });
 
-  test("a secret read by the code is pointed at the dashboard, never declared nor filled in", () => {
+  test("a secret read by the code is declared by its name, never filled in: its value is set on the server", () => {
     const { manifest, notes } = inferred(join(FIXTURES, "node-express"), "shop");
-    expect(manifest.secrets).toBeUndefined();
+    expect(manifest.secrets).toEqual(["STRIPE_SECRET_KEY"]);
     const note = notes.find((line) => line.includes("STRIPE_SECRET_KEY"));
-    expect(note).toContain('"secrets": ["shop.env"]');
-    expect(note).toContain("dashboard");
+    expect(note).toContain('declared under "secrets"');
+    expect(note).toContain("sitesolide secrets set NAME");
     // What is not a secret is told apart.
     expect(notes.find((line) => line.includes("CHECKOUT_MODE"))).toContain('"env"');
+    // A URL that carries a password is one too.
+    expect(inferred(join(FIXTURES, "flask-app"), "shop").manifest.secrets).toEqual(["DATABASE_URL"]);
+  });
+
+  test("a static site's build reads a secret: under secrets.build, from whoever deploys; a framework's public name goes to env", () => {
+    const folder = copy(join(FIXTURES, "vite-site"));
+    mkdirSync(join(folder, "src"), { recursive: true });
+    writeFileSync(join(folder, "src", "content.ts"), "export const token = import.meta.env.CMS_TOKEN;\nexport const key = import.meta.env.VITE_STRIPE_KEY;\nexport const node = process.env.NODE_AUTH_TOKEN;\n");
+    const { kind, manifest, notes } = inferred(folder, "blog");
+    expect(kind).toBe("static-build");
+    expect(manifest.secrets).toEqual({ build: ["CMS_TOKEN"] });
+    expect(notes.find((line) => line.includes("CMS_TOKEN"))).toContain("read at build time on this workstation");
+    expect(notes.find((line) => line.includes("VITE_STRIPE_KEY"))).toContain('they go under "env"');
+    expect(deployable(manifest)).toEqual([]);
+  });
+
+  test("a reserved name is never declared, whatever its suffix", () => {
+    const folder = copy(join(FIXTURES, "bun-app"));
+    writeFileSync(join(folder, "more.ts"), "export const a = process.env.NODE_AUTH_TOKEN;\nexport const b = process.env.PASSWORD_HASH;\nexport const c = Bun.env.SESSION_SECRET;\n");
+    const { manifest } = inferred(folder, "bun-app");
+    expect(manifest.secrets).toEqual(["SESSION_SECRET"]);
   });
 
   test("a .env never leaves the workstation", () => {
@@ -393,9 +417,10 @@ describe("every inferred manifest", () => {
     test(`passes validate() once deploy has given it its port: ${folder.split("/").slice(-2).join("/")}`, () => {
       const { manifest } = inferred(folder, "inferred");
       expect(deployable(manifest)).toEqual([]);
-      // Never a key the CLI would refuse as a typo, never a guessed secret or network.
+      // Never a key the CLI would refuse as a typo, never a value or a file for a secret, never a guessed network.
       expect(Object.keys(manifest).every((key) => KNOWN_KEYS.includes(key))).toBe(true);
-      expect(manifest.secrets).toBeUndefined();
+      const names = Array.isArray(manifest.secrets) ? manifest.secrets : (manifest.secrets?.build ?? []);
+      expect(names.every((name) => /^[A-Z_][A-Z0-9_]*$/.test(name))).toBe(true);
       expect(manifest.network).toBeUndefined();
     });
   }

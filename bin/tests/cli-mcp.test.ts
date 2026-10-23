@@ -80,7 +80,7 @@ describe("the legacy handshake", () => {
     await h.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } });
     expect(await h.send({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeUndefined();
     const list = await h.send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    expect(list!.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["detect", "deploy", "status", "logs", "access", "share", "lock_status"]);
+    expect(list!.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["detect", "deploy", "status", "logs", "access", "share", "secrets", "secrets_generate", "lock_status"]);
     expect(list!.result.resultType).toBeUndefined();
   });
 
@@ -241,7 +241,7 @@ describe("tools/call", () => {
 });
 
 describe("the tools", () => {
-  test("deploy and share say first what they change, and are the only ones not read-only", () => {
+  test("deploy and share say first what they change; with secrets_generate, the only ones not read-only", () => {
     const deploy = TOOLS.find((tool) => tool.name === "deploy")!;
     expect(deploy.description).toContain("THIS CHANGES THE LIVE SERVER");
     expect(deploy.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
@@ -249,7 +249,47 @@ describe("the tools", () => {
     expect(share.description).toContain("THIS GIVES REAL PEOPLE ACCESS to the app and to the data");
     expect(share.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
     expect(TOOLS.find((tool) => tool.name === "access")!.description).toContain("Access gives real people the app and the data it holds");
-    for (const tool of TOOLS.filter((candidate) => !["deploy", "share"].includes(candidate.name))) expect(tool.annotations.readOnlyHint).toBe(true);
+    // It never replaces a value: not destructive, and a second call is refused, so not idempotent either.
+    expect(TOOLS.find((tool) => tool.name === "secrets_generate")!.annotations).toEqual({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true });
+    for (const tool of TOOLS.filter((candidate) => !["deploy", "share", "secrets_generate"].includes(candidate.name))) expect(tool.annotations.readOnlyHint).toBe(true);
+  });
+
+  test("the secrets tools carry no value either way: no value, no replace, and the listing read-only", () => {
+    const secrets = TOOLS.find((tool) => tool.name === "secrets")!;
+    expect(secrets.annotations.readOnlyHint).toBe(true);
+    expect(Object.keys(secrets.inputSchema.properties)).toEqual(["folder"]);
+    expect(secrets.description).toContain("never a value");
+    const generate = TOOLS.find((tool) => tool.name === "secrets_generate")!;
+    expect(Object.keys(generate.inputSchema.properties)).toEqual(["folder", "name", "format", "bytes", "restart"]);
+    for (const tool of TOOLS) {
+      for (const key of Object.keys(tool.inputSchema.properties)) expect(["value", "replace", "content", "stdin"]).not.toContain(key);
+    }
+    expect(generate.description).toContain("never returned");
+    expect(generate.description).toContain("sitesolide secrets set NAME");
+    // The deploy tool says a missing runtime secret does not stop it, and what to do instead.
+    const deploy = TOOLS.find((tool) => tool.name === "deploy")!;
+    expect(deploy.description).toContain("A missing runtime secret does not stop the deploy");
+    expect(deploy.description).toContain("missingSecrets");
+    expect(deploy.description).toContain("A missing build secret stops the deploy before anything is sent");
+    expect(deploy.description).not.toContain("names the dashboard page");
+  });
+
+  test("secrets and secrets_generate's command lines: the name as an argument, never a value; a replace refused", () => {
+    expect(planCall("secrets", { folder: FOLDER })).toEqual({ argv: ["secrets"], cwd: FOLDER });
+    expect(planCall("secrets_generate", { folder: FOLDER, name: "SESSION_SECRET" })).toEqual({ argv: ["secrets", "generate", "SESSION_SECRET", "--format", "hex", "--bytes", "32"], cwd: FOLDER });
+    expect(planCall("secrets_generate", { folder: FOLDER, name: "SESSION_SECRET", format: "base64url", bytes: 48, restart: true })).toEqual({
+      argv: ["secrets", "generate", "SESSION_SECRET", "--format", "base64url", "--bytes", "48", "--restart"],
+      cwd: FOLDER,
+    });
+    expect(planCall("secrets_generate", { folder: FOLDER, name: "SESSION_SECRET", replace: true })).toMatchObject({ error: expect.stringContaining("unknown argument") });
+    expect(planCall("secrets_generate", { folder: FOLDER, name: "SESSION_SECRET", value: "x" })).toMatchObject({ error: expect.stringContaining("unknown argument") });
+    for (const name of ["sk_live_abc", "--replace", "A=b", "1A", "", 42, "A".repeat(65)]) {
+      expect(planCall("secrets_generate", { folder: FOLDER, name })).toMatchObject({ error: expect.stringContaining("name:") });
+    }
+    expect(planCall("secrets_generate", { folder: FOLDER })).toMatchObject({ error: expect.stringContaining("name:") });
+    expect(planCall("secrets_generate", { folder: FOLDER, name: "A", format: "base32" })).toEqual({ error: "format: hex or base64url" });
+    expect(planCall("secrets_generate", { folder: FOLDER, name: "A", bytes: 8 })).toEqual({ error: "bytes: a whole number from 16 to 64" });
+    expect(planCall("secrets_generate", { folder: FOLDER, name: "A", restart: "yes" })).toEqual({ error: "restart: true or false" });
   });
 
   test("no tool removes a project, locks, switches a domain or forces", () => {

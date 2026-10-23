@@ -8,9 +8,11 @@
  * The folder says most of it. This module reads what it says, and nothing it
  * does not:
  *
- * - **a secret is never guessed.** Code that reads `STRIPE_SECRET_KEY` gets a
- *   note saying where secrets go, the dashboard, and the line to add to
- *   declare one; no value, no file name chosen on its behalf;
+ * - **a secret's value is never guessed.** Code that reads
+ *   `STRIPE_SECRET_KEY` gets the name listed under `secrets`, and a note
+ *   saying how its value is set on the server; a static site's build gets
+ *   it under `secrets.build`, taken from whoever deploys. A name, never a
+ *   value;
  * - **the network is never opened silently.** `network: outbound` gives a
  *   service the internet; the code that obviously calls out gets a note
  *   naming the line, and the decision stays with whoever reads it;
@@ -33,7 +35,8 @@
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
-import { DEPENDENCIES, isSystemName, isValidSlug, KNOWN_KEYS, RESERVED_ENV, SERVICE_PORTS, SUSPICIOUS_ENV, validate, type Manifest } from "./manifest";
+import { DEPENDENCIES, isFrameworkPublic, isSystemName, isValidSlug, KNOWN_KEYS, RESERVED_ENV, SERVICE_PORTS, SUSPICIOUS_ENV, validate, type Manifest } from "./manifest";
+import { buildNameRefusal, checkKey, isVariableName, PASSWORD_VARIABLE, VALUE_LIKE_PREFIXES } from "./variables";
 import { needsPort } from "./ports";
 import { projectPaths } from "./unit";
 
@@ -296,6 +299,9 @@ function readCode(folder: Folder, files: string[]): CodeReading {
   return { variables, outbound };
 }
 
+/** The files a JavaScript or TypeScript project's code is read from. */
+const SCRIPT_EXTENSIONS = [".ts", ".js", ".mjs", ".cjs", ".tsx", ".jsx"];
+
 /** Variables that tend to carry a password even without a telling suffix. */
 const CREDENTIAL_URLS = /^(DATABASE_URL|REDIS_URL|MONGODB_URI|MONGO_URL|AMQP_URL|[A-Z0-9_]*_DSN)$/;
 
@@ -303,32 +309,75 @@ const CREDENTIAL_URLS = /^(DATABASE_URL|REDIS_URL|MONGODB_URI|MONGO_URL|AMQP_URL
 const ORDINARY_VARIABLES = new Set([...RESERVED_ENV, "NODE_ENV", "HOME", "PATH", "TZ", "LANG", "DEBUG"]);
 
 /**
- * The notes every app gets: what the code reads, what it calls, the port. The
- * wording names the exact line to add, never a value.
+ * The names the code reads that carry a secret: a telling suffix, or a URL
+ * that holds a password. Reserved ones, the platform's or the runtime's, and
+ * a framework's public names, which the framework publishes anyway, are not.
  */
-function appNotes(reading: CodeReading, slug: string, expectsPort: boolean): string[] {
+function secretNames(reading: CodeReading): { secrets: string[]; published: string[]; others: string[] } {
+  const names = [...reading.variables].filter((name) => !ORDINARY_VARIABLES.has(name)).sort();
+  const published = names.filter(isFrameworkPublic);
+  const secrets = names.filter((name) => !published.includes(name) && (SUSPICIOUS_ENV.test(name) || CREDENTIAL_URLS.test(name)));
+  return { secrets, published, others: names.filter((name) => !published.includes(name) && !secrets.includes(name)) };
+}
+
+/** A name the manifest may list under `secrets`: what the store takes, and nothing that starts like a key. */
+function declarable(name: string): boolean {
+  return isVariableName(name) && name !== PASSWORD_VARIABLE && checkKey(name) === null && !VALUE_LIKE_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
+/** The note on a framework's public names: their values are the site's, published with it. */
+function publishedNote(published: string[]): string[] {
+  if (published.length === 0) return [];
+  return [`the code reads ${published.join(", ")}, public by the framework's rule: their values are published with the site, so they go under "env", never a secret`];
+}
+
+/**
+ * What every app gets from its code: the names of its secrets, which the
+ * manifest lists under `secrets`, never a value, and the notes on what it
+ * reads, what it calls, the port. The wording names the exact command or
+ * line, never a value.
+ */
+function appReading(reading: CodeReading, expectsPort: boolean): { secrets: string[]; notes: string[] } {
   const notes: string[] = [];
   if (reading.outbound.length > 0) {
     notes.push(
       `the code seems to reach the network (${reading.outbound.join(", ")}): a service only reaches the loopback by default, DNS included; add "network": "outbound" if it does`,
     );
   }
-  const names = [...reading.variables].filter((name) => !ORDINARY_VARIABLES.has(name)).sort();
-  const secrets = names.filter((name) => SUSPICIOUS_ENV.test(name) || CREDENTIAL_URLS.test(name));
-  const others = names.filter((name) => !secrets.includes(name));
+  const { secrets: found, published, others } = secretNames(reading);
+  const secrets = found.filter(declarable);
+  const kept = [...others, ...found.filter((name) => !declarable(name))].sort();
   if (secrets.length > 0) {
     notes.push(
-      `the code reads ${secrets.join(", ")}: secrets live on the server, never in the repository; declare "secrets": ["${slug}.env"] and set their values in the dashboard's Secrets section`,
+      `the code reads ${secrets.join(", ")}: declared under "secrets"; set their values with sitesolide secrets set NAME, or sitesolide secrets generate NAME for a random key`,
     );
   }
-  if (others.length > 0) {
-    notes.push(`the code also reads ${others.join(", ")}: set the ones that are not secret under "env"`);
+  notes.push(...publishedNote(published));
+  if (kept.length > 0) {
+    notes.push(`the code also reads ${kept.join(", ")}: set the ones that are not secret under "env"`);
   }
   if (expectsPort && !reading.variables.has("PORT")) {
     notes.push("the code does not seem to read PORT: the service must listen on 127.0.0.1, on the port the PORT variable carries");
   }
   notes.push('no "port": deploy picks a free one on the server and writes it into sitesolide.json');
-  return notes;
+  return { secrets, notes };
+}
+
+/**
+ * What a static site's build reads: the names of its secrets go under
+ * `secrets.build`, whose values the build takes from whoever deploys, on the
+ * workstation, never from the server.
+ */
+function buildReading(reading: CodeReading, slug: string): { build: string[]; notes: string[] } {
+  const { secrets: found, published } = secretNames(reading);
+  const build = found.filter((name) => declarable(name) && buildNameRefusal(name) === null);
+  const notes = publishedNote(published);
+  if (build.length > 0) {
+    notes.unshift(
+      `the build reads ${build.join(", ")}: declared under "secrets": { "build": [...] }, read at build time on this workstation: export them, or keep them in ~/.config/sitesolide/secrets/${slug}.env`,
+    );
+  }
+  return { build, notes };
 }
 
 // --- package.json ------------------------------------------------------------
@@ -475,7 +524,7 @@ function exclusions(folder: Folder, always: string[]): { exclude: string[]; note
   if (env.length > 0) {
     exclude.push(".env*");
     notes.push(
-      `${listed(env)} ${env.length === 1 ? "stays" : "stay"} on this workstation: on the server, secrets are set in the dashboard's Secrets section`,
+      `${listed(env)} ${env.length === 1 ? "stays" : "stay"} on this workstation: on the server, secrets are set with sitesolide secrets set NAME`,
     );
   }
   return { exclude, notes };
@@ -508,6 +557,7 @@ function detectGo(folder: Folder): Detection {
   const compile = `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ${slug} ${target}`;
   const assets = packageBuild(folder);
   const { exclude, notes } = exclusions(folder, folder.entries.has("package.json") ? ["node_modules"] : []);
+  const code = appReading(readCode(folder, folder.code([".go"])), true);
   return {
     kind: "go",
     manifest: {
@@ -516,13 +566,14 @@ function detectGo(folder: Folder): Detection {
       build: assets === null ? compile : `${assets} && ${compile}`,
       start: `${projectPaths(slug).app}/${slug}`,
       ...(exclude.length > 0 ? { exclude } : {}),
+      ...(code.secrets.length > 0 ? { secrets: code.secrets } : {}),
     },
     reasons: ["go.mod", target === "." ? "package main at the root" : `package main in ${target}`],
     notes: [
       ...notes,
       "the binary is built on this workstation for linux/amd64: set GOARCH=arm64 in build for an ARM server",
       `the build writes the binary ${slug} into the folder: add it to .gitignore`,
-      ...appNotes(readCode(folder, folder.code([".go"])), slug, true),
+      ...code.notes,
     ],
   };
 }
@@ -586,6 +637,7 @@ function detectPython(folder: Folder): Detection {
   const caches = ["venv", ".pytest_cache", ".mypy_cache", ".ruff_cache"].filter((name) => folder.entries.has(name));
   const { exclude, notes: kept } = exclusions(folder, [".venv", "__pycache__", ...caches, ...(folder.entries.has("package.json") ? ["node_modules"] : [])]);
   const build = packageBuild(folder);
+  const code = appReading(readCode(folder, folder.code([".py"])), false);
   return {
     kind: "python",
     manifest: {
@@ -595,13 +647,14 @@ function detectPython(folder: Folder): Detection {
       install,
       start,
       exclude,
+      ...(code.secrets.length > 0 ? { secrets: code.secrets } : {}),
     },
     reasons: [`${framework} in ${source}`, `${target} in ${found.file}`],
     notes: [
       ...kept,
       ...notes,
       `install builds the virtualenv on the server with ${UV} and the server's own Python`,
-      ...appNotes(readCode(folder, folder.code([".py"])), slug, false),
+      ...code.notes,
     ],
   };
 }
@@ -655,6 +708,7 @@ function javascriptApp(
   const code = entry === null ? "" : (folder.text(entry.path) ?? "");
   const runtime = found.manager === "bun" || /^\s*bun\b/.test(start ?? "") || /\bBun\./.test(code) ? "bun" : "node";
   const { exclude, notes } = exclusions(folder, ["node_modules"]);
+  const reading = appReading(readCode(folder, folder.code(SCRIPT_EXTENSIONS)), true);
   return {
     kind: runtime,
     manifest: {
@@ -665,13 +719,14 @@ function javascriptApp(
       start: entry !== null ? `${BUN} run ${entry.path}` : `${BUN} --bun run start`,
       env: { NODE_ENV: "production" },
       exclude,
+      ...(reading.secrets.length > 0 ? { secrets: reading.secrets } : {}),
     },
     reasons: [...(folder.entries.has("package.json") ? ["package.json"] : []), entry !== null ? entry.reason : `the start script: ${start}`],
     notes: [
       ...notes,
       ...(runtime === "node" ? ["it runs under Bun, the runtime the server carries, which runs most Node servers as they are"] : []),
       ...(found.install ? ["the dependencies are installed on the server, by bun install --production", ...installNotes(folder)] : []),
-      ...appNotes(readCode(folder, folder.code([".ts", ".js", ".mjs", ".cjs", ".tsx", ".jsx"])), folder.slug, true),
+      ...reading.notes,
     ],
   };
 }
@@ -729,9 +784,10 @@ function detectJavaScript(folder: Folder): Detection {
   if (hasBuild) {
     const existing = builtFolder(folder);
     const output = generator?.output ?? existing ?? "dist";
+    const reading = buildReading(readCode(folder, folder.code([...SCRIPT_EXTENSIONS, ".astro", ".vue", ".svelte"])), slug);
     return {
       kind: "static-build",
-      manifest: { slug, publicDir: output, build: runScript(manager, "build") },
+      manifest: { slug, publicDir: output, build: runScript(manager, "build"), ...(reading.build.length > 0 ? { secrets: { build: reading.build } } : {}) },
       reasons: [
         "package.json with a build script",
         generator === undefined ? "no server, the site is a folder of files" : `${generator.name} builds into ${output}/`,
@@ -739,6 +795,7 @@ function detectJavaScript(folder: Folder): Detection {
       notes: [
         "the build runs on this workstation before every deploy, with its node_modules",
         ...(generator === undefined && existing === null ? [`publicDir is a guess: check that the build writes the site into ${output}/`] : []),
+        ...reading.notes,
       ],
     };
   }

@@ -28,6 +28,16 @@
  * first, for the client to ask its user. It only ever shares a site already
  * behind the portal, and never makes one public.
  *
+ * SECRETS: `secrets` and `secrets_generate` are tools, `set` is not. A tool
+ * that set a secret would take its value from the conversation, where the
+ * model, its logs and its provider would all have read it: a provider's key
+ * is typed by the user, at the prompt of `sitesolide secrets set NAME`, which
+ * does not echo. The two tools carry no value either way: `secrets` lists
+ * names and states, never a value, and `secrets_generate` has the server draw
+ * a random one, never returned, for a key the project checks itself, a
+ * session's or an internal token's. It never replaces one already set: an
+ * agent never rotates a live secret.
+ *
  * THE PROTOCOL, written here rather than borrowed: a dependency for a few
  * hundred lines of JSON-RPC would be the largest thing in bin/. Both eras of
  * MCP are spoken, since the clients in use speak one or the other:
@@ -50,6 +60,7 @@ import { existsSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { isCompiled, VERSION } from "./cli/kit";
 import { isValidSlug } from "./cli/manifest";
+import { VALUE_LIKE_PREFIXES } from "./cli/variables";
 import { forEachLine } from "./cli/output";
 
 /**
@@ -87,8 +98,9 @@ export const INSTRUCTIONS = [
   "then give them the url from the result. When a call fails, its error carries a hint: follow it.",
   "Once a restricted project is deployed, share it with the people who need it: call share with",
   "the addresses or the domain the user gave, never others, and give them the message from the result.",
-  "Secrets never go in the repository nor in sitesolide.json: the user sets them in the dashboard's",
-  "Secrets section, whose address a deploy stopped by a missing secret gives. Read logs when a service fails.",
+  "Secrets never go in the repository nor in sitesolide.json, which lists their names alone: call secrets to see",
+  "which are missing, secrets_generate for a random key the project checks itself, and ask the user to run",
+  "`sitesolide secrets set NAME` in their terminal for any other. Read logs when a service fails.",
   "Never change the server by any other means than these tools, and never retry a refusal with a workaround.",
 ].join(" ");
 
@@ -133,7 +145,9 @@ export const TOOLS: ToolDefinition[] = [
       "and replaces the version of the site visitors get. Ask the user before a real deploy, and run with dry_run true first to show them what would happen. " +
       "Needs a sitesolide.json in the folder, or accept_inferred true to write the inferred one first (refused if the server already has a project of that name). " +
       "On success the result carries the site's url, and manifestWritten true when sitesolide.json was written (an inferred manifest, a port chosen): commit it. " +
-      "On failure the error carries a hint: follow it. A missing secret stops the deploy and names the dashboard page where the user sets it. " +
+      "On failure the error carries a hint: follow it. A missing runtime secret does not stop the deploy: the result's missingSecrets lists them; " +
+      "call secrets_generate for a random key the project checks itself, and ask the user to run `sitesolide secrets set NAME` for the others. " +
+      "A missing build secret stops the deploy before anything is sent. " +
       "On a workstation that deploys with a token rather than the owner's SSH access, dry_run is refused and nothing is sent: review sitesolide.json with the user instead.",
     inputSchema: {
       type: "object",
@@ -222,6 +236,40 @@ export const TOOLS: ToolDefinition[] = [
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   },
   {
+    name: "secrets",
+    title: "A project's secrets",
+    description:
+      "The names a deployed project's services find in their environment, where each value comes from (the project's store on the server, or a legacy file), which declared names are missing, " +
+      "its files read whole (at $CREDENTIALS_DIRECTORY/files_<name>), and the build secrets kept by whoever deploys. Read-only, and never a value: no tool reads one back. " +
+      "Read it after a deploy whose result lists missingSecrets, and before secrets_generate.",
+    inputSchema: { type: "object", properties: { folder: FOLDER }, required: ["folder"], additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: "secrets_generate",
+    title: "Draw a random secret on the server",
+    description:
+      "Draw a random value on the server for a runtime secret the project declares, and store it there: the value is never returned, shown or logged. " +
+      "Only for a key the project itself checks, a session secret, an internal token, a database password before its first use; never for a provider's key " +
+      "(Stripe, an email service, an API), which only the user can set, by running `sitesolide secrets set NAME` in their terminal. " +
+      "It never replaces a value already set. With restart true, the service is restarted so that it reads the value, and the result says whether it holds.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folder: FOLDER,
+        name: { type: "string", description: "The variable's name, as sitesolide.json lists it under secrets: letters, digits and underscores, not starting with a digit." },
+        format: { type: "string", enum: ["hex", "base64url"], description: "How the random bytes are written. Default hex.", default: "hex" },
+        bytes: { type: "integer", minimum: 16, maximum: 64, description: "How many random bytes. Default 32.", default: 32 },
+        restart: { type: "boolean", description: "Restart the service once the value is stored. Default false: the next deploy or restart reads it.", default: false },
+      },
+      required: ["folder", "name"],
+      additionalProperties: false,
+    },
+    // Not destructive: it never replaces a value. Not idempotent: a second
+    // call is refused once the name is set.
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
     name: "lock_status",
     title: "Preview lock status",
     description:
@@ -299,6 +347,22 @@ export function planCall(name: string, args: Record<string, unknown>, cwd = proc
       if (who.length === 0 && remove.length === 0) return { error: "share: give who or remove; call access to read who may open it" };
       if (remove.length > 0) return { argv: ["share", "--remove", ...remove], cwd: folder };
       return { argv: ["share", ...who, "--role", role, ...(expires === undefined ? [] : ["--expires", expires as string])], cwd: folder };
+    }
+    case "secrets":
+      return { argv: ["secrets"], cwd: folder };
+    case "secrets_generate": {
+      const variable = args.name;
+      // A name of a variable's shape, never one that starts like a provider's key: it would be journaled as a name.
+      if (typeof variable !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(variable) || VALUE_LIKE_PREFIXES.some((prefix) => variable.startsWith(prefix))) {
+        return { error: "name: the variable's name, letters, digits and underscores, not starting with a digit, 64 characters at most, never a value" };
+      }
+      const format = args.format ?? "hex";
+      if (format !== "hex" && format !== "base64url") return { error: "format: hex or base64url" };
+      const bytes = args.bytes ?? 32;
+      if (typeof bytes !== "number" || !Number.isInteger(bytes) || bytes < 16 || bytes > 64) return { error: "bytes: a whole number from 16 to 64" };
+      const restart = flag("restart");
+      if (typeof restart === "string") return { error: restart };
+      return { argv: ["secrets", "generate", variable, "--format", format, "--bytes", String(bytes), ...(restart ? ["--restart"] : [])], cwd: folder };
     }
     case "logs": {
       const lines = args.lines ?? 50;
