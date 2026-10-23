@@ -330,13 +330,26 @@ describe.skipIf(OPENSSL === null)("the connectors", () => {
     // Bun.serve's maxRequestBodySize refuses a Content-Length above it, and
     // let a chunked body of any size through, to an upstream slower than the
     // loopback: the proxy held what it could not send yet, without bound.
-    const total = MAX_BODY_BYTES + 1024 * 1024;
+    const chunk = 1024 * 1024;
+    const total = MAX_BODY_BYTES + chunk;
+    // One chunk goes with the head, the rest once the upstream has the call.
+    // Until then the proxy holds what arrives, up to pendingBytes, past which
+    // it refuses with a 400 of its own, tested apart below. fetch writes from
+    // a thread of its own: a release runner whose event loop was late to read
+    // the head found more than that behind it, read in the same burst, and
+    // the call never reached the limit this test is about.
+    const before = asked.length;
+    const judged = async () => {
+      const deadline = Date.now() + 3000;
+      while (asked.length === before && Date.now() < deadline) await Bun.sleep(5);
+    };
     let sent = 0;
     const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
+      async pull(controller) {
         if (sent >= total) return controller.close();
-        controller.enqueue(new Uint8Array(1024 * 1024).fill(5));
-        sent += 1024 * 1024;
+        if (sent > 0) await judged();
+        controller.enqueue(new Uint8Array(chunk).fill(5));
+        sent += chunk;
       },
     });
     const response = await fetch(`${base()}/connectors/chat/size`, { method: "PUT", body, duplex: "half" } as RequestInit);
@@ -1158,6 +1171,27 @@ describe.skipIf(OPENSSL === null)("what one project may take of the connectors",
       stop();
     }
   }, 20_000);
+
+  test("a body sent before its call is judged is held up to a cap, and refused past it rather than held whole", async () => {
+    const { connectors, open, stop } = bench({ pendingBytes: 4 * 1024 });
+    try {
+      // A chunked body behind its head in one write, under the loopback's MTU
+      // (16 KiB on macOS, 64 KiB on Linux), is read with the head, while the
+      // call is still judged: see the proxy's own test of its CONNECT port.
+      const shop = await open("shop");
+      shop.socket.write(`POST /connectors/feed/upload HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n3000\r\n${"x".repeat(0x3000)}\r\n`);
+      expect(await shop.status()).toBe(400);
+      await shop.closed;
+      expect(JSON.parse(shop.body())).toEqual({ error: "invalid", message: "connectors: too much sent before the call was judged" });
+      // Refused on its head: the upstream never heard of the call.
+      expect(answers.map((answer) => answer.path)).not.toContain("/upload");
+      await Bun.sleep(50);
+      expect(connectors.open()).toBe(0);
+      expect(connectors.buffered()).toBe(0);
+    } finally {
+      stop();
+    }
+  });
 
   test("a call keeps its place among its project's calls until its answer is sent, not only until its headers", async () => {
     const { open, stop } = bench();
