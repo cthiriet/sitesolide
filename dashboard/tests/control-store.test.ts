@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test, type Mock } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PORTAL_PORT } from "../borrowed/portal";
@@ -7,7 +7,7 @@ import type { StoreChangeResponse, StoreView } from "../borrowed/store-protocol"
 import { createAccessSystem } from "../src/access/system";
 import { openDatabase } from "../src/database";
 import { createApiRoutes, SECRETS_CHANGE_IDLE_S, storeRoutes } from "../src/control/api";
-import type { ControlSteward } from "../src/control/client";
+import { localControlSteward, type ControlSteward } from "../src/control/client";
 import { createLimiter } from "../src/control/limiter";
 import { INSTALLER_TEMPLATE, MAX_SECRET_NAMES, MAX_SECRETS_BODY_BYTES, type Identity, type Scope, type TokenView } from "../src/control/protocol";
 import { FILE_NAME_REFUSAL } from "../src/control/secrets";
@@ -38,6 +38,11 @@ import { readRegistryFile, registryOf, writeRegistry, type People } from "./regi
  * here is what the control routes decide before handing anything over: the
  * token, its person's role, its flag, the slug deployed or to be created,
  * what a removed project or another token left under a name, the hour.
+ *
+ * Then the same routes with the secrets steward's real store behind them,
+ * through the dashboard's API on a real port and the steward on a real
+ * socket: the token path end to end, the values written in the store's env
+ * and files, and nowhere else.
  *
  * Then the dashboard's API on a real port, the steward reduced to the
  * answers it gives: what the dashboard judges itself, and what it passes on,
@@ -117,7 +122,7 @@ const protectedBlock = (slug: string) => `${slug}.${ZONE} {\n\tforward_auth @por
  * listing names, the store's form; notes: a static site; the dashboard and
  * the portal.
  */
-async function mount(options: { store?: boolean; secretChangesPerHour?: number } = {}): Promise<Bench> {
+async function mount(options: { store?: boolean | "real"; secretChangesPerHour?: number } = {}): Promise<Bench> {
   const root = mkdtempSync(join(tmpdir(), "control-store-"));
   toClean.push(root);
   const folder = (name: string) => {
@@ -250,7 +255,7 @@ async function mount(options: { store?: boolean; secretChangesPerHour?: number }
     access: handler.accessForToken,
     forgetAccess: handler.forgetProjectAccess,
     secrets: handler.secretsForToken,
-    store: options.store === false ? null : store,
+    store: options.store === false ? null : options.store === "real" ? handler.storeForToken : store,
     ...(options.secretChangesPerHour === undefined ? {} : { secretChangesPerHour: options.secretChangesPerHour }),
   });
 
@@ -606,6 +611,107 @@ describe("the steward: around the store", () => {
     const b = await mount();
     const { secret } = await b.ownerToken({ create: true });
     expect(await body(await preflight(b, secret, "shop"))).toEqual({ status: 200, creating: true, placeholders: { zone: ZONE, contact: "" } });
+  });
+});
+
+describe("end to end, with the secrets steward's real store", () => {
+  /** The API on a real port, the steward on a real socket, as dashboard/server.ts and dashboard/steward.ts mount them. */
+  async function chain(b: Bench) {
+    const socket = join(b.root, "steward.sock");
+    const steward = Bun.serve({ unix: socket, fetch: (req) => b.control(req) });
+    const store = createControlStore(openDatabase(join(b.root, "dashboard.db")));
+    const client = localControlSteward(socket);
+    const spool = createSpool(join(b.root, "spool"));
+    const api = createApiRoutes({ steward: client, store, spool, limiter: createLimiter(), tracker: createTracker({ store, steward: client, spool }), stateFile: join(b.root, "state.json"), publicUrl: `https://dashboard.${ZONE}`, zone: ZONE });
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", routes: storeRoutes(api), fetch: () => new Response("not found", { status: 404 }) });
+    const texts: string[] = [];
+    const send = async (bearer: string, method: string, path: string, payload?: unknown) => {
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/v1/projects${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${bearer}`, "X-Forwarded-For": "198.51.100.9", "Content-Type": "application/json" },
+        ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+      });
+      const text = await response.text();
+      texts.push(text);
+      return { status: response.status, json: JSON.parse(text) as Record<string, unknown> };
+    };
+    return { send, texts, stop: () => (server.stop(true), steward.stop(true)) };
+  }
+
+  test("a token's names, a value drawn and a file reach the project's store, and come back to no one: listed as names, its view a Developer's", async () => {
+    const b = await mount({ store: "real" });
+    const c = await chain(b);
+    try {
+      const { token, secret } = await b.ownerToken({ slugs: ["kanban"], secrets: true });
+      expect(await c.send(secret, "PATCH", "/kanban/store", { set: { API_KEY: CANARY } })).toMatchObject({ status: 201, json: { created: true, set: ["API_KEY"] } });
+      expect(readFileSync(join(b.storeRoot, "kanban", "env"), "utf8")).toContain(`API_KEY=${CANARY}`);
+      const drawn = await c.send(secret, "POST", "/kanban/store/generate", { name: "SESSION_KEY", bytes: 32 });
+      expect(drawn).toMatchObject({ status: 200, json: { generated: ["SESSION_KEY"] } });
+      const value = /^SESSION_KEY=([0-9a-f]{64})$/m.exec(readFileSync(join(b.storeRoot, "kanban", "env"), "utf8"))?.[1];
+      expect(value).toBeDefined();
+      expect(await c.send(secret, "PUT", "/kanban/store/files/gcp.json", { content: CONTENT })).toMatchObject({ status: 200, json: { files: { set: ["gcp.json"] } } });
+      expect(readFileSync(join(b.storeRoot, "kanban", "files", "gcp.json"), "utf8")).toContain(CANARY);
+
+      const listed = await c.send(secret, "GET", "/kanban/store");
+      expect(listed.status).toBe(200);
+      const view = listed.json.store as StoreView;
+      expect(view.variables.find((variable) => variable.name === "API_KEY")).toMatchObject({ source: "store", declared: true });
+      expect(view.variables.find((variable) => variable.name === "SESSION_KEY")).toMatchObject({ source: "store", declared: false });
+      expect(view.missing).toEqual([]);
+      expect(view.files).toEqual([expect.objectContaining({ name: "gcp.json", state: "set", bytes: null })]);
+      expect(view.may).toEqual({ write: true, reveal: false, restore: false, migrate: false });
+
+      // Journaled under the token, names alone.
+      expect(b.journal().filter((entry) => entry.actor === `token:${token.id}` && entry.result === "ok").length).toBeGreaterThan(0);
+      for (const text of [...c.texts, b.everywhere()]) {
+        expect(text).not.toContain(CANARY);
+        expect(text).not.toContain(value!);
+      }
+      // A file removed, that file alone: the folder every unit loads stays.
+      expect(await c.send(secret, "DELETE", "/kanban/store/files/gcp.json")).toMatchObject({ status: 200, json: { files: { removed: ["gcp.json"] } } });
+      expect(readdirSync(join(b.storeRoot, "kanban", "files"))).toEqual([]);
+    } finally {
+      c.stop();
+    }
+  });
+
+  test("the rules hold against the real store: a token without the flag, another's project, a person below Developer; nothing written", async () => {
+    const b = await mount({ store: "real" });
+    const c = await chain(b);
+    try {
+      const flagless = await b.ownerToken({ slugs: ["kanban"] });
+      expect(await c.send(flagless.secret, "PATCH", "/kanban/store", { set: { API_KEY: CANARY } })).toMatchObject({ status: 403, json: { error: "out-of-scope" } });
+      const elsewhere = await b.ownerToken({ slugs: ["blog"], secrets: true });
+      expect(await c.send(elsewhere.secret, "GET", "/kanban/store")).toMatchObject({ status: 404 });
+      const alice = await b.personToken(ALICE, { slugs: ["kanban"], secrets: true });
+      b.seed({ [ALICE]: { kanban: "viewer" } }, [CARL]);
+      expect(await c.send(alice.secret, "POST", "/kanban/store/generate", { name: "SESSION_KEY" })).toMatchObject({ status: 403, json: { error: "out-of-scope" } });
+      expect(existsSync(join(b.storeRoot, "kanban", "env"))).toBe(false);
+      for (const text of [...c.texts, b.everywhere()]) expect(text).not.toContain(CANARY);
+    } finally {
+      c.stop();
+    }
+  });
+
+  test("a store written ahead of the first deployment is the writing token's alone: recorded, then its deployment its own; another token neither sees nor takes it", async () => {
+    const b = await mount({ store: "real" });
+    const c = await chain(b);
+    try {
+      const { token, secret } = await b.ownerToken({ create: true, secrets: true });
+      expect(await c.send(secret, "PATCH", "/shop/store", { set: { API_KEY: CANARY } })).toMatchObject({ status: 201, json: { created: true } });
+      expect(readFileSync(join(b.storeRoot, "shop", "env"), "utf8")).toContain(`API_KEY=${CANARY}`);
+      expect(b.owners()).toEqual({ shop: token.id });
+      expect(await c.send(secret, "GET", "/shop/store")).toMatchObject({ status: 200, json: { store: { slug: "shop", exists: true } } });
+      expect(await body(await deploy(b, secret, "shop"))).toMatchObject({ status: 202, creating: true });
+
+      const other = await b.ownerToken({ create: true, secrets: true });
+      expect(await c.send(other.secret, "GET", "/shop/store")).toMatchObject({ status: 404 });
+      expect(await c.send(other.secret, "PATCH", "/shop/store", { set: { API_KEY: "taken" } })).toMatchObject({ status: 404 });
+      expect(readFileSync(join(b.storeRoot, "shop", "env"), "utf8")).toContain(`API_KEY=${CANARY}`);
+      for (const text of [...c.texts, b.everywhere()]) expect(text).not.toContain(CANARY);
+    } finally {
+      c.stop();
+    }
   });
 });
 

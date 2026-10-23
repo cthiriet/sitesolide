@@ -41,7 +41,6 @@ import { createConnectorStore } from "./src/connectors/store";
 import { EGRESS_ACCOUNT, EGRESS_CONFIG_DIR } from "./borrowed/connectors";
 import { createControlSteward, isControlPath, MAX_SECRETS_CHANGE_BODY_BYTES } from "./src/control/steward";
 import { createControlSystem } from "./src/control/system";
-import type { StoreForToken } from "./src/secrets/store-api";
 import { INSTALLER_RUN_FOLDER } from "./src/control/protocol";
 import { CODES_FILE as LOCK_CODES_FILE, FRAGMENT_NAME, LOCKS_DIR } from "./borrowed/locks";
 import { createBackupReader } from "./src/backup/reader";
@@ -122,11 +121,6 @@ const PORTAL_DATA_FOLDER = process.env.PORTAL_DATA_FOLDER ?? `${SITES_DIR}/porta
  * hash.
  */
 const OWNERS = process.env.OWNERS ?? "site-";
-
-/** The secrets routes' work on a store for a token, null when they carry none. */
-function storeForTokenOf(handler: object): StoreForToken | null {
-  return "storeForToken" in handler ? ((handler as { storeForToken: StoreForToken | null }).storeForToken ?? null) : null;
-}
 
 function die(message: string): never {
   console.error(`steward: ${message}`);
@@ -272,10 +266,8 @@ const control = createControlSteward(
     forgetAccess: handler.forgetProjectAccess,
     secrets: handler.secretsForToken,
     // A token's work on a project's store, judged by the control routes then
-    // done by the secrets routes' own code (src/secrets/store-api.ts). A
-    // handler without it leaves the store routes out, as on a steward that
-    // predates them.
-    store: storeForTokenOf(handler),
+    // done by the secrets routes' own code (src/secrets/store-api.ts).
+    store: handler.storeForToken,
     // What {contact} becomes in a token's build, the same file Caddy reads.
     contact: process.env.SITESOLIDE_CONTACT ?? "",
   },
