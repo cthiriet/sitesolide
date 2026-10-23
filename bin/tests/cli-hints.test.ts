@@ -202,7 +202,12 @@ describe("the hints", () => {
     expect(REMOTE_HINTS["build-secret-missing"]).toContain("never a value read from the conversation");
     expect(REMOTE_HINTS["build-secret-missing"]).toContain("nothing was sent");
     expect(REMOTE_HINTS["build-secrets-unreadable"]).toContain("never read, print or rewrite the file yourself");
-    expect(REMOTE_HINTS["migrate-conflict"]).toBe("fix the file named, in the dashboard, then run migrate again; never read or print a value");
+    expect(REMOTE_HINTS["migrate-conflict"]).toContain("sitesolide refresh <slug>`, then migrate again");
+    expect(REMOTE_HINTS["migrate-conflict"]).not.toContain("duplicate");
+    // A deployment that would drop legacy values stops, and says to migrate first, the owner's.
+    expect(REMOTE_HINTS["migrate-first"]).toContain("sitesolide secrets migrate --restart");
+    expect(hintFor("migrate first: sitesolide secrets migrate --restart; the service reads A from legacy files this manifest no longer reads, and the store lacks it")).toBe(REMOTE_HINTS["migrate-first"]!);
+    expect(REMOTE_HINTS["migrate-conflict"]).toContain("never read or print a value");
     expect(REMOTE_HINTS["store-refused"]).toContain("never move, delete or replace it yourself");
     expect(REMOTE_HINTS["already-present"]).toContain("--replace");
     expect(REMOTE_HINTS["steward-outdated"]).toContain("sitesolide upgrade");

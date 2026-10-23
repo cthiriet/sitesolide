@@ -675,8 +675,9 @@ describe("sitesolide remove also removes the block laid from the dashboard", () 
     expect(publicDir).toBeGreaterThan(-1);
     expect(block).toBeGreaterThan(publicDir);
     expect(folder).toBeGreaterThan(block);
-    // Read before the Caddy lock, for a code to take away first, and under it.
-    expect(vm.logs()).toEqual([`READ ${SHOWCASE.slug}`, `READ ${SHOWCASE.slug}`]);
+    // Read before the Caddy lock, for a code to take away first, and under it;
+    // and the leftover secret files the steward attaches to it, a read too.
+    expect(vm.logs()).toEqual([`READ ${SHOWCASE.slug}`, `READ ${SHOWCASE.slug}`, `STORE LEFTOVERS ${SHOWCASE.slug}`]);
   });
 
   test("a site that opens with a code goes back to Public through the steward first, then is removed", async () => {

@@ -201,7 +201,7 @@ import {
 import { CREDENTIALS_EXIT_STATUS, credentialsFailure, readStorePrepareAnswer, slugHasStore, storePaths, storePrepareCommand, workstationSecretsPath } from "./cli/store";
 import { envValue, keys, parseEnv } from "./cli/envfile";
 import { gatherBuildSecrets, missingBuildSecrets, readWorkstationSecrets, sourceLine, unreadableWorkstation, type BuildSecretsResolution } from "./cli/build-secrets";
-import { handleMissing, legacyLossRefusal, readStoreArguments, runStore, sshStore, STORE_USAGE, storelessRefusal, withDeclared, type StoreTransport } from "./cli/store-cli";
+import { handleMissing, legacyLossRefusal, ownerLeftovers, readStoreArguments, runStore, sshStore, STORE_USAGE, storelessRefusal, withDeclared, type StoreTransport } from "./cli/store-cli";
 import {
   secretPath,
   projectPaths,
@@ -2386,6 +2386,19 @@ async function secretFilesRefusal(manifest: Manifest, config: Config, executor: 
   return refusal(declared.map((name) => ownerRefusal(manifest.slug, name, owners.get(name)!)).filter((one): one is string => one !== null));
 }
 
+/**
+ * The leftover flat files the steward attaches to a project that names its
+ * secrets: asked of its owner socket, a read, so in a dry run too. A steward
+ * that cannot say, one from before the store included, is said, and no
+ * leftover is deleted: the files stay for the owner to look at.
+ */
+async function leftoverSecretFiles(slug: string, config: Config, executor: Executor): Promise<string[]> {
+  const read = await ownerLeftovers((command, input) => executor.execute(config, command, input), slug);
+  if (read.ok) return read.value;
+  warn(`cannot tell which leftover secret files are ${slug}'s: ${read.failure.message}`, ["none of them is removed: the owner looks at /etc/sitesolide by hand"]);
+  return [];
+}
+
 /** Who owns each declared secret file on the machine; an unreadable answer stops the command, `why` saying what that spares. */
 async function readOwners(names: readonly string[], config: Config, executor: Executor, why: string): Promise<Map<string, SecretOwner>> {
   const owners = readSecretOwners(await executor.read(config, secretOwnersCommand(names)), names);
@@ -3269,24 +3282,31 @@ async function remove(
   // stopped service.
   const hasBlock = isApplication || behindPortal;
 
-  // The secret files this folder's manifest names, deleted only when they
-  // are this project's: see removableSecrets. The sites on the machine are
-  // read before any gesture, an unreadable reading deleting nothing.
+  // The secret files this folder's manifest names, and the leftovers the
+  // steward attaches to the project, flat files a project that moved to its
+  // store never retired: read now, before the served folder goes, after
+  // which nobody can tell whose they are. Each is deleted only when it is
+  // this project's: see removableSecrets. The sites on the machine are read
+  // before any gesture, an unreadable reading deleting nothing.
   const declared = legacySecretFiles(manifest);
+  const leftovers = await leftoverSecretFiles(slug, config, executor);
+  const named = [...new Set([...declared, ...leftovers])];
   let secrets: string[] = [];
-  if (declared.length > 0) {
+  let leftoversRemoved: string[] = [];
+  if (named.length > 0) {
     const sites = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
     if (sites.kind === "unreadable") {
       die("cannot read the manifests on the server to tell whose secret files these are", [sites.reason, "nothing was removed"]);
     }
-    const owners = await readOwners(declared, config, executor, "nothing was removed: a file another account owns could have been deleted");
-    const chosen = removableSecrets(slug, declared, siteLabels(sites.manifests.keys(), config.zone), owners);
+    const owners = await readOwners(named, config, executor, "nothing was removed: a file another account owns could have been deleted");
+    const chosen = removableSecrets(slug, named, siteLabels(sites.manifests.keys(), config.zone), owners);
     for (const line of chosen.kept) say(`   ${line}`);
-    secrets = chosen.removed;
+    secrets = chosen.removed.filter((name) => declared.includes(name));
+    leftoversRemoved = chosen.removed.filter((name) => !declared.includes(name));
   }
 
   for (const removalStep of removalSteps(
-    { slug, isApplication, secrets, units: unitNames(manifest) },
+    { slug, isApplication, secrets, leftovers: leftoversRemoved, units: unitNames(manifest) },
     { block: hasBlock, isProtected: behindPortal },
   )) {
     if (removalStep.kind === "action") {
@@ -3888,7 +3908,7 @@ function usage(zone: string | null): string {
     "     remove <NAME>...             take variables out of the store",
     "     set-file <NAME> < path       a file read whole, at $CREDENTIALS_DIRECTORY/files_<NAME>",
     "     remove-file <NAME>           take a file out of the store",
-    "     migrate [--dry-run]          merge the legacy files into the store; --retire deletes those it covers",
+    "     migrate [--dry-run]          merge the legacy files into the store; --retire deletes those it covers, --force those it overrides",
     "     --restart                    with a change: then restart the service, and say whether it holds",
     "  sitesolide run -- <command>     the workstation's own credentials for this project, from the vault, then run",
     "  sitesolide mcp                  serve these commands to an agent, over MCP on stdio",

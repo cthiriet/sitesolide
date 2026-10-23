@@ -417,17 +417,26 @@ landing or a service made by hand, keeps its files by name, as before.
    <slug>`: the units read the legacy files, then the empty store.
 2. `sitesolide secrets migrate --dry-run`, then `sitesolide secrets migrate`,
    or *Merge into the store* in the dashboard: every legacy variable is copied
-   into the store, with its value. Two legacy files holding a name with
-   different values refuse the whole merge, naming the name and the files;
-   remove the duplicate from one of them in the dashboard, then merge again.
+   into the store, with its value. A name two legacy files give different
+   values takes the value in effect, the one of the file the units read
+   last, which is what the service runs with, and is said by name and files,
+   never a value. Only units that read the files in different orders refuse
+   the merge: `sitesolide refresh <slug>`, then merge again.
 3. `sitesolide secrets migrate --restart`, or a deployment: the service
    starts on the store's values, identical.
 4. `sitesolide secrets migrate --retire`, or *Retire* in the dashboard: each
    legacy file the store covers, every variable in it present in the store
-   with the same value, after a restart that loaded the store, is kept as its
-   previous version and deleted.
+   with the same value, after a restart that loaded the store, is kept as a
+   copy with the project and deleted. A leftover whose values differ from
+   the store's, which overrides them, is kept and said; `sitesolide secrets
+   migrate --retire --force` retires it all the same, the owner's choice,
+   the store's values standing alone.
 5. In the repository, `secrets` becomes the names, `sitesolide secrets
-   --json` listing them; commit, deploy.
+   --json` listing them; commit, deploy. Deployed before step 2, a manifest
+   that names its variables would drop the values the legacy files still
+   supply, its units reading the store alone: `deploy` stops before anything
+   is sent, `migrate first: sitesolide secrets migrate --restart`, naming
+   them.
 
 Merging and retiring are the owner's alone. Steps 4 and 5 may come in either
 order. Never `sitesolide refresh --all` for any of them. The detail, and how

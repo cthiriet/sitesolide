@@ -261,7 +261,7 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "store-unmanaged":
     "the project's store on the machine is in a state the steward does not rewrite, and nothing was changed: tell the owner of the machine, with the message; never work around it",
   "migrate-conflict":
-    "fix the file named, in the dashboard, then run migrate again; never read or print a value",
+    "the project's units read its legacy files in different orders: the owner runs `sitesolide refresh <slug>`, then migrate again; never edit or remove a legacy file to settle it, and never read or print a value",
   "already-present":
     "the name already has a value: leave it, or, only if the user asks for a new one, they run `sitesolide secrets generate NAME --replace` themselves, which stops the old value working at the next restart",
   locked: "this change needs the dashboard's unlock: make it from the dashboard, or over the owner's SSH",

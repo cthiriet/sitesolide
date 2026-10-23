@@ -792,12 +792,14 @@ still needs.
 
 ### What it refuses to guess
 
-**Two different values for one name, in two legacy files**: a conflict. Any
-conflict refuses the whole merge, and the answer names the name and the
-files, never a value: `NAME: in a.env and b.env, with different values`.
-Equal values merge. Remove the line from the file the service does not need,
-in the dashboard, which is allowed while the store does not hold the name,
-then merge again.
+**Two different values for one name, in two legacy files**: the merge takes
+the value in effect, the one of the file the units read last, which is the
+value the service runs with, and names the files whose value it did not
+take, never a value: `NAME: kept b.env's value, in effect; a.env's differs`.
+Equal values merge. Only units that read the files in different orders leave
+the value in effect unknown: that refuses the whole merge, nothing written,
+and `sitesolide refresh <slug>` lays units that read them in one order, then
+merge again.
 
 Against the store, each name is one of three: `merged`, absent from the store
 and now in it; `already`, there with the same value; `overridden`, there with

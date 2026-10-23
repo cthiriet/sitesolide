@@ -526,7 +526,7 @@ const SLUG = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
  * is built into the address only once it has a slug's shape: the address is
  * quoted, and a quote in it would end the quoting.
  */
-export function ownerReadCommand(path: "/people" | `/access?slug=${string}` | `/store?slug=${string}`): string {
+export function ownerReadCommand(path: "/people" | `/access?slug=${string}` | `/store?slug=${string}` | `/store/leftovers?slug=${string}`): string {
   const slug = /\?slug=(.*)$/.exec(path)?.[1];
   if (slug !== undefined && !SLUG.test(slug)) throw new Error("not a project's slug: no read is built from it");
   return `sudo curl -sS --max-time 30 -w '\\n%{http_code}\\n' ${SOCKET} 'http://steward${path}'`;

@@ -1048,6 +1048,43 @@ describe("deploy and the store of secrets", () => {
   });
 });
 
+describe("sitesolide remove and the secret files a project left behind", () => {
+  test("a project that names its secrets: the leftovers the steward attaches to it are read first, then deleted with their previous versions when they are its own", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.writeManifest("sample-store", readFileSync(join(TESTS_ROOT, "projects", "store-app", "sitesolide.json"), "utf8"));
+      vm.setStore({ leftovers: { "sample-store": ["sample-store-ses.env", "sample-store-old.env"] } });
+      // One the project's account owns; one another account does: kept, and said.
+      vm.writeFile(SWITCHES.secretFiles, JSON.stringify({ "sample-store-ses.env": "site-sample-store", "sample-store-old.env": "site-other" }));
+      const r = await run("projects/store-app", ["remove", "--confirm", "sample-store", "--dry-run"], { vm });
+      expect(r.code).toBe(0);
+      expect(r.output).toContain("rm -f /etc/sitesolide/sample-store-ses.env");
+      expect(r.output).toContain("rm -f /var/lib/sitesolide-steward/precedents/sample-store-ses.env");
+      expect(r.output).not.toContain("rm -f /etc/sitesolide/sample-store-old.env");
+      expect(r.output).toContain("kept: /etc/sitesolide/sample-store-old.env is already on the machine and belongs to site-other, not site-sample-store");
+      // Asked before anything: nobody can tell whose they are once the folder is gone.
+      expect(vm.logs().slice(0, 3)).toEqual(["READ sample-store", "READ sample-store", "STORE LEFTOVERS sample-store"]);
+      expect(r.output.indexOf("rm -f /etc/sitesolide/sample-store-ses.env")).toBeLessThan(r.output.indexOf("rm -rf /etc/sitesolide/projects/sample-store"));
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("a steward that cannot say: said, and no leftover deleted", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.writeManifest("sample-store", readFileSync(join(TESTS_ROOT, "projects", "store-app", "sitesolide.json"), "utf8"));
+      vm.setStore({ state: "old", leftovers: { "sample-store": ["sample-store-ses.env"] } });
+      const r = await run("projects/store-app", ["remove", "--confirm", "sample-store", "--dry-run"], { vm });
+      expect(r.code).toBe(0);
+      expect(r.error).toContain("!! cannot tell which leftover secret files are sample-store's");
+      expect(r.output).not.toContain("/etc/sitesolide/sample-store-ses.env");
+    } finally {
+      vm.cleanup();
+    }
+  });
+});
+
 /**
  * `sitesolide secrets` over SSH: the project's store, on the steward's owner
  * socket, as root. A value goes on standard input, never in a command line,

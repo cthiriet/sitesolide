@@ -72,7 +72,7 @@ sitesolide secrets              this project's secrets: names, sources, states, 
    remove <NAME>...             take variables out of the store
    set-file <NAME> < path       a file read whole, at $CREDENTIALS_DIRECTORY/files_<NAME>
    remove-file <NAME>           take a file out of the store
-   migrate [--dry-run]          merge the legacy files into the store; --retire deletes those it covers
+   migrate [--dry-run]          merge the legacy files into the store; --retire deletes those it covers, --force those it overrides
    --restart                    with a change: then restart the service, and say whether it holds
 sitesolide run -- <command>     the workstation's own credentials for this project, from the vault, then run
 sitesolide mcp                  serve these commands to an agent, over MCP on stdio
@@ -137,7 +137,10 @@ stops there when they cannot be laid or are not root's. See
 
 `sitesolide remove` deletes the project's store and its previous versions,
 after its units are stopped, and the legacy secret files the folder's
-manifest declares only when they are the project's by that same rule; it
+manifest declares, with the leftovers the steward attaches to a project that
+names its secrets (flat files it never retired, read before the served
+folder goes, after which nobody can tell whose they are), each with its
+previous version, only when they are the project's by that same rule; it
 prints the others, `kept:` and why: the manifest is whatever the folder holds
 now, and a clone's naming `dashboard.env` had root delete the dashboard's
 password. It reads the sites on the machine and the files' owners first, and
@@ -313,7 +316,7 @@ sitesolide secrets remove <NAME>... [--restart]      take variables out of the s
 sitesolide secrets set-file <NAME> [--restart] < path   a file read whole, 64 KiB at most
 sitesolide secrets remove-file <NAME> [--restart]
 sitesolide secrets migrate [--dry-run] [--restart]   the owner's: merge the legacy files into the store
-sitesolide secrets migrate --retire                  the owner's: delete the legacy files the store covers
+sitesolide secrets migrate --retire [--force]        the owner's: delete the legacy files the store covers; --force those it overrides
 ```
 
 ```console
@@ -342,8 +345,10 @@ whose routes return none. With `--json`, the listing's `result` carries
 carries `command`, `action`, `slug`, `created`, `set`, `generated`,
 `removed`, `absent`, `files` and `restart`; `migrate`'s carries `action`,
 `slug`, `dryRun`, `sources`, `skipped`, `merged`, `already`, `overridden`,
-`conflicts`, `written` and `restart`, and `--retire`'s `action`, `slug`,
-`retired` and `kept`.
+`shadowed`, `conflicts`, `written` and `restart`, and `--retire`'s `action`,
+`slug`, `force`, `retired`, `forced` and `kept`. A restart's verdict carries
+`reason` when the steward can say why the service did not come back, a
+service that could not load its secret files (exit status 243).
 
 **The value never comes from the command line**, where the shell's history
 and the process list would keep it: `set` asks for it at a prompt that does
@@ -380,9 +385,15 @@ the project's service once the change is written, and says whether it holds.
 without anyone seeing a value, then delete the files the store covers, and
 print names and files alone: read, skipped, merged, already in the store,
 kept with the store's own value, retired, kept and why. A name two legacy
-files give different values stops the merge, nothing written, the
-`migrate-conflict` error listing each as `NAME: in a.env and b.env, with
-different values`. The steps are in
+files give different values takes the value in effect, the one of the file
+the units read last, which is what the service runs with: `NAME: kept B's
+value, in effect; A's differs`, never a value. Only units that read the
+files in different orders stop the merge, nothing written, the
+`migrate-conflict` error naming each name and its files: `sitesolide refresh
+<slug>` lays units that read them in one order, then migrate again. A
+leftover whose values differ from the store's is kept by `--retire`; the
+owner retires it with `--retire --force`, the store's values standing alone,
+the file kept as a copy with the project. The steps are in
 [secrets.md](secrets.md#legacy-files-and-moving-to-the-store).
 
 The dashboard and the portal keep their password hashes in their own files,

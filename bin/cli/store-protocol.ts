@@ -10,8 +10,13 @@
  */
 import type { GenerateFormat } from "./store";
 
-/** The steward's Verdict (dashboard/src/secrets/protocol.ts), structurally identical. */
-export type RestartVerdict = { kind: "active" | "looping" | "failure" | "scheduled"; state: string; subState: string; restarts: number };
+/**
+ * The steward's Verdict (dashboard/src/secrets/protocol.ts), structurally
+ * identical. `reason`: why it did not come back, when the steward can say
+ * better than systemd, a service that could not load its secret files (exit
+ * status 243) worded as deploy and the monitor word it; absent otherwise.
+ */
+export type RestartVerdict = { kind: "active" | "looping" | "failure" | "scheduled"; state: string; subState: string; restarts: number; reason?: string };
 
 /** Where a variable's value in force comes from: the store, a legacy file, or nowhere yet. */
 export type VariableSource = "store" | "legacy" | "none";
@@ -85,7 +90,8 @@ export type StoreFileRemoveRequest = StoreTarget & { name: string };
 export type StoreRevealRequest = StoreTarget & { name: string };
 export type StoreRestoreRequest = StoreTarget & { dryRun?: boolean };
 export type StoreMigrateRequest = StoreTarget & { dryRun?: boolean };
-export type StoreRetireRequest = StoreTarget & { files: string[] };
+/** `force`: the owner's explicit choice to retire a file whose values differ from the store's, the store's standing alone. */
+export type StoreRetireRequest = StoreTarget & { files: string[]; force?: boolean };
 
 export type StoreListResponse = { store: StoreView };
 export type StoreChangeResponse = {
@@ -101,7 +107,10 @@ export type StoreChangeResponse = {
 };
 export type StoreRevealResponse = { value: string };
 export type StoreRestoreResponse = StoreChangeResponse & { appeared: string[]; disappeared: string[]; restored: boolean };
+/** A name the project's units read from its legacy files in different orders: which value is in effect cannot be told, and the migration refuses. */
 export type MigrateConflict = { name: string; files: string[] };
+/** A name two legacy files set differently: the value of `kept`, the last the units read and the one the service runs with, merged; the `others`' not. */
+export type MigrateShadowed = { name: string; kept: string; others: string[] };
 export type StoreMigrateResponse = {
   store: StoreView;
   sources: string[];
@@ -109,10 +118,20 @@ export type StoreMigrateResponse = {
   merged: string[];
   already: string[];
   overridden: string[];
+  shadowed: MigrateShadowed[];
   conflicts: MigrateConflict[];
   written: boolean;
 };
-export type StoreRetireResponse = { store: StoreView; retired: string[]; kept: { file: string; reason: string }[] };
+/** `forced`: the files retired only because the request carried `force`, the store's values standing where theirs differed. */
+export type StoreRetireResponse = { store: StoreView; retired: string[]; forced: string[]; kept: { file: string; reason: string }[] };
+/**
+ * A project's leftover flat files, names only, in the folder's order: those
+ * no manifest declares and whose most specific owner by prefix is this
+ * project, which names its secrets in its store. Empty for a project that is
+ * not deployed, keeps the old form, or has none. Root's alone, on the owner's
+ * socket: what `sitesolide remove` reads before it deletes the served folder.
+ */
+export type StoreLeftoversResponse = { slug: string; leftovers: string[] };
 
 export type StoreApiChangeBody = { set?: Record<string, string>; remove?: string[]; restart?: boolean };
 export type StoreApiGenerateBody = { name: string; format?: GenerateFormat; bytes?: number; replace?: boolean; restart?: boolean };

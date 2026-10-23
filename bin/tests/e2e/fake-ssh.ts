@@ -136,6 +136,8 @@ export type StoreState = {
   files: Record<string, string[]>;
   /** The project's legacy flat files, by name: the variables each holds, whether an installed unit reads it, and its state. */
   legacy?: Record<string, { name: string; variables: string[]; read: boolean; state?: "managed" | "absent" | "unmanaged" }[]>;
+  /** The flat files the steward attaches to the project as leftovers, which `remove` asks for. */
+  leftovers?: Record<string, string[]>;
 };
 
 export const DEFAULT_STORE: StoreState = { state: "current", variables: {}, files: {} };
@@ -752,6 +754,13 @@ if (import.meta.main) {
     const current = stores();
     answerOwner(current.state);
     answer(200, { store: storeView(current, storeSlug) });
+  }
+  const leftoversOf = /^sudo curl .*http:\/\/steward\/store\/leftovers\?slug=([a-z0-9-]+)'$/.exec(command)?.[1];
+  if (leftoversOf !== undefined && command === ownerReadCommand(`/store/leftovers?slug=${leftoversOf}`)) {
+    record(`STORE LEFTOVERS ${leftoversOf}`);
+    const current = stores();
+    answerOwner(current.state);
+    answer(200, { slug: leftoversOf, leftovers: current.leftovers?.[leftoversOf] ?? [] });
   }
   const storeWrites = [
     ["PUT", "/store/variable"],

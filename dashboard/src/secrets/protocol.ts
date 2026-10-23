@@ -366,34 +366,18 @@ export type PortalResponse = { portal: PortalView; detail: string };
 export type RestartResponse = { verdict: Verdict };
 
 /**
- * The flat files under /etc/sitesolide a project's store left behind: present,
- * declared by no manifest, and whose most specific owner by prefix is this
- * project, which names its secrets in its store (src/secrets/scope.ts,
- * `Site.leftovers`). Names only, in the folder's order; empty for a project
- * that is not deployed, keeps the old form, or has none. What `sitesolide
- * remove` reads before it deletes the served folder, after which nobody can
- * tell them apart; it judges each one again (removableSecrets) before
- * deleting it. Root's alone, on the owner's socket.
+ * What `GET /store/leftovers` answers, what `POST /store/migrate` and `POST
+ * /store/retire` answer: the shapes live in bin/cli/store-protocol.ts with
+ * the rest of the store's, which the CLI reads too. The leftovers are the
+ * flat files a project's store left behind (src/secrets/scope.ts,
+ * `Site.leftovers`), which `sitesolide remove` reads before it deletes the
+ * served folder and judges again before deleting each; `shadowed`, the
+ * names two legacy files set differently, the value in effect merged;
+ * `forced`, the files retired only because the owner asked with `force`.
  */
-export type StoreLeftoversResponse = { slug: string; leftovers: string[] };
-
-/**
- * What `POST /store/migrate` answers, beyond bin/cli/store-protocol.ts's
- * shape: `shadowed`, each name two legacy files set to different values,
- * the value of `kept`, the last the units read and the one the service runs
- * with, merged, the `others` not. Names and files, never a value.
- * `conflicts` is left for units that read the files in different orders,
- * which still refuses the migration.
- */
-export type StoreMigrateAnswer = StoreMigrateResponse & { shadowed: { name: string; kept: string; others: string[] }[] };
-
-/**
- * What `POST /store/retire` answers, beyond bin/cli/store-protocol.ts's
- * shape: `forced`, the files retired only because the request carried
- * `force: true`, the store's values standing where theirs differed. The
- * request takes `force`, the owner's explicit choice.
- */
-export type StoreRetireAnswer = StoreRetireResponse & { forced: string[] };
+export type { StoreLeftoversResponse } from "../../borrowed/store-protocol";
+export type StoreMigrateAnswer = StoreMigrateResponse;
+export type StoreRetireAnswer = StoreRetireResponse;
 
 // --- The dashboard's routes, under /api/secrets ------------------------------
 //
