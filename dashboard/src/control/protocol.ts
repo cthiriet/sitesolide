@@ -175,6 +175,13 @@ export type InstallerResult = {
    * Names only.
    */
   missingSecrets: StoreMissing | null;
+  /**
+   * This deployment, a creation, made the project's folder itself and keeps
+   * it: the project is its token's even if the deployment then failed, a
+   * service not starting for want of a secret above all. Absent from an
+   * installer before it: false.
+   */
+  laid?: boolean;
 };
 
 /**
@@ -405,8 +412,8 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 // And on the owner's socket, which only root opens:
 //
 //   DELETE /tokens/project        { slug }    a project removed: its token ownership and its people with access forgotten
-//   GET    /tokens/claim?slug=<slug>          -> ClaimView: does a token hold a name the machine does not carry
-//   DELETE /tokens/claim          { slug }    -> { slug, released }: the owner takes such a name back (`sitesolide deploy --adopt`)
+//   GET    /tokens/claim?slug=<slug>          -> ClaimView: does a token hold or claim a name, and is a deployment of it under way
+//   DELETE /tokens/claim          { slug }    -> ClaimReleased: the owner takes such a name back, its store moved aside (`sitesolide deploy --adopt`)
 //
 // The paths under `/team/` answer too, for one release: a dashboard or a CLI
 // from before the rename still calls them. Any error returns
@@ -416,25 +423,31 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 export type TeamResponse = { tokens: TokenView[] };
 
 /**
- * A name a token holds, or claimed, while the machine does not carry its
- * project, as the owner's SSH deploy asks before laying anything: a project
- * the owner deploys under it would otherwise be handed to that token, or
- * fill a store that token's write made. `token` null when none holds it.
- * Ids and the token's label alone, never a value.
+ * A name a token holds, or claimed, the machine carrying its project or not,
+ * as the owner's SSH deploy asks before laying anything: the owner's code
+ * would otherwise run under a name, and with values, that token may still
+ * deploy over, or fill a store that token's write made. `token` null when
+ * none holds it. Ids and the token's label alone, never a value.
  */
 export type ClaimView = {
   slug: string;
-  /** A token holds the name, or claimed it, and the machine does not carry the project. */
+  /** A token holds the name, or claimed it, the machine carrying its project or not. */
   claimed: boolean;
+  /** The machine carries the project. */
+  onMachine: boolean;
   token: { id: string; label: string; email: string } | null;
   /** The project's store was made by that token's write, ahead of any deployment. */
   store: boolean;
-  /** A deployment of the name by that token is under way: taking it back waits for its end. */
+  /** A deployment of the name is under way, that token's or any: wait for its end before deploying or taking it back. */
   deploying: boolean;
 };
 
-/** What `DELETE /tokens/claim` answers: the token whose hold was taken back, null when none held it. */
-export type ClaimReleased = { slug: string; released: string | null };
+/**
+ * What `DELETE /tokens/claim` answers: the token whose hold was taken back,
+ * null when none held it, and what its store held, moved aside and kept as
+ * its previous versions: names alone, for the owner to set what they need.
+ */
+export type ClaimReleased = { slug: string; released: string | null; dropped: { variables: string[]; files: string[] } };
 /**
  * A person's tokens, those the owner made for them included, and what they
  * may mint them for: their roles, and the create right. `until`: the end of

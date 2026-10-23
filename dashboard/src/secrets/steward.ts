@@ -161,7 +161,7 @@ import type {
 } from "./protocol";
 import { RESTART_TIMEOUT_MS, MAX_PORTAL_MS } from "./protocol";
 import { isAnchorUnit, showArguments, readShow, restartPending, serviceView, verdict, withCredentials, type ServiceReading } from "./restart";
-import type { Command, Permissions, Examination, System } from "./system";
+import type { Command, Permissions, Examination, StorePreviousPart, System } from "./system";
 import { createConnectorRoutes } from "../connectors/steward";
 import type { ConnectorStore } from "../connectors/store";
 import { createBackupRoutes } from "../backup/routes";
@@ -255,6 +255,14 @@ export type StewardOptions = {
    * its project (src/control/claims.ts). Never fails the write.
    */
   ownerStoreWritten?: (slug: string) => Promise<void>;
+  /**
+   * Asked under the lock before an owner's write into a store: does a
+   * token's write ahead hold it, the machine not carrying the project
+   * (src/control/claims.ts)? Then its variables and files are moved aside
+   * first (`moveStoreAside`), so that none of the token's values stays in
+   * effect under the owner's project, and the answer names them. Read alone.
+   */
+  ownerStoreClaimed?: (slug: string) => Promise<boolean>;
 };
 
 export type Handler = (req: Request) => Promise<Response>;
@@ -296,6 +304,14 @@ export type StewardHandler = Handler & {
   secretsForToken: SecretsForToken | null;
   /** A token's work on a store, judged by the control routes (store-api.ts). */
   storeForToken: StoreForToken | null;
+  /**
+   * A store taken back from the token whose write made it, or whose project
+   * the owner adopts (`sitesolide deploy --adopt`, src/control/steward.ts):
+   * its variables and files moved aside under the lock, each kept as its
+   * previous version and journaled. The answer: `{ variables, files }`,
+   * names alone.
+   */
+  storeAside: (slug: string) => Promise<Response>;
 };
 
 /**
@@ -3079,24 +3095,35 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   type StoreTask = (body: Body, actor: StoreActor) => Promise<Response>;
 
   /** A store's route on the dashboard's socket: the owner's live unlock, checked again under the lock. */
-  function ownerStoreRoute(texts: string[], others: string[], task: StoreTask, max = MAX_BODY_BYTES): (req: Request) => Promise<Response> {
-    return async (req) => {
+  function ownerStoreRoute(texts: string[], others: string[], task: StoreTask, max = MAX_BODY_BYTES): (req: Request, aside?: StoreAside) => Promise<Response> {
+    return async (req, aside) => {
       const body = await bodyWithToken(req, texts, others, max);
       if (body instanceof Response) return body;
       const { token: _token, ...fields } = body;
-      return underLock(req, body, () => task(fields, OWNER_STORE));
+      return underLock(req, body, async () => {
+        const moved = (await aside?.(fields.slug)) ?? null;
+        return withTakenBack(await task(fields, OWNER_STORE), fields.slug as string, moved);
+      });
     };
   }
 
   /** The same on the owner's socket, which only root opens: no unlock, root has asked. */
-  function sshStoreRoute(texts: string[], others: string[], task: StoreTask, max = MAX_BODY_BYTES): (req: Request) => Promise<Response> {
-    return async (req) => {
+  function sshStoreRoute(texts: string[], others: string[], task: StoreTask, max = MAX_BODY_BYTES): (req: Request, aside?: StoreAside) => Promise<Response> {
+    return async (req, aside) => {
       const body = await readBody(req, [...texts, ...others], max);
       if (body instanceof Response) return body;
       for (const field of texts) if (typeof body[field] !== "string") return error("invalid", `${field} must be a string`);
-      return underLockWith(req, async () => null, () => task(body, SSH_STORE));
+      return underLockWith(req, async () => null, async () => {
+        const moved = (await aside?.(body.slug)) ?? null;
+        return withTakenBack(await task(body, SSH_STORE), body.slug as string, moved);
+      });
     };
   }
+
+  /** What an owner's write asks before it, under the lock: what was moved aside, null when nothing had to be (`told`). */
+  type StoreAside = (slug: unknown) => Promise<MovedAside | null>;
+  /** A store's names moved aside, and the step that keeps their copies as the previous versions once a write followed. */
+  type MovedAside = { variables: string[]; files: string[]; again: () => Promise<void> };
 
   /** `GET /store?slug=<slug>`: the listing, which reads no value and takes no lock. */
   function storeListRoute(actor: StoreActor): (req: Request) => Promise<Response> {
@@ -3107,16 +3134,74 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     };
   }
 
-  /** A write of the owner's that answered, told to the control routes with its project (`ownerStoreWritten`). */
-  function told(handler: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
+  /**
+   * A store's variables and files moved aside, under the lock: the env kept
+   * as its previous version and emptied, each file kept as its own and
+   * removed, each name journaled. A store taken back from a token, so that
+   * none of its values stays in effect under the owner's project (the
+   * control routes decide when). Names alone; a part that does not read is
+   * left, and refuses the write that follows as it would anyway.
+   */
+  async function moveStoreAside(slug: string, who: Who): Promise<MovedAside> {
+    const copies: [StorePreviousPart, Uint8Array][] = [];
+    const moved: MovedAside = { variables: [], files: [], again: async () => {
+      // A write that followed kept its own previous version: the copies laid again over it.
+      for (const [part, bytes] of copies) await system.writeStorePrevious(slug, part, bytes);
+    } };
+    if (!isValidSlug(slug)) return moved;
+    const detail = "taken back from a token: moved aside, kept as its previous version";
+    const env = await system.readStoreEnv(slug).catch(() => null);
+    if (env !== null && env.kind === "present" && env.bytes !== null && env.bytes.length > 0) {
+      const parsed = parseEnvBytes(env.bytes);
+      moved.variables = parsed.ok ? keys(parsed.document) : [];
+      await system.writeStorePrevious(slug, "env", env.bytes);
+      copies.push(["env", env.bytes]);
+      await system.writeStoreEnv(slug, new Uint8Array(0));
+      for (const name of moved.variables) await writeLog("remove", "ok", { slug }, detail, name, who, STORE_LABEL);
+      if (moved.variables.length === 0) await writeLog("remove", "ok", { slug }, detail, null, who, STORE_LABEL);
+    }
+    for (const name of await system.listStoreFiles(slug).catch(() => [] as string[])) {
+      if (!isValidFileName(name)) continue;
+      const file = await system.readStoreFile(slug, name);
+      if (file.kind !== "present" || file.bytes === null) continue;
+      await system.writeStorePrevious(slug, `files/${name}`, file.bytes);
+      copies.push([`files/${name}`, file.bytes]);
+      await system.removeStoreFile(slug, name);
+      await writeLog("remove", "ok", { slug }, detail, null, who, storeFileLabel(name));
+      moved.files.push(name);
+    }
+    return moved;
+  }
+
+  /**
+   * An owner's write into a store: a store a token's write ahead holds
+   * moved aside first, under the lock (`ownerStoreClaimed`), the answer
+   * naming what was; then told to the control routes once it answered
+   * (`ownerStoreWritten`), which take the name back.
+   */
+  function told(handler: (req: Request, aside: StoreAside) => Promise<Response>): (req: Request) => Promise<Response> {
     return async (req) => {
-      const answer = await handler(req);
-      if (answer.ok && options.ownerStoreWritten !== undefined) {
-        const slug = ((await answer.clone().json().catch(() => null)) as { store?: { slug?: unknown } } | null)?.store?.slug;
-        if (typeof slug === "string") await options.ownerStoreWritten(slug).catch(() => undefined);
+      let asided = false;
+      const answer = await handler(req, async (slug) => {
+        if (typeof slug !== "string" || options.ownerStoreClaimed === undefined || !(await options.ownerStoreClaimed(slug).catch(() => false))) return null;
+        asided = true;
+        return moveStoreAside(slug, OWNER);
+      });
+      if ((answer.ok || asided) && options.ownerStoreWritten !== undefined) {
+        const slug = ((await answer.clone().json().catch(() => null)) as { store?: { slug?: unknown }; takenBack?: { slug?: unknown } } | null);
+        const named = slug?.store?.slug ?? slug?.takenBack?.slug;
+        if (typeof named === "string") await options.ownerStoreWritten(named).catch(() => undefined);
       }
       return answer;
     };
+  }
+
+  /** The owner's answer with what was moved aside before it, when anything was, its copies kept as the previous versions. */
+  async function withTakenBack(answer: Response, slug: string, moved: MovedAside | null): Promise<Response> {
+    if (moved === null) return answer;
+    await moved.again();
+    const body = (await answer.json().catch(() => ({}))) as Record<string, unknown>;
+    return Response.json({ ...body, takenBack: { slug, variables: moved.variables, files: moved.files } }, { status: answer.status, headers: answer.headers });
   }
 
   /** The store's routes, for the owner's unlocked dashboard or for root over SSH. */
@@ -3444,6 +3529,11 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           },
     accessForToken: access?.forToken ?? null,
     secretsForToken,
+    storeAside: (slug: string) =>
+      underLockWith(new Request("http://steward/store/aside"), async () => null, async () => {
+        const { variables, files } = await moveStoreAside(slug, OWNER);
+        return Response.json({ variables, files });
+      }),
     storeForToken,
   });
 }

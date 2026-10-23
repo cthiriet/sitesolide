@@ -193,13 +193,16 @@ const backups = createBackupReader({
 // in, and which tokens that would be: the calls are filled in below.
 let revokeMemberTokens: (email: string, actor: string) => Promise<LeavingToken[]> = async () => [];
 let memberTokens: (email: string) => Promise<LeavingToken[]> = async () => [];
-// And the owner's writes into a store, which take back a name a token claims.
+// And the owner's writes into a store, which take back a name a token claims,
+// its store moved aside first when a token's write made it.
 let ownerStoreWritten: (slug: string) => Promise<void> = async () => undefined;
+let ownerStoreClaimed: (slug: string) => Promise<boolean> = async () => false;
 
 const handler = createSteward(system, {
   secretsFolder: SECRETS_FOLDER,
   checkAccounts: OWNERS !== "",
   ownerStoreWritten: (slug) => ownerStoreWritten(slug),
+  ownerStoreClaimed: (slug) => ownerStoreClaimed(slug),
   connectors,
   backups,
   // Access: the registry of who may do what on each project, the portal's
@@ -271,6 +274,8 @@ const control = createControlSteward(
     // A token's work on a project's store, judged by the control routes then
     // done by the secrets routes' own code (src/secrets/store-api.ts).
     store: handler.storeForToken,
+    // A token's store moved aside when the owner adopts its name.
+    storeAside: handler.storeAside,
     // What {contact} becomes in a token's build, the same file Caddy reads.
     contact: process.env.SITESOLIDE_CONTACT ?? "",
   },
@@ -278,6 +283,7 @@ const control = createControlSteward(
 revokeMemberTokens = control.revokeMember;
 memberTokens = control.tokensOf;
 ownerStoreWritten = control.ownerWroteStore;
+ownerStoreClaimed = control.storeClaimed;
 
 // The access registry: made from members.json and the portal's database at the
 // first start on this code, then its projection written again for the portal.

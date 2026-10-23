@@ -60,6 +60,7 @@ export function createReporter(folder: string, request: InstallRequest, clock: (
     url: null,
     allocated: [],
     missingSecrets: null,
+    laid: false,
   };
   const write = () => {
     result.updatedAt = clock();
@@ -70,6 +71,12 @@ export function createReporter(folder: string, request: InstallRequest, clock: (
     }
   };
   return {
+    /** The project's folder made by this creation, or taken away again: written at once, an installer killed after keeps it said. */
+    laid(laid: boolean) {
+      if (result.laid === laid) return;
+      result.laid = laid;
+      write();
+    },
     log(line: string) {
       echo(`installer ${request.slug}: ${line}`);
       result.log.push(line.length > MAX_LOG_LINE ? `${line.slice(0, MAX_LOG_LINE - 3)}...` : line);
@@ -234,6 +241,7 @@ export async function main(argv: string[], env: Environment, overrides: { comman
         systemdAnalyze: env.SYSTEMD_ANALYZE ?? "/usr/bin/systemd-analyze",
       }),
     log: (line) => reporter.log(line),
+    laid: (laid) => reporter.laid(laid),
   });
 
   const outcome = await runPipeline(host, request, { zone, runFolder: machineConfig.runFolder });

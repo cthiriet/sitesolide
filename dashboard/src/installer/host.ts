@@ -32,6 +32,8 @@ export type Host = {
   now: () => number;
   /** One line of the deployment's log, which the client follows. Never a secret. */
   log: (line: string) => void;
+  /** The project's folder made by this deployment, or taken away again (InstallerResult.laid). */
+  laid: (laid: boolean) => void;
 
   /** The gatekeeper's machine: Caddy's lock, the blocks, validate, reload, probe. */
   machine: Machine;
@@ -81,10 +83,11 @@ export type Host = {
    * The legacy files the project's installed units read with
    * `EnvironmentFile=`, flat under /etc/sitesolide, the store's own env left
    * out: each absent, managed with its variables' names, or unmanaged (not a
-   * plain file, too big, or not read back). Never a value. Throws when a unit
+   * plain file, too big, or not read back); then the `declared` flat files
+   * no unit reads yet, `read` false. Never a value. Throws when a unit
    * cannot be read.
    */
-  legacyReadByUnits: (slug: string) => Promise<LegacyRead[]>;
+  legacyReadByUnits: (slug: string, declared?: readonly string[]) => Promise<LegacyRead[]>;
   /** The tokens' claims (src/control/claims.ts), as the steward wrote them: null when there is no file. Throws when it is there but unreadable. */
   readClaims: () => Promise<string | null>;
 

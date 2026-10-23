@@ -96,6 +96,7 @@ export function readResult(text: string, deployment: string): ResultJudgement {
       url: url as string | null,
       allocated: allocated as InstallerResult["allocated"],
       missingSecrets: readMissing(object.missingSecrets),
+      laid: object.laid === true,
     },
   };
 }

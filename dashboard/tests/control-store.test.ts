@@ -189,11 +189,13 @@ async function mount(options: { store?: boolean | "real"; secretChangesPerHour?:
   const access = { ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "", portalDataFolder: join(root, "portal-data") }, false), now: () => clock.t };
   // The owner's writes into a store told to the control routes, as dashboard/steward.ts wires them.
   let ownerStoreWritten: (slug: string) => Promise<void> = async () => undefined;
+  let ownerStoreClaimed: (slug: string) => Promise<boolean> = async () => false;
   const handler = createSteward(system, {
     secretsFolder: secrets,
     checkAccounts: false,
     members: { system: members, access, zone: ZONE },
     ownerStoreWritten: (slug) => ownerStoreWritten(slug),
+    ownerStoreClaimed: (slug) => ownerStoreClaimed(slug),
   });
 
   // The store's own work, as the secrets steward does it: asks `still` once
@@ -265,9 +267,11 @@ async function mount(options: { store?: boolean | "real"; secretChangesPerHour?:
     forgetAccess: handler.forgetProjectAccess,
     secrets: handler.secretsForToken,
     store: options.store === false ? null : options.store === "real" ? handler.storeForToken : store,
+    storeAside: handler.storeAside,
     ...(options.secretChangesPerHour === undefined ? {} : { secretChangesPerHour: options.secretChangesPerHour }),
   });
   ownerStoreWritten = control.ownerWroteStore;
+  ownerStoreClaimed = control.storeClaimed;
 
   const printed: unknown[][] = [];
   for (const method of ["log", "error", "warn", "info"] as const) {
@@ -811,8 +815,8 @@ beforeAll(() => {
   const steward = {
     authenticate: async (bearer: string) =>
       bearer === GRACE ? Response.json({ identity: IDENTITY }) : Response.json({ error: "unauthenticated", message: "missing or unknown token" }, { status: 401 }),
-    storeList: async (bearer: string, slug: string) => {
-      sim.asked.push({ route: "list", requested: { bearer, slug } });
+    storeList: async (bearer: string, slug: string, quiet = false) => {
+      sim.asked.push({ route: "list", requested: quiet ? { bearer, slug, quiet } : { bearer, slug } });
       if (sim.outdated) return Response.json({ error: "not-found", message: "no such route" }, { status: 404 });
       if (sim.refusal !== null) return refusal(sim.refusal);
       return Response.json({ store: sim.broken ? { ...STEWARD_STORE, variables: [{ name: "API_KEY" }] } : STEWARD_STORE, extra: LEAK });
@@ -900,6 +904,18 @@ describe("the API: a project's store", () => {
     expect(answer.status).toBe(200);
     expect(answer.json).toEqual({ store: TOKEN_STORE });
     expect(sim.asked).toEqual([{ route: "list", requested: { bearer: GRACE, slug: "kanban" } }]);
+  });
+
+  test("?for=deploy asks the steward for the deployment's quiet listing; any other value, or twice, refused before it", async () => {
+    expect((await read(await send("GET", "?for=deploy"))).status).toBe(200);
+    expect(sim.asked).toEqual([{ route: "list", requested: { bearer: GRACE, slug: "kanban", quiet: true } }]);
+    sim.refusal = { status: 403, error: "out-of-scope", message: "this token may not manage secrets" };
+    expect(await read(await send("GET", "?for=deploy"))).toMatchObject({ status: 403, json: { error: "out-of-scope" } });
+    sim.asked.length = 0;
+    for (const query of ["?for=deploys", "?for=", "?for=deploy&for=deploy"]) {
+      expect(await read(await send("GET", query))).toMatchObject({ status: 400, json: { error: "invalid", message: "for: deploy, or nothing" } });
+    }
+    expect(sim.asked).toEqual([]);
   });
 
   test("a store that does not read is no answer: 502", async () => {
@@ -1270,15 +1286,16 @@ describe("a token never holds what the owner deployed or filled", () => {
     expect((await list(b, secret, "shop")).status).toBe(500);
   });
 
-  test("the owner's socket says which token holds a name the machine does not carry, and takes it back for the owner's own deploy (--adopt)", async () => {
+  test("the owner's socket says which token holds a name, on the machine or not, and takes it back for the owner's own deploy (--adopt), its store moved aside", async () => {
     const b = await mount({ store: "real" });
     const { token, secret } = await b.ownerToken({ create: true, secrets: true });
-    expect(await body(await owner(b, "GET", "/tokens/claim?slug=shop"))).toEqual({ status: 200, slug: "shop", claimed: false, token: null, store: false, deploying: false });
+    expect(await body(await owner(b, "GET", "/tokens/claim?slug=shop"))).toEqual({ status: 200, slug: "shop", claimed: false, onMachine: false, token: null, store: false, deploying: false });
     expect((await change(b, secret, "shop", { API_KEY: CANARY })).status).toBe(201);
     expect(await body(await owner(b, "GET", "/tokens/claim?slug=shop"))).toEqual({
       status: 200,
       slug: "shop",
       claimed: true,
+      onMachine: false,
       token: { id: token.id, label: "agent", email: "owner" },
       store: true,
       deploying: false,
@@ -1288,14 +1305,16 @@ describe("a token never holds what the owner deployed or filled", () => {
     expect(await body(await owner(b, "GET", "/tokens/claim?slug=shop"))).toMatchObject({ claimed: true, deploying: true });
     expect(await body(await owner(b, "DELETE", "/tokens/claim", { slug: "shop" }))).toMatchObject({ status: 409, error: "busy" });
     result(b, DEPLOYMENT, "shop", "failed");
-    expect(await body(await owner(b, "DELETE", "/tokens/claim", { slug: "shop" }))).toEqual({ status: 200, slug: "shop", released: token.id });
+    // Taken back: the token's values moved aside, named, kept as the store's previous version.
+    expect(await body(await owner(b, "DELETE", "/tokens/claim", { slug: "shop" }))).toEqual({ status: 200, slug: "shop", released: token.id, dropped: { variables: ["API_KEY"], files: [] } });
+    expect(readFileSync(join(b.storeRoot, "shop", "env"), "utf8")).toBe("");
     expect(b.owners()).toEqual({});
     expect(await body(await owner(b, "GET", "/tokens/claim?slug=shop"))).toMatchObject({ claimed: false, token: null });
     // The store it made is no longer its own: a leftover to it, the owner's to deploy.
     expect(await body(await preflight(b, secret, "shop"))).toMatchObject({ status: 403, error: "reserved" });
-    // Nothing to take back, or a project on the machine: said.
-    expect(await body(await owner(b, "DELETE", "/tokens/claim", { slug: "other" }))).toEqual({ status: 200, slug: "other", released: null });
-    expect(await body(await owner(b, "DELETE", "/tokens/claim", { slug: "kanban" }))).toMatchObject({ status: 409, error: "busy" });
+    // A name no token holds changes nothing, the owner's own store above all.
+    expect(await body(await owner(b, "DELETE", "/tokens/claim", { slug: "other" }))).toEqual({ status: 200, slug: "other", released: null, dropped: { variables: [], files: [] } });
+    expect(await body(await owner(b, "DELETE", "/tokens/claim", { slug: "kanban" }))).toEqual({ status: 200, slug: "kanban", released: null, dropped: { variables: [], files: [] } });
     expect(await body(await owner(b, "GET", "/tokens/claim?slug=../x"))).toMatchObject({ status: 400 });
     expect(b.everywhere()).not.toContain(CANARY);
   });
@@ -1305,7 +1324,9 @@ describe("a token never holds what the owner deployed or filled", () => {
     const { token, secret } = await b.ownerToken({ create: true, secrets: true });
     expect((await change(b, secret, "shop", { API_KEY: "ahead" })).status).toBe(201);
     expect(b.owners()).toEqual({ shop: token.id });
-    expect((await b.ssh("PUT", "/store/variable", { slug: "shop", name: "STRIPE_SECRET_KEY", value: CANARY })).ok).toBe(true);
+    const written = await body(await b.ssh("PUT", "/store/variable", { slug: "shop", name: "STRIPE_SECRET_KEY", value: CANARY }));
+    expect(written).toMatchObject({ status: 200, takenBack: { slug: "shop", variables: ["API_KEY"], files: [] } });
+    expect(readFileSync(join(b.storeRoot, "shop", "env"), "utf8")).toBe(`STRIPE_SECRET_KEY=${CANARY}\n`);
     expect(b.owners()).toEqual({});
     expect(await body(await preflight(b, secret, "shop"))).toMatchObject({ status: 403, error: "reserved" });
     // kanban, on the machine, held by that token: an owner's write there takes nothing back.
@@ -1314,10 +1335,11 @@ describe("a token never holds what the owner deployed or filled", () => {
     writeFileSync(join(b.state, "team.json"), JSON.stringify(team));
     expect((await b.ssh("PUT", "/store/variable", { slug: "kanban", name: "API_KEY", value: "set-by-the-owner" })).ok).toBe(true);
     expect(b.owners()).toEqual({ kanban: token.id });
-    // A refused write takes nothing back either.
+    expect(Object.hasOwn(await body(await b.ssh("PUT", "/store/variable", { slug: "kanban", name: "OTHER", value: "x" })), "takenBack")).toBe(false);
+    // A write the store refuses, into a token's store ahead: the owner acted on it, it is taken back all the same.
     expect((await change(b, secret, "cafe", { API_KEY: "ahead" })).status).toBe(201);
-    expect((await b.ssh("PUT", "/store/variable", { slug: "cafe", name: "PATH", value: "x" })).ok).toBe(false);
-    expect(b.owners()).toEqual({ kanban: token.id, cafe: token.id });
+    expect(await body(await b.ssh("PUT", "/store/variable", { slug: "cafe", name: "PATH", value: "x" }))).toMatchObject({ status: 400, takenBack: { variables: ["API_KEY"] } });
+    expect(b.owners()).toEqual({ kanban: token.id });
     expect(b.everywhere()).not.toContain(CANARY);
   });
 });
@@ -1358,5 +1380,105 @@ describe("a deployment never drops values legacy files supply", () => {
     const { secret } = await b.ownerToken({ slugs: ["oldapp"] });
     expect((await send(b, secret, { secrets: ["API_KEY", "SMTP_URL"] })).status).toBe(202);
     expect(b.everywhere()).not.toContain(CANARY);
+  });
+});
+
+describe("a deployment in the old form dropping a file the unit reads", () => {
+  test("the steward's deploy route refuses it migrate-first, as for a manifest that lists names; the file's values in the store, accepted", async () => {
+    const b = await mount({ store: "real" });
+    mkdirSync(join(b.root, "sites", "oldapp"), { recursive: true });
+    writeFileSync(join(b.root, "sites", "oldapp", "sitesolide.json"), JSON.stringify({ slug: "oldapp", start: "/usr/local/bin/bun run server.ts", port: 3070, publicDir: "public", portal: true, secrets: ["oldapp.env", "oldapp-smtp.env"] }));
+    writeFileSync(join(b.root, "units", "oldapp.service"), `[Service]\nEnvironment=PORT=3070\nEnvironmentFile=-${b.secrets}/oldapp.env\nEnvironmentFile=-${b.secrets}/oldapp-smtp.env\nExecStart=/usr/local/bin/bun run server.ts\n`);
+    writeFileSync(join(b.root, "caddy", "oldapp.caddy"), protectedBlock("oldapp"));
+    writeFileSync(join(b.secrets, "oldapp.env"), "API_KEY=a\n", { mode: 0o600 });
+    writeFileSync(join(b.secrets, "oldapp-smtp.env"), `SMTP_URL=${CANARY}\n`, { mode: 0o600 });
+    const { secret } = await b.ownerToken({ slugs: ["oldapp"] });
+    const send = () => b.call("POST", "/control/deploy", { bearer: secret, deployment: DEPLOYMENT, slug: "oldapp", manifest: JSON.stringify({ slug: "oldapp", start: "/usr/local/bin/bun run server.ts", port: 3070, publicDir: "public", secrets: ["oldapp.env"] }) });
+    expect(await body(await send())).toMatchObject({ status: 409, error: "migrate-first", message: expect.stringContaining("the service reads 1 variable from legacy files this manifest no longer reads") });
+    expect((await b.ssh("PATCH", "/store", { slug: "oldapp", set: { SMTP_URL: "smtp" }, remove: [] })).ok).toBe(true);
+    expect((await send()).status).toBe(202);
+    expect(b.everywhere()).not.toContain(CANARY);
+  });
+});
+
+describe("a colleague's token with Manage secrets and create, end to end", () => {
+  /** What its installer lays, and its result: `laid`, the folder made by this creation and kept, failed or not. */
+  const laid = (b: Bench, slug: string, state: "failed" | "succeeded", deployment = DEPLOYMENT) => {
+    mkdirSync(join(b.root, "sites", slug), { recursive: true });
+    writeFileSync(join(b.root, "sites", slug, "sitesolide.json"), JSON.stringify({ slug, start: "/usr/local/bin/bun run server.ts", port: 3061, publicDir: "public", secrets: ["API_KEY", "STRIPE_KEY"], portal: true }));
+    writeFileSync(join(b.root, "caddy", `${slug}.caddy`), protectedBlock(slug));
+    writeFileSync(join(b.root, "units", `${slug}.service`), `[Service]\nEnvironment=PORT=3061\nExecStart=/usr/local/bin/bun run server.ts\nEnvironmentFile=-${b.storeRoot}/${slug}/env\n`);
+    writeFileSync(
+      join(b.root, "installer", `${deployment}.json`),
+      JSON.stringify({
+        deployment,
+        slug,
+        state,
+        startedAt: b.clock.t,
+        updatedAt: b.clock.t,
+        finishedAt: b.clock.t,
+        log: [],
+        error: state === "failed" ? { code: "service-failed", message: "shop.service did not come back active" } : null,
+        url: null,
+        allocated: [],
+        missingSecrets: null,
+        laid: true,
+      }),
+      { mode: 0o600 },
+    );
+  };
+  for (const outcome of ["succeeded", "failed"] as const) {
+    test(`writes ahead, deploys (${outcome}, the project laid by its own installer), sets the rest after, and deploys again`, async () => {
+      const b = await mount({ store: "real" });
+      const { token, secret } = await b.ownerToken({ create: true, secrets: true });
+      expect((await change(b, secret, "shop", { API_KEY: "a" })).status).toBe(201);
+      expect(await body(await deploy(b, secret, "shop"))).toMatchObject({ status: 202, creating: true });
+      laid(b, "shop", outcome);
+      await b.control.settleCreations();
+      expect((await change(b, secret, "shop", { STRIPE_KEY: "b" })).status).toBe(200);
+      expect(await body(await deploy(b, secret, "shop", "abcdefabcdefabcdefabcde0"))).toMatchObject({ status: 202, creating: false });
+      expect(b.owners()).toEqual({ shop: token.id });
+    });
+  }
+});
+
+describe("the owner's write into a token's store ahead", () => {
+  test("moves the token's values aside first, named in the answer and kept as the previous version: none stays in effect under the owner's project", async () => {
+    const b = await mount({ store: "real" });
+    const { secret } = await b.ownerToken({ create: true, secrets: true });
+    expect((await change(b, secret, "shop", { DATABASE_URL: "postgres://colleague.invalid/steal" })).status).toBe(201);
+    expect((await setFile(b, secret, "shop", "seed.json")).status).toBe(200);
+    const unlocked = (await (await b.call("POST", "/unlock", { password: PASSWORD })).json()) as { token: string };
+    const written = await body(await b.call("PUT", "/store/variable", { token: unlocked.token, slug: "shop", name: "STRIPE_KEY", value: CANARY }));
+    expect(written).toMatchObject({ status: 200, set: ["STRIPE_KEY"], takenBack: { slug: "shop", variables: ["DATABASE_URL"], files: ["seed.json"] } });
+    expect(b.owners()).toEqual({});
+    expect(readFileSync(join(b.storeRoot, "shop", "env"), "utf8")).toBe(`STRIPE_KEY=${CANARY}\n`);
+    expect(readdirSync(join(b.storeRoot, "shop", "files"))).toEqual([]);
+    // Kept aside, journaled under the owner, names alone.
+    expect(readFileSync(join(b.state, "precedents", "projects", "shop", "env"), "utf8")).toContain("DATABASE_URL=");
+    expect(b.journal().filter((entry) => entry.slug === "shop" && entry.actor === "owner" && entry.operation === "remove").map((entry) => entry.variable ?? entry.file)).toEqual([
+      "DATABASE_URL",
+      "store/seed.json",
+    ]);
+    // A second write of the owner's moves nothing more: the name is theirs now.
+    const again = await body(await b.call("PUT", "/store/variable", { token: unlocked.token, slug: "shop", name: "API_KEY", value: "x" }));
+    expect(Object.hasOwn(again, "takenBack")).toBe(false);
+    expect(readFileSync(join(b.storeRoot, "shop", "env"), "utf8")).toContain(`STRIPE_KEY=${CANARY}`);
+  });
+});
+
+describe("a deployment's listing by a token without Manage secrets", () => {
+  test("refused quietly: neither journaled nor charged to its hour, past sixty deployments; asked otherwise, still both", async () => {
+    const b = await mount({ store: "real" });
+    const { secret } = await b.ownerToken({ slugs: ["kanban"] });
+    const journaled = b.journal().length;
+    for (let i = 0; i < 70; i++) {
+      expect(await body(await b.call("POST", "/control/store/list", { bearer: secret, slug: "kanban", quiet: true }))).toMatchObject({ status: 403, error: "out-of-scope" });
+    }
+    expect(b.journal()).toHaveLength(journaled);
+    expect((await list(b, secret, "kanban")).status).toBe(403);
+    expect(b.journal()).toHaveLength(journaled + 1);
+    expect(await body(await b.call("POST", "/control/store/list", { bearer: secret, slug: "kanban", quiet: "yes" }))).toMatchObject({ status: 400 });
+    expect((await deploy(b, secret, "kanban", "abcdefabcdefabcdefabcde1")).status).toBe(202);
   });
 });

@@ -70,11 +70,12 @@
  * laid (src/control/claims.ts). Otherwise the token's code would run with
  * the owner's project and its values.
  *
- * **No value the service runs with is dropped.** A manifest that reads the
- * store alone, deployed over units that read legacy files whose variables
- * the store lacks, would restart the service without them: refused at step
- * 1, `migrate-first`, before anything is written, whatever the client
- * checked (`judgeLegacyLoss`).
+ * **No value the service runs with is dropped.** A manifest that no longer
+ * declares a legacy file its installed units read, its old form naming
+ * fewer files or a manifest that lists names, would restart the service
+ * without what that file supplies and neither the store nor a kept file
+ * does: refused at step 1, `migrate-first`, before anything is written,
+ * whatever the client checked (`judgeLegacyLoss`).
  *
  * **One rule `deploy` cannot apply, applied here.** Over SSH, a block or a unit
  * in service that differs from the generated one stops the deployment until
@@ -105,7 +106,7 @@ import type { StoreMissing } from "../../borrowed/store-protocol";
 import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "../../borrowed/portal-vm";
 import { domainConflicts, foreignUnit, portConflicts, staleUnits, unstableUnits, type UnitStanding } from "../../borrowed/services";
 import { decideUnit, earlierGenerations, generateUnits, runningUnits, unitArgument, unitFileName, watchedUnits } from "../../borrowed/unit";
-import { compareDirectives, sameDirectives, summariseDivergence } from "../../borrowed/comparison";
+import { compareDirectives, sameDirectives, summariseDivergence, usefulDirectives } from "../../borrowed/comparison";
 import { FIRST_CERTIFICATE_MS, readZoneNamesAnswer, ZONE_NAMES_PATH } from "../../borrowed/zone-names";
 import { isPortalReady, portalHost, fromPortal, answers, describe } from "../gatekeeper/probe";
 import { TIMEOUTS } from "../gatekeeper/transaction";
@@ -276,12 +277,37 @@ export function finalManifest(
 /**
  * Is the file in service one the deployment may replace? Absent, identical, or
  * exactly what the previous deposited manifest generates; anything else was
- * edited by hand on the machine.
+ * edited by hand on the machine. Exactly: its `EnvironmentFile=` lines too in
+ * the same order and number, see generatedAs.
  */
 export function replaceable(inService: string | null, generated: string, previous: string | null): boolean {
   if (inService === null || inService.trim() === "") return true;
-  if (sameDirectives(inService, generated)) return true;
-  return previous !== null && sameDirectives(inService, previous);
+  if (generatedAs(inService, generated)) return true;
+  return previous !== null && generatedAs(inService, previous);
+}
+
+/**
+ * Whether a file in service is what the generator wrote as `earlier`, to be
+ * replaced without --force: the same directives, and its `EnvironmentFile=`
+ * lines in the same order and number. sameDirectives compares sets, which
+ * suits a file kept as it is; one about to be replaced is held to more, since
+ * a hand edit that names a file again last, or swaps two, adds no line and
+ * still decides which value wins, systemd reading them in order. A Caddy
+ * block has no such line, and is judged on its directives alone.
+ *
+ * The rule of generatedAs in bin/cli/unit.ts, which `deploy` applies; kept
+ * here until that function is on main, then borrowed in its place.
+ */
+export function generatedAs(inService: string, earlier: string): boolean {
+  if (!sameDirectives(inService, earlier)) return false;
+  const read = environmentFiles(inService);
+  const written = environmentFiles(earlier);
+  return read.length === written.length && read.every((line, i) => line === written[i]);
+}
+
+/** A unit's `EnvironmentFile=` lines in the order systemd reads them, a repeat kept. */
+function environmentFiles(text: string): string[] {
+  return usefulDirectives(text).filter((line) => line.startsWith("EnvironmentFile="));
 }
 
 function handEdited(path: string, inService: string, generated: string): Stop {
@@ -331,7 +357,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     // Only an app's unit reads its `secrets`; any project's name may take a
     // file by its prefix all the same.
     await judgeClaims(host, slug, text, application ? legacySecretFiles(manifest) : []);
-    if (hasStore(manifest) && secretsOf(manifest).form !== "legacy") await judgeLegacyLoss(host, slug);
+    if (hasStore(manifest)) await judgeLegacyLoss(host, slug, legacySecretFiles(manifest));
     const behindPortal = final.portal;
     for (const { service, port } of allocated) host.log(`   port ${port} chosen for ${service === null ? "the service" : `service ${service}`}`);
     host.log(`   project ${slug}, ${application ? `${servicesOf(manifest).length > 1 ? `${servicesOf(manifest).length} services` : "service"}` : "static"}, ${behindPortal ? "restricted" : "public"}`);
@@ -402,6 +428,8 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     if (created.account) host.log(`   site-${slug} created`);
     created.tree = (await host.prepareTree(slug, application)) === "created";
     if (request.creating && !created.tree) throw takenMeanwhile(slug);
+    // Said at once: an installer killed from here on leaves a folder it laid itself.
+    if (created.tree) host.laid(true);
     if (hasStore(manifest)) {
       created.store = await prepareStore(host, slug);
       if (request.creating && !created.store) await judgeStoreOwn(host, slug, request.token.id);
@@ -701,19 +729,20 @@ async function judgeStoreOwn(host: Host, slug: string, token: string): Promise<v
  * variable nor a file: the owner runs `sitesolide secrets migrate --restart`
  * first. A store whose names cannot be read refuses too, rather than guess.
  */
-async function judgeLegacyLoss(host: Host, slug: string): Promise<void> {
+async function judgeLegacyLoss(host: Host, slug: string, kept: readonly string[]): Promise<void> {
   let read: Awaited<ReturnType<Host["legacyReadByUnits"]>>;
   try {
-    read = await host.legacyReadByUnits(slug);
+    read = await host.legacyReadByUnits(slug, kept);
   } catch (error) {
     throw new Stop("machine-unreadable", `cannot read the units of ${slug} on the machine (${(error as Error).message}): nothing was changed`);
   }
-  if (read.every((file) => file.state === "absent")) return;
+  // Only the files an installed unit reads and this manifest no longer declares can drop anything.
+  if (read.every((file) => file.read === false || kept.includes(file.name) || file.state === "absent")) return;
   const names = await host.storeNames(slug);
   if (names === null) {
     throw new Stop("machine-unreadable", "cannot tell what the project's store holds of the variables legacy files supply the service with: nothing was changed");
   }
-  const refusal = legacyLossRefusal(legacyLoss(read, new Set(names.variables)));
+  const refusal = legacyLossRefusal(legacyLoss(read, new Set(names.variables), kept));
   if (refusal !== null) throw new Stop("migrate-first", refusal);
 }
 
@@ -861,6 +890,7 @@ async function undoCreation(host: Host, slug: string, created: Created): Promise
       return;
     }
     host.log(`   removed    /srv/sites/${slug}`);
+    host.laid(false);
     // Once nobody else deployed it meanwhile: a deployment that did would
     // have laid units that load the folder.
     if (created.store) {

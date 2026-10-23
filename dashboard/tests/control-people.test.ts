@@ -359,6 +359,8 @@ function finish(b: Bench, deployment: string, slug: string, state: "running" | "
     url: state === "succeeded" ? `https://${slug}.${ZONE}/` : null,
     allocated: [],
     missingSecrets: null,
+    // Served: laid by its own installer, which made the folder and keeps it.
+    laid: served,
   };
   writeFileSync(join(b.root, "installer", `${deployment}.json`), `${JSON.stringify(result)}\n`);
 }
@@ -401,16 +403,18 @@ describe("ownership of what a person's token creates", () => {
     expect(b.journal).toHaveLength(journaled);
   });
 
-  test("a creation that failed, the project there, makes nobody Admin: what lies there may be another's, deployed over SSH meanwhile", async () => {
+  test("a creation that failed after serving the project, a secret missing, still makes its creator Admin: they must deploy it again", async () => {
     const b = bench();
     setRoles(b, ADA, { alpha: "developer" }, true);
     const { secret } = await minted(b, { create: true });
     expect((await call(b, "POST", "/control/deploy", { bearer: secret, deployment: DEPLOYMENT, slug: "omega", manifest: JSON.stringify({ slug: "omega" }) })).status).toBe(202);
     finish(b, DEPLOYMENT, "omega", "failed", true);
     await b.handler.settleCreations();
-    expect(rightsOf(b.registry.value, ADA)?.roles).toEqual({ alpha: "developer" });
+    expect(rightsOf(b.registry.value, ADA)?.roles).toEqual({ alpha: "developer", omega: "admin" });
     expect(pendingCreations(b)).toEqual([]);
-    expect((await call(b, "POST", "/control/preflight", { bearer: secret, slug: "omega" })).status).toBe(403);
+    // And the same token deploys it again, now that she holds a role there.
+    const again = await call(b, "POST", "/control/preflight", { bearer: secret, slug: "omega" });
+    expect(again.status).toBe(200);
   });
 
   test("a creation undone, nothing left on the machine, makes nobody Admin, and is dropped", async () => {

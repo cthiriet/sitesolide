@@ -196,6 +196,8 @@ async function wire(registry: Registry, sites: string[]) {
       url: null,
       allocated: [],
       missingSecrets: null,
+      // Laid by its own installer, which made the folder and keeps it.
+      laid,
     };
     writeFileSync(join(root, "installer", `${deployment}.json`), JSON.stringify(written), { mode: 0o600 });
   };
@@ -268,21 +270,20 @@ describe("a creation's own project, nobody given access to it, makes its creator
     expect(bench.creations()).toEqual([]);
   });
 
-  test("failed, the project there: nobody made Admin, and the name no longer the token's: what lies there may be the owner's own, deployed over SSH meanwhile", async () => {
+  test("failed after laying it, a secret missing: Admin, and the token deploys it again as its Admin's", async () => {
     const bench = await wire(registryWith([], [DAVE]), []);
     const dave = await bench.mint(DAVE, true);
     const D = "aaaaaaaaaaaaaaaaaaaaaaac";
     expect((await bench.deploy(dave.secret, D, "shop")).status).toBe(202);
     bench.result(D, "shop", "failed", true);
     await bench.control.settleCreations();
-    expect(await bench.entries("shop")).toEqual([]);
-    expect(creates(bench)).toEqual([]);
-    expect(bench.creations()).toEqual([]);
-    expect(bench.team().owners).toEqual({});
-    expect((await bench.preflight(dave.secret, "shop")).status).toBe(403);
+    expect(await bench.entries("shop")).toEqual([`${DAVE}:admin`]);
+    expect(await (await bench.preflight(dave.secret, "shop")).json()).toMatchObject({ creating: false });
+    const again = await bench.deploy(dave.secret, "aaaaaaaaaaaaaaaaaaaaaaad", "shop");
+    expect(await again.json()).toEqual({ deployment: "aaaaaaaaaaaaaaaaaaaaaaad", slug: "shop", creating: false });
   });
 
-  test("its installer stopped half way, its own result left running: shown interrupted, nobody made Admin, the name let go", async () => {
+  test("its installer stopped half way, its own result left running: shown interrupted, Admin, and deployed again as its Admin's", async () => {
     const bench = await wire(registryWith([], [DAVE]), []);
     const dave = await bench.mint(DAVE, true);
     const D = "111111111111111111111111";
@@ -295,11 +296,13 @@ describe("a creation's own project, nobody given access to it, makes its creator
     expect(await bench.entries("shop")).toEqual([]);
     bench.clock.now += STALE;
     expect(await shown(bench, D)).toBe("failed");
-    expect(await bench.entries("shop")).toEqual([]);
-    expect(creates(bench)).toEqual([]);
+    expect(await bench.entries("shop")).toEqual([`${DAVE}:admin`]);
+    expect(creates(bench)).toHaveLength(1);
     expect(bench.creations()).toEqual([]);
-    expect(bench.team().owners).toEqual({});
-    expect((await bench.preflight(dave.secret, "shop")).status).toBe(403);
+    expect(await (await bench.preflight(dave.secret, "shop")).json()).toMatchObject({ creating: false });
+    const again = await bench.deploy(dave.secret, "222222222222222222222222", "shop");
+    expect(await again.json()).toEqual({ deployment: "222222222222222222222222", slug: "shop", creating: false });
+    expect(bench.request("shop")).toMatchObject({ deployment: "222222222222222222222222", creating: false });
   });
 
   test("its installer stopped by a reboot after laying it, no result left on /run: nothing settled while it may still write, then nobody made Admin", async () => {
@@ -513,8 +516,8 @@ describe("a settle racing the owner", () => {
     expect(await bench.entries("shop")).toEqual([`${ERIN}:admin`]);
     expect(creates(bench)).toEqual([]);
     expect(bench.creations()).toEqual([]);
-    // Its installer stopped half way: the project is not its by a deployment that succeeded.
-    expect(bench.team().owners).toEqual({});
+    // Its installer stopped half way, having laid the project itself: still its own.
+    expect(bench.team().owners).toEqual({ shop: dave.token.id });
   });
 
   test("the timer and the dashboard's reads settle at once: one Admin, journaled once", async () => {
@@ -844,6 +847,65 @@ describe("the owner's project laid over a creation that did not succeed is never
     await bench.control.settleCreations();
     expect(await bench.entries("shop")).toEqual([]);
     expect(creates(bench)).toEqual([]);
+    expect(bench.team().owners).toEqual({});
+  });
+});
+
+describe("a creation that fails after laying its own project", () => {
+  for (const who of ["owner", DAVE] as const) {
+    test(`${who === "owner" ? "the owner's" : "a person's"} token: its first deployment fails at the service's start, the folder laid by its own installer; the project stays its, and it deploys again`, async () => {
+      const bench = await wire(registryWith([], [DAVE]), []);
+      const token = await bench.mint(who, true);
+      const D = "abababababababababababab";
+      expect((await bench.deploy(token.secret, D, "shop")).status).toBe(202);
+      // Its own installer laid /srv/sites/shop, then the app crashed on start
+      // (a secret not set yet): served, so kept, the result failed and laid.
+      bench.result(D, "shop", "failed", true);
+      expect(await shown(bench, D)).toBe("failed");
+      await bench.control.settleCreations();
+      expect(bench.team().owners).toEqual({ shop: token.token.id });
+      if (who === DAVE) expect(await bench.entries("shop")).toEqual([`${DAVE}:admin`]);
+      const again = await bench.deploy(token.secret, "acacacacacacacacacacacac", "shop");
+      expect(await again.json()).toEqual({ deployment: "acacacacacacacacacacacac", slug: "shop", creating: false });
+    });
+  }
+});
+
+describe("a name a token deployed, then deployed by the owner over SSH", () => {
+  const view = async (bench: Awaited<ReturnType<typeof wire>>) => (await bench.control.owner(new Request("http://steward/tokens/claim?slug=shop"))).json();
+  const adopt = (bench: Awaited<ReturnType<typeof wire>>) => bench.control.owner(new Request("http://steward/tokens/claim", { method: "DELETE", body: JSON.stringify({ slug: "shop" }) }));
+
+  test("the claim view names the token holding it on the machine; the owner's store write takes nothing from a deployed project; --adopt forgets the token's hold", async () => {
+    const bench = await wire(registryWith([], []), []);
+    const ci = await bench.mint("owner", true);
+    const D = "adadadadadadadadadadadad";
+    expect((await bench.deploy(ci.secret, D, "shop")).status).toBe(202);
+    bench.result(D, "shop", "succeeded", true);
+    expect(await shown(bench, D)).toBe("succeeded");
+    expect(await view(bench)).toEqual({ slug: "shop", claimed: true, onMachine: true, token: { id: ci.token.id, label: expect.any(String), email: "owner" }, store: false, deploying: false });
+    // Setting a colleague's secret on a deployed project is no adoption.
+    await bench.control.ownerWroteStore("shop");
+    expect(bench.team().owners).toEqual({ shop: ci.token.id });
+    // The owner's deploy with --adopt: the token's hold forgotten, its redeploy refused.
+    expect(await (await adopt(bench)).json()).toEqual({ slug: "shop", released: ci.token.id, dropped: { variables: [], files: [] } });
+    expect(bench.team().owners).toEqual({});
+    expect((await bench.deploy(ci.secret, "aeaeaeaeaeaeaeaeaeaeaeae", "shop")).status).toBe(403);
+    expect(await view(bench)).toMatchObject({ claimed: false, onMachine: true, token: null });
+  });
+
+  test("while a token's creation, its tree laid, is still under way: the view says it is deploying, and nothing is taken back until it ends", async () => {
+    const bench = await wire(registryWith([], []), []);
+    const ci = await bench.mint("owner", true);
+    const D = "afafafafafafafafafafafaf";
+    expect((await bench.deploy(ci.secret, D, "shop")).status).toBe(202);
+    // Past step 4, the tree laid, its `install` still running.
+    bench.result(D, "shop", "running", true);
+    expect(await view(bench)).toMatchObject({ claimed: true, onMachine: true, token: { id: ci.token.id }, deploying: true });
+    expect((await adopt(bench)).status).toBe(409);
+    // Ended: the owner may take it back.
+    bench.result(D, "shop", "succeeded", true);
+    expect(await view(bench)).toMatchObject({ claimed: true, deploying: false });
+    expect((await adopt(bench)).status).toBe(200);
     expect(bench.team().owners).toEqual({});
   });
 });

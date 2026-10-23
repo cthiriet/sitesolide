@@ -118,6 +118,8 @@ export type HostConfig = {
   machine: Machine;
   commands: Commands;
   log: (line: string) => void;
+  /** Told when this deployment made the project's folder, and when it took it away again. */
+  laid?: (laid: boolean) => void;
   now?: () => number;
 };
 
@@ -238,6 +240,7 @@ export function createHost(config: HostConfig): Host {
   return {
     now,
     log: config.log,
+    laid: config.laid ?? (() => undefined),
     machine: config.machine,
 
     async readManifests() {
@@ -436,7 +439,7 @@ export function createHost(config: HostConfig): Host {
       return existed ? "present" : "created";
     },
 
-    async legacyReadByUnits(slug) {
+    async legacyReadByUnits(slug, declared = []) {
       if (!isValidSlug(slug)) throw new Error("invalid slug");
       const units = [slug, ...(await this.generatedUnits(slug))];
       const names: string[] = [];
@@ -453,15 +456,15 @@ export function createHost(config: HostConfig): Host {
         }
       }
       const read: LegacyRead[] = [];
-      for (const name of names) {
+      const examine = (name: string, byUnit: boolean) => {
         const examination = readBounded(join(config.secretsFolder, name), MAX_STORE_ENV_BYTES);
-        if (examination.kind === "absent") {
-          read.push({ name, state: "absent", variables: [] });
-          continue;
-        }
+        if (examination.kind === "absent") return read.push({ name, state: "absent", variables: [], read: byUnit });
         const parsed = examination.bytes === null ? null : parseEnvBytes(examination.bytes);
-        read.push(parsed === null || !parsed.ok ? { name, state: "unmanaged", variables: [] } : { name, state: "managed", variables: keys(parsed.document) });
-      }
+        read.push(parsed === null || !parsed.ok ? { name, state: "unmanaged", variables: [], read: byUnit } : { name, state: "managed", variables: keys(parsed.document), read: byUnit });
+      };
+      for (const name of names) examine(name, true);
+      // The flat files the new manifest declares that no unit reads yet: what they hold is supplied too.
+      for (const name of declared) if (!names.includes(name) && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) examine(name, false);
       return read;
     },
 

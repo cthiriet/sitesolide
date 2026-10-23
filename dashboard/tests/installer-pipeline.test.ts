@@ -7,7 +7,7 @@ import { readManifest, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected } from "../borrowed/portal";
 import { earlierGenerations, generateUnits } from "../borrowed/unit";
 import type { InstallRequest, Scope } from "../src/control/protocol";
-import { finalManifest, replaceable, runPipeline, STABILITY_WINDOW_MS, type Outcome } from "../src/installer/pipeline";
+import { finalManifest, generatedAs, replaceable, runPipeline, STABILITY_WINDOW_MS, type Outcome } from "../src/installer/pipeline";
 import { FIRST_CERTIFICATE_MS, parseZoneNames, ZONE_NAMES_PATH } from "../borrowed/zone-names";
 import { createBench as newBench, file, hostOf, OWN_UID, stageBundle as stage, storeMadeBy, zoneNames, ZONE, type Bench, type BenchOptions } from "./installer-bench";
 
@@ -644,6 +644,37 @@ describe("workers, scheduled services and anchors", () => {
     }
   });
 
+  test("a unit whose secret files were repeated or reordered by hand stays, and says so: the previous manifest's unit or an earlier release's, the same lines in another order decide which value wins", async () => {
+    const FLAT = "EnvironmentFile=-/etc/sitesolide/shop.env\n";
+    const STORE = "EnvironmentFile=-/etc/sitesolide/projects/shop/env\n";
+    const previous = { ...APP, port: 3040, portal: true, secrets: ["shop.env"] } as Manifest;
+    const [main] = generateUnits(previous);
+    expect(main!.text).toContain(`${FLAT}${STORE}`);
+    const repeated = (text: string) => text.replace(`${FLAT}${STORE}`, `${FLAT}${STORE}${FLAT}`);
+    const swapped = (text: string) => text.replace(`${FLAT}${STORE}`, `${STORE}${FLAT}`);
+    // The release before the system-call filter, store lines and all.
+    const beforeFilter = earlierGenerations(main!.text)[3]!;
+    expect(beforeFilter).toContain(`${FLAT}${STORE}`);
+    for (const edited of [repeated(main!.text), swapped(main!.text), swapped(beforeFilter), repeated(beforeFilter)]) {
+      const bench = createBench();
+      deposit(bench, previous);
+      writeFileSync(join(bench.units, "shop.service"), edited);
+      stageBundle(bench, APP_FILES);
+      const outcome = await run(bench, request({ ...previous, memory: "512M" }));
+      expect(outcome).toMatchObject({ ok: true });
+      expect(bench.events.some((event) => event.startsWith("log    differs    shop.service, edited by hand on the machine"))).toBe(true);
+      expect(readFileSync(join(bench.units, "shop.service"), "utf8")).toBe(edited);
+    }
+    // In the generator's order, it is the generator's own, and replaced.
+    const bench = createBench();
+    deposit(bench, previous);
+    writeFileSync(join(bench.units, "shop.service"), main!.text);
+    stageBundle(bench, APP_FILES);
+    expect((await run(bench, request({ ...previous, memory: "512M" }))).ok).toBe(true);
+    expect(bench.events.some((event) => event.includes("differs"))).toBe(false);
+    expect(readFileSync(join(bench.units, "shop.service"), "utf8")).toContain("MemoryMax=512M");
+  });
+
   test("a unit whose filter was taken off by hand stays, and says so", async () => {
     const bench = createBench();
     const previous = { ...APP, port: 3040, portal: true } as Manifest;
@@ -1097,6 +1128,40 @@ describe("what the installer refuses a token whatever its client checked", () =>
     expect(await run(unreadable, request({ ...APP, port: 3040, secrets: ["API_KEY"] }))).toMatchObject({ ok: false, code: "machine-unreadable" });
   });
 
+  test("the old form naming fewer files than the unit reads: what the dropped file alone supplies stops the deployment, migrate-first; moved to the kept file, or in the store, it goes on", async () => {
+    const layout = () => {
+      const bench = createBench();
+      const previous = { ...APP, port: 3040, portal: true, secrets: ["shop.env", "smtp.env"] } as Manifest;
+      deposit(bench, previous);
+      const unit = generateUnits(previous)[0]!.text.replaceAll("EnvironmentFile=-/etc/sitesolide/", `EnvironmentFile=-${bench.secrets}/`);
+      writeFileSync(join(bench.units, "shop.service"), unit);
+      writeFileSync(join(bench.secrets, "shop.env"), "API_KEY=a\n", { mode: 0o600 });
+      writeFileSync(join(bench.secrets, "smtp.env"), `SMTP_URL=${CANARY}\n`, { mode: 0o600 });
+      writeFileSync(join(bench.root, "passwd"), `${readFileSync(join(bench.root, "passwd"), "utf8")}site-shop:x:${OWN_UID}:${OWN_UID}::/nonexistent:/usr/sbin/nologin\n`);
+      stageBundle(bench, APP_FILES);
+      return { bench, unit };
+    };
+    const dropped = layout();
+    const refused = await run(dropped.bench, request({ ...APP, port: 3040, secrets: ["shop.env"] }));
+    expect(refused).toMatchObject({ ok: false, code: "migrate-first" });
+    expect(refused.ok === false && refused.message).toContain("the service reads 1 variable from legacy files this manifest no longer reads");
+    expect(readFileSync(join(dropped.bench.units, "shop.service"), "utf8")).toBe(dropped.unit);
+    expect(JSON.stringify(refused)).not.toContain(CANARY);
+    // The names form over the same unit: both files dropped.
+    const names = layout();
+    expect(await run(names.bench, request({ ...APP, port: 3040, secrets: ["API_KEY"] }))).toMatchObject({ ok: false, code: "migrate-first" });
+
+    // SMTP_URL now in the kept file: nothing dropped.
+    const moved = layout();
+    writeFileSync(join(moved.bench.secrets, "shop.env"), "API_KEY=a\nSMTP_URL=moved\n", { mode: 0o600 });
+    expect((await run(moved.bench, request({ ...APP, port: 3040, secrets: ["shop.env"] }))).ok).toBe(true);
+    // SMTP_URL in the store: nothing dropped either.
+    const stored = layout();
+    mkdirSync(join(stored.bench.store, "shop", "files"), { recursive: true });
+    writeFileSync(join(stored.bench.store, "shop", "env"), "SMTP_URL=stored\n", { mode: 0o600 });
+    expect((await run(stored.bench, request({ ...APP, port: 3040, secrets: ["shop.env"] }))).ok).toBe(true);
+  });
+
   test("a creation that finds its project laid since it was accepted, its manifest or its tree: refused, the other's project untouched", async () => {
     const deposited = createBench();
     deposit(deposited, { ...APP, port: 3040, portal: true } as Manifest);
@@ -1137,6 +1202,30 @@ describe("what the installer refuses a token whatever its client checked", () =>
     storeMadeBy(own, "shop", TOKEN_ID);
     stageBundle(own, APP_FILES);
     expect((await run(own, request(APP))).ok).toBe(true);
+  });
+});
+
+describe("what a creation laid itself", () => {
+  /** The real host, what the pipeline says of the folder it laid recorded. */
+  const told = (bench: Bench) => ({ ...hostOf(bench), laid: (laid: boolean) => void bench.events.push(`laid ${laid}`) });
+
+  test("said as soon as its installer made the project's folder, and taken back when it removes it again; never for one it found", async () => {
+    const kept = createBench({ restartFails: true });
+    stageBundle(kept, APP_FILES);
+    expect(await runPipeline(told(kept), request(APP), { zone: ZONE, runFolder: kept.run })).toMatchObject({ ok: false, code: "service-failed" });
+    expect(kept.events.filter((event) => event.startsWith("laid"))).toEqual(["laid true"]);
+    expect(order(kept, "laid true", "as shop extract")).toBe(true);
+
+    const undone = createBench({ lockHeld: true });
+    stageBundle(undone, APP_FILES);
+    expect(await runPipeline(told(undone), request(APP), { zone: ZONE, runFolder: undone.run })).toMatchObject({ ok: false, code: "caddy-busy" });
+    expect(undone.events.filter((event) => event.startsWith("laid"))).toEqual(["laid true", "laid false"]);
+
+    const existing = createBench();
+    deposit(existing, { ...APP, port: 3040, portal: true } as Manifest);
+    stageBundle(existing, APP_FILES);
+    expect((await runPipeline(told(existing), asJudged(existing, request({ ...APP, port: 3040 })), { zone: ZONE, runFolder: existing.run })).ok).toBe(true);
+    expect(existing.events.filter((event) => event.startsWith("laid"))).toEqual([]);
   });
 });
 
@@ -1265,5 +1354,18 @@ describe("finalManifest and replaceable, pure", () => {
     expect(replaceable("x 1", "x 2", "x 1")).toBe(true);
     expect(replaceable("x 1\ny 2", "x 2", "x 1")).toBe(false);
     expect(replaceable("x 1", "x 2", null)).toBe(false);
+  });
+
+  test("a unit is the generator's own only with its EnvironmentFile= lines in the same order and number; a block has none", () => {
+    const written = "Type=simple\nEnvironmentFile=-/etc/sitesolide/a.env\nEnvironmentFile=-/etc/sitesolide/b.env\n";
+    expect(generatedAs(written, written)).toBe(true);
+    expect(generatedAs(`# kept\n${written}\n`, written)).toBe(true);
+    expect(generatedAs("Type=simple\nEnvironmentFile=-/etc/sitesolide/b.env\nEnvironmentFile=-/etc/sitesolide/a.env\n", written)).toBe(false);
+    expect(generatedAs(`${written}EnvironmentFile=-/etc/sitesolide/a.env\n`, written)).toBe(false);
+    expect(generatedAs("EnvironmentFile=-/etc/sitesolide/a.env\nType=simple\nEnvironmentFile=-/etc/sitesolide/b.env\n", written)).toBe(true);
+    // Both the file generated now and the previous manifest's are held to it.
+    expect(replaceable(`${written}EnvironmentFile=-/etc/sitesolide/a.env\n`, "Type=notify\n", written)).toBe(false);
+    expect(replaceable(`${written}EnvironmentFile=-/etc/sitesolide/a.env\n`, written, null)).toBe(false);
+    expect(replaceable("x 1\ny 2\n", "y 2\nx 1\n", null)).toBe(true);
   });
 });

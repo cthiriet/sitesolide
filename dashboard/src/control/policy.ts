@@ -395,36 +395,44 @@ export function leavesPorts(object: Record<string, unknown>): boolean {
 
 // --- legacy values a deployment would drop ---------------------------------------------
 
-/** A legacy file an installed unit of the project reads, as the steward or the installer read it: its variables' names alone. */
-export type LegacyRead = { name: string; state: "managed" | "absent" | "unmanaged"; variables: string[] };
+/**
+ * A legacy file as the steward or the installer read it, its variables'
+ * names alone: one an installed unit of the project reads, or, `read`
+ * false, one the new manifest declares that no unit reads yet.
+ */
+export type LegacyRead = { name: string; state: "managed" | "absent" | "unmanaged"; variables: string[]; read?: boolean };
 
 /** What would be dropped: the names legacy files supply that the store lacks, and the files that cannot be told. */
 export type LegacyLoss = { names: string[]; unmanaged: string[] };
 
 /**
- * What a deployment of a manifest that reads the store alone would drop of
- * what the service runs with today: the variables the legacy files its
- * installed units read supply and the store lacks, and the files whose
- * variables cannot be told. A missing file supplies nothing.
+ * What a deployment would drop of what the service runs with today: the
+ * variables that the legacy files its installed units read and the new
+ * manifest no longer declares (`kept`, its old form's files; none for a
+ * manifest that lists names) supply, and that neither the store nor a kept
+ * file supplies; and the dropped files whose variables cannot be told. A
+ * missing file supplies nothing.
  */
-export function legacyLoss(read: readonly LegacyRead[], inStore: ReadonlySet<string>): LegacyLoss {
+export function legacyLoss(read: readonly LegacyRead[], inStore: ReadonlySet<string>, kept: readonly string[] = []): LegacyLoss {
+  const supplied = new Set(inStore);
+  for (const file of read) if (kept.includes(file.name) && file.state === "managed") for (const name of file.variables) supplied.add(name);
   const names = new Set<string>();
   const unmanaged: string[] = [];
   for (const file of read) {
-    if (file.state === "absent") continue;
+    if (file.read === false || kept.includes(file.name) || file.state === "absent") continue;
     if (file.state === "unmanaged") {
       unmanaged.push(file.name);
       continue;
     }
-    for (const name of file.variables) if (!inStore.has(name)) names.add(name);
+    for (const name of file.variables) if (!supplied.has(name)) names.add(name);
   }
   return { names: [...names], unmanaged };
 }
 
-/** The same from a store's listing: the legacy files an installed unit reads, and the names the store holds. */
-export function legacyLossOfView(view: Pick<StoreView, "legacy" | "variables">): LegacyLoss {
-  const read = view.legacy.filter((file) => file.read).map((file) => ({ name: file.name, state: file.state, variables: file.variables }));
-  return legacyLoss(read, new Set(view.variables.filter((variable) => variable.source === "store").map((variable) => variable.name)));
+/** The same from a store's listing: its legacy files, read by an installed unit or not, and the names the store holds. */
+export function legacyLossOfView(view: Pick<StoreView, "legacy" | "variables">, kept: readonly string[] = []): LegacyLoss {
+  const read = view.legacy.map((file) => ({ name: file.name, state: file.state, variables: file.variables, read: file.read }));
+  return legacyLoss(read, new Set(view.variables.filter((variable) => variable.source === "store").map((variable) => variable.name)), kept);
 }
 
 /** How a refusal of the kind begins: the command that carries the values over first. */

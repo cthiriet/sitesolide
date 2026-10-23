@@ -179,6 +179,7 @@ describe("the installer's result, judged", () => {
     url: "https://shop.test-zone.invalid/",
     allocated: [{ service: null, port: 3002 }],
     missingSecrets: { runtime: ["ADMIN_TOKEN"], files: ["gcp.json"] },
+    laid: false,
   };
   const info = { link: false, regular: true, links: 1, uid: 0, gid: 0, mode: 0o600, size: 10, modifiedAt: 0 };
   const present = (value: unknown, extra: Partial<typeof info> = {}) => ({ kind: "present" as const, info: { ...info, ...extra }, bytes: new TextEncoder().encode(JSON.stringify(value)) });
@@ -203,6 +204,16 @@ describe("the installer's result, judged", () => {
       expect(readResult(JSON.stringify({ ...result, missingSecrets }), ID)).toEqual({ kind: "read", result: { ...result, missingSecrets: null } });
     }
     expect(readResult(JSON.stringify({ ...result, missingSecrets: { runtime: [], files: [] } }), ID)).toEqual({ kind: "read", result: { ...result, missingSecrets: { runtime: [], files: [] } } });
+  });
+
+  test("whether a creation laid its project itself: said only by true; absent, from an older installer, or anything else, not laid", () => {
+    const failed = { ...result, state: "failed" as const, error: { code: "service-failed", message: "shop did not come back" }, laid: true };
+    expect(readResult(JSON.stringify(failed), ID)).toEqual({ kind: "read", result: failed });
+    const { laid: _laid, ...older } = result;
+    expect(readResult(JSON.stringify(older), ID)).toEqual({ kind: "read", result });
+    for (const laid of ["true", 1, null, {}]) {
+      expect(readResult(JSON.stringify({ ...result, laid }), ID)).toEqual({ kind: "read", result });
+    }
   });
 
   test("anything else is not believed", () => {

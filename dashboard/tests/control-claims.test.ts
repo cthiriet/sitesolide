@@ -46,10 +46,12 @@ describe("who a store and a name are", () => {
     expect(withStoreMade(deployed, "shop", T, 9).shop).toEqual({ creator: T, deployer: T, deployment: D, at: 5 });
   });
 
-  test("a project is the holder's only by its own deployment, which succeeded: one that failed or still runs never counts", () => {
+  test("a project is the holder's only by its own deployment, which succeeded or failed after laying the project itself: one that failed otherwise or still runs never counts", () => {
     const ahead = claimOf(withStoreMade({}, "shop", T, 1), "shop");
     const deployed = claimOf(withDeployment({}, "shop", T, D, 2), "shop");
     expect(credited(deployed, T, "succeeded")).toBe(true);
+    expect(credited(deployed, T, "laid")).toBe(true);
+    expect(credited(deployed, U, "laid")).toBe(false);
     expect(credited(deployed, T, "ended")).toBe(false);
     expect(credited(deployed, T, "under-way")).toBe(false);
     expect(credited(deployed, U, "succeeded")).toBe(false);

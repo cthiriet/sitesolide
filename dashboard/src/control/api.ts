@@ -862,7 +862,11 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
     async projectStore(req, slug) {
       const auth = await authenticated(req);
       if (auth instanceof Response) return auth;
-      const reached = await reach(() => steward.storeList(auth.bearer, slug), [auth.bearer]);
+      // `?for=deploy`: the listing a deployment asks for, refused quietly (the steward's `quiet`).
+      const asked = new URL(req.url).searchParams.getAll("for");
+      if (asked.length > 1 || (asked.length === 1 && asked[0] !== "deploy")) return failure("invalid", "for: deploy, or nothing");
+      const quiet = asked.length === 1;
+      const reached = await reach(() => steward.storeList(auth.bearer, slug, quiet), [auth.bearer]);
       if (reached.kind !== "received" || reached.status !== 200) return relayedWork(reached);
       const store = storeViewOf(reached.body.store);
       return store === null ? unreadable() : json({ store });

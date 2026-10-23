@@ -121,10 +121,13 @@ export function madeStore(claims: Claims | null, slug: string, token: string): b
 
 /**
  * How a claim's own deployment went, as its installer's result says: still
- * under way, succeeded, or ended otherwise (failed, stopped half way, or
- * never started past the grace). The steward reads it (src/control/steward.ts).
+ * under way, succeeded, ended without success having laid the project's
+ * folder itself and kept it (`laid`: a service that did not start for want
+ * of a secret, a site whose root answered 404), or ended otherwise (failed
+ * before laying anything, stopped half way so, or never started past the
+ * grace). The steward reads it (src/control/steward.ts).
  */
-export type DeploymentOutcome = "under-way" | "succeeded" | "ended";
+export type DeploymentOutcome = "under-way" | "succeeded" | "laid" | "ended";
 
 /**
  * Is this token's hold on a project the machine carries released? It is when
@@ -138,9 +141,14 @@ export function released(claim: Claim | null, onMachine: boolean, credited: bool
   return onMachine && claim !== null && !credited;
 }
 
-/** Is the project the holder's by its own deployment, which succeeded? */
+/**
+ * Is the project the holder's by its own deployment: one that succeeded, or
+ * that laid the folder itself and kept it, then failed? A creation's
+ * installer lays the folder only where none was (`taken-meanwhile`
+ * otherwise), so the folder is the token's own either way.
+ */
 export function credited(claim: Claim | null, holder: string | null, outcome: DeploymentOutcome | null): boolean {
-  return claim !== null && holder !== null && claim.deployer === holder && outcome === "succeeded";
+  return claim !== null && holder !== null && claim.deployer === holder && (outcome === "succeeded" || outcome === "laid");
 }
 
 /**

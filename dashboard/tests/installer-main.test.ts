@@ -108,7 +108,7 @@ describe("main", () => {
     expect(calls).toContain("useradd site-notes");
   });
 
-  test("the names the store lacked go into the result with its verdict, names alone; none known until then", () => {
+  test("the names the store lacked go into the result with its verdict, names alone; none known until then; the folder a creation laid, at once", () => {
     const root = mkdtempSync(join(tmpdir(), "installer-reporter-"));
     toClean.push(root);
     const request = {
@@ -124,8 +124,12 @@ describe("main", () => {
     const reporter = createReporter(root, request, () => 1, () => {});
     reporter.log("-> manifest");
     expect(read().missingSecrets).toBeNull();
+    expect(read().laid).toBe(false);
+    // Said at once, an installer killed from here on leaving it said.
+    reporter.laid(true);
+    expect(read()).toMatchObject({ state: "running", laid: true });
     reporter.finish({ ok: false, code: "service-failed", message: "shop did not come back", allocated: [], missingSecrets: { runtime: ["ADMIN_TOKEN"], files: ["gcp.json"] } });
-    expect(read()).toMatchObject({ state: "failed", missingSecrets: { runtime: ["ADMIN_TOKEN"], files: ["gcp.json"] } });
+    expect(read()).toMatchObject({ state: "failed", laid: true, missingSecrets: { runtime: ["ADMIN_TOKEN"], files: ["gcp.json"] } });
     const other = createReporter(root, request, () => 2, () => {});
     other.finish({ ok: true, url: "https://shop.test-zone.invalid/", allocated: [] });
     expect(read()).toMatchObject({ state: "succeeded", missingSecrets: null });

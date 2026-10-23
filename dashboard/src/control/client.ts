@@ -32,8 +32,12 @@ export type ControlSteward = {
   secretsChange: (requested: SecretsChangeRequest) => Promise<Response>;
   /** A project's service restarted for a token, and its verdict. */
   restart: (bearer: string, slug: string) => Promise<Response>;
-  /** A project's store, names and states, as a token reads it. */
-  storeList: (bearer: string, slug: string) => Promise<Response>;
+  /**
+   * A project's store, names and states, as a token reads it. `quiet`: the
+   * listing a deployment asks for, whose refusal for scope is neither
+   * journaled nor charged to the token's hour.
+   */
+  storeList: (bearer: string, slug: string, quiet?: boolean) => Promise<Response>;
   /** Names of the store set and removed by a token, all or nothing. */
   storeChange: (requested: { bearer: string } & StoreChangeRequest) => Promise<Response>;
   /** A value drawn on the machine, never sent back. */
@@ -80,7 +84,8 @@ export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_
     secretsList: (bearer, slug) => call("POST", "/control/secrets/list", { bearer, slug }),
     secretsChange: (requested) => call("PATCH", "/control/secrets", requested, longMs),
     restart: (bearer, slug) => call("POST", "/control/restart", { bearer, slug }, longMs),
-    storeList: (bearer, slug) => call("POST", "/control/store/list", { bearer, slug }),
+    // Sent only when asked: a steward from before refuses a field it does not know.
+    storeList: (bearer, slug, quiet = false) => call("POST", "/control/store/list", quiet ? { bearer, slug, quiet: true } : { bearer, slug }),
     // Every write waits its turn under the secrets' lock, as a change of secrets does.
     storeChange: (requested) => call("PATCH", "/control/store", requested, longMs),
     storeGenerate: (requested) => call("POST", "/control/store/generate", requested, longMs),
