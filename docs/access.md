@@ -324,7 +324,7 @@ it in `sitesolide.json` to make it explicit.
 
 | In the manifest | Refused unless | Why |
 |---|---|---|
-| no `portal`, or `portalExempt` | the token may deploy public sites | private by default |
+| `portalExempt` | the token may deploy public sites | exempted paths are public |
 | a static site (no `start`) | the token may deploy public sites | a static site cannot be restricted yet |
 | `"network": "outbound"` | the token may use outbound network | services reach only the loopback otherwise |
 | `egress` | the token may use outbound network | the hosts it lists are reached through the egress proxy, a way out all the same |
@@ -333,7 +333,9 @@ it in `sitesolide.json` to make it explicit.
 | `lock` | never | a preview code is chosen in the site's *Access* section, by its Admin or the owner, or with `sitesolide lock` over the owner's SSH |
 | `memory` above 1G, more than 6 services | never | one machine serves everyone |
 
-A project that already exists keeps the general access the machine carries:
+A manifest without `portal` is not refused: a new project a token creates
+without the public permission is Restricted whatever the manifest says. A
+project that already exists keeps the general access the machine carries:
 it is switched from the dashboard, never from a deployment. A token without
 the public permission does not deploy an existing public site either, so that
 a stolen one publishes nothing; a person's own token does, general access
@@ -674,6 +676,35 @@ there that does not belong to the project's account; it names the file,
 never what it holds. A schedule systemd on the machine does not read
 comes back as `invalid-manifest`, before anything is written; a server or a
 worker that falls within ten seconds of its restart, as `service-failed`.
+
+### Without the CLI, in one script
+
+[deploy.sh](../deploy.sh), at the root of this repository and on every
+release, makes these calls for a workstation or a sandbox that holds the
+token and nothing of sitesolide: it needs bash, curl, tar, gzip, find, mktemp
+and one JSON reader among jq, node, bun and python3, the first found.
+Download it outside the project, or its archive carries it:
+
+```bash
+curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/deploy.sh -o ~/deploy.sh
+export SITESOLIDE_API=https://dashboard.<zone>
+read -rs SITESOLIDE_TOKEN && export SITESOLIDE_TOKEN   # typed, kept out of the history
+bash ~/deploy.sh                             # from the project's folder, or name it
+bash ~/deploy.sh --archive bundle.tar.gz     # build and write the archive, send nothing
+```
+
+It is `sitesolide deploy` with a token, step for step: the same refusals
+before anything leaves (a folder of dependencies present and not excluded, a
+`source` or a `publicDir` leading out of the repository, a link among what
+would be sent, an empty `publicDir`), the manifest first, the build on the
+workstation, the archive with the CLI's exclusions, then the machine's log
+to the end. It exits 0 only once the machine says `succeeded`. curl reads the
+token's header from a file descriptor, never from its arguments, and the
+build runs without `SITESOLIDE_TOKEN` in its environment, but as you all the
+same, with what you may read: deploy, and run `--archive`, which builds too,
+only a project whose build you would run yourself. `bin/tests/deploy-script.test.ts` holds
+its archive to the CLI's on the same folder, read back by the installer's own
+reader, with each of the four JSON readers.
 
 ## When it goes wrong
 

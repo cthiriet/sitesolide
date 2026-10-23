@@ -78,8 +78,8 @@ dash, no machine, domain or address of an installation, no secret.
    gh run watch <run id> --exit-status
    ```
 
-   The release then has its six files: four binaries, `SHA256SUMS`,
-   `install.sh`.
+   The release then has its seven files: four binaries, `SHA256SUMS`,
+   `install.sh`, `deploy.sh`.
 6. **The notes**, written in a file outside the repository, in the format
    above: `gh release edit vX.Y.Z --notes-file <file>`. Check the title still
    reads `vX.Y.Z` and that `gh api repos/cthiriet/sitesolide/releases/latest -q .tag_name`
