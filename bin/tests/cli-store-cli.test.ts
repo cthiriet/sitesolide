@@ -5,6 +5,8 @@ import type { Failure, Output, Remote } from "../cli/remote";
 import {
   apiStore,
   handleMissing,
+  legacyLoss,
+  legacyLossRefusal,
   looksLikeValue,
   missingOf,
   missingWarning,
@@ -452,7 +454,7 @@ function terminal(answers: (string | null)[], typed: (string | null | { refused:
 describe("the missing names of deploy", () => {
   const declared = (secrets: object): ReturnType<typeof secretsOf> => secretsOf({ slug: "shop", start: "/x", port: 3000, secrets } as Manifest);
 
-  test("the local manifest's names, not the deployed one's: a name the store or a legacy file supplies is not missing", () => {
+  test("the local manifest's names, not the deployed one's: a name only the store supplies is not missing", () => {
     const listed = view({
       variables: [
         { name: "A", source: "store", file: null, shadows: [], declared: true },
@@ -466,9 +468,56 @@ describe("the missing names of deploy", () => {
       ],
     });
     const local = withDeclared(listed, declared({ runtime: ["A", "B", "C"], files: ["gcp.json", "tls.key"] }));
-    expect(missingOf(local)).toEqual({ runtime: ["C"], files: ["tls.key"] });
+    // B comes from a legacy file, which the units of this manifest no longer read.
+    expect(missingOf(local)).toEqual({ runtime: ["B", "C"], files: ["tls.key"] });
     expect(local.files.find((file) => file.name === "gcp.json")?.declared).toBe(true);
     expect(local.files.some((file) => file.name === "gone.pem")).toBe(false);
+  });
+
+  test("a name a legacy file supplies is missing for a manifest that names its variables: its units read the store alone", () => {
+    const listed = view({
+      variables: [
+        { name: "EARLY_KEY", source: "legacy", file: "early.env", shadows: [], declared: false },
+        { name: "IN_STORE", source: "store", file: null, shadows: ["early.env"], declared: false },
+      ],
+    });
+    expect(missingOf(withDeclared(listed, declared({ runtime: ["EARLY_KEY", "IN_STORE"] }))).runtime).toEqual(["EARLY_KEY"]);
+    expect(missingOf(withDeclared(listed, declared(["EARLY_KEY", "IN_STORE"]))).runtime).toEqual(["EARLY_KEY"]);
+  });
+
+  test("what a names manifest would drop: names a legacy file the units read holds and the store lacks, and read files not managed", () => {
+    const file = (name: string, variables: string[], over: object = {}) => ({ name, state: "managed" as const, reason: null, variables, read: true, leftover: false, covered: null, ...over });
+    const listed = view({
+      variables: [{ name: "IN_STORE", source: "store", file: null, shadows: [], declared: true }],
+      legacy: [
+        file("early.env", ["EARLY_KEY", "IN_STORE", "SHARED"]),
+        file("early-ses.env", ["SHARED", "REGION"]),
+        file("early-old.env", ["UNREAD"], { read: false, leftover: true }),
+        file("early-gone.env", [], { state: "absent" }),
+        file("early-hand.env", [], { state: "unmanaged", reason: "owned by root" }),
+      ],
+    });
+    expect(legacyLoss(listed)).toEqual({
+      names: [
+        { name: "EARLY_KEY", files: ["early.env"] },
+        { name: "SHARED", files: ["early.env", "early-ses.env"] },
+        { name: "REGION", files: ["early-ses.env"] },
+      ],
+      unmanaged: ["early-hand.env"],
+    });
+    const refusal = legacyLossRefusal(listed, "nothing was sent")!;
+    expect(refusal.message).toBe("migrate first: sitesolide secrets migrate --restart; the service reads EARLY_KEY, SHARED, REGION from legacy files this manifest no longer reads, and the store lacks them");
+    expect(refusal.details).toContain("SHARED: in early.env, early-ses.env");
+    expect(refusal.details.at(-1)).toBe("nothing was sent");
+    // Once migrated, the store holds them: nothing is lost, nothing stops.
+    const migrated = view({
+      variables: ["EARLY_KEY", "IN_STORE", "SHARED", "REGION"].map((name) => ({ name, source: "store" as const, file: null, shadows: [], declared: true })),
+      legacy: [file("early.env", ["EARLY_KEY", "IN_STORE", "SHARED"]), file("early-ses.env", ["SHARED", "REGION"])],
+    });
+    expect(legacyLossRefusal(migrated, "nothing was sent")).toBeNull();
+    // A file no unit reads drops nothing; a store with no legacy file neither.
+    expect(legacyLossRefusal(view({ legacy: [file("early-old.env", ["UNREAD"], { read: false })] }), "x")).toBeNull();
+    expect(legacyLossRefusal(view(), "x")).toBeNull();
   });
 
   test("at a terminal: set, typed without echo, then sent; generate, drawn on the server; leave; no restart asked", async () => {

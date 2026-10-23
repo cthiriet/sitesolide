@@ -859,7 +859,7 @@ function jsonEvents(output: string): Record<string, unknown>[] {
  * keeps deploying, with a warning.
  */
 describe("deploy and the store of secrets", () => {
-  test("a dry run says what it would read and lay, and asks the machine for neither", async () => {
+  test("a dry run reads the store, which it may, and lays nothing nor asks for a value", async () => {
     const vm = createFakeVm();
     try {
       const r = await run("projects/store-app", ["deploy", "--dry-run", "--json"], { vm });
@@ -867,12 +867,13 @@ describe("deploy and the store of secrets", () => {
       const list = jsonEvents(r.output);
       const planned = list.filter((event) => event.type === "planned").map((event) => event.message as string);
       expect(planned).toContain("lay /etc/sitesolide/projects/sample-store/ and its files/ folder, root's, 0700, which every unit of sample-store loads");
-      expect(planned).toContain("read which declared runtime secrets the store holds: the missing ones asked for at a terminal, warned of otherwise");
+      expect(planned).toContain("the declared runtime secrets the store lacks asked for at a terminal, warned of otherwise");
       // The store's folders before the units, so that none starts without them.
       const lay = planned.findIndex((message) => message.startsWith("lay /etc/sitesolide/projects/"));
       expect(lay).toBeLessThan(planned.findIndex((message) => message.startsWith("read /etc/systemd/system/sample-store.service")));
       expect(list.at(-1)).toMatchObject({ type: "result", command: "deploy", missingSecrets: null, buildSecrets: [] });
-      expect(vm.logs().filter((line) => /^(STORE|ACCEPTED|REFUSED)/.test(line))).toEqual([]);
+      // The listing is a read, which tells what deploying would drop: nothing else reached the machine.
+      expect(vm.logs().filter((line) => /^(STORE|ACCEPTED|REFUSED)/.test(line))).toEqual(["STORE GET sample-store"]);
     } finally {
       vm.cleanup();
     }
@@ -907,6 +908,37 @@ describe("deploy and the store of secrets", () => {
       expect(logs.filter((line) => line.startsWith("STORE ") && !line.startsWith("STORE GET"))).toEqual([]);
       // The run went on to the restart: a missing secret stopped nothing.
       expect(restart).toBeGreaterThan(-1);
+    } finally {
+      vm.cleanup();
+    }
+  }, 30_000);
+
+  test("a manifest that names its variables while the unit reads them from a legacy file the store lacks: refused before anything is pushed, dry run included; migrated, it goes", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      // The bench's case: the 0.7 unit reads the legacy file, the store is empty.
+      const legacy = { "sample-store": [{ name: "sample-store.env", variables: ["SESSION_SECRET", "MAIL_API_KEY", "MAIL_REGION"], read: true }] };
+      vm.setStore({ legacy });
+      for (const asked of [["deploy", "--json"], ["deploy", "--dry-run", "--json"]]) {
+        const r = await run("projects/store-app", asked, { vm });
+        expect(r.code).toBe(1);
+        expect(jsonEvents(r.output).at(-1)).toMatchObject({
+          type: "error",
+          message: "migrate first: sitesolide secrets migrate --restart; the service reads SESSION_SECRET, MAIL_API_KEY, MAIL_REGION from legacy files this manifest no longer reads, and the store lacks them",
+          details: expect.arrayContaining(["SESSION_SECRET: in sample-store.env", "nothing was sent"]),
+          hint: expect.stringContaining("sitesolide secrets migrate --restart"),
+        });
+        // Never "every declared runtime secret is set", and nothing pushed.
+        expect(r.output).not.toContain("every declared runtime secret is set");
+      }
+      const logs = vm.logs();
+      expect(logs.filter((line) => line.startsWith("ACCEPTED") || line.startsWith("STORE-PREPARE") || line.includes("rsync") || line.startsWith("LOCK"))).toEqual([]);
+      // Migrated: the store holds every name the legacy file does, and the deployment goes.
+      vm.setStore({ legacy, variables: { "sample-store": ["SESSION_SECRET", "MAIL_API_KEY", "MAIL_REGION"] } });
+      const migrated = await run("projects/store-app", ["deploy", "--json"], { vm });
+      expect(jsonEvents(migrated.output).some((event) => String(event.message).startsWith("migrate first"))).toBe(false);
+      expect(vm.logs().some((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart sample-store"))).toBe(true);
     } finally {
       vm.cleanup();
     }

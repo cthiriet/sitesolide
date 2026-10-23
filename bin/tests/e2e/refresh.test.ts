@@ -406,6 +406,21 @@ describe("refresh and the store of secrets", () => {
     expect(logs.filter((line) => line.startsWith("STORE ") && !line.startsWith("STORE GET"))).toEqual([]);
   });
 
+  test("a manifest that names its variables over a unit that reads a legacy file: the unit is kept, nothing written nor restarted", async () => {
+    const on = machine();
+    on.acceptWrites();
+    // The bench's case: the deposited manifest names its variables, the unit
+    // in service is the one 0.7 made from the old form, which reads the file.
+    const old = app("sample-refresh", 3061, { secrets: ["sample-refresh.env"] });
+    on.writeManifest("sample-refresh", `${JSON.stringify(app("sample-refresh", 3061, { secrets: ["EARLY_KEY"] }), null, 2)}\n`);
+    on.writeFile(UNIT_PATH, asInstalled(generated(old)[0]!.text, "previous")!);
+    const r = await refresh(on, ["sample-refresh", "--json"]);
+    expect(r.code).toBe(0);
+    expect(ended(r, "result")).toMatchObject({ kept: ["sample-refresh"], refreshed: [] });
+    expect(accepted(on)).toEqual([]);
+    expect(readFileSync(join(on.root, UNIT_PATH.slice(1)), "utf8")).toContain("EnvironmentFile=-/etc/sitesolide/sample-refresh.env");
+  });
+
   test("--dry-run says it would lay them, and asks nothing", async () => {
     const on = machine();
     lay(on, SAMPLE, "previous");

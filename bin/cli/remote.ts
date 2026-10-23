@@ -646,20 +646,29 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
   const declares = hasStore(manifest) && (declaration.runtime.length > 0 || declaration.files.length > 0);
   let missing: StoreMissing | null = declares ? null : { runtime: [], files: [] };
   let deferred = false;
-  if (declares) {
-    output.say("-> runtime secrets");
+  // A manifest that names its variables, or none, makes units that read the
+  // store alone: what legacy files the installed units read hold, and the
+  // store lacks, would be dropped. Read first, and a stop before anything is
+  // sent; then what the store lacks of the declared names.
+  if (hasStore(manifest) && declaration.form !== "legacy") {
+    if (declares) output.say("-> runtime secrets");
     const listed = await transport.list(slug);
     if (listed.ok) {
-      missing = await store.handleMissing(store.withDeclared(listed.value, declaration), transport, io);
-      if (missing.runtime.length === 0 && missing.files.length === 0) output.say("   every declared runtime secret is set");
+      const loss = store.legacyLossRefusal(listed.value, "nothing was sent");
+      if (loss !== null) return report(output, { error: "migrate-first", ...loss });
+      if (declares) {
+        missing = await store.handleMissing(store.withDeclared(listed.value, declaration), transport, io);
+        if (missing.runtime.length === 0 && missing.files.length === 0) output.say("   every declared runtime secret is set");
+      }
     } else if (listed.failure.error === "out-of-scope") {
-      output.say("   this token may not list secrets: the machine's log names any that is missing");
+      if (declares) output.say("   this token may not list secrets: the machine's log names any that is missing");
     } else if (listed.failure.error === "not-found") {
       // A project not deployed yet whose store this token may not hold
-      // ahead: what it lacks is asked for once the deployment made it.
-      deferred = true;
-      output.say("   not deployed yet: what its store lacks is said once the deployment is done");
-    } else warnOn(output, `cannot tell which runtime secrets are set: ${listed.failure.message}`, []);
+      // ahead: nothing installed reads a legacy file, and what the store
+      // lacks is asked for once the deployment made it.
+      deferred = declares;
+      if (declares) output.say("   not deployed yet: what its store lacks is said once the deployment is done");
+    } else if (declares) warnOn(output, `cannot tell which runtime secrets are set: ${listed.failure.message}`, []);
   }
 
   // The manifest first: the dashboard and the steward judge it, so that a

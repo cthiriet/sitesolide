@@ -130,7 +130,13 @@ export const SWITCHES = {
  * route`), or with no owner socket at all (`down`, curl's 7). Per project,
  * the names of the variables its store holds and of its files. Never a value.
  */
-export type StoreState = { state: "current" | "old" | "down"; variables: Record<string, string[]>; files: Record<string, string[]> };
+export type StoreState = {
+  state: "current" | "old" | "down";
+  variables: Record<string, string[]>;
+  files: Record<string, string[]>;
+  /** The project's legacy flat files, by name: the variables each holds, whether an installed unit reads it, and its state. */
+  legacy?: Record<string, { name: string; variables: string[]; read: boolean; state?: "managed" | "absent" | "unmanaged" }[]>;
+};
 
 export const DEFAULT_STORE: StoreState = { state: "current", variables: {}, files: {} };
 
@@ -722,10 +728,16 @@ if (import.meta.main) {
     exists: Object.hasOwn(current.variables, slug) || Object.hasOwn(current.files, slug),
     state: "managed",
     reason: null,
-    variables: (current.variables[slug] ?? []).map((name) => ({ name, source: "store", file: null, shadows: [], declared: false })),
+    // The store's names, then those a legacy file the units read supplies, the last file read winning, as the steward lists them.
+    variables: [
+      ...(current.variables[slug] ?? []).map((name) => ({ name, source: "store", file: null, shadows: [], declared: false })),
+      ...[...new Set((current.legacy?.[slug] ?? []).filter((file) => file.read && (file.state ?? "managed") === "managed").flatMap((file) => file.variables))]
+        .filter((name) => !(current.variables[slug] ?? []).includes(name))
+        .map((name) => ({ name, source: "legacy", file: (current.legacy?.[slug] ?? []).filter((file) => file.read && file.variables.includes(name)).at(-1)!.name, shadows: [], declared: false })),
+    ],
     missing: [],
     files: (current.files[slug] ?? []).map((name) => ({ name, state: "set", declared: false, reason: null, bytes: null, modifiedAt: null, restartPending: false })),
-    legacy: [],
+    legacy: (current.legacy?.[slug] ?? []).map((file) => ({ name: file.name, state: file.state ?? "managed", reason: null, variables: file.variables, read: file.read, leftover: false, covered: null })),
     build: [],
     public: [],
     unitReadsStore: true,

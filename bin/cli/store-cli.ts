@@ -584,17 +584,72 @@ export function storeLines(view: StoreView): string[] {
 /**
  * The listing with this folder's manifest in place of the deployed one:
  * deploy reads the store before it deposits the manifest, and a name the
- * new manifest declares is missing too. A name the store or a legacy file
- * supplies is not; a file present is not.
+ * new manifest declares is missing too. A name only the store supplies is
+ * not, and a file present is not. A name a legacy file supplies is missing:
+ * a manifest that names its variables makes units that read no legacy file,
+ * so that value would be gone at the next start (legacyLoss stops the
+ * deployment before that happens).
  */
 export function withDeclared(view: StoreView, declaration: SecretsDeclaration): StoreView {
-  const supplied = new Set(view.variables.filter((variable) => variable.source !== "none").map((variable) => variable.name));
+  const supplied = new Set(view.variables.filter((variable) => (declaration.form === "legacy" ? variable.source !== "none" : variable.source === "store")).map((variable) => variable.name));
   const missing = declaration.runtime.filter((name) => !supplied.has(name));
   const files: StoreFileView[] = view.files.map((file) => ({ ...file, declared: declaration.files.includes(file.name) }));
   for (const name of declaration.files) {
     if (!files.some((file) => file.name === name)) files.push({ name, state: "missing", declared: true, reason: null, bytes: null, modifiedAt: null, restartPending: false });
   }
   return { ...view, missing, files: files.filter((file) => file.declared || file.state !== "missing") };
+}
+
+/**
+ * What a manifest that names its variables, or none, would drop: the names a
+ * legacy file the installed units read holds and the store lacks, each with
+ * the files that hold it, and the legacy files they read that are not
+ * managed, whose names cannot be told. The units such a manifest makes read
+ * the store alone, so each of these values would be gone at the next start:
+ * the service runs on without it, often without a word. Names only.
+ */
+export function legacyLoss(view: StoreView): { names: { name: string; files: string[] }[]; unmanaged: string[] } {
+  const inStore = new Set(view.variables.filter((variable) => variable.source === "store").map((variable) => variable.name));
+  const names = new Map<string, string[]>();
+  const unmanaged: string[] = [];
+  for (const file of view.legacy) {
+    if (!file.read || file.state === "absent") continue;
+    if (file.state === "unmanaged") {
+      unmanaged.push(file.name);
+      continue;
+    }
+    for (const name of file.variables) {
+      if (inStore.has(name)) continue;
+      names.set(name, [...(names.get(name) ?? []), file.name]);
+    }
+  }
+  return { names: [...names].map(([name, files]) => ({ name, files })), unmanaged };
+}
+
+/**
+ * The stop of a deployment or a refresh that would drop values the service
+ * reads today: before anything is sent or written, with the command that
+ * carries them into the store first. A data-loss guard, not a missing
+ * secret: a name set nowhere never stops anything.
+ */
+export function legacyLossRefusal(view: StoreView, nothing: string): { message: string; details: string[] } | null {
+  const { names, unmanaged } = legacyLoss(view);
+  if (names.length === 0 && unmanaged.length === 0) return null;
+  const listed = names.map(({ name }) => name);
+  const message =
+    names.length > 0
+      ? `migrate first: sitesolide secrets migrate --restart; the service reads ${listed.join(", ")} from legacy files this manifest no longer reads, and the store lacks ${names.length === 1 ? "it" : "them"}`
+      : `migrate first: sitesolide secrets migrate --restart; the service reads ${unmanaged.join(", ")}, which the dashboard does not manage, and this manifest no longer reads ${unmanaged.length === 1 ? "it" : "them"}`;
+  return {
+    message,
+    details: [
+      ...names.map(({ name, files }) => `${name}: in ${files.join(", ")}`),
+      ...unmanaged.map((file) => `${file}: read by the service, not managed by the dashboard, its variables cannot be told: fix it in the Secrets section first`),
+      "deployed as it is, the service would start without them: the units of a manifest that names its variables read the store alone",
+      "sitesolide secrets migrate --restart copies them into the store and restarts the service, the owner's, over SSH; then deploy again",
+      nothing,
+    ],
+  };
 }
 
 /** The names a listing says are missing: declared runtime names with no value, declared files not present. */

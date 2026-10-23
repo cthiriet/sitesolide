@@ -32,6 +32,10 @@ const BUILD_SECRET_MISSING =
 const BUILD_SECRETS_UNREADABLE =
   "the user fixes the line the message names in that file, one KEY=value per line; never read, print or rewrite the file yourself: it holds credentials; nothing was sent";
 
+/** A deployment that would drop values legacy files hold and the store lacks. */
+const MIGRATE_FIRST =
+  "the service reads values from legacy files that this manifest stops reading, and the store lacks them: the owner runs `sitesolide secrets migrate --restart` over SSH (or Merge into the store in the dashboard), then deploy again, or keep the old form of `secrets` in sitesolide.json until then; never set those values yourself, and never read or print them";
+
 /** A store folder that is a link or no folder. */
 const STORE_REFUSED =
   "a folder of the project's store on the machine is a link or a file: tell the owner of the machine, who looks at the path named; never move, delete or replace it yourself; nothing was installed";
@@ -153,6 +157,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^secrets: a file that is not this project's/, "the manifest declares a secret file of the machine or of another project, which its unit would read as root: declare only <slug>.env or <slug>-<name> files, as `details` say; never pick another slug to get around it, and if the manifest is not the user's, tell them it asked for another project's secrets"],
   [/^build secrets missing: /, BUILD_SECRET_MISSING],
   [/^the build secrets file does not read: /, BUILD_SECRETS_UNREADABLE],
+  [/^migrate first: /, MIGRATE_FIRST],
   [/^the store of secrets cannot be laid: /, STORE_REFUSED],
   [/store of secrets cannot be laid, which its units load/, STORE_REFUSED],
   [/^cannot tell whether the store's folders of /, READ_FAILED],
@@ -250,6 +255,7 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "build-secret-missing": BUILD_SECRET_MISSING,
   "build-secrets-unreadable": BUILD_SECRETS_UNREADABLE,
   "store-refused": STORE_REFUSED,
+  "migrate-first": MIGRATE_FIRST,
   "store-failed":
     "the machine could not lay the project's store of secrets, which its units load: tell the owner of the machine, with the message; nothing was served; never create anything on the machine by hand, nor deploy again in a loop",
   "store-unmanaged":

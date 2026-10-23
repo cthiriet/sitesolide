@@ -201,7 +201,7 @@ import {
 import { CREDENTIALS_EXIT_STATUS, credentialsFailure, readStorePrepareAnswer, slugHasStore, storePaths, storePrepareCommand, workstationSecretsPath } from "./cli/store";
 import { envValue, keys, parseEnv } from "./cli/envfile";
 import { gatherBuildSecrets, missingBuildSecrets, readWorkstationSecrets, sourceLine, unreadableWorkstation, type BuildSecretsResolution } from "./cli/build-secrets";
-import { handleMissing, readStoreArguments, runStore, sshStore, STORE_USAGE, storelessRefusal, withDeclared, type StoreTransport } from "./cli/store-cli";
+import { handleMissing, legacyLossRefusal, readStoreArguments, runStore, sshStore, STORE_USAGE, storelessRefusal, withDeclared, type StoreTransport } from "./cli/store-cli";
 import {
   secretPath,
   projectPaths,
@@ -1000,29 +1000,42 @@ async function buildSecretsFor(project: Project, config: Config, executor: Execu
 }
 
 /**
- * The runtime secrets the manifest declares that the store lacks, read over
- * the owner's socket before the build and the Caddy lock. At a terminal,
- * each missing name is asked for: set, typed without echo, generated on the
- * server, or left unset; otherwise one warning names them, with the commands.
- * A deployment never stops here: a steward that cannot say is a warning too,
- * and an app that cannot live without a variable stops at start, which the
- * stability check reports. Not in a dry run, which asks the machine nothing
- * it would write.
+ * The store, read over the owner's socket before the build and the Caddy
+ * lock, for an app whose manifest names its variables, or none.
+ *
+ * First, what deploying would drop: such a manifest makes units that read
+ * the store alone, so a value a legacy file the installed units read holds,
+ * and the store lacks, would be gone at the next start. That stops the
+ * deployment before anything is sent, saying to migrate first. A read, hence
+ * in a dry run too.
+ *
+ * Then the declared runtime secrets the store lacks. At a terminal, each is
+ * asked for: set, typed without echo, generated on the server, or left
+ * unset; otherwise one warning names them, with the commands. A missing
+ * secret never stops a deployment: an app that cannot live without one stops
+ * at start, which the stability check reports. Not in a dry run, which asks
+ * the machine nothing it would write. A steward that cannot say is a warning.
  */
 async function runtimeSecrets(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
   if (!hasStore(manifest)) return;
   const declaration = secretsOf(manifest);
-  if (declaration.runtime.length === 0 && declaration.files.length === 0) return;
-  if (executor.simulated) {
-    say("   [dry-run] read which declared runtime secrets the store holds: the missing ones asked for at a terminal, warned of otherwise");
-    note({ missingSecrets: null });
-    return;
-  }
-  step("runtime secrets");
+  // The old form keeps reading its files, and declares no name of the store's.
+  if (declaration.form === "legacy") return;
+  const declares = declaration.runtime.length > 0 || declaration.files.length > 0;
+  if (declares) step("runtime secrets");
   const transport = ownerStore(config, executor);
   const listed = await transport.list(manifest.slug);
   if (!listed.ok) {
-    warn(`cannot tell which runtime secrets are set: ${listed.failure.message}`, listed.failure.details ?? []);
+    const what = declares ? "which runtime secrets are set" : "whether the service reads values this manifest would drop";
+    warn(`cannot tell ${what}: ${listed.failure.message}`, listed.failure.details ?? []);
+    if (declares) note({ missingSecrets: null });
+    return;
+  }
+  const loss = legacyLossRefusal(listed.value, "nothing was sent");
+  if (loss !== null) die(loss.message, loss.details);
+  if (!declares) return;
+  if (executor.simulated) {
+    say("   [dry-run] the declared runtime secrets the store lacks asked for at a terminal, warned of otherwise");
     note({ missingSecrets: null });
     return;
   }
