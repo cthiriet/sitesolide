@@ -108,14 +108,34 @@ describe("the merge (spec §6.8)", () => {
     });
   });
 
-  test("PASSWORD_HASH, or a name the store refuses, refuses everything, naming the file and the names", () => {
-    for (const [values, names] of [
-      [{ A: "1", PASSWORD_HASH: "$argon2id$x" }, "PASSWORD_HASH"],
-      [{ NODE_OPTIONS: "--x", DEFAULT_SENDER: "a@b.test", A: "1" }, "NODE_OPTIONS, DEFAULT_SENDER"],
-    ] as const) {
-      const plan = planMigration({ sources: [managed("a.env", { ...values })], store: new Map(), keyRefusal, orderAgreed: true });
-      expect(plan).toEqual({ kind: "refused", refusal: { error: "invalid", message: `a.env holds ${names}, which a store does not take: remove them from a.env first, then migrate again` } });
-    }
+  test("a name a store does not take refuses everything, naming the file and the names, with a remedy that keeps what the service runs with", () => {
+    const reserved = (name: string) => checkKey(name);
+    const setElsewhere = new Set(["NODE_ENV", "DEFAULT_SENDER", "PORT"]);
+    const refused = (values: Record<string, string>) => planMigration({ sources: [managed("a.env", values)], store: new Map(), keyRefusal: reserved, setElsewhere, orderAgreed: true });
+    // A name no store holds: its value is in effect, and removing it changes that.
+    expect(refused({ A: "1", PASSWORD_HASH: "$argon2id$x" })).toEqual({
+      kind: "refused",
+      refusal: {
+        error: "invalid",
+        message:
+          "a.env holds PASSWORD_HASH, which a store never holds: the file's value is the one the service runs with, and removing it from a.env changes that. Move it to the manifest's env if it belongs there, deploy, then remove it from a.env and migrate again",
+      },
+    });
+    // A name the env or the unit sets too: the file's value wins over it; dropping it from the file would switch the service to the env's.
+    expect(refused({ DEFAULT_SENDER: SECRET_A, A: "1" })).toEqual({
+      kind: "refused",
+      refusal: {
+        error: "invalid",
+        message:
+          "a.env holds DEFAULT_SENDER, which the project's env or its unit sets too: the file's value, read after, is the one the service runs with, and a store takes no name its unit sets. Drop it from the manifest's env (or the unit) and deploy, then migrate again: the store keeps its value from a.env. Removing it from a.env instead would switch the service to the env's value",
+      },
+    });
+    // Both at once, plural, a reserved name the env sets counted as set elsewhere; never a value.
+    const both = refused({ NODE_ENV: "staging", DEFAULT_SENDER: SECRET_A, NODE_OPTIONS: "--x", PATH: "/x" });
+    expect(both.kind === "refused" && both.refusal.message).toBe(
+      "a.env holds NODE_ENV, DEFAULT_SENDER, which the project's env or its unit sets too: the file's values, read after, are the ones the service runs with, and a store takes no name its unit sets. Drop them from the manifest's env (or the unit) and deploy, then migrate again: the store keeps their values from a.env. Removing them from a.env instead would switch the service to the env's value. a.env holds NODE_OPTIONS, PATH, which a store never holds: the file's values are the ones the service runs with, and removing them from a.env changes that. Move them to the manifest's env if they belong there, deploy, then remove them from a.env and migrate again",
+    );
+    expect(JSON.stringify(both)).not.toContain(SECRET_A);
   });
 });
 

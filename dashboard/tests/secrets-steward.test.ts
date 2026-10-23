@@ -4380,6 +4380,44 @@ describe("migrate and retire (spec §6.8, §6.9, §8.1)", () => {
     expect(existsSync(storeOf(bench, "lab").env)).toBe(false);
   });
 
+  test("a file a unit names twice counts at its last place, as systemd reads it again: A, B, A runs with A's value, and migrate takes it", async () => {
+    const bench = await mount();
+    const lab = { slug: "lab", start: "/usr/local/bin/bun run server.ts", port: 3053, secrets: ["lab-a.env", "lab-b.env"] };
+    mkdirSync(join(bench.sites, "lab"), { recursive: true });
+    writeFileSync(join(bench.sites, "lab", "sitesolide.json"), JSON.stringify(lab));
+    writeFileSync(join(bench.units, "lab.service"), storeUnit(bench, "lab", ["lab-a.env", "lab-b.env", "lab-a.env"]));
+    writeFileSync(join(bench.secrets, "lab-a.env"), "KEY=from-a\n", { mode: 0o600 });
+    writeFileSync(join(bench.secrets, "lab-b.env"), "KEY=from-b\n", { mode: 0o600 });
+    // The listing names the file in effect.
+    expect((await storeList(bench, "lab")).variables).toEqual([{ name: "KEY", source: "legacy", file: "lab-a.env", shadows: ["lab-b.env"], declared: false }]);
+    const token = await unlock(bench);
+    const answer = (await (await bench.call("POST", "/store/migrate", { token, slug: "lab" })).json()) as StoreMigrateResponse;
+    expect(answer).toMatchObject({ sources: ["lab-b.env", "lab-a.env"], shadowed: [{ name: "KEY", kept: "lab-a.env", others: ["lab-b.env"] }], written: true });
+    expect(readFileSync(storeOf(bench, "lab").env, "utf8")).toBe("KEY=from-a\n");
+  });
+
+  test("a legacy file setting a name the project's env sets too: refused, saying the file's value is the one in effect and what keeps it", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    // cms's manifest sets DEFAULT_SENDER; cms-webhook.env, read after, overrides it.
+    writeFileSync(join(bench.secrets, "cms-webhook.env"), `DEFAULT_SENDER=${STORE_CANARY}\n`, { mode: 0o600 });
+    const token = await unlock(bench);
+    const refused = await bench.call("POST", "/store/migrate", { token, slug: "cms" });
+    expect(refused.status).toBe(400);
+    const failure = await errorOf(refused);
+    expect(failure.message).toBe(
+      "cms-webhook.env holds DEFAULT_SENDER, which the project's env or its unit sets too: the file's value, read after, is the one the service runs with, and a store takes no name its unit sets. Drop it from the manifest's env (or the unit) and deploy, then migrate again: the store keeps its value from cms-webhook.env. Removing it from cms-webhook.env instead would switch the service to the env's value",
+    );
+    expect(JSON.stringify(failure)).not.toContain(STORE_CANARY);
+    expect(existsSync(storeOf(bench, "cms").env)).toBe(false);
+    // Following the advice: the manifest no longer sets it, and the store takes the file's value, the one in effect.
+    const manifest = JSON.parse(readFileSync(join(bench.sites, "cms", "sitesolide.json"), "utf8")) as { env: Record<string, string> };
+    delete manifest.env.DEFAULT_SENDER;
+    writeFileSync(join(bench.sites, "cms", "sitesolide.json"), JSON.stringify(manifest));
+    expect(await (await bench.call("POST", "/store/migrate", { token, slug: "cms" })).json()).toMatchObject({ merged: ["SID", "TOKEN", "DEFAULT_SENDER"], written: true });
+    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toContain(`DEFAULT_SENDER=${STORE_CANARY}\n`);
+  });
+
   test("a legacy file carrying PASSWORD_HASH, or not managed, refuses the whole migration", async () => {
     const bench = await mount();
     cmsReadsStore(bench);
@@ -4387,7 +4425,8 @@ describe("migrate and retire (spec §6.8, §6.9, §8.1)", () => {
     writeFileSync(join(bench.secrets, "cms-webhook.env"), "PASSWORD_HASH=$argon2id$x\n", { mode: 0o600 });
     expect(await errorOf(await bench.call("POST", "/store/migrate", { token, slug: "cms" }))).toEqual({
       error: "invalid",
-      message: "cms-webhook.env holds PASSWORD_HASH, which a store does not take: remove them from cms-webhook.env first, then migrate again",
+      message:
+        "cms-webhook.env holds PASSWORD_HASH, which a store never holds: the file's value is the one the service runs with, and removing it from cms-webhook.env changes that. Move it to the manifest's env if it belongs there, deploy, then remove it from cms-webhook.env and migrate again",
     });
     chmodSync(join(bench.secrets, "cms-webhook.env"), 0o644);
     expect((await errorOf(await bench.call("POST", "/store/migrate", { token, slug: "cms" }))).message).toStartWith("cms-webhook.env is not managed here: mode 644");

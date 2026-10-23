@@ -2149,6 +2149,21 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return files.length > 0 && files.at(-1)!.path === storeLocation(slug).env;
   }
 
+  /**
+   * The files a unit reads with `EnvironmentFile=`, each at the last place
+   * it is named: systemd reads a file named twice twice, so A, B, A runs
+   * with A's value of a name both set, and the order in effect is B, A.
+   */
+  function readOrder(text: string): string[] {
+    const order: string[] = [];
+    for (const { path } of unitEnvironment(text).files) {
+      const at = order.indexOf(path);
+      if (at !== -1) order.splice(at, 1);
+      order.push(path);
+    }
+    return order;
+  }
+
   /** Does this unit read anything of the project's store, its env or its files? A restart then applies something. */
   function unitTouchesStore(text: string, slug: string): boolean {
     const environment = unitEnvironment(text);
@@ -2381,7 +2396,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     if (site === null) return [];
     const order: string[] = [];
     for (const unit of units) {
-      for (const file of unitEnvironment(unit.text).files) if (!order.includes(file.path)) order.push(file.path);
+      for (const path of readOrder(unit.text)) if (!order.includes(path)) order.push(path);
     }
     const declared = project.manifest === null ? [] : legacySecretFiles(project.manifest);
     const candidates = [
@@ -2804,7 +2819,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   function inEffectOrder(files: readonly LegacyFile[], units: readonly InstalledUnit[], declared: readonly string[]): { legacy: LegacyFile[]; orderAgreed: boolean } {
     const pathOf = (file: LegacyFile) => pathUnder(secretsFolder, file.declaration.name) ?? file.declaration.name;
     const paths = new Set(files.map(pathOf));
-    const orders = units.map((unit) => [...new Set(unitEnvironment(unit.text).files.map((file) => file.path).filter((path) => paths.has(path)))]);
+    const orders = units.map((unit) => readOrder(unit.text).filter((path) => paths.has(path)));
     const first = orders[0] ?? [];
     const orderAgreed = orders.every((order) => order.length === first.length && order.every((path, index) => path === first[index]));
     const read = first.map((path) => files.find((file) => pathOf(file) === path)!);
@@ -2854,7 +2869,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           : { file: file.declaration.name, state: "managed", assignments: [...documentValues(file.state.managed.document!)] },
     );
     const setKeys = storeSetKeys(project, units);
-    const plan = planMigration({ sources, store: storeValues(reading), keyRefusal: (name) => checkKey(name, setKeys), orderAgreed });
+    const plan = planMigration({ sources, store: storeValues(reading), keyRefusal: (name) => checkKey(name), setElsewhere: new Set(setKeys), orderAgreed });
     if (plan.kind === "refused") return storeRefuse("migrate", project.slug, plan.refusal, actor);
 
     const outcome = (written: boolean, store: StoreView): StoreMigrateAnswer => ({

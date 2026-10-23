@@ -67,9 +67,14 @@ export type MigrationPlan =
  * to 5).
  *
  * A source that is not managed refuses the whole migration with its reason,
- * and so does one carrying `PASSWORD_HASH` or a name the store refuses
- * (`keyRefusal`, the store's `checkKey`), naming the file and the names: a
- * migration is all or nothing. An absent source is skipped and said.
+ * and so does one carrying a name a store does not take, naming the file and
+ * the names: a migration is all or nothing. An absent source is skipped and
+ * said. Such a name is `PASSWORD_HASH`, a reserved one (`keyRefusal`, the
+ * store's `checkKey` with nothing set), or one the project's env or a unit
+ * sets too (`setElsewhere`). The file's value of it is the one the service
+ * runs with, read after `Environment=`: the refusal says so, since removing
+ * it from the file, the obvious remedy, would switch the service to another
+ * value (migrationKeyRefusal).
  *
  * **The value merged is the one in effect.** Two files setting one name to
  * different values: systemd keeps the later one in the order the unit reads
@@ -85,9 +90,12 @@ export function planMigration(input: {
   sources: readonly MigrationSource[];
   store: ReadonlyMap<string, string>;
   keyRefusal: (name: string) => string | null;
+  /** Names the project's env, a service's env, the tree or an installed unit's `Environment=` sets. */
+  setElsewhere?: ReadonlySet<string>;
   /** Every installed unit reads the sources in the same order. */
   orderAgreed: boolean;
 }): MigrationPlan {
+  const setElsewhere = input.setElsewhere ?? new Set<string>();
   const sources: string[] = [];
   const skipped: { file: string; reason: string }[] = [];
   /** Each name's assignments, in the order in effect. */
@@ -101,13 +109,11 @@ export function planMigration(input: {
     if (source.state === "unmanaged") {
       return { kind: "refused", refusal: { error: "unmanaged", message: `${source.file} is not managed here: ${source.reason}; fix it, then migrate again` } };
     }
-    const refused = source.assignments.map(([name]) => name).filter((name) => name === PASSWORD_VARIABLE || input.keyRefusal(name) !== null);
-    if (refused.length > 0) {
-      return {
-        kind: "refused",
-        refusal: { error: "invalid", message: `${source.file} holds ${[...new Set(refused)].join(", ")}, which a store does not take: remove them from ${source.file} first, then migrate again` },
-      };
-    }
+    const names = source.assignments.map(([name]) => name);
+    const elsewhere = names.filter((name) => setElsewhere.has(name));
+    const reserved = names.filter((name) => !setElsewhere.has(name) && (name === PASSWORD_VARIABLE || input.keyRefusal(name) !== null));
+    const refusal = migrationKeyRefusal(source.file, elsewhere, reserved);
+    if (refusal !== null) return { kind: "refused", refusal };
     sources.push(source.file);
     for (const [name, value] of source.assignments) {
       const known = seen.get(name) ?? [];
@@ -145,6 +151,49 @@ export function planMigration(input: {
   }
   // A conflict refuses the whole migration: nothing is to be written.
   return { kind: "plan", sources, skipped, merged, already, overridden, shadowed, conflicts, writes: conflicts.length > 0 ? [] : writes };
+}
+
+/**
+ * Why a legacy file's names keep it from being merged, or null, with the
+ * remedy that keeps what the service runs with. The file is read with
+ * `EnvironmentFile=`, after `Environment=`: its value wins over the
+ * project's env and its unit's, and removing a name from it switches the
+ * service to the env's value, or to none. Names only, never a value.
+ *
+ * - a name the env or a unit sets too: drop it there and deploy, and the
+ *   store, which then takes it, keeps the file's value;
+ * - a name no store holds, reserved or a password hash: the file's value is
+ *   in effect, and going on means moving it where it belongs, knowingly.
+ */
+export function migrationKeyRefusal(file: string, setElsewhere: readonly string[], reserved: readonly string[]): Refusal | null {
+  const sentences: string[] = [];
+  /** The words of one name or of several. */
+  const words = (names: readonly string[]) => {
+    const unique = [...new Set(names)];
+    const one = unique.length === 1;
+    return {
+      list: unique.join(", "),
+      it: one ? "it" : "them",
+      they: one ? "it" : "they",
+      its: one ? "its value" : "their values",
+      value: one ? "value" : "values",
+      is: one ? "is the one" : "are the ones",
+      belongs: one ? "belongs" : "belong",
+    };
+  };
+  if (setElsewhere.length > 0) {
+    const w = words(setElsewhere);
+    sentences.push(
+      `${file} holds ${w.list}, which the project's env or its unit sets too: the file's ${w.value}, read after, ${w.is} the service runs with, and a store takes no name its unit sets. Drop ${w.it} from the manifest's env (or the unit) and deploy, then migrate again: the store keeps ${w.its} from ${file}. Removing ${w.it} from ${file} instead would switch the service to the env's value`,
+    );
+  }
+  if (reserved.length > 0) {
+    const w = words(reserved);
+    sentences.push(
+      `${file} holds ${w.list}, which a store never holds: the file's ${w.value} ${w.is} the service runs with, and removing ${w.it} from ${file} changes that. Move ${w.it} to the manifest's env if ${w.they} ${w.belongs} there, deploy, then remove ${w.it} from ${file} and migrate again`,
+    );
+  }
+  return sentences.length === 0 ? null : { error: "invalid", message: sentences.join(". ") };
 }
 
 /** One legacy file asked to be retired, as the steward found it. */
