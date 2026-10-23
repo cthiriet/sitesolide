@@ -24,12 +24,19 @@
 #
 # The token is a password. It never goes into an argument, which `ps` shows
 # to every user of the machine: curl reads its header from a file descriptor.
-# The build, which is the project's own code and its dependencies', runs
-# without it in its environment, nor any other SITESOLIDE_ variable, but as
-# you all the same, with what you may read: a process of yours that holds
-# the token in its own environment is one of them on Linux. Deploy, and run
-# `--archive`, which builds too, only a project whose build you would run
-# yourself.
+# The build, which is the project's own code and its dependencies', runs in a
+# clean environment, as the CLI's does (buildEnv in bin/cli/kit.ts): of
+# yours, only the variables every build inherits (BUILD_INHERITED below) and
+# the build secrets the manifest names under `secrets.build`, then the
+# manifest's own `env`. Never the token, nor any SITESOLIDE_ variable. It
+# runs as you all the same, with what you may read: a process of yours that
+# holds the token in its own environment is one of them on Linux. Deploy,
+# and run `--archive`, which builds too, only a project whose build you
+# would run yourself.
+#
+# A build secret is taken from the environment alone, exported before the
+# run: one the manifest names and the environment lacks stops the run before
+# anything is sent. Its value never goes on a command line either.
 #
 # The archive's rules are bin/cli/remote.ts and bin/cli/bundle.ts, and
 # bin/tests/deploy-script.test.ts holds this script to them: change one, and
@@ -51,6 +58,15 @@ set -euo pipefail
 case "$-" in *x*) set +x && echo "deploy.sh: tracing turned off, it would print the token" >&2 ;; esac
 unset CDPATH
 
+# The environment as it came, by name, before this script assigns anything:
+# a build secret's value is taken from here, never from a variable of this
+# script's that bears the same name. Values stay in memory, never on a line.
+for _ss_name in $(compgen -e); do
+  [[ $_ss_name =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+  [ -z "${!_ss_name+x}" ] || printf -v "_ss_env_$_ss_name" '%s' "${!_ss_name}"
+done
+unset _ss_name
+
 TOKEN_SHAPE='^sst_[A-Za-z0-9_-]{43}$'
 HTTPS_ORIGIN='^https://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]+)?$'
 LOOPBACK_ORIGIN='^http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?$'
@@ -60,6 +76,12 @@ LOOPBACK_ORIGIN='^http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?$'
 # (DEPENDENCIES there).
 NEVER_SENT=(.git '.env*')
 DEPENDENCIES=(node_modules .venv venv __pycache__)
+# What every build inherits from whoever deploys, by exact name and by
+# prefix (BUILD_INHERITED and BUILD_INHERITED_PREFIXES in
+# bin/cli/variables.ts, which bin/tests/deploy-script.test.ts holds this copy
+# equal to). NODE_ENV is not among them: the manifest sets it.
+BUILD_INHERITED=(PATH HOME USER LOGNAME SHELL TERM COLORTERM NO_COLOR FORCE_COLOR LANG LANGUAGE TZ TMPDIR SSH_AUTH_SOCK CI BUN_INSTALL NVM_DIR NVM_BIN VOLTA_HOME PNPM_HOME COREPACK_HOME GOPATH GOROOT GOCACHE GOMODCACHE CARGO_HOME RUSTUP_HOME JAVA_HOME ANDROID_HOME PYENV_ROOT UV_CACHE_DIR DENO_DIR HOMEBREW_PREFIX HOMEBREW_CELLAR HOMEBREW_REPOSITORY SDKROOT DEVELOPER_DIR)
+BUILD_INHERITED_PREFIXES=(LC_ XDG_)
 # What the machine accepts (LIMITS in bin/cli/remote.ts).
 MAX_ENTRIES=20000
 MAX_EXTRACTED=$((512 * 1024 * 1024))
@@ -158,9 +180,11 @@ trap cleanup EXIT
 # The value at a dotted path of the JSON on standard input: a string as it
 # is, an array one element a line, anything else as JSON, nothing for null,
 # an empty array or a path that leads nowhere. With `type` second, its type
-# instead: string, number, boolean, array or object. Run from the work
-# folder, never the project's, whose bunfig.toml or json.py would otherwise
-# be read first. An empty input is no JSON, whatever jq makes of it.
+# instead: string, number, boolean, array or object. With `entries`, an
+# object's string values as `name=value`, each ended by a NUL byte, which no
+# value holds. Run from the work folder, never the project's, whose
+# bunfig.toml or json.py would otherwise be read first. An empty input is no
+# JSON, whatever jq makes of it.
 json_get() {
   local path="$1" mode="${2:-value}" input
   input="$(cat; echo .)"
@@ -168,14 +192,15 @@ json_get() {
   [ -n "$input" ] || return 1
   case "$JSON" in
     jq)
-      printf '%s' "$input" | (cd "$work" && jq -r --arg p "$path" --arg mode "$mode" '
+      printf '%s' "$input" | (cd "$work" && jq -j --arg p "$path" --arg mode "$mode" '
         ($p | split(".") | map(select(. != ""))) as $k
         | (try getpath($k) catch null)
         | if . == null then empty
-          elif $mode == "type" then type
-          elif type == "array" then .[] | (if type == "string" then . else tojson end)
-          elif type == "string" then .
-          else tojson end')
+          elif $mode == "entries" then (if type == "object" then to_entries[] | select(.value | type == "string") | "\(.key)=\(.value)\u0000" else empty end)
+          elif $mode == "type" then type + "\n"
+          elif type == "array" then .[] | (if type == "string" then . else tojson end) + "\n"
+          elif type == "string" then . + "\n"
+          else tojson + "\n" end')
       ;;
     node | bun)
       # The path travels in the environment: a `node` that is Bun under
@@ -191,6 +216,11 @@ json_get() {
             value = object && Object.prototype.hasOwnProperty.call(value, key) ? value[key] : undefined;
           }
           if (value === undefined || value === null) return;
+          if (process.env.SITESOLIDE_JSON_MODE === "entries") {
+            if (typeof value !== "object" || Array.isArray(value)) return;
+            for (const [key, item] of Object.entries(value)) if (typeof item === "string") process.stdout.write(key + "=" + item + "\0");
+            return;
+          }
           if (process.env.SITESOLIDE_JSON_MODE === "type") {
             process.stdout.write((Array.isArray(value) ? "array" : typeof value) + "\n");
             return;
@@ -210,7 +240,10 @@ def show(item):
     return item if isinstance(item, str) else json.dumps(item, separators=(",", ":"), ensure_ascii=False)
 def kind(item):
     return {bool: "boolean", int: "number", float: "number", str: "string", list: "array", dict: "object"}[type(item)]
-if value is not None and sys.argv[2] == "type":
+if value is not None and sys.argv[2] == "entries":
+    if isinstance(value, dict):
+        sys.stdout.buffer.write(b"".join((key + "=" + item + "\0").encode("utf-8") for key, item in value.items() if isinstance(item, str)))
+elif value is not None and sys.argv[2] == "type":
     sys.stdout.write(kind(value) + "\n")
 elif value is not None and value != []:
     lines = [show(item) for item in value] if isinstance(value, list) else [show(value)]
@@ -241,6 +274,24 @@ public_dir="$(field publicDir)"
 source_dir="$(field source)"
 exclude=()
 while IFS= read -r pattern; do exclude+=("$pattern"); done < <(field exclude)
+# The build secrets the manifest names, `"secrets": { "build": [...] }`:
+# each one is taken from the environment this script started with, and one
+# missing stops the run before anything is sent, the manifest included.
+build_secrets=()
+while IFS= read -r name; do [ -z "$name" ] || build_secrets+=("$name"); done < <(field secrets.build)
+missing_secrets=()
+for name in ${build_secrets[@]+"${build_secrets[@]}"}; do
+  # Checked before it is ever expanded: an indirection on another shape could run code.
+  [[ $name =~ ^[A-Za-z_][A-Za-z0-9_]{0,127}$ ]] || fail "secrets.build: an entry is not a variable name; nothing was sent"
+  case "$name" in SITESOLIDE_*) fail "secrets.build: $name is sitesolide's own, which a build never receives; nothing was sent" ;; esac
+  starting="_ss_env_$name"
+  [ -n "${!starting+x}" ] || missing_secrets+=("$name")
+done
+if [ "${#missing_secrets[@]}" -eq 1 ]; then
+  fail "build secret ${missing_secrets[0]} is not in the environment: export it; nothing was sent"
+elif [ "${#missing_secrets[@]}" -gt 1 ]; then
+  fail "build secrets ${missing_secrets[*]} are not in the environment: export them; nothing was sent"
+fi
 # An app has a `start` that is a string, or `services` with at least one
 # (isApp in bin/cli/manifest.ts): anything else sends public/ alone.
 is_app=0
@@ -364,19 +415,87 @@ if [ -z "$archive_to" ]; then
   fi
 fi
 
-# The build gets this environment less every variable named SITESOLIDE_:
-# the token, and SITESOLIDE_API or a DNS provider's SITESOLIDE_DNS_<...> with
-# it, as the CLI withholds them (buildEnv in bin/cli/kit.ts). The names come
-# from `env`, which lists what a child would receive, a name bash holds no
-# variable for included; a line inside a value that looks like one only
-# withholds a name nothing carries.
+# What `{zone}` and `{contact}` become in the manifest's `env` for the build:
+# the deployment's answer, or, from a dashboard before it sends them, the
+# zone its address names, `dashboard.<zone>`, and no contact. A placeholder
+# that cannot be filled stays in place, visible, as the CLI leaves it.
+zone=""
+contact=""
+if [ -z "$archive_to" ] && [ "$(json_get deployment.placeholders.zone type <"$work/answer" 2>/dev/null)" = string ]; then
+  zone="$(answer deployment.placeholders.zone)"
+  contact="$(answer deployment.placeholders.contact)"
+elif [ -n "${SITESOLIDE_API:-}" ]; then
+  host="${SITESOLIDE_API#*://}"
+  host="${host%%[:/]*}"
+  case "$host" in dashboard.*) zone="${host#dashboard.}" ;; esac
+fi
+
+# Every occurrence of $2 in $1 replaced by $3, by prefix and suffix rather
+# than ${1//...}, whose replacement bash 5.2 reads `&` in.
+replace_all() {
+  local text="$1" from="$2" to="$3" out=""
+  while [[ $text == *"$from"* ]]; do
+    out+="${text%%"$from"*}$to"
+    text="${text#*"$from"}"
+  done
+  printf '%s' "$out$text"
+}
+
+# Does every build inherit this variable, or does the manifest name it?
+build_takes() {
+  local name="$1" kept
+  case "$name" in SITESOLIDE_*) return 1 ;; esac
+  for kept in "${BUILD_INHERITED[@]}" ${build_secrets[@]+"${build_secrets[@]}"}; do [ "$name" = "$kept" ] && return 0; done
+  for kept in "${BUILD_INHERITED_PREFIXES[@]}"; do [[ $name == "$kept"* ]] && return 0; done
+  return 1
+}
+
+# The build gets a clean environment, as the CLI's (buildEnv in
+# bin/cli/kit.ts): from this one, only what build_takes keeps, the rest
+# unset, or, for a name bash holds no variable for, left out by `env -u`,
+# which takes names alone; then the manifest's project-level `env`, its
+# placeholders replaced and any SITESOLIDE_ name left out; then the build
+# secrets, from the environment the script started with. No value is ever
+# put on a command line: `env NAME=value` would show it in `ps`. The names
+# come from `env`, which lists what a child would receive; a line inside a
+# value that looks like one only removes a name nothing carries.
 if [ -n "$build" ]; then
   echo "-> build ($build)"
-  withheld=()
-  while IFS= read -r line; do
-    case "$line" in SITESOLIDE_*=*) withheld+=(-u "${line%%=*}") ;; esac
-  done < <(env)
-  (cd "$code" && env ${withheld[@]+"${withheld[@]}"} sh -c "$build") || fail "build failed: $build"
+  (
+    cd "$code"
+    # What the run needs, kept under names of its own first: the loop below
+    # unsets whatever else the environment carries, `build` or `slug`
+    # included, should a variable of that name have been exported.
+    _ss_build="$build"
+    _ss_slug="$slug"
+    _ss_zone="$zone"
+    _ss_contact="$contact"
+    _ss_entries=()
+    while IFS= read -r -d '' _ss_entry; do _ss_entries+=("$_ss_entry"); done < <(field env entries)
+    _ss_odd=()
+    while IFS= read -r _ss_line; do
+      _ss_key="${_ss_line%%=*}"
+      [ "$_ss_key" != "$_ss_line" ] && [ -n "$_ss_key" ] || continue
+      build_takes "$_ss_key" && continue
+      if [[ $_ss_key =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && unset "$_ss_key" 2>/dev/null; then continue; fi
+      _ss_odd+=(-u "$_ss_key")
+    done < <(env)
+    for _ss_entry in ${_ss_entries[@]+"${_ss_entries[@]}"}; do
+      _ss_key="${_ss_entry%%=*}"
+      _ss_value="${_ss_entry#*=}"
+      [[ $_ss_key =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+      case "$_ss_key" in SITESOLIDE_*) continue ;; esac
+      _ss_value="$(replace_all "$_ss_value" "{slug}" "$_ss_slug")"
+      [ -z "$_ss_zone" ] || _ss_value="$(replace_all "$_ss_value" "{zone}" "$_ss_zone")"
+      _ss_value="$(replace_all "$_ss_value" "{contact}" "$_ss_contact")"
+      export "$_ss_key=$_ss_value"
+    done
+    for _ss_key in ${build_secrets[@]+"${build_secrets[@]}"}; do
+      _ss_starting="_ss_env_$_ss_key"
+      export "$_ss_key=${!_ss_starting}"
+    done
+    exec env ${_ss_odd[@]+"${_ss_odd[@]}"} sh -c "$_ss_build"
+  ) || fail "build failed: $build"
 fi
 
 if [ -n "$public_dir" ]; then

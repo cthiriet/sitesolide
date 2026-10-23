@@ -3,6 +3,7 @@ import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, syml
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { projectEntries, readRemoteProject } from "../cli/remote";
+import { BUILD_INHERITED, BUILD_INHERITED_PREFIXES } from "../cli/variables";
 import { createTarReader } from "../../dashboard/src/installer/tar";
 
 /**
@@ -130,6 +131,25 @@ async function archive(folder: string, reader?: string): Promise<{ run: Run; see
 }
 
 const toolboxes = new Map<string, string>();
+
+/**
+ * A toolbox whose `env`, `curl` and `sh` record their arguments, then run the
+ * real ones: what `ps` would show of each, read back by the tests.
+ */
+function recordingToolbox(): { path: string; log: string } {
+  const folder = join(WORK, `path-recorded-${counter++}`);
+  mkdirSync(folder, { recursive: true });
+  const log = join(folder, "argv.log");
+  const reader = READERS[0]!;
+  for (const tool of [...TOOLS, reader]) {
+    const found = tool === "bun" ? process.execPath : Bun.which(tool)!;
+    if (["env", "curl", "sh"].includes(tool)) {
+      writeFileSync(join(folder, tool), `#!/bin/sh\nprintf '%s\\n' "${tool} $*" >> "${log}"\nexec "${found}" "$@"\n`);
+      chmodSync(join(folder, tool), 0o755);
+    } else symlinkSync(found, join(folder, tool));
+  }
+  return { path: folder, log };
+}
 
 beforeAll(() => {
   for (const reader of READERS) toolboxes.set(reader, toolbox(reader));
@@ -267,10 +287,19 @@ describe("the archive, beside the CLI's", () => {
     expect(read(new Uint8Array(readFileSync(out))).files["public/token.txt"]?.content).toBe("absent");
   }, 30_000);
 
-  // As the CLI withholds them, over SSH as with a token (buildEnv in bin/cli/kit.ts).
+  // As the CLI builds it, over SSH as with a token (buildEnv in bin/cli/kit.ts): an allow list.
   for (const shell of ["bash", "sh"]) {
-    test(`no SITESOLIDE_ variable reaches the build, an odd name included, and the rest does, started with ${shell}`, async () => {
-      const folder = project({ slug: "built", publicDir: "dist", build: "mkdir -p dist && env > dist/env.txt" }, {});
+    test(`no SITESOLIDE_ variable reaches the build, an odd name included, nor anything but the allow list and the declared, started with ${shell}`, async () => {
+      const folder = project(
+        {
+          slug: "built",
+          publicDir: "dist",
+          build: "mkdir -p dist && env > dist/env.txt",
+          env: { PUBLIC_URL: "https://{slug}.{zone}", CONTACT: "{contact}", SITESOLIDE_ZONE: "never.invalid" },
+          secrets: { build: ["CMS_TOKEN"] },
+        },
+        {},
+      );
       const out = join(WORK, `built-${counter++}.tar.gz`);
       const result = await run(folder, ["--archive", out], {
         shell,
@@ -279,17 +308,47 @@ describe("the archive, beside the CLI's", () => {
           SITESOLIDE_API: "https://dashboard.test-zone.invalid",
           SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
           "SITESOLIDE_ODD-NAME": "set through env, never through export",
-          BUILD_PROBE: "kept",
+          "ODD-NAME": "an odd name of the shell's",
+          BUILD_PROBE: "an undeclared variable",
+          AWS_SECRET_ACCESS_KEY: "a cloud's key the shell carries",
+          NODE_ENV: "development",
+          LC_ALL: "C",
+          CMS_TOKEN: "the cms token",
+          // Names the script itself assigns: the build secret still comes from the environment it started with.
+          JSON: "the deployer's",
         },
       });
       expect(result.code).toBe(0);
       const lines = read(new Uint8Array(readFileSync(out))).files["public/env.txt"]!.content.split("\n");
       // SITESOLIDE_DEPLOY_BASH too, which the script sets when sh started it.
       expect(lines.filter((line) => line.startsWith("SITESOLIDE_"))).toEqual([]);
-      expect(lines.some((line) => line.includes(TOKEN) || line.includes("a DNS provider's secret"))).toBe(false);
-      for (const line of ["BUILD_PROBE=kept", `HOME=${WORK}`, `PATH=${toolboxes.get(READERS[0]!)}`]) expect(lines).toContain(line);
+      expect(lines.some((line) => line.includes(TOKEN) || line.includes("a DNS provider's secret") || line.includes("a cloud's key"))).toBe(false);
+      // No deployment answered in an archive: the zone is the one SITESOLIDE_API names, the contact none.
+      for (const line of [`HOME=${WORK}`, `PATH=${toolboxes.get(READERS[0]!)}`, "LC_ALL=C", "CMS_TOKEN=the cms token", "PUBLIC_URL=https://built.test-zone.invalid", "CONTACT="]) expect(lines).toContain(line);
+      expect(lines.filter((line) => /^(BUILD_PROBE|AWS_SECRET_ACCESS_KEY|NODE_ENV|JSON|ODD-NAME)=/.test(line))).toEqual([]);
     }, 30_000);
   }
+
+  test("a build secret declared and not in the environment stops the run, before the build", async () => {
+    const folder = project({ slug: "built", publicDir: "dist", build: "touch ran && mkdir -p dist && touch dist/x", secrets: { build: ["CMS_TOKEN", "REGISTRY_TOKEN"] } }, {});
+    const result = await run(folder, ["--archive", join(WORK, "never.tar.gz")], { env: { CMS_TOKEN: "set" } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("deploy.sh: build secret REGISTRY_TOKEN is not in the environment: export it; nothing was sent");
+    expect(() => readFileSync(join(folder, "ran"))).toThrow();
+    // A name that is not one is refused before it is ever expanded.
+    const odd = project({ slug: "built", publicDir: "dist", build: "true", secrets: { build: ["a[$(touch pwned)]"] } }, {});
+    const refused = await run(odd, ["--archive", join(WORK, "never.tar.gz")]);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("secrets.build: an entry is not a variable name");
+    expect(() => readFileSync(join(WORK, "pwned"))).toThrow();
+  }, 30_000);
+
+  test("its copy of what every build inherits is the CLI's, name for name", () => {
+    const text = readFileSync(SCRIPT, "utf8");
+    const list = (name: string) => /^\s*(?<rest>.*)$/.exec(new RegExp(`^${name}=\\(([^)]*)\\)$`, "m").exec(text)![1]!)!.groups!.rest!.split(/\s+/).filter((entry) => entry !== "");
+    expect(list("BUILD_INHERITED")).toEqual([...BUILD_INHERITED]);
+    expect(list("BUILD_INHERITED_PREFIXES")).toEqual([...BUILD_INHERITED_PREFIXES]);
+  });
 });
 
 describe("what it refuses before anything leaves", () => {
@@ -426,6 +485,41 @@ describe("against the control API", () => {
     expect(globbed.code).toBe(1);
     expect(globbed.stderr).toContain("without a deployment");
     expect(requests.map((request) => request.method)).toEqual(["POST", "POST"]);
+  }, 30_000);
+
+  test("a build secret missing from the environment stops the run before the POST: nothing sent", async () => {
+    requests = [];
+    answer = () => new Response("unexpected", { status: 500 });
+    const folder = project({ slug: "app", publicDir: "dist", build: "mkdir -p dist && touch dist/x", secrets: { build: ["CMS_TOKEN"] } }, {});
+    const result = await run(folder, [], { env: { SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("build secret CMS_TOKEN is not in the environment: export it; nothing was sent");
+    expect(requests).toEqual([]);
+  }, 30_000);
+
+  test("the placeholders from the deployment's answer, and a build secret in no command line: env, curl and sh record theirs", async () => {
+    requests = [];
+    let polls = 0;
+    answer = (request) => {
+      if (request.method === "POST") return Response.json({ deployment: { id: "d1", state: "awaiting-bundle", creating: false, placeholders: { zone: "zone.invalid", contact: "owner@zone.invalid" } } }, { status: 201 });
+      if (request.method === "PUT") return deployment("running", [], 0);
+      polls++;
+      return polls === 1 ? deployment("running", [], 0) : deployment("succeeded", ["-> deployed"], 1);
+    };
+    const secret = "cms-value-never-on-a-line";
+    const tools = recordingToolbox();
+    const folder = project({ slug: "app", publicDir: "dist", build: "mkdir -p dist && env > dist/env.txt", env: { URL: "https://{slug}.{zone}", MAIL: "{contact}" }, secrets: { build: ["CMS_TOKEN"] } }, {});
+    const result = await run(folder, [], { env: { PATH: tools.path, SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN, CMS_TOKEN: secret } });
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    const argv = readFileSync(tools.log, "utf8");
+    expect(argv).toContain("sh -c mkdir -p dist && env > dist/env.txt");
+    expect(argv).toContain("curl ");
+    expect(argv).not.toContain(secret);
+    expect(argv).not.toContain(TOKEN);
+    const uploaded = requests.find((request) => request.method === "PUT")!;
+    const lines = read(uploaded.body).files["public/env.txt"]!.content.split("\n");
+    for (const line of ["URL=https://app.zone.invalid", "MAIL=owner@zone.invalid", `CMS_TOKEN=${secret}`]) expect(lines).toContain(line);
   }, 30_000);
 
   test("a refused manifest: every reason, and nothing built or sent", async () => {
