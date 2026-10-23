@@ -20,8 +20,8 @@ own: there is no staging environment and no second machine.
 `vm.test.ts` carries tests that dry-run mode cannot replace: an app never placed
 on the machine, deployed by the single `deploy` command, and that same
 deployment run again, which must place and reload nothing. Then a project with a
-secret: `deploy` finds it present and pushes nothing, the machine being the
-source of truth. Dry-run reads nothing on the machine, so nothing would say whether the
+secret file of the old form: `deploy` finds it present and pushes nothing, the
+machine being the source of truth. Dry-run reads nothing on the machine, so nothing would say whether the
 unit or the secret were really missing.
 
 ## What protects production
@@ -70,6 +70,21 @@ whether the account its unit runs as exists before making it, and the fake ssh
 answers from the accounts the test lays (`addAccount`) and from those an
 accepted `useradd` made, so that `deploy-monitor.test.ts` sees the account made
 once, and a second run make nothing.
+
+## The store of secrets
+
+The steward's owner socket is faked like the access registry: `store.json`
+in the VM's folder (`setStore`) holds, per project, the names of the
+variables and files its store keeps, never a value. A listing is a reading,
+always answered, as this release's steward, one from before the store (a 404
+`no such route`) or one with no owner socket. A change is a write: refused
+unless the test accepts writes, then applied by name and logged as
+`STORE <method> <route> <slug> <names>`; the value or the file came on
+standard input and is never recorded, which the tests check. The command
+that lays a store's folders is logged as `STORE-PREPARE <slug>` and lays them
+in the VM's tree, or answers as for a link in their place
+(`refuseStorePrepare`); the tests check it comes before the units, and the
+listing before the Caddy lock.
 
 ## Setup
 
@@ -150,7 +165,8 @@ with the binary itself. `help.test.ts` holds `help` and
 | `projects/bun-mixed` | Caddy serves `public/`, the service gets the rest |
 | `projects/own-domain` | a site waiting to switch to its own domain |
 | `projects/fastapi-app` | Python, no static page, everything goes to the service |
-| `projects/api-with-secret` | a declared secret, checked on the machine and never pushed, and outbound network |
+| `projects/api-with-secret` | a secret file of the old form, `"secrets": ["sample-secret.env"]`, deployed with its warning, checked on the machine and never pushed, and outbound network |
+| `projects/store-app` | secrets named in the manifest, two runtime variables and a file, kept in the project's store: its folders laid before the units, what it lacks read before the build and the Caddy lock, warned of and never a stop |
 | `projects/portal-mixed` | a project behind the portal, with an exempted path |
 | `projects/multi-service` | several services: a front, an API under `/v1`, an internal worker |
 | `projects/sourced` | a manifest alone, whose code lives in another folder, named by `source` |

@@ -66,7 +66,7 @@ describe("built documentation", () => {
     expect(r.output).toContain("projects/static-docs/dist/");
   });
 
-  test("the build gets no SITESOLIDE_ variable, a token exported by hand included, and the rest of the environment as it is", async () => {
+  test("the build gets no SITESOLIDE_ variable, a token exported by hand included, and of the rest only the allow list, the manifest's env and its build secrets", async () => {
     // The build is the folder's own code: a token or a DNS provider's
     // credentials in the workstation's environment would be its to read.
     const token = `sst_${"T".repeat(43)}`;
@@ -76,7 +76,8 @@ describe("built documentation", () => {
       const folder = join(parent, "site");
       mkdirSync(folder);
       const build = 'mkdir -p public && echo ok > public/index.html && env > "$ENV_PROBE"';
-      writeFileSync(join(folder, "sitesolide.json"), JSON.stringify({ slug: "build-env", publicDir: "public", build }));
+      // ENV_PROBE reaches the build because the manifest names it: nothing else of the workstation's but the allow list does.
+      writeFileSync(join(folder, "sitesolide.json"), JSON.stringify({ slug: "build-env", publicDir: "public", build, env: { SITE_URL: "https://{slug}.{zone}" }, secrets: { build: ["ENV_PROBE"] } }));
       const probe = join(parent, "build-env.txt");
       const r = await run(folder, ["deploy", "--dry-run", "--build"], {
         vm,
@@ -93,7 +94,9 @@ describe("built documentation", () => {
       // SITESOLIDE_SERVER and SITESOLIDE_ZONE, which the CLI itself reads, withheld with the rest.
       expect(lines.filter((line) => line.startsWith("SITESOLIDE_"))).toEqual([]);
       expect(lines.some((line) => line.includes(token) || line.includes("a DNS provider's secret"))).toBe(false);
-      for (const line of ["BUILD_PROBE=kept", `PATH=${vm.env.PATH}`]) expect(lines).toContain(line);
+      for (const line of [`PATH=${vm.env.PATH}`, `ENV_PROBE=${probe}`, "SITE_URL=https://build-env.test-zone.invalid"]) expect(lines).toContain(line);
+      expect(lines.filter((line) => line.startsWith("BUILD_PROBE="))).toEqual([]);
+      expect(r.output).toContain("build secret ENV_PROBE from your environment");
     } finally {
       vm.cleanup();
       rmSync(parent, { recursive: true, force: true });
@@ -806,13 +809,15 @@ describe("rejects", () => {
 });
 
 describe("project with a secret", () => {
-  test("the unit loads the file and no longer forbids the folder", async () => {
+  test("the unit loads the file, then the project's store, and closes the folder all the same", async () => {
     const r = await run("projects/api-with-secret", ["deploy", "--dry-run"]);
     expect(r.code).toBe(0);
-    expect(r.output).toContain("EnvironmentFile=-/etc/sitesolide/sample-secret.env");
-    // A service that reads its own file does not carry the directive,
-    // otherwise systemd could not give it to it.
-    expect(r.output).not.toContain("InaccessiblePaths=-/etc/sitesolide");
+    expect(r.output).toContain("EnvironmentFile=-/etc/sitesolide/sample-secret.env\nEnvironmentFile=-/etc/sitesolide/projects/sample-secret/env\n");
+    expect(r.output).toContain("LoadCredential=files:/etc/sitesolide/projects/sample-secret/files");
+    // PID 1 reads both before the walls go up (bench Q3): the folder is
+    // closed to the service whether it reads a flat file or not.
+    expect(r.output).toContain("InaccessiblePaths=-/etc/sitesolide");
+    expect(r.output).toContain("ProtectProc=invisible");
   });
 
   test("network outbound lifts the network confinement, and only that", async () => {
@@ -835,63 +840,280 @@ describe("project with a secret", () => {
   });
 });
 
+/** The events of a --json run, the last one checked to end it. */
+function jsonEvents(output: string): Record<string, unknown>[] {
+  const list = output
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  expect(["result", "error"]).toContain(list.at(-1)!.type as string);
+  return list;
+}
+
 /**
- * The secrets are managed on the machine, from the dashboard's Secrets
- * section: the VM is the authority. `sitesolide secrets` therefore pushes
- * nothing, and says where to go.
- *
- * The tests pass `--dry-run` although the command makes nothing of it: that is
- * what gives them the SITESOLIDE_SERVER that does not resolve, and a regression that
- * started pushing again would fail loudly instead of speaking to production.
+ * The project's store of secrets, /etc/sitesolide/projects/<slug>/, on the
+ * deploy path: its folders laid before the units, what it lacks read before
+ * the build and the Caddy lock, warned of and never a stop. The legacy form
+ * keeps deploying, with a warning.
  */
-describe("sitesolide secrets points to the dashboard", () => {
-  test("from a project, it says where the secrets are managed and exits with an error", async () => {
-    const r = await run("projects/api-with-secret", ["secrets", "--dry-run"]);
-    expect(r.code).toBe(1);
-    expect(r.error).toContain("Secrets section of https://dashboard.");
-    expect(r.error).toContain("source of truth");
+describe("deploy and the store of secrets", () => {
+  test("a dry run says what it would read and lay, and asks the machine for neither", async () => {
+    const vm = createFakeVm();
+    try {
+      const r = await run("projects/store-app", ["deploy", "--dry-run", "--json"], { vm });
+      expect(r.code).toBe(0);
+      const list = jsonEvents(r.output);
+      const planned = list.filter((event) => event.type === "planned").map((event) => event.message as string);
+      expect(planned).toContain("lay /etc/sitesolide/projects/sample-store/ and its files/ folder, root's, 0700, which every unit of sample-store loads");
+      expect(planned).toContain("read which declared runtime secrets the store holds: the missing ones asked for at a terminal, warned of otherwise");
+      // The store's folders before the units, so that none starts without them.
+      const lay = planned.findIndex((message) => message.startsWith("lay /etc/sitesolide/projects/"));
+      expect(lay).toBeLessThan(planned.findIndex((message) => message.startsWith("read /etc/systemd/system/sample-store.service")));
+      expect(list.at(-1)).toMatchObject({ type: "result", command: "deploy", missingSecrets: null, buildSecrets: [] });
+      expect(vm.logs().filter((line) => /^(STORE|ACCEPTED|REFUSED)/.test(line))).toEqual([]);
+    } finally {
+      vm.cleanup();
+    }
   });
 
-  test("it recalls the one secret the dashboard cannot create, its own password", async () => {
-    const r = await run("projects/api-with-secret", ["secrets", "--dry-run"]);
-    expect(r.error).toContain("bin/dashboard-password.sh");
-    // Nothing is pushed from the workstation any more: the script that did it
-    // is gone, and the command must not send anyone looking for it.
-    expect(r.error).not.toContain("deploy-secrets");
+  test("for real: what the store lacks read before the build and the Caddy lock, warned of under --json, and the deployment goes on; its folders laid before the units", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      vm.setStore({ variables: { "sample-store": ["SESSION_SECRET"] } });
+      // No --dry-run: the run goes past the restart, as far as the HTTPS
+      // check, which a zone that resolves nowhere fails.
+      const r = await run("projects/store-app", ["deploy", "--json"], { vm });
+      const list = jsonEvents(r.output);
+      expect(list.find((event) => event.type === "warning" && String(event.message).startsWith("runtime secrets not set"))).toMatchObject({
+        message: "runtime secrets not set on the server: MAIL_API_KEY; files not set on the server: signing.pem",
+        details: expect.arrayContaining(["sitesolide secrets set MAIL_API_KEY, or sitesolide secrets generate MAIL_API_KEY (a random key, drawn on the server)", "sitesolide secrets set-file signing.pem < path"]),
+      });
+      const logs = vm.logs();
+      const read = logs.indexOf("STORE GET sample-store");
+      const prepared = logs.indexOf("STORE-PREPARE sample-store");
+      const unit = logs.findIndex((line) => line.startsWith("ACCEPTED sudo install") && line.includes("/etc/systemd/system/sample-store.service"));
+      const lock = logs.indexOf("LOCK take deploy");
+      const restart = logs.findIndex((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart sample-store"));
+      expect(read).toBeGreaterThan(-1);
+      expect(read).toBeLessThan(lock);
+      expect(prepared).toBeGreaterThan(-1);
+      expect(prepared).toBeLessThan(unit);
+      expect(prepared).toBeLessThan(restart);
+      expect(existsSync(join(vm.root, "etc", "sitesolide", "projects", "sample-store", "files"))).toBe(true);
+      // Nothing was written to the store: without a terminal, nothing is asked.
+      expect(logs.filter((line) => line.startsWith("STORE ") && !line.startsWith("STORE GET"))).toEqual([]);
+      // The run went on to the restart: a missing secret stopped nothing.
+      expect(restart).toBeGreaterThan(-1);
+    } finally {
+      vm.cleanup();
+    }
+  }, 30_000);
+
+  test("a steward from before the store: one warning, and the deployment goes on", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      vm.setStore({ state: "old" });
+      const r = await run("projects/store-app", ["deploy", "--json"], { vm });
+      const list = jsonEvents(r.output);
+      expect(list.filter((event) => event.type === "warning" && String(event.message).startsWith("cannot tell which runtime secrets are set"))).toHaveLength(1);
+      expect(vm.logs().some((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart sample-store"))).toBe(true);
+    } finally {
+      vm.cleanup();
+    }
+  }, 30_000);
+
+  test("a store folder that is a link stops the deployment before the units and the code", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      vm.refuseStorePrepare();
+      const r = await run("projects/store-app", ["deploy", "--json"], { vm });
+      expect(r.code).toBe(1);
+      expect(jsonEvents(r.output).at(-1)).toMatchObject({
+        type: "error",
+        message: "the store of secrets cannot be laid: /etc/sitesolide/projects/sample-store is a link or not a folder",
+        hint: expect.stringContaining("tell the owner of the machine"),
+      });
+      const logs = vm.logs();
+      expect(logs.some((line) => line.includes("/etc/systemd/system/sample-store.service") && line.startsWith("ACCEPTED"))).toBe(false);
+      expect(logs.some((line) => line.includes("rsync"))).toBe(false);
+    } finally {
+      vm.cleanup();
+    }
+  }, 30_000);
+
+  test("a unit that cannot load its secret files is said so, never as systemd's Protocol error", async () => {
+    const vm = createFakeVm();
+    try {
+      // The restart fails, and the services read after it say 243.
+      vm.acceptWrites(["systemctl restart"]);
+      vm.setStandings([{ "sample-store": { active: "failed", sub: "failed", restarts: 0, status: 243 } }]);
+      const r = await run("projects/store-app", ["deploy", "--json"], { vm });
+      expect(r.code).toBe(1);
+      expect(jsonEvents(r.output).at(-1)).toMatchObject({
+        type: "error",
+        message: "sample-store.service could not load its secret files (243/CREDENTIALS): the store's files folder is missing, or its files are too large; sitesolide refresh sample-store lays the folder again",
+        hint: expect.stringContaining("sitesolide refresh"),
+      });
+    } finally {
+      vm.cleanup();
+    }
+  }, 30_000);
+
+  test("the legacy form deploys with its warning, and a missing legacy file is said, never a stop", async () => {
+    const dry = await run("projects/api-with-secret", ["deploy", "--dry-run", "--json"]);
+    expect(dry.code).toBe(0);
+    expect(jsonEvents(dry.output).find((event) => event.type === "warning")).toMatchObject({
+      message: "secrets: sample-secret.env is a file name, the old form: it keeps loading before the project's store; run sitesolide secrets migrate, then list the variable names",
+    });
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      vm.answer("if test -f /etc/sitesolide/sample-secret.env", "ABSENT\n");
+      const r = await run("projects/api-with-secret", ["deploy", "--json"], { vm });
+      const list = jsonEvents(r.output);
+      expect(list.find((event) => event.type === "warning" && String(event.message).startsWith("/etc/sitesolide/sample-secret.env"))).toMatchObject({
+        message: "/etc/sitesolide/sample-secret.env is missing: the service starts without its variables",
+      });
+      // Past it: the service restarted. A legacy-form project declares no name the store is read for.
+      expect(vm.logs().some((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart sample-secret"))).toBe(true);
+      expect(vm.logs().filter((line) => line.startsWith("STORE GET"))).toEqual([]);
+    } finally {
+      vm.cleanup();
+    }
+  }, 30_000);
+
+  test("a build secret missing from the environment and the workstation stops before anything is read on the machine; a dry run that does not build only warns", async () => {
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), "build-secret-")));
+    const vm = createFakeVm();
+    try {
+      const folder = join(parent, "site");
+      mkdirSync(folder);
+      writeFileSync(join(folder, "sitesolide.json"), JSON.stringify({ slug: "build-secret", publicDir: "public", build: "mkdir -p public && touch public/index.html", secrets: { build: ["CMS_TOKEN"] } }));
+      const home = join(parent, "home");
+      const built = await run(folder, ["deploy", "--dry-run", "--build", "--json"], { vm, env: { HOME: home, SITESOLIDE_VAULT: join(home, "vault") } });
+      expect(built.code).toBe(1);
+      expect(jsonEvents(built.output).at(-1)).toMatchObject({ type: "error", message: "build secrets missing: CMS_TOKEN", hint: expect.stringContaining("nothing was sent") });
+      expect(vm.logs()).toEqual([]);
+      const planned = await run(folder, ["deploy", "--dry-run", "--json"], { vm, env: { HOME: home, SITESOLIDE_VAULT: join(home, "vault") } });
+      expect(planned.code).toBe(0);
+      expect(jsonEvents(planned.output).find((event) => event.type === "warning")).toMatchObject({ message: "build secrets missing: CMS_TOKEN" });
+      // From the workstation's file of the project: said by its path, its value never.
+      mkdirSync(join(home, "vault"), { recursive: true });
+      writeFileSync(join(home, "vault", "build-secret.env"), "CMS_TOKEN=from-the-vault\n");
+      const found = await run(folder, ["deploy", "--dry-run", "--build", "--json"], { vm, env: { HOME: home, SITESOLIDE_VAULT: join(home, "vault") } });
+      expect(found.code).toBe(0);
+      expect(jsonEvents(found.output).at(-1)).toMatchObject({ buildSecrets: [{ name: "CMS_TOKEN", source: "workstation" }] });
+      expect(found.all).not.toContain("from-the-vault");
+    } finally {
+      vm.cleanup();
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * `sitesolide secrets` over SSH: the project's store, on the steward's owner
+ * socket, as root. A value goes on standard input, never in a command line,
+ * and never comes back. The dashboard and the portal have no store: they
+ * point to the dashboard.
+ */
+describe("sitesolide secrets, over SSH", () => {
+  const VALUE = "e2e-secret-value-never-on-a-line";
+
+  test("the listing: names and states, never a value; nothing written", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.setStore({ variables: { "sample-store": ["SESSION_SECRET"] }, files: { "sample-store": ["signing.pem"] } });
+      const r = await run("projects/store-app", ["secrets", "--json"], { vm });
+      expect(r.code).toBe(0);
+      const result = jsonEvents(r.output).at(-1)!;
+      expect(result).toMatchObject({ type: "result", command: "secrets", slug: "sample-store", store: { variables: [{ name: "SESSION_SECRET", source: "store" }] } });
+      const human = await run("projects/store-app", ["secrets"], { vm });
+      expect(human.output).toContain("-> secrets of sample-store, over SSH, as the owner");
+      expect(human.output).toContain("files, read at $CREDENTIALS_DIRECTORY/files_<name>: signing.pem set");
+      expect(vm.logs()).toEqual(["STORE GET sample-store", "STORE GET sample-store"]);
+    } finally {
+      vm.cleanup();
+    }
   });
 
-  test("it no longer holds any site file outside the dashboard", async () => {
-    // The dashboard, the portal and the landing used to be kept out of it;
-    // naming them still as exceptions would point to the vault for files that
-    // the dashboard now manages, and a value pushed from there would overwrite
-    // the one in service. The message only quotes the platform's own pieces:
-    // an ordinary site has no business appearing there, the platform knowing
-    // nothing of their trade.
-    const r = await run("projects/api-with-secret", ["secrets", "--dry-run"]);
-    expect(r.error).toContain("the dashboard, the portal and the landing included");
-    expect(r.error).not.toContain("dashboard.env");
-    expect(r.error).not.toContain("portal.env");
-    expect(r.error).not.toContain("does not manage");
+  test("set takes the value on standard input, sends it to the steward on standard input, never in a command line", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      const proc = Bun.spawn(["bun", join(REPO, "bin", "sitesolide.ts"), "secrets", "set", "MAIL_API_KEY", "--stdin", "--json"], {
+        cwd: join(TESTS_ROOT, "projects", "store-app"),
+        env: { ...process.env, SITESOLIDE_ZONE: "test-zone.invalid", SITESOLIDE_EMAIL: "sample@test-zone.invalid", ...vm.env },
+        stdin: new TextEncoder().encode(`${VALUE}\n`),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [output, error, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+      expect(code).toBe(0);
+      expect(jsonEvents(output).at(-1)).toMatchObject({ type: "result", command: "secrets", action: "set", set: ["MAIL_API_KEY"] });
+      expect(`${output}${error}`).not.toContain(VALUE);
+      expect(vm.logs()).toEqual(["STORE PUT /store/variable sample-store MAIL_API_KEY"]);
+      expect(vm.store().variables["sample-store"]).toEqual(["MAIL_API_KEY"]);
+      expect(readFileSync(join(vm.root, "logs"), "utf8")).not.toContain(VALUE);
+    } finally {
+      vm.cleanup();
+    }
   });
 
-  test("nothing leaves, nothing is read, nothing restarts", async () => {
-    const r = await run("projects/api-with-secret", ["secrets", "--dry-run"]);
-    // Not even a command displayed in a dry run: there is no gesture to
-    // simulate.
-    expect(r.all).not.toContain("[dry-run]");
-    expect(r.all).not.toContain("systemctl");
-    expect(r.all).not.toContain("test -f");
+  test("a value on the command line is refused before anything is read or sent; --dry-run belongs to migrate alone", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      const r = await run("projects/store-app", ["secrets", "set", `MAIL_API_KEY=${VALUE}`, "--json"], { vm });
+      expect(r.code).toBe(1);
+      expect(jsonEvents(r.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("never goes on the command line") });
+      expect(r.all).not.toContain(VALUE);
+      const dry = await run("projects/store-app", ["secrets", "generate", "SESSION_SECRET", "--dry-run", "--json"], { vm });
+      expect(dry.code).toBe(1);
+      expect(vm.logs()).toEqual([]);
+    } finally {
+      vm.cleanup();
+    }
   });
 
-  test("outside a project, the answer is the same", async () => {
-    const r = await run(".", ["secrets", "--dry-run"]);
-    expect(r.code).toBe(1);
-    expect(r.error).toContain("Secrets section of https://dashboard.");
-    expect(r.error).toContain("bin/dashboard-password.sh");
-    expect(r.all).not.toContain("[dry-run]");
+  test("generate draws the value on the server, never shown; a steward from before the store says so", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      const r = await run("projects/store-app", ["secrets", "generate", "SESSION_SECRET", "--json"], { vm });
+      expect(jsonEvents(r.output).at(-1)).toMatchObject({ type: "result", action: "generate", generated: ["SESSION_SECRET"] });
+      vm.setStore({ state: "old" });
+      const old = await run("projects/store-app", ["secrets", "--json"], { vm });
+      expect(jsonEvents(old.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("sitesolide upgrade"), hint: expect.stringContaining("sitesolide upgrade") });
+    } finally {
+      vm.cleanup();
+    }
   });
 
-  test("restart over SSH points to the dashboard too, and restarts nothing", async () => {
+  test("the dashboard and the portal have no store: secrets points to the dashboard; a static site has none either", async () => {
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), "storeless-")));
+    const vm = createFakeVm();
+    try {
+      const portal = join(parent, "portal");
+      mkdirSync(portal);
+      writeFileSync(join(portal, "sitesolide.json"), JSON.stringify({ slug: "portal", start: "/usr/local/bin/bun run server.ts", port: 3001, secrets: ["portal.env"] }));
+      const r = await run(portal, ["secrets"], { vm });
+      expect(r.code).toBe(1);
+      expect(r.error).toContain("Secrets section of https://dashboard.");
+      expect(r.error).toContain("bin/dashboard-password.sh");
+      const site = await run("projects/simple-site", ["secrets", "--json"], { vm });
+      expect(jsonEvents(site.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("a static site") });
+      expect(vm.logs()).toEqual([]);
+    } finally {
+      vm.cleanup();
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("restart over SSH points to the dashboard, and restarts nothing", async () => {
     const r = await run("projects/api-with-secret", ["restart", "--dry-run"]);
     expect(r.code).toBe(1);
     expect(r.error).toContain("a service is restarted from the dashboard: Restart service, in the project's Overview at https://dashboard.");
@@ -899,12 +1121,12 @@ describe("sitesolide secrets points to the dashboard", () => {
     expect(r.all).not.toContain("systemctl");
   });
 
-  test("the usage no longer offers it, and says where the secrets live", async () => {
+  test("the usage offers it, and says where the secrets live", async () => {
     const r = await run(".", ["--dry-run"]);
     expect(r.code).toBe(1);
     expect(r.error).toContain("usage:");
-    expect(r.error).not.toContain("sitesolide secrets");
-    expect(r.error).toContain("Secrets section of https://dashboard.");
+    expect(r.error).toContain("sitesolide secrets");
+    expect(r.error).toContain("never in the repository");
   });
 });
 

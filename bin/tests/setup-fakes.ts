@@ -199,7 +199,14 @@ export function fakeKit(machine: FakeMachine): FakeKit {
       machine.install(["caddyfile", "tls-zone-live"]);
       return { code: 0, output: "" };
     }
-    if (name === "deploy portal" && !machine.labels.has("portal-password")) return { code: 1, output: "!! secret missing on the server: /etc/sitesolide/portal.env" };
+    // A deploy no longer stops on a missing secret file: it warns, and the
+    // portal starts without its hash, which nobody can then sign in with.
+    // The order of the steps keeps the password first; what deploy says
+    // when it is not is what a deploy of this release says.
+    if (name === "deploy portal" && !machine.labels.has("portal-password")) {
+      machine.install(EFFECTS[name] ?? []);
+      return { code: 0, output: "!! /etc/sitesolide/portal.env is missing: the service starts without its variables" };
+    }
     if (name === "deploy-egress.sh") machine.labels.delete("steward-after-egress");
     if (name === "deploy-steward.sh" && machine.labels.has("egress-active")) machine.labels.add("steward-after-egress");
     machine.install(EFFECTS[name] ?? []);

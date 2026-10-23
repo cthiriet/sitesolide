@@ -344,6 +344,78 @@ describe("sitesolide refresh <slug>", () => {
   }, 30_000);
 });
 
+describe("refresh and the store of secrets", () => {
+  test("the store's folders laid before any unit, and for a current project too: a files/ folder deleted by hand comes back", async () => {
+    const on = machine();
+    on.acceptWrites();
+    on.keepUnits();
+    lay(on, SAMPLE, "previous");
+    await refresh(on, ["sample-refresh"]);
+    const logs = on.logs();
+    expect(logs.indexOf("STORE-PREPARE sample-refresh")).toBeGreaterThan(-1);
+    expect(logs.indexOf("STORE-PREPARE sample-refresh")).toBeLessThan(logs.indexOf(INSTALL));
+    const files = join(on.root, "etc", "sitesolide", "projects", "sample-refresh", "files");
+    expect(existsSync(files)).toBe(true);
+    // Deleted by hand: every unit of the project would fail with 243. A
+    // refresh of a project whose units are current lays it back, and
+    // writes and restarts nothing else.
+    rmSync(files, { recursive: true });
+    const before = on.logs().length;
+    const again = await refresh(on, ["sample-refresh", "--json"]);
+    expect(again.code).toBe(0);
+    expect(ended(again, "result")).toMatchObject({ current: ["sample-refresh"], refreshed: [] });
+    expect(existsSync(files)).toBe(true);
+    expect(on.logs().slice(before).filter((line) => /^(ACCEPTED|LOCK)/.test(line))).toEqual([]);
+    expect(on.logs().slice(before)).toContain("STORE-PREPARE sample-refresh");
+  });
+
+  test("a store folder that is a link refuses the project before any unit is written", async () => {
+    const on = machine();
+    on.acceptWrites();
+    on.refuseStorePrepare();
+    lay(on, SAMPLE, "previous");
+    const r = await refresh(on, ["sample-refresh", "--json"]);
+    expect(r.code).toBe(1);
+    expect(ended(r, "error")).toMatchObject({ message: "sample-refresh's store of secrets cannot be laid, which its units load: nothing was changed for it" });
+    expect(accepted(on)).toEqual([]);
+  });
+
+  test("a legacy secret file the project may not read refuses it before any unit is written, as deploy refuses it", async () => {
+    const on = machine();
+    on.acceptWrites();
+    lay(on, app("sample-refresh", 3061, { secrets: ["dashboard-backup.env"] }), "previous");
+    const r = await refresh(on, ["sample-refresh", "--json"]);
+    expect(r.code).toBe(1);
+    const error = ended(r, "error");
+    expect(error.message).toBe("sample-refresh declares a secret file that is not its own, which its units would read as root: nothing was changed for it");
+    expect((error.details as string[]).join(" ")).toContain("dashboard-backup.env belongs to the machine");
+    expect(accepted(on)).toEqual([]);
+    expect(on.logs().filter((line) => line.startsWith("STORE-PREPARE"))).toEqual([]);
+  });
+
+  test("after the restart, what the store lacks is warned of, never asked for", async () => {
+    const on = machine();
+    on.acceptWrites();
+    on.keepUnits();
+    lay(on, app("sample-refresh", 3061, { secrets: ["SESSION_SECRET"] }), "previous");
+    const r = await refresh(on, ["sample-refresh", "--json"]);
+    const warning = events(r).find((event) => event.type === "warning" && String(event.message).startsWith("runtime secrets not set"));
+    expect(warning).toMatchObject({ message: "runtime secrets not set on the server: SESSION_SECRET" });
+    const logs = on.logs();
+    expect(logs.indexOf("STORE GET sample-refresh")).toBeGreaterThan(logs.indexOf(RESTART));
+    expect(logs.filter((line) => line.startsWith("STORE ") && !line.startsWith("STORE GET"))).toEqual([]);
+  });
+
+  test("--dry-run says it would lay them, and asks nothing", async () => {
+    const on = machine();
+    lay(on, SAMPLE, "previous");
+    const r = await refresh(on, ["sample-refresh", "--dry-run"]);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("[dry-run] lay /etc/sitesolide/projects/sample-refresh/ and its files/ folder, root's, 0700, which every unit of sample-refresh loads");
+    expect(on.logs().filter((line) => /^(STORE|ACCEPTED|REFUSED)/.test(line))).toEqual([]);
+  });
+});
+
 describe("sitesolide refresh --all", () => {
   /** Six projects, in the order refresh takes them: current, edited, unreadable, static, then two of the previous generation. */
   function sixProjects(on: FakeVm): void {

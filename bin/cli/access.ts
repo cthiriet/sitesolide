@@ -522,15 +522,40 @@ const SLUG = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /**
  * A read, as root on the machine; the status on a line of its own after the
- * body. The address quoted: a `?` is a pattern to the remote shell.
+ * body. The address quoted: a `?` is a pattern to the remote shell. A slug
+ * is built into the address only once it has a slug's shape: the address is
+ * quoted, and a quote in it would end the quoting.
  */
-export function ownerReadCommand(path: "/people" | `/access?slug=${string}`): string {
+export function ownerReadCommand(path: "/people" | `/access?slug=${string}` | `/store?slug=${string}`): string {
+  const slug = /\?slug=(.*)$/.exec(path)?.[1];
+  if (slug !== undefined && !SLUG.test(slug)) throw new Error("not a project's slug: no read is built from it");
   return `sudo curl -sS --max-time 30 -w '\\n%{http_code}\\n' ${SOCKET} 'http://steward${path}'`;
 }
 
-/** A change, the JSON body on standard input: no address of the request ever goes through a shell. */
-export function ownerWriteCommand(method: "PUT" | "DELETE" | "POST", path: "/access/entry" | "/people/person" | "/access/migrate"): string {
-  return `sudo curl -sS --max-time 30 -X ${method} -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' ${SOCKET} http://steward${path}`;
+/** The owner socket's routes that change something, each taking its JSON body on standard input. */
+export type OwnerWritePath =
+  | "/access/entry"
+  | "/people/person"
+  | "/access/migrate"
+  | "/store"
+  | "/store/variable"
+  | "/store/generate"
+  | "/store/file"
+  | "/store/migrate"
+  | "/store/retire"
+  | "/restart";
+
+/**
+ * Those that wait for the steward's lock and then for a service: a restart
+ * watches the service for a few seconds, migrate and retire read every unit
+ * of the project. curl waits longer for them than for a write alone.
+ */
+const SLOW_WRITES: readonly OwnerWritePath[] = ["/restart", "/store/migrate", "/store/retire"];
+
+/** A change, the JSON body on standard input: no address of the request, nor any value, ever goes through a shell. */
+export function ownerWriteCommand(method: "PUT" | "DELETE" | "POST" | "PATCH", path: OwnerWritePath): string {
+  const time = SLOW_WRITES.includes(path) ? 120 : 30;
+  return `sudo curl -sS --max-time ${time} -X ${method} -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' ${SOCKET} http://steward${path}`;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -546,8 +571,14 @@ export function ownerGeneralCommand(): string {
   return `sudo curl -sS --max-time 240 -X POST -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' ${SOCKET} http://steward/general`;
 }
 
-/** The steward's answer over SSH, or the failure in the command's words. */
-async function askSteward(
+/**
+ * The steward's answer over SSH, or the failure in the command's words: an
+ * ssh that did not connect, a socket missing (a steward from before the
+ * owner's socket), a route the steward does not carry yet (`outdated`), or
+ * its refusal as it stands. `unchanged` adds that nothing was changed to a
+ * refusal, which a read or a change that may have half happened leaves out.
+ */
+export async function askSteward(
   run: RunOnMachine,
   command: string,
   input?: string,

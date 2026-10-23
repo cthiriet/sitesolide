@@ -3,6 +3,7 @@ import { DEFAULT_HINT, hintFor } from "../cli/hints";
 import type { Manifest } from "../cli/manifest";
 import {
   changedMeanwhile,
+  foreignSecretFiles,
   foreignUnits,
   notDeployed,
   parseRefreshArguments,
@@ -12,6 +13,7 @@ import {
   refusedManifest,
   stoppedAt,
   stoppedDetails,
+  storeRefused,
   summaryFields,
   summaryLines,
   type ProjectReport,
@@ -169,6 +171,10 @@ describe("what it says", () => {
       `${stoppedAt("shop")}Caddy is being changed by deploy since 10:00:00 UTC; try again in a moment`,
       `${stoppedAt("shop")}cannot take the Caddy lock: no answer`,
       `${stoppedAt("shop")}cannot tell whether /etc/systemd/system/shop.service is there`,
+      // What it checks and lays before any unit, as deploy does.
+      foreignSecretFiles("shop"),
+      storeRefused("shop"),
+      `${stoppedAt("shop")}cannot read who owns the secret files on the server`,
     ];
     for (const message of messages) {
       const hint = hintFor(message);
@@ -179,5 +185,7 @@ describe("what it says", () => {
     expect(hintFor(`${stoppedAt("shop")}cannot tell whether /etc/systemd/system/shop.service is there`)).toContain("nothing was changed");
     expect(hintFor(`${stoppedAt("shop")}a service fell after its restart`)).toContain("sitesolide logs");
     expect(hintFor(refusedManifest("shop"))).toContain("sitesolide deploy");
+    expect(hintFor(storeRefused("shop"))).toContain("tell the owner of the machine");
+    expect(foreignSecretFiles("shop")).toBe("shop declares a secret file that is not its own, which its units would read as root: nothing was changed for it");
   });
 });

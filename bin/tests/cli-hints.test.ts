@@ -5,7 +5,11 @@ import { decideTake, type TakeAnswer } from "../cli/caddy-lock";
 import { DEFAULT_HINT, HINTS, hintFor, hintForFailure, REMOTE_HINTS } from "../cli/hints";
 import { PROJECT_PORTS_FILE } from "../cli/loopback";
 import { confirmDoorUnderLock, decidePortal, guardDepositedManifest } from "../cli/portal-vm";
-import { decideSecret } from "../cli/secrets";
+import { missingBuildSecrets, unreadableWorkstation } from "../cli/build-secrets";
+import { credentialsFailure } from "../cli/store";
+import { foreignSecretFiles, storeRefused } from "../cli/refresh";
+import { storelessRefusal } from "../cli/store-cli";
+import type { Manifest } from "../cli/manifest";
 
 /**
  * Every refusal the CLI prints carries, under --json, a hint an agent can act
@@ -54,8 +58,18 @@ describe("the hints", () => {
       const decision = decideTake(answer);
       if (decision.kind === "rejects") messages.push(decision.message);
     }
-    const secret = decideSecret({ name: "shop.env", onServer: false }, "https://dashboard.test-zone.invalid");
-    if (secret.kind === "rejects") messages.push(secret.message);
+    // The store and the build's secrets: deploy and refresh word these where they stop.
+    messages.push(
+      missingBuildSecrets(["CMS_TOKEN"], "/home/someone/.config/sitesolide/secrets/blog.env").message,
+      unreadableWorkstation("/home/someone/.config/sitesolide/secrets/blog.env", "line 3: invalid variable name").message,
+      "the store of secrets cannot be laid: /etc/sitesolide/projects/shop is a link or not a folder",
+      "cannot tell whether the store's folders of shop are laid",
+      credentialsFailure("shop.service", "shop"),
+      foreignSecretFiles("shop"),
+      storeRefused("shop"),
+      storelessRefusal({ slug: "blog", publicDir: "dist" } as Manifest).message,
+      storelessRefusal({ slug: "portal", start: "/x", port: 3001 } as Manifest).message,
+    );
     const unreadable = { kind: "unreadable", reason: "no answer" } as const;
     for (const decision of [
       decidePortal("shop", { portal: false, lock: false }, unreadable),
@@ -65,7 +79,7 @@ describe("the hints", () => {
     ]) {
       if (decision.kind === "rejects") messages.push(decision.message);
     }
-    expect(messages.length).toBe(7);
+    expect(messages.length).toBe(15);
     expect(messages.filter((message) => hintFor(message) === DEFAULT_HINT)).toEqual([]);
   });
 
@@ -94,10 +108,10 @@ describe("the hints", () => {
     expect(hintForFailure("verify-failed", "https://shop.test-zone.invalid/ answered 404: nothing is served at the site's root")).toContain("index.html in publicDir");
   });
 
-  test("a missing secret sends to the dashboard, never to the repository", () => {
-    const hint = hintFor("secret missing on the server: /etc/sitesolide/shop.env");
-    expect(hint).toContain("dashboard");
-    expect(hint).toContain("never put secret values in the repository");
+  test("a missing build secret goes to whoever deploys, never into the repository", () => {
+    const hint = hintFor("build secrets missing: CMS_TOKEN");
+    expect(hint).toContain("export it");
+    expect(hint).toContain("never put its value in the repository");
   });
 
   test("a refusal through the API is answered by its code, and never with --force", () => {
@@ -151,12 +165,14 @@ describe("the hints", () => {
   });
 
   test("every refusal of a token's run has its code's hint, the secrets routes' and the CLI's own among them", () => {
-    const source = readFileSync(join(import.meta.dir, "..", "cli", "remote.ts"), "utf8");
+    // `secrets` and `restart` live in store-cli.ts, which both ways run.
+    const source = ["remote.ts", "store-cli.ts"].map((file) => readFileSync(join(import.meta.dir, "..", "cli", file), "utf8")).join("\n");
     const codes = new Set([...source.matchAll(/error: "([a-z-]+)"/g)].map((match) => match[1]!));
     // Enough to be sure the scan reads the file.
     for (const code of ["value-in-arguments", "needs-stdin", "cancelled", "restart-failed", "needs-ssh", "unknown-option", "stdin-is-terminal", "looks-like-value", "unconfirmed"]) expect(codes.has(code)).toBe(true);
-    // What the API answers on its secrets and restart routes (docs/access.md), `unmanaged` the one they add.
-    for (const code of ["unauthenticated", "too-many-attempts", "out-of-scope", "invalid", "not-found", "busy", "too-large", "unmanaged", "not-available", "failure"]) codes.add(code);
+    // What the API answers on its secrets and restart routes (docs/access.md), `unmanaged` the one they add,
+    // and what the steward refuses a change of the store with, over SSH as through the API.
+    for (const code of ["unauthenticated", "too-many-attempts", "out-of-scope", "invalid", "not-found", "busy", "too-large", "unmanaged", "not-available", "failure", "already-present", "store-unmanaged", "store-refused", "steward-outdated", "ssh-failed"]) codes.add(code);
     expect([...codes].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
   });
 
@@ -174,6 +190,20 @@ describe("the hints", () => {
     expect(REMOTE_HINTS["needs-ssh"]).toContain("secrets, restart and login");
     expect(hintForFailure("restart-failed", "the service of shop did not hold after its restart")).toContain("never restart in a loop");
     expect(hintForFailure("unmanaged", "shop.env is not managed here")).toContain("tell the owner");
+  });
+
+  test("the store's and the build secrets' codes: what to do, never a value read or printed", () => {
+    expect(REMOTE_HINTS["build-secret-missing"]).toContain("never a value read from the conversation");
+    expect(REMOTE_HINTS["build-secret-missing"]).toContain("nothing was sent");
+    expect(REMOTE_HINTS["build-secrets-unreadable"]).toContain("never read, print or rewrite the file yourself");
+    expect(REMOTE_HINTS["migrate-conflict"]).toBe("fix the file named, in the dashboard, then run migrate again; never read or print a value");
+    expect(REMOTE_HINTS["store-refused"]).toContain("never move, delete or replace it yourself");
+    expect(REMOTE_HINTS["already-present"]).toContain("--replace");
+    expect(REMOTE_HINTS["steward-outdated"]).toContain("sitesolide upgrade");
+    // 243 is said by what to run, refresh, never by a hand on the machine.
+    expect(hintFor(credentialsFailure("shop.worker.service", "shop"))).toContain("sitesolide refresh <slug>");
+    // The stop it described is gone: a missing runtime secret never stops a deployment.
+    expect(HINTS.some(([pattern]) => pattern.test("secret missing on the server: /etc/sitesolide/shop.env"))).toBe(false);
   });
 
   test("the codes of what is gone have no hint left: members and the portal's own sharing", () => {

@@ -36,7 +36,11 @@ export type OutputEvent =
   | { type: "info"; message: string }
   /** What a dry run would have done, and did not. */
   | { type: "planned"; message: string }
-  /** Something went wrong without stopping the run. */
+  /**
+   * Something went wrong without stopping the run: the old form of `secrets`,
+   * runtime secrets the store lacks, a legacy file missing, a store that could
+   * not be listed. `details` name the commands that fix it, never a value.
+   */
   | { type: "warning"; message: string; details: string[] }
   /** A line printed by a command the CLI launched: the build, rsync, a script of bin/. */
   | { type: "output"; stream: "stdout" | "stderr"; line: string }
@@ -52,7 +56,12 @@ export type OutputEvent =
    * bin/cli/steps.ts.
    */
   | { type: "check"; step: string; status: "done" | "ok" | "skip" | "todo" | "fail"; title: string; detail: string | null }
-  /** The last event of a run that succeeded, with what it concluded. */
+  /**
+   * The last event of a run that succeeded, with what it concluded. deploy's
+   * carries `missingSecrets`, the declared runtime names and files the store
+   * lacks (null when they could not be read, or in a dry run), and
+   * `buildSecrets`, each build secret's name and where its value came from.
+   */
   | ({ type: "result"; ok: true; command: string } & Record<string, unknown>)
   /** The last event of a run that failed: what, why, and what to do next. */
   | { type: "error"; message: string; details: string[]; hint: string };

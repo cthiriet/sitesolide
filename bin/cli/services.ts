@@ -11,6 +11,7 @@
 import { domainHosts, isValidSchedule, isValidSlug, PORTAL_SLUG, readManifest, servicesOf, type Manifest } from "./manifest";
 import { PORTAL_PORT } from "./portal";
 import { LOOPBACK_TABLE, PROJECT_PORTS_FILE, PROJECT_PORTS_SET } from "./loopback";
+import { CREDENTIALS_EXIT_STATUS, credentialsFailure } from "./store";
 import { isTimerUnit, systemUser, unitArgument, unitFileName, unitNames } from "./unit";
 
 export const MARKER_DONE = "DONE";
@@ -370,8 +371,12 @@ export function readScheduleCheck(output: string, schedules: string[]): string[]
   return refused;
 }
 
-/** How a unit stands, as stabilityCommand reads it. */
-export type UnitStanding = { active: string; sub: string; restarts: number };
+/**
+ * How a unit stands, as stabilityCommand reads it. `status`: the exit status
+ * of its main process, when the reading asked for it; 243 is a unit whose
+ * secret files could not be loaded (CREDENTIALS_EXIT_STATUS in ./store).
+ */
+export type UnitStanding = { active: string; sub: string; restarts: number; status?: number };
 
 /**
  * Reads how each unit stands, its state and how many times systemd restarted
@@ -384,7 +389,7 @@ export function stabilityCommand(units: string[]): string {
   for (const unit of units) {
     if (!/^[a-z0-9][a-z0-9.-]*$/.test(unit)) throw new Error(`invalid unit: ${unit}`);
   }
-  return `systemctl show -p Id -p ActiveState -p SubState -p NRestarts ${units.map(unitArgument).join(" ")} && echo ${MARKER_DONE}`;
+  return `systemctl show -p Id -p ActiveState -p SubState -p NRestarts -p ExecMainStatus ${units.map(unitArgument).join(" ")} && echo ${MARKER_DONE}`;
 }
 
 /** Each unit's standing, by unit as named in `units`, or null when the answer does not read. */
@@ -401,10 +406,13 @@ export function readStability(output: string, units: string[]): Map<string, Unit
     const unit = byId.get(fields.get("Id") ?? "");
     if (unit === undefined) continue;
     const restarts = Number(fields.get("NRestarts"));
+    const status = fields.get("ExecMainStatus");
     standings.set(unit, {
       active: fields.get("ActiveState") ?? "unknown",
       sub: fields.get("SubState") ?? "unknown",
       restarts: Number.isInteger(restarts) ? restarts : 0,
+      // Only when asked for: a reading without it, the installer's, keeps its shape.
+      ...(status !== undefined && /^[0-9]+$/.test(status) ? { status: Number(status) } : {}),
     });
   }
   return units.every((unit) => standings.has(unit)) ? standings : null;
@@ -412,7 +420,9 @@ export function readStability(output: string, units: string[]): Map<string, Unit
 
 /**
  * The units that did not hold: no longer active, or restarted by systemd
- * since the first reading. Each named with what was seen, for the refusal.
+ * since the first reading. Each named with what was seen, for the refusal;
+ * one whose last start exited 243 by credentialsFailure, since systemd logs
+ * it as "Protocol error", which sends one looking elsewhere.
  */
 export function unstableUnits(before: Map<string, UnitStanding>, after: Map<string, UnitStanding>): string[] {
   const fallen: string[] = [];
@@ -420,6 +430,11 @@ export function unstableUnits(before: Map<string, UnitStanding>, after: Map<stri
     const then = before.get(unit);
     const restarted = then !== undefined && now.restarts > then.restarts;
     if (now.active !== "active" || restarted) {
+      if (now.status === CREDENTIALS_EXIT_STATUS) {
+        // A unit's slug is its name up to the first dot: `shop`, `shop.worker`.
+        fallen.push(credentialsFailure(unitFileName(unit), unit.split(".")[0]!));
+        continue;
+      }
       fallen.push(`${unitFileName(unit)} is ${now.active} (${now.sub})${restarted ? `, restarted ${now.restarts - then!.restarts} time(s) by systemd` : ""}`);
     }
   }

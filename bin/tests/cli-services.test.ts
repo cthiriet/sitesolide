@@ -932,7 +932,7 @@ describe("how the services stand after their restart", () => {
   }
 
   test("asked without sudo, the main unit as it always was, a secondary with its type", () => {
-    expect(stabilityCommand(UNITS)).toBe(`systemctl show -p Id -p ActiveState -p SubState -p NRestarts lab lab.queue.service && echo ${MARKER_DONE}`);
+    expect(stabilityCommand(UNITS)).toBe(`systemctl show -p Id -p ActiveState -p SubState -p NRestarts -p ExecMainStatus lab lab.queue.service && echo ${MARKER_DONE}`);
     expect(() => stabilityCommand(["lab; reboot"])).toThrow(/invalid unit/);
   });
 
@@ -964,5 +964,20 @@ describe("how the services stand after their restart", () => {
     // Up again by the second reading, but restarted by systemd in between: it fell all the same.
     const flapped = readStability(shown([["lab.service", "active", "running", 2], ["lab.queue.service", "active", "running", 1]]), UNITS)!;
     expect(unstableUnits(before, flapped)).toEqual(["lab.service is active (running), restarted 2 time(s) by systemd"]);
+  });
+
+  test("a unit whose start exited 243 is said to lack its secret files, never as systemd's Protocol error", () => {
+    const withStatus = (status: number) =>
+      `Id=lab.service\nActiveState=failed\nSubState=failed\nNRestarts=0\nExecMainStatus=0\n\nId=lab.queue.service\nActiveState=activating\nSubState=auto-restart\nNRestarts=2\nExecMainStatus=${status}\n${MARKER_DONE}\n`;
+    const before = readStability(shown([["lab.service", "active", "running", 0], ["lab.queue.service", "active", "running", 0]]), UNITS)!;
+    const after = readStability(withStatus(243), UNITS)!;
+    expect(after.get("lab.queue")).toEqual({ active: "activating", sub: "auto-restart", restarts: 2, status: 243 });
+    expect(unstableUnits(before, after)).toEqual([
+      "lab.service is failed (failed)",
+      "lab.queue.service could not load its secret files (243/CREDENTIALS): the store's files folder is missing, or its files are too large; sitesolide refresh lab lays the folder again",
+    ]);
+    // Any other status is worded as before; a reading without the property keeps its shape.
+    expect(unstableUnits(before, readStability(withStatus(1), UNITS)!)[1]).toBe("lab.queue.service is activating (auto-restart), restarted 2 time(s) by systemd");
+    expect(readStability(shown([["lab.service", "active", "running", 0], ["lab.queue.service", "active", "running", 0]]), UNITS)!.get("lab")).toEqual({ active: "active", sub: "running", restarts: 0 });
   });
 });

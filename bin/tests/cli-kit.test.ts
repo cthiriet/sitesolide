@@ -264,11 +264,17 @@ describe("where the kit lives", () => {
   });
 });
 
-describe("the environment of a project's build", () => {
+describe("the environment of a project's build: an allow list", () => {
   const WORKSTATION = {
     PATH: "/opt/tools/bin:/usr/bin:/bin",
     HOME: "/home/someone",
-    NODE_ENV: "production",
+    LANG: "en_GB.UTF-8",
+    LC_ALL: "en_GB.UTF-8",
+    XDG_CONFIG_HOME: "/home/someone/.config",
+    BUN_INSTALL: "/home/someone/.bun",
+    NODE_ENV: "development",
+    AWS_SECRET_ACCESS_KEY: "a cloud's key the shell happens to carry",
+    GITHUB_TOKEN: "ghp_planted",
     SITESOLIDE_TOKEN: `sst_${"T".repeat(43)}`,
     SITESOLIDE_API: "https://dashboard.test-zone.invalid",
     SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
@@ -277,24 +283,52 @@ describe("the environment of a project's build", () => {
     SITESOLIDE_CONFIG_DIR: "/home/someone/.config/sitesolide",
     "SITESOLIDE_ODD-NAME": "set through env, never through export",
   };
+  const nothing = { lent: {}, project: [] as [string, string][], secrets: {} };
 
-  test("no variable named SITESOLIDE_ reaches it, and the rest is left as it is", () => {
-    expect(buildEnv(WORKSTATION, {})).toEqual({ PATH: "/opt/tools/bin:/usr/bin:/bin", HOME: "/home/someone", NODE_ENV: "production" });
-  });
-
-  test("an object even with nothing to withhold: Bun.spawn given none hands down the whole starting environment", () => {
-    expect(buildEnv({ PATH: "/usr/bin:/bin", HOME: "/home/someone", UNSET: undefined }, {})).toEqual({ PATH: "/usr/bin:/bin", HOME: "/home/someone" });
-    expect(buildEnv({}, {})).toEqual({});
-  });
-
-  test("what the binary lends comes last: its PATH, and the path of itself the bun shim runs", () => {
-    const lent = { PATH: "/opt/tools/bin:/usr/bin:/bin:/kit/.bin", SITESOLIDE_BINARY: "/usr/local/bin/sitesolide" };
-    expect(buildEnv({ ...WORKSTATION, SITESOLIDE_BINARY: "/elsewhere/sitesolide" }, lent)).toEqual({
-      PATH: "/opt/tools/bin:/usr/bin:/bin:/kit/.bin",
+  test("of the workstation, only the names every build inherits: never NODE_ENV, a cloud's key, a token nor a SITESOLIDE_ name", () => {
+    expect(buildEnv({ inherited: WORKSTATION, ...nothing })).toEqual({
+      PATH: "/opt/tools/bin:/usr/bin:/bin",
       HOME: "/home/someone",
-      NODE_ENV: "production",
-      SITESOLIDE_BINARY: "/usr/local/bin/sitesolide",
+      LANG: "en_GB.UTF-8",
+      LC_ALL: "en_GB.UTF-8",
+      XDG_CONFIG_HOME: "/home/someone/.config",
+      BUN_INSTALL: "/home/someone/.bun",
     });
+  });
+
+  test("the manifest's env, its placeholders already replaced by the caller, and NODE_ENV from there alone", () => {
+    const project: [string, string][] = [
+      ["NODE_ENV", "production"],
+      ["PUBLIC_SITE_URL", "https://blog.test-zone.invalid"],
+      // buildEnvOf leaves these out; a caller that did not is held to it here too.
+      ["SITESOLIDE_ZONE", "elsewhere.invalid"],
+    ];
+    const built = buildEnv({ inherited: WORKSTATION, lent: {}, project, secrets: {} });
+    expect(built.NODE_ENV).toBe("production");
+    expect(built.PUBLIC_SITE_URL).toBe("https://blog.test-zone.invalid");
+    expect(Object.keys(built).filter((name) => name.startsWith("SITESOLIDE_"))).toEqual([]);
+  });
+
+  test("a declared build secret reaches it, and wins over the manifest's env; an undeclared one from the shell never does", () => {
+    const built = buildEnv({ inherited: WORKSTATION, lent: {}, project: [["CMS_TOKEN", "from the manifest"]], secrets: { CMS_TOKEN: "from whoever deploys" } });
+    expect(built.CMS_TOKEN).toBe("from whoever deploys");
+    expect(built.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(built.GITHUB_TOKEN).toBeUndefined();
+    // A secret of sitesolide's name never, whoever hands it.
+    expect(buildEnv({ inherited: {}, lent: {}, project: [], secrets: { SITESOLIDE_TOKEN: "no" } })).toEqual({});
+  });
+
+  test("an object even with nothing to keep: Bun.spawn given none hands down the whole starting environment", () => {
+    expect(buildEnv({ inherited: { PATH: "/usr/bin:/bin", HOME: "/home/someone", UNSET: undefined }, ...nothing })).toEqual({ PATH: "/usr/bin:/bin", HOME: "/home/someone" });
+    expect(buildEnv({ inherited: {}, ...nothing })).toEqual({});
+  });
+
+  test("what the binary lends comes last: its PATH, and the path of itself the bun shim runs, the only SITESOLIDE_ name", () => {
+    const lent = { PATH: "/opt/tools/bin:/usr/bin:/bin:/kit/.bin", SITESOLIDE_BINARY: "/usr/local/bin/sitesolide" };
+    const built = buildEnv({ inherited: { ...WORKSTATION, SITESOLIDE_BINARY: "/elsewhere/sitesolide" }, lent, project: [["PATH", "/from/the/manifest"]], secrets: {} });
+    expect(built.PATH).toBe("/opt/tools/bin:/usr/bin:/bin:/kit/.bin");
+    expect(built.SITESOLIDE_BINARY).toBe("/usr/local/bin/sitesolide");
+    expect(Object.keys(built).filter((name) => name.startsWith("SITESOLIDE_"))).toEqual(["SITESOLIDE_BINARY"]);
   });
 });
 

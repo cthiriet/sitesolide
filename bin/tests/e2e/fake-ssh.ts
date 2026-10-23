@@ -54,7 +54,16 @@
  *   unit finds it. Every other accepted write still runs nothing;
  * - `tls-zone-state`: what the reading of the zone's TLS policy answers, one
  *   of TLS_ZONE_STATES in bin/cli/tls.ts. A machine that carries a provider's
- *   policy unless the test lays it.
+ *   policy unless the test lays it;
+ * - `store.json`: the projects' stores of secrets the steward's owner socket
+ *   lists, see `StoreState`: their variable names and files, never a value.
+ *   A listing is always answered; a change is a write, refused unless the
+ *   test accepts writes, then applied by name, and recorded with the names
+ *   that came on standard input, never a value nor a file's content;
+ * - `store-prepare`: `refused` makes the command that lays a store's folders
+ *   answer as it does for a link or a file in their place. Otherwise, once
+ *   writes are accepted, it lays the folders in the VM's tree and says
+ *   whether it made the project's, as the machine would.
  *
  * `sitesolide setup`'s scripts, `sh -s <tag>` with the script on standard
  * input, are writes like any other: refused, or accepted and answered from
@@ -78,6 +87,7 @@ import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
 import { backupComponentCommand, BACKUP_COMPONENT_MARKER } from "../../cli/backups";
 import { ownerGeneralCommand, ownerReadCommand, ownerWriteCommand, type EntryView, type PersonView, type Role } from "../../cli/access";
 import { ownershipReleaseCommand } from "../../cli/removal";
+import { STORE_READY, STORE_REFUSED, storePaths, storePrepareCommand } from "../../cli/store";
 import { OWNERS_DONE, secretOwnersCommand } from "../../cli/secrets";
 import { NOT_ON_DEMAND, TLS_ZONE_STATE_COMMAND, TLS_ZONE_STATES, ZONE_NAMES_COMMAND } from "../../cli/tls";
 import { ZONE_LABEL } from "../../../api/src/zone-names";
@@ -110,7 +120,19 @@ export const SWITCHES = {
   secretFiles: "secret-files.json",
   keepUnits: "keep-units",
   tlsZoneState: "tls-zone-state",
+  store: "store.json",
+  storePrepare: "store-prepare",
 } as const;
+
+/**
+ * The stores of secrets the steward's owner socket answers for: as this
+ * release's steward does, one from before the store (`old`, a 404 `no such
+ * route`), or with no owner socket at all (`down`, curl's 7). Per project,
+ * the names of the variables its store holds and of its files. Never a value.
+ */
+export type StoreState = { state: "current" | "old" | "down"; variables: Record<string, string[]>; files: Record<string, string[]> };
+
+export const DEFAULT_STORE: StoreState = { state: "current", variables: {}, files: {} };
 
 /**
  * How a unit stands when `deploy` reads it after its restart, as `systemctl
@@ -119,7 +141,7 @@ export const SWITCHES = {
  * order, the last one answering every reading past it; a unit a map does not
  * name is active, running, and never restarted.
  */
-export type Standing = { active: string; sub: string; restarts: number } | null;
+export type Standing = { active: string; sub: string; restarts: number; status?: number } | null;
 
 /**
  * An account as /etc/passwd carries it, made the way the deploy scripts make
@@ -240,7 +262,7 @@ const READ_FILE = new RegExp(
 /** The schedules a deployment asks systemd to read, each between double quotes, see scheduleCheckCommand. */
 const SCHEDULE = /systemd-analyze calendar "([^"]*)"/g;
 /** How the services stand after the restart, the units last, see stabilityCommand. */
-const STABILITY = new RegExp(`^systemctl show -p Id -p ActiveState -p SubState -p NRestarts ([a-z0-9. -]+) && echo ${MARKER_DONE}$`);
+const STABILITY = new RegExp(`^systemctl show -p Id -p ActiveState -p SubState -p NRestarts -p ExecMainStatus ([a-z0-9. -]+) && echo ${MARKER_DONE}$`);
 /** What bin/deploy-caddy.sh reads to tell a first install, before its guard. */
 export const FIRST_INSTALL_FILES = "test -f /etc/caddy/sitesolide.env && test -f /etc/caddy/domaines.map";
 /** The guard of bin/deploy-caddy.sh, which checks that the unit loads the zone variables. */
@@ -492,7 +514,7 @@ if (import.meta.main) {
     for (const unit of units) {
       const standing = Object.hasOwn(reading, unit) ? reading[unit]! : { active: "active", sub: "running", restarts: 0 };
       if (standing === null) continue;
-      process.stdout.write(`Id=${unitFileName(unit)}\nActiveState=${standing.active}\nSubState=${standing.sub}\nNRestarts=${standing.restarts}\n\n`);
+      process.stdout.write(`Id=${unitFileName(unit)}\nActiveState=${standing.active}\nSubState=${standing.sub}\nNRestarts=${standing.restarts}\nExecMainStatus=${standing.status ?? 0}\n\n`);
     }
     process.stdout.write(`${MARKER_DONE}\n`);
     process.exit(0);
@@ -686,6 +708,98 @@ if (import.meta.main) {
       writeFileSync(accessFile, JSON.stringify(current));
     }
     process.stdout.write(`${JSON.stringify({ slug, forgotten, access })}\n200\n`);
+    process.exit(0);
+  }
+
+  // The store of secrets, on the steward's owner socket. A listing is a
+  // reading, always answered from what the test lays; a change is a write,
+  // refused unless the test accepts writes, then applied by name and recorded
+  // with the names alone: the value came on standard input, and stays there.
+  const storeFile = join(vm, SWITCHES.store);
+  const stores = (): StoreState => (existsSync(storeFile) ? (JSON.parse(readFileSync(storeFile, "utf8")) as StoreState) : structuredClone(DEFAULT_STORE));
+  const storeView = (current: StoreState, slug: string): object => ({
+    slug,
+    exists: Object.hasOwn(current.variables, slug) || Object.hasOwn(current.files, slug),
+    state: "managed",
+    reason: null,
+    variables: (current.variables[slug] ?? []).map((name) => ({ name, source: "store", file: null, shadows: [], declared: false })),
+    missing: [],
+    files: (current.files[slug] ?? []).map((name) => ({ name, state: "set", declared: false, reason: null, bytes: null, modifiedAt: null, restartPending: false })),
+    legacy: [],
+    build: [],
+    public: [],
+    unitReadsStore: true,
+    modifiedAt: null,
+    restartPending: false,
+    previous: false,
+    may: { write: true, reveal: false, restore: true, migrate: true },
+  });
+  const storeSlug = /^sudo curl .*http:\/\/steward\/store\?slug=([a-z0-9-]+)'$/.exec(command)?.[1];
+  if (storeSlug !== undefined && command === ownerReadCommand(`/store?slug=${storeSlug}`)) {
+    record(`STORE GET ${storeSlug}`);
+    const current = stores();
+    answerOwner(current.state);
+    answer(200, { store: storeView(current, storeSlug) });
+  }
+  const storeWrites = [
+    ["PUT", "/store/variable"],
+    ["DELETE", "/store/variable"],
+    ["PATCH", "/store"],
+    ["POST", "/store/generate"],
+    ["PUT", "/store/file"],
+    ["DELETE", "/store/file"],
+    ["POST", "/restart"],
+  ] as const;
+  const storeWrite = storeWrites.find(([method, path]) => command === ownerWriteCommand(method, path));
+  if (storeWrite !== undefined) {
+    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
+    const [method, path] = storeWrite;
+    const asked = JSON.parse(await Bun.stdin.text()) as { slug: string; name?: string; names?: string[]; set?: Record<string, string>; remove?: string[] };
+    const current = stores();
+    answerOwner(current.state);
+    const slug = asked.slug;
+    if (path === "/restart") {
+      record(`STORE POST /restart ${slug}`);
+      answer(200, { verdict: { kind: "active", state: "active", subState: "running", restarts: 0 } });
+    }
+    const set = path === "/store" ? Object.keys(asked.set ?? {}) : path === "/store/variable" && method === "PUT" ? [asked.name!] : [];
+    const removed = path === "/store" ? (asked.remove ?? []) : path === "/store/variable" && method === "DELETE" ? (asked.names ?? []) : [];
+    const generated = path === "/store/generate" ? [asked.name!] : [];
+    const file = path === "/store/file" ? asked.name! : null;
+    record(`STORE ${method} ${path} ${slug} ${[...set, ...removed, ...generated, ...(file === null ? [] : [file])].join(" ")}`.trimEnd());
+    const created = !Object.hasOwn(current.variables, slug) && !Object.hasOwn(current.files, slug);
+    const names = new Set([...(current.variables[slug] ?? []), ...set, ...generated]);
+    for (const name of removed) names.delete(name);
+    current.variables[slug] = [...names];
+    const files = new Set(current.files[slug] ?? []);
+    if (file !== null && method === "PUT") files.add(file);
+    if (file !== null && method === "DELETE") files.delete(file);
+    current.files[slug] = [...files];
+    writeFileSync(storeFile, JSON.stringify(current));
+    answer(200, {
+      store: storeView(current, slug),
+      created,
+      set,
+      generated,
+      removed,
+      absent: [],
+      files: { set: file !== null && method === "PUT" ? [file] : [], removed: file !== null && method === "DELETE" ? [file] : [] },
+    });
+  }
+  // The store's folders, laid before a project's units, as root: a write,
+  // refused unless the test accepts writes, then laid in the VM's tree.
+  const preparing = /^sudo sh -c ': store-prepare ([a-z0-9-]+);/.exec(command)?.[1];
+  if (preparing !== undefined && command === storePrepareCommand(preparing)) {
+    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
+    record(`STORE-PREPARE ${preparing}`);
+    const { folder, files } = storePaths(preparing);
+    if (existsSync(join(vm, SWITCHES.storePrepare)) && readFileSync(join(vm, SWITCHES.storePrepare), "utf8").trim() === "refused") {
+      process.stdout.write(`${STORE_REFUSED} ${folder}\n`);
+      process.exit(3);
+    }
+    const made = !existsSync(join(vm, folder));
+    mkdirSync(join(vm, files), { recursive: true });
+    process.stdout.write(`${STORE_READY} ${made ? "created" : "present"}\n`);
     process.exit(0);
   }
 

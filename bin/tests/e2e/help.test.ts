@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PEOPLE_USAGE, SHARE_USAGE } from "../../cli/access";
+import { STORE_USAGE } from "../../cli/store-cli";
 import { REMOTE_USAGE } from "../../cli/remote";
 import { run, TEST_ZONE } from "./run";
 
@@ -43,8 +44,8 @@ describe("help and version, with no configuration", () => {
     expect(r.all).not.toContain("missing settings");
   });
 
-  test("share --help and people --help print their own short usage", async () => {
-    for (const [command, usage] of [["share", SHARE_USAGE], ["people", PEOPLE_USAGE]] as const) {
+  test("share --help, people --help and secrets --help print their own short usage", async () => {
+    for (const [command, usage] of [["share", SHARE_USAGE], ["people", PEOPLE_USAGE], ["secrets", STORE_USAGE]] as const) {
       const r = await run(WORK, [command, "--help"], { env: { HOME: emptyHome() } });
       expect({ command, code: r.code, output: r.output }).toEqual({ command, code: 0, output: `${usage.join("\n")}\n` });
     }

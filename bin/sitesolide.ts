@@ -13,7 +13,9 @@
  *   sitesolide share [<email|@domain>...]   general access and people with access
  *   sitesolide people               everyone with access, and who may create projects
  *   sitesolide remove --confirm <slug>  take the project off the machine
- *   sitesolide run -- <command>     load the vault secret and run
+ *   sitesolide secrets [set|generate|remove|set-file|remove-file|migrate]
+ *                                   the project's store of secrets, see bin/cli/store-cli.ts
+ *   sitesolide run -- <command>     the workstation's own credentials for it, then run
  *   sitesolide mcp                  the same commands, as tools for an agent
  *   sitesolide login --url <url>    a team member: a token instead of SSH
  *   sitesolide machine create       a VM from a cloud provider's API, see cli/machine.ts
@@ -36,17 +38,19 @@
  * identifier, like the manifest keys.
  *
  * ONE COMMAND IS ENOUGH, including on the first run: `deploy` creates the
- * system user, puts the unit in place and checks that every declared secret is
- * on the VM; one that is missing stops it, naming the dashboard's Secrets
- * section where it is created, and the same command then finishes. It never
- * replaces, on the other hand, a unit in service, whose contents may differ
- * from the generated one for good reasons: that case is reported, and
- * `--force` settles it by hand. Nor does it push or touch a secret, for another
- * reason: THE VM IS THE SOURCE OF TRUTH.
- * /etc/sitesolide is managed from the Secrets section of the dashboard, and a
- * deployment that measured the machine against the workstation's vault would
- * take every value changed over there for a lag to catch up on. Everything
- * `deploy` puts in place is idempotent: the second run changes nothing on the
+ * system user, lays the project's store of secrets' folders and the unit, and
+ * reads which declared runtime secrets the store lacks: at a terminal it asks
+ * for each, typed without echo or drawn on the server, and otherwise warns,
+ * naming the commands. A missing runtime secret never stops it; a missing
+ * build secret, which the build on the workstation needs, does, before
+ * anything is sent. It never replaces, on the other hand, a unit in service,
+ * whose contents may differ from the generated one for good reasons: that
+ * case is reported, and `--force` settles it by hand. Nor does it compare a
+ * secret with the workstation's, for another reason: THE VM IS THE SOURCE OF
+ * TRUTH. The store, /etc/sitesolide/projects/<slug>/, is changed by
+ * `sitesolide secrets` and the dashboard's Secrets section, and a value is
+ * never read back but by the owner, in the dashboard. Everything `deploy`
+ * puts in place is idempotent: the second run changes nothing on the
  * machine.
  *
  * THE GENERAL ACCESS OF A DEPLOYED SITE IS SET FROM THE DASHBOARD, AND THE VM
@@ -125,12 +129,16 @@ import { decideBlock, domainLeftOpen, generateFragment, LOCKS_FRAGMENT, type Ser
 import { hintFor } from "./cli/hints";
 import { inferManifest, renderManifest, slugFromFolder, type Inference } from "./cli/infer";
 import {
+  buildEnvOf,
+  hasStore,
   isApp,
   isHeadless,
   isProtected,
   isSystemName,
   isValidSlug,
   legacySecretFiles,
+  secretsOf,
+  secretsWarnings,
   mainPort,
   missingExclusions,
   NEVER_SENT,
@@ -182,16 +190,18 @@ import {
 } from "./cli/removal";
 import {
   dashboardAddress,
-  decideSecret,
   ownerRefusal,
   readPresenceAnswer,
   readSecretOwners,
   secretFileRefusal,
   secretOwnersCommand,
   type SecretOwner,
-  type SecretAction,
   type PresenceRead,
 } from "./cli/secrets";
+import { CREDENTIALS_EXIT_STATUS, credentialsFailure, readStorePrepareAnswer, slugHasStore, storePaths, storePrepareCommand, workstationSecretsPath } from "./cli/store";
+import { envValue, keys, parseEnv } from "./cli/envfile";
+import { gatherBuildSecrets, missingBuildSecrets, readWorkstationSecrets, sourceLine, unreadableWorkstation, type BuildSecretsResolution } from "./cli/build-secrets";
+import { handleMissing, readStoreArguments, runStore, sshStore, STORE_USAGE, storelessRefusal, withDeclared, type StoreTransport } from "./cli/store-cli";
 import {
   secretPath,
   projectPaths,
@@ -200,6 +210,7 @@ import {
   type GeneratedUnit,
   readUnitAnswer,
   sandboxedInstallCommand,
+  substitute,
   type UnitRead,
   MARKER_ABSENT,
   MARKER_PRESENT,
@@ -223,6 +234,7 @@ import {
 import {
   changedMeanwhile,
   emptyReport,
+  foreignSecretFiles,
   foreignUnits,
   notDeployed,
   parseRefreshArguments,
@@ -231,6 +243,7 @@ import {
   refusedManifest,
   stoppedAt,
   stoppedDetails,
+  storeRefused,
   summaryFields,
   summaryLines,
   type ProjectPlan,
@@ -242,7 +255,7 @@ import { FIRST_CERTIFICATE_MS, readZoneNamesAnswer, ZONE_NAMES_COMMAND, ZONE_NAM
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { machine, sshLogin } from "./cli/machine";
 import { DNS_PROVIDERS, dnsEntry, MANUAL } from "./cli/dns/registry";
-import { eventOutput, humanOutput, login, remoteMode, REMOTE_USAGE, runRemote } from "./cli/remote";
+import { eventOutput, humanOutput, login, promptWithoutEcho, remoteMode, REMOTE_USAGE, runRemote, type BuildContext } from "./cli/remote";
 import { buildEnv, KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
 import { ownerGeneralCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshGeneral, sshPeople } from "./cli/access";
 import {
@@ -931,7 +944,14 @@ function buildRuns(project: Project, executor: Executor): boolean {
   return project.manifest.build !== undefined && (!executor.simulated || buildInDryRun || compareInDryRun);
 }
 
-async function runBuild(project: Project, executor: Executor): Promise<void> {
+/**
+ * The manifest's build, in the project's code folder, in the clean
+ * environment of buildEnv: the workstation's allow list, the manifest's
+ * project-level `env` with its placeholders replaced, the build secrets
+ * resolved from whoever deploys, then what the kit lends. Over SSH as with a
+ * token, never a SITESOLIDE_ variable.
+ */
+async function runBuild(project: Project, executor: Executor, context: BuildContext): Promise<void> {
   const { build } = project.manifest;
   if (build === undefined) return;
   if (!buildRuns(project, executor)) {
@@ -941,13 +961,86 @@ async function runBuild(project: Project, executor: Executor): Promise<void> {
   step(`build (${build})`);
   const proc = Bun.spawn(["sh", "-c", build], {
     cwd: project.code,
-    // Over SSH as with a token: never a SITESOLIDE_ variable, see buildEnv.
-    env: buildEnv(process.env, fromKit(projectEnv)),
+    env: buildEnv({
+      inherited: process.env,
+      lent: fromKit(projectEnv),
+      project: buildEnvOf(project.manifest).map(([name, value]): [string, string] => [name, substitute(value, context.placeholders)]),
+      secrets: context.secrets,
+    }),
     stdout: childOutput(),
     stderr: childOutput(),
   });
   await Promise.all([relayOutput(proc.stdout, "stdout"), relayOutput(proc.stderr, "stderr")]);
   if ((await proc.exited) !== 0) die(`build failed: ${build}`);
+}
+
+/**
+ * The build secrets the manifest names, resolved from whoever deploys: the
+ * environment, then the workstation's `<vault>/<slug>.env`. Each found one
+ * is said with where it came from, never its value. A missing one stops the
+ * deployment before anything is read on the machine or sent, and so does a
+ * file that does not read; in a dry run whose build does not run, both are
+ * warnings, the build being what needs them.
+ */
+async function buildSecretsFor(project: Project, config: Config, executor: Executor): Promise<BuildSecretsResolution> {
+  const names = secretsOf(project.manifest).build;
+  const path = workstationSecretsPath(config.vault, project.manifest.slug);
+  const resolution = await gatherBuildSecrets(names, process.env, path);
+  if (names.length === 0) return resolution;
+  const runs = buildRuns(project, executor);
+  const stop = (refusal: { message: string; details: string[] }): void => {
+    if (runs) die(refusal.message, refusal.details);
+    warn(refusal.message, [...refusal.details, "the build does not run in this dry run: for real, this stops the deployment"]);
+  };
+  if (resolution.refusal !== null) stop(unreadableWorkstation(path, resolution.refusal));
+  else if (resolution.missing.length > 0) stop(missingBuildSecrets(resolution.missing, path));
+  for (const { name, source } of resolution.sources) say(`   ${sourceLine(name, source, path)}`);
+  note({ buildSecrets: resolution.sources });
+  return resolution;
+}
+
+/**
+ * The runtime secrets the manifest declares that the store lacks, read over
+ * the owner's socket before the build and the Caddy lock. At a terminal,
+ * each missing name is asked for: set, typed without echo, generated on the
+ * server, or left unset; otherwise one warning names them, with the commands.
+ * A deployment never stops here: a steward that cannot say is a warning too,
+ * and an app that cannot live without a variable stops at start, which the
+ * stability check reports. Not in a dry run, which asks the machine nothing
+ * it would write.
+ */
+async function runtimeSecrets(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
+  if (!hasStore(manifest)) return;
+  const declaration = secretsOf(manifest);
+  if (declaration.runtime.length === 0 && declaration.files.length === 0) return;
+  if (executor.simulated) {
+    say("   [dry-run] read which declared runtime secrets the store holds: the missing ones asked for at a terminal, warned of otherwise");
+    note({ missingSecrets: null });
+    return;
+  }
+  step("runtime secrets");
+  const transport = ownerStore(config, executor);
+  const listed = await transport.list(manifest.slug);
+  if (!listed.ok) {
+    warn(`cannot tell which runtime secrets are set: ${listed.failure.message}`, listed.failure.details ?? []);
+    note({ missingSecrets: null });
+    return;
+  }
+  const missing = await handleMissing(withDeclared(listed.value, declaration), transport, {
+    terminal: !jsonOutput && process.stdin.isTTY === true && process.stdout.isTTY === true,
+    json: jsonOutput,
+    ask: async (question) => prompt(question),
+    secret: (question) => promptWithoutEcho(question),
+    say,
+    warn,
+  });
+  if (missing.runtime.length === 0 && missing.files.length === 0) say("   every declared runtime secret is set");
+  note({ missingSecrets: missing });
+}
+
+/** The store over the owner's SSH: root on the machine asks the steward's owner socket, every body on standard input. */
+function ownerStore(config: Config, executor: Executor): StoreTransport {
+  return sshStore((command, input) => executor.execute(config, command, input));
 }
 
 function publicFolder(project: Project): string | null {
@@ -1089,7 +1182,14 @@ async function deploy(
     ...(isApplication ? { runs } : {}),
     dryRun: executor.simulated,
     manifestWritten: outcome.manifestWritten === true,
+    missingSecrets: { runtime: [], files: [] },
+    buildSecrets: [],
   });
+  // The old form of `secrets` keeps working, and says how to leave it.
+  for (const warning of secretsWarnings(rawProject.manifest)) warn(warning);
+  // The build's secrets, from whoever deploys, before anything is read on
+  // the machine or sent: a missing one stops here.
+  const buildSecrets = await buildSecretsFor(rawProject, config, executor);
 
   // The door before everything else, in a dry run as for real: the block shown,
   // the block checked, the order of the steps and the deposited manifest all
@@ -1109,7 +1209,10 @@ async function deploy(
   if (isApplication) await checkRemoteBlock(manifest, config, executor, replace, doorConfirmed);
   if (isApplication) await checkUnitNames(manifest, config, executor);
   if (isApplication) await checkPorts(manifest, config, executor);
-  if (isApplication) await checkSecretFiles(manifest, config, executor);
+  if (isApplication) {
+    const refusal = await secretFilesRefusal(manifest, config, executor);
+    if (refusal !== null) die(refusal.message, refusal.details);
+  }
   if (scheduledServices(manifest).length > 0) await checkSchedules(manifest, config, executor);
   // A backup command reaches its service on its port, through the same set.
   if (reachesOwnPorts(manifest)) await requireProjectSet(config, executor);
@@ -1118,7 +1221,12 @@ async function deploy(
   const behindPortal = isProtected(manifest);
   if (behindPortal) await requirePortal(config, executor);
 
-  await runBuild(project, executor);
+  // What the store lacks, before the build and before the Caddy lock: a
+  // person thinking at a prompt never holds the lock the gatekeeper and every
+  // other deployment wait for.
+  await runtimeSecrets(manifest, config, executor);
+
+  await runBuild(project, executor, { secrets: buildSecrets.values, placeholders: { slug, zone: config.zone, contact: config.contact ?? "" } });
   checkPublicFolder(project, executor);
   if (executor.simulated && compareInDryRun) {
     await compareWithServer(project, config, executor, doorConfirmed);
@@ -1192,13 +1300,10 @@ async function deploy(
   // Caddy step and the verify are done: see STABILITY_WINDOW.
   let stability: Standings | null = null;
   if (isApplication) {
-    // The secrets come after prepareService, which creates site-<slug>, and
-    // after depositManifest. That order is what makes their refusal workable:
-    // a secret missing everywhere is created from the Secrets section of the
-    // dashboard, which only handles a project whose manifest it reads on the VM
-    // and only puts a file in place in the name of its user. Both therefore
-    // exist when `deploy` stops here, and running it again after the creation
-    // is enough.
+    // The old form's files, after prepareService, which creates site-<slug>,
+    // and after depositManifest: the Secrets section of the dashboard creates
+    // a missing one in that user's name once it reads the manifest on the
+    // machine. Said, never a stop.
     await ensureSecrets(manifest, config, executor);
 
     if (manifest.install !== undefined) {
@@ -1550,16 +1655,14 @@ async function remotePresence(
 }
 
 /**
- * Checks that every declared secret is on the VM, and stops on the first that
- * is not, saying where to create it.
+ * Says whether each legacy file the manifest declares is on the machine. A
+ * missing one stops nothing: the unit reads it with `EnvironmentFile=-`, the
+ * service starts without its variables, and one that cannot live without
+ * them stops at start, which the stability check reports. Presence alone is
+ * read, never a content.
  *
- * THE VM IS THE SOURCE OF TRUTH. /etc/sitesolide is managed from the Secrets
- * section of the dashboard, which reads, sets and removes the variables there
- * then restarts the service. Nothing is pushed from the workstation: see
- * bin/cli/secrets.ts for why.
- *
- * Every presence is read before anything is decided, so that the message names
- * all the missing files at once rather than one per run. No content is read.
+ * Every presence is read before anything is said, so that the warning names
+ * all the missing files at once. A store-form manifest declares no file.
  */
 async function ensureSecrets(
   manifest: Manifest,
@@ -1568,7 +1671,7 @@ async function ensureSecrets(
 ): Promise<void> {
   const secrets = legacySecretFiles(manifest);
   if (secrets.length === 0) return;
-  step("declared secrets");
+  step("declared secret files");
 
   // In a dry run, nothing is asked of the VM: an end-to-end test must be able
   // to run without it, and without a forgotten path talking to production.
@@ -1578,25 +1681,19 @@ async function ensureSecrets(
   }
 
   const dashboard = dashboardAddress(config.zone);
-  const actions: { name: string; action: SecretAction }[] = [];
+  const missing: string[] = [];
   for (const name of secrets) {
     const presence = await remotePresence(config, executor, secretPath(name));
     if (presence.kind === "unreadable") {
-      die(`cannot tell whether ${secretPath(name)} is there`, [
-        "the server answered neither an absence nor a presence",
+      warn(`cannot tell whether ${secretPath(name)} is there: the server answered neither an absence nor a presence`);
+    } else if (presence.kind === "absent") {
+      missing.push(name);
+      warn(`${secretPath(name)} is missing: the service starts without its variables`, [
+        `set them in the Secrets section of ${dashboard}, or move to the store: list the variable names in sitesolide.json, then sitesolide secrets set NAME`,
       ]);
-    }
-    actions.push({ name, action: decideSecret({ name, onServer: presence.kind === "present" }, dashboard) });
+    } else say(`   present  ${secretPath(name)}`);
   }
-
-  const [first, ...others] = actions.filter(({ action }) => action.kind === "rejects");
-  if (first !== undefined && first.action.kind === "rejects") {
-    die(first.action.message, [
-      ...others.map(({ name }) => `also missing: ${secretPath(name)}`),
-      ...first.action.details,
-    ]);
-  }
-  for (const { name } of actions) say(`   present  ${secretPath(name)}`);
+  if (missing.length > 0) note({ missingLegacy: missing.map((name) => secretPath(name)) });
 }
 
 /**
@@ -1818,8 +1915,45 @@ async function restartServices(manifest: Manifest, config: Config, executor: Exe
   const running = runningUnits(manifest);
   const units = running.map(unitArgument).join(" ");
   step(running.length > 1 ? "services restart" : "service restart");
-  await executor.ssh(config, `sudo systemctl reset-failed ${units} 2>/dev/null; sudo systemctl restart ${units} && systemctl is-active ${units}`);
+  const command = `sudo systemctl reset-failed ${units} 2>/dev/null; sudo systemctl restart ${units} && systemctl is-active ${units}`;
+  if (executor.simulated) {
+    await executor.ssh(config, command);
+    return readStandings(watchedUnits(manifest), config, executor);
+  }
+  const done = await executor.execute(config, command);
+  stopIfInterrupted();
+  relayCaptured(done);
+  if (done.code !== 0) {
+    // A unit whose secret files could not be loaded fails its start at once,
+    // with 243, which systemd words "Protocol error": said as what it is.
+    const watched = watchedUnits(manifest);
+    const standing = readStability(await executor.read(config, stabilityCommand(watched)), watched);
+    const failed = standing === null ? [] : watched.filter((unit) => standing.get(unit)?.status === CREDENTIALS_EXIT_STATUS);
+    if (failed.length > 0) {
+      die(credentialsFailure(unitFileName(failed[0]!), manifest.slug), [
+        ...failed.slice(1).map((unit) => credentialsFailure(unitFileName(unit), manifest.slug)),
+        "the code is in place: once the folder is back, the services start again",
+      ]);
+    }
+    const code = done.code;
+    die(`failed (${code}): ssh ${config.server} ${command}`);
+  }
   return readStandings(watchedUnits(manifest), config, executor);
+}
+
+/**
+ * What a command run on the machine printed, said as the terminal would have
+ * shown it: its lines as they came, or `output` events under --json.
+ */
+function relayCaptured(done: Execution): void {
+  for (const [text, stream] of [[done.output, "stdout"], [done.error, "stderr"]] as const) {
+    for (const line of text.split("\n")) {
+      if (line === "") continue;
+      if (jsonOutput) emit({ type: "output", stream, line });
+      else if (stream === "stdout") console.log(line);
+      else console.error(line);
+    }
+  }
 }
 
 /**
@@ -2003,6 +2137,16 @@ async function prepareService(
     ].join(" && "),
   );
 
+  // The store's folders before the units: every unit of an app with a store
+  // loads its files/ folder, and a missing one fails every start with
+  // 243/CREDENTIALS. On every deployment, so that a folder deleted by hand
+  // comes back; before the code and the units, so that a refusal changes
+  // nothing.
+  if (hasStore(manifest)) {
+    const refusal = await prepareStore(slug, config, executor);
+    if (refusal !== null) die(refusal.message, refusal.details);
+  }
+
   step(units.length > 1 ? "systemd units" : "systemd unit");
   if (executor.simulated) {
     for (const { unit } of units) say(`   [dry-run] read ${unitPath(unit)}, install it if missing`);
@@ -2068,6 +2212,44 @@ async function prepareService(
   // The main unit alone is enabled: it wants the others, and the timers of
   // the scheduled ones, at boot as here.
   if (installed) await executor.ssh(config, `sudo systemctl daemon-reload && sudo systemctl enable ${slug}`);
+}
+
+/**
+ * Lays the project's store folders, `/etc/sitesolide/projects/<slug>/` and
+ * its `files/`, root's, 0700, as root on the machine: see storePrepareCommand
+ * in bin/cli/store.ts. Only folders, idempotent, never a file. The refusal
+ * when one of them is a link or no folder, PID 1 would read through it, or
+ * when the answer does not read; null once they are there.
+ */
+async function prepareStore(slug: string, config: Config, executor: Executor): Promise<{ message: string; details: string[] } | null> {
+  const { folder } = storePaths(slug);
+  if (executor.simulated) {
+    say(`   [dry-run] lay ${folder}/ and its files/ folder, root's, 0700, which every unit of ${slug} loads`);
+    return null;
+  }
+  step("the store of secrets' folders");
+  const done = await executor.execute(config, storePrepareCommand(slug));
+  const answer = readStorePrepareAnswer(done.output);
+  if (answer.kind === "refused") {
+    return {
+      message: `the store of secrets cannot be laid: ${answer.path} is a link or not a folder`,
+      details: [
+        "PID 1 would read through it: the owner of the machine must look at it",
+        "nothing was installed: the units and the code are as they were",
+      ],
+    };
+  }
+  if (answer.kind === "unreadable") {
+    return {
+      message: `cannot tell whether the store's folders of ${slug} are laid`,
+      details: [
+        done.error.trim() || "the server answered neither that they are nor why not",
+        "nothing was installed: without its files folder, every start of the project would fail with 243/CREDENTIALS",
+      ],
+    };
+  }
+  say(`   ${folder}: ${answer.created ? "created" : "present"}`);
+  return null;
 }
 
 /**
@@ -2157,22 +2339,26 @@ function siteLabels(folders: Iterable<string>, zone: string): string[] {
  * read: the machine's own, another site's by its name, or one a more
  * specific site deployed on the machine holds. The unit reads each declared
  * file as root, so `deploy` checking that it was there handed it to whoever
- * wrote the manifest. See secretFileRefusal in bin/cli/secrets.ts.
+ * wrote the manifest. See secretFileRefusal in bin/cli/secrets.ts. The old
+ * form's files alone: a project whose manifest names its secrets reads no
+ * flat file at all.
  *
  * The rule without the machine first, then with the sites it carries: a
- * read, hence done in a dry run too.
+ * read, hence done in a dry run too. The refusal is returned, deploy dying
+ * on it and refresh refusing that project alone; a read that fails stops.
  */
-async function checkSecretFiles(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
+async function secretFilesRefusal(manifest: Manifest, config: Config, executor: Executor): Promise<{ message: string; details: string[] } | null> {
   const declared = legacySecretFiles(manifest);
-  if (declared.length === 0) return;
-  const refuse = (refusals: string[]): void => {
-    if (refusals.length === 0) return;
-    die("secrets: a file that is not this project's", [
-      ...refusals,
-      `nothing was pushed: a project declares ${manifest.slug}.env or ${manifest.slug}-<name> files alone, which its unit reads as root`,
-    ]);
-  };
-  refuse(declared.map((name) => secretFileRefusal(manifest.slug, name)).filter((refusal): refusal is string => refusal !== null));
+  if (declared.length === 0) return null;
+  const refusal = (refusals: string[]): { message: string; details: string[] } | null =>
+    refusals.length === 0
+      ? null
+      : {
+          message: "secrets: a file that is not this project's",
+          details: [...refusals, `nothing was pushed: a project declares ${manifest.slug}.env or ${manifest.slug}-<name> files alone, which its unit reads as root`],
+        };
+  const named = refusal(declared.map((name) => secretFileRefusal(manifest.slug, name)).filter((one): one is string => one !== null));
+  if (named !== null) return named;
   const reading = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
   if (reading.kind === "unreadable") {
     die("cannot read the manifests on the server to check the secret files", [
@@ -2181,9 +2367,10 @@ async function checkSecretFiles(manifest: Manifest, config: Config, executor: Ex
     ]);
   }
   const labels = siteLabels(reading.manifests.keys(), config.zone);
-  refuse(declared.map((name) => secretFileRefusal(manifest.slug, name, labels)).filter((refusal): refusal is string => refusal !== null));
+  const held = refusal(declared.map((name) => secretFileRefusal(manifest.slug, name, labels)).filter((one): one is string => one !== null));
+  if (held !== null) return held;
   const owners = await readOwners(declared, config, executor, "nothing was pushed: a file another account owns could be read by this project");
-  refuse(declared.map((name) => ownerRefusal(manifest.slug, name, owners.get(name)!)).filter((refusal): refusal is string => refusal !== null));
+  return refusal(declared.map((name) => ownerRefusal(manifest.slug, name, owners.get(name)!)).filter((one): one is string => one !== null));
 }
 
 /** Who owns each declared secret file on the machine; an unreadable answer stops the command, `why` saying what that spares. */
@@ -2482,29 +2669,20 @@ async function journalEvents(
 }
 
 /**
- * `sitesolide secrets` pushes nothing: the secrets are managed on the machine,
- * from the Secrets section of the dashboard, because the VM is the source of
- * truth. A verb of the workstation that wrote into /etc/sitesolide would put a
- * development copy back over the value in service, without anything reporting
- * it.
+ * `sitesolide secrets` on the dashboard or the portal: they have no store.
+ * Their one file, `<slug>.env`, holds the owner's password hash, which their
+ * own unit reads and Change password writes, in the dashboard. Every other
+ * app's secrets are its store's, which `sitesolide secrets` lists and
+ * changes over the owner's socket: see bin/cli/store-cli.ts.
  *
- * The verb stays recognised so that the hand typing it learns where to go,
- * rather than landing on the general usage. It exits in error: nothing was
- * done, and a script chaining it must not believe otherwise.
- *
- * Every site's file is managed over there, including those that were kept out
- * of it: the dashboard's own, the portal's and the landing's. The vault keeps
- * only what belongs to no site, cloudflare.env, the token Caddy reads for its
- * certificates.
- *
- * The dashboard's own password is the one exception, since it is what opens the
- * dashboard: bin/dashboard-password.sh puts it on a machine that has none.
+ * The dashboard's own password, on a machine that has none, is the one thing
+ * the dashboard cannot set, since it is what opens the dashboard:
+ * bin/dashboard-password.sh puts it there.
  */
 function pointToDashboard(config: Config): never {
   die(`secrets are managed in the Secrets section of ${dashboardAddress(config.zone)}`, [
-    "the server is the source of truth: read, set or remove a variable there,",
-    "create a declared file that is missing, then restart the service",
-    "every site's file is managed there, the dashboard, the portal and the landing included",
+    "the dashboard and the portal keep their password hash in a file of their own, which their unit reads:",
+    "it is changed with Change password there, and they have no store of secrets",
     "",
     "the dashboard's own password, on a machine that has none yet:",
     `  ${script("dashboard-password.sh")}`,
@@ -2526,25 +2704,28 @@ function restartFromDashboard(config: Config): never {
 }
 
 /**
- * Loads a secret from the workstation's vault and runs the command. The file is
- * sourced by bash, never read by this process: nothing of its contents goes
- * through the CLI, is shown or is logged.
+ * Runs a command with the workstation's own credentials for the project: what
+ * the workstation itself presents to production, the API token a
+ * command-line tool sends for instance, and nothing that only the machine
+ * uses, which lives there alone.
  *
- * The vault is not a copy of production. It holds what the workstation itself
- * needs to reach production, the API token a command-line tool presents for
- * instance, and nothing that only the machine uses: those live in
- * /etc/sitesolide alone, managed from the dashboard.
+ * A manifest of the old form names its files, sourced from the vault by bash
+ * as before: nothing of their contents goes through the CLI. Any other reads
+ * `<vault>/<slug>.env` with the strict parser the steward uses, and hands
+ * every variable it holds to the command in its environment, never through a
+ * shell: sourcing a file runs what it holds. A line that does not parse is
+ * refused by its number and reason, never its content.
  */
 async function runWithSecret(
   project: Project,
   config: Config,
   command: string[],
 ): Promise<void> {
-  const secrets = legacySecretFiles(project.manifest);
-  if (secrets.length === 0) die("no secret declared in the manifest");
   if (command.length === 0) die("usage: sitesolide run -- <command>");
+  const declaration = secretsOf(project.manifest);
+  if (declaration.form !== "legacy") return runWithVariables(project, config, command);
 
-  const files = secrets.map((name) => join(config.vault, name));
+  const files = declaration.legacy.map((name) => join(config.vault, name));
   for (const file of files) {
     if (!existsSync(file)) {
       die(`missing from the vault: ${file}`, [
@@ -2564,6 +2745,31 @@ async function runWithSecret(
     ],
     { cwd: project.code, env: projectEnvironment(), stdout: "inherit", stderr: "inherit", stdin: "inherit" },
   );
+  process.exit(await proc.exited);
+}
+
+/** `run` for a manifest that names its secrets, or none: `<vault>/<slug>.env`, parsed strictly, in the command's environment. */
+async function runWithVariables(project: Project, config: Config, command: string[]): Promise<void> {
+  const path = workstationSecretsPath(config.vault, project.manifest.slug);
+  const read = await readWorkstationSecrets(path);
+  if (read.kind === "absent") {
+    die(`missing from the vault: ${path}`, [
+      "the vault holds what this workstation needs to reach production, and only that",
+      "write it yourself, one KEY=value per line, the values this workstation presents",
+    ]);
+  }
+  if (read.kind === "refused") die(`the vault's file does not read: ${path}, ${read.reason}`, ["its content is never shown"]);
+  const parsed = parseEnv(read.text);
+  if (!parsed.ok) {
+    const where = parsed.line === 0 ? parsed.reason : `line ${parsed.line}: ${parsed.reason}`;
+    die(`the vault's file does not read: ${path}, ${where}`, ["one KEY=value per line, the value quoted if it holds a space; its content is never shown"]);
+  }
+  const variables = Object.fromEntries(keys(parsed.document).map((name) => [name, envValue(parsed.document, name) ?? ""]));
+  const environment: Record<string, string | undefined> = { ...(projectEnvironment() ?? process.env), ...variables };
+  // Found on the PATH the command will have, as a shell would find it.
+  const program = command[0]!.includes("/") ? command[0]! : Bun.which(command[0]!, { PATH: environment.PATH ?? "", cwd: project.code });
+  if (program === null) die(`run: ${command[0]} is not on the PATH`, ["name the command as a shell would find it, or by its path"]);
+  const proc = Bun.spawn([program, ...command.slice(1)], { cwd: project.code, env: environment, stdout: "inherit", stderr: "inherit", stdin: "inherit" });
   process.exit(await proc.exited);
 }
 
@@ -3208,6 +3414,25 @@ async function refreshProject(folder: string, raw: string, run: RefreshRun, conf
     sayPlan(plan);
     const paths = (list: readonly { path: string }[]): string[] => list.map((unit) => unit.path);
     const report: ProjectReport = { ...emptyReport(slug, plan.state), write: paths(plan.write), current: paths(plan.current), kept: paths(plan.kept) };
+
+    // Before any unit is written, as deploy: a legacy file the project may
+    // not read refuses it, then the store's folders are laid, for a current
+    // project too, so that a files/ folder deleted by hand comes back and
+    // its units start again (they fail with 243/CREDENTIALS without it).
+    const legacy = await secretFilesRefusal(manifest, config, executor);
+    if (legacy !== null) {
+      stopContext = null;
+      refuseProject(run, foreignSecretFiles(slug), legacy.details);
+      return { ...report, state: "refused", write: [], reasons: legacy.details };
+    }
+    if (hasStore(manifest)) {
+      const refusal = await prepareStore(slug, config, executor);
+      if (refusal !== null) {
+        stopContext = null;
+        refuseProject(run, storeRefused(slug), [refusal.message, ...refusal.details]);
+        return { ...report, state: "refused", write: [], reasons: [refusal.message, ...refusal.details] };
+      }
+    }
     if (plan.state !== "outdated") return report;
 
     // A name systemd gives to a unit deploy did not write: deploy refuses it
@@ -3252,6 +3477,9 @@ async function refreshProject(folder: string, raw: string, run: RefreshRun, conf
     progress.restarted = !executor.simulated;
     const standings = await restartServices(manifest, config, executor);
     releaseCaddyLock();
+    // What the store lacks, said and never asked for: refresh deploys no
+    // manifest of its own, and a person may not be at a terminal.
+    await missingAfterRestart(manifest, config, executor);
     await verify(manifest, config, executor, (fields) => {
       if (typeof fields.url === "string") report.url = fields.url;
       if (typeof fields.status === "number") report.status = fields.status;
@@ -3261,6 +3489,34 @@ async function refreshProject(folder: string, raw: string, run: RefreshRun, conf
   } finally {
     stopContext = null;
   }
+}
+
+/**
+ * After refresh's restart, the declared runtime names and files the store
+ * lacks, warned of with the commands that set them. A store that cannot be
+ * read is said, and stops nothing.
+ */
+async function missingAfterRestart(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
+  const declaration = secretsOf(manifest);
+  if (!hasStore(manifest) || (declaration.runtime.length === 0 && declaration.files.length === 0)) return;
+  if (executor.simulated) {
+    say("   [dry-run] read which declared runtime secrets the store holds, and warn of the missing ones");
+    return;
+  }
+  const transport = ownerStore(config, executor);
+  const listed = await transport.list(manifest.slug);
+  if (!listed.ok) {
+    warn(`cannot tell which runtime secrets of ${manifest.slug} are set: ${listed.failure.message}`);
+    return;
+  }
+  await handleMissing(withDeclared(listed.value, declaration), transport, {
+    terminal: false,
+    json: jsonOutput,
+    ask: async () => null,
+    secret: async () => null,
+    say,
+    warn,
+  });
 }
 
 /** What the machine has of each unit, in order, "" for one it does not have; a reading that fails stops everything. */
@@ -3613,7 +3869,15 @@ function usage(zone: string | null): string {
     "  sitesolide remove --confirm <slug>",
     "                                  take the project off the machine, for good, its name freed from the token that created it",
     "     --dry-run                    show every step, remove nothing",
-    "  sitesolide run -- <command>     load the secret from the vault and run",
+    "  sitesolide secrets              this project's secrets: names, sources, states, never a value",
+    "     set <NAME> [--stdin]         set a variable, typed at a prompt that does not echo, or piped",
+    "     generate <NAME>              a random value drawn on the server, never shown: --format, --bytes, --replace",
+    "     remove <NAME>...             take variables out of the store",
+    "     set-file <NAME> < path       a file read whole, at $CREDENTIALS_DIRECTORY/files_<NAME>",
+    "     remove-file <NAME>           take a file out of the store",
+    "     migrate [--dry-run]          merge the legacy files into the store; --retire deletes those it covers",
+    "     --restart                    with a change: then restart the service, and say whether it holds",
+    "  sitesolide run -- <command>     the workstation's own credentials for this project, from the vault, then run",
     "  sitesolide mcp                  serve these commands to an agent, over MCP on stdio",
     "  sitesolide login --url <https://dashboard.zone>",
     "                                  a person with a token: deploy, set secrets and restart without SSH",
@@ -3625,7 +3889,7 @@ function usage(zone: string | null): string {
     "  SITESOLIDE_CONFIG_DIR=<dir>     before any command: read that installation's configuration",
     "",
     "--json, on every command but init and run: one JSON event per line, see docs/agents.md",
-    `secrets live on the server: manage them in the Secrets section of ${zone === null ? "https://dashboard.<zone>" : dashboardAddress(zone)}`,
+    `secrets live on the server, never in the repository: sitesolide secrets, or the Secrets section of ${zone === null ? "https://dashboard.<zone>" : dashboardAddress(zone)}`,
     "general access of a deployed site is set from the dashboard too: deploy follows the server",
   ].join("\n");
 }
@@ -3643,9 +3907,10 @@ function asksForHelp(arguments_: string[]): boolean {
  * configuration file, and an unreadable one only loses the zone.
  */
 function helpText(arguments_: string[]): string {
-  // `share --help` and `people --help`: their own usage, short, rather than every command.
+  // `share --help`, `people --help` and `secrets --help`: their own usage, short, rather than every command.
   if (arguments_[0] === "share") return SHARE_USAGE.join("\n");
   if (arguments_[0] === "people") return PEOPLE_USAGE.join("\n");
+  if (arguments_[0] === "secrets") return STORE_USAGE.join("\n");
   if (remoteMode(arguments_, process.env)) return REMOTE_USAGE.join("\n");
   let zone: string | null = process.env.SITESOLIDE_ZONE ?? null;
   try {
@@ -3765,7 +4030,7 @@ if (import.meta.main) {
         folder,
         environment: process.env,
         output: remoteOutput,
-        build: (project) => runBuild(project, executor),
+        build: (project, context) => runBuild(project, executor, context),
         checkPublic: (project) => checkPublicFolder(project),
       }),
     );
@@ -3834,8 +4099,32 @@ if (import.meta.main) {
     case "people":
       // The same registry, machine-wide. It reads no project folder.
       process.exit(await people(arguments_, dashboardAddress(config.zone), sshPeople((remote, input) => executor.execute(config, remote, input)), remoteOutput));
-    case "secrets":
-      pointToDashboard(config);
+    case "secrets": {
+      // The arguments first, before anything is read: one of them may be a
+      // value typed in the wrong place, refused without being quoted.
+      const asked = readStoreArguments(arguments_, jsonOutput);
+      if ("error" in asked) {
+        remoteOutput.failed(asked);
+        process.exit(1);
+      }
+      const { manifest } = readProject(folder);
+      // The dashboard's and the portal's one file holds the owner's hash.
+      if (!slugHasStore(manifest.slug)) pointToDashboard(config);
+      if (!hasStore(manifest)) {
+        remoteOutput.failed(storelessRefusal(manifest));
+        process.exit(1);
+      }
+      // The store, on the steward's owner socket, as root over SSH: see bin/cli/store-cli.ts.
+      process.exit(
+        await runStore(asked, manifest.slug, ownerStore(config, executor), {
+          output: remoteOutput,
+          json: jsonOutput,
+          terminal: () => process.stdin.isTTY === true,
+          stdin: () => Bun.stdin.bytes(),
+          secretPrompt: (question) => promptWithoutEcho(question),
+        }),
+      );
+    }
     case "restart":
       restartFromDashboard(config);
     case "lock": {

@@ -17,6 +17,13 @@
  * this release refuses, refuses its project, naming why, and nothing is
  * changed for it: deploying the project again writes a current one.
  *
+ * WHAT IT CHECKS AND LAYS FIRST, as deploy does, before any unit: a secret
+ * file of the old form the project may not read refuses it; then the
+ * project's store folders are laid, for a project whose units are current
+ * too, so that a `files/` folder deleted by hand comes back (every unit of
+ * the project fails to start without it). After a restart, the runtime
+ * secrets the store lacks are said, never asked for.
+ *
  * WHAT IT WRITES. Each unit is decided by decideUnit exactly as deploy decides
  * it without `--force`: a current unit is left alone; a missing one, or one an
  * earlier release generated, is written; one edited by hand is kept, and
@@ -232,6 +239,14 @@ export function refusedManifest(slug: string): string {
 
 export function foreignUnits(slug: string): string {
   return `${slug}'s units are named like a service of the server that deploy did not write: nothing was changed for it`;
+}
+
+export function foreignSecretFiles(slug: string): string {
+  return `${slug} declares a secret file that is not its own, which its units would read as root: nothing was changed for it`;
+}
+
+export function storeRefused(slug: string): string {
+  return `${slug}'s store of secrets cannot be laid, which its units load: nothing was changed for it`;
 }
 
 export function notDeployed(slug: string): string {

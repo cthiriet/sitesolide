@@ -6,7 +6,10 @@
  *   sitesolide deploy      build here, upload, follow the machine's log
  *   sitesolide status      the projects this token may deploy
  *   sitesolide logs [--follow]
- *   sitesolide share [<email>...]   who may open the project, see sharing.ts
+ *   sitesolide share [<email>...]   who may open the project, see access.ts
+ *   sitesolide secrets [set|generate|remove|set-file|remove-file]
+ *                                   the project's store of secrets, see store-cli.ts
+ *   sitesolide restart              the project's service, and whether it holds
  *
  * **Which mode a command runs in.** A configuration with a `server` is the
  * owner's, and runs over SSH exactly as before: nothing here touches that path.
@@ -30,6 +33,10 @@
  * The build stays on the workstation, as over SSH: the archive carries its
  * result, the code minus its exclusions in `app/`, and the public files in
  * `public/`. The machine installs dependencies itself, as the project's account.
+ * The build's secrets are resolved here first, a missing one stopping the run
+ * before anything is sent; the runtime secrets the store lacks are read before
+ * the deployment, asked for at a terminal and warned of otherwise, never a
+ * stop (see store-cli.ts).
  *
  * **An option this path does not carry is refused, never passed over.**
  * `deploy --dry-run` used to deploy for real here, and `--json` to print plain
@@ -44,10 +51,28 @@ import { dirname, join, resolve } from "node:path";
 import { bundle, excludedBy, type BundleEntry } from "./bundle";
 import { configPath, defaultPaths, expandHome, projectsRepo, readConfigFile } from "./config";
 import { hintForFailure } from "./hints";
-import { hasServices, isApp, mainPort, missingExclusions, NEVER_SENT, parserComplaint, readManifest, servicesOf, type Manifest } from "./manifest";
+import { gatherBuildSecrets, missingBuildSecrets, sourceLine, unreadableWorkstation } from "./build-secrets";
+import {
+  hasServices,
+  hasStore,
+  isApp,
+  mainPort,
+  missingExclusions,
+  NEVER_SENT,
+  parserComplaint,
+  readManifest,
+  secretsOf,
+  secretsWarnings,
+  servicesOf,
+  type Manifest,
+  type SecretsDeclaration,
+} from "./manifest";
 import { eventFor, formatEvent, runsOf, type OutputEvent } from "./output";
 import { share, SHARE_OPTIONS, type AccessState, type AccessTransport, type EntryAnswer, type Reading } from "./access";
 import { sourceRefusal } from "./source";
+import { workstationSecretsPath } from "./store";
+import type { MissingIo, StoreTransport } from "./store-cli";
+import type { StoreMissing } from "./store-protocol";
 
 /** Where the token is kept in the vault. */
 export const TOKEN_FILE = "team-token";
@@ -262,6 +287,8 @@ export async function call<T>(remote: Remote, path: string, init: RequestInit = 
 export type Output = {
   say: (line: string) => void;
   journal: (line: string) => void;
+  /** Something wrong that stops nothing, with its details: a `warning` event under --json. */
+  warn?: (message: string, details: string[]) => void;
   /** `said`: a person already read the message, in the machine's log. */
   failed: (failure: Failure, said?: boolean) => void;
   succeeded: (command: string, fields: Record<string, unknown>) => void;
@@ -270,6 +297,10 @@ export type Output = {
 export const humanOutput: Output = {
   say: (line) => console.log(line),
   journal: (line) => console.log(line),
+  warn: (message, details) => {
+    console.error(`!! ${message}`);
+    for (const detail of details) console.error(`   ${detail}`);
+  },
   failed: (failure, said = false) => {
     if (said) return;
     console.error(`!! ${failure.message}`);
@@ -288,6 +319,7 @@ export function eventOutput(write: (line: string) => void = (line) => console.lo
       if (event !== null) emit(event);
     },
     journal: (line) => emit({ type: "log", at: null, unit: null, priority: null, message: line }),
+    warn: (message, details) => emit({ type: "warning", message, details }),
     failed: (failure) =>
       emit({
         type: "error",
@@ -427,8 +459,12 @@ export type RemoteDependencies = {
   home?: string;
   fetcher?: Fetch;
   output?: Output;
-  /** The build of bin/sitesolide.ts, which runs the manifest's `build` here. */
-  build: (project: RemoteProject) => Promise<void>;
+  /**
+   * The build of bin/sitesolide.ts, which runs the manifest's `build` here,
+   * in the clean environment of buildEnv: the build secrets resolved, and
+   * what `{zone}` and `{contact}` become in the manifest's `env`.
+   */
+  build: (project: RemoteProject, context: BuildContext) => Promise<void>;
   /** Its check that the public folder exists and is not empty. */
   checkPublic: (project: RemoteProject) => void;
   /** Between two reads of a deployment's progress. */
@@ -439,7 +475,14 @@ export type RemoteDependencies = {
   secretPrompt?: (question: string) => Promise<Typed>;
   /** Whether standard input is a terminal, where a person types and `--stdin` would echo: its `isTTY` by default. */
   terminal?: () => boolean;
+  /** Whether standard output is one too: deploy asks for a missing secret only when both are. Its `isTTY` by default. */
+  outputTerminal?: () => boolean;
+  /** All of standard input, as bytes: `secrets set --stdin` and `secrets set-file`. */
+  stdinBytes?: () => Promise<Uint8Array>;
 };
+
+/** What a project's build receives besides the workstation's allow list: see buildEnv in ./kit. */
+export type BuildContext = { secrets: Record<string, string>; placeholders: { slug: string; zone: string; contact: string } };
 
 type DeploymentView = {
   id: string;
@@ -451,6 +494,10 @@ type DeploymentView = {
   error: { code: string; message: string } | null;
   url: string | null;
   allocated: { service: string | null; port: number }[];
+  /** What {zone} and {contact} become for the build here; absent from a dashboard before the store. */
+  placeholders?: { zone: string; contact: string };
+  /** Declared runtime names and files the store lacked once the installer was done; absent before the store. */
+  missingSecrets?: StoreMissing | null;
 };
 
 /** `member`: the dashboard's member whose own token it is, narrowed to their roles; absent from a dashboard before them. */
@@ -543,7 +590,26 @@ export async function login(arguments_: string[], dependencies: Omit<RemoteDepen
   return 0;
 }
 
-async function deploy(remote: Remote, dependencies: RemoteDependencies): Promise<number> {
+/**
+ * What `{zone}` and `{contact}` become for the build: the deployment's own
+ * answer, or, from a dashboard before it sends them, the zone the dashboard's
+ * address names, `dashboard.<zone>`, and no contact. A placeholder that
+ * cannot be filled stays in place, visible, as the unit generator leaves it.
+ */
+export function buildPlaceholders(slug: string, api: string, given: { zone?: unknown; contact?: unknown } | undefined): BuildContext["placeholders"] {
+  if (given !== undefined && typeof given.zone === "string" && typeof given.contact === "string") return { slug, zone: given.zone, contact: given.contact };
+  const host = new URL(api).hostname;
+  return { slug, zone: host.startsWith("dashboard.") ? host.slice("dashboard.".length) : "", contact: "" };
+}
+
+/** Says a warning, with its details: the output's own way when it has one, its lines otherwise. */
+function warnOn(output: Output, message: string, details: string[]): void {
+  if (output.warn !== undefined) return output.warn(message, details);
+  output.say(`!! ${message}`);
+  for (const detail of details) output.say(`   ${detail}`);
+}
+
+async function deploy(remote: Remote, dependencies: RemoteDependencies, json: boolean): Promise<number> {
   const output = dependencies.output ?? humanOutput;
   const read = readRemoteProject(dependencies.folder);
   if ("errors" in read) {
@@ -551,7 +617,50 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies): Promise
     return report(output, { error: "invalid", message: first ?? "sitesolide.json rejected", details: rest });
   }
   const project = read;
-  output.say(`-> project ${project.manifest.slug}, through ${remote.api}`);
+  const { manifest } = project;
+  const slug = manifest.slug;
+  output.say(`-> project ${slug}, through ${remote.api}`);
+  for (const warning of secretsWarnings(manifest)) warnOn(output, warning, []);
+
+  // The build's secrets first, from whoever deploys: a missing one stops
+  // here, before anything is sent, the manifest included.
+  const declaration = secretsOf(manifest);
+  const workstation = workstationSecretsPath(vaultFolder(dependencies.environment, dependencies.home ?? homedir()), slug);
+  const resolved = await gatherBuildSecrets(declaration.build, dependencies.environment, workstation);
+  if (resolved.refusal !== null) return report(output, { error: "build-secrets-unreadable", ...unreadableWorkstation(workstation, resolved.refusal) });
+  if (resolved.missing.length > 0) return report(output, { error: "build-secret-missing", ...missingBuildSecrets(resolved.missing, workstation) });
+  for (const { name, source } of resolved.sources) output.say(`   ${sourceLine(name, source, workstation)}`);
+
+  // The runtime secrets the store lacks, before anything is sent: asked for
+  // at a terminal, warned of otherwise. Never a stop.
+  const store = await import("./store-cli");
+  const transport = store.apiStore(remote, dependencies.fetcher);
+  const io: MissingIo = {
+    terminal: (dependencies.terminal ?? (() => process.stdin.isTTY === true))() && (dependencies.outputTerminal ?? (() => process.stdout.isTTY === true))(),
+    json,
+    ask: async (question) => (dependencies.prompt ?? prompt)(question),
+    secret: dependencies.secretPrompt ?? promptWithoutEcho,
+    say: (line) => output.say(line),
+    warn: (message, details) => warnOn(output, message, details),
+  };
+  const declares = hasStore(manifest) && (declaration.runtime.length > 0 || declaration.files.length > 0);
+  let missing: StoreMissing | null = declares ? null : { runtime: [], files: [] };
+  let deferred = false;
+  if (declares) {
+    output.say("-> runtime secrets");
+    const listed = await transport.list(slug);
+    if (listed.ok) {
+      missing = await store.handleMissing(store.withDeclared(listed.value, declaration), transport, io);
+      if (missing.runtime.length === 0 && missing.files.length === 0) output.say("   every declared runtime secret is set");
+    } else if (listed.failure.error === "out-of-scope") {
+      output.say("   this token may not list secrets: the machine's log names any that is missing");
+    } else if (listed.failure.error === "not-found") {
+      // A project not deployed yet whose store this token may not hold
+      // ahead: what it lacks is asked for once the deployment made it.
+      deferred = true;
+      output.say("   not deployed yet: what its store lacks is said once the deployment is done");
+    } else warnOn(output, `cannot tell which runtime secrets are set: ${listed.failure.message}`, []);
+  }
 
   // The manifest first: the dashboard and the steward judge it, so that a
   // refusal comes back before the build and the upload.
@@ -565,7 +674,7 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies): Promise
   const deployment = created.body.deployment;
   output.say(`   deployment ${deployment.id}${deployment.creating ? ", a new project" : ""}`);
 
-  await dependencies.build(project);
+  await dependencies.build(project, { secrets: resolved.values, placeholders: buildPlaceholders(slug, remote.api, deployment.placeholders) });
   dependencies.checkPublic(project);
 
   output.say("-> archive");
@@ -610,18 +719,24 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies): Promise
       for (const { service, port } of view.allocated) {
         output.say(`   the machine chose port ${port}${service === null ? "" : ` for ${service}`}: write it in sitesolide.json to keep it explicit`);
       }
+      // What the installer found missing once done is the word that counts;
+      // a dashboard before it says nothing, and the reading before stands.
+      let missingSecrets: StoreMissing | null = view.missingSecrets !== undefined ? view.missingSecrets : missing;
+      if (deferred && io.terminal && !json) missingSecrets = await askAfterCreation(slug, declaration, transport, io, store, output);
       const main = view.allocated.find((entry) => entry.service === null) ?? view.allocated[0];
       output.succeeded("deploy", {
-        slug: project.manifest.slug,
-        kind: isApp(project.manifest) ? (hasServices(project.manifest) ? "services" : "service") : "static",
-        ...(isApp(project.manifest) ? { runs: runsOf(servicesOf(project.manifest)) } : {}),
+        slug,
+        kind: isApp(manifest) ? (hasServices(manifest) ? "services" : "service") : "static",
+        ...(isApp(manifest) ? { runs: runsOf(servicesOf(manifest)) } : {}),
         dryRun: false,
-        port: main?.port ?? mainPort(project.manifest),
+        port: main?.port ?? mainPort(manifest),
         ...(view.allocated.length > 0 ? { portChosen: "free" } : {}),
         manifestWritten: false,
         url: view.url,
         deployment: deployment.id,
         creating: deployment.creating,
+        missingSecrets,
+        buildSecrets: resolved.sources,
       });
       return 0;
     }
@@ -634,6 +749,40 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies): Promise
     }
     await pause();
   }
+}
+
+/**
+ * The prompts of a first deployment whose store the token could not hold
+ * ahead, now that the deployment made the project: then one restart offered,
+ * so that the service reads what was set. What is left missing is returned.
+ */
+async function askAfterCreation(
+  slug: string,
+  declaration: SecretsDeclaration,
+  transport: StoreTransport,
+  io: MissingIo,
+  store: typeof import("./store-cli"),
+  output: Output,
+): Promise<StoreMissing | null> {
+  output.say("-> runtime secrets, now that the project exists");
+  const listed = await transport.list(slug);
+  if (!listed.ok) {
+    warnOn(output, `cannot tell which runtime secrets are set: ${listed.failure.message}`, []);
+    return null;
+  }
+  const view = store.withDeclared(listed.value, declaration);
+  const before = store.missingOf(view);
+  const left = await store.handleMissing(view, transport, io);
+  if (left.runtime.length === before.runtime.length) return left;
+  const answer = await io.ask("Restart the service now, so that it reads them? [y/N] ");
+  if (answer === null || !/^y(es)?$/i.test(answer.trim())) {
+    output.say("   not restarted: sitesolide restart applies them");
+    return left;
+  }
+  const restarted = await transport.restart(slug);
+  if (!restarted.ok) warnOn(output, `the restart was not made: ${restarted.failure.message}`, ["sitesolide restart, once its cause is fixed"]);
+  else output.say(`   ${store.verdictWords(restarted.value.verdict)}`);
+  return left;
 }
 
 /** One service of a project, as the control API reports it. */
@@ -773,155 +922,11 @@ export function apiAccess(remote: Remote, fetcher?: Fetch): AccessTransport {
 }
 
 // --- secrets and restarts --------------------------------------------------------
-
-/**
- * `sitesolide secrets`, `secrets set` and `secrets remove`, with a token that
- * may manage secrets: the variable names of this folder's project, and the
- * variables of `<slug>.env` set and removed, the only file a token changes.
- * `sitesolide restart`, with any token that deploys the project. The steward
- * judges all of it on the machine (docs/access.md, "Secrets with a token").
- *
- * **A value never comes from the command line.** An argument stays in the
- * shell's history and shows in every user's process list: `set` reads the
- * value from standard input with `--stdin`, or from a prompt that does not
- * echo it. `NAME=value`, or anything after the name, is refused before a
- * request leaves, and no refusal ever quotes an argument that could be a
- * value: a name is named only when it has a variable name's shape. Under
- * `--json` nothing prompts, for the reason `login` gives: `--stdin` is then
- * required.
- *
- * **What the steward would refuse is refused here first**, so that the
- * refusal can say nothing was sent: a name that looks like a value, a value
- * of several lines, too large, or not valid Unicode, a key the prompt does
- * not take. Refused on the machine, the value had already travelled.
- *
- * **A value never comes back.** No route reads one, and nothing here prints
- * the value sent: a refusal that quoted it would be withheld, here as on the
- * dashboard.
- */
-
-/** What `sitesolide secrets` was asked. */
-export type SecretsAsk =
-  | { action: "list" }
-  | { action: "set"; name: string; stdin: boolean; restart: boolean }
-  | { action: "remove"; names: string[]; restart: boolean };
-
-/** The shape of a variable name, as the steward reads one: only such a name is ever quoted back. */
-const VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
-
-/**
- * How the keys of common services begin, Stripe's, GitHub's, Slack's, AWS's,
- * GitLab's and sitesolide's own. `sitesolide secrets set sk_live_...` has the
- * shape of a variable name: sent, the key would become a name, journaled for
- * good and listed to every Developer of the project.
- */
-export const VALUE_PREFIXES = ["sk_", "rk_", "pk_live", "whsec_", "ghp_", "gho_", "github_pat_", "xox", "AKIA", "sst_", "glpat-"] as const;
-
-/**
- * The longest name taken here. The steward takes 128 characters, but a name
- * that long is far likelier a key pasted in the wrong place than a variable;
- * a longer one is set from the dashboard's Secrets section.
- */
-export const NAME_MAX_HERE = 64;
-
-/** Whether an argument where a name goes is more likely a secret's value. */
-export function looksLikeValue(argument: string): boolean {
-  return argument.length > NAME_MAX_HERE || VALUE_PREFIXES.some((prefix) => argument.startsWith(prefix));
-}
-
-/** A value typed where a name goes: refused, never quoted, and its owner told the shell kept it. */
-function valueAsName(where: string): Failure {
-  return {
-    error: "looks-like-value",
-    message: `${where} looks like a secret's value, not a variable name: nothing was sent`,
-    details: [
-      `refused here: a name over ${NAME_MAX_HERE} characters, or starting as service keys do, ${VALUE_PREFIXES.join(", ")}`,
-      "if it was a value, it may now be in the shell's history: change it at its source",
-      "the value goes at the prompt of sitesolide secrets set NAME, or through a pipe to sitesolide secrets set NAME --stdin",
-      "a variable really named so is set from the dashboard's Secrets section",
-    ],
-  };
-}
-
-/** The usage of `secrets`, as the refusals list it. */
-const SECRETS_USAGE = [
-  "sitesolide secrets                          this folder's project's secret files and variable names",
-  "sitesolide secrets set <NAME> [--restart]   its value typed at a prompt that does not echo it",
-  "sitesolide secrets set <NAME> --stdin       its value from standard input",
-  "sitesolide secrets remove <NAME>...         take variables out",
-];
-
-/** A value on the command line: refused, the argument never quoted. */
-const valueInArguments: Failure = {
-  error: "value-in-arguments",
-  message: "a secret's value never goes on the command line, sitesolide secrets set takes a name alone: nothing was sent",
-  details: [
-    "an argument stays in the shell's history and shows in the process list",
-    "type the value at the prompt of sitesolide secrets set NAME, or pipe it to sitesolide secrets set NAME --stdin",
-    "if a real value was on that line, change it at its source: the shell's history keeps it",
-  ],
-};
-
-/**
- * The arguments of `secrets`, read whole before anything is asked or sent.
- * Only the options it takes and a name of a variable's shape are ever named
- * in a refusal: anything else may be a value typed in the wrong place.
- */
-export function readSecretsArguments(arguments_: string[]): SecretsAsk | Failure {
-  const rest = arguments_[0] === "secrets" ? arguments_.slice(1) : arguments_;
-  const json = rest.includes("--json");
-  const positional: string[] = [];
-  let stdin = false;
-  let restart = false;
-  for (const argument of rest) {
-    if (GLOBAL_OPTIONS.includes(argument)) continue;
-    if (argument === "--stdin") stdin = true;
-    else if (argument === "--restart") restart = true;
-    else if (argument.startsWith("-")) {
-      // Not quoted either: `--value=...` is the first thing a hand tries.
-      if (argument.includes("=")) return valueInArguments;
-      return { error: "unknown-option", message: "an option sitesolide secrets does not take with a token: nothing was sent", details: ["it takes --stdin with set, and --restart with set and remove", ...SECRETS_USAGE] };
-    } else positional.push(argument);
-  }
-  // `NAME=value` wherever it stands, `secrets API_KEY=...` as much as `secrets set API_KEY=...`.
-  if (positional.some((argument) => argument.includes("="))) return valueInArguments;
-  const [action, ...names] = positional;
-  if (action === undefined) {
-    if (stdin || restart) return { error: "usage", message: "sitesolide secrets alone lists, and takes no option: nothing was sent", details: SECRETS_USAGE };
-    return { action: "list" };
-  }
-  if (action !== "set" && action !== "remove") {
-    // `sitesolide secrets sk_live_...`: the same slip, one word shorter.
-    if (looksLikeValue(action)) return valueAsName("secrets: what follows");
-    return { error: "usage", message: "sitesolide secrets takes set or remove, or nothing to list: nothing was sent", details: ["a value is never read back through the API", ...SECRETS_USAGE] };
-  }
-  if (action === "set") {
-    const [name, ...extra] = names;
-    if (name === undefined) return { error: "usage", message: "secrets set: name the variable, sitesolide secrets set NAME: nothing was sent", details: SECRETS_USAGE };
-    // Anything after the name is a value typed on the line, `secrets set API_KEY s3cret`.
-    if (extra.length > 0) return valueInArguments;
-    // Before the shape: `glpat-...` is no variable name either, and its owner needs the history warning more than the rule.
-    if (looksLikeValue(name)) return valueAsName("secrets set: the name");
-    if (!VARIABLE_NAME.test(name)) {
-      return { error: "invalid", message: "secrets set: the name is not a variable name, letters, digits and underscores, not starting with a digit, 128 characters at most: nothing was sent" };
-    }
-    // Asked now, before a prompt or a read of standard input: under --json
-    // nobody answers one, and an agent's empty input would set an empty value.
-    if (json && !stdin) {
-      return { error: "needs-stdin", message: "secrets set under --json never prompts: pipe the value to --stdin; nothing was sent", details: ["sitesolide secrets set NAME --stdin --json"] };
-    }
-    return { action: "set", name, stdin, restart };
-  }
-  if (stdin) return { error: "usage", message: "--stdin goes with set: secrets remove takes names alone; nothing was sent", details: SECRETS_USAGE };
-  if (names.length === 0) return { error: "usage", message: "secrets remove: name the variables, sitesolide secrets remove NAME...: nothing was sent", details: SECRETS_USAGE };
-  const valueLike = names.findIndex(looksLikeValue);
-  if (valueLike !== -1) return valueAsName(`secrets remove: name ${valueLike + 1}`);
-  const malformed = names.findIndex((name) => !VARIABLE_NAME.test(name));
-  if (malformed !== -1) {
-    return { error: "invalid", message: `secrets remove: name ${malformed + 1} is not a variable name, letters, digits and underscores, not starting with a digit, 128 characters at most: nothing was sent` };
-  }
-  return { action: "remove", names, restart };
-}
+//
+// `sitesolide secrets` and `sitesolide restart` live in ./store-cli, one parser
+// and one renderer for SSH and the API: runRemote hands them this folder's
+// slug and the API's transport. What stays here is the prompt that does not
+// echo, which `login` reads a token with too.
 
 /**
  * How the no-echo prompt ends: the value entered, null when it was abandoned,
@@ -1141,317 +1146,21 @@ export async function promptWithoutEcho(question: string, terminal: HiddenTermin
   }
 }
 
-/** The largest value the steward writes: `MAX_VALUE_BYTES` of dashboard/src/secrets/envfile.ts. */
-export const MAX_VALUE_BYTES = 8 * 1024;
-
 /**
- * Why the steward would refuse this value, or null, in its own words:
- * `checkValue` of dashboard/src/secrets/envfile.ts, mirrored rather than
- * imported. That module reads dashboard/borrowed/, which the dashboard's
- * borrow script writes and git does not keep: imported, it would break
- * `bun test` in bin/ on a fresh clone, and the binary's build.
- * bin/tests/cli-remote.test.ts runs both over the same values, words included.
+ * This folder's project, from its manifest, as `share`, `secrets` and `logs`
+ * read it: its slug, and whether it may have a store.
  */
-export function valueRefusal(value: string): string | null {
-  if (value.includes("\n") || value.includes("\r")) return "the value must fit on one line";
-  if (value.includes("\0")) return "the value contains a null byte";
-  if (!value.isWellFormed()) return "the value is not valid Unicode";
-  if (NONCHARACTER.test(value)) return "the value holds a Unicode noncharacter, which systemd refuses";
-  if (new TextEncoder().encode(value).length > MAX_VALUE_BYTES) return "the value is larger than 8 KiB";
-  return null;
-}
-
-/**
- * U+FDD0 to U+FDEF, and U+xxFFFE and U+xxFFFF in every plane: systemd refuses
- * them in a variables file, and drops every variable of the file with them.
- * The steward's own list (dashboard/src/secrets/envfile.ts), which the tests
- * hold side by side with this one.
- */
-const NONCHARACTER =
-  /[\uFDD0-\uFDEF\uFFFE\uFFFF\u{1FFFE}\u{1FFFF}\u{2FFFE}\u{2FFFF}\u{3FFFE}\u{3FFFF}\u{4FFFE}\u{4FFFF}\u{5FFFE}\u{5FFFF}\u{6FFFE}\u{6FFFF}\u{7FFFE}\u{7FFFF}\u{8FFFE}\u{8FFFF}\u{9FFFE}\u{9FFFF}\u{AFFFE}\u{AFFFF}\u{BFFFE}\u{BFFFF}\u{CFFFE}\u{CFFFF}\u{DFFFE}\u{DFFFF}\u{EFFFE}\u{EFFFF}\u{FFFFE}\u{FFFFF}\u{10FFFE}\u{10FFFF}]/u;
-
-/** A value refused here, before it travels: never quoted. */
-function refusedValue(reason: string): Failure {
-  return {
-    error: "invalid",
-    message: `${reason}: nothing was sent`,
-    details: [
-      "the machine takes a value on one line, without a null byte, in valid Unicode with no noncharacter, 8 KiB at most",
-      "a key or a certificate of several lines goes in a file read whole, from the dashboard's Secrets section",
-    ],
-  };
-}
-
-/** A key the prompt does not take, or several lines pasted into it. */
-function refusedTyping(reason: string): Failure {
-  return {
-    error: "invalid",
-    message: `${reason}: nothing was sent`,
-    details: [
-      "at the prompt, Backspace, Ctrl-U and Ctrl-W edit the value, Enter ends it, Ctrl-C abandons it",
-      "what followed was read and dropped here, not passed to the shell",
-      "a value of several lines goes in a file read whole, from the dashboard's Secrets section",
-    ],
-  };
-}
-
-/**
- * `--stdin` reads a pipe. At a terminal, `Bun.stdin.text()` would read the
- * value with the terminal's echo on, the value on screen and in the scrollback,
- * until Ctrl-D: a pipe forgotten, and the value shown to whoever looks.
- */
-const stdinIsTerminal: Failure = {
-  error: "stdin-is-terminal",
-  message: "--stdin reads a pipe, and standard input is this terminal, where the value would show as it is typed: nothing was sent",
-  details: ["pipe the value: <command> | sitesolide secrets set NAME --stdin", "or drop --stdin to be prompted without echo: sitesolide secrets set NAME"],
-};
-
-/**
- * All of standard input, decoded strictly: `Bun.stdin.text()` turns a byte
- * that is not UTF-8 into U+FFFD, and the steward would write that, not what
- * was piped. null when it is not UTF-8.
- */
-async function readStandardInput(): Promise<string | null> {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(await Bun.stdin.bytes());
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Whether a change may have reached the machine though no answer came back.
- * A connection refused sent nothing. A connection dropped once the request
- * had left, or an answer cut or replaced by a proxy's page, may follow a
- * write already made: the dashboard's idle timeout can close the connection
- * while a write followed by a restart is still running.
- */
-function unanswered(answer: Answer<unknown>, thrown: unknown): boolean {
-  if (answer.ok) return false;
-  if (answer.failure.error === "unreachable") return (thrown as { code?: unknown } | null)?.code !== "ConnectionRefused";
-  return answer.failure.error === "unreadable" && (answer.status < 400 || answer.status >= 500);
-}
-
-/** A change sent whose answer never came: said as what it is, and how to check, rather than "unreachable". */
-function unconfirmed(file: string, failure: Failure, restart: boolean): Failure {
-  return {
-    error: "unconfirmed",
-    message: `the change of ${file} was sent and its answer never came: it may have been written`,
-    details: [
-      failure.message,
-      `sitesolide secrets lists the names in ${file}: a name removed is gone once the change is written, a name set is there`,
-      "no value is read back, so a set over a value already there cannot be checked: running the same command again writes the change once more, harmlessly",
-      ...(restart ? ["the restart may have been made too: sitesolide status shows the service"] : []),
-    ],
-  };
-}
-
-/**
- * A refusal with no value of the request in it: the steward quotes none,
- * the dashboard withholds a message that would, and this is the third lock.
- */
-function withheld(failure: Failure, values: readonly string[]): Failure {
-  const quotes = (text: string) => values.some((value) => value.length >= 4 && text.includes(value));
-  if (!quotes(failure.message) && !(failure.details ?? []).some(quotes)) return failure;
-  return { error: failure.error, message: "the dashboard refused the change; its message is withheld: see the project's Activity", ...(failure.wait === undefined ? {} : { wait: failure.wait }) };
-}
-
-/** A secret file as a token lists it: names, never a value, a size nor a previous version. */
-type TokenFile = {
-  name: string;
-  kind: "variables" | "content";
-  state: "managed" | "absent" | "unmanaged";
-  reason: string | null;
-  variables: readonly string[];
-  passwords: readonly string[];
-  restartPending?: boolean;
-  writable: boolean;
-};
-
-type ProjectSecrets = { slug: string; service: { unit: string; state: string; subState: string } | null; files: TokenFile[] };
-
-type Verdict = { kind: "active" | "looping" | "failure" | "scheduled"; state: string; subState: string; restarts: number };
-
-type RestartOutcome = { verdict: Verdict } | Failure;
-
-type SecretsChange = { file: TokenFile; created: boolean; set: string[]; removed: string[]; absent: string[]; restart: RestartOutcome | null };
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((one) => typeof one === "string");
-const isFile = (value: unknown): value is TokenFile =>
-  isRecord(value) && typeof value.name === "string" && typeof value.state === "string" && isStrings(value.variables) && typeof value.writable === "boolean";
-const isVerdict = (value: unknown): value is Verdict =>
-  isRecord(value) && typeof value.kind === "string" && typeof value.state === "string" && typeof value.subState === "string" && typeof value.restarts === "number";
-
-/** A verdict in words: what systemd says, and whether the service holds. */
-function verdictWords(verdict: Verdict): string {
-  const said = { active: "holds", looping: "restarts in a loop", failure: "did not come back", scheduled: "restarts once this answer has left" }[verdict.kind] ?? verdict.kind;
-  return `${verdict.state}, ${verdict.subState}, ${verdict.restarts} restart(s) by systemd: the service ${said}`;
-}
-
-/** A restart that did not leave the service running: the run fails, saying what was already done. */
-function restartFailed(slug: string, verdict: Verdict, done: string[] = []): Failure {
-  return {
-    error: "restart-failed",
-    message: `the service of ${slug} did not hold after its restart: ${verdictWords(verdict)}`,
-    details: [...done, "sitesolide logs says why"],
-  };
-}
-
-/** The lines of one file, in the listing. */
-export function secretFileLines(file: TokenFile): string[] {
-  const elsewhere = "set from the dashboard's Secrets section";
-  if (file.state === "absent") return [`   ${file.name}: missing, ${file.writable ? `sitesolide secrets set NAME creates it` : `created from the dashboard's Secrets section`}`];
-  if (file.state === "unmanaged") return [`   ${file.name}: not managed by the dashboard${file.reason === null ? "" : `, ${file.reason}`}`];
-  if (file.kind === "content") return [`   ${file.name}: a file read whole, ${elsewhere}`];
-  const passwords = file.passwords ?? [];
-  const names = file.variables.filter((name) => !passwords.includes(name));
-  return [
-    `   ${file.name}: ${names.length === 0 ? "no variable yet" : names.join(", ")}`,
-    ...passwords.map((name) => `      ${name}: a password hash, changed from the dashboard alone`),
-    ...(file.writable ? [] : [`      read only with a token: ${elsewhere}`]),
-    ...(file.restartPending === true ? ["      restart pending: changed since the service started, sitesolide restart applies it"] : []),
-  ];
-}
-
-/** This folder's project's slug, from its manifest, as `share` and `logs` read it. */
-function folderSlug(folder: string): string | Failure {
+function folderManifest(folder: string): Manifest | Failure {
   const path = join(folder, "sitesolide.json");
   if (!existsSync(path)) return { error: "invalid", message: `sitesolide.json not found in ${folder}: run this from the project's folder` };
   const { manifest } = checkManifest(readFileSync(path, "utf8"));
   if (manifest === undefined) return { error: "invalid", message: "sitesolide.json rejected" };
-  return manifest.slug;
+  return manifest;
 }
 
-const notCarried = (remote: Remote, what: string): Failure => ({
-  error: "not-available",
-  message: `the dashboard at ${remote.api} does not carry ${what} by token yet: the owner of the machine runs sitesolide upgrade`,
-});
-
-async function listSecrets(remote: Remote, slug: string, dependencies: RemoteDependencies): Promise<number> {
-  const output = dependencies.output ?? humanOutput;
-  const answer: Answer<{ secrets: ProjectSecrets }> = await call(remote, `/api/v1/projects/${encodeURIComponent(slug)}/secrets`, {}, dependencies.fetcher);
-  if (predatesRoute(answer)) return report(output, notCarried(remote, "secrets"));
-  if (!answer.ok) return report(output, answer.failure);
-  const secrets = answer.body.secrets;
-  if (!isRecord(secrets) || !Array.isArray(secrets.files) || !secrets.files.every(isFile)) {
-    return report(output, { error: "unreadable", message: `${remote.api} answered with something that is not the control API's secrets` });
-  }
-  output.say(`-> secrets of ${slug}, through ${remote.api}`);
-  const service = isRecord(secrets.service) ? secrets.service : null;
-  output.say(`   service: ${service === null ? "none" : `${service.state}, ${service.subState}`}`);
-  if (secrets.files.length === 0) output.say("   no secret file: its sitesolide.json declares none");
-  for (const file of secrets.files) for (const line of secretFileLines(file)) output.say(line);
-  output.say("   a value is never read back: sitesolide secrets set NAME writes one");
-  output.succeeded("secrets", { slug, secrets });
-  return 0;
-}
-
-/**
- * One change of `<slug>.env`, all or nothing on the machine, then, asked
- * for, the restart. A refused restart leaves the change written, and says
- * so: running the same command again sets the same value, harmlessly.
- */
-async function changeSecrets(remote: Remote, slug: string, ask: Extract<SecretsAsk, { action: "set" | "remove" }>, dependencies: RemoteDependencies): Promise<number> {
-  const output = dependencies.output ?? humanOutput;
-  const file = `${slug}.env`;
-  let set: [string, string][] = [];
-  if (ask.action === "set") {
-    let value: string;
-    const atTerminal = (dependencies.terminal ?? (() => process.stdin.isTTY === true))();
-    if (ask.stdin) {
-      // Asked before anything is read: reading is what would echo.
-      if (atTerminal) return report(output, stdinIsTerminal);
-      const piped = dependencies.stdin === undefined ? await readStandardInput() : await dependencies.stdin();
-      if (piped === null) return report(output, refusedValue("the value piped is not valid UTF-8"));
-      // One trailing line break is the pipe's, `echo` adds one: never the value's.
-      value = piped.replace(/\r?\n$/, "");
-    } else if (atTerminal) {
-      const typed = await (dependencies.secretPrompt ?? promptWithoutEcho)(`${ask.name} for ${file} (no echo): `);
-      if (typed === null) return report(output, { error: "cancelled", message: "nothing typed: nothing was sent" });
-      if (typeof typed !== "string") return report(output, refusedTyping(typed.refused));
-      value = typed;
-    } else {
-      return report(output, { error: "needs-stdin", message: "no terminal to type the value in: pipe it to --stdin; nothing was sent", details: ["sitesolide secrets set NAME --stdin"] });
-    }
-    // An unset variable piped by mistake reads as nothing: it would empty
-    // the secret in service without a word.
-    if (value === "") return report(output, { error: "invalid", message: "the value is empty: nothing was sent", details: ["to take a variable out: sitesolide secrets remove NAME"] });
-    const refusal = valueRefusal(value);
-    if (refusal !== null) return report(output, refusedValue(refusal));
-    set = [[ask.name, value]];
-  }
-  const values = set.map(([, value]) => value);
-  output.say(`-> ${file}, through ${remote.api}`);
-  // Object.fromEntries defines the name as the object's own: `__proto__` stays a variable.
-  const body = { ...(set.length > 0 ? { set: Object.fromEntries(set) } : {}), ...(ask.action === "remove" ? { remove: ask.names } : {}), ...(ask.restart ? { restart: true } : {}) };
-  // What fetch threw, kept to tell a connection refused, which sent nothing, from one dropped.
-  let thrown: unknown = null;
-  const fetcher = dependencies.fetcher ?? fetch;
-  const answer: Answer<SecretsChange> = await call(
-    remote,
-    `/api/v1/projects/${encodeURIComponent(slug)}/secrets/${encodeURIComponent(file)}`,
-    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
-    async (input, init) => {
-      try {
-        return await fetcher(input, init);
-      } catch (error) {
-        thrown = error;
-        throw error;
-      }
-    },
-  );
-  if (predatesRoute(answer)) return report(output, notCarried(remote, "secrets"));
-  if (!answer.ok && unanswered(answer, thrown)) return report(output, withheld(unconfirmed(file, answer.failure, ask.restart), values));
-  if (!answer.ok) return report(output, withheld(answer.failure, values));
-  const change = answer.body;
-  if (!isRecord(change) || !isFile(change.file) || !isStrings(change.set) || !isStrings(change.removed) || !isStrings(change.absent)) {
-    return report(output, { error: "unreadable", message: `${remote.api} answered with something that is not the control API's change of secrets` });
-  }
-  if (change.created === true) output.say(`   ${file} created, as the project's manifest declares it`);
-  if (change.set.length > 0) output.say(`   set: ${change.set.join(", ")}`);
-  if (change.removed.length > 0) output.say(`   removed: ${change.removed.join(", ")}`);
-  if (change.absent.length > 0) output.say(`   not in ${file}, nothing to remove: ${change.absent.join(", ")}`);
-  const done = [
-    ...(change.set.length > 0 ? [`set in ${file}: ${change.set.join(", ")}`] : []),
-    ...(change.removed.length > 0 ? [`removed from ${file}: ${change.removed.join(", ")}`] : []),
-  ];
-  const result = { slug, file, created: change.created === true, set: change.set, removed: change.removed, absent: change.absent, restart: change.restart ?? null };
-  const outcome = change.restart;
-  if (!ask.restart || outcome === null || outcome === undefined) {
-    if (change.file.restartPending === true) output.say("   the service reads it once restarted: sitesolide restart, or --restart with the change");
-    output.succeeded("secrets", { action: ask.action, ...result });
-    return 0;
-  }
-  output.say("-> restart");
-  const read: Record<string, unknown> = isRecord(outcome) ? outcome : {};
-  const verdict = read.verdict;
-  if (!isVerdict(verdict)) {
-    const refusal: Failure =
-      typeof read.error === "string" && typeof read.message === "string"
-        ? { error: read.error, message: read.message, ...(typeof read.wait === "number" ? { wait: read.wait } : {}) }
-        : { error: "unreadable", message: `${remote.api} answered a restart with something that is not a verdict` };
-    return report(output, { ...refusal, message: `the change is written, the restart was not made: ${refusal.message}`, details: done });
-  }
-  output.say(`   ${verdictWords(verdict)}`);
-  if (verdict.kind !== "active") return report(output, restartFailed(slug, verdict, [...done, "the change is written"]));
-  output.succeeded("secrets", { action: ask.action, ...result });
-  return 0;
-}
-
-/** The project's service restarted and watched for a few seconds: the exit code says whether it holds. */
-async function restartProject(remote: Remote, slug: string, dependencies: RemoteDependencies): Promise<number> {
-  const output = dependencies.output ?? humanOutput;
-  output.say(`-> restart ${slug}, through ${remote.api}`);
-  const answer: Answer<{ verdict: Verdict }> = await call(remote, `/api/v1/projects/${encodeURIComponent(slug)}/restart`, { method: "POST" }, dependencies.fetcher);
-  if (predatesRoute(answer)) return report(output, notCarried(remote, "restarts"));
-  if (!answer.ok) return report(output, answer.failure);
-  const verdict = isRecord(answer.body) ? answer.body.verdict : null;
-  if (!isVerdict(verdict)) return report(output, { error: "unreadable", message: `${remote.api} answered a restart with something that is not a verdict` });
-  output.say(`   ${verdictWords(verdict)}`);
-  if (verdict.kind !== "active") return report(output, restartFailed(slug, verdict));
-  output.succeeded("restart", { slug, verdict });
-  return 0;
+/** All of standard input, as bytes. */
+async function standardInput(): Promise<Uint8Array> {
+  return Bun.stdin.bytes();
 }
 
 /** What a command that needs the machine's root says through the API. */
@@ -1480,8 +1189,8 @@ const REMOTE_OPTIONS: Readonly<Record<string, Readonly<Record<string, boolean>>>
   logs: { "--follow": false, "--lines": true },
   login: { "--url": true, "--token-stdin": false },
   share: SHARE_OPTIONS,
-  // Read by readSecretsArguments, which never quotes what it refuses.
-  secrets: { "--stdin": false, "--restart": false },
+  // Read by readStoreArguments in ./store-cli, which never quotes what it refuses.
+  secrets: { "--stdin": false, "--restart": false, "--format": true, "--bytes": true, "--replace": false },
   restart: {},
 };
 
@@ -1538,11 +1247,16 @@ export const REMOTE_USAGE = [
   "  sitesolide share                                  this folder's project's general access and people with access",
   "     <email|@domain>...                             give them Can open: people inside the company's domains, or one of them",
   "     --remove <email|@domain>...                    take their Can open away",
-  "  sitesolide secrets                                this folder's project's secret files and variable names, never a value",
-  "  sitesolide secrets set <NAME>                     set a variable of <slug>.env, typed at a prompt that does not echo it",
+  "  sitesolide secrets                                this folder's project's secrets: names, sources, states, never a value",
+  "  sitesolide secrets set <NAME>                     set a variable in the project's store, typed at a prompt that does not echo it",
   "     --stdin                                        the value from standard input, one trailing line break dropped",
-  "  sitesolide secrets remove <NAME>...               take variables out of <slug>.env",
-  "     --restart                                      with set or remove: then restart the service, and say whether it holds",
+  "  sitesolide secrets generate <NAME>                a random value drawn on the server, never shown",
+  "     --format hex|base64url --bytes <16-64>         hex and 32 bytes by default",
+  "     --replace                                      draw a new one over a value already set",
+  "  sitesolide secrets remove <NAME>...               take variables out of the store",
+  "  sitesolide secrets set-file <NAME> < path         a file read whole, 64 KiB at most, read at $CREDENTIALS_DIRECTORY/files_<NAME>",
+  "  sitesolide secrets remove-file <NAME>             take a file out of the store",
+  "     --restart                                      with any change: then restart the service, and say whether it holds",
   "  sitesolide restart                                restart this folder's project's service, and say whether it holds",
   "",
   "--json, on every one of them: one JSON event per line, see docs/agents.md",
@@ -1560,8 +1274,10 @@ export async function runRemote(command: string, arguments_: string[], dependenc
     return report(output, { error: "usage", message: command === "" ? (title ?? "usage") : `unknown command with a token: ${command}`, details: command === "" ? usage : REMOTE_USAGE });
   }
   // `secrets` reads its own arguments: unknownOptions quotes the option it
-  // refuses, and an argument of `secrets set` may be a value.
-  const asked = command === "secrets" ? readSecretsArguments(arguments_) : null;
+  // refuses, and an argument of `secrets set` may be a value. Loaded here,
+  // not at the top: ./store-cli reads this module's `call`.
+  const store = command === "secrets" || command === "restart" || command === "deploy" ? await import("./store-cli") : null;
+  const asked = command === "secrets" ? store!.readStoreArguments(arguments_, arguments_.includes("--json")) : null;
   if (asked !== null && "error" in asked) return report(output, asked);
   const refused = command === "secrets" ? null : unknownOptions(command, arguments_);
   if (refused !== null) return report(output, refused);
@@ -1573,18 +1289,26 @@ export async function runRemote(command: string, arguments_: string[], dependenc
   if ("missing" in remote) return report(output, { error: "unauthenticated", message: remote.missing });
   switch (command) {
     case "deploy":
-      return deploy(remote, dependencies);
+      return deploy(remote, dependencies, arguments_.includes("--json"));
     case "status":
       return status(remote, dependencies);
     case "share":
     case "secrets":
     case "restart": {
-      const slug = folderSlug(dependencies.folder);
-      if (typeof slug !== "string") return report(output, slug);
+      const manifest = folderManifest(dependencies.folder);
+      if ("error" in manifest) return report(output, manifest);
+      const slug = manifest.slug;
       if (command === "share") return share(arguments_, slug, apiAccess(remote, dependencies.fetcher), output);
-      if (command === "restart") return restartProject(remote, slug, dependencies);
-      if (asked === null || asked.action === "list") return listSecrets(remote, slug, dependencies);
-      return changeSecrets(remote, slug, asked, dependencies);
+      const transport = store!.apiStore(remote, dependencies.fetcher);
+      if (command === "restart") return store!.restartCommand(slug, transport, output);
+      if (!hasStore(manifest)) return report(output, store!.storelessRefusal(manifest));
+      return store!.runStore(asked!, slug, transport, {
+        output,
+        json: arguments_.includes("--json"),
+        terminal: dependencies.terminal ?? (() => process.stdin.isTTY === true),
+        stdin: dependencies.stdinBytes ?? standardInput,
+        secretPrompt: dependencies.secretPrompt ?? promptWithoutEcho,
+      });
     }
     default:
       return logs(remote, dependencies, arguments_.includes("--follow"), Number(lines));

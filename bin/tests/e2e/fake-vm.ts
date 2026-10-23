@@ -26,7 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HOLDER_NAME, LOCK_NAME } from "../../cli/caddy-lock";
-import { addAccount, DEFAULT_ACCESS, readAccounts, SWITCHES, TEST_HOST, type AccessRegistry, type Standing } from "./fake-ssh";
+import { addAccount, DEFAULT_ACCESS, DEFAULT_STORE, readAccounts, SWITCHES, TEST_HOST, type AccessRegistry, type Standing, type StoreState } from "./fake-ssh";
 
 export type FakeVm = {
   /** The folder that stands in for the machine. */
@@ -82,6 +82,12 @@ export type FakeVm = {
   setStandings(readings: Record<string, Standing>[]): void;
   /** What the reading of the zone's TLS policy answers, one of TLS_ZONE_STATES in bin/cli/tls.ts. */
   setTlsZoneState(state: string): void;
+  /** The stores of secrets the steward's owner socket lists, by name only, over the default: current, every store empty. */
+  setStore(state: Partial<StoreState>): void;
+  /** The stores as they stand, after the writes accepted. */
+  store(): StoreState;
+  /** The command that lays a store's folders finds a link or a file in their place. */
+  refuseStorePrepare(): void;
   /** The static accounts as /etc/passwd lines: those laid, and those an accepted useradd made. */
   accounts(): string[];
   /** The commands received, one per line: CONNECT, READ <pattern>, REFUSED <command>... */
@@ -203,6 +209,16 @@ export function createFakeVm(): FakeVm {
     },
     setStandings(readings) {
       writeFileSync(join(root, SWITCHES.standings), JSON.stringify(readings));
+    },
+    setStore(state) {
+      writeFileSync(join(root, SWITCHES.store), JSON.stringify({ ...DEFAULT_STORE, ...state }));
+    },
+    store() {
+      const file = join(root, SWITCHES.store);
+      return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as StoreState) : structuredClone(DEFAULT_STORE);
+    },
+    refuseStorePrepare() {
+      writeFileSync(join(root, SWITCHES.storePrepare), "refused");
     },
     setTlsZoneState(state) {
       writeFileSync(join(root, SWITCHES.tlsZoneState), state);

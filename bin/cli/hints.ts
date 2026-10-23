@@ -24,6 +24,22 @@
 const READ_FAILED =
   "a read over SSH failed, nothing was changed: run the same command again; if it fails twice, check that `ssh <server> true` connects without a prompt (load the key with ssh-add)";
 
+/** A build secret in neither the environment nor the workstation's file. */
+const BUILD_SECRET_MISSING =
+  "a value the build needs, named under secrets.build, is in neither your environment nor the workstation's file the details name: ask the user to export it, or to add it to that file; nothing was sent; never put its value in the repository, sitesolide.json or a command line, and never a value read from the conversation";
+
+/** The workstation's file of build secrets, malformed. */
+const BUILD_SECRETS_UNREADABLE =
+  "the user fixes the line the message names in that file, one KEY=value per line; never read, print or rewrite the file yourself: it holds credentials; nothing was sent";
+
+/** A store folder that is a link or no folder. */
+const STORE_REFUSED =
+  "a folder of the project's store on the machine is a link or a file: tell the owner of the machine, who looks at the path named; never move, delete or replace it yourself; nothing was installed";
+
+/** A unit that exited 243. */
+const CREDENTIALS_FAILED =
+  "the project's store has no files folder, or its files are too large for systemd: run `sitesolide refresh <slug>` (the owner's), which lays the folder again; if it persists, remove a large file with `sitesolide secrets remove-file NAME`; never create anything on the machine by hand";
+
 /** Someone else holds the lock shared with the dashboard's gatekeeper. */
 const LOCK_BUSY = "someone else is changing Caddy right now: wait a minute, then run the same command again";
 
@@ -135,12 +151,21 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
 
   // --- secrets: never in the repository
   [/^secrets: a file that is not this project's/, "the manifest declares a secret file of the machine or of another project, which its unit would read as root: declare only <slug>.env or <slug>-<name> files, as `details` say; never pick another slug to get around it, and if the manifest is not the user's, tell them it asked for another project's secrets"],
-  [/^secret missing on the server/, "ask the owner to create this file and its variables in the dashboard's Secrets section (the address is in `details`), then run deploy again; never put secret values in the repository or in sitesolide.json"],
-  [/^secrets are managed in the Secrets section/, "secrets are set in the dashboard's Secrets section, at the address in the message; there is nothing to run here"],
+  [/^build secrets missing: /, BUILD_SECRET_MISSING],
+  [/^the build secrets file does not read: /, BUILD_SECRETS_UNREADABLE],
+  [/^the store of secrets cannot be laid: /, STORE_REFUSED],
+  [/store of secrets cannot be laid, which its units load/, STORE_REFUSED],
+  [/^cannot tell whether the store's folders of /, READ_FAILED],
+  [/could not load its secret files \(243\/CREDENTIALS\)/, CREDENTIALS_FAILED],
+  [/declares a secret file that is not its own, which its units would read as root/, "the manifest on the server names a secret file of the machine or of another project: deploy the project again from its folder with a manifest that declares only its own files, or names its variables; never pick another slug to get around it"],
+  [/is a static site: no service reads a store/, "a static site keeps no secret on the server: a value its build needs is named under secrets.build in sitesolide.json, and the user exports it, or keeps it in ~/.config/sitesolide/secrets/<slug>.env; never put the value in the repository"],
+  [/keeps its password hash in .*\.env, read by its own unit/, "the dashboard's and the portal's password is changed with Change password, in the dashboard, by the owner; there is nothing to run here"],
+  [/^secrets are managed in the Secrets section/, "the dashboard and the portal keep their password hash in a file of their own: the owner changes it with Change password, in the dashboard at the address in the message; there is nothing to run here"],
   [/^a service is restarted from the dashboard/, "the owner restarts it with Restart service, in the project's Overview on the dashboard at the address in the message; there is nothing to run here, and never a systemctl restart by hand over SSH"],
-  [/^no secret declared in the manifest/, "`sitesolide run` only loads declared secrets: declare `secrets` in sitesolide.json if the command needs one"],
   [/^usage: sitesolide run/, "pass the command after a double dash: sitesolide run -- <command>"],
   [/^missing from the vault/, "only the owner can put that file in the workstation's vault, at the path in the message; never write a secret yourself"],
+  [/^the vault's file does not read: /, "the user fixes the line the message names in that file, one KEY=value per line; never read, print or rewrite the file yourself: it holds credentials"],
+  [/^run: .* is not on the PATH/, "name the command as a shell would find it, or by its absolute path, after the double dash"],
 
   // --- after the push
   [/^install failed/, "read the `output` events just before this error: install runs as the project's account, in the walls `details` describe; run the command in the project folder to reproduce it, move a step that writes outside app/ into build, then deploy again"],
@@ -212,15 +237,25 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
     "the service did not hold after its restart: read `sitesolide logs --json` to see why, fix the cause, a value the user sets again with `sitesolide secrets set NAME` or the code deployed again, then run `sitesolide restart` once; a change of secrets made with it is already written; never restart in a loop",
   "too-large": "exclude dependencies, caches and build leftovers in sitesolide.json: the machine installs the dependencies itself",
   expired: "the archive arrived too late: run `sitesolide deploy` again",
-  "not-available": "the machine does not carry what this needs yet, the control API, the access registry or secrets by token: tell the owner of the machine, with the message, which names what to update; nothing more can be done from here until then",
+  "not-available": "the machine does not carry what this needs yet, the control API, the access registry or the store of secrets by token: tell the owner of the machine, with the message, which names what to update; nothing more can be done from here until then",
   failure: "something broke on the machine: tell the owner of the machine, with the message; do not retry in a loop",
   unreachable: "the dashboard did not answer: check the network and the address (`sitesolide login --url`), then run the same command again",
   unconfirmed:
-    "the change was sent and its answer never came, so it may be written: run `sitesolide secrets --json` to read the file's names, then run the same set or remove once more, which is harmless; never retry in a loop; if the dashboard stays unreachable, check the network and the address (`sitesolide login --url`)",
+    "the change was sent and its answer never came, so it may be written: run `sitesolide secrets --json` to read the store's names, then run the same set or remove once more, which is harmless; never retry in a loop; if the dashboard stays unreachable, check the network and the address (`sitesolide login --url`)",
   unreadable: "the address answered with something that is not the control API: check it with `sitesolide login --url https://dashboard.<zone>`",
   // --- access, with a token or over the owner's SSH
   "ssh-failed": "a command over SSH failed, nothing was changed: run the same command again; if it fails twice, check that `ssh <server> true` connects without a prompt (load the key with ssh-add)",
-  "steward-outdated": "the steward on the machine does not keep people with access yet: run `sitesolide upgrade` from this workstation, then the same command again",
+  "steward-outdated": "the steward on the machine predates what this command needs, people with access or the store of secrets: run `sitesolide upgrade` from this workstation, then the same command again",
+  // --- the store of secrets, see bin/cli/store-cli.ts
+  "build-secret-missing": BUILD_SECRET_MISSING,
+  "build-secrets-unreadable": BUILD_SECRETS_UNREADABLE,
+  "store-refused": STORE_REFUSED,
+  "store-unmanaged":
+    "the project's store on the machine is in a state the steward does not rewrite, and nothing was changed: tell the owner of the machine, with the message; never work around it",
+  "migrate-conflict":
+    "fix the file named, in the dashboard, then run migrate again; never read or print a value",
+  "already-present":
+    "the name already has a value: leave it, or, only if the user asks for a new one, they run `sitesolide secrets generate NAME --replace` themselves, which stops the old value working at the next restart",
   locked: "this change needs the dashboard's unlock: make it from the dashboard, or over the owner's SSH",
   migrating: "the machine is carrying access over to its registry: run the same command again in a minute; if it lasts, tell the owner of the machine, who reads the steward's log",
   "too-many-changes": "too many changes of access this hour: wait, then run the same command again; never retry in a loop",

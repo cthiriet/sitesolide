@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   dashboardAddress,
-  decideSecret,
   MACHINE_FILES,
   ownerRefusal,
   OWNERS_DONE,
@@ -16,57 +15,12 @@ import {
 import { MARKER_ABSENT, MARKER_PRESENT } from "../cli/unit";
 
 /**
- * What decides the fate of a secret, tried without a machine: the function
- * only receives a presence, and gives back an action.
- *
- * The rule held here is the one that costs the most to break: **the VM is the
- * authority**. `/etc/sitesolide` is managed from the *Secrets* section of the
- * dashboard, and `deploy` never pushes a secret: a deployment that replaced a
- * value laid down there would put back in service a key that has just been
- * changed, without any error saying so.
+ * What `deploy` checks of a secret file of the old form, tried without a
+ * machine: its presence read, its owner, and whether the project may read it
+ * at all. A missing file no longer stops anything: deploy says so, and the
+ * service starts without its variables (see ensureSecrets in
+ * bin/sitesolide.ts). What still stops is a file the project may not read.
  */
-
-/** The dashboard these tests aim at: a reserved zone, which resolves nowhere. */
-const DASHBOARD_URL = dashboardAddress("test-zone.invalid");
-
-describe("present on the VM", () => {
-  test("nothing to do: the machine has the right one", () => {
-    expect(decideSecret({ name: "calendar.env", onServer: true }, DASHBOARD_URL)).toEqual({ kind: "present" });
-  });
-});
-
-describe("absent from the VM", () => {
-  const refusal = decideSecret({ name: "calendar.env", onServer: false }, DASHBOARD_URL);
-
-  test("refused, because the service would start up silently", () => {
-    expect(refusal.kind).toBe("rejects");
-    if (refusal.kind !== "rejects") return;
-    expect(refusal.message).toBe("secret missing on the server: /etc/sitesolide/calendar.env");
-    expect(refusal.details.join("\n")).toContain("silently");
-  });
-
-  test("the refusal points to the dashboard's Secrets section, then to deploy", () => {
-    if (refusal.kind !== "rejects") throw new Error("expected a refusal");
-    const text = refusal.details.join("\n");
-    expect(text).toContain(`Secrets section of ${DASHBOARD_URL}`);
-    expect(text).toContain("sitesolide deploy again");
-  });
-
-  test("nothing is ever pushed from the workstation", () => {
-    // There used to be a third answer, `deposit`, fed from a copy of every
-    // secret kept on the workstation. The decision has two answers now, and
-    // neither sends anything.
-    for (const onServer of [true, false]) {
-      expect(["present", "rejects"]).toContain(decideSecret({ name: "calendar.env", onServer }, DASHBOARD_URL).kind);
-    }
-  });
-
-  test("the refusal follows the dashboard address it is given", () => {
-    const elsewhere = decideSecret({ name: "calendar.env", onServer: false }, dashboardAddress("other.test"));
-    if (elsewhere.kind !== "rejects") throw new Error("expected a refusal");
-    expect(elsewhere.details.join("\n")).toContain("https://dashboard.other.test");
-  });
-});
 
 describe("the dashboard's address", () => {
   test("it follows the configuration's zone, and invents none", () => {

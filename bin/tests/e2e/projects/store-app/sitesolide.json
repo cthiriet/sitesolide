@@ -1,0 +1,12 @@
+{
+  "slug": "sample-store",
+  "port": 3036,
+  "start": "/usr/local/bin/bun run server.ts",
+  "env": {
+    "PUBLIC_URL": "https://{slug}.{zone}"
+  },
+  "secrets": {
+    "runtime": ["SESSION_SECRET", "MAIL_API_KEY"],
+    "files": ["signing.pem"]
+  }
+}

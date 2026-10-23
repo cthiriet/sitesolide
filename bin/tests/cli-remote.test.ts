@@ -8,23 +8,17 @@ import {
   apiOrigin,
   checkManifest,
   describeIdentity,
+  buildPlaceholders,
   keyIn,
-  looksLikeValue,
-  MAX_VALUE_BYTES,
-  NAME_MAX_HERE,
   projectEntries,
   promptWithoutEcho,
   readRemote,
   readRemoteProject,
-  readSecretsArguments,
   remoteMode,
   runRemote,
-  secretFileLines,
   serviceWord,
   SSH_COMMANDS,
   TOKEN_FILE,
-  VALUE_PREFIXES,
-  valueRefusal,
   type Failure,
   type Fetch,
   type HiddenTerminal,
@@ -58,32 +52,34 @@ function folder(prefix: string): string {
 type Received = { method: string; path: string; authorization: string | null; body: string | Uint8Array | null };
 const received: Received[] = [];
 let scenario: "succeeds" | "fails" | "refuses" = "succeeds";
-/** The secrets routes: as this release answers them, from a dashboard before them, or a refusal quoting what was sent. */
-let secretsScenario: "answers" | "old" | "quotes" = "answers";
+/** The store routes: as this release answers them, from a dashboard before them, a refusal quoting what was sent, or a token that may not list. */
+let storeScenario: "answers" | "old" | "quotes" | "out-of-scope" | "not-found" = "answers";
 /** What a restart's observation concludes. */
 let restartVerdict: "active" | "failure" = "active";
+/** What the finished deployment says the store lacked, and the placeholders it hands the build; undefined for a dashboard before them. */
+let deploymentExtras: { placeholders?: { zone: string; contact: string }; missingSecrets?: { runtime: string[]; files: string[] } | null } = {};
 
-const SECRETS = {
+/** The store of `shop`, as the control API lists it to a token: names, never a value. */
+const STORE = {
   slug: "shop",
-  service: { unit: "shop", state: "active", subState: "running", startedAt: 1_760_000_000_000 },
-  files: [
-    {
-      name: "shop.env",
-      kind: "variables",
-      state: "managed",
-      reason: null,
-      expected: "site-shop:site-shop 0600",
-      readable: false,
-      variables: ["API_KEY", "SMTP_URL"],
-      passwords: [],
-      bytes: null,
-      modifiedAt: 1_760_000_000_000,
-      previous: false,
-      restartPending: true,
-      writable: true,
-    },
-    { name: "shop-signing.key", kind: "content", state: "managed", reason: null, expected: "site-shop:site-shop 0400", readable: false, variables: [], passwords: [], bytes: null, modifiedAt: null, previous: false, restartPending: false, writable: false },
+  exists: true,
+  state: "managed",
+  reason: null,
+  variables: [
+    { name: "API_KEY", source: "store", file: null, shadows: [], declared: true },
+    { name: "SMTP_URL", source: "legacy", file: "shop.env", shadows: [], declared: false },
+    { name: "WEBHOOK_SECRET", source: "none", file: null, shadows: [], declared: true },
   ],
+  missing: ["WEBHOOK_SECRET"],
+  files: [],
+  legacy: [{ name: "shop.env", state: "managed", reason: null, variables: ["SMTP_URL"], read: true, leftover: false, covered: null }],
+  build: [],
+  public: [],
+  unitReadsStore: true,
+  modifiedAt: 1_760_000_000_000,
+  restartPending: true,
+  previous: false,
+  may: { write: true, reveal: false, restore: false, migrate: false },
 };
 const VERDICTS = {
   active: { kind: "active", state: "active", subState: "running", restarts: 0 },
@@ -104,7 +100,7 @@ beforeAll(() => {
     hostname: "127.0.0.1",
     async fetch(req) {
       const url = new URL(req.url);
-      const body = req.method === "PUT" ? new Uint8Array(await req.arrayBuffer()) : req.method === "POST" || req.method === "PATCH" ? await req.text() : null;
+      const body = url.pathname.endsWith("/bundle") ? new Uint8Array(await req.arrayBuffer()) : req.method === "GET" ? null : await req.text();
       received.push({ method: req.method, path: `${url.pathname}${url.search}`, authorization: req.headers.get("authorization"), body });
       if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return Response.json({ error: "unauthenticated", message: "missing or unknown token" }, { status: 401 });
       if (url.pathname === "/api/v1/whoami") return Response.json({ identity });
@@ -113,7 +109,7 @@ beforeAll(() => {
           return Response.json({ error: "invalid-manifest", message: "your token may not deploy this manifest: fix every point in details", details: ['network: your token may not deploy "network": "outbound"'] }, { status: 422 });
         }
         reads = 0;
-        return Response.json({ deployment: { id: "0123456789abcdef01234567", slug: "shop", state: "awaiting-bundle", creating: true, log: [], next: 0, error: null, url: null, allocated: [], uploadUrl: "https://elsewhere.invalid/steal" } }, { status: 201 });
+        return Response.json({ deployment: { id: "0123456789abcdef01234567", slug: "shop", state: "awaiting-bundle", creating: true, log: [], next: 0, error: null, url: null, allocated: [], uploadUrl: "https://elsewhere.invalid/steal", ...(deploymentExtras.placeholders === undefined ? {} : { placeholders: deploymentExtras.placeholders }) } }, { status: 201 });
       }
       if (url.pathname.endsWith("/bundle")) return Response.json({ deployment: { state: "running" } }, { status: 202 });
       if (url.pathname.startsWith("/api/v1/deployments/")) {
@@ -132,6 +128,7 @@ beforeAll(() => {
             error: failed ? { code: "install-failed", message: "bun install --production failed (exit 1): nothing served was changed" } : null,
             url: done && !failed ? "https://shop.test-zone.invalid/" : null,
             allocated: done && !failed ? [{ service: null, port: 3002 }] : [],
+            ...(done ? deploymentExtras : {}),
           },
         });
       }
@@ -139,25 +136,26 @@ beforeAll(() => {
         return Response.json({ projects: [{ slug: "shop", access: "owned", deployed: true, type: "app", url: "https://shop.test-zone.invalid/", portal: { wanted: true, installed: true }, services: [{ name: null, state: "active", subState: "running", port: 3002 }] }] });
       }
       if (url.pathname === "/api/v1/projects/shop/logs") return Response.json({ lines: ["2026-10-04T10:00:00+0000 vm shop[1]: listening on 3002"], cursor: "s=1" });
-      const secretsRoute = url.pathname.startsWith("/api/v1/projects/shop/secrets") || url.pathname === "/api/v1/projects/shop/restart";
-      if (secretsRoute && secretsScenario === "old") return Response.json({ error: "not-found", message: "no such route: see docs/team.md" }, { status: 404 });
-      if (url.pathname === "/api/v1/projects/shop/secrets" && req.method === "GET") return Response.json({ secrets: SECRETS });
-      if (url.pathname === "/api/v1/projects/shop/secrets/shop.env" && req.method === "PATCH") {
-        const change = JSON.parse(body as string) as { set?: Record<string, string>; remove?: string[]; restart?: boolean };
-        if (secretsScenario === "quotes") {
-          // A refusal that would quote a value: what the CLI must never print.
-          return Response.json({ error: "invalid", message: `set: API_KEY: ${Object.values(change.set ?? {}).join("")} is refused` }, { status: 400 });
-        }
-        const carried: readonly string[] = SECRETS.files[0]!.variables;
-        const removed = (change.remove ?? []).filter((name) => carried.includes(name));
-        return Response.json({
-          file: SECRETS.files[0],
-          created: false,
-          set: Object.keys(change.set ?? {}),
-          removed,
-          absent: (change.remove ?? []).filter((name) => !removed.includes(name)),
-          restart: change.restart === true ? { verdict: VERDICTS[restartVerdict] } : null,
-        });
+      const storeRoute = url.pathname.startsWith("/api/v1/projects/shop/store") || url.pathname === "/api/v1/projects/shop/restart";
+      if (storeRoute && storeScenario === "old") return Response.json({ error: "not-found", message: "no such route: see docs/access.md" }, { status: 404 });
+      if (url.pathname === "/api/v1/projects/shop/store" && req.method === "GET") {
+        if (storeScenario === "out-of-scope") return Response.json({ error: "out-of-scope", message: "this token may not manage secrets" }, { status: 403 });
+        if (storeScenario === "not-found") return Response.json({ error: "not-found", message: "shop is not deployed" }, { status: 404 });
+        return Response.json({ store: STORE });
+      }
+      const changed = (over: object) => Response.json({ store: STORE, created: false, set: [], generated: [], removed: [], absent: [], files: { set: [], removed: [] }, restart: null, ...over });
+      if (url.pathname === "/api/v1/projects/shop/store" && req.method === "PATCH") {
+        const change = JSON.parse(body as string) as { set?: Record<string, string>; remove?: string[] };
+        // A refusal that would quote a value: what the CLI must never print.
+        if (storeScenario === "quotes") return Response.json({ error: "invalid", message: `set: API_KEY: ${Object.values(change.set ?? {}).join("")} is refused` }, { status: 400 });
+        const held = STORE.variables.filter((variable) => variable.source === "store").map((variable) => variable.name);
+        const removed = (change.remove ?? []).filter((name) => held.includes(name));
+        return changed({ set: Object.keys(change.set ?? {}), removed, absent: (change.remove ?? []).filter((name) => !removed.includes(name)) });
+      }
+      if (url.pathname === "/api/v1/projects/shop/store/generate" && req.method === "POST") return changed({ generated: [(JSON.parse(body as string) as { name: string }).name] });
+      if (url.pathname.startsWith("/api/v1/projects/shop/store/files/")) {
+        const name = decodeURIComponent(url.pathname.split("/").at(-1)!);
+        return changed({ files: req.method === "PUT" ? { set: [name], removed: [] } : { set: [], removed: [name] } });
       }
       if (url.pathname === "/api/v1/projects/shop/restart" && req.method === "POST") return Response.json({ verdict: VERDICTS[restartVerdict] });
       return Response.json({ error: "not-found", message: "no such route" }, { status: 404 });
@@ -243,10 +241,11 @@ describe("deploy through the API", () => {
     expect(vm.logs().filter((line) => line.startsWith("CONNECT") || line.includes("rsync"))).toEqual([]);
   });
 
-  test("the build gets no SITESOLIDE_ variable, the token above all, and the rest of the environment as it is", async () => {
+  test("the build gets no SITESOLIDE_ variable, the token above all, and of the rest only what every build inherits", async () => {
     scenario = "succeeds";
     const probe = join(folder("remote-probe-"), "build-env.txt");
-    const root = project({ ...APP, build: 'env > "$ENV_PROBE"' }, APP_FILES);
+    // ENV_PROBE reaches the build only because the manifest names it.
+    const root = project({ ...APP, build: 'env > "$ENV_PROBE"', secrets: { build: ["ENV_PROBE"] } }, APP_FILES);
     const home = folder("remote-home-");
     const result = await cli(root, ["deploy"], {
       HOME: home,
@@ -261,7 +260,10 @@ describe("deploy through the API", () => {
     const lines = readFileSync(probe, "utf8").split("\n");
     expect(lines.filter((line) => line.startsWith("SITESOLIDE_"))).toEqual([]);
     expect(lines.some((line) => line.includes(TOKEN) || line.includes("a DNS provider's secret"))).toBe(false);
-    for (const line of ["BUILD_PROBE=kept", `HOME=${home}`, `PATH=${vm.env.PATH}`]) expect(lines).toContain(line);
+    for (const line of [`HOME=${home}`, `PATH=${vm.env.PATH}`]) expect(lines).toContain(line);
+    expect(lines).toContain(`ENV_PROBE=${probe}`);
+    // BUILD_PROBE is no name every build inherits, nor one the manifest declares.
+    expect(lines.filter((line) => line.startsWith("BUILD_PROBE="))).toEqual([]);
   });
 
   test("a deployment that fails: its reason, and a non-zero exit", async () => {
@@ -515,461 +517,268 @@ describe("login, status, logs", () => {
   });
 });
 
-describe("secrets and restart, with a token", () => {
+describe("secrets and restart, with a token: the project's store", () => {
   const VALUE = "s3cret-value-never-printed";
   const env = () => ({ HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN });
-  const patches = () => received.filter((entry) => entry.method === "PATCH");
+  const sent = () => received.filter((entry) => entry.method !== "GET");
+  const STORE_APP = { ...APP, secrets: ["API_KEY", "WEBHOOK_SECRET"] };
 
-  test("secrets lists the files and their variable names: never a value, and no longer the owner's SSH alone", async () => {
-    secretsScenario = "answers";
+  test("secrets lists the store's names, where each comes from, what is missing: never a value", async () => {
+    storeScenario = "answers";
     received.length = 0;
     expect(SSH_COMMANDS).not.toContain("secrets");
-    const root = project(APP, APP_FILES);
+    const root = project(STORE_APP, APP_FILES);
     const human = await cli(root, ["secrets"], env());
     expect(human.code).toBe(0);
-    for (const line of [`-> secrets of shop, through ${api}`, "   service: active, running", "   shop.env: API_KEY, SMTP_URL", "restart pending", "   shop-signing.key: a file read whole, set from the dashboard's Secrets section"]) {
+    for (const line of [`-> secrets of shop, through ${api}`, "   API_KEY", "set", "   SMTP_URL", "from shop.env", "missing: sitesolide secrets set WEBHOOK_SECRET", "legacy: shop.env, read by the service", "a value is never shown here"]) {
       expect(human.output).toContain(line);
     }
-    expect(received.map((entry) => `${entry.method} ${entry.path}`)).toEqual(["GET /api/v1/projects/shop/secrets"]);
+    expect(received.map((entry) => `${entry.method} ${entry.path}`)).toEqual(["GET /api/v1/projects/shop/store"]);
     const json = events((await cli(root, ["secrets", "--json"], env())).output).at(-1)!;
-    expect(json).toMatchObject({ type: "result", command: "secrets", slug: "shop", secrets: { files: [{ name: "shop.env", variables: ["API_KEY", "SMTP_URL"], writable: true }, { name: "shop-signing.key" }] } });
+    expect(json).toMatchObject({ type: "result", command: "secrets", slug: "shop", store: { missing: ["WEBHOOK_SECRET"] } });
   });
 
-  test("secrets set reads the value from standard input, one trailing line break dropped, and never prints it", async () => {
-    secretsScenario = "answers";
+  test("secrets set reads the value from standard input, one trailing line break dropped, sends it in the body alone, and never prints it", async () => {
+    storeScenario = "answers";
     received.length = 0;
-    const root = project(APP, APP_FILES);
+    const root = project(STORE_APP, APP_FILES);
     const human = await cli(root, ["secrets", "set", "API_KEY", "--stdin"], env(), `${VALUE}\n`);
     expect(human.code).toBe(0);
-    expect(human.output).toContain(`-> shop.env, through ${api}`);
+    expect(human.output).toContain(`-> shop's store, through ${api}`);
     expect(human.output).toContain("   set: API_KEY");
     expect(human.output).toContain("sitesolide restart, or --restart with the change");
-    expect(patches()).toEqual([{ method: "PATCH", path: "/api/v1/projects/shop/secrets/shop.env", authorization: `Bearer ${TOKEN}`, body: JSON.stringify({ set: { API_KEY: VALUE } }) }]);
-    const json = await cli(root, ["secrets", "set", "API_KEY", "--stdin", "--json"], env(), `${VALUE}\r\n`);
-    expect(events(json.output).at(-1)).toMatchObject({ type: "result", command: "secrets", action: "set", slug: "shop", file: "shop.env", set: ["API_KEY"], restart: null });
-    expect(JSON.parse(patches().at(-1)!.body as string)).toEqual({ set: { API_KEY: VALUE } });
-    for (const run of [human, json]) expect(run.all).not.toContain(VALUE);
+    expect(human.all).not.toContain(VALUE);
+    expect(sent().map((entry) => [entry.method, entry.path, JSON.parse(entry.body as string)])).toEqual([["PATCH", "/api/v1/projects/shop/store", { set: { API_KEY: VALUE }, remove: [] }]]);
+    expect(vm.logs().filter((line) => line.includes(VALUE))).toEqual([]);
   });
 
-  test("a value on the command line is refused before anything is sent, and never quoted back", async () => {
-    secretsScenario = "answers";
-    received.length = 0;
-    const root = project(APP, APP_FILES);
-    for (const arguments_ of [
-      ["secrets", "set", `API_KEY=${VALUE}`],
-      ["secrets", "set", "API_KEY", VALUE],
-      ["secrets", "set", "API_KEY", "--stdin", VALUE],
-      ["secrets", `API_KEY=${VALUE}`],
-      ["secrets", "set", "API_KEY", `--value=${VALUE}`],
-      ["secrets", "remove", `API_KEY=${VALUE}`],
-    ]) {
-      const human = await cli(root, arguments_, env(), `${VALUE}\n`);
-      expect({ arguments_, code: human.code }).toEqual({ arguments_, code: 1 });
-      expect(human.error).toContain("never goes on the command line");
-      expect(human.error).toContain("the shell's history keeps it");
-      const json = await cli(root, [...arguments_, "--json"], env(), `${VALUE}\n`);
-      const error = events(json.output).at(-1)!;
-      expect(error).toMatchObject({ type: "error", message: expect.stringContaining("nothing was sent") });
-      expect(error.hint).toContain("never a value read from the conversation");
-      for (const run of [human, json]) expect({ arguments_, quoted: run.all.includes(VALUE) }).toEqual({ arguments_, quoted: false });
+  test("a value on the command line, or a name that looks like one, is refused before anything is sent, and never quoted back", async () => {
+    storeScenario = "answers";
+    const root = project(STORE_APP, APP_FILES);
+    for (const asked of [["set", `API_KEY=${VALUE}`], ["set", "API_KEY", VALUE], ["set", `sk_live_${VALUE}`], ["generate", `whsec_${VALUE}`], ["remove", `ghp_${VALUE}`]]) {
+      received.length = 0;
+      const r = await cli(root, ["secrets", ...asked, "--json"], env());
+      expect(r.code).toBe(1);
+      expect(r.all).not.toContain(VALUE);
+      expect(received).toEqual([]);
+      expect(events(r.output).at(-1)!.hint).toContain("never");
     }
-    // Anything else that may be a value is refused without being named either.
-    for (const arguments_ of [["secrets", VALUE], ["secrets", "set", "9-not-a-name"], ["secrets", "remove", "API_KEY", `${VALUE}!`], ["secrets", "get", "API_KEY"], ["secrets", "set", "API_KEY", "--hunter2"]]) {
-      const run = await cli(root, arguments_, env());
-      expect({ arguments_, code: run.code }).toEqual({ arguments_, code: 1 });
-      expect(run.error).toContain("nothing was sent");
-      for (const argument of arguments_.slice(1).filter((one) => !["set", "remove", "API_KEY"].includes(one))) expect(run.all).not.toContain(argument);
-    }
-    expect(received).toEqual([]);
   });
 
-  test("secrets set prompts only at a terminal: under --json, or from a pipe without --stdin, nothing is read nor sent", async () => {
+  test("set prompts only at a terminal: under --json, or from a pipe without --stdin, nothing is read nor sent", async () => {
+    storeScenario = "answers";
     received.length = 0;
-    const root = project(APP, APP_FILES);
-    const json = await cli(root, ["secrets", "set", "API_KEY", "--json"], env(), `${VALUE}\n`);
-    expect(json.code).toBe(1);
-    const error = events(json.output).at(-1)!;
-    expect(error).toMatchObject({ type: "error", message: "secrets set under --json never prompts: pipe the value to --stdin; nothing was sent" });
-    expect(error.hint).toContain("never a value read from the conversation");
-    const piped = await cli(root, ["secrets", "set", "API_KEY"], env());
+    const root = project(STORE_APP, APP_FILES);
+    const json = await cli(root, ["secrets", "set", "API_KEY", "--json"], env(), VALUE);
+    expect(events(json.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("never prompts") });
+    const piped = await cli(root, ["secrets", "set", "API_KEY"], env(), VALUE);
     expect(piped.code).toBe(1);
-    expect(piped.error).toContain("!! no terminal to type the value in: pipe it to --stdin; nothing was sent");
-    const empty = await cli(root, ["secrets", "set", "API_KEY", "--stdin"], env(), "\n");
-    expect(empty.code).toBe(1);
-    expect(empty.error).toContain("!! the value is empty: nothing was sent");
+    expect(piped.error).toContain("no terminal to type the value in");
     expect(received).toEqual([]);
   });
 
-  test("at a terminal, the value is typed at a prompt that does not echo it, and abandoning it sends nothing", async () => {
-    secretsScenario = "answers";
+  test("generate asks the server to draw it, set-file sends a file read whole, remove-file takes one out", async () => {
+    storeScenario = "answers";
     received.length = 0;
-    const root = project(APP, APP_FILES);
-    const lines: string[] = [];
-    const output: Output = { say: (line) => lines.push(line), journal: (line) => lines.push(line), failed: (failure) => lines.push(`!! ${failure.error}: ${failure.message}`), succeeded: () => {} };
-    const questions: string[] = [];
-    const base = { folder: root, environment: env(), output, build: async () => {}, checkPublic: () => {}, terminal: () => true };
-    const typed = await runRemote("secrets", ["secrets", "set", "API_KEY"], {
-      ...base,
-      secretPrompt: async (question) => {
-        questions.push(question);
-        return VALUE;
-      },
-    });
-    expect(typed).toBe(0);
-    expect(questions).toEqual(["API_KEY for shop.env (no echo): "]);
-    expect(JSON.parse(patches().at(-1)!.body as string)).toEqual({ set: { API_KEY: VALUE } });
-    expect(lines.join("\n")).not.toContain(VALUE);
-    received.length = 0;
-    const abandoned = await runRemote("secrets", ["secrets", "set", "API_KEY"], { ...base, secretPrompt: async () => null });
-    expect(abandoned).toBe(1);
-    expect(lines.at(-1)).toBe("!! cancelled: nothing typed: nothing was sent");
-    expect(received).toEqual([]);
+    const root = project(STORE_APP, APP_FILES);
+    expect((await cli(root, ["secrets", "generate", "SESSION_SECRET", "--format", "base64url"], env())).code).toBe(0);
+    expect((await cli(root, ["secrets", "set-file", "gcp.json"], env(), '{"type":"service_account"}')).code).toBe(0);
+    const removed = await cli(root, ["secrets", "remove-file", "gcp.json", "--json"], env());
+    expect(events(removed.output).at(-1)).toMatchObject({ type: "result", command: "secrets", action: "remove-file", files: { removed: ["gcp.json"] } });
+    expect(sent().map((entry) => `${entry.method} ${entry.path} ${entry.body}`)).toEqual([
+      'POST /api/v1/projects/shop/store/generate {"name":"SESSION_SECRET","format":"base64url","bytes":32}',
+      `PUT /api/v1/projects/shop/store/files/gcp.json {"content":"${new TextEncoder().encode('{"type":"service_account"}').toBase64()}"}`,
+      "DELETE /api/v1/projects/shop/store/files/gcp.json {}",
+    ]);
   });
 
   test("set --restart writes, then restarts: a service that does not hold fails the run, the change said written", async () => {
-    secretsScenario = "answers";
-    const root = project(APP, APP_FILES);
-    restartVerdict = "active";
-    const holds = await cli(root, ["secrets", "set", "API_KEY", "--stdin", "--restart"], env(), VALUE);
-    expect(holds.code).toBe(0);
-    expect(JSON.parse(patches().at(-1)!.body as string)).toEqual({ set: { API_KEY: VALUE }, restart: true });
-    expect(holds.output).toContain("-> restart\n   active, running, 0 restart(s) by systemd: the service holds");
+    storeScenario = "answers";
     restartVerdict = "failure";
-    const falls = await cli(root, ["secrets", "set", "API_KEY", "--stdin", "--restart", "--json"], env(), VALUE);
-    expect(falls.code).toBe(1);
-    const error = events(falls.output).at(-1)!;
-    expect(error).toMatchObject({ type: "error", message: "the service of shop did not hold after its restart: failed, failed, 3 restart(s) by systemd: the service did not come back" });
-    expect(error.details).toEqual(["set in shop.env: API_KEY", "the change is written", "sitesolide logs says why"]);
-    expect(error.hint).toContain("sitesolide logs --json");
-    for (const run of [holds, falls]) expect(run.all).not.toContain(VALUE);
-    restartVerdict = "active";
-  });
-
-  test("secrets remove takes several names, and says which were not there", async () => {
-    secretsScenario = "answers";
     received.length = 0;
-    const root = project(APP, APP_FILES);
-    const result = await cli(root, ["secrets", "remove", "SMTP_URL", "GONE"], env());
-    expect(result.code).toBe(0);
-    expect(JSON.parse(patches().at(-1)!.body as string)).toEqual({ remove: ["SMTP_URL", "GONE"] });
-    expect(result.output).toContain("   removed: SMTP_URL");
-    expect(result.output).toContain("   not in shop.env, nothing to remove: GONE");
+    const root = project(STORE_APP, APP_FILES);
+    const r = await cli(root, ["secrets", "set", "API_KEY", "--stdin", "--restart"], env(), VALUE);
+    restartVerdict = "active";
+    expect(r.code).toBe(1);
+    expect(r.error).toContain("the service of shop did not hold after its restart");
+    expect(r.error).toContain("the change is written");
+    expect(sent().map((entry) => `${entry.method} ${entry.path}`)).toEqual(["PATCH /api/v1/projects/shop/store", "POST /api/v1/projects/shop/restart"]);
   });
 
   test("restart prints the verdict, and exits 1 unless the service holds", async () => {
-    secretsScenario = "answers";
-    received.length = 0;
-    const root = project(APP, APP_FILES);
-    restartVerdict = "active";
-    const holds = await cli(root, ["restart", "--json"], env());
-    expect(holds.code).toBe(0);
-    expect(events(holds.output).at(-1)).toMatchObject({ type: "result", command: "restart", slug: "shop", verdict: { kind: "active", restarts: 0 } });
+    storeScenario = "answers";
+    const root = project(STORE_APP, APP_FILES);
+    const held = await cli(root, ["restart"], env());
+    expect(held.code).toBe(0);
+    expect(held.output).toContain("the service holds");
     restartVerdict = "failure";
-    const falls = await cli(root, ["restart"], env());
-    expect(falls.code).toBe(1);
-    expect(falls.output).toContain("   failed, failed, 3 restart(s) by systemd: the service did not come back");
-    expect(falls.error).toContain("!! the service of shop did not hold after its restart");
-    expect(received.map((entry) => `${entry.method} ${entry.path}`)).toEqual(["POST /api/v1/projects/shop/restart", "POST /api/v1/projects/shop/restart"]);
+    const fell = await cli(root, ["restart", "--json"], env());
     restartVerdict = "active";
-    // An option restart does not take is refused, never passed over.
-    expect((await cli(root, ["restart", "--force"], env())).code).toBe(1);
-    expect(received).toHaveLength(2);
+    expect(fell.code).toBe(1);
+    expect(events(fell.output).at(-1)).toMatchObject({ type: "error", hint: expect.stringContaining("never restart in a loop") });
   });
 
-  test("a dashboard from before these routes: not-available, the owner to upgrade, on every one of them", async () => {
-    secretsScenario = "old";
-    const root = project(APP, APP_FILES);
-    for (const [arguments_, what] of [[["secrets"], "secrets"], [["secrets", "remove", "API_KEY"], "secrets"], [["restart"], "restarts"]] as const) {
-      const result = await cli(root, [...arguments_, "--json"], env());
-      expect(result.code).toBe(1);
-      const error = events(result.output).at(-1)!;
-      expect(error).toMatchObject({ type: "error", message: `the dashboard at ${api} does not carry ${what} by token yet: the owner of the machine runs sitesolide upgrade` });
-      expect(error.hint).toBe(hintForFailure("not-available", ""));
+  test("a dashboard from before the store: not-available, the owner to upgrade, on every route", async () => {
+    storeScenario = "old";
+    const root = project(STORE_APP, APP_FILES);
+    for (const asked of [["secrets"], ["secrets", "generate", "A"], ["restart"]]) {
+      const r = await cli(root, [...asked, "--json"], env());
+      expect(events(r.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("sitesolide upgrade") });
     }
-    secretsScenario = "answers";
+    storeScenario = "answers";
   });
 
   test("a refusal that would quote the value sent is withheld", async () => {
-    secretsScenario = "quotes";
-    const root = project(APP, APP_FILES);
-    const result = await cli(root, ["secrets", "set", "API_KEY", "--stdin"], env(), VALUE);
-    expect(result.code).toBe(1);
-    expect(result.error).toContain("its message is withheld");
-    expect(result.all).not.toContain(VALUE);
-    secretsScenario = "answers";
+    storeScenario = "quotes";
+    const root = project(STORE_APP, APP_FILES);
+    const r = await cli(root, ["secrets", "set", "API_KEY", "--stdin"], env(), VALUE);
+    storeScenario = "answers";
+    expect(r.code).toBe(1);
+    expect(r.all).not.toContain(VALUE);
+    expect(r.error).toContain("withheld");
   });
 
   test("--stdin at a terminal is refused before standard input is read: the value would show as it is typed", async () => {
     received.length = 0;
-    const root = project(APP, APP_FILES);
-    for (const extra of [[], ["--json"]]) {
-      const { failures, output } = recording();
-      let read = false;
-      const code = await runRemote("secrets", ["secrets", "set", "API_KEY", "--stdin", ...extra], {
-        folder: root,
-        environment: env(),
-        output,
-        build: async () => {},
-        checkPublic: () => {},
-        terminal: () => true,
-        stdin: async () => {
-          read = true;
-          return VALUE;
-        },
-      });
-      expect({ extra, code, read }).toEqual({ extra, code: 1, read: false });
-      expect(failures).toEqual([
-        {
-          error: "stdin-is-terminal",
-          message: "--stdin reads a pipe, and standard input is this terminal, where the value would show as it is typed: nothing was sent",
-          details: ["pipe the value: <command> | sitesolide secrets set NAME --stdin", "or drop --stdin to be prompted without echo: sitesolide secrets set NAME"],
-        },
-      ]);
-    }
-    expect(hintForFailure("stdin-is-terminal", "")).toContain("without --stdin");
-    expect(received).toEqual([]);
-  });
-
-  test("a value the steward would refuse is refused here, before it travels, and never quoted", async () => {
-    secretsScenario = "answers";
-    received.length = 0;
-    const root = project(APP, APP_FILES);
-    const bytes = new TextEncoder().encode(VALUE);
-    for (const [stdin, message] of [
-      // One trailing line break is the pipe's; a second line is the value's.
-      [`${VALUE}\nsecond line\n`, "the value must fit on one line: nothing was sent"],
-      [`${VALUE}\rmore`, "the value must fit on one line: nothing was sent"],
-      [`${VALUE}\0`, "the value contains a null byte: nothing was sent"],
-      [`${VALUE}${"x".repeat(MAX_VALUE_BYTES)}`, "the value is larger than 8 KiB: nothing was sent"],
-      // Read leniently, 0xff became U+FFFD: what was written would not be what was piped.
-      [new Uint8Array([...bytes, 0xff, 0x0a]), "the value piped is not valid UTF-8: nothing was sent"],
-    ] as const) {
-      const human = await cli(root, ["secrets", "set", "API_KEY", "--stdin"], env(), stdin);
-      expect({ message, code: human.code }).toEqual({ message, code: 1 });
-      expect(human.error).toContain(`!! ${message}`);
-      expect(human.error).toContain("a key or a certificate of several lines goes in a file read whole, from the dashboard's Secrets section");
-      const json = await cli(root, ["secrets", "set", "API_KEY", "--stdin", "--json"], env(), stdin);
-      const error = events(json.output).at(-1)!;
-      expect(error).toMatchObject({ type: "error", message });
-      expect(error.hint).toBe(hintForFailure("invalid", ""));
-      for (const run of [human, json]) expect({ message, quoted: run.all.includes(VALUE) }).toEqual({ message, quoted: false });
-    }
-    // A lone surrogate cannot come through a pipe, decoded strictly; typed, it is refused the same way.
-    const { failures, output } = recording();
-    const base = { folder: root, environment: env(), output, build: async () => {}, checkPublic: () => {}, terminal: () => true };
-    expect(await runRemote("secrets", ["secrets", "set", "API_KEY"], { ...base, secretPrompt: async () => `${VALUE}\ud800` })).toBe(1);
-    expect(failures.map((failure) => failure.message)).toEqual(["the value is not valid Unicode: nothing was sent"]);
-    expect(received).toEqual([]);
-    // 8 KiB exactly, counted in bytes, passes and is sent.
-    const largest = "é".repeat(MAX_VALUE_BYTES / 2);
-    const sent = await cli(root, ["secrets", "set", "API_KEY", "--stdin"], env(), largest);
-    expect(sent.code).toBe(0);
-    expect(JSON.parse(patches().at(-1)!.body as string)).toEqual({ set: { API_KEY: largest } });
-  });
-
-  test("a name that looks like a value is refused before anything is sent, never quoted, and its owner told the shell kept it", async () => {
-    received.length = 0;
-    const root = project(APP, APP_FILES);
-    const keys = [`sk_live_${"51HxQjZ2eZvKYlo2C0aBcDeFgHiJkLmNoP"}`, "ghp_16C7e42F292c6912E7710c838347Ae178B4a", "xoxb-1234567890-abcdefghijkl", `A${"b".repeat(NAME_MAX_HERE)}`];
-    for (const [arguments_, where] of [
-      [["secrets", "set", keys[0]!], "secrets set: the name"],
-      [["secrets", "set", keys[2]!, "--stdin"], "secrets set: the name"],
-      [["secrets", "remove", "API_KEY", keys[1]!], "secrets remove: name 2"],
-      [["secrets", "set", keys[3]!], "secrets set: the name"],
-      [["secrets", keys[0]!], "secrets: what follows"],
-    ] as const) {
-      const human = await cli(root, [...arguments_], env(), `${VALUE}\n`);
-      expect({ arguments_, code: human.code }).toEqual({ arguments_, code: 1 });
-      expect(human.error).toContain(`!! ${where} looks like a secret's value, not a variable name: nothing was sent`);
-      expect(human.error).toContain("if it was a value, it may now be in the shell's history: change it at its source");
-      expect(human.error).toContain("a variable really named so is set from the dashboard's Secrets section");
-      const json = await cli(root, [...arguments_, "--json"], env(), `${VALUE}\n`);
-      const error = events(json.output).at(-1)!;
-      expect(error).toMatchObject({ type: "error", message: `${where} looks like a secret's value, not a variable name: nothing was sent` });
-      expect(error.hint).toBe(hintForFailure("looks-like-value", ""));
-      for (const run of [human, json]) for (const key of keys) expect({ arguments_, quoted: run.all.includes(key) }).toEqual({ arguments_, quoted: false });
-    }
-    expect(received).toEqual([]);
-  });
-
-  test("a connection dropped once the change was sent: it may have been written, and how to check, rather than unreachable", async () => {
-    // A dashboard that reads the whole request, then closes the connection without a word: its idle timeout, after the write.
-    let request = "";
-    const dropping = Bun.listen({
-      hostname: "127.0.0.1",
-      port: 0,
-      socket: {
-        data(socket, data) {
-          request += new TextDecoder().decode(data);
-          const head = request.indexOf("\r\n\r\n");
-          const length = Number(/content-length: *([0-9]+)/i.exec(request)?.[1] ?? "0");
-          if (head !== -1 && new TextEncoder().encode(request.slice(head + 4)).length >= length) socket.end();
-        },
+    const root = project(STORE_APP, APP_FILES);
+    const record = recording();
+    const code = await runRemote("secrets", ["secrets", "set", "API_KEY", "--stdin"], {
+      folder: root,
+      environment: { SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN },
+      home: folder("remote-home-"),
+      output: record.output,
+      build: async () => {},
+      checkPublic: () => {},
+      terminal: () => true,
+      stdinBytes: async () => {
+        throw new Error("standard input read");
       },
     });
-    try {
-      const root = project(APP, APP_FILES);
-      const dashboard = `http://127.0.0.1:${dropping.port}`;
-      const { lines, failures, output } = recording();
-      const base = { folder: root, environment: { ...env(), SITESOLIDE_API: dashboard }, output, build: async () => {}, checkPublic: () => {} };
-      const code = await runRemote("secrets", ["secrets", "set", "API_KEY", "--stdin", "--restart"], { ...base, stdin: async () => VALUE });
-      expect(code).toBe(1);
-      // It did leave: the value was in the request the dashboard read.
-      expect(request).toContain(`"API_KEY":"${VALUE}"`);
-      expect(failures).toEqual([
-        {
-          error: "unconfirmed",
-          message: "the change of shop.env was sent and its answer never came: it may have been written",
-          details: [
-            expect.stringContaining(`${dashboard} unreachable: `),
-            "sitesolide secrets lists the names in shop.env: a name removed is gone once the change is written, a name set is there",
-            "no value is read back, so a set over a value already there cannot be checked: running the same command again writes the change once more, harmlessly",
-            "the restart may have been made too: sitesolide status shows the service",
-          ],
-        },
-      ]);
-      expect(lines.join("\n")).not.toContain(VALUE);
-    } finally {
-      dropping.stop(true);
-    }
+    expect(code).toBe(1);
+    expect(record.failures[0]).toMatchObject({ error: "stdin-is-terminal" });
+    expect(received).toEqual([]);
   });
 
-  test("an answer cut or replaced by a proxy's page is unconfirmed too; a connection refused sent nothing, and says so as before", async () => {
-    const root = project(APP, APP_FILES);
-    const run = async (fetcher: Fetch, environment = env()) => {
-      const { failures, output } = recording();
-      const code = await runRemote("secrets", ["secrets", "remove", "SMTP_URL"], { folder: root, environment, output, build: async () => {}, checkPublic: () => {}, fetcher });
-      return { code, failure: failures[0]! };
-    };
-    const proxy = await run(async () => new Response("<html>502 Bad Gateway</html>", { status: 502 }));
-    expect(proxy.code).toBe(1);
-    expect(proxy.failure).toMatchObject({ error: "unconfirmed", details: [`${api} answered 502 with something that is not the control API`, expect.any(String), expect.any(String)] });
-    const cut = await run(async () => new Response('{"file":', { status: 200 }));
-    expect(cut.failure.error).toBe("unconfirmed");
-    // A 4xx page is not the dashboard's: nothing says the change was made.
-    const elsewhere = await run(async () => new Response("<html>404</html>", { status: 404 }));
-    expect(elsewhere.failure.error).toBe("unreadable");
-    // A port nothing listens on: the connection is refused before a byte leaves.
-    const closed = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
-    const port = closed.port;
-    closed.stop(true);
-    const refused = await run(fetch, { ...env(), SITESOLIDE_API: `http://127.0.0.1:${port}` });
-    expect(refused.failure).toMatchObject({ error: "unreachable", message: expect.stringContaining(`http://127.0.0.1:${port} unreachable: `) });
+  test("migrate is the owner's: with a token, needs-ssh, nothing sent; a static site has no store", async () => {
+    received.length = 0;
+    const root = project(STORE_APP, APP_FILES);
+    for (const asked of [["migrate"], ["migrate", "--retire"]]) {
+      const r = await cli(root, ["secrets", ...asked, "--json"], env());
+      expect(events(r.output).at(-1)).toMatchObject({ type: "error", hint: expect.stringContaining("the owner") });
+    }
+    expect(received.filter((entry) => entry.path.includes("/store"))).toEqual([]);
+    const site = project({ slug: "shop", publicDir: "public" }, { "public/index.html": "" });
+    const r = await cli(site, ["secrets", "--json"], env());
+    expect(events(r.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("a static site") });
   });
 
   test("what still needs the owner's SSH says so, and names what a token runs", async () => {
-    const root = project(APP, APP_FILES);
-    const result = await cli(root, ["lock"], env());
-    expect(result.code).toBe(1);
-    expect(result.error).toContain("with a token, this workstation runs: deploy, status, logs, share, secrets, restart, login");
+    const r = await cli(project(STORE_APP, APP_FILES), ["refresh", "--json"], env());
+    expect(events(r.output).at(-1)).toMatchObject({ type: "error", hint: expect.stringContaining("secrets, restart and login") });
   });
 });
 
-describe("the arguments of secrets, read before anything is sent", () => {
-  test("list, set and remove, with their options wherever they stand", () => {
-    expect(readSecretsArguments(["secrets"])).toEqual({ action: "list" });
-    expect(readSecretsArguments(["secrets", "--json", "--api"])).toEqual({ action: "list" });
-    expect(readSecretsArguments(["secrets", "set", "API_KEY"])).toEqual({ action: "set", name: "API_KEY", stdin: false, restart: false });
-    expect(readSecretsArguments(["secrets", "--restart", "set", "__proto__", "--stdin", "--json"])).toEqual({ action: "set", name: "__proto__", stdin: true, restart: true });
-    expect(readSecretsArguments(["secrets", "remove", "A", "B_2", "--restart"])).toEqual({ action: "remove", names: ["A", "B_2"], restart: true });
+describe("deploy through the API: the secrets", () => {
+  const env = (extra: Record<string, string> = {}) => ({ HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN, ...extra });
+  // The build writes what it received beside the manifest, which a static site never sends.
+  const BLOG = { slug: "shop", build: "mkdir -p public && touch public/index.html && env > build-env.txt", publicDir: "public", env: { PUBLIC_URL: "https://{slug}.{zone}", CONTACT: "{contact}" }, secrets: { build: ["CMS_TOKEN"] } };
+
+  test("a missing build secret stops before anything is sent, the manifest included", async () => {
+    scenario = "succeeds";
+    received.length = 0;
+    const r = await cli(project(BLOG), ["deploy", "--json"], env());
+    expect(r.code).toBe(1);
+    expect(events(r.output).at(-1)).toMatchObject({ type: "error", message: "build secrets missing: CMS_TOKEN", hint: expect.stringContaining("nothing was sent") });
+    expect(received).toEqual([]);
   });
 
-  test("every refusal by its code, and none quotes what was typed", () => {
-    const refusals: [string[], string][] = [
-      [["secrets", "set", "A=b"], "value-in-arguments"],
-      [["secrets", "set", "A", "b"], "value-in-arguments"],
-      [["secrets", "--token=b"], "value-in-arguments"],
-      [["secrets", "set", "A", "--json"], "needs-stdin"],
-      [["secrets", "set"], "usage"],
-      [["secrets", "remove"], "usage"],
-      [["secrets", "remove", "A", "--stdin"], "usage"],
-      [["secrets", "--restart"], "usage"],
-      [["secrets", "show", "A"], "usage"],
-      [["secrets", "set", "1A"], "invalid"],
-      [["secrets", "set", "A".repeat(129)], "looks-like-value"],
-      [["secrets", "set", `sk_live_${"51HxQjZ2eZvKYlo2C0aBcDeF"}`], "looks-like-value"],
-      [["secrets", "remove", "A", "ghp_16C7e42F292c6912E7710c838347Ae178B4a"], "looks-like-value"],
-      [["secrets", `sk_test_${"51HxQjZ2eZvKYlo2C0aBcDeF"}`], "looks-like-value"],
-      [["secrets", "set", "glpat-xxxxxxxxxxxxxxxxxxxx"], "looks-like-value"],
-      [["secrets", "remove", "A", "b-c"], "invalid"],
-      [["secrets", "set", "A", "--force"], "unknown-option"],
-    ];
-    for (const [arguments_, code] of refusals) {
-      const refusal = readSecretsArguments(arguments_);
-      expect({ arguments_, error: "error" in refusal ? refusal.error : null }).toEqual({ arguments_, error: code });
-      if (!("error" in refusal)) continue;
-      const said = [refusal.message, ...(refusal.details ?? [])].join("\n");
-      for (const argument of arguments_.filter((one) => !["secrets", "set", "remove", "A", "--json", "--stdin", "--restart"].includes(one))) {
-        expect({ arguments_, quoted: said.includes(argument) }).toEqual({ arguments_, quoted: false });
-      }
+  test("the build gets the allow list, the manifest's env with the deployment's placeholders, and the declared build secret: never the token, an undeclared variable, NODE_ENV", async () => {
+    scenario = "succeeds";
+    deploymentExtras = { placeholders: { zone: "test-zone.invalid", contact: "sample@test-zone.invalid" }, missingSecrets: null };
+    const home = folder("remote-home-");
+    const root = project(BLOG);
+    const r = await cli(root, ["deploy", "--json"], {
+      HOME: home,
+      SITESOLIDE_API: api,
+      SITESOLIDE_TOKEN: TOKEN,
+      SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
+      BUILD_PROBE: "an undeclared variable",
+      CMS_TOKEN: "the-cms-token",
+      AWS_SECRET_ACCESS_KEY: "planted-cloud-key",
+      NODE_ENV: "development",
+      LANG: "en_GB.UTF-8",
+    });
+    deploymentExtras = {};
+    expect(r.code).toBe(0);
+    const result = events(r.output).at(-1)!;
+    expect(result).toMatchObject({ type: "result", command: "deploy", buildSecrets: [{ name: "CMS_TOKEN", source: "environment" }] });
+    expect(r.output).toContain("build secret CMS_TOKEN from your environment");
+    expect(r.all).not.toContain("the-cms-token");
+    const lines = readFileSync(join(root, "build-env.txt"), "utf8").split("\n");
+    expect(lines).toContain("CMS_TOKEN=the-cms-token");
+    expect(lines).toContain("PUBLIC_URL=https://shop.test-zone.invalid");
+    expect(lines).toContain("CONTACT=sample@test-zone.invalid");
+    expect(lines).toContain(`HOME=${home}`);
+    expect(lines).toContain("LANG=en_GB.UTF-8");
+    expect(lines.filter((line) => /^(SITESOLIDE_|AWS_SECRET_ACCESS_KEY|NODE_ENV|BUILD_PROBE)/.test(line))).toEqual([]);
+  });
+
+  test("a build secret from the workstation's file of the project, said by its path, never its value", async () => {
+    scenario = "succeeds";
+    const home = folder("remote-home-");
+    mkdirSync(join(home, ".config", "sitesolide", "secrets"), { recursive: true });
+    writeFileSync(join(home, ".config", "sitesolide", "secrets", "shop.env"), "CMS_TOKEN=from-the-workstation\nOTHER=never-taken\n");
+    const r = await cli(project(BLOG), ["deploy", "--json"], { HOME: home, SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN });
+    expect(r.code).toBe(0);
+    expect(events(r.output).at(-1)).toMatchObject({ buildSecrets: [{ name: "CMS_TOKEN", source: "workstation" }] });
+    expect(r.all).not.toContain("from-the-workstation");
+    // A file that does not parse stops, by its line, never its content.
+    writeFileSync(join(home, ".config", "sitesolide", "secrets", "shop.env"), "CMS_TOKEN = from-the-workstation\n");
+    received.length = 0;
+    const bad = await cli(project(BLOG), ["deploy", "--json"], { HOME: home, SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN });
+    expect(events(bad.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("line 1: whitespace before `=`") });
+    expect(bad.all).not.toContain("from-the-workstation");
+    expect(received).toEqual([]);
+  });
+
+  test("runtime secrets the store lacks: read before the deployment, a warning under --json, and the deployment goes on with missingSecrets in its result", async () => {
+    scenario = "succeeds";
+    storeScenario = "answers";
+    received.length = 0;
+    deploymentExtras = { missingSecrets: { runtime: ["WEBHOOK_SECRET"], files: [] } };
+    const r = await cli(project({ ...APP, secrets: ["API_KEY", "WEBHOOK_SECRET"] }, APP_FILES), ["deploy", "--json"], env());
+    deploymentExtras = {};
+    expect(r.code).toBe(0);
+    const list = events(r.output);
+    expect(list.find((event) => event.type === "warning")).toMatchObject({
+      message: "runtime secrets not set on the server: WEBHOOK_SECRET",
+      details: expect.arrayContaining(["sitesolide secrets set WEBHOOK_SECRET, or sitesolide secrets generate WEBHOOK_SECRET (a random key, drawn on the server)"]),
+    });
+    expect(list.at(-1)).toMatchObject({ type: "result", missingSecrets: { runtime: ["WEBHOOK_SECRET"], files: [] } });
+    const order = received.map((entry) => `${entry.method} ${entry.path}`);
+    expect(order.indexOf("GET /api/v1/projects/shop/store")).toBeLessThan(order.indexOf("POST /api/v1/deployments"));
+    expect(received.filter((entry) => entry.method === "PATCH")).toEqual([]);
+  });
+
+  test("a token that may not list secrets, a project not deployed yet, a dashboard before the store: said, and the deployment goes on", async () => {
+    scenario = "succeeds";
+    for (const [state, said] of [
+      ["out-of-scope", "this token may not list secrets"],
+      ["not-found", "not deployed yet"],
+      ["old", "cannot tell which runtime secrets are set"],
+    ] as const) {
+      storeScenario = state;
+      const r = await cli(project({ ...APP, secrets: ["API_KEY"] }, APP_FILES), ["deploy"], env());
+      expect({ state, code: r.code }).toEqual({ state, code: 0 });
+      expect(r.all).toContain(said);
     }
+    storeScenario = "answers";
   });
 
-  test("a file in the listing: its names, what the token may not change, a restart pending", () => {
-    const file = { name: "shop.env", kind: "variables", state: "managed", reason: null, variables: ["API_KEY", "PASSWORD_HASH"], passwords: ["PASSWORD_HASH"], restartPending: false, writable: true } as const;
-    expect(secretFileLines(file)).toEqual(["   shop.env: API_KEY", "      PASSWORD_HASH: a password hash, changed from the dashboard alone"]);
-    expect(secretFileLines({ ...file, name: "shop-mail.env", variables: [], passwords: [], writable: false, restartPending: true })).toEqual([
-      "   shop-mail.env: no variable yet",
-      "      read only with a token: set from the dashboard's Secrets section",
-      "      restart pending: changed since the service started, sitesolide restart applies it",
-    ]);
-    expect(secretFileLines({ ...file, state: "absent", variables: [], passwords: [] })).toEqual(["   shop.env: missing, sitesolide secrets set NAME creates it"]);
-    expect(secretFileLines({ ...file, state: "unmanaged", reason: "line 2 is not KEY=value" })).toEqual(["   shop.env: not managed by the dashboard, line 2 is not KEY=value"]);
-  });
-});
-
-describe("a name that looks like a value, and a value the steward would refuse", () => {
-  test("a name over 64 characters, or starting as service keys do, is refused; a variable's usual name is not", () => {
-    for (const prefix of VALUE_PREFIXES) {
-      const name = `${prefix}0123456789abcdef`;
-      expect({ name, looks: looksLikeValue(name) }).toEqual({ name, looks: true });
-      for (const arguments_ of [["secrets", "set", name], ["secrets", "remove", "API_KEY", name]]) {
-        const refusal = readSecretsArguments(arguments_);
-        expect({ arguments_, error: "error" in refusal ? refusal.error : null }).toEqual({ arguments_, error: "looks-like-value" });
-      }
-    }
-    expect(readSecretsArguments(["secrets", "set", "A".repeat(NAME_MAX_HERE)])).toEqual({ action: "set", name: "A".repeat(NAME_MAX_HERE), stdin: false, restart: false });
-    expect(readSecretsArguments(["secrets", "set", "A".repeat(NAME_MAX_HERE + 1)])).toMatchObject({ error: "looks-like-value" });
-    // The prefixes are a service's, in its own case: an upper-case variable is not a key.
-    for (const name of ["API_KEY", "SK_LIVE_KEY", "GHP_TOKEN", "AKI", "XO", "STRIPE_SK", "sst", "__proto__"]) {
-      expect({ name, looks: looksLikeValue(name) }).toEqual({ name, looks: false });
-      expect(readSecretsArguments(["secrets", "set", name])).toEqual({ action: "set", name, stdin: false, restart: false });
-    }
-  });
-
-  test("the value is checked by the steward's own rules, in its own words: both refuse the same values, and take the same", async () => {
-    // dashboard/src/secrets/envfile.ts imports dashboard/borrowed/, which git
-    // does not keep: the dashboard's borrow makes it, as its check does first.
-    const repository = join(import.meta.dir, "..", "..");
-    Bun.spawnSync(["bun", join(repository, "dashboard", "scripts", "borrow.ts")], { stdout: "ignore" });
-    // A path tsc does not follow: bin/ is typed alone, without the dashboard's sources.
-    const steward = (await import(join(repository, "dashboard", "src", "secrets", "envfile.ts"))) as { checkValue: (value: string) => string | null; MAX_VALUE_BYTES: number };
-    expect(MAX_VALUE_BYTES).toBe(steward.MAX_VALUE_BYTES);
-    const samples = [
-      "plain",
-      "",
-      "with spaces and = signs, 'quotes' \"too\" and $DOLLARS",
-      "tab\there",
-      "line\nbreak",
-      "carriage\rreturn",
-      "trailing\n",
-      "null\0byte",
-      "\ud800",
-      "half\udc00a pair",
-      "an emoji 😀",
-      " ",
-      "\u0085",
-      "a noncharacter \ufdd0",
-      "one at the end of a plane \u{10ffff}",
-      "x".repeat(MAX_VALUE_BYTES),
-      "x".repeat(MAX_VALUE_BYTES + 1),
-      "é".repeat(MAX_VALUE_BYTES / 2),
-      `${"é".repeat(MAX_VALUE_BYTES / 2)}x`,
-    ];
-    for (const sample of samples) expect({ sample, refusal: valueRefusal(sample) }).toEqual({ sample, refusal: steward.checkValue(sample) });
-    // Enough of each kind for the comparison to mean something.
-    expect(samples.filter((sample) => valueRefusal(sample) !== null).length).toBeGreaterThan(6);
-    expect(samples.filter((sample) => valueRefusal(sample) === null).length).toBeGreaterThan(6);
+  test("the placeholders a dashboard before them does not send: the zone its address names, no contact", () => {
+    expect(buildPlaceholders("shop", "https://dashboard.example.com", undefined)).toEqual({ slug: "shop", zone: "example.com", contact: "" });
+    expect(buildPlaceholders("shop", "http://127.0.0.1:4000", undefined)).toEqual({ slug: "shop", zone: "", contact: "" });
+    expect(buildPlaceholders("shop", "https://dashboard.example.com", { zone: "z.test", contact: "c@z.test" })).toEqual({ slug: "shop", zone: "z.test", contact: "c@z.test" });
   });
 });
 
@@ -1023,6 +832,7 @@ function fakeTerminal(chunks: readonly (string | Uint8Array)[], options: { gapMs
 
 /** The calls of a prompt that ended cleanly, around what was read in between. */
 const around = (reads: number) => ["write \"Q: \"", "signals on", "raw true", "listen", ...Array<string>(reads).fill("data"), "unlisten", "signals off", "raw false", 'write "\\n"'];
+
 
 describe("the prompt that does not echo", () => {
   test("Backspace, Ctrl-U and Ctrl-W edit the line; Enter ends it; Ctrl-C and Ctrl-D abandon it", () => {

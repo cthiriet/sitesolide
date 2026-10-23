@@ -83,6 +83,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { EMBEDDED_KIT } from "./kit-archive";
+import { isBuildInherited } from "./variables";
 
 /** Replaced by bin/build.ts with the release's tag; undeclared, hence `dev`, everywhere else. */
 declare const SITESOLIDE_BUILD_VERSION: string | undefined;
@@ -480,27 +481,54 @@ export function projectEnv(): Record<string, string> {
 }
 
 /**
- * The environment of a project's own build: `inherited`, the workstation's,
- * less every variable named SITESOLIDE_, then `lent`, what projectEnv adds.
+ * The environment of a project's own build: an allow list, never the
+ * workstation's environment as it stands. In this order, a later one
+ * winning:
+ *
+ *   1. from `inherited`, the workstation's, only the names every build
+ *      inherits (BUILD_INHERITED and its prefixes in ./variables): where
+ *      things are, who runs, the terminal, the language, each toolchain's
+ *      folders. Never a name starting SITESOLIDE_;
+ *   2. `project`, the manifest's project-level `env`, its placeholders
+ *      replaced (buildEnvOf in ./manifest, which leaves SITESOLIDE_ names
+ *      out);
+ *   3. `secrets`, the build secrets the manifest names, resolved from whoever
+ *      deploys (./build-secrets);
+ *   4. `lent`, what projectEnv adds: the shim folder on the PATH and
+ *      SITESOLIDE_BINARY, a path the kit sets, not inherited and no secret,
+ *      which the `bun` shim runs.
  *
  * The build is the project's code and its dependencies', often a clone
  * nobody has read, run as the person deploying: a token exported as
- * SITESOLIDE_TOKEN, a DNS provider's SITESOLIDE_DNS_<...> or any other of
- * sitesolide's own variables would be its to read and send on. No build
- * needs one. The only one it gets is SITESOLIDE_BINARY when projectEnv lends
- * it, a path and no secret, which the `bun` shim runs. deploy.sh withholds
- * the same names from its own build.
+ * SITESOLIDE_TOKEN, a cloud's AWS_SECRET_ACCESS_KEY, anything the shell
+ * carries would be its to read and send on. A build that needs one of the
+ * deployer's variables names it under `secrets.build`. NODE_ENV is not
+ * inherited either: the manifest sets it, and a workstation's `development`
+ * must not leak into a production build. deploy.sh builds the same
+ * environment.
  *
- * Always an object, even with nothing to withhold: Bun.spawn given no `env`
- * hands down the environment the process started with, all of them included.
+ * Always an object, even an empty one: Bun.spawn given no `env` hands down
+ * the environment the process started with, all of it.
  */
-export function buildEnv(inherited: Record<string, string | undefined>, lent: Record<string, string>): Record<string, string> {
+export function buildEnv(input: {
+  inherited: Record<string, string | undefined>;
+  lent: Record<string, string>;
+  project: [string, string][];
+  secrets: Record<string, string>;
+}): Record<string, string> {
   const environment: Record<string, string> = {};
-  for (const [name, value] of Object.entries(inherited)) {
-    if (value === undefined || name.startsWith("SITESOLIDE_")) continue;
+  const platform = (name: string): boolean => name.startsWith("SITESOLIDE_");
+  for (const [name, value] of Object.entries(input.inherited)) {
+    if (value === undefined || platform(name) || !isBuildInherited(name)) continue;
     environment[name] = value;
   }
-  return { ...environment, ...lent };
+  for (const [name, value] of input.project) {
+    if (!platform(name)) environment[name] = value;
+  }
+  for (const [name, value] of Object.entries(input.secrets)) {
+    if (!platform(name)) environment[name] = value;
+  }
+  return { ...environment, ...input.lent };
 }
 
 /**

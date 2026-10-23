@@ -230,9 +230,25 @@ describe("deploy --json", () => {
     expect(ended(unknown, "error").message).toBe("unknown command: dance");
     const runs = await run("projects/simple-site", ["run", "--json", "--", "true"], { vm: fakeVm() });
     expect(ended(runs, "error").message).toBe("--json is not available for run");
-    // Past `--`, the option belongs to the command run launches.
-    const passed = await run("projects/simple-site", ["run", "--", "echo", "--json"], { vm: fakeVm() });
-    expect(passed.error).toContain("no secret declared in the manifest");
+    // Past `--`, the option belongs to the command run launches: run reads
+    // the project's file in the vault, a vault of the test's own, and starts it.
+    const vault = realpathSync(mkdtempSync(join(tmpdir(), "agents-vault-")));
+    try {
+      const missing = await run("projects/simple-site", ["run", "--", "echo", "--json"], { vm: fakeVm(), env: { SITESOLIDE_VAULT: vault } });
+      expect(missing.error).toContain(`missing from the vault: ${vault}/sample-static.env`);
+      writeFileSync(join(vault, "sample-static.env"), "GREETING='from the vault'\n");
+      const passed = await run("projects/simple-site", ["run", "--", "sh", "-c", 'echo "$GREETING" "$1"', "sh", "--json"], { vm: fakeVm(), env: { SITESOLIDE_VAULT: vault } });
+      expect(passed.code).toBe(0);
+      expect(passed.output.trim()).toBe("from the vault --json");
+      // A line the strict parser refuses: its number and reason, never its content.
+      writeFileSync(join(vault, "sample-static.env"), "GREETING = never-shown\n");
+      const refused = await run("projects/simple-site", ["run", "--", "true"], { vm: fakeVm(), env: { SITESOLIDE_VAULT: vault } });
+      expect(refused.code).toBe(1);
+      expect(refused.error).toContain("line 1: whitespace before `=`");
+      expect(refused.all).not.toContain("never-shown");
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+    }
   });
 });
 
