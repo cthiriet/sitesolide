@@ -703,6 +703,9 @@ describe("a project's store, by role (spec §6.3)", () => {
     const token = await unlockAs(bench, alice, ALICE);
     const set = (slug: string) => bench.call("PUT", "/people/store/variable", { session: alice, token, slug, name: "A", value: "1" });
     expect(await body(await set("shop"))).toEqual({ error: "out-of-scope", message: `${ALICE} is a Viewer on shop: changing its secrets takes a Developer or an Admin` });
+    // A value drawn on the machine, refused by role, is journaled as what was asked.
+    expect((await bench.call("POST", "/people/store/generate", { session: alice, token, slug: "shop", name: "A" })).status).toBe(403);
+    expect(bench.journal().at(-1)).toMatchObject({ operation: "generate", result: "rejects", actor: ALICE, slug: "shop", detail: "role viewer" });
     // Can open is no role in the dashboard.
     expect(await body(await set("beta"))).toEqual({ error: "out-of-scope", message: `${ALICE} holds no role on beta` });
     expect(await body(await set("nobody"))).toEqual({ error: "out-of-scope", message: `${ALICE} holds no role on nobody` });

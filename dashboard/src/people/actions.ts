@@ -262,9 +262,8 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
         run: ops.storeRemove,
       }),
     },
-    // A value drawn on the machine is a set: refused by role as one.
     "/people/store/generate": {
-      POST: action({ operation: "set", power: "secrets.write", texts: STORE_NAME, others: ["format", "bytes", "replace"], check: boolean("replace"), run: ops.storeGenerate }),
+      POST: action({ operation: "generate", power: "secrets.write", texts: STORE_NAME, others: ["format", "bytes", "replace"], check: boolean("replace"), run: ops.storeGenerate }),
     },
     "/people/store/file": {
       PUT: action({ operation: "replace", power: "secrets.write", texts: [...STORE_NAME, "content"], max: dependencies.maxContentBytes, run: ops.storeSetFile }),

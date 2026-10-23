@@ -146,6 +146,7 @@ describe("each source's rows, in one shape", () => {
       "dashboard.signin",
       "dashboard.signin_failed",
       "dashboard.signout",
+      "generate",
       "guest.create",
       "guest.revoke",
       "list",
@@ -156,6 +157,7 @@ describe("each source's rows, in one shape", () => {
       "member.signin",
       "member.signin_failed",
       "member.signout",
+      "migrate",
       "password",
       "people.create",
       "portal",
@@ -166,6 +168,7 @@ describe("each source's rows, in one shape", () => {
       "replace",
       "restart",
       "restore",
+      "retire",
       "set",
       "sharing",
       "token.create",
@@ -180,6 +183,12 @@ describe("each source's rows, in one shape", () => {
       detail: { result: "rejects", note: "no secrets permission" },
     });
     expect(fromJournal([{ a: T, operation: "constructor", result: "ok", slug: null, file: null, variable: null, detail: null }])).toEqual([]);
+    // A store's value drawn on the machine: listed by its name, under the store.
+    expect(fromJournal([{ a: T, operation: "generate", result: "ok", actor: "owner", member: null, slug: "shop", file: "store", variable: "SESSION_KEY", detail: "hex" }])[0]?.row).toMatchObject({
+      action: "secrets.generate",
+      target: "shop",
+      detail: { result: "ok", file: "store", variable: "SESSION_KEY", note: "hex" },
+    });
     expect(fromJournal([{ a: "now", operation: "set" }, null, 4])).toEqual([]);
   });
 

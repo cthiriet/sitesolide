@@ -110,7 +110,7 @@ export type MemberPrincipal = { email: string; roles: Roles; create: boolean; se
  * says who tried what, on which project, and their role, never a value.
  */
 export type RestartRefusal = {
-  operation: "restart" | "read" | "set" | "remove" | "create" | "restore" | "replace" | "portal" | "backup.restore";
+  operation: "restart" | "read" | "set" | "remove" | "create" | "restore" | "replace" | "generate" | "portal" | "backup.restore";
   result: "rejects";
   actor: string;
   member: string;

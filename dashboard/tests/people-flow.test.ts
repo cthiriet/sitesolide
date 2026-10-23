@@ -541,13 +541,17 @@ describe("a person's secrets, general access and people, end to end", () => {
     expect((await owner.api("/api/secrets/value", { method: "POST", body: { slug: "blog", file: "blog.env", variable: "SIDE" } })).status).toBe(200);
   });
 
-  test("an Admin reads their project's values, and gives people access to it, which the portal is told through the steward's projection", async () => {
+  test("an Admin never reads a value back, and gives people access to their project, which the portal is told through the steward's projection", async () => {
     const HAL = "hal@acme.test";
     await give(HAL, { blog: "developer", shop: "admin" });
     const { browser } = await signInAs(HAL);
     await unlockAs(browser, HAL, "/site/secrets/?s=shop");
+    // Reading a value back is the owner's alone, an Admin's unlock included (I8).
     const read = await browser.api("/api/secrets/value", { method: "POST", body: { slug: "shop", file: "shop.env", variable: "API_KEY" } });
-    expect(await json(read)).toEqual({ value: SECRET_VALUE });
+    expect(read.status).toBe(403);
+    const refusal = await json(read);
+    expect(refusal.message).toContain("the owner's alone");
+    expect(JSON.stringify(refusal)).not.toContain(SECRET_VALUE);
 
     const page = await json(await browser.api("/api/access?slug=shop"));
     expect(page).toMatchObject({ slug: "shop", you: { kind: "person", email: HAL, role: "admin" }, grantable: ["visitor", "viewer", "developer", "admin"], portal: { reading: "steward" } });
