@@ -92,10 +92,18 @@ export function planMigration(input: {
   keyRefusal: (name: string) => string | null;
   /** Names the project's env, a service's env, the tree or an installed unit's `Environment=` sets. */
   setElsewhere?: ReadonlySet<string>;
+  /**
+   * Of those, the names the generated unit sets itself, from no `env`: the
+   * tree variables (`PORT`, `DATA_DIR`, `PUBLIC_DIR`), the egress proxy's.
+   * Nobody drops them from a manifest's env, none being there: they get the
+   * advice of a name no store holds.
+   */
+  setByUnit?: ReadonlySet<string>;
   /** Every installed unit reads the sources in the same order. */
   orderAgreed: boolean;
 }): MigrationPlan {
-  const setElsewhere = input.setElsewhere ?? new Set<string>();
+  const setByUnit = input.setByUnit ?? new Set<string>();
+  const setElsewhere = new Set([...(input.setElsewhere ?? [])].filter((name) => !setByUnit.has(name)));
   const sources: string[] = [];
   const skipped: { file: string; reason: string }[] = [];
   /** Each name's assignments, in the order in effect. */
@@ -111,7 +119,7 @@ export function planMigration(input: {
     }
     const names = source.assignments.map(([name]) => name);
     const elsewhere = names.filter((name) => setElsewhere.has(name));
-    const reserved = names.filter((name) => !setElsewhere.has(name) && (name === PASSWORD_VARIABLE || input.keyRefusal(name) !== null));
+    const reserved = names.filter((name) => !setElsewhere.has(name) && (setByUnit.has(name) || name === PASSWORD_VARIABLE || input.keyRefusal(name) !== null));
     const refusal = migrationKeyRefusal(source.file, elsewhere, reserved);
     if (refusal !== null) return { kind: "refused", refusal };
     sources.push(source.file);
@@ -162,8 +170,9 @@ export function planMigration(input: {
  *
  * - a name the env or a unit sets too: drop it there and deploy, and the
  *   store, which then takes it, keeps the file's value;
- * - a name no store holds, reserved or a password hash: the file's value is
- *   in effect, and going on means moving it where it belongs, knowingly.
+ * - a name no store holds, reserved, a password hash, or one the generated
+ *   unit sets itself (`PORT`), which no env holds to drop: the file's value
+ *   is in effect, and going on means moving it where it belongs, knowingly.
  */
 export function migrationKeyRefusal(file: string, setElsewhere: readonly string[], reserved: readonly string[]): Refusal | null {
   const sentences: string[] = [];

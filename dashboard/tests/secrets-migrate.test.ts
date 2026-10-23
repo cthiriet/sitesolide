@@ -137,6 +137,22 @@ describe("the merge (spec §6.8)", () => {
     );
     expect(JSON.stringify(both)).not.toContain(SECRET_A);
   });
+
+  test("a name the generated unit sets itself, which no env holds to drop, gets the advice of a name no store holds", () => {
+    const setElsewhere = new Set(["PORT", "DATA_DIR", "PUBLIC_DIR", "HTTPS_PROXY", "DEFAULT_SENDER"]);
+    const setByUnit = new Set(["PORT", "DATA_DIR", "PUBLIC_DIR", "HTTPS_PROXY"]);
+    for (const name of ["PORT", "DATA_DIR", "PUBLIC_DIR", "HTTPS_PROXY"]) {
+      const plan = planMigration({ sources: [managed("a.env", { [name]: "x" })], store: new Map(), keyRefusal: (key) => checkKey(key), setElsewhere, setByUnit, orderAgreed: true });
+      expect([name, plan.kind === "refused" && plan.refusal.message]).toEqual([
+        name,
+        `a.env holds ${name}, which a store never holds: the file's value is the one the service runs with, and removing it from a.env changes that. Move it to the manifest's env if it belongs there, deploy, then remove it from a.env and migrate again`,
+      ]);
+    }
+    // A name the env sets, beside one the unit sets: each its own advice.
+    const plan = planMigration({ sources: [managed("a.env", { PORT: "1", DEFAULT_SENDER: "x" })], store: new Map(), keyRefusal: (key) => checkKey(key), setElsewhere, setByUnit, orderAgreed: true });
+    expect(plan.kind === "refused" && plan.refusal.message).toStartWith("a.env holds DEFAULT_SENDER, which the project's env or its unit sets too");
+    expect(plan.kind === "refused" && plan.refusal.message).toContain("a.env holds PORT, which a store never holds");
+  });
 });
 
 describe("retiring a legacy file (spec §6.9)", () => {

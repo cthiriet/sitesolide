@@ -28,6 +28,8 @@
  */
 import { hasStore, isAnchored, isApp, isProtected, isValidFileName, isValidSlug, legacySecretFiles, servicesOf, type Manifest } from "../../borrowed/manifest";
 import { CREDENTIAL_ID, MAX_STORE_ENV_BYTES, MAX_STORE_FILE_BYTES, storePaths } from "../../borrowed/store";
+import { egressUnitLines } from "../../borrowed/egress";
+import { RESERVED_ENV } from "../../borrowed/variables";
 import type {
   StoreChangeResponse,
   StoreListResponse,
@@ -2272,6 +2274,21 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return [...found];
   }
 
+  /**
+   * The names the generated unit sets itself, from no `env` a manifest could
+   * drop them from: the tree variables, and the egress proxy's and the
+   * connectors' when the manifest asks for them, as unit.ts writes them.
+   */
+  function generatedUnitKeys(manifest: Manifest): Set<string> {
+    const found = new Set<string>(RESERVED_ENV);
+    try {
+      for (const key of unitEnvironment(["[Service]", ...egressUnitLines(manifest)].join("\n")).keys) found.add(key);
+    } catch {
+      // a manifest too broken to say what it asks for: the tree variables alone
+    }
+    return found;
+  }
+
   type EnvReading =
     | { kind: "absent" }
     | { kind: "managed"; bytes: Uint8Array; document: EnvDocument; info: FileInfo }
@@ -2876,7 +2893,14 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           : { file: file.declaration.name, state: "managed", assignments: [...documentValues(file.state.managed.document!)] },
     );
     const setKeys = storeSetKeys(project, units);
-    const plan = planMigration({ sources, store: storeValues(reading), keyRefusal: (name) => checkKey(name), setElsewhere: new Set(setKeys), orderAgreed });
+    const plan = planMigration({
+      sources,
+      store: storeValues(reading),
+      keyRefusal: (name) => checkKey(name),
+      setElsewhere: new Set(setKeys),
+      setByUnit: generatedUnitKeys(project.manifest!),
+      orderAgreed,
+    });
     if (plan.kind === "refused") return storeRefuse("migrate", project.slug, plan.refusal, actor);
 
     const outcome = (written: boolean, store: StoreView): StoreMigrateAnswer => ({

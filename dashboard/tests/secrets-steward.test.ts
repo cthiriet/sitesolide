@@ -4418,6 +4418,22 @@ describe("migrate and retire (spec §6.8, §6.9, §8.1)", () => {
     expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toContain(`DEFAULT_SENDER=${STORE_CANARY}\n`);
   });
 
+  test("PORT, DATA_DIR, PUBLIC_DIR or the proxy in a legacy file: the generated unit sets them, so the advice is a reserved name's, never to drop them from the env", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    const token = await unlock(bench);
+    const reserved = (names: string) =>
+      `cms-webhook.env holds ${names}, which a store never holds: the file's values are the ones the service runs with, and removing them from cms-webhook.env changes that. Move them to the manifest's env if they belong there, deploy, then remove them from cms-webhook.env and migrate again`;
+    writeFileSync(join(bench.secrets, "cms-webhook.env"), "PORT=4000\nDATA_DIR=/tmp/x\nPUBLIC_DIR=/tmp/y\n", { mode: 0o600 });
+    expect(await errorOf(await bench.call("POST", "/store/migrate", { token, slug: "cms" }))).toEqual({ error: "invalid", message: reserved("PORT, DATA_DIR, PUBLIC_DIR") });
+    // The egress proxy's names, when the manifest asks for the proxy.
+    const manifest = JSON.parse(readFileSync(join(bench.sites, "cms", "sitesolide.json"), "utf8")) as Record<string, unknown>;
+    writeFileSync(join(bench.sites, "cms", "sitesolide.json"), JSON.stringify({ ...manifest, egress: ["api.example.com"] }));
+    writeFileSync(join(bench.secrets, "cms-webhook.env"), "HTTPS_PROXY=http://elsewhere\nNO_PROXY=x\n", { mode: 0o600 });
+    expect(await errorOf(await bench.call("POST", "/store/migrate", { token, slug: "cms" }))).toEqual({ error: "invalid", message: reserved("HTTPS_PROXY, NO_PROXY") });
+    expect(existsSync(storeOf(bench, "cms").env)).toBe(false);
+  });
+
   test("a legacy file carrying PASSWORD_HASH, or not managed, refuses the whole migration", async () => {
     const bench = await mount();
     cmsReadsStore(bench);
