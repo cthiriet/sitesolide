@@ -17,7 +17,7 @@ import type { Raw } from "../src/state";
 import { readRequest } from "../src/installer/instance";
 import { createReporter } from "../src/installer/main";
 import { runPipeline } from "../src/installer/pipeline";
-import { createBench, file, hostOf, ZONE, type Bench } from "./installer-bench";
+import { createBench, file, hostOf, storeMadeBy, ZONE, type Bench } from "./installer-bench";
 
 /**
  * The whole chain on the workstation, each piece the real one: the dashboard's
@@ -254,9 +254,12 @@ describe("a project's store through a deployment", () => {
     expect(created.status).toBe(201);
     const deployment = ((await created.json()) as { deployment: DeploymentView }).deployment;
     expect(deployment).toMatchObject({ slug: "kanban", placeholders: { zone: ZONE, contact: "" }, missingSecrets: null });
-    // The token's store, as one written ahead would hold it: one name set.
+    // The token's store, as one written ahead would hold it: one name set,
+    // the steward's record that this token's write made it.
     mkdirSync(join(bench.store, "kanban", "files"), { recursive: true });
     writeFileSync(join(bench.store, "kanban", "env"), "ADMIN_TOKEN=a-value-never-read-back\n", { mode: 0o600 });
+    const { identity } = (await (await api("/api/v1/whoami")).json()) as { identity: Identity };
+    storeMadeBy(bench, "kanban", identity.id);
     const archive = bundle([file("app/server.ts", "Bun.serve({})"), file("public/index.html", "<h1>kanban</h1>")]);
     expect((await api(`/api/v1/deployments/${deployment.id}/bundle`, { method: "PUT", body: archive, headers: { "Content-Type": "application/gzip" } })).status).toBe(202);
     const done = await follow(deployment.id);

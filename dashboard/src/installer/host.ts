@@ -13,6 +13,7 @@ import type { LoopbackState, UnitFacts, UnitStanding } from "../../borrowed/serv
 import type { ProjectEntry } from "../secrets/scope";
 import type { SecretFile } from "./claims";
 import type { ExtractOutcome } from "./extract";
+import type { LegacyRead } from "../control/policy";
 
 export type Execution = { code: number; output: string };
 
@@ -76,6 +77,16 @@ export type Host = {
    * the log with its reason, never a line of it.
    */
   storeNames: (slug: string) => Promise<{ variables: string[]; files: string[] } | null>;
+  /**
+   * The legacy files the project's installed units read with
+   * `EnvironmentFile=`, flat under /etc/sitesolide, the store's own env left
+   * out: each absent, managed with its variables' names, or unmanaged (not a
+   * plain file, too big, or not read back). Never a value. Throws when a unit
+   * cannot be read.
+   */
+  legacyReadByUnits: (slug: string) => Promise<LegacyRead[]>;
+  /** The tokens' claims (src/control/claims.ts), as the steward wrote them: null when there is no file. Throws when it is there but unreadable. */
+  readClaims: () => Promise<string | null>;
 
   /** Creates `site-<slug>` when it is missing. */
   ensureAccount: (slug: string) => Promise<"created" | "present">;

@@ -304,6 +304,8 @@ export const TOKEN_REFUSALS_PER_HOUR = 60;
  *   expired             410  the archive arrived after the upload window
  *   unmanaged           409  the secret file is there, in a form the steward does not rewrite
  *   already-present     409  a value to generate is set already: `replace` draws a new one
+ *   migrate-first       409  the deployment would drop values legacy files supply the service
+ *                            with today: sitesolide secrets migrate --restart first
  *   not-available       503  the machine does not carry the control API, the access registry
  *                            or the secrets routes yet
  *   failure             500/502  something broke on the machine; the message says where to look
@@ -327,6 +329,7 @@ export type ControlErrorCode =
   | "no-portal"
   | "unmanaged"
   | "already-present"
+  | "migrate-first"
   | "not-available"
   | "failure";
 
@@ -347,6 +350,7 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
   "no-portal": 409,
   unmanaged: 409,
   "already-present": 409,
+  "migrate-first": 409,
   "not-available": 503,
   failure: 500,
 };
@@ -401,6 +405,8 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 // And on the owner's socket, which only root opens:
 //
 //   DELETE /tokens/project        { slug }    a project removed: its token ownership and its people with access forgotten
+//   GET    /tokens/claim?slug=<slug>          -> ClaimView: does a token hold a name the machine does not carry
+//   DELETE /tokens/claim          { slug }    -> { slug, released }: the owner takes such a name back (`sitesolide deploy --adopt`)
 //
 // The paths under `/team/` answer too, for one release: a dashboard or a CLI
 // from before the rename still calls them. Any error returns
@@ -408,6 +414,27 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 // them: the dashboard turns that into `not-available`.
 
 export type TeamResponse = { tokens: TokenView[] };
+
+/**
+ * A name a token holds, or claimed, while the machine does not carry its
+ * project, as the owner's SSH deploy asks before laying anything: a project
+ * the owner deploys under it would otherwise be handed to that token, or
+ * fill a store that token's write made. `token` null when none holds it.
+ * Ids and the token's label alone, never a value.
+ */
+export type ClaimView = {
+  slug: string;
+  /** A token holds the name, or claimed it, and the machine does not carry the project. */
+  claimed: boolean;
+  token: { id: string; label: string; email: string } | null;
+  /** The project's store was made by that token's write, ahead of any deployment. */
+  store: boolean;
+  /** A deployment of the name by that token is under way: taking it back waits for its end. */
+  deploying: boolean;
+};
+
+/** What `DELETE /tokens/claim` answers: the token whose hold was taken back, null when none held it. */
+export type ClaimReleased = { slug: string; released: string | null };
 /**
  * A person's tokens, those the owner made for them included, and what they
  * may mint them for: their roles, and the create right. `until`: the end of

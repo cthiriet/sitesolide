@@ -14,12 +14,23 @@
  *
  *   - a store is a token's own because that token's write made it
  *     (`creator`), never because the registry names the token;
- *   - a name is kept by a token that wrote its store ahead only until a
- *     project of that name appears on the machine: deployed by that token
- *     (`deployer`), it stays its own; deployed by anyone else, the owner over
- *     SSH above all, the token's claim is released (`released`);
+ *   - a name is kept by a token that claimed it only until a project of that
+ *     name appears on the machine: laid by that token's own deployment,
+ *     which succeeded (`credited`), it stays its own; laid by anyone else,
+ *     the owner over SSH above all, the token's claim is released
+ *     (`released`), and a deployment of the token that failed or still runs
+ *     never counts;
+ *   - any write of the owner into the store of a name the machine does not
+ *     carry takes the name back from the token that claimed it, and so does
+ *     the owner's `DELETE /tokens/claim` (the steward's owner socket), which
+ *     `sitesolide deploy --adopt` sends;
  *   - a name with no project, no store and no deployment under way is given
  *     back (`settle` in the steward).
+ *
+ * A store whose claim is missing, a record that failed after the store was
+ * made, is nobody's: a leftover no token adopts, its writer included, until
+ * the owner removes it (`sitesolide remove --confirm <slug>`). It fails
+ * closed. No store predates these claims: both came in the same release.
  *
  * Pure: the steward reads and writes the file, this decides.
  */
@@ -82,7 +93,7 @@ export function encodeClaims(claims: Claims): string {
   return `${JSON.stringify({ version: 1, claims }, null, 2)}\n`;
 }
 
-const claimOf = (claims: Claims, slug: string): Claim | null => (Object.hasOwn(claims, slug) ? claims[slug]! : null);
+export const claimOf = (claims: Claims, slug: string): Claim | null => (Object.hasOwn(claims, slug) ? claims[slug]! : null);
 
 /** This token's write made the store of a name the machine does not carry. */
 export function withStoreMade(claims: Claims, slug: string, token: string, at: number): Claims {
@@ -109,15 +120,27 @@ export function madeStore(claims: Claims | null, slug: string, token: string): b
 }
 
 /**
- * Is this token's hold on a project the machine carries released? It is when
- * the token claimed the name ahead of the project, and the project came by
- * anyone else's deployment: that token never deployed it. A name the token
- * holds from before these claims were kept, with no claim, stays as it was.
+ * How a claim's own deployment went, as its installer's result says: still
+ * under way, succeeded, or ended otherwise (failed, stopped half way, or
+ * never started past the grace). The steward reads it (src/control/steward.ts).
  */
-export function released(claims: Claims | null, slug: string, token: string, onMachine: boolean): boolean {
-  if (!onMachine || claims === null) return false;
-  const claim = claimOf(claims, slug);
-  return claim !== null && claim.deployer !== token;
+export type DeploymentOutcome = "under-way" | "succeeded" | "ended";
+
+/**
+ * Is this token's hold on a project the machine carries released? It is when
+ * the token claimed the name, and the project is not there by its own
+ * deployment having succeeded (`credited`): a deployment that failed, or is
+ * still under way, while the owner's SSH deploy laid the project, never
+ * hands it the owner's project. A name the token holds from before claims
+ * were kept, with no claim, stays as it was.
+ */
+export function released(claim: Claim | null, onMachine: boolean, credited: boolean): boolean {
+  return onMachine && claim !== null && !credited;
+}
+
+/** Is the project the holder's by its own deployment, which succeeded? */
+export function credited(claim: Claim | null, holder: string | null, outcome: DeploymentOutcome | null): boolean {
+  return claim !== null && holder !== null && claim.deployer === holder && outcome === "succeeded";
 }
 
 /**
@@ -126,15 +149,22 @@ export function released(claims: Claims | null, slug: string, token: string, onM
  * the store's folder is there, or cannot be told (counted as there).
  * `pending`: a deployment of the name is under way: its installer active, a
  * person's creation noted, or the claim's own deployment not ended.
+ * `credited`: the holder's own deployment of it succeeded.
  */
 export type Settlement = { forget: boolean; drop: boolean };
 
-export function settle(claim: Claim | null, holder: string | null, facts: { onMachine: boolean; store: boolean; pending: boolean }): Settlement {
+export function settle(
+  claim: Claim | null,
+  holder: string | null,
+  facts: { onMachine: boolean; store: boolean; pending: boolean; credited: boolean },
+): Settlement {
   if (facts.onMachine) {
-    // The project is there: a claim has said all it had to. The holder that
-    // never deployed it lets go of it.
+    // The project is there. A claim says whose it is once its deployment
+    // has ended: the holder's when that deployment succeeded, nobody's
+    // otherwise, the owner's SSH deploy having laid it.
     if (claim === null) return { forget: false, drop: false };
-    return { forget: holder !== null && claim.deployer !== holder, drop: true };
+    if (facts.pending) return { forget: false, drop: false };
+    return { forget: holder !== null && !facts.credited, drop: true };
   }
   if (facts.pending) return { forget: false, drop: false };
   if (facts.store) {

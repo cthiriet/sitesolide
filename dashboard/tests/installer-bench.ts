@@ -100,6 +100,13 @@ export function createBench(options: BenchOptions = {}): Bench {
   return bench;
 }
 
+/** The steward's record that this token's write made the project's store (src/control/claims.ts). */
+export function storeMadeBy(bench: Bench, slug: string, token: string): void {
+  const file = join(bench.root, "claims.json");
+  const current = existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as { claims: Record<string, unknown> }).claims : {};
+  writeFileSync(file, JSON.stringify({ version: 1, claims: { ...current, [slug]: { creator: token, deployer: null, deployment: null, at: 1 } } }));
+}
+
 /** The zone's sites the bench's script wrote, null before any. */
 export function zoneNames(bench: Bench): string | null {
   const file = join(bench.root, "zone-names");
@@ -246,6 +253,7 @@ export function hostOf(bench: Bench, log: (line: string) => void = (line) => ben
     unitsFolder: bench.units,
     secretsFolder: bench.secrets,
     storePreviousFolder: bench.previous,
+    claimsFile: join(bench.root, "claims.json"),
     spoolFolder: bench.spool,
     accountsFile: join(bench.root, "passwd"),
     projectPortsFile: join(bench.root, "projects.nft"),

@@ -193,10 +193,13 @@ const backups = createBackupReader({
 // in, and which tokens that would be: the calls are filled in below.
 let revokeMemberTokens: (email: string, actor: string) => Promise<LeavingToken[]> = async () => [];
 let memberTokens: (email: string) => Promise<LeavingToken[]> = async () => [];
+// And the owner's writes into a store, which take back a name a token claims.
+let ownerStoreWritten: (slug: string) => Promise<void> = async () => undefined;
 
 const handler = createSteward(system, {
   secretsFolder: SECRETS_FOLDER,
   checkAccounts: OWNERS !== "",
+  ownerStoreWritten: (slug) => ownerStoreWritten(slug),
   connectors,
   backups,
   // Access: the registry of who may do what on each project, the portal's
@@ -274,6 +277,7 @@ const control = createControlSteward(
 );
 revokeMemberTokens = control.revokeMember;
 memberTokens = control.tokensOf;
+ownerStoreWritten = control.ownerWroteStore;
 
 // The access registry: made from members.json and the portal's database at the
 // first start on this code, then its projection written again for the portal.

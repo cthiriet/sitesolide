@@ -98,11 +98,26 @@ import type { AccessRoutes } from "../access/steward";
 import type { LeavingToken } from "../access/protocol";
 import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../people/tokens";
 import type { StoreForToken } from "../secrets/store-api";
+import type { StoreView } from "../../borrowed/store-protocol";
 import { readFileContent, readFileName, readGenerate, readSecretsChange, type TokenSecretsChange } from "./secrets";
 import { CREATION_MAX_AGE_MS, encodeCreations, MAX_PENDING, readCreations, type PendingCreation } from "./creations";
-import { encodeClaims, madeStore, MAX_CLAIMS, readClaims, released, settle, withDeployment, withStoreMade, without, type Claims } from "./claims";
+import {
+  claimOf,
+  credited,
+  encodeClaims,
+  madeStore,
+  MAX_CLAIMS,
+  readClaims,
+  released,
+  settle,
+  withDeployment,
+  withStoreMade,
+  without,
+  type Claims,
+  type DeploymentOutcome,
+} from "./claims";
 import { MAX_CONTROL_FILE_BYTES, type ControlSystem } from "./system";
-import { decideManifest, decideSlug, leftoversReason, reservedReason, type Leftovers, type SlugDecision } from "./policy";
+import { decideManifest, decideSlug, legacyLossOfView, legacyLossRefusal, leftoversReason, reservedReason, type Leftovers, type SlugDecision } from "./policy";
 import {
   CONTROL_STATUSES,
   DEPLOYMENT_ID_SHAPE,
@@ -115,6 +130,8 @@ import {
   TOKEN_SECRET_CHANGES_PER_HOUR,
   type ControlErrorCode,
   type ControlFailure,
+  type ClaimReleased,
+  type ClaimView,
   type CreatedTokenResponse,
   type DeployResponse,
   type Identity,
@@ -266,6 +283,8 @@ export type ControlHandler = Handler & {
   settleCreations: () => Promise<void>;
   /** The live tokens of anyone the registry gives no rights, revoked; the ones revoked. */
   sweepTokens: () => Promise<LeavingToken[]>;
+  /** The owner wrote into this project's store: a name the machine does not carry is theirs from then on (src/control/claims.ts). */
+  ownerWroteStore: (slug: string) => Promise<void>;
 };
 
 /** Who a bearer is, narrowed to their person's rights for a person's token. */
@@ -432,18 +451,24 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
-   * The names a token holds, but those it claimed ahead of a project that
-   * someone else then deployed on the machine: the owner's SSH deploy of a
-   * name a token had written a store ahead for, above all. Its hold there is
-   * released (`released`), here at once, and in the registry at the next
-   * settlement.
+   * Is this token's hold on a name it claimed released now? Released when
+   * the machine carries the project and the token's own deployment of it
+   * did not succeed, or still runs: the owner's SSH deploy laid it. Here at
+   * once, and in the registry at the next settlement.
    */
-  async function heldNow(identity: Identity): Promise<Identity> {
-    const claims = await claimsNow();
-    if (claims === null || identity.owned.every((slug) => !Object.hasOwn(claims, slug))) return identity;
+  async function releasedNow(claims: Claims, slug: string, token: string, onMachine: boolean): Promise<boolean> {
+    const claim = claimOf(claims, slug);
+    if (!onMachine || claim === null) return false;
+    const outcome = claim.deployment === null || claim.deployer !== token ? null : await outcomeOf(claim.deployment, slug, claim.at);
+    return released(claim, onMachine, credited(claim, token, outcome));
+  }
+
+  /** The names a token holds, but those whose hold is released (`releasedNow`). */
+  async function heldNow(identity: Identity, claims: Claims): Promise<Identity> {
+    if (identity.owned.every((slug) => !Object.hasOwn(claims, slug))) return identity;
     const owned: string[] = [];
     for (const slug of identity.owned) {
-      if (Object.hasOwn(claims, slug) && released(claims, slug, identity.id, await system.projectExists(slug))) continue;
+      if (Object.hasOwn(claims, slug) && (await releasedNow(claims, slug, identity.id, await system.projectExists(slug)))) continue;
       owned.push(slug);
     }
     return { ...identity, owned };
@@ -475,7 +500,11 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       }
       holder = { identity: narrowIdentity(result.identity, rights), rights };
     }
-    holder = { ...holder, identity: await heldNow(holder.identity) };
+    // What tokens claimed decides which names a token holds: while that does
+    // not read, a hold released could come back, so no token is served.
+    const claims = await claimsNow();
+    if (claims === null) return failure("failure", "the tokens' claims on names do not read on the machine, and no token is served meanwhile: the owner must check /var/lib/sitesolide-steward/claims.json");
+    holder = { ...holder, identity: await heldNow(holder.identity, claims) };
     const touched = touching ? touch(registry, result.identity.id, now) : null;
     if (touched !== null) {
       // Out of the request's path: a registry that cannot be written does not
@@ -543,7 +572,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     const exists = await system.projectExists(slug);
     const claims = await claimsNow();
     const named = registry.owners[slug] ?? null;
-    return { exists, owner: named !== null && released(claims, slug, named, exists) ? null : named, claims };
+    const gone = named !== null && (claims === null || (await releasedNow(claims, slug, named, exists)));
+    return { exists, owner: gone ? null : named, claims };
   }
 
   /**
@@ -681,6 +711,22 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return Response.json(answer);
   }
 
+  /**
+   * The values a deployment of this manifest would drop, as the store's own
+   * listing says what the installed units read and the store holds; null
+   * when none, when the manifest keeps the legacy form, or when the store
+   * cannot list it here (the installer judges it again from the files).
+   */
+  async function lossOf(holder: Holder, slug: string, manifest: string): Promise<string | null> {
+    const { manifest: read } = parseManifest(manifest);
+    if (read === undefined || !hasStore(read) || secretsOf(read).form === "legacy" || store === null) return null;
+    const listed = await store.list(slug, whoOf(holder), false);
+    if (listed.status !== 200) return null;
+    const view = ((await listed.json()) as { store?: StoreView }).store;
+    if (view === undefined || !Array.isArray(view.legacy) || !Array.isArray(view.variables)) return null;
+    return legacyLossRefusal(legacyLossOfView(view));
+  }
+
   async function isActive(unit: string): Promise<boolean> {
     const answer = await system.systemctl(["is-active", unit], systemctlTimeoutMs);
     const state = answer.output.trim();
@@ -724,6 +770,13 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         named = undefined;
       }
       if (named !== target) return failure("invalid", `manifest: its slug must be ${target}`);
+
+      // A manifest that reads the store alone, over units that read legacy
+      // files the store lacks the values of: deployed, the service would
+      // start without them. Judged here, whatever the client checked or
+      // could list, and again by the installer before it lays a unit.
+      const loss = state.exists ? await lossOf(holder, target, manifest) : null;
+      if (loss !== null) return failure("migrate-first", loss);
 
       if (!(await system.installerInstalled())) {
         return failure("not-available", "the installer is not installed on this machine yet: the owner must run sitesolide setup again for this machine, without --minimal");
@@ -1533,6 +1586,107 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return Response.json({ slug, forgotten: released, access: dropped });
   }
 
+  // --- a name a token claims, taken back by the owner -----------------------------------
+
+  /**
+   * `GET /tokens/claim?slug=<slug>` on the owner's socket: does a token hold
+   * a name the machine does not carry, or claim it, as the owner's SSH
+   * deploy asks before laying anything (`sitesolide deploy`, which refuses
+   * unless `--adopt`). Read alone, no queue.
+   */
+  async function claimRoute(req: Request): Promise<Response> {
+    const wanted = new URL(req.url).searchParams.getAll("slug");
+    if (wanted.length !== 1 || !isValidSlug(wanted[0]!)) return failure("invalid", "name one project: ?slug=<slug>");
+    const slug = wanted[0]!;
+    const registry = await team();
+    if (registry instanceof Response) return registry;
+    const claims = await claimsToChange();
+    if (claims instanceof Response) return claims;
+    const onMachine = await system.projectExists(slug);
+    const claim = claimOf(claims, slug);
+    const holder = registry.owners[slug] ?? claim?.creator ?? claim?.deployer ?? null;
+    const record = holder === null ? undefined : registry.tokens.find((one) => one.id === holder);
+    const deploying = claim !== null && claim.deployment !== null && (await outcomeOf(claim.deployment, slug, claim.at)) === "under-way";
+    const answer: ClaimView = {
+      slug,
+      claimed: !onMachine && (holder !== null || claim !== null),
+      token: holder === null ? null : { id: holder, label: record?.label ?? "", email: record?.email ?? "" },
+      store: holder !== null && madeStore(claims, slug, holder),
+      deploying,
+    };
+    return Response.json(answer);
+  }
+
+  /**
+   * `DELETE /tokens/claim { slug }` on the owner's socket: the owner takes
+   * back a name a token holds while the machine does not carry its project,
+   * before deploying it themselves (`sitesolide deploy --adopt`): the
+   * token's hold and claim dropped, its person's creation of it too, so
+   * that nobody is made its Admin. Refused while that token's deployment of
+   * it runs, and once the machine carries the project, which `sitesolide
+   * remove` frees. Journaled under the owner.
+   */
+  async function takeBackRoute(req: Request): Promise<Response> {
+    const body = await readBody(req, ["slug"], bodyTimeoutMs);
+    if (body instanceof Response) return body;
+    const { slug } = body;
+    if (typeof slug !== "string" || !isValidSlug(slug)) return failure("invalid", "slug: lowercase letters, digits and dashes");
+    const released = await takeBack(slug, true);
+    if (released instanceof Response) return released;
+    const answer: ClaimReleased = { slug, released };
+    return Response.json(answer);
+  }
+
+  /**
+   * A name taken back from the token that holds it, in the tokens' queue,
+   * the machine not carrying its project: its hold, its claim and a
+   * person's creation of it dropped. `strict`: a deployment of it under
+   * way refuses, rather than being let go. The token released, or null.
+   */
+  function takeBack(slug: string, strict: boolean): Promise<string | null | Response> {
+    return serially(async () => {
+      if (await system.projectExists(slug)) return failure("busy", `${slug} is on the machine: a project there is not taken back; sitesolide remove --confirm ${slug} frees its name`);
+      const registry = await team();
+      if (registry instanceof Response) return registry;
+      const claims = await claimsToChange();
+      if (claims instanceof Response) return claims;
+      const claim = claimOf(claims, slug);
+      const holder = registry.owners[slug] ?? null;
+      if (holder === null && claim === null) return null;
+      if (strict && claim !== null && claim.deployment !== null && (await outcomeOf(claim.deployment, slug, claim.at)) === "under-way") {
+        return failure("busy", `a deployment of ${slug} by token ${claim.deployer} is under way: wait for it to end, then take the name back`);
+      }
+      const dropped = await dropPending(slug);
+      if (dropped instanceof Response) return dropped;
+      if (claim !== null) await system.writeClaims(encodeClaims(without(claims, slug)));
+      const released = holder ?? claim?.creator ?? claim?.deployer ?? null;
+      if (holder !== null) {
+        const forgotten = forgetOwnership(registry, slug);
+        if (forgotten !== null) {
+          const refused = await save(forgotten.team);
+          if (refused !== null) return refused;
+        }
+      }
+      console.log(`control: ${slug} taken back by the owner from token ${released}, before any project of that name`);
+      await options.members?.journal({ operation: "project.remove", result: "ok", actor: "owner", member: null, detail: `taken back from token ${released} before any deployment`, slug });
+      return released;
+    });
+  }
+
+  /**
+   * The owner wrote into a project's store, on the dashboard or over SSH
+   * (told by src/secrets/steward.ts once the write answered): a name the
+   * machine does not carry is the owner's from then on, whatever a token
+   * claimed there, its write made the store or not, and even while a
+   * deployment of it by the token runs, which its installer then refuses
+   * (the store no longer its own). Never fails the write it follows.
+   */
+  async function ownerWroteStore(slug: string): Promise<void> {
+    if (!isValidSlug(slug)) return;
+    const taken = await takeBack(slug, false).catch((e: unknown) => failure("failure", errorName(e)));
+    if (taken instanceof Response && taken.status !== 409) console.error(`control: ${slug} not taken back from a token after the owner wrote into its store`);
+  }
+
   // --- creations and the tokens from before -----------------------------------------
 
   /** The creations waiting for their installer, one change at a time. */
@@ -1594,18 +1748,32 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * result, of a project of that name removed since, is another deployment's.
    */
   async function ended(creation: PendingCreation): Promise<boolean> {
-    const judgement = judgeResult(await system.readResult(creation.deployment), creation.deployment, options.uidRoot);
-    if (judgement.kind === "absent") return system.now() - creation.at > graceMs && !(await isActive(installerUnit(creation.slug)));
-    if (judgement.kind !== "read") return false;
+    return (await outcomeOf(creation.deployment, creation.slug, creation.at)) !== "under-way";
+  }
+
+  /**
+   * How a deployment of this slug, accepted at `at`, went (claims.ts): under
+   * way while its result says so or none is there yet within the grace, its
+   * installer active; succeeded only by its own final result; ended
+   * otherwise. A result that does not read, or an earlier one of the same
+   * id, says nothing yet.
+   */
+  async function outcomeOf(deployment: string, slug: string, at: number): Promise<DeploymentOutcome> {
+    const judgement = judgeResult(await system.readResult(deployment), deployment, options.uidRoot);
+    if (judgement.kind === "absent") return system.now() - at > graceMs && !(await isActive(installerUnit(slug))) ? "ended" : "under-way";
+    if (judgement.kind !== "read") return "under-way";
     const { result } = judgement;
-    if (result.slug !== creation.slug || result.startedAt < creation.at) return false;
-    return result.state !== "running" || (await stopped(result));
+    if (result.slug !== slug || result.startedAt < at) return "under-way";
+    if (result.state === "running") return (await stopped(result)) ? "ended" : "under-way";
+    return result.state === "succeeded" ? "succeeded" : "ended";
   }
 
   /**
    * The creations settled, under one rule. Its person is made Admin only
-   * when all of this holds at once: its own installer has ended (`ended`),
-   * the machine carries the project, the token that started it still owns
+   * when all of this holds at once: its own installer has ended and its
+   * deployment succeeded, which a creation's installer only does having
+   * laid the project's folder itself (src/installer/pipeline.ts), never
+   * over one the owner deployed meanwhile; the machine carries the project, the token that started it still owns
    * its name, and nobody has access to the project yet, which the registry
    * checks in its own queue with the create right (`recordCreation`). An
    * ended creation is dropped either way: one of those failing, nobody is
@@ -1626,7 +1794,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       let held: Team | Response | null = null;
       for (const creation of current) {
         const expired = system.now() - creation.at >= CREATION_MAX_AGE_MS;
-        if (!expired && !(await ended(creation))) {
+        const outcome = await outcomeOf(creation.deployment, creation.slug, creation.at);
+        if (!expired && outcome === "under-way") {
           left.push(creation);
           continue;
         }
@@ -1634,6 +1803,12 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         if (!carried) undone.push(creation);
         if (expired || !carried || options.members === undefined) {
           console.log(`control: the creation of ${creation.slug} by ${creation.email} ${expired ? "not settled within a day" : "undone"}: dropped, nobody made Admin`);
+          continue;
+        }
+        if (outcome !== "succeeded") {
+          // Whatever the machine carries under the name was not laid by a
+          // deployment of theirs that succeeded: the owner's to give.
+          console.log(`control: the creation of ${creation.slug} by ${creation.email} did not succeed: dropped, nobody made Admin`);
           continue;
         }
         held ??= await team();
@@ -1690,21 +1865,19 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       const given: string[] = [];
       for (const slug of new Set([...Object.keys(registry.owners), ...Object.keys(claims)])) {
         const holder = Object.hasOwn(registry.owners, slug) ? registry.owners[slug]! : null;
-        const claim = Object.hasOwn(claims, slug) ? claims[slug]! : null;
+        const claim = claimOf(claims, slug);
         const onMachine = await system.projectExists(slug);
-        const noting =
-          !onMachine &&
-          (noted.some((one) => one.slug === slug) ||
-            (claim !== null && claim.deployment !== null && !(await ended({ deployment: claim.deployment, slug, email: "", token: claim.deployer ?? "", at: claim.at }))));
+        const outcome = claim === null || claim.deployment === null ? null : await outcomeOf(claim.deployment, slug, claim.at);
+        const noting = noted.some((one) => one.slug === slug) || outcome === "under-way";
         const store = onMachine || noting ? false : await storeKept(slug);
-        let settled = settle(claim, holder, { onMachine, store, pending: noting });
+        let settled = settle(claim, holder, { onMachine, store, pending: noting, credited: credited(claim, holder, outcome) });
         // Asked last, of what would otherwise be let go: an installer still at work.
         if ((settled.forget || settled.drop) && !onMachine && !noting && isValidSlug(slug) && (await isActive(installerUnit(slug)))) settled = { forget: false, drop: false };
         if (settled.forget) {
           const forgotten = forgetOwnership(registry, slug);
           if (forgotten !== null) {
             registry = forgotten.team;
-            given.push(`${slug} (token ${forgotten.id}${onMachine ? ", deployed by someone else" : ""})`);
+            given.push(`${slug} (token ${forgotten.id}${onMachine ? ", laid by no deployment of its that succeeded" : ""})`);
           }
         }
         if (settled.drop) claims = without(claims, slug);
@@ -1864,7 +2037,12 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     revokeMember,
     tokensOf,
     // `/team/project`: what a CLI from before the rename calls, kept one release.
-    owner: serve({ "/tokens/project": { DELETE: forgetProject }, "/team/project": { DELETE: forgetProject } }),
+    owner: serve({
+      "/tokens/project": { DELETE: forgetProject },
+      "/team/project": { DELETE: forgetProject },
+      "/tokens/claim": { GET: claimRoute, DELETE: takeBackRoute },
+    }),
+    ownerWroteStore,
     migrateTokens,
     settleCreations,
     sweepTokens,

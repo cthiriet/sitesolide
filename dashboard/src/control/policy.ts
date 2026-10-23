@@ -51,6 +51,7 @@ import {
   type Manifest,
 } from "../../borrowed/manifest";
 import { reservedPorts } from "../../borrowed/services";
+import type { StoreView } from "../../borrowed/store-protocol";
 import {
   MAX_TOKEN_MEMORY_BYTES,
   MAX_TOKEN_SERVICES,
@@ -391,3 +392,58 @@ export function leavesPorts(object: Record<string, unknown>): boolean {
   return typeof object.start === "string" && object.start.length > 0 && !("port" in object);
 }
 
+
+// --- legacy values a deployment would drop ---------------------------------------------
+
+/** A legacy file an installed unit of the project reads, as the steward or the installer read it: its variables' names alone. */
+export type LegacyRead = { name: string; state: "managed" | "absent" | "unmanaged"; variables: string[] };
+
+/** What would be dropped: the names legacy files supply that the store lacks, and the files that cannot be told. */
+export type LegacyLoss = { names: string[]; unmanaged: string[] };
+
+/**
+ * What a deployment of a manifest that reads the store alone would drop of
+ * what the service runs with today: the variables the legacy files its
+ * installed units read supply and the store lacks, and the files whose
+ * variables cannot be told. A missing file supplies nothing.
+ */
+export function legacyLoss(read: readonly LegacyRead[], inStore: ReadonlySet<string>): LegacyLoss {
+  const names = new Set<string>();
+  const unmanaged: string[] = [];
+  for (const file of read) {
+    if (file.state === "absent") continue;
+    if (file.state === "unmanaged") {
+      unmanaged.push(file.name);
+      continue;
+    }
+    for (const name of file.variables) if (!inStore.has(name)) names.add(name);
+  }
+  return { names: [...names], unmanaged };
+}
+
+/** The same from a store's listing: the legacy files an installed unit reads, and the names the store holds. */
+export function legacyLossOfView(view: Pick<StoreView, "legacy" | "variables">): LegacyLoss {
+  const read = view.legacy.filter((file) => file.read).map((file) => ({ name: file.name, state: file.state, variables: file.variables }));
+  return legacyLoss(read, new Set(view.variables.filter((variable) => variable.source === "store").map((variable) => variable.name)));
+}
+
+/** How a refusal of the kind begins: the command that carries the values over first. */
+export const MIGRATE_FIRST = "migrate first: sitesolide secrets migrate --restart";
+
+/**
+ * The refusal of a deployment that would drop values, or null. It names
+ * neither a variable nor a file, but counts them: the installer's log and a
+ * token without Manage secrets read it, and `sitesolide secrets migrate
+ * --dry-run` names them to the owner.
+ */
+export function legacyLossRefusal(loss: LegacyLoss): string | null {
+  if (loss.names.length > 0) {
+    const [variables, them] = loss.names.length === 1 ? ["1 variable", "it"] : [`${loss.names.length} variables`, "them"];
+    return `${MIGRATE_FIRST}; the service reads ${variables} from legacy files this manifest no longer reads, and the store lacks ${them}: deployed as it is, the service would start without ${them}; nothing was changed`;
+  }
+  if (loss.unmanaged.length > 0) {
+    const files = loss.unmanaged.length === 1 ? "a legacy file" : `${loss.unmanaged.length} legacy files`;
+    return `${MIGRATE_FIRST}; the service reads ${files} the dashboard does not manage, which this manifest no longer reads, and what they hold cannot be told; nothing was changed`;
+  }
+  return null;
+}

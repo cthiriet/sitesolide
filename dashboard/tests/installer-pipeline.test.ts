@@ -9,7 +9,7 @@ import { earlierGenerations, generateUnits } from "../borrowed/unit";
 import type { InstallRequest, Scope } from "../src/control/protocol";
 import { finalManifest, replaceable, runPipeline, STABILITY_WINDOW_MS, type Outcome } from "../src/installer/pipeline";
 import { FIRST_CERTIFICATE_MS, parseZoneNames, ZONE_NAMES_PATH } from "../borrowed/zone-names";
-import { createBench as newBench, file, hostOf, OWN_UID, stageBundle as stage, zoneNames, ZONE, type Bench, type BenchOptions } from "./installer-bench";
+import { createBench as newBench, file, hostOf, OWN_UID, stageBundle as stage, storeMadeBy, zoneNames, ZONE, type Bench, type BenchOptions } from "./installer-bench";
 
 /**
  * The installer's pipeline on a throwaway tree, with the real host: real
@@ -19,6 +19,8 @@ import { createBench as newBench, file, hostOf, OWN_UID, stageBundle as stage, z
  */
 
 const DEPLOYMENT = "0123456789abcdef01234567";
+/** The token every request of these tests comes from. */
+const TOKEN_ID = "aaaaaaaaaaaa";
 const NOW = Date.now();
 const PRIVATE: Scope = { slugs: [], create: true, outbound: false, domain: false, public: false };
 const PUBLIC: Scope = { ...PRIVATE, public: true };
@@ -41,7 +43,7 @@ function request(manifest: object, scope: Scope = PRIVATE, slug = "shop"): Insta
     deployment: DEPLOYMENT,
     slug,
     requestedAt: NOW,
-    token: { id: "aaaaaaaaaaaa", email: "ada@test-zone.invalid", member: null },
+    token: { id: TOKEN_ID, email: "ada@test-zone.invalid", member: null },
     scope,
     creating: true,
     manifest: JSON.stringify(manifest),
@@ -54,8 +56,17 @@ function deposit(bench: Bench, manifest: Manifest): void {
   writeFileSync(join(bench.sites, manifest.slug, "sitesolide.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+/**
+ * The pipeline as the steward starts it: a deployment is a creation when the
+ * machine did not carry its project as the steward judged it, which these
+ * tests lay or not beforehand.
+ */
 async function run(bench: Bench, requested: InstallRequest): Promise<Outcome> {
-  return runPipeline(hostOf(bench), requested, { zone: ZONE, runFolder: bench.run });
+  return runPipeline(hostOf(bench), asJudged(bench, requested), { zone: ZONE, runFolder: bench.run });
+}
+
+function asJudged(bench: Bench, requested: InstallRequest): InstallRequest {
+  return { ...requested, creating: !existsSync(join(bench.sites, requested.slug)) };
 }
 
 const APP = { slug: "shop", start: "/usr/local/bin/bun run server.ts", publicDir: "public" };
@@ -919,6 +930,8 @@ describe("the project's store of secrets", () => {
 
     const ahead = createBench();
     mkdirSync(join(storeOf(ahead), "files"), { recursive: true });
+    // Made ahead by the deploying token's own write, as the steward records it.
+    storeMadeBy(ahead, "shop", TOKEN_ID);
     writeFileSync(join(storeOf(ahead), "env"), `API_KEY=${CANARY}\n`, { mode: 0o600 });
     stageBundle(ahead, traversal);
     expect(await run(ahead, request(APP))).toMatchObject({ ok: false, code: "bundle-refused" });
@@ -938,6 +951,8 @@ describe("the project's store of secrets", () => {
 
     const kept = createBench();
     mkdirSync(join(storeOf(kept), "files"), { recursive: true });
+    // Made ahead by the deploying token's own write, as the steward records it.
+    storeMadeBy(kept, "shop", TOKEN_ID);
     mkdirSync(join(kept.previous, "shop"), { recursive: true });
     writeFileSync(join(kept.previous, "shop", "env"), "API_KEY=before\n");
     stageBundle(kept, APP_FILES);
@@ -948,6 +963,8 @@ describe("the project's store of secrets", () => {
   test("the declared names the store lacks: said in the log and in the outcome, names alone; nothing stops, the service restarted", async () => {
     const bench = createBench();
     mkdirSync(join(storeOf(bench), "files"), { recursive: true });
+    // Made ahead by the deploying token's own write, as the steward records it.
+    storeMadeBy(bench, "shop", TOKEN_ID);
     writeFileSync(join(storeOf(bench), "env"), `ADMIN_TOKEN=${CANARY}\nUNDECLARED=${CANARY}\n`, { mode: 0o600 });
     writeFileSync(join(storeOf(bench), "files", "gcp.json"), `{"key":"${CANARY}"}`, { mode: 0o600 });
     writeFileSync(join(storeOf(bench), "files", "tls.key"), "", { mode: 0o600 });
@@ -973,6 +990,8 @@ describe("the project's store of secrets", () => {
   test("a store's env that does not read back: said with its line and reason, never the line; nothing known of what is missing, nothing stops", async () => {
     const bench = createBench();
     mkdirSync(join(storeOf(bench), "files"), { recursive: true });
+    // Made ahead by the deploying token's own write, as the steward records it.
+    storeMadeBy(bench, "shop", TOKEN_ID);
     writeFileSync(join(storeOf(bench), "env"), `export ADMIN_TOKEN=${CANARY}\n`, { mode: 0o600 });
     stageBundle(bench, APP_FILES);
     const outcome = await run(bench, request({ ...APP, secrets: ["ADMIN_TOKEN"] }));
@@ -1013,6 +1032,111 @@ describe("the project's store of secrets", () => {
     expect(await run(later, request({ ...APP, secrets: ["shop.env"] }))).toMatchObject({ ok: false, code: "secret-taken" });
     expect(existsSync(join(storeOf(later), "files"))).toBe(true);
     expect(later.events.some((event) => event.startsWith("systemctl restart"))).toBe(false);
+  });
+});
+
+describe("what the installer refuses a token whatever its client checked", () => {
+  const CANARY = "legacy-value-canary-6d2a";
+  const direct = (bench: Bench, requested: InstallRequest) => runPipeline(hostOf(bench), requested, { zone: ZONE, runFolder: bench.run });
+
+  /** shop deployed in the old form: its unit reads shop.env, which holds API_KEY and SMTP_URL. */
+  function oldForm(bench: Bench): string {
+    const previous = { ...APP, port: 3040, portal: true, secrets: ["shop.env"] } as Manifest;
+    deposit(bench, previous);
+    const unit = generateUnits(previous)[0]!.text.replace(/EnvironmentFile=-\/etc\/sitesolide\/shop\.env/, `EnvironmentFile=-${bench.secrets}/shop.env`);
+    writeFileSync(join(bench.units, "shop.service"), unit);
+    writeFileSync(join(bench.secrets, "shop.env"), `API_KEY=${CANARY}\nSMTP_URL=smtp://mail\n`, { mode: 0o600 });
+    writeFileSync(join(bench.root, "passwd"), `${readFileSync(join(bench.root, "passwd"), "utf8")}site-shop:x:${OWN_UID}:${OWN_UID}::/nonexistent:/usr/sbin/nologin\n`);
+    return unit;
+  }
+
+  test("a manifest that reads the store alone over a unit that reads values the store lacks: migrate-first before anything is written, naming no variable", async () => {
+    for (const secrets of [["API_KEY"], undefined]) {
+      const bench = createBench();
+      const unit = oldForm(bench);
+      stageBundle(bench, APP_FILES);
+      const outcome = await run(bench, request({ ...APP, port: 3040, ...(secrets === undefined ? {} : { secrets }) }));
+      expect(outcome).toMatchObject({ ok: false, code: "migrate-first" });
+      expect(outcome.ok === false && outcome.message).toBe(
+        "migrate first: sitesolide secrets migrate --restart; the service reads 2 variables from legacy files this manifest no longer reads, and the store lacks them: deployed as it is, the service would start without them; nothing was changed",
+      );
+      expect(readFileSync(join(bench.units, "shop.service"), "utf8")).toBe(unit);
+      expect(existsSync(bench.store)).toBe(false);
+      expect(bench.events.some((event) => event.startsWith("systemctl") || event.startsWith("as shop"))).toBe(false);
+      expect(JSON.stringify(outcome)).not.toContain("API_KEY");
+      expect(bench.events.join("\n")).not.toContain(CANARY);
+    }
+  });
+
+  test("the old form, or a store that holds every name, deploys; a legacy file that does not read, or a store whose names do not, refuses", async () => {
+    const legacy = createBench();
+    oldForm(legacy);
+    stageBundle(legacy, APP_FILES);
+    expect((await run(legacy, request({ ...APP, port: 3040, secrets: ["shop.env"] }))).ok).toBe(true);
+
+    const migrated = createBench();
+    oldForm(migrated);
+    mkdirSync(join(migrated.store, "shop", "files"), { recursive: true });
+    writeFileSync(join(migrated.store, "shop", "env"), "API_KEY=a\nSMTP_URL=b\n", { mode: 0o600 });
+    stageBundle(migrated, APP_FILES);
+    expect((await run(migrated, request({ ...APP, port: 3040, secrets: ["API_KEY"] }))).ok).toBe(true);
+
+    const unmanaged = createBench();
+    oldForm(unmanaged);
+    writeFileSync(join(unmanaged.secrets, "shop.env"), "export API_KEY=x\n", { mode: 0o600 });
+    stageBundle(unmanaged, APP_FILES);
+    const refused = await run(unmanaged, request({ ...APP, port: 3040, secrets: ["API_KEY"] }));
+    expect(refused).toMatchObject({ ok: false, code: "migrate-first" });
+    expect(refused.ok === false && refused.message).toContain("a legacy file the dashboard does not manage");
+
+    const unreadable = createBench();
+    oldForm(unreadable);
+    mkdirSync(join(unreadable.store, "shop", "files"), { recursive: true });
+    writeFileSync(join(unreadable.store, "shop", "env"), "export A=b\n", { mode: 0o600 });
+    stageBundle(unreadable, APP_FILES);
+    expect(await run(unreadable, request({ ...APP, port: 3040, secrets: ["API_KEY"] }))).toMatchObject({ ok: false, code: "machine-unreadable" });
+  });
+
+  test("a creation that finds its project laid since it was accepted, its manifest or its tree: refused, the other's project untouched", async () => {
+    const deposited = createBench();
+    deposit(deposited, { ...APP, port: 3040, portal: true } as Manifest);
+    writeFileSync(join(deposited.sites, "shop", "app", "server.ts"), "the owner's code");
+    stageBundle(deposited, APP_FILES);
+    expect(await direct(deposited, request(APP))).toMatchObject({ ok: false, code: "taken-meanwhile" });
+    expect(readFileSync(join(deposited.sites, "shop", "app", "server.ts"), "utf8")).toBe("the owner's code");
+    expect(deposited.events.some((event) => event.startsWith("useradd") || event.startsWith("as shop"))).toBe(false);
+
+    const tree = createBench();
+    mkdirSync(join(tree.sites, "shop", "app"), { recursive: true });
+    writeFileSync(join(tree.sites, "shop", "app", "server.ts"), "laid by the owner, its manifest not yet");
+    stageBundle(tree, APP_FILES);
+    expect(await direct(tree, request(APP))).toMatchObject({ ok: false, code: "taken-meanwhile" });
+    expect(readFileSync(join(tree.sites, "shop", "app", "server.ts"), "utf8")).toBe("laid by the owner, its manifest not yet");
+    expect(readdirSync(tree.units)).toEqual([]);
+  });
+
+  test("a creation finding a store no write of its token made: refused before any unit, the store untouched, the creation undone; its own store passes", async () => {
+    for (const [name, lay] of [
+      ["the owner's", () => undefined],
+      ["another token's", (bench: Bench) => storeMadeBy(bench, "shop", "bbbbbbbbbbbb")],
+      ["claims that do not read", (bench: Bench) => writeFileSync(join(bench.root, "claims.json"), "not json")],
+    ] as const) {
+      const bench = createBench();
+      mkdirSync(join(bench.store, "shop", "files"), { recursive: true });
+      writeFileSync(join(bench.store, "shop", "env"), `STRIPE_SECRET_KEY=${CANARY}\n`, { mode: 0o600 });
+      lay(bench);
+      stageBundle(bench, APP_FILES);
+      const outcome = await run(bench, request(APP));
+      expect({ name, outcome }).toMatchObject({ name, outcome: { ok: false, code: "store-not-yours" } });
+      expect(readdirSync(bench.units)).toEqual([]);
+      expect(readdirSync(bench.sites)).toEqual([]);
+      expect(readFileSync(join(bench.store, "shop", "env"), "utf8")).toBe(`STRIPE_SECRET_KEY=${CANARY}\n`);
+    }
+    const own = createBench();
+    mkdirSync(join(own.store, "shop", "files"), { recursive: true });
+    storeMadeBy(own, "shop", TOKEN_ID);
+    stageBundle(own, APP_FILES);
+    expect((await run(own, request(APP))).ok).toBe(true);
   });
 });
 

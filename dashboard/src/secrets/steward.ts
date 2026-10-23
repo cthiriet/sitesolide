@@ -246,6 +246,13 @@ export type StewardOptions = {
     /** A person's live tokens, as a confirmation names them (src/control/steward.ts, `tokensOf`). */
     tokensOf?: (email: string) => Promise<LeavingToken[]>;
   };
+  /**
+   * The owner wrote into a project's store, on the dashboard or over SSH:
+   * told once the write answered, outside the lock, so that the control
+   * routes take back a name a token claims while the machine does not carry
+   * its project (src/control/claims.ts). Never fails the write.
+   */
+  ownerStoreWritten?: (slug: string) => Promise<void>;
 };
 
 export type Handler = (req: Request) => Promise<Response>;
@@ -3076,9 +3083,22 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     };
   }
 
+  /** A write of the owner's that answered, told to the control routes with its project (`ownerStoreWritten`). */
+  function told(handler: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
+    return async (req) => {
+      const answer = await handler(req);
+      if (answer.ok && options.ownerStoreWritten !== undefined) {
+        const slug = ((await answer.clone().json().catch(() => null)) as { store?: { slug?: unknown } } | null)?.store?.slug;
+        if (typeof slug === "string") await options.ownerStoreWritten(slug).catch(() => undefined);
+      }
+      return answer;
+    };
+  }
+
   /** The store's routes, for the owner's unlocked dashboard or for root over SSH. */
   function storeRoutes(ssh: boolean): Record<string, Record<string, (req: Request) => Promise<Response>>> {
-    const route = ssh ? sshStoreRoute : ownerStoreRoute;
+    const written = ssh ? sshStoreRoute : ownerStoreRoute;
+    const route = (...args: Parameters<typeof written>) => told(written(...args));
     return {
       "/store": { GET: storeListRoute(ssh ? SSH_STORE : OWNER_STORE), PATCH: route(["slug"], ["set", "remove"], storeTasks.change, MAX_CONTENT_BODY_BYTES) },
       "/store/variable": { PUT: route(["slug", "name", "value"], [], storeTasks.set), DELETE: route(["slug"], ["names"], storeTasks.remove) },

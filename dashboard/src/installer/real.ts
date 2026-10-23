@@ -51,7 +51,7 @@ import type { Machine } from "../gatekeeper/machine";
 import { readAccount, readBounded, writeAtomically } from "../secrets/system";
 import { LOOPBACK_TABLE, PROJECT_PORTS_SET } from "../../borrowed/loopback";
 import { isValidFileName, isValidSchedule, isValidSlug } from "../../borrowed/manifest";
-import { keys, parseEnvBytes } from "../../borrowed/envfile";
+import { keys, parseEnvBytes, unitEnvironment } from "../../borrowed/envfile";
 import { MAX_STORE_ENV_BYTES, STORE_FOLDER_MODE, STORE_PREVIOUS_ROOT, storePaths } from "../../borrowed/store";
 import { GENERATOR_MARK, MARKER_DONE, readCurrentPairs, readStability } from "../../borrowed/services";
 import { isTimerUnit, systemdRunArguments, systemUser, unitArgument, unitFileName, type ProjectRun } from "../../borrowed/unit";
@@ -60,6 +60,7 @@ import { BUNDLE_NAME, DEPLOYMENT_ID_SHAPE, MAX_BUNDLE_BYTES } from "../control/p
 import { SUBFOLDER_SUFFIX, type ProjectEntry } from "../secrets/scope";
 import type { ExtractOutcome } from "./extract";
 import type { Execution, Host, Part, Standing } from "./host";
+import type { LegacyRead } from "../control/policy";
 
 /**
  * One program run as the project's account, and the `systemd-run` line that
@@ -92,6 +93,8 @@ export type HostConfig = {
    * of each store the steward keeps: `STORE_PREVIOUS_ROOT` when absent.
    */
   storePreviousFolder?: string;
+  /** /var/lib/sitesolide-steward/claims.json, the tokens' claims the steward writes; read alone. */
+  claimsFile?: string;
   /** /srv/sites/dashboard/data/control */
   spoolFolder: string;
   /** /etc/passwd */
@@ -206,6 +209,7 @@ export function exitStatuses(output: string, units: string[]): Map<string, numbe
 export function createHost(config: HostConfig): Host {
   const now = config.now ?? Date.now;
   const storeRoot = join(config.secretsFolder, "projects");
+  const claimsFile = config.claimsFile ?? "/var/lib/sitesolide-steward/claims.json";
   const storePrevious = config.storePreviousFolder ?? STORE_PREVIOUS_ROOT;
   const root = (slug: string) => {
     if (!isValidSlug(slug)) throw new Error("invalid slug");
@@ -430,6 +434,42 @@ export function createHost(config: HostConfig): Host {
       if (owner !== null && (created || lstatSync(data).uid === 0)) chownSync(data, owner.uid, owner.gid);
       chmodSync(data, 0o750);
       return existed ? "present" : "created";
+    },
+
+    async legacyReadByUnits(slug) {
+      if (!isValidSlug(slug)) throw new Error("invalid slug");
+      const units = [slug, ...(await this.generatedUnits(slug))];
+      const names: string[] = [];
+      const prefix = `${config.secretsFolder}/`;
+      for (const unit of units) {
+        const text = await this.readUnit(unit);
+        if (text === null) continue;
+        for (const { path } of unitEnvironment(text).files) {
+          if (!path.startsWith(prefix)) continue;
+          const name = path.slice(prefix.length);
+          // The store's own env is no legacy file; neither is a path that climbs.
+          if (name.startsWith("projects/") || name.split("/").some((part) => part === "" || part === "." || part === "..")) continue;
+          if (!names.includes(name)) names.push(name);
+        }
+      }
+      const read: LegacyRead[] = [];
+      for (const name of names) {
+        const examination = readBounded(join(config.secretsFolder, name), MAX_STORE_ENV_BYTES);
+        if (examination.kind === "absent") {
+          read.push({ name, state: "absent", variables: [] });
+          continue;
+        }
+        const parsed = examination.bytes === null ? null : parseEnvBytes(examination.bytes);
+        read.push(parsed === null || !parsed.ok ? { name, state: "unmanaged", variables: [] } : { name, state: "managed", variables: keys(parsed.document) });
+      }
+      return read;
+    },
+
+    async readClaims() {
+      const examination = readBounded(claimsFile, 1024 * 1024);
+      if (examination.kind === "absent") return null;
+      if (examination.bytes === null) throw new Error("claims.json is not a plain file of a reasonable size");
+      return decoder.decode(examination.bytes);
     },
 
     async prepareStore(slug) {

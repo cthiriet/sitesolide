@@ -268,20 +268,21 @@ describe("a creation's own project, nobody given access to it, makes its creator
     expect(bench.creations()).toEqual([]);
   });
 
-  test("failed after laying it, a secret missing: Admin, and the token deploys it again as its Admin's", async () => {
+  test("failed, the project there: nobody made Admin, and the name no longer the token's: what lies there may be the owner's own, deployed over SSH meanwhile", async () => {
     const bench = await wire(registryWith([], [DAVE]), []);
     const dave = await bench.mint(DAVE, true);
     const D = "aaaaaaaaaaaaaaaaaaaaaaac";
     expect((await bench.deploy(dave.secret, D, "shop")).status).toBe(202);
     bench.result(D, "shop", "failed", true);
     await bench.control.settleCreations();
-    expect(await bench.entries("shop")).toEqual([`${DAVE}:admin`]);
-    expect(await (await bench.preflight(dave.secret, "shop")).json()).toMatchObject({ creating: false });
-    const again = await bench.deploy(dave.secret, "aaaaaaaaaaaaaaaaaaaaaaad", "shop");
-    expect(await again.json()).toEqual({ deployment: "aaaaaaaaaaaaaaaaaaaaaaad", slug: "shop", creating: false });
+    expect(await bench.entries("shop")).toEqual([]);
+    expect(creates(bench)).toEqual([]);
+    expect(bench.creations()).toEqual([]);
+    expect(bench.team().owners).toEqual({});
+    expect((await bench.preflight(dave.secret, "shop")).status).toBe(403);
   });
 
-  test("its installer stopped half way, its own result left running: shown interrupted, Admin, and deployed again as its Admin's", async () => {
+  test("its installer stopped half way, its own result left running: shown interrupted, nobody made Admin, the name let go", async () => {
     const bench = await wire(registryWith([], [DAVE]), []);
     const dave = await bench.mint(DAVE, true);
     const D = "111111111111111111111111";
@@ -294,16 +295,14 @@ describe("a creation's own project, nobody given access to it, makes its creator
     expect(await bench.entries("shop")).toEqual([]);
     bench.clock.now += STALE;
     expect(await shown(bench, D)).toBe("failed");
-    expect(await bench.entries("shop")).toEqual([`${DAVE}:admin`]);
-    expect(creates(bench)).toHaveLength(1);
+    expect(await bench.entries("shop")).toEqual([]);
+    expect(creates(bench)).toEqual([]);
     expect(bench.creations()).toEqual([]);
-    expect(await (await bench.preflight(dave.secret, "shop")).json()).toMatchObject({ creating: false });
-    const again = await bench.deploy(dave.secret, "222222222222222222222222", "shop");
-    expect(await again.json()).toEqual({ deployment: "222222222222222222222222", slug: "shop", creating: false });
-    expect(bench.request("shop")).toMatchObject({ deployment: "222222222222222222222222", creating: false });
+    expect(bench.team().owners).toEqual({});
+    expect((await bench.preflight(dave.secret, "shop")).status).toBe(403);
   });
 
-  test("its installer stopped by a reboot after laying it, no result left on /run: Admin once past the grace with its unit not active", async () => {
+  test("its installer stopped by a reboot after laying it, no result left on /run: nothing settled while it may still write, then nobody made Admin", async () => {
     const bench = await wire(registryWith([], [DAVE]), []);
     const dave = await bench.mint(DAVE, true);
     const D = "333333333333333333333333";
@@ -321,11 +320,10 @@ describe("a creation's own project, nobody given access to it, makes its creator
     // The machine rebooted: the unit is not active, and no result will come.
     bench.active.clear();
     await bench.control.settleCreations();
-    expect(await bench.entries("shop")).toEqual([`${DAVE}:admin`]);
-    expect(creates(bench)).toHaveLength(1);
+    expect(await bench.entries("shop")).toEqual([]);
+    expect(creates(bench)).toEqual([]);
     expect(bench.creations()).toEqual([]);
-    const again = await bench.deploy(dave.secret, "444444444444444444444444", "shop");
-    expect(await again.json()).toEqual({ deployment: "444444444444444444444444", slug: "shop", creating: false });
+    expect(bench.team().owners).toEqual({});
   });
 });
 
@@ -515,7 +513,8 @@ describe("a settle racing the owner", () => {
     expect(await bench.entries("shop")).toEqual([`${ERIN}:admin`]);
     expect(creates(bench)).toEqual([]);
     expect(bench.creations()).toEqual([]);
-    expect(bench.team().owners).toEqual({ shop: dave.token.id });
+    // Its installer stopped half way: the project is not its by a deployment that succeeded.
+    expect(bench.team().owners).toEqual({});
   });
 
   test("the timer and the dashboard's reads settle at once: one Admin, journaled once", async () => {
@@ -620,7 +619,7 @@ describe("undone creations give their names back", () => {
     expect((await bench.deploy(ci.secret, idOf(99), slugOf(99))).status).toBe(202);
   });
 
-  test("a name laid on the machine since keeps its owner: only names still not carried come back", async () => {
+  test("a name laid on the machine since by anyone but its creation's own success is let go too; a creation under way keeps its name", async () => {
     const bench = await wire(registryWith([], [DAVE]), []);
     const dave = await bench.mint(DAVE, true);
     expect((await bench.deploy(dave.secret, idOf(1), "shop")).status).toBe(202);
@@ -639,7 +638,7 @@ describe("undone creations give their names back", () => {
     release();
     expect((await deploying).status).toBe(202);
     await settled;
-    expect(bench.team().owners).toEqual({ cafe: dave.token.id, bar: dave.token.id });
+    expect(bench.team().owners).toEqual({ bar: dave.token.id });
   });
 
   test("a name created again before it comes back keeps its token: the new creation makes its person Admin", async () => {
@@ -810,5 +809,41 @@ describe("the tokens of someone with no role are swept", () => {
         [ci.token.id, null],
       ]),
     );
+  });
+});
+
+describe("the owner's project laid over a creation that did not succeed is never its creator's", () => {
+  test("Dave's creation of shop fails having laid nothing, the owner deploys their own shop over SSH before the settlement, giving nobody access: nobody made Admin, the name let go", async () => {
+    const bench = await wire(registryWith([], [DAVE]), []);
+    const dave = await bench.mint(DAVE, true);
+    const D = "eeeeeeeeeeeeeeeeeeeeeee1";
+    expect((await bench.deploy(dave.secret, D, "shop")).status).toBe(202);
+    bench.result(D, "shop", "failed", false);
+    // The owner's own shop, over SSH.
+    mkdirSync(join(bench.root, "sites", "shop"), { recursive: true });
+    await bench.control.settleCreations();
+    expect(await bench.entries("shop")).toEqual([]);
+    expect(creates(bench)).toEqual([]);
+    expect(bench.team().owners).toEqual({});
+    expect((await bench.preflight(dave.secret, "shop")).status).toBe(403);
+  });
+
+  test("the same with Dave's installer still running when the owner's SSH deploy lands: nothing settled while it runs, and nobody made Admin once it fails", async () => {
+    const bench = await wire(registryWith([], [DAVE]), []);
+    const dave = await bench.mint(DAVE, true);
+    const D = "eeeeeeeeeeeeeeeeeeeeeee2";
+    expect((await bench.deploy(dave.secret, D, "shop")).status).toBe(202);
+    bench.active.add(installerUnit("shop"));
+    bench.result(D, "shop", "running", false);
+    mkdirSync(join(bench.root, "sites", "shop"), { recursive: true });
+    await bench.control.settleCreations();
+    expect(await bench.entries("shop")).toEqual([]);
+    expect(bench.creations()).toHaveLength(1);
+    bench.active.clear();
+    bench.result(D, "shop", "failed", false);
+    await bench.control.settleCreations();
+    expect(await bench.entries("shop")).toEqual([]);
+    expect(creates(bench)).toEqual([]);
+    expect(bench.team().owners).toEqual({});
   });
 });

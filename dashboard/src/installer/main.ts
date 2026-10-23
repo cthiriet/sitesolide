@@ -212,6 +212,8 @@ export async function main(argv: string[], env: Environment, overrides: { comman
     secretsFolder: env.SECRETS_FOLDER ?? "/etc/sitesolide",
     // The steward's previous versions of each store, dropped for a store laid anew.
     storePreviousFolder: join(stateFolder, "precedents", "projects"),
+    // The tokens' claims: a creation never takes a store no write of its token made.
+    claimsFile: join(stateFolder, "claims.json"),
     spoolFolder: env.SPOOL_FOLDER ?? "/srv/sites/dashboard/data/control",
     accountsFile: env.ACCOUNTS_FILE ?? "/etc/passwd",
     projectPortsFile: env.PROJECT_PORTS_FILE ?? "/etc/sitesolide-loopback-projects.nft",
