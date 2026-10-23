@@ -36,6 +36,7 @@ import {
   isProtected,
   isValidMemory,
   isValidSlug,
+  legacySecretFiles,
   readManifest,
   servicesOf,
   SERVICE_PORTS,
@@ -186,7 +187,7 @@ export function scopeRefusals(manifest: Manifest, scope: Scope, slug: string): s
   if (manifest.lock !== undefined) {
     refusals.push("lock: a preview code is chosen in the site's Access section, by its Admin or the owner, never by a deployment; remove the key");
   }
-  for (const name of manifest.secrets ?? []) {
+  for (const name of legacySecretFiles(manifest)) {
     if (name !== `${slug}.env`) {
       refusals.push(`secrets: a token's project reads ${slug}.env and no other file; ${String(name)} is not its own`);
     }

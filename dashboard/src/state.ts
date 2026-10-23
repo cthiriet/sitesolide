@@ -23,6 +23,7 @@ import {
   isApp,
   isHeadless,
   isProtected,
+  legacySecretFiles,
   mainPort,
   PORTAL_SLUG,
   servicesOf,
@@ -713,7 +714,7 @@ export function buildSnapshot(raw: Raw): Snapshot {
       services,
       bytes: folder.bytes,
       deployed: folder.deployed,
-      secrets: (manifest?.secrets ?? []).filter((name): name is string => typeof name === "string"),
+      secrets: manifest === null ? [] : legacySecretFiles(manifest),
     });
   }
 

@@ -61,7 +61,7 @@
  */
 import { generateFragment, decideBlock } from "../../borrowed/fragment";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts, type ProjectAccount } from "../../borrowed/loopback";
-import { domainHosts, isApp, readManifest, scheduledServices, servicesOf, setDomainActive, setLock, setPortal, type Manifest } from "../../borrowed/manifest";
+import { domainHosts, isApp, legacySecretFiles, readManifest, scheduledServices, servicesOf, setDomainActive, setLock, setPortal, type Manifest } from "../../borrowed/manifest";
 import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "../../borrowed/portal-vm";
 import { domainConflicts, foreignUnit, portConflicts, staleUnits, unstableUnits, type UnitStanding } from "../../borrowed/services";
 import { decideUnit, earlierGenerations, generateUnits, runningUnits, unitArgument, unitFileName, watchedUnits } from "../../borrowed/unit";
@@ -280,7 +280,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     const application = isApp(manifest);
     // Only an app's unit reads its `secrets`; any project's name may take a
     // file by its prefix all the same.
-    await judgeClaims(host, slug, text, application ? (manifest.secrets ?? []) : []);
+    await judgeClaims(host, slug, text, application ? legacySecretFiles(manifest) : []);
     const behindPortal = final.portal;
     for (const { service, port } of allocated) host.log(`   port ${port} chosen for ${service === null ? "the service" : `service ${service}`}`);
     host.log(`   project ${slug}, ${application ? `${servicesOf(manifest).length > 1 ? `${servicesOf(manifest).length} services` : "service"}` : "static"}, ${behindPortal ? "restricted" : "public"}`);
@@ -492,7 +492,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
 
     // --- 9. secrets, restart ----------------------------------------------------------
     if (application) {
-      const secrets = manifest.secrets ?? [];
+      const secrets = legacySecretFiles(manifest);
       if (secrets.length > 0) {
         host.log("-> declared secrets");
         const missing: string[] = [];

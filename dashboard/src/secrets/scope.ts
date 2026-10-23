@@ -41,7 +41,7 @@
  */
 import { relative, resolve } from "node:path";
 import { MACHINE_FOLDER } from "../../borrowed/backups";
-import { isApp, readManifest, isValidSlug, type Manifest } from "../../borrowed/manifest";
+import { isApp, legacySecretFiles, readManifest, isValidSlug, type Manifest } from "../../borrowed/manifest";
 import { IDENTITY_VARIABLES } from "../../borrowed/sharing";
 import { PASSWORD_MAX } from "../auth";
 import { LANDING_FOLDER } from "../state";
@@ -465,7 +465,7 @@ export function tokenFileRefusal(site: Site, file: unknown): Refusal | null {
   const own = `${site.folder}.env`;
   if (file !== own) return outOfScope(`a token manages ${own} alone`);
   const { manifest } = site;
-  const declared = manifest !== null && manifest.slug === site.folder && isApp(manifest) && Array.isArray(manifest.secrets) && manifest.secrets.includes(own);
+  const declared = manifest !== null && manifest.slug === site.folder && isApp(manifest) && legacySecretFiles(manifest).includes(own);
   if (!declared) {
     return outOfScope(`the sitesolide.json deployed for ${site.folder} does not declare ${own}: add "secrets": ["${own}"] to it and deploy, then set its variables`);
   }

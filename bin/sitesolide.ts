@@ -130,6 +130,7 @@ import {
   isProtected,
   isSystemName,
   isValidSlug,
+  legacySecretFiles,
   mainPort,
   missingExclusions,
   NEVER_SENT,
@@ -1565,7 +1566,7 @@ async function ensureSecrets(
   config: Config,
   executor: Executor,
 ): Promise<void> {
-  const secrets = manifest.secrets ?? [];
+  const secrets = legacySecretFiles(manifest);
   if (secrets.length === 0) return;
   step("declared secrets");
 
@@ -2162,7 +2163,7 @@ function siteLabels(folders: Iterable<string>, zone: string): string[] {
  * read, hence done in a dry run too.
  */
 async function checkSecretFiles(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
-  const declared = manifest.secrets ?? [];
+  const declared = legacySecretFiles(manifest);
   if (declared.length === 0) return;
   const refuse = (refusals: string[]): void => {
     if (refusals.length === 0) return;
@@ -2539,7 +2540,7 @@ async function runWithSecret(
   config: Config,
   command: string[],
 ): Promise<void> {
-  const secrets = project.manifest.secrets ?? [];
+  const secrets = legacySecretFiles(project.manifest);
   if (secrets.length === 0) die("no secret declared in the manifest");
   if (command.length === 0) die("usage: sitesolide run -- <command>");
 
@@ -3052,7 +3053,7 @@ async function remove(
   // The secret files this folder's manifest names, deleted only when they
   // are this project's: see removableSecrets. The sites on the machine are
   // read before any gesture, an unreadable reading deleting nothing.
-  const declared = manifest.secrets ?? [];
+  const declared = legacySecretFiles(manifest);
   let secrets: string[] = [];
   if (declared.length > 0) {
     const sites = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));

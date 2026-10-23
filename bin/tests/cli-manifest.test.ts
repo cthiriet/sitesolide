@@ -13,8 +13,23 @@ import {
   setLock,
   isValidSlug,
   validate,
+  buildEnvOf,
+  FILE_NAME_SHAPE,
+  FRAMEWORK_PUBLIC_PREFIXES,
+  hasStore,
+  isFrameworkPublic,
+  isLegacySecretName,
+  isValidFileName,
+  legacySecretFiles,
+  MAX_DECLARED_FILES,
+  NOT_A_PLACEHOLDER,
+  RESERVED_ENV,
+  secretsOf,
+  secretsWarnings,
+  STORELESS_SLUGS,
   type Manifest,
 } from "../cli/manifest";
+import { RESERVED_ENV as VARIABLES_RESERVED_ENV } from "../cli/variables";
 import { domainForms, isValidDomain as isValidDomainApi, isValidSlug as isValidSlugApi } from "../../api/src/table";
 
 /** The tests' zone: a reserved TLD, which resolves nowhere. */
@@ -441,14 +456,14 @@ describe("environment variables", () => {
     }
   });
 
-  test("refuses what looks like a secret", () => {
-    // This file is versioned: what hides lives on the VM, managed from the
-    // dashboard. The check bears on the name, since nobody can recognise a
-    // secret by its shape and everybody recognises a key named API_KEY.
-    for (const key of ["API_KEY", "STRIPE_SECRET", "AWS_SESSION_TOKEN", "DB_PASSWORD"]) {
-      expect(validate({ ...APP, env: { [key]: "x" } })).toContainEqual(
-        expect.stringContaining("managed from the dashboard"),
-      );
+  test("refuses what looks like a secret, and points to secrets", () => {
+    // This file is versioned: what hides is named under `secrets` and set on
+    // the server. The check bears on the name first, since everybody
+    // recognises a key named API_KEY.
+    for (const key of ["API_KEY", "STRIPE_SECRET", "AWS_SESSION_TOKEN", "DB_PASSWORD", "STRIPE_KEY"]) {
+      expect(validate({ ...APP, env: { [key]: "x" } })).toEqual([
+        `env: ${key} looks like a secret: list its name under "secrets" and set its value on the server, never in a committed file`,
+      ]);
     }
   });
 
@@ -636,7 +651,7 @@ describe("what reaches a Caddy block or a unit", () => {
     for (const secret of ["budget.env\nExecStartPre=+/bin/sh -c id", "a b.env", "%h.env", ".env", "-budget.env", "budget.env\\"]) {
       expect(validate({ ...APP, secrets: [secret] })).toContainEqual(expect.stringContaining("secrets"));
     }
-    expect(validate({ ...APP, secrets: "budget.env" } as unknown as Manifest)).toContainEqual(expect.stringContaining("a list of file names"));
+    expect(validate({ ...APP, secrets: "budget.env" } as unknown as Manifest)).toContainEqual(expect.stringContaining("a list of variable names"));
     expect(validate({ ...APP, secrets: ["budget.env", "Budget_2.env"] })).toEqual([]);
   });
 
@@ -709,5 +724,345 @@ describe("portal", () => {
   test("an unknown key is refused: a typo would open the site", () => {
     const errors = validate({ ...APP, portall: true } as unknown as Manifest);
     expect(errors).toContainEqual(expect.stringContaining("portall"));
+  });
+});
+
+/**
+ * What a planted secret value is: had a refusal quoted it back, it would have
+ * reached a terminal, an agent's context or a log.
+ */
+const PLANTED = "sk_live_planted_value_never_quoted";
+
+/** The refusals of a manifest, checked to quote none of the planted values. */
+function refusals(manifest: unknown, planted: readonly string[] = [PLANTED]): string[] {
+  const errors = validate(manifest as Manifest, ZONE);
+  for (const error of errors) {
+    for (const value of planted) expect({ error, quotes: error.includes(value) }).toEqual({ error, quotes: false });
+  }
+  return errors;
+}
+
+const SERVICES: Manifest = { slug: "engine", services: { api: { start: "/srv/sites/engine/app/api", port: 3040 } } };
+const BUILT: Manifest = { slug: "blog", build: "bun run build", publicDir: "dist" };
+
+describe("secrets, the forms", () => {
+  test("none: absent, an empty list, an empty object", () => {
+    for (const secrets of [undefined, [], {}]) {
+      expect(secretsOf({ ...APP, secrets } as Manifest)).toEqual({ form: "none", legacy: [], runtime: [], files: [], build: [] });
+    }
+  });
+
+  test("the short form lists runtime variables", () => {
+    expect(secretsOf({ ...APP, secrets: ["ADMIN_TOKEN", "STRIPE_SECRET_KEY"] })).toEqual({
+      form: "names",
+      legacy: [],
+      runtime: ["ADMIN_TOKEN", "STRIPE_SECRET_KEY"],
+      files: [],
+      build: [],
+    });
+  });
+
+  test("the long form, each list optional", () => {
+    const secrets = { runtime: ["POSTGRES_PASSWORD"], files: ["gcp.json", "tls.key"], build: ["CMS_TOKEN"] };
+    expect(secretsOf({ ...APP, secrets })).toEqual({ form: "names", legacy: [], ...secrets });
+    expect(secretsOf({ ...APP, secrets: { files: ["gcp.json"] } })).toEqual({ form: "names", legacy: [], runtime: [], files: ["gcp.json"], build: [] });
+  });
+
+  test("the old form: file names, each with a dot, in the manifest's order", () => {
+    const secrets = ["nis2-ses.env", "nis2-stripe.env", "nis2-stats.env"];
+    expect(secretsOf({ ...APP, secrets })).toEqual({ form: "legacy", legacy: secrets, runtime: [], files: [], build: [] });
+  });
+
+  test("a mixed list reads as the old form, every entry a file, as the CLI that could deploy it read it", () => {
+    expect(secretsOf({ ...APP, secrets: ["crm.env", "API_KEY"] })).toMatchObject({ form: "legacy", legacy: ["crm.env", "API_KEY"], runtime: [] });
+  });
+
+  test("malformed input never throws, and keeps what parses", () => {
+    const empty = { legacy: [], runtime: [], files: [], build: [] };
+    for (const secrets of ["budget.env", 3, null, true, [3, null], [[]]]) {
+      expect(secretsOf({ ...APP, secrets } as unknown as Manifest)).toEqual({ form: "none", ...empty });
+    }
+    expect(secretsOf({ ...APP, secrets: ["a.env", 3] } as unknown as Manifest)).toMatchObject({ form: "legacy", legacy: ["a.env"] });
+    expect(secretsOf({ ...APP, secrets: { runtime: "A", files: [1, "x.pem"], other: ["B"] } } as unknown as Manifest)).toEqual({
+      form: "names",
+      ...empty,
+      files: ["x.pem"],
+    });
+  });
+
+  test("legacySecretFiles: the old list exactly for the old form, nothing for the others", () => {
+    expect(legacySecretFiles({ ...APP, secrets: ["budget.env", "budget-stripe.env"] })).toEqual(["budget.env", "budget-stripe.env"]);
+    expect(legacySecretFiles({ ...APP, secrets: ["../x.env"] })).toEqual(["../x.env"]);
+    for (const secrets of [undefined, [], ["API_KEY"], { files: ["gcp.json"] }, "budget.env", null]) {
+      expect(legacySecretFiles({ ...APP, secrets } as unknown as Manifest)).toEqual([]);
+    }
+  });
+
+  test("an app has a store, but a static site and the two storeless projects", () => {
+    expect(hasStore(APP)).toBe(true);
+    expect(hasStore(SERVICES)).toBe(true);
+    expect(hasStore({ ...APP, slug: "analytics" })).toBe(true);
+    expect(hasStore(STATIC)).toBe(false);
+    expect(STORELESS_SLUGS).toEqual(["dashboard", "portal"]);
+    for (const slug of STORELESS_SLUGS) expect(hasStore({ ...APP, slug })).toBe(false);
+    for (const slug of ["../x", "", "Shop", 3]) expect(hasStore({ ...APP, slug } as unknown as Manifest)).toBe(false);
+  });
+
+  test("a legacy entry is a valid file name with a dot", () => {
+    for (const name of ["crm.env", "nis2-ses.env", ".env"]) expect(isLegacySecretName(name)).toBe(name !== ".env");
+    for (const name of ["API_KEY", "projects", "a/b.env", "../x.env", 3, null]) expect(isLegacySecretName(name)).toBe(false);
+  });
+
+  test("a store file's name: no leading dot, no slash, no .., 64 characters at most", () => {
+    expect(FILE_NAME_SHAPE.source).toBe("^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$");
+    for (const name of ["gcp.json", "tls.key", "a", "A-b_c.d", "x".repeat(64)]) expect(isValidFileName(name)).toBe(true);
+    for (const name of ["", ".hidden", "-x", "_x", "sub/x", "a..b", "..", "x".repeat(65), "a b", "a%b", "é.pem", 3, null]) {
+      expect({ name, valid: isValidFileName(name) }).toEqual({ name, valid: false });
+    }
+  });
+});
+
+describe("secrets, validation", () => {
+  test("V1: a list of strings, or an object of three lists of strings", () => {
+    const shape = 'secrets: a list of variable names, such as ["API_KEY"], or { "runtime": [...], "files": [...], "build": [...] }';
+    for (const secrets of ["budget.env", 3, null, [PLANTED, 3], { runtime: [PLANTED], extra: [PLANTED] }, { runtime: PLANTED }, { files: [3] }]) {
+      expect(refusals({ ...APP, secrets })).toEqual([shape]);
+    }
+    expect(refusals({ ...APP, secrets: { runtime: ["API_KEY"], files: ["gcp.json"] } })).toEqual([]);
+  });
+
+  test("V2: file names and variable names are not mixed", () => {
+    expect(refusals({ ...APP, secrets: ["budget.env", PLANTED] })).toEqual([
+      "secrets: file names (with a dot) and variable names cannot be mixed: migrate the files first (sitesolide secrets migrate), then list the variable names",
+    ]);
+  });
+
+  test("V3: the old form keeps its rule and its message", () => {
+    expect(refusals({ ...APP, secrets: ["budget.env", "a b.env"] })).toEqual(['secrets: "a b.env" must be a plain file name under /etc/sitesolide']);
+    expect(refusals({ ...APP, secrets: ["budget.env", "budget-stripe.env"] })).toEqual([]);
+  });
+
+  test("V4: runtime names have a variable's shape, and are never quoted when they have not", () => {
+    for (const name of ["1ABC", "A-B", "-----BEGIN PRIVATE KEY-----", "A".repeat(129), ""]) {
+      expect(refusals({ ...APP, secrets: [name] }, [name || PLANTED])).toEqual([
+        "secrets: entry 1 is not a variable name: letters, digits and underscores, not starting with a digit, 128 characters at most",
+      ]);
+    }
+    for (const name of [PLANTED, "whsec_abc", "AKIAIOSFODNN7EXAMPLE", "pk_live_abc", "xoxb_abc"]) {
+      expect(refusals({ ...APP, secrets: { runtime: ["API_KEY", name] } }, [name])).toEqual([
+        "secrets.runtime: entry 2 starts like a secret key, not a variable name: a value never goes in sitesolide.json",
+      ]);
+    }
+    expect(refusals({ ...APP, secrets: ["API_KEY", "a", "A".repeat(128)] })).toEqual([]);
+  });
+
+  test("V4: unique, not reserved, not the password hash, not set by env", () => {
+    expect(refusals({ ...APP, secrets: ["API_KEY", "API_KEY"] })).toEqual(["secrets: API_KEY is listed twice"]);
+    expect(refusals({ ...APP, secrets: ["PATH"] })).toEqual(["secrets: PATH changes how the runtime behaves, not what the site does, and cannot be set here"]);
+    expect(refusals({ ...APP, secrets: ["NODE_OPTIONS", "http_proxy", "CREDENTIALS_DIRECTORY"] })).toHaveLength(3);
+    for (const name of RESERVED_ENV) {
+      expect(refusals({ ...APP, secrets: [name] })).toEqual([`secrets: ${name} is set by the deployment, a secret would move the service elsewhere`]);
+    }
+    expect(refusals({ ...APP, secrets: ["PASSWORD_HASH"] })).toEqual([
+      "secrets: PASSWORD_HASH is changed with Change password, in the dashboard's and the portal's files alone",
+    ]);
+    expect(refusals({ ...APP, env: { API_URL: "https://x.test" }, secrets: ["API_URL"] })).toEqual(["secrets: API_URL is also set in env; a name lives in one place"]);
+    const services = { api: { start: "/bin/api", port: 3040, env: { API_URL: "https://x.test" } } };
+    expect(refusals({ slug: "engine", services, secrets: { runtime: ["API_URL"] } })).toEqual([
+      "secrets.runtime: API_URL is also set in env; a name lives in one place",
+    ]);
+  });
+
+  test("V4: no BACKUP_ name beside a backup command, any name beside none", () => {
+    const backup = { folder: "pg", command: "/bin/sh /srv/sites/budget/app/backup.sh" };
+    expect(refusals({ ...APP, backup, secrets: ["BACKUP_KEY"] })).toEqual([
+      "secrets: BACKUP_KEY is a name of the backup component, which sets BACKUP_DIR for the backup command: no BACKUP_ variable beside one",
+    ]);
+    const services = { db: { start: "/usr/bin/postgres", internal: true, backup } };
+    expect(refusals({ slug: "engine", services, publicDir: "public", secrets: ["BACKUP_KEY"] })).toHaveLength(1);
+    expect(refusals({ ...APP, secrets: ["BACKUP_KEY"] })).toEqual([]);
+  });
+
+  test("V5: file names are a store file's, unique, 32 at most, and never quoted when they are not one", () => {
+    for (const name of [".hidden", "sub/x", "a..b", "x".repeat(65), `${PLANTED} x`]) {
+      expect(refusals({ ...APP, secrets: { files: [name] } }, [name, PLANTED])).toEqual([
+        "secrets.files: entry 1 is not a file name: a letter or a digit first, then letters, digits, dots, dashes and underscores, 64 characters at most, no ..",
+      ]);
+    }
+    expect(refusals({ ...APP, secrets: { files: ["gcp.json", "gcp.json"] } })).toEqual(["secrets.files: gcp.json is listed twice"]);
+    const many = Array.from({ length: MAX_DECLARED_FILES + 1 }, (_, rank) => `f${rank}.pem`);
+    expect(refusals({ ...APP, secrets: { files: many } })).toEqual([`secrets.files: ${MAX_DECLARED_FILES} files at most, systemd loads a bounded amount for each unit`]);
+    expect(refusals({ ...APP, secrets: { files: many.slice(0, MAX_DECLARED_FILES) } })).toEqual([]);
+  });
+
+  test("V6: a static site has no runtime secret nor file; its build's go under secrets.build", () => {
+    const refusal = "secrets: without start, no service reads a runtime secret; a value the build needs goes under secrets.build";
+    for (const secrets of [["CMS_TOKEN"], { runtime: ["CMS_TOKEN"] }, { files: ["gcp.json"] }, { runtime: ["CMS_TOKEN"], build: ["CMS_TOKEN"] }]) {
+      expect(refusals({ ...BUILT, secrets })).toEqual([refusal]);
+    }
+    expect(refusals({ ...BUILT, secrets: { build: ["CMS_TOKEN"] } })).toEqual([]);
+    // The old form stays as it was on a static site: nothing reads it, nothing refused it.
+    expect(refusals({ ...STATIC, secrets: ["notes.env"] })).toEqual([]);
+  });
+
+  test("V7: build names, taken from whoever deploys: not sitesolide's, not inherited, not in env, only with a build", () => {
+    expect(refusals({ ...BUILT, secrets: { build: ["SITESOLIDE_TOKEN"] } })).toEqual([
+      "secrets.build: SITESOLIDE_TOKEN is sitesolide's own: a build never receives a SITESOLIDE_ variable",
+    ]);
+    for (const name of ["PATH", "HOME", "LC_ALL", "XDG_CONFIG_HOME"]) {
+      expect(refusals({ ...BUILT, secrets: { build: [name] } })).toEqual([`secrets.build: ${name} reaches every build from whoever deploys already: it needs no declaring`]);
+    }
+    expect(refusals({ ...BUILT, secrets: { build: ["CMS_TOKEN", "CMS_TOKEN"] } })).toEqual(["secrets.build: CMS_TOKEN is listed twice"]);
+    expect(refusals({ ...BUILT, env: { CMS_URL: "https://cms.test" }, secrets: { build: ["CMS_URL"] } })).toEqual([
+      "secrets.build: CMS_URL is also set in env; a name lives in one place",
+    ]);
+    expect(refusals({ ...BUILT, secrets: { build: ["a-b", PLANTED] } })).toEqual([
+      "secrets.build: entry 1 is not a variable name: letters, digits and underscores, not starting with a digit, 128 characters at most",
+      "secrets.build: entry 2 starts like a secret key, not a variable name: a value never goes in sitesolide.json",
+    ]);
+    expect(refusals({ ...APP, secrets: { build: ["CMS_TOKEN"] } })).toEqual(["secrets.build: without build, nothing reads them"]);
+    expect(refusals({ ...APP, build: "bun run build", secrets: { runtime: ["CMS_TOKEN"], build: ["CMS_TOKEN", "NPM_TOKEN"] } })).toEqual([]);
+  });
+
+  test("V8: the dashboard and the portal keep their flat files, for good and without a warning", () => {
+    for (const slug of STORELESS_SLUGS) {
+      const app = { ...APP, slug };
+      expect(refusals({ ...app, secrets: ["API_KEY"] })).toEqual([
+        `secrets: ${slug} keeps its hash in ${slug}.env, read by its own unit: its secrets cannot move to a store`,
+      ]);
+      expect(refusals({ ...app, secrets: { files: ["x.pem"] } })).toHaveLength(1);
+      expect(refusals({ ...app, secrets: [`${slug}.env`] })).toEqual([]);
+      expect(secretsWarnings({ ...app, secrets: [`${slug}.env`] })).toEqual([]);
+    }
+  });
+
+  test("V9: a framework's public name may sit in env, whatever its suffix", () => {
+    expect(FRAMEWORK_PUBLIC_PREFIXES).toEqual(["NEXT_PUBLIC_", "NUXT_PUBLIC_", "EXPO_PUBLIC_", "REACT_APP_", "VITE_", "PUBLIC_", "GATSBY_"]);
+    for (const name of ["NEXT_PUBLIC_STRIPE_KEY", "VITE_STRIPE_KEY", "PUBLIC_MAPS_TOKEN", "REACT_APP_API_KEY"]) {
+      expect(isFrameworkPublic(name)).toBe(true);
+      expect(refusals({ ...APP, env: { [name]: "pk_live_51Hx" } })).toEqual([]);
+    }
+    expect(isFrameworkPublic("STRIPE_KEY")).toBe(false);
+    expect(refusals({ ...APP, env: { STRIPE_KEY: "x" } })).toHaveLength(1);
+  });
+
+  test("V9: a value that starts like a secret key is refused under any name, and never quoted", () => {
+    for (const value of ["sk_live_x", "whsec_x", "sk-proj-x", "AKIAx", "ghp_x", "glpat-x", "SG.x", PLANTED]) {
+      expect(refusals({ ...APP, env: { REGION: value } }, [value])).toEqual([
+        "env: the value of REGION starts like a secret key; a secret goes in secrets, never in a committed file",
+      ]);
+      const services = { api: { start: "/bin/api", port: 3040, env: { NEXT_PUBLIC_X: value } } };
+      expect(refusals({ slug: "engine", services }, [value])).toEqual([
+        "services.api.env: the value of NEXT_PUBLIC_X starts like a secret key; a secret goes in secrets, never in a committed file",
+      ]);
+    }
+    for (const value of ["pk_live_x", "pk_test_x", "production", "SK_LIVE", "eu-west-3"]) {
+      expect(refusals({ ...APP, env: { REGION: value } })).toEqual([]);
+    }
+  });
+
+  test("V9: a static site may declare env when it builds, not otherwise", () => {
+    expect(refusals({ ...BUILT, env: { PUBLIC_SITE_URL: "https://{slug}.{zone}" } })).toEqual([]);
+    expect(refusals({ ...STATIC, env: { NODE_ENV: "production" } })).toEqual(["env: without start or build, nothing reads these variables"]);
+  });
+
+  test("V10: {credentials} is not a placeholder, in env, a start or a backup command", () => {
+    expect(NOT_A_PLACEHOLDER).toBe("{credentials}");
+    const reading = "{credentials} is not replaced; a service reads its files at $CREDENTIALS_DIRECTORY/files_<name>";
+    expect(refusals({ ...APP, env: { GCP_KEY_FILE: "{credentials}/files_gcp.json" } })).toEqual([`env: ${reading}`]);
+    expect(refusals({ ...APP, start: "/bin/app --key {credentials}/files_tls.key" })).toEqual([`start: ${reading}`]);
+    const backup = { folder: "pg", command: "/bin/sh /srv/sites/budget/app/backup.sh {credentials}" };
+    expect(refusals({ ...APP, backup })).toEqual([`backup.command: ${reading}`]);
+    const services = {
+      api: { start: "/bin/api --tls {credentials}/files_tls.key", port: 3040, env: { CERT: "{credentials}" } },
+      db: { start: "/usr/bin/postgres", internal: true, backup: { ...backup, command: "/bin/dump {credentials}" } },
+    };
+    expect(refusals({ slug: "engine", services })).toEqual([
+      `services.api.start: ${reading}`,
+      `services.api.env: ${reading}`,
+      `services.db.backup.command: ${reading}`,
+    ]);
+    // The variable systemd sets is the way, on a command line as in code.
+    expect(refusals({ ...APP, start: "/bin/app --key ${CREDENTIALS_DIRECTORY}/files_tls.key" })).toEqual([]);
+  });
+
+  test("the forms of the specification pass as written", () => {
+    expect(
+      refusals({
+        slug: "shop",
+        start: "/usr/local/bin/bun run server.ts",
+        port: 3040,
+        env: { NODE_ENV: "production", VITE_STRIPE_KEY: "pk_live_51Hx", PUBLIC_URL: "https://{slug}.{zone}" },
+        secrets: ["ADMIN_TOKEN", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"],
+      }),
+    ).toEqual([]);
+    expect(
+      refusals({
+        slug: "engine",
+        services: {
+          api: { start: "/srv/sites/engine/app/.venv/bin/uvicorn main:app --port 3040", port: 3040 },
+          postgres: { start: "/usr/lib/postgresql/17/bin/postgres -D /srv/sites/engine/data/pg", internal: true, backup: { folder: "pg", command: "/bin/sh /srv/sites/engine/app/backup.sh" } },
+        },
+        build: "uv sync",
+        secrets: { runtime: ["POSTGRES_PASSWORD", "HCLOUD_TOKEN"], files: ["gcp.json", "tls.key"], build: ["CMS_TOKEN"] },
+      }),
+    ).toEqual([]);
+    expect(refusals({ ...BUILT, env: { PUBLIC_SITE_URL: "https://{slug}.{zone}" }, secrets: { build: ["CMS_TOKEN"] } })).toEqual([]);
+    expect(refusals({ ...APP, secrets: ["nis2-ses.env", "nis2-stripe.env", "nis2-stats.env"] })).toEqual([]);
+    expect(refusals({ ...APP, slug: "dashboard", secrets: ["dashboard.env"] })).toEqual([]);
+  });
+
+  test("RESERVED_ENV lives in variables.ts, re-exported here", () => {
+    expect(RESERVED_ENV).toBe(VARIABLES_RESERVED_ENV);
+    expect(RESERVED_ENV).toEqual(["PORT", "DATA_DIR", "PUBLIC_DIR"]);
+  });
+});
+
+describe("secrets, warnings", () => {
+  test("the old form on a project that has a store warns, naming its files", () => {
+    expect(secretsWarnings({ ...APP, secrets: ["nis2-ses.env", "nis2-stripe.env"] })).toEqual([
+      "secrets: nis2-ses.env, nis2-stripe.env are file names, the old form: they keep loading before the project's store; run sitesolide secrets migrate, then list the variable names",
+    ]);
+    expect(secretsWarnings({ ...APP, secrets: ["crm.env"] })).toEqual([
+      "secrets: crm.env is a file name, the old form: it keeps loading before the project's store; run sitesolide secrets migrate, then list the variable names",
+    ]);
+  });
+
+  test("nothing for the new forms, a static site, a storeless project, or no secrets", () => {
+    for (const manifest of [APP, { ...APP, secrets: ["API_KEY"] }, { ...APP, secrets: { files: ["x.pem"] } }, { ...STATIC, secrets: ["notes.env"] }, { ...APP, slug: "portal", secrets: ["portal.env"] }]) {
+      expect(secretsWarnings(manifest as Manifest)).toEqual([]);
+    }
+  });
+
+  test("every known manifest still passes, and warns exactly when it keeps the old form with a store", () => {
+    for (const manifest of knownManifests()) {
+      const { slug } = manifest;
+      expect({ slug, errors: validate(manifest, ZONE) }).toEqual({ slug, errors: [] });
+      const legacy = secretsOf(manifest).form === "legacy";
+      expect({ slug, warnings: secretsWarnings(manifest).length }).toEqual({ slug, warnings: legacy && hasStore(manifest) ? 1 : 0 });
+      // What the code that predates the store read, exactly.
+      expect({ slug, files: legacySecretFiles(manifest) }).toEqual({ slug, files: Array.isArray(manifest.secrets) && legacy ? manifest.secrets : [] });
+    }
+  });
+});
+
+describe("the build's env", () => {
+  test("the project's env, raw, without its SITESOLIDE_ names and without a service's", () => {
+    const manifest: Manifest = {
+      slug: "dashboard",
+      services: { web: { start: "/bin/web", port: 3040, env: { SERVICE_ONLY: "x" } } },
+      build: "bun run build",
+      env: { NODE_ENV: "production", PUBLIC_URL: "https://{slug}.{zone}", SITESOLIDE_ZONE: "{zone}" },
+    };
+    expect(buildEnvOf(manifest)).toEqual([
+      ["NODE_ENV", "production"],
+      ["PUBLIC_URL", "https://{slug}.{zone}"],
+    ]);
+    expect(buildEnvOf(STATIC)).toEqual([]);
+  });
+
+  test("tolerant of what validate refuses", () => {
+    for (const env of [null, "x", ["A=b"], 3]) expect(buildEnvOf({ ...APP, env } as unknown as Manifest)).toEqual([]);
+    expect(buildEnvOf({ ...APP, env: { A: "b", B: 3 } } as unknown as Manifest)).toEqual([["A", "b"]]);
   });
 });

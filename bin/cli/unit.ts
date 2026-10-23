@@ -24,6 +24,7 @@ import {
   isValidServiceName,
   isValidSlug,
   isValidTimeout,
+  legacySecretFiles,
   SERVICE_PORTS,
   servedContact,
   servedZone,
@@ -149,7 +150,7 @@ function assertWritable(manifest: Manifest, service: ServiceView): void {
   for (const [name, value] of Object.entries(service.env)) {
     if (!isValidEnvName(name) || !isValidEnvValue(value)) throw refused(`env ${JSON.stringify(name)}`);
   }
-  for (const secret of manifest.secrets ?? []) {
+  for (const secret of legacySecretFiles(manifest)) {
     if (!isValidSecretName(secret)) throw refused(`secrets ${JSON.stringify(secret)}`);
   }
 }
@@ -377,7 +378,7 @@ function renderUnit(
   const slug = manifest.slug;
   const account = systemUser(slug);
   const paths = projectPaths(slug);
-  const secrets = manifest.secrets ?? [];
+  const secrets = legacySecretFiles(manifest);
   const isOutbound = manifest.network === "outbound";
   const description = escapeSpecifiers(manifest.description ?? `Project ${slug}`);
 

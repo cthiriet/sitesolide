@@ -16,6 +16,19 @@
  */
 import { MACHINE_FOLDER } from "./backups";
 import { egressErrors } from "./egress";
+import {
+  buildNameRefusal,
+  checkKey,
+  isVariableName,
+  looksLikeSecretValue,
+  MAX_KEY,
+  PASSWORD_VARIABLE,
+  RESERVED_ENV,
+  VALUE_LIKE_PREFIXES,
+} from "./variables";
+
+/** Defined in ./variables with the other rules of a variable's name, and re-exported where it always was. */
+export { RESERVED_ENV } from "./variables";
 
 /**
  * One process of a project that runs several, declared under `services`: a web
@@ -88,7 +101,13 @@ export type Manifest = {
   /** The processor ceiling of every service, as a service's own `cpu` overrides it. */
   cpu?: string;
   network?: "localhost" | "outbound";
-  secrets?: string[];
+  /**
+   * The names of the project's secrets, never a value: a list of variable
+   * names, the short form, or SecretsLongForm when a file or a build secret
+   * is needed. A list of file names, each with a dot, is the old form, still
+   * read: see secretsOf.
+   */
+  secrets?: string[] | SecretsLongForm;
   domain?: { name: string; aliases?: string[]; active?: boolean };
   lock?: boolean;
   /** The site goes behind the shared portal, see portal/README.md. */
@@ -329,23 +348,32 @@ export function timeoutSeconds(timeout: unknown): number | null {
   return Number(match[1]) * unit;
 }
 
-/** The service is an application as soon as it declares a start command. */
-/**
- * Variables set by the generator, which a manifest cannot redefine: they
- * describe the served tree, and a value from the manifest would make the
- * service write somewhere other than its own directory.
- */
-export const RESERVED_ENV = ["PORT", "DATA_DIR", "PUBLIC_DIR"];
-
 /**
  * A secret is never written into a versioned file. `env` is made for what has
- * nothing to hide, `NODE_ENV` or an AWS region; what does hide goes through the
- * vault and `secrets`. The check is on the name rather than on the value:
- * nobody knows how to recognise a secret by its shape, everybody recognises a
- * key named `API_KEY`.
+ * nothing to hide, `NODE_ENV` or an AWS region; what does hide is named under
+ * `secrets` and set on the server. The check is on the name first: everybody
+ * recognises a key named `API_KEY`. A value that starts like a provider's key
+ * is refused too, whatever its name, see SECRET_VALUE_PREFIXES in
+ * ./variables; a name a framework publishes anyway is let through, see
+ * FRAMEWORK_PUBLIC_PREFIXES.
  */
 export const SUSPICIOUS_ENV = /(_KEY|_SECRET|_TOKEN|_PASSWORD|_PASSWD|_CREDENTIALS)$/;
 
+/**
+ * The prefixes under which a framework publishes a variable into the code it
+ * sends to every visitor: whatever such a name holds is public by
+ * construction, so SUSPICIOUS_ENV does not refuse it, and
+ * `NEXT_PUBLIC_STRIPE_KEY` may sit in `env`. The platform imposes no prefix of
+ * its own: this list only relaxes a refusal.
+ */
+export const FRAMEWORK_PUBLIC_PREFIXES: readonly string[] = ["NEXT_PUBLIC_", "NUXT_PUBLIC_", "EXPO_PUBLIC_", "REACT_APP_", "VITE_", "PUBLIC_", "GATSBY_"];
+
+/** Does a framework publish this variable to every visitor anyway? See FRAMEWORK_PUBLIC_PREFIXES. */
+export function isFrameworkPublic(name: string): boolean {
+  return FRAMEWORK_PUBLIC_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
+/** The service is an application as soon as it declares a start command. */
 export function isApp(manifest: Manifest): boolean {
   return (typeof manifest.start === "string" && manifest.start.length > 0) || hasServices(manifest);
 }
@@ -776,6 +804,142 @@ export function isValidSecretName(name: unknown): name is string {
   return typeof name === "string" && name.length <= 255 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name);
 }
 
+// --- Secrets -----------------------------------------------------------------
+//
+// A manifest names its secrets, never their values. The values live on the
+// machine, in the project's store, /etc/sitesolide/projects/<slug>/ (see
+// ./store), or with whoever deploys for a build secret.
+//
+// - The short form, `"secrets": ["API_KEY"]`, lists runtime variables.
+// - The long form, SecretsLongForm, adds files read whole, which every
+//   service finds at $CREDENTIALS_DIRECTORY/files_<name>, and the build's
+//   secrets.
+// - The old form lists flat files of /etc/sitesolide, each name with a dot
+//   (`"secrets": ["crm.env"]`). Still read, before the store, with a warning.
+//
+// A variable name never has a dot and every old entry has one: the dot alone
+// tells the forms apart.
+
+/** The long form of `secrets`, each list optional. */
+export type SecretsLongForm = { runtime?: string[]; files?: string[]; build?: string[] };
+
+/** The keys of the long form, refused beyond these for the same reason as KNOWN_KEYS. */
+const SECRETS_KEYS = ["runtime", "files", "build"];
+
+/** How a manifest declares its secrets: not at all, as flat files (the old form), or as names. */
+export type SecretsForm = "none" | "legacy" | "names";
+
+/** A manifest's secrets, read tolerantly: what parses is kept, nothing throws (scope.ts reads deployed manifests so). */
+export type SecretsDeclaration = {
+  form: SecretsForm;
+  /** Legacy file names, in the manifest's order: read flat from /etc/sitesolide, before the store. */
+  legacy: string[];
+  runtime: string[];
+  files: string[];
+  build: string[];
+};
+
+/**
+ * Projects whose hash-only files stay flat: no store, units as in 0.7. The
+ * dashboard's and the portal's `<slug>.env` carry the owner's password hash,
+ * which their own unit reads and Change password writes; nothing else goes
+ * there, see HASH_ONLY in dashboard/src/secrets/scope.ts.
+ */
+export const STORELESS_SLUGS: readonly string[] = ["dashboard", "portal"];
+
+/** An app whose slug is valid and not storeless: its units read the project's store. */
+export function hasStore(manifest: Manifest): boolean {
+  const slug = manifest.slug as unknown;
+  return isApp(manifest) && typeof slug === "string" && isValidSlug(slug) && !STORELESS_SLUGS.includes(slug);
+}
+
+/** A legacy entry: a valid secret file name with a dot. */
+export function isLegacySecretName(name: unknown): name is string {
+  return isValidSecretName(name) && name.includes(".");
+}
+
+/**
+ * A file of the store, as systemd's `LoadCredential=` loads it from the
+ * project's `files/` folder, measured on systemd 257: no leading dot, which
+ * it would skip silently, no `/`, which it would flatten into `_` and
+ * collide, and 64 characters, far under the 249 its credential id allows.
+ */
+export const FILE_NAME_SHAPE: RegExp = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
+/** FILE_NAME_SHAPE, and no `..`. */
+export function isValidFileName(name: unknown): name is string {
+  return typeof name === "string" && FILE_NAME_SHAPE.test(name) && !name.includes("..");
+}
+
+/** The files a manifest may declare: what systemd loads for one unit is bounded, see ./store. */
+export const MAX_DECLARED_FILES = 32;
+
+/** Not a placeholder: refused wherever a manifest writes it, see placeholderErrors. */
+export const NOT_A_PLACEHOLDER = "{credentials}";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The strings of a list, what is not one left out; nothing for what is not a list. */
+function stringsOf(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+/**
+ * The manifest's secrets, whatever their form, read tolerantly: the dashboard
+ * and the steward read the manifests deployed on the machine as they are, and
+ * one bad entry must not take a page down. validate() judges them.
+ *
+ * A list with a dot in any entry reads as the old form, every entry a file:
+ * validate() refuses a list that mixes both, so only a CLI from before the
+ * store could have deployed one, and it read every entry as a file.
+ */
+export function secretsOf(manifest: Manifest): SecretsDeclaration {
+  const declaration: SecretsDeclaration = { form: "none", legacy: [], runtime: [], files: [], build: [] };
+  const raw = manifest.secrets as unknown;
+  if (Array.isArray(raw)) {
+    const names = stringsOf(raw);
+    if (names.length === 0) return declaration;
+    if (names.some((name) => name.includes("."))) return { ...declaration, form: "legacy", legacy: names };
+    return { ...declaration, form: "names", runtime: names };
+  }
+  if (isRecord(raw) && Object.keys(raw).length > 0) {
+    return { ...declaration, form: "names", runtime: stringsOf(raw.runtime), files: stringsOf(raw.files), build: stringsOf(raw.build) };
+  }
+  return declaration;
+}
+
+/** secretsOf(manifest).legacy: what the code that predates the store meant by `manifest.secrets`. */
+export function legacySecretFiles(manifest: Manifest): string[] {
+  return secretsOf(manifest).legacy;
+}
+
+/**
+ * Not errors: what deploy prints before it goes on. The old form on a project
+ * that has a store keeps working, its files read before the store, and says
+ * how to leave it.
+ */
+export function secretsWarnings(manifest: Manifest): string[] {
+  const declaration = secretsOf(manifest);
+  if (declaration.form !== "legacy" || !hasStore(manifest)) return [];
+  const files = declaration.legacy.join(", ");
+  const [are, they, keep] = declaration.legacy.length === 1 ? ["is a file name", "it", "keeps"] : ["are file names", "they", "keep"];
+  return [`secrets: ${files} ${are}, the old form: ${they} ${keep} loading before the project's store; run sitesolide secrets migrate, then list the variable names`];
+}
+
+/**
+ * The project-level `env` a build receives, raw: the placeholders are the
+ * caller's to replace. A service's `env` is that service's alone, and a
+ * SITESOLIDE_ name never reaches a build: the dashboard's SITESOLIDE_ZONE
+ * reaches its service, not the code it builds.
+ */
+export function buildEnvOf(manifest: Manifest): [string, string][] {
+  const env = manifest.env as unknown;
+  if (!isRecord(env)) return [];
+  return Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string" && !entry[0].startsWith("SITESOLIDE_"));
+}
+
 /**
  * Parses the manifest's JSON. Returning the errors rather than throwing allows
  * showing them all at once, rather than having them fixed one by one.
@@ -885,7 +1049,7 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
 
   // Written into the unit's ExecStart=: see commandErrors.
   if (typeof manifest.start === "string" && manifest.start.length > 0) {
-    errors.push(...commandErrors(manifest.start, "start"));
+    errors.push(...commandErrors(manifest.start, "start"), ...placeholderErrors(manifest.start, "start"));
   }
 
   if (manifest.services !== undefined) {
@@ -937,8 +1101,10 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
   }
 
   errors.push(...envErrors(manifest.env, "env"));
-  if (manifest.env !== undefined && !isApplication) {
-    errors.push("env: without `start`, no service would read these variables");
+  // The build receives the project's env too, see buildEnvOf: a static site
+  // that builds may declare one.
+  if (manifest.env !== undefined && !isApplication && !hasBuild(manifest)) {
+    errors.push("env: without start or build, nothing reads these variables");
   }
 
   // Written into the site's Caddy block, see isValidHeaderName and
@@ -971,15 +1137,7 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     }
   }
 
-  if (manifest.secrets !== undefined && !Array.isArray(manifest.secrets)) {
-    errors.push('secrets: a list of file names, such as ["api.env"]');
-  } else {
-    for (const secret of manifest.secrets ?? []) {
-      if (!isValidSecretName(secret)) {
-        errors.push(`secrets: "${String(secret)}" must be a plain file name under /etc/sitesolide`);
-      }
-    }
-  }
+  errors.push(...secretsErrors(manifest, isApplication));
 
   const declared = manifest.domain as unknown;
   if (declared !== undefined && (typeof declared !== "object" || declared === null || Array.isArray(declared))) {
@@ -1132,7 +1290,7 @@ function serviceBackupErrors(raw: unknown, label: string): string[] {
     errors.push(`${label}.command: required, the command that leaves a consistent copy of the folder in $BACKUP_DIR`);
   } else {
     const refused = commandErrors(command, `${label}.command`);
-    errors.push(...refused);
+    errors.push(...refused, ...placeholderErrors(command, `${label}.command`));
     if (refused.length === 0 && commandWords(command) === null) {
       errors.push(`${label}.command: one program and its arguments, read as systemd reads them: no quote left open, no lone ;, and no escape but \\\\ \\" \\' \\s \\n \\t; a script does the rest`);
     }
@@ -1148,9 +1306,9 @@ function envErrors(env: Record<string, string> | undefined, label: string): stri
       errors.push(`${label}: "${key}" is not an environment variable name`);
     } else if (RESERVED_ENV.includes(key)) {
       errors.push(`${label}: ${key} is set by the deployment and cannot be redefined`);
-    } else if (SUSPICIOUS_ENV.test(key)) {
+    } else if (SUSPICIOUS_ENV.test(key) && !isFrameworkPublic(key)) {
       errors.push(
-        `${label}: ${key} looks like a secret; secrets live on the server, managed from the dashboard, not here`,
+        `${label}: ${key} looks like a secret: list its name under "secrets" and set its value on the server, never in a committed file`,
       );
     }
     if (typeof value !== "string") {
@@ -1159,7 +1317,185 @@ function envErrors(env: Record<string, string> | undefined, label: string): stri
       errors.push(`${label}: the value of ${key} must hold on one line`);
     } else if (!isValidEnvValue(value)) {
       errors.push(`${label}: the value of ${key} must hold no space, quote or backslash, which systemd would split or unquote`);
+    } else if (looksLikeSecretValue(value)) {
+      // Whatever its name: this file is committed. Never quoted.
+      errors.push(`${label}: the value of ${key} starts like a secret key; a secret goes in secrets, never in a committed file`);
+    } else {
+      errors.push(...placeholderErrors(value, label));
     }
+  }
+  return errors;
+}
+
+/** Does the project build anything? Its build is what reads `env` and `secrets.build` without a service. */
+function hasBuild(manifest: Manifest): boolean {
+  return typeof manifest.build === "string" && manifest.build.trim().length > 0;
+}
+
+/**
+ * `{credentials}` is no placeholder: nothing replaces it, in a unit, an
+ * environment file or a backup command's line alike, as measured on systemd
+ * 257. It is refused so that nobody writes it believing it works.
+ */
+function placeholderErrors(text: string, label: string): string[] {
+  return text.includes(NOT_A_PLACEHOLDER)
+    ? [`${label}: ${NOT_A_PLACEHOLDER} is not replaced; a service reads its files at $CREDENTIALS_DIRECTORY/files_<name>`]
+    : [];
+}
+
+/** Every name the project's `env` or any service's sets: a secret's name lives in one place. */
+function envNamesOf(manifest: Manifest): Set<string> {
+  const names = new Set(isRecord(manifest.env) ? Object.keys(manifest.env) : []);
+  for (const service of isRecord(manifest.services) ? Object.values(manifest.services) : []) {
+    if (isRecord(service) && isRecord(service.env)) for (const name of Object.keys(service.env)) names.add(name);
+  }
+  return names;
+}
+
+/** Does any service of the project have a backup command, its single one or one under `services`? */
+function hasBackupCommand(manifest: Manifest): boolean {
+  if (isRecord(manifest.backup)) return true;
+  return (isRecord(manifest.services) ? Object.values(manifest.services) : []).some((service) => isRecord(service) && isRecord(service.backup));
+}
+
+/**
+ * How a refusal names an entry: by itself when it has a variable name's shape
+ * and does not start like a key, by its rank otherwise. A value pasted where
+ * a name goes is never quoted back, into a terminal, an agent's context or a
+ * log.
+ */
+function entryLabel(name: string, rank: number, quotable: boolean): string {
+  return quotable && !VALUE_LIKE_PREFIXES.some((prefix) => name.startsWith(prefix)) ? name : `entry ${rank + 1}`;
+}
+
+const SECRETS_SHAPE = 'secrets: a list of variable names, such as ["API_KEY"], or { "runtime": [...], "files": [...], "build": [...] }';
+const NOT_A_NAME = `not a variable name: letters, digits and underscores, not starting with a digit, ${MAX_KEY} characters at most`;
+const LIKE_A_KEY = "starts like a secret key, not a variable name: a value never goes in sitesolide.json";
+
+/**
+ * The refusals of `secrets`, in every form, see secretsOf. None quotes a
+ * value: a name is quoted only once it has a name's shape, see entryLabel.
+ */
+function secretsErrors(manifest: Manifest, isApplication: boolean): string[] {
+  const raw = manifest.secrets as unknown;
+  if (raw === undefined) return [];
+  const listOfStrings = (value: unknown): boolean => Array.isArray(value) && value.every((entry) => typeof entry === "string");
+  const shaped = listOfStrings(raw) || (isRecord(raw) && Object.entries(raw).every(([key, list]) => SECRETS_KEYS.includes(key) && listOfStrings(list)));
+  if (!shaped) return [SECRETS_SHAPE];
+
+  const declaration = secretsOf(manifest);
+  if (declaration.form === "none") return [];
+  if (declaration.form === "legacy") {
+    if (declaration.legacy.some((name) => !name.includes("."))) {
+      return ["secrets: file names (with a dot) and variable names cannot be mixed: migrate the files first (sitesolide secrets migrate), then list the variable names"];
+    }
+    // The old form's rule and message, unchanged.
+    return declaration.legacy.filter((name) => !isValidSecretName(name)).map((name) => `secrets: "${name}" must be a plain file name under /etc/sitesolide`);
+  }
+
+  const slug = manifest.slug as unknown;
+  if (typeof slug === "string" && STORELESS_SLUGS.includes(slug)) {
+    return [`secrets: ${slug} keeps its hash in ${slug}.env, read by its own unit: its secrets cannot move to a store`];
+  }
+  const errors: string[] = [];
+  const shortForm = Array.isArray(raw);
+  if (!isApplication && (shortForm || declaration.runtime.length > 0 || declaration.files.length > 0)) {
+    errors.push("secrets: without start, no service reads a runtime secret; a value the build needs goes under secrets.build");
+  } else {
+    errors.push(...runtimeNameErrors(manifest, declaration.runtime, shortForm ? "secrets" : "secrets.runtime"));
+    errors.push(...fileNameErrors(declaration.files));
+  }
+  errors.push(...buildNameErrors(manifest, declaration.build));
+  return errors;
+}
+
+/** The runtime variables' names: each set in the store, read by every service of the project at start. */
+function runtimeNameErrors(manifest: Manifest, names: string[], label: string): string[] {
+  const errors: string[] = [];
+  const set = envNamesOf(manifest);
+  const besideBackup = hasBackupCommand(manifest);
+  const seen = new Set<string>();
+  for (const [rank, name] of names.entries()) {
+    const entry = entryLabel(name, rank, isVariableName(name));
+    if (!isVariableName(name)) {
+      errors.push(`${label}: ${entry} is ${NOT_A_NAME}`);
+      continue;
+    }
+    if (entry !== name) {
+      errors.push(`${label}: ${entry} ${LIKE_A_KEY}`);
+      continue;
+    }
+    if (seen.has(name)) {
+      errors.push(`${label}: ${name} is listed twice`);
+      continue;
+    }
+    seen.add(name);
+    if (name === PASSWORD_VARIABLE) {
+      errors.push(`${label}: ${name} is changed with Change password, in the dashboard's and the portal's files alone`);
+      continue;
+    }
+    // The name has a variable's shape here: checkKey's reasons are the
+    // reserved ones, and each starts with the name.
+    const reserved = checkKey(name);
+    if (reserved !== null) {
+      errors.push(`${label}: ${reserved}`);
+      continue;
+    }
+    if (set.has(name)) errors.push(`${label}: ${name} is also set in env; a name lives in one place`);
+    if (besideBackup && name.startsWith("BACKUP_")) {
+      errors.push(`${label}: ${name} is a name of the backup component, which sets BACKUP_DIR for the backup command: no BACKUP_ variable beside one`);
+    }
+  }
+  return errors;
+}
+
+/** The files' names: each a file of the store's files/ folder, see isValidFileName. */
+function fileNameErrors(names: string[]): string[] {
+  const errors: string[] = [];
+  if (names.length > MAX_DECLARED_FILES) {
+    errors.push(`secrets.files: ${MAX_DECLARED_FILES} files at most, systemd loads a bounded amount for each unit`);
+  }
+  const seen = new Set<string>();
+  for (const [rank, name] of names.entries()) {
+    if (!isValidFileName(name)) {
+      errors.push(
+        `secrets.files: entry ${rank + 1} is not a file name: a letter or a digit first, then letters, digits, dots, dashes and underscores, 64 characters at most, no ..`,
+      );
+      continue;
+    }
+    if (seen.has(name)) errors.push(`secrets.files: ${entryLabel(name, rank, true)} is listed twice`);
+    seen.add(name);
+  }
+  return errors;
+}
+
+/** The build secrets' names: each taken from whoever deploys, by the build alone, see buildNameRefusal. */
+function buildNameErrors(manifest: Manifest, names: string[]): string[] {
+  const errors: string[] = [];
+  if (names.length > 0 && !hasBuild(manifest)) errors.push("secrets.build: without build, nothing reads them");
+  const env = new Set(isRecord(manifest.env) ? Object.keys(manifest.env) : []);
+  const seen = new Set<string>();
+  for (const [rank, name] of names.entries()) {
+    const entry = entryLabel(name, rank, isVariableName(name));
+    if (!isVariableName(name)) {
+      errors.push(`secrets.build: ${entry} is ${NOT_A_NAME}`);
+      continue;
+    }
+    if (entry !== name) {
+      errors.push(`secrets.build: ${entry} ${LIKE_A_KEY}`);
+      continue;
+    }
+    if (seen.has(name)) {
+      errors.push(`secrets.build: ${name} is listed twice`);
+      continue;
+    }
+    seen.add(name);
+    const refusal = buildNameRefusal(name);
+    if (refusal !== null) {
+      errors.push(`secrets.build: ${refusal}`);
+      continue;
+    }
+    if (env.has(name)) errors.push(`secrets.build: ${name} is also set in env; a name lives in one place`);
   }
   return errors;
 }
@@ -1216,7 +1552,7 @@ function serviceErrors(manifest: Manifest): string[] {
     if (typeof service.start !== "string" || service.start.length === 0) {
       errors.push(`${label}.start: required, the command systemd runs`);
     } else {
-      errors.push(...commandErrors(service.start, `${label}.start`));
+      errors.push(...commandErrors(service.start, `${label}.start`), ...placeholderErrors(service.start, `${label}.start`));
     }
 
     if (service.internal !== undefined && service.internal !== true) {

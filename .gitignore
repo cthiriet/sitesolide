@@ -15,8 +15,9 @@ node_modules/
 # What earlier versions kept on the workstation and nothing reads any more: a
 # copy of every secret, the registry saying where each landed, and a copy of
 # every generated unit and block. A clone that still has them keeps them out of
-# git until they are deleted. See docs/secrets.md.
-secrets/
+# git until they are deleted. See docs/secrets.md. At the root only: a bare
+# `secrets/` also hid every new file of dashboard/src/secrets/, which is code.
+/secrets/
 
 # Audience measurement: its database and the directory its tests rewrite. The
 # data directory carries the database on the VM, never here.

@@ -55,6 +55,7 @@ import {
   isValidSecretName,
   isValidServiceName,
   isValidSlug,
+  legacySecretFiles,
   servicesOf,
   type ServiceView,
 } from "../../borrowed/manifest";
@@ -107,7 +108,7 @@ export function projectHooks(project: Project, stagingPath: string): { hooks: Ho
   const invalid = (service: ServiceView) => ({
     error: `${commandOf(service)} in sitesolide.json is not valid: fix it and deploy again, see docs/manifest.md`,
   });
-  for (const secret of manifest.secrets ?? []) {
+  for (const secret of legacySecretFiles(manifest)) {
     if (!isValidSecretName(secret)) return { error: "a secret file named in its sitesolide.json is not valid: fix it and deploy again" };
   }
   const hooks: Hook[] = [];
@@ -166,7 +167,7 @@ export function hookJob(config: BackupConfig, project: Project, hook: Hook, time
     environment: [...treeVariables(manifest, hook.service, config.sitesDir), ...declaredVariables(hook.service, placeholders), ["BACKUP_DIR", hook.backupDir]],
     // The dash, as in the unit: a file not created yet leaves the variable
     // unset, and the command says what it misses.
-    environmentFiles: (manifest.secrets ?? []).map((secret) => `-${secretPath(secret)}`),
+    environmentFiles: legacySecretFiles(manifest).map((secret) => `-${secretPath(secret)}`),
     workingDirectory: join(root, "app"),
     memory: hookMemory(hook.service.memory),
   };

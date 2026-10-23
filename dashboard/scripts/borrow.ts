@@ -32,6 +32,12 @@ const DESTINATION = join(import.meta.dir, "..", "borrowed");
  */
 const BORROWINGS = [
   "bin/cli/manifest.ts",
+  // The rules of a variable's name and value, which the manifest's validation
+  // imports, and the parser of a file systemd reads with EnvironmentFile=:
+  // the steward writes those files, the CLI reads the workstation's, both
+  // with this one copy. dashboard/src/secrets/envfile.ts re-exports it.
+  "bin/cli/variables.ts",
+  "bin/cli/envfile.ts",
   "bin/cli/portal.ts",
   "api/src/locks.ts",
   "api/src/config.ts",
