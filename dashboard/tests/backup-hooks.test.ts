@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readSnapshotName, SERVICE_COMMANDS_FEATURE, snapshotName } from "../borrowed/backups";
 import type { Manifest } from "../borrowed/manifest";
-import { generateUnits } from "../borrowed/unit";
+import { generateUnits, unitFileName, withoutStoreLines } from "../borrowed/unit";
 import { configFrom } from "../src/backup/config";
 import { HOOK_EXIT, removeTree } from "../src/backup/child";
 import { copyData, CopyError, LISTED_BYTES, measureCopy, undeclaredServer } from "../src/backup/copy";
 import { extractData } from "../src/backup/extract";
-import { DISCARD_TIMEOUT_MS, discardJob, hookJob, HOOK_GRACE_MS, hookMemory, projectHooks, runHooks } from "../src/backup/hooks";
+import { DISCARD_TIMEOUT_MS, discardJob, hookJob, HOOK_GRACE_MS, hookMemory, installedUnit, projectHooks, runHooks, unitStoreLines } from "../src/backup/hooks";
 import { freeBytes } from "../src/backup/projects";
 import { encodeRequest } from "../src/backup/request";
 import { restore, type Command } from "../src/backup/restore";
@@ -44,6 +44,20 @@ afterAll(() => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/**
+ * A folder of installed units for `manifest`, as /etc/systemd/system holds
+ * them: this release's (`current`), those 0.7 laid (`0.7`), or none.
+ */
+function installedUnits(manifest: Manifest, how: "current" | "0.7" | "none"): string {
+  const folder = mkdtempSync(join(tmpdir(), "backup-units-"));
+  roots.push(folder);
+  if (how === "none") return folder;
+  for (const { unit, text } of generateUnits(manifest, { slug: manifest.slug, zone: "test-zone.invalid", contact: "" })) {
+    writeFileSync(join(folder, unitFileName(unit)), how === "current" ? text : withoutStoreLines(text));
+  }
+  return folder;
+}
 
 /** A running cluster's files, as a copy file by file would find them. */
 function liveCluster(folder: string): void {
@@ -626,7 +640,8 @@ describe("a backup command's unit", () => {
       db: { start: "/bin/sh /srv/sites/vault/app/postgres.sh", port: 3041, internal: true, memory: "512M", backup: { folder: "db", command: "/bin/sh /srv/sites/vault/app/backup.sh" } },
     },
   } as Manifest;
-  const config = configFrom({ SITESOLIDE_ZONE: "test-zone.invalid" }, { bun: "/usr/local/bin/bun", script: "/usr/local/lib/sitesolide/backup.js" });
+  // Its service's unit installed as this release lays it.
+  const config = { ...configFrom({ SITESOLIDE_ZONE: "test-zone.invalid" }, { bun: "/usr/local/bin/bun", script: "/usr/local/lib/sitesolide/backup.js" }), unitsFolder: installedUnits(manifest, "current") };
   const vaultProject = { folder: "vault", account: "site-vault", owner: { uid: 1042, gid: 1042 }, dataDir: "/srv/sites/vault/data", manifest };
   const place = staging(config, "vault");
   const found = projectHooks(vaultProject, place.path);
@@ -772,12 +787,14 @@ describe("a worker's backup command", () => {
 describe("a backup command and its project's store", () => {
   const config = configFrom({ SITESOLIDE_ZONE: "test-zone.invalid" }, { bun: "/usr/local/bin/bun", script: "/usr/local/lib/sitesolide/backup.js" });
   const backup = { folder: "db", command: "/bin/sh /srv/sites/vault/app/backup.sh" };
-  const jobOf = (manifest: Manifest) => {
+  /** The command's job, its service's units installed as `how` says, or in the folder given. */
+  const jobOf = (manifest: Manifest, how: "current" | "0.7" | "none" | { folder: string } = "current") => {
     const project = { folder: manifest.slug, account: `site-${manifest.slug}`, owner: { uid: 1042, gid: 1042 }, dataDir: `/srv/sites/${manifest.slug}/data`, manifest };
     const place = staging(config, manifest.slug);
     const found = projectHooks(project, place.path);
     if ("error" in found) throw new Error(found.error);
-    return hookJob(config, project, found.hooks[0]!, 600_000, place.cacheDirectory);
+    const unitsFolder = typeof how === "string" ? installedUnits(manifest, how) : how.folder;
+    return hookJob({ ...config, unitsFolder }, project, found.hooks[0]!, 600_000, place.cacheDirectory);
   };
   const propertiesOf = (job: Job) => {
     const command = childCommand(job, config, "a1b2c3d4");
@@ -802,6 +819,118 @@ describe("a backup command and its project's store", () => {
     const job = jobOf({ slug: "vault", port: 3041, start: "/bin/sh db.sh", backup, secrets: ["vault-ses.env", "vault.env"] } as Manifest);
     expect(job.environmentFiles).toEqual(["-/etc/sitesolide/vault-ses.env", "-/etc/sitesolide/vault.env", "-/etc/sitesolide/projects/vault/env"]);
     expect(job.credentials).toEqual(["files:/etc/sitesolide/projects/vault/files"]);
+  });
+
+  test("a service whose unit 0.7 laid reads no store: its command gets none either, its files/ folder perhaps not laid yet", () => {
+    // Between the dashboard's upgrade and the project's next deployment. Given
+    // LoadCredential= from the manifest, a folder not laid yet failed every
+    // snapshot of the project with 243 (review finding M1).
+    for (const secrets of [["API_KEY"], { runtime: ["API_KEY"], files: ["tls.key"] }, undefined]) {
+      const job = jobOf({ slug: "vault", port: 3041, start: "/bin/sh db.sh", backup, ...(secrets === undefined ? {} : { secrets }) } as Manifest, "0.7");
+      expect(job.environmentFiles).toEqual([]);
+      expect(job.credentials).toEqual([]);
+      expect(propertiesOf(job).some((property) => property.startsWith("LoadCredential=") || property.includes("/projects/"))).toBe(false);
+    }
+    // The old form keeps its flat files, as its service does.
+    const legacy = jobOf({ slug: "vault", port: 3041, start: "/bin/sh db.sh", backup, secrets: ["vault-ses.env", "vault.env"] } as Manifest, "0.7");
+    expect(legacy.environmentFiles).toEqual(["-/etc/sitesolide/vault-ses.env", "-/etc/sitesolide/vault.env"]);
+    expect(legacy.credentials).toEqual([]);
+  });
+
+  test("its own service's unit decides, not the project's main one", () => {
+    const manifest = { slug: "vault", services: { web: { start: "/usr/local/bin/bun run web.ts", port: 3040 }, db: { start: "/bin/sh db.sh", port: 3041, internal: true, backup } }, secrets: ["API_KEY"] } as Manifest;
+    const folder = installedUnits(manifest, "current");
+    // The database's unit still 0.7's, the front's this release's.
+    writeFileSync(join(folder, "vault.db.service"), withoutStoreLines(readFileSync(join(folder, "vault.db.service"), "utf8")));
+    expect(jobOf(manifest, { folder }).credentials).toEqual([]);
+    expect(jobOf(manifest, "current").credentials).toEqual(["files:/etc/sitesolide/projects/vault/files"]);
+  });
+
+  test("a store folder no deploy laid never yields a LoadCredential line: no unit, a link, a unit too big, or one edited by hand", () => {
+    const manifest = { slug: "vault", port: 3041, start: "/bin/sh db.sh", backup, secrets: { files: ["tls.key"] } } as Manifest;
+    const current = readFileSync(join(installedUnits(manifest, "current"), "vault.service"), "utf8");
+    const credentialsOf = (write: (folder: string) => void) => {
+      const folder = mkdtempSync(join(tmpdir(), "backup-units-"));
+      roots.push(folder);
+      write(folder);
+      return jobOf(manifest, { folder }).credentials;
+    };
+    // The unit itself, as a reference.
+    expect(credentialsOf((folder) => writeFileSync(join(folder, "vault.service"), current))).toEqual(["files:/etc/sitesolide/projects/vault/files"]);
+    // Never deployed as an app, or its unit gone.
+    expect(credentialsOf(() => undefined)).toEqual([]);
+    // A link is not read, wherever it points.
+    expect(
+      credentialsOf((folder) => {
+        writeFileSync(join(folder, "elsewhere"), current);
+        symlinkSync(join(folder, "elsewhere"), join(folder, "vault.service"));
+      }),
+    ).toEqual([]);
+    // Past the bound a unit has no reason to reach.
+    expect(credentialsOf((folder) => writeFileSync(join(folder, "vault.service"), `${current}${"#".repeat(256 * 1024)}\n`))).toEqual([]);
+    // Edited by hand: the line in a comment, outside [Service], or naming another project's store or another path.
+    const loads = "LoadCredential=files:/etc/sitesolide/projects/vault/files\n";
+    for (const edited of [
+      current.replace(loads, `# ${loads}`),
+      current.replace(loads, "").replace("[Install]\n", `[Install]\n${loads}`),
+      current.replace(loads, "LoadCredential=files:/etc/sitesolide/projects/other/files\n"),
+      current.replace(loads, "LoadCredential=key:/etc/ssl/private/vault.pem\n"),
+      current.replace(loads, "LoadCredential=files:/etc/sitesolide/projects/vault/files/\n"),
+    ]) {
+      expect(credentialsOf((folder) => writeFileSync(join(folder, "vault.service"), edited))).toEqual([]);
+    }
+  });
+
+  test("the store's lines of an installed unit, read exactly, each on its own", () => {
+    const service = (...lines: string[]) => ["[Unit]", "Description=x", "", "[Service]", ...lines, "", "[Install]", "WantedBy=multi-user.target", ""].join("\n");
+    const env = "EnvironmentFile=-/etc/sitesolide/projects/vault/env";
+    const files = "LoadCredential=files:/etc/sitesolide/projects/vault/files";
+    expect(unitStoreLines(service(env, files), "vault")).toEqual({ environmentFiles: ["-/etc/sitesolide/projects/vault/env"], credentials: ["files:/etc/sitesolide/projects/vault/files"] });
+    expect(unitStoreLines(service(env), "vault")).toEqual({ environmentFiles: ["-/etc/sitesolide/projects/vault/env"], credentials: [] });
+    expect(unitStoreLines(service(files), "vault")).toEqual({ environmentFiles: [], credentials: ["files:/etc/sitesolide/projects/vault/files"] });
+    // Indented, or twice: once.
+    expect(unitStoreLines(service(`  ${files}`, files), "vault").credentials).toEqual(["files:/etc/sitesolide/projects/vault/files"]);
+    expect(unitStoreLines(service(env, files), "other")).toEqual({ environmentFiles: [], credentials: [] });
+    expect(unitStoreLines(service("EnvironmentFile=/etc/sitesolide/projects/vault/env"), "vault").environmentFiles).toEqual([]);
+    expect(unitStoreLines(null, "vault")).toEqual({ environmentFiles: [], credentials: [] });
+    // A storeless slug or one that is not a project's reads none, whatever its unit says.
+    expect(unitStoreLines(service("LoadCredential=files:/etc/sitesolide/projects/dashboard/files"), "dashboard").credentials).toEqual([]);
+    expect(unitStoreLines(service(files), "../vault")).toEqual({ environmentFiles: [], credentials: [] });
+  });
+
+  test("an installed unit is read as a plain file, by its unit's file name", () => {
+    const folder = mkdtempSync(join(tmpdir(), "backup-units-"));
+    roots.push(folder);
+    writeFileSync(join(folder, "vault.db.service"), "[Service]\n");
+    expect(installedUnit(folder, "vault.db")).toBe("[Service]\n");
+    expect(installedUnit(folder, "vault")).toBeNull();
+    mkdirSync(join(folder, "vault.service"));
+    expect(installedUnit(folder, "vault")).toBeNull();
+  });
+
+  test("after the upgrade, a project still on its 0.7 unit keeps its snapshot; on this release's, its command gets the files", async () => {
+    // A systemd-run that fails as PID 1 does when the folder LoadCredential=
+    // names is missing (bench Q8): 243, the command never run.
+    const root = mkdtempSync(join(tmpdir(), "backup-m1-"));
+    roots.push(root);
+    const systemdRun = join(root, "systemd-run");
+    writeFileSync(systemdRun, '#!/bin/sh\nfor argument; do case "$argument" in LoadCredential=*) exit 243 ;; esac; done\nexit 0\n', { mode: 0o755 });
+    const manifest = { slug: "vault", port: 3041, start: "/bin/sh db.sh", backup, secrets: ["API_KEY"] } as Manifest;
+    const project = { folder: "vault", account: "site-vault", owner: { uid: 1042, gid: 1042 }, dataDir: join(root, "data"), manifest };
+    const found = projectHooks(project, join(root, "staging"));
+    if ("error" in found) throw new Error(found.error);
+    const ran = async (how: "current" | "0.7") => {
+      const journal: string[] = [];
+      const outcome = await runHooks({ ...config, systemdRun, unitsFolder: installedUnits(manifest, how) }, project, found.hooks, Date.now() + 30_000, null, (line) => journal.push(line));
+      return { outcome, journal };
+    };
+    const before = await ran("0.7");
+    expect(before.outcome).toEqual({ ok: true });
+    expect(before.journal).toEqual(["backup vault: the backup command left its copy of db"]);
+    // Laid by a deploy, the unit comes with its folder; were it gone, the
+    // command fails as its service would, and says why.
+    const after = await ran("current");
+    expect(after.outcome).toEqual({ ok: false, error: credentialsFailure("the backup command", "vault"), cause: null });
   });
 
   test("dashboard and portal keep their flat file alone, with no store line (I10)", () => {

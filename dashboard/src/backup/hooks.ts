@@ -16,8 +16,9 @@
  * service's environment as the unit sets it (bin/cli/unit.ts), its secrets
  * read by PID 1 from `/etc/sitesolide`, never on a command line: the old
  * form's flat files, then the project's store, its variables and its files,
- * the latter at `${CREDENTIALS_DIRECTORY}/files_<name>`, and the loopback
- * alone, to reach its service on its port. The machine's loopback
+ * the latter at `${CREDENTIALS_DIRECTORY}/files_<name>`, when its service's
+ * installed unit reads the store (unitStoreLines), and the loopback alone,
+ * to reach its service on its port. The machine's loopback
  * rule lets a project's account reach its own ports and nobody else's
  * (bin/cli/loopback.ts, reachesOwnPorts).
  *
@@ -44,7 +45,7 @@
  * the hook mode's exit code alone (HOOK_EXIT, child.ts), and what was printed
  * goes to the journal.
  */
-import { existsSync, statfsSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, statfsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   commandErrors,
@@ -62,9 +63,9 @@ import {
   servicesOf,
   type ServiceView,
 } from "../../borrowed/manifest";
-import { CREDENTIALS_EXIT_STATUS, credentialsFailure, storeCredentials, storeEnvironmentFile } from "../../borrowed/store";
+import { CREDENTIALS_EXIT_STATUS, credentialsFailure, slugHasStore, storeCredentials, storeEnvironmentFile } from "../../borrowed/store";
 import { HOOK_EXIT } from "./child";
-import { declaredVariables, secretPath, treeVariables } from "../../borrowed/unit";
+import { declaredVariables, secretPath, treeVariables, unitFileName } from "../../borrowed/unit";
 import { label } from "../secrets/scope";
 import type { BackupConfig } from "./config";
 import type { LiveFolder } from "./copy";
@@ -141,18 +142,80 @@ export function liveFolders(hooks: readonly Hook[], stopped: boolean): LiveFolde
   return hooks.map((hook) => ({ folder: hook.folder, source: stopped ? null : hook.backupDir }));
 }
 
+/** A unit file has no reason to be bigger: the installer reads them at the same bound. */
+const MAX_UNIT_BYTES = 256 * 1024;
+
+/**
+ * A service's unit as the machine has it installed, `/etc/systemd/system/<unit>.service`:
+ * a plain file, read whole, or null when it is missing, a link, too big or
+ * unreadable. Root reads it, as the rest of /etc, which the run's own unit
+ * leaves readable; /etc/sitesolide itself it cannot see.
+ */
+export function installedUnit(unitsFolder: string, unit: string): string | null {
+  const path = join(unitsFolder, unitFileName(unit));
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > MAX_UNIT_BYTES) return null;
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+export type StoreLines = { environmentFiles: string[]; credentials: string[] };
+
+/**
+ * The lines of the project's store an installed unit carries in its
+ * `[Service]` section, exactly as this release writes them for the slug:
+ * what its backup command is handed too, and nothing else.
+ *
+ * Its service, not its manifest, decides. `LoadCredential=` has no optional
+ * form, and a missing `files/` folder fails the unit with 243 (bench Q8):
+ * the folder is laid by the deploy that lays a unit loading it, and not
+ * before. Between the dashboard's upgrade and a project's next deployment,
+ * its unit is still 0.7's, which reads no store, and its folder may not
+ * exist: handed the line from the manifest, its command would fail the whole
+ * snapshot every hour. The run cannot look at the folder itself, its own unit
+ * hiding /etc/sitesolide. A unit missing, unreadable or edited to name
+ * another path gives none: the command gets less, never another project's
+ * secrets.
+ */
+export function unitStoreLines(installed: string | null, slug: string): StoreLines {
+  const lines: StoreLines = { environmentFiles: [], credentials: [] };
+  if (installed === null || !slugHasStore(slug)) return lines;
+  const environmentFile = storeEnvironmentFile(slug);
+  const credentials = storeCredentials(slug);
+  let section = "";
+  for (const raw of installed.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("[")) {
+      section = line;
+      continue;
+    }
+    if (section !== "[Service]") continue;
+    if (line === `EnvironmentFile=${environmentFile}`) lines.environmentFiles = [environmentFile];
+    if (line === `LoadCredential=${credentials}`) lines.credentials = [credentials];
+  }
+  return lines;
+}
+
 /**
  * A command's unit: its service's walls, environment and secrets, the
  * loopback, the copy's CacheDirectory for its folder. `timeoutMs` is the
  * unit's RuntimeMaxSec; the command itself is given a little less, so that
- * running out of time is said rather than cut.
+ * running out of time is said rather than cut. The store's lines are those
+ * its service's installed unit carries, read in `config.unitsFolder` as the
+ * command starts (unitStoreLines).
  */
 export function hookJob(config: BackupConfig, project: Project, hook: Hook, timeoutMs: number, cacheDirectory: string | null): Job {
   const manifest = project.manifest!;
   const root = join(config.sitesDir, project.folder);
   const placeholders = { slug: manifest.slug, zone: config.zone, contact: config.contact };
-  // dashboard and portal keep their flat file alone, as their unit does.
-  const store = hasStore(manifest);
+  // dashboard and portal keep their flat file alone, as their unit does; any
+  // other project, what its service's unit reads of its store.
+  const store: StoreLines = hasStore(manifest)
+    ? unitStoreLines(installedUnit(config.unitsFolder, hook.service.unit), manifest.slug)
+    : { environmentFiles: [], credentials: [] };
   return {
     mode: "hook",
     folder: project.folder,
@@ -174,11 +237,11 @@ export function hookJob(config: BackupConfig, project: Project, hook: Hook, time
     // As in the unit: the old form's files, then the store, which wins on a
     // name both hold; the dash on each, a file not written yet leaving its
     // variables unset, and the command saying what it misses.
-    environmentFiles: [...legacySecretFiles(manifest).map((secret) => `-${secretPath(secret)}`), ...(store ? [storeEnvironmentFile(manifest.slug)] : [])],
+    environmentFiles: [...legacySecretFiles(manifest).map((secret) => `-${secretPath(secret)}`), ...store.environmentFiles],
     // The store's files, which its service reads at
-    // $CREDENTIALS_DIRECTORY/files_<name>: the folder always exists for a
-    // project with a store, missing it fails the unit with 243.
-    credentials: store ? [storeCredentials(manifest.slug)] : [],
+    // $CREDENTIALS_DIRECTORY/files_<name>, when its unit loads them: the
+    // folder is laid with that unit, missing it fails the command with 243.
+    credentials: store.credentials,
     workingDirectory: join(root, "app"),
     memory: hookMemory(hook.service.memory),
   };
