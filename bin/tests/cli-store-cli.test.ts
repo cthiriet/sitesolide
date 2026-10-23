@@ -247,6 +247,20 @@ describe("the owner's transport, over SSH to the steward's owner socket", () => 
     expect(garbled).toMatchObject({ ok: false, failure: { error: "unreadable" } });
   });
 
+  test("a migration's conflicts come back refused with 409, its body the answer: said by name and files, never a value", async () => {
+    const conflicts = { error: "unmanaged", message: "AWS_ACCESS_KEY_ID: in a.env and b.env, with different values. Remove the duplicate from one file, then migrate again; nothing was written" };
+    const body = { ...conflicts, store: view(), sources: ["a.env", "b.env"], skipped: [], merged: [], already: [], overridden: [], conflicts: [{ name: "AWS_ACCESS_KEY_ID", files: ["a.env", "b.env"] }], written: false };
+    const { transport } = machine(() => curl(409, body));
+    const migrated = await transport.migrate!("shop", false);
+    expect(migrated).toMatchObject({ ok: true, value: { conflicts: [{ name: "AWS_ACCESS_KEY_ID", files: ["a.env", "b.env"] }], written: false } });
+    const record = recording();
+    expect(await runStore({ action: "migrate", dryRun: false, restart: true }, "shop", transport, dependencies(record.output))).toBe(1);
+    expect(record.failures[0]).toMatchObject({ error: "migrate-conflict", details: expect.arrayContaining(["AWS_ACCESS_KEY_ID: in a.env and b.env, with different values"]) });
+    // Any other refusal stays one.
+    const refused = await machine(() => curl(409, { error: "unmanaged", message: "shop.env is not managed" })).transport.migrate!("shop", false);
+    expect(refused).toMatchObject({ ok: false, failure: { error: "unmanaged" } });
+  });
+
   test("a slug that is not one never reaches a command", async () => {
     const { ran, transport } = machine(() => curl(200, change()));
     for (const slug of ["Shop", "shop'; reboot", "../etc", ""]) {

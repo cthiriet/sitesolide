@@ -776,7 +776,8 @@ if (import.meta.main) {
     if (file !== null && method === "DELETE") files.delete(file);
     current.files[slug] = [...files];
     writeFileSync(storeFile, JSON.stringify(current));
-    answer(200, {
+    // As the steward: 201 when this request made the store.
+    answer(created ? 201 : 200, {
       store: storeView(current, slug),
       created,
       set,

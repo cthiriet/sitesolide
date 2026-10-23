@@ -410,7 +410,11 @@ export function sshStore(run: RunOnMachine): StoreTransport {
     },
     async migrate(slug, dryRun) {
       if (!isValidSlug(slug)) return refusedSlug(slug);
-      const read = await askSteward(run, ownerWriteCommand("POST", "/store/migrate"), JSON.stringify({ slug, dryRun }), words(true));
+      // Conflicts refuse the migration with a 409 whose body is the migration's answer: read as one, so that they are said by name.
+      const read = await askSteward(run, ownerWriteCommand("POST", "/store/migrate"), JSON.stringify({ slug, dryRun }), {
+        ...words(true),
+        answers: (status, body) => status === 409 && Array.isArray(body.conflicts) && body.conflicts.length > 0,
+      });
       if (!read.ok) return read;
       const answer = readMigrate(read.value);
       return answer === null ? unreadable(steward, "a migration") : { ok: true, value: answer };

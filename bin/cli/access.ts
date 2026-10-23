@@ -576,13 +576,19 @@ export function ownerGeneralCommand(): string {
  * ssh that did not connect, a socket missing (a steward from before the
  * owner's socket), a route the steward does not carry yet (`outdated`), or
  * its refusal as it stands. `unchanged` adds that nothing was changed to a
- * refusal, which a read or a change that may have half happened leaves out.
+ * refusal, which a read or a change that may have half happened leaves out;
+ * `answers` takes a refusal's body as the answer, for the caller to read.
  */
 export async function askSteward(
   run: RunOnMachine,
   command: string,
   input?: string,
-  words: { outdated: string; unchanged: boolean } = { outdated: "the steward on the server does not keep people with access yet: run sitesolide upgrade first", unchanged: true },
+  words: {
+    outdated: string;
+    unchanged: boolean;
+    /** A refusal whose body is an answer all the same: a migration's conflicts, which name what to fix. */
+    answers?: (status: number, body: Record<string, unknown>) => boolean;
+  } = { outdated: "the steward on the server does not keep people with access yet: run sitesolide upgrade first", unchanged: true },
 ): Promise<Reading<Record<string, unknown>>> {
   const done = await run(command, input);
   if (done.code === 255) {
@@ -611,7 +617,7 @@ export async function askSteward(
   if (answer.status === 404 && body.message === "no such route") {
     return { ok: false, failure: { error: "steward-outdated", message: words.outdated } };
   }
-  if (answer.status >= 400) {
+  if (answer.status >= 400 && words.answers?.(answer.status, body) !== true) {
     const code = typeof body.error === "string" ? body.error : "failure";
     const said = typeof body.message === "string" ? body.message : `refused (${answer.status})`;
     return { ok: false, failure: { error: code, message: words.unchanged ? `${said}: nothing was changed` : said } };
