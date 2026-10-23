@@ -9,12 +9,13 @@ import { configFrom } from "../src/backup/config";
 import { HOOK_EXIT, removeTree } from "../src/backup/child";
 import { copyData, CopyError, LISTED_BYTES, measureCopy, undeclaredServer } from "../src/backup/copy";
 import { extractData } from "../src/backup/extract";
-import { DISCARD_TIMEOUT_MS, discardJob, hookJob, HOOK_GRACE_MS, hookMemory, projectHooks } from "../src/backup/hooks";
+import { DISCARD_TIMEOUT_MS, discardJob, hookJob, HOOK_GRACE_MS, hookMemory, projectHooks, runHooks } from "../src/backup/hooks";
 import { freeBytes } from "../src/backup/projects";
 import { encodeRequest } from "../src/backup/request";
 import { restore, type Command } from "../src/backup/restore";
 import { runBackups } from "../src/backup/run";
 import { childCommand, confinement, startChild, type Job } from "../src/backup/runner";
+import { CREDENTIALS_EXIT_STATUS, credentialsFailure, storeCredentials, storeEnvironmentFile } from "../borrowed/store";
 import { staging, takeSnapshot, verifyArchive } from "../src/backup/snapshot";
 import { TarWriter, type Sink } from "../src/backup/tar";
 import { dumped, names as storedNames, NO_RESTIC, project, SCRIPT, tree } from "./backup-fixtures";
@@ -675,7 +676,7 @@ describe("a backup command's unit", () => {
   test("is confined at least like its service, the loopback kept", () => {
     const wanted = lines
       .filter((line) =>
-        /^(NoNewPrivileges|PrivateTmp|PrivateDevices|ProtectSystem|ProtectHome|ReadWritePaths|TemporaryFileSystem|BindPaths|BindReadOnlyPaths|ProtectKernelTunables|ProtectKernelModules|ProtectControlGroups|RestrictNamespaces|RestrictSUIDSGID|RestrictRealtime|LockPersonality|UMask|IPAddressDeny|IPAddressAllow|SocketBindDeny|MemoryMax)=/.test(line),
+        /^(NoNewPrivileges|PrivateTmp|PrivateDevices|ProtectSystem|ProtectHome|ReadWritePaths|TemporaryFileSystem|BindPaths|BindReadOnlyPaths|InaccessiblePaths|ProtectProc|ProtectKernelTunables|ProtectKernelModules|ProtectControlGroups|RestrictNamespaces|RestrictSUIDSGID|RestrictRealtime|LockPersonality|UMask|IPAddressDeny|IPAddressAllow|SocketBindDeny|MemoryMax)=/.test(line),
       )
       .map((line) => line.replace(/^(\w+)=true$/, "$1=yes"));
     expect(wanted).toContain("IPAddressAllow=localhost");
@@ -688,10 +689,10 @@ describe("a backup command's unit", () => {
     for (const line of wanted.filter((line) => !line.startsWith("MemoryMax="))) expect(confinement(job)).toContain(line);
     // Its service's ceiling, and room for the program that runs the command.
     expect(confinement(job)).toContain("MemoryMax=640M");
-    // Stricter than its service on one line: /etc/sitesolide stays hidden, its
-    // secret reaching it through PID 1 all the same.
-    expect(lines).not.toContain("InaccessiblePaths=-/etc/sitesolide");
-    expect(confinement(job)).toContain("InaccessiblePaths=-/etc/sitesolide");
+    // /etc/sitesolide hidden from both, the secrets reaching each through PID 1
+    // all the same, and the processes of other accounts too.
+    expect(wanted).toContain("InaccessiblePaths=-/etc/sitesolide");
+    expect(wanted).toContain("ProtectProc=invisible");
     expect(confinement(job)).not.toContain("DynamicUser=yes");
     expect(confinement(job).some((property) => property.startsWith("RestrictAddressFamilies"))).toBe(false);
     expect(confinement(job)).toContain("RuntimeMaxSec=600");
@@ -705,11 +706,17 @@ describe("a backup command's unit", () => {
     expect(given).toContain("RATIO=100%");
   });
 
-  test("its secrets are read by PID 1 from the file its service reads, never put on the command line", () => {
-    const files = lines.filter((line) => line.startsWith("EnvironmentFile=")).map((line) => line);
-    expect(files).toEqual(["EnvironmentFile=-/etc/sitesolide/vault.env"]);
+  test("its secrets are read by PID 1 from the files its service reads, the store last, never put on the command line", () => {
+    const files = lines.filter((line) => line.startsWith("EnvironmentFile="));
+    expect(files).toEqual(["EnvironmentFile=-/etc/sitesolide/vault.env", "EnvironmentFile=-/etc/sitesolide/projects/vault/env"]);
     expect(properties.filter((property) => property.startsWith("EnvironmentFile="))).toEqual(files);
+    // Its files as its service loads them, each at $CREDENTIALS_DIRECTORY/files_<name>.
+    const credentials = lines.filter((line) => line.startsWith("LoadCredential="));
+    expect(credentials).toEqual(["LoadCredential=files:/etc/sitesolide/projects/vault/files"]);
+    expect(properties.filter((property) => property.startsWith("LoadCredential="))).toEqual(credentials);
     expect(properties).toContain("WorkingDirectory=/srv/sites/vault/app");
+    // No placeholder, no credentials path, no %d: systemd sets CREDENTIALS_DIRECTORY itself.
+    expect(command.some((argument) => /%d|\/run\/credentials|CREDENTIALS_DIRECTORY/.test(argument))).toBe(false);
   });
 
   test("with no isolation, the same mode as a plain child", () => {
@@ -752,5 +759,148 @@ describe("a worker's backup command", () => {
     expect(unit).not.toContain("Environment=PORT=");
     const given = childCommand(job, config, "a1b2c3d4").filter((argument) => argument.startsWith("--setenv=") && !argument.includes("BACKUP_EXPECTED_UID"));
     expect(given).toEqual(["--setenv=DATA_DIR=/srv/sites/vault/data", "--setenv=PUBLIC_DIR=/srv/sites/vault/public", "--setenv=BACKUP_DIR=/var/cache/sitesolide-backup/vault/hooks/vault.indexer"]);
+  });
+});
+
+/**
+ * A backup command gets its project's store as its service does: the store's
+ * env file after the old form's, the files folder by LoadCredential=, and the
+ * processes of other accounts hidden. Measured on the runner's own line on
+ * systemd 257 (the store's bench, Q8): CREDENTIALS_DIRECTORY set, the files
+ * read, and a missing folder failing systemd-run with 243.
+ */
+describe("a backup command and its project's store", () => {
+  const config = configFrom({ SITESOLIDE_ZONE: "test-zone.invalid" }, { bun: "/usr/local/bin/bun", script: "/usr/local/lib/sitesolide/backup.js" });
+  const backup = { folder: "db", command: "/bin/sh /srv/sites/vault/app/backup.sh" };
+  const jobOf = (manifest: Manifest) => {
+    const project = { folder: manifest.slug, account: `site-${manifest.slug}`, owner: { uid: 1042, gid: 1042 }, dataDir: `/srv/sites/${manifest.slug}/data`, manifest };
+    const place = staging(config, manifest.slug);
+    const found = projectHooks(project, place.path);
+    if ("error" in found) throw new Error(found.error);
+    return hookJob(config, project, found.hooks[0]!, 600_000, place.cacheDirectory);
+  };
+  const propertiesOf = (job: Job) => {
+    const command = childCommand(job, config, "a1b2c3d4");
+    return command.flatMap((argument, index) => (command[index - 1] === "-p" ? [argument] : []));
+  };
+
+  test("the names form, or no secret at all: the store alone, its env file and its files", () => {
+    for (const secrets of [["API_KEY"], { runtime: ["API_KEY"], files: ["tls.key"] }, undefined]) {
+      const job = jobOf({ slug: "vault", port: 3041, start: "/bin/sh db.sh", backup, ...(secrets === undefined ? {} : { secrets }) } as Manifest);
+      expect(job.environmentFiles).toEqual([storeEnvironmentFile("vault")]);
+      expect(job.environmentFiles).toEqual(["-/etc/sitesolide/projects/vault/env"]);
+      expect(job.credentials).toEqual([storeCredentials("vault")]);
+      expect(job.credentials).toEqual(["files:/etc/sitesolide/projects/vault/files"]);
+      expect(propertiesOf(job).filter((property) => /^(EnvironmentFile|LoadCredential)=/.test(property))).toEqual([
+        "EnvironmentFile=-/etc/sitesolide/projects/vault/env",
+        "LoadCredential=files:/etc/sitesolide/projects/vault/files",
+      ]);
+    }
+  });
+
+  test("the old form: its files in the manifest's order, then the store, which wins on a name both hold", () => {
+    const job = jobOf({ slug: "vault", port: 3041, start: "/bin/sh db.sh", backup, secrets: ["vault-ses.env", "vault.env"] } as Manifest);
+    expect(job.environmentFiles).toEqual(["-/etc/sitesolide/vault-ses.env", "-/etc/sitesolide/vault.env", "-/etc/sitesolide/projects/vault/env"]);
+    expect(job.credentials).toEqual(["files:/etc/sitesolide/projects/vault/files"]);
+  });
+
+  test("dashboard and portal keep their flat file alone, with no store line (I10)", () => {
+    for (const slug of ["dashboard", "portal"]) {
+      const job = jobOf({ slug, port: 3041, start: "/bin/sh db.sh", backup, secrets: [`${slug}.env`] } as Manifest);
+      expect(job.environmentFiles).toEqual([`-/etc/sitesolide/${slug}.env`]);
+      expect(job.credentials).toEqual([]);
+      expect(propertiesOf(job).some((property) => property.startsWith("LoadCredential=") || property.includes("/projects/"))).toBe(false);
+    }
+  });
+
+  test("its line is the one the bench ran, with the store's files and ProtectProc added, and nothing else", () => {
+    // The line bench/hookline.ts built with the runner of main for project
+    // demo (hookline.json), which systemd 257 ran with the store's env file;
+    // Q8b added LoadCredential=files:<store>/files to it, and read the files.
+    const bench = ["/usr/bin/systemd-run","--quiet","--wait","--pipe","--collect","--service-type=exec","--unit=sitesolide-backup-hook-demo-bench.service","--description=Backup hook of demo","--uid=site-demo","--gid=site-demo","--nice=10","--setenv=PORT=3010","--setenv=DATA_DIR=/srv/sites/demo/data","--setenv=PUBLIC_DIR=/srv/sites/demo/public","--setenv=BACKUP_DIR=/srv/sites/demo/data/.backup","-p","EnvironmentFile=-/etc/sitesolide/projects/demo/env","-p","WorkingDirectory=/srv/sites/demo/app","-p","UMask=0077","-p","NoNewPrivileges=yes","-p","PrivateTmp=yes","-p","PrivateDevices=yes","-p","ProtectSystem=strict","-p","ProtectHome=yes","-p","ReadWritePaths=/srv/sites/demo/data","-p","TemporaryFileSystem=/srv:ro","-p","BindReadOnlyPaths=/srv/sites/demo/app","-p","BindReadOnlyPaths=/srv/sites/demo/public","-p","BindPaths=/srv/sites/demo/data","-p","InaccessiblePaths=-/etc/sitesolide","-p","InaccessiblePaths=-/var/lib/sitesolide-steward","-p","InaccessiblePaths=-/var/backups","-p","ProtectKernelTunables=yes","-p","ProtectKernelModules=yes","-p","ProtectControlGroups=yes","-p","RestrictNamespaces=yes","-p","RestrictSUIDSGID=yes","-p","RestrictRealtime=yes","-p","LockPersonality=yes","-p","MemoryMax=384M","-p","IPAddressDeny=any","-p","IPAddressAllow=localhost","-p","SocketBindDeny=2019","-p","SocketBindDeny=3000-3099","-p","SocketBindDeny=3128-3129","-p","IOSchedulingClass=idle","-p","RuntimeMaxSec=60","-p","TimeoutStopSec=15s","--","/bin/sh","/srv/sites/demo/app/hookprobe.sh","hook","997","/srv/sites/demo/data/.backup","55000"];
+    const job: Job = {
+      mode: "hook",
+      folder: "demo",
+      account: "site-demo",
+      uid: 997,
+      args: ["997", "/srv/sites/demo/data/.backup", "55000"],
+      readWrite: ["/srv/sites/demo/data"],
+      bind: ["/srv/sites/demo/data"],
+      bindReadOnly: ["/srv/sites/demo/app", "/srv/sites/demo/public"],
+      cacheDirectory: null,
+      stdin: null,
+      stdout: "ignore",
+      timeoutMs: 60000,
+      loopback: true,
+      environment: [["PORT", "3010"], ["DATA_DIR", "/srv/sites/demo/data"], ["PUBLIC_DIR", "/srv/sites/demo/public"], ["BACKUP_DIR", "/srv/sites/demo/data/.backup"]],
+      environmentFiles: [storeEnvironmentFile("demo")],
+      credentials: [storeCredentials("demo")],
+      workingDirectory: "/srv/sites/demo/app",
+      memory: "384M",
+    };
+    const line = childCommand(job, { isolation: "systemd", systemdRun: "/usr/bin/systemd-run", bun: "/bin/sh", script: "/srv/sites/demo/app/hookprobe.sh", offsiteFile: "/unused" }, "bench");
+    const added = (properties: string[]) => {
+      const removed = [...line];
+      for (const property of properties) {
+        const at = removed.indexOf(property);
+        expect({ property, found: at > 0 && removed[at - 1] === "-p" }).toEqual({ property, found: true });
+        removed.splice(at - 1, 2);
+      }
+      return removed;
+    };
+    expect(added(["LoadCredential=files:/etc/sitesolide/projects/demo/files", "ProtectProc=invisible"])).toEqual(bench);
+    // ${CREDENTIALS_DIRECTORY} on a command's line is systemd's to expand there:
+    // the runner never turns that off, as the installer's line does.
+    expect(line).not.toContain("--expand-environment=no");
+  });
+
+  test("a command naming one of its files through ${CREDENTIALS_DIRECTORY} is run as written, systemd expanding it", () => {
+    const job = jobOf({ slug: "vault", port: 3041, start: "/bin/sh db.sh", backup: { folder: "db", command: "/bin/sh /srv/sites/vault/app/backup.sh ${CREDENTIALS_DIRECTORY}/files_tls.key" }, secrets: { files: ["tls.key"] } } as Manifest);
+    expect(childCommand(job, config, "a1b2c3d4").at(-1)).toBe("${CREDENTIALS_DIRECTORY}/files_tls.key");
+  });
+
+  test("every child hides the processes of other accounts, whatever its mode", () => {
+    const base: Job = { mode: "copy", folder: "vault", account: "site-vault", uid: 1042, args: [], readWrite: [], bind: [], cacheDirectory: null, stdin: null, stdout: "ignore", timeoutMs: 60_000 };
+    const jobs: Job[] = [
+      base,
+      { ...base, mode: "extract" },
+      { ...base, mode: "measure" },
+      { ...base, mode: "discard" },
+      { ...base, mode: "hook", loopback: true },
+      { ...base, mode: "download", account: null, uid: null, offsite: null },
+      { ...base, folder: "machine", account: null, uid: null, readAll: true },
+    ];
+    for (const job of jobs) {
+      const properties = confinement(job);
+      expect({ mode: job.mode, readAll: job.readAll === true, count: properties.filter((property) => property === "ProtectProc=invisible").length }).toEqual({ mode: job.mode, readAll: job.readAll === true, count: 1 });
+      expect(properties.some((property) => /^(PrivatePIDs|ProcSubset)=/.test(property))).toBe(false);
+    }
+    // A child that is not a backup command loads no credential.
+    expect(childCommand(base, config, "a1b2c3d4").some((argument) => argument.startsWith("LoadCredential="))).toBe(false);
+  });
+
+  test("a command whose unit could not load its secret files (243) is said so, not as a failure of the command", async () => {
+    const root = mkdtempSync(join(tmpdir(), "backup-243-"));
+    roots.push(root);
+    // systemd-run returns the unit's status: 243 when its credentials could
+    // not be set up, before the command ever ran. A program exiting 243
+    // stands for it here, with no isolation.
+    const fails = join(root, "credentials.sh");
+    writeFileSync(fails, "exit 243\n");
+    const plain = configFrom({ BACKUP_ISOLATION: "none", SITESOLIDE_ZONE: "test-zone.invalid", BACKUP_REPOSITORY: join(root, "repository") }, { bun: "/bin/sh", script: fails });
+    const manifest = { slug: "vault", port: 3041, start: "/bin/sh db.sh", backup, secrets: { files: ["tls.key"] } } as Manifest;
+    const project = { folder: "vault", account: "site-vault", owner: null, dataDir: join(root, "data"), manifest };
+    const found = projectHooks(project, join(root, "staging"));
+    if ("error" in found) throw new Error(found.error);
+    const journal: string[] = [];
+    const outcome = await runHooks(plain, project, found.hooks, Date.now() + 30_000, null, (line) => journal.push(line));
+    expect(CREDENTIALS_EXIT_STATUS).toBe(243);
+    expect(outcome).toEqual({ ok: false, error: credentialsFailure("the backup command", "vault"), cause: null });
+    expect(outcome).toEqual({
+      ok: false,
+      error: "the backup command could not load its secret files (243/CREDENTIALS): the store's files folder is missing, or its files are too large; sitesolide refresh vault lays the folder again",
+      cause: null,
+    });
+    expect(journal.some((line) => line.includes("failed, exit code 243"))).toBe(true);
   });
 });

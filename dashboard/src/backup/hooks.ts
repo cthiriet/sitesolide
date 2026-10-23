@@ -14,8 +14,10 @@
  * project's account, in the walls of its service: the same identity, the
  * same `app/`, `public/` and `data/`, the same working directory, its
  * service's environment as the unit sets it (bin/cli/unit.ts), its secrets
- * read by PID 1 from `/etc/sitesolide`, never on a command line, and the
- * loopback alone, to reach its service on its port. The machine's loopback
+ * read by PID 1 from `/etc/sitesolide`, never on a command line: the old
+ * form's flat files, then the project's store, its variables and its files,
+ * the latter at `${CREDENTIALS_DIRECTORY}/files_<name>`, and the loopback
+ * alone, to reach its service on its port. The machine's loopback
  * rule lets a project's account reach its own ports and nobody else's
  * (bin/cli/loopback.ts, reachesOwnPorts).
  *
@@ -48,6 +50,7 @@ import {
   commandErrors,
   commandWords,
   foldersOverlap,
+  hasStore,
   isDataFolder,
   isValidEnvName,
   isValidEnvValue,
@@ -59,6 +62,7 @@ import {
   servicesOf,
   type ServiceView,
 } from "../../borrowed/manifest";
+import { CREDENTIALS_EXIT_STATUS, credentialsFailure, storeCredentials, storeEnvironmentFile } from "../../borrowed/store";
 import { HOOK_EXIT } from "./child";
 import { declaredVariables, secretPath, treeVariables } from "../../borrowed/unit";
 import { label } from "../secrets/scope";
@@ -147,6 +151,8 @@ export function hookJob(config: BackupConfig, project: Project, hook: Hook, time
   const manifest = project.manifest!;
   const root = join(config.sitesDir, project.folder);
   const placeholders = { slug: manifest.slug, zone: config.zone, contact: config.contact };
+  // dashboard and portal keep their flat file alone, as their unit does.
+  const store = hasStore(manifest);
   return {
     mode: "hook",
     folder: project.folder,
@@ -165,9 +171,14 @@ export function hookJob(config: BackupConfig, project: Project, hook: Hook, time
     loopback: true,
     // BACKUP_DIR last, over any `env` of that name: the folder is the component's.
     environment: [...treeVariables(manifest, hook.service, config.sitesDir), ...declaredVariables(hook.service, placeholders), ["BACKUP_DIR", hook.backupDir]],
-    // The dash, as in the unit: a file not created yet leaves the variable
-    // unset, and the command says what it misses.
-    environmentFiles: legacySecretFiles(manifest).map((secret) => `-${secretPath(secret)}`),
+    // As in the unit: the old form's files, then the store, which wins on a
+    // name both hold; the dash on each, a file not written yet leaving its
+    // variables unset, and the command saying what it misses.
+    environmentFiles: [...legacySecretFiles(manifest).map((secret) => `-${secretPath(secret)}`), ...(store ? [storeEnvironmentFile(manifest.slug)] : [])],
+    // The store's files, which its service reads at
+    // $CREDENTIALS_DIRECTORY/files_<name>: the folder always exists for a
+    // project with a store, missing it fails the unit with 243.
+    credentials: store ? [storeCredentials(manifest.slug)] : [],
     workingDirectory: join(root, "app"),
     memory: hookMemory(hook.service.memory),
   };
@@ -280,6 +291,12 @@ export async function runHooks(
         return { ok: false, error: `${what} could not be started, see the journal of sitesolide-backup`, cause: null };
       case HOOK_EXIT.prepare:
         return { ok: false, error: `${what} could not have its BACKUP_DIR emptied, see the journal of sitesolide-backup`, cause: null };
+      // systemd's own, never the hook mode's: the unit could not be given its
+      // project's secret files, its store's folder missing or its files past
+      // what systemd loads, and the command never ran. systemd logs it as a
+      // "Protocol error", which sends one looking elsewhere.
+      case CREDENTIALS_EXIT_STATUS:
+        return { ok: false, error: credentialsFailure(what, project.manifest!.slug), cause: null };
       default:
         return { ok: false, error: `${what} failed, see the journal of sitesolide-backup`, cause: null };
     }

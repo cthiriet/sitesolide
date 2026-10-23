@@ -59,7 +59,8 @@
  * and `public/` read-only beside the data, its working directory, its
  * environment and its secrets, and the loopback, to reach its service on its
  * port. Its secrets reach it the way the bucket's reach a download, by
- * `EnvironmentFile=` read by PID 1; `/etc/sitesolide` stays hidden from it.
+ * `EnvironmentFile=` read by PID 1, its project's files by `LoadCredential=`,
+ * as its service gets them; `/etc/sitesolide` stays hidden from it.
  */
 import { existsSync } from "node:fs";
 import type { BackupConfig } from "./config";
@@ -99,6 +100,8 @@ export type Job = {
   environment?: [string, string][];
   /** Files PID 1 reads into the environment before the walls go up, a dash first for an optional one. */
   environmentFiles?: string[];
+  /** LoadCredential= values for a backup command: its project's files folder, as its service loads it. */
+  credentials?: string[];
   workingDirectory?: string | null;
   /** Its memory ceiling, CHILD_MEMORY unless said: a backup command is given its service's. */
   memory?: string;
@@ -132,9 +135,9 @@ export function unitName(job: Pick<Job, "mode" | "folder">, suffix: string = hex
 /**
  * The confinement of a child, directive by directive. Every line of a
  * project's own unit that applies to a process with no network and no secret
- * is here (bin/cli/unit.ts), and the test holds them side by side. A download
- * differs in two lines: a dynamic user rather than a project's, and the
- * network rather than none. A backup command keeps the loopback, and its
+ * is here (bin/cli/unit.ts), `ProtectProc=invisible` included, and the test
+ * holds them side by side. A download differs in two lines: a dynamic user
+ * rather than a project's, and the network rather than none. A backup command keeps the loopback, and its
  * service's read-only folders and memory ceiling: the test holds it beside
  * the unit of its service, line for line.
  */
@@ -155,6 +158,9 @@ export function confinement(job: Job): string[] {
     // but the copy of the machine's own state, which has them bound read-only.
     ...(job.readAll === true ? [] : ["InaccessiblePaths=-/etc/sitesolide", "InaccessiblePaths=-/var/lib/sitesolide-steward"]),
     "InaccessiblePaths=-/var/backups",
+    // The processes of other accounts hidden, as from every project's
+    // service: a copy has no reason to see the machine's, nor a download.
+    "ProtectProc=invisible",
     "ProtectKernelTunables=yes",
     "ProtectKernelModules=yes",
     "ProtectControlGroups=yes",
@@ -210,6 +216,10 @@ export function childCommand(job: Job, config: Pick<BackupConfig, "isolation" | 
     // Read by PID 1 before the walls go up, which hide /etc/sitesolide from the child itself.
     ...(job.offsite === undefined || job.offsite === null ? [] : ["-p", `EnvironmentFile=${config.offsiteFile}`]),
     ...(job.environmentFiles ?? []).flatMap((file) => ["-p", `EnvironmentFile=${file}`]),
+    // The project's files, copied by PID 1 into the unit's own credentials
+    // folder, which systemd names in CREDENTIALS_DIRECTORY: the command reads
+    // them at ${CREDENTIALS_DIRECTORY}/files_<name>, as its service does.
+    ...(job.credentials ?? []).flatMap((credential) => ["-p", `LoadCredential=${credential}`]),
     ...(job.workingDirectory === undefined || job.workingDirectory === null ? [] : ["-p", `WorkingDirectory=${job.workingDirectory}`]),
     ...confinement(job).flatMap((property) => ["-p", property]),
     "--",
