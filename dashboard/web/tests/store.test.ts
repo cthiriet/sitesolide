@@ -18,6 +18,7 @@ import {
   encodeBase64,
   generatedLength,
   generatedSummary,
+  isEmptyFile,
   legacyLabels,
   legacyLine,
   legacyOffer,
@@ -64,11 +65,11 @@ const DEVELOPER: StoreMay = { write: true, reveal: false, restore: false, migrat
 const READER: StoreMay = { write: false, reveal: false, restore: false, migrate: false }
 
 describe("a project as it arrives", () => {
-  test("a steward that sends no store, or one the page cannot read, gives a project with none", () => {
+  test("an older steward's project, with no store, or a store the page cannot read, reads as one with none", () => {
     const { store: _, ...bare } = secretProject()
-    expect(withStore(bare).store).toBeNull()
-    expect(withStore({ ...bare, store: null }).store).toBeNull()
-    expect(withStore({ ...bare, store: { slug: "cms" } as never }).store).toBeNull()
+    expect(withStore(bare as never).store).toBeNull()
+    expect(withStore(secretProject({ store: null })).store).toBeNull()
+    expect(withStore(secretProject({ store: { slug: "cms" } as never })).store).toBeNull()
   })
 
   test("a store the steward sends is kept as it is", () => {
@@ -78,7 +79,7 @@ describe("a project as it arrives", () => {
 
   test("sortProjects makes sure of every store, and sorts by slug", () => {
     const { store: _, ...bare } = secretProject({ slug: "zeta" })
-    const sorted = sortProjects([bare, secretProject({ slug: "alpha", store: storeView({ slug: "alpha" }) })])
+    const sorted = sortProjects([bare as never, secretProject({ slug: "alpha", store: storeView({ slug: "alpha" }) })])
     expect(sorted.map((project) => [project.slug, project.store === null])).toEqual([
       ["alpha", false],
       ["zeta", true],
@@ -151,6 +152,17 @@ describe("what is missing", () => {
     expect(missingLabel(store)).toBe("3 not set")
     expect(missingLabel(storeView())).toBeNull()
   })
+
+  /** The steward lists an empty file as missing, its reason `empty`: a declared one is lacking, an undeclared one nobody reads is not. */
+  test("a declared file the server holds empty is missing; an undeclared one is not counted", () => {
+    const store = storeView({
+      files: [
+        storeFile({ name: "tls.key", state: "missing", reason: "empty", bytes: 0 }),
+        storeFile({ name: "notes.txt", state: "missing", reason: "empty", declared: false, bytes: 0 }),
+      ],
+    })
+    expect(storeMissing(store).files).toEqual(["tls.key"])
+  })
 })
 
 describe("a file of the store", () => {
@@ -162,10 +174,18 @@ describe("a file of the store", () => {
     expect(storeFileOffer(storeView({ may: READER }), storeFile())).toEqual({ upload: false, remove: false })
   })
 
-  test("its state in a word and a tone", () => {
-    expect(storeFileState({ state: "set" })).toEqual({ text: "Set", tone: "neutral" })
-    expect(storeFileState({ state: "missing" })).toEqual({ text: "Missing", tone: "error" })
-    expect(storeFileState({ state: "unmanaged" })).toEqual({ text: "Unmanaged", tone: "attention" })
+  test("its state in a word and a tone; an empty file says so, and is no error when nothing declares it", () => {
+    expect(storeFileState({ state: "set", reason: null, declared: true })).toEqual({ text: "Set", tone: "neutral" })
+    expect(storeFileState({ state: "missing", reason: null, declared: true })).toEqual({ text: "Missing", tone: "error" })
+    expect(storeFileState({ state: "missing", reason: "empty", declared: true })).toEqual({ text: "Empty", tone: "error" })
+    expect(storeFileState({ state: "missing", reason: "empty", declared: false })).toEqual({ text: "Empty", tone: "attention" })
+    expect(storeFileState({ state: "unmanaged", reason: "a link", declared: true })).toEqual({ text: "Unmanaged", tone: "attention" })
+    expect(isEmptyFile({ state: "missing", reason: "empty" })).toBe(true)
+    expect(isEmptyFile({ state: "missing", reason: null })).toBe(false)
+  })
+
+  test("an empty file on the server can be removed like any file there", () => {
+    expect(storeFileOffer(storeView(), storeFile({ state: "missing", reason: "empty" }))).toEqual({ upload: true, remove: true })
   })
 
   test("its size only when the steward gave it, which it does to the owner alone", () => {

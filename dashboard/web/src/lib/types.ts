@@ -48,7 +48,10 @@ export type {
   FileState,
   FileView,
   FileKind,
+  LogEntry,
+  Operation,
   PortalView,
+  ProjectView,
   ContentResponse,
   DashboardUnlockResponse,
   FileResponse,
@@ -88,34 +91,6 @@ export type {
   VariableSource,
 } from "../../../borrowed/store-protocol"
 export type { GenerateFormat } from "../../../borrowed/store"
-
-/**
- * A project as the page reads it: the steward's, with its store, null for a
- * static site and a project whose files stay flat (the dashboard, the portal).
- * Written over the steward's own type rather than re-exported, so that a
- * steward that does not send `store` yet reads as a project with none
- * (`sortProjects` makes the field null): the page then shows the files alone,
- * as it did before stores.
- */
-export type ProjectView = Omit<import("../../../src/secrets/protocol").ProjectView, "store"> & {
-  store: import("../../../borrowed/store-protocol").StoreView | null
-}
-
-/** A project as it arrives, before the page has made sure of its `store`. */
-export type ArrivingProjectView = Omit<ProjectView, "store"> & {
-  store?: import("../../../borrowed/store-protocol").StoreView | null
-}
-
-/**
- * The steward's operations, with the three a store adds: a value drawn on the
- * server, legacy files merged into the store, and legacy files retired. Spelled
- * here as well as in the steward's type, so the log names them whichever of the
- * two the page is built against.
- */
-export type Operation = import("../../../src/secrets/protocol").Operation | "generate" | "migrate" | "retire"
-
-/** One line of the steward's log, its operation read with the store's three. Never a value. */
-export type LogEntry = Omit<import("../../../src/secrets/protocol").LogEntry, "operation"> & { operation: Operation }
 
 /**
  * The shapes of the Connectors page, from the same contract as the steward and

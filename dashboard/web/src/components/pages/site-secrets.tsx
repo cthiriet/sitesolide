@@ -149,7 +149,8 @@ function Content({ slug }: { slug: string }) {
       )}
 
       {project !== null && store === null && project.files.length > 0 && (
-        // A project whose files stay flat, the dashboard and the portal, or a steward from before stores.
+        // No store listed: the dashboard and the portal, whose files stay flat, a static site, or a store the
+        // steward could not read, which its journal names.
         <FilesPanel key={project.slug} project={project} />
       )}
 

@@ -41,6 +41,7 @@ import {
   changeSummary,
   credentialPath,
   declaredText,
+  isEmptyFile,
   legacyLine,
   legacyOffer,
   mayMerge,
@@ -427,6 +428,7 @@ function StoreFileRow({
 }) {
   const offer = storeFileOffer(store, file)
   const state = storeFileState(file)
+  const present = file.state === "set" || isEmptyFile(file)
   const summary = storeFileSummary(file, serverNow)
   const reason = file.state === "unmanaged" && file.reason !== null ? splitReason(file.reason) : null
   return (
@@ -441,9 +443,9 @@ function StoreFileRow({
         {summary !== "" && <span className="text-xs text-muted-foreground tabular-nums">{summary}</span>}
         <div className="ml-auto flex items-center gap-1">
           {offer.upload && (
-            <Button variant="ghost" size="sm" onClick={onUpload} aria-label={`${file.state === "set" ? "Replace" : "Upload"} ${file.name}`} className="text-muted-foreground hover:text-foreground max-md:h-10">
+            <Button variant="ghost" size="sm" onClick={onUpload} aria-label={`${present ? "Replace" : "Upload"} ${file.name}`} className="text-muted-foreground hover:text-foreground max-md:h-10">
               <FileUp />
-              {file.state === "set" ? "Replace" : "Upload"}
+              {present ? "Replace" : "Upload"}
             </Button>
           )}
           {offer.remove && (
@@ -589,7 +591,7 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
   }
 
   function openFile(name: string | null) {
-    const replaces = name !== null && store.files.some((one) => one.name === name && one.state === "set")
+    const replaces = name !== null && store.files.some((one) => one.name === name && (one.state === "set" || isEmptyFile(one)))
     writing(() => setFile({ slug, name, replaces, opening: next(), open: true }))
   }
 

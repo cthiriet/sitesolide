@@ -14,7 +14,6 @@
 import { ago, size } from "./format"
 import type { Tone } from "./tones"
 import type {
-  ArrivingProjectView,
   GenerateFormat,
   LegacyFileView,
   ProjectView,
@@ -45,12 +44,16 @@ function isStoreView(value: unknown): value is StoreView {
 }
 
 /**
- * A project with its store, or with none: a steward from before stores sends
- * no `store`, and a project shown with none reads its files as it did then,
- * which is what that steward still serves. Never throws.
+ * A project with its store, or with none. The steward sends `store` for
+ * every project, null for a static site, the dashboard, the portal and a
+ * store it could not read; the page holds it to that shape all the same,
+ * since `sitesolide upgrade` brings the steward first but a dashboard
+ * deployed alone may still face an older one, whose projects carry no
+ * `store`: shown with none, they read as files, which is what that steward
+ * serves. Never throws.
  */
-export function withStore(project: ArrivingProjectView): ProjectView {
-  return { ...project, store: isStoreView(project.store) ? project.store : null }
+export function withStore(project: ProjectView): ProjectView {
+  return isStoreView(project.store) ? project : { ...project, store: null }
 }
 
 // --- Files: the path a service reads ----------------------------------------------
@@ -130,14 +133,14 @@ export function storeVariableOffer(store: Pick<StoreView, "may" | "state">, vari
 // --- What is missing --------------------------------------------------------------
 
 /**
- * The declared names with no value anywhere, and the declared files not on
- * the server, in the steward's order. A legacy-form manifest declares no
- * name: nothing is missing then.
+ * The declared names with no value anywhere, and the declared files the
+ * server lacks, absent or empty, in the steward's order. A legacy-form
+ * manifest declares no name: nothing is missing then.
  */
 export function storeMissing(store: Pick<StoreView, "missing" | "files">): { variables: string[]; files: string[] } {
   return {
     variables: [...store.missing],
-    files: store.files.filter((file) => file.state === "missing").map((file) => file.name),
+    files: store.files.filter((file) => file.state === "missing" && file.declared).map((file) => file.name),
   }
 }
 
@@ -191,18 +194,28 @@ export function storeOverview(store: StoreView): OverviewRow[] {
 
 export type StoreFileOffer = { upload: boolean; remove: boolean }
 
-/** *Upload* where there is none, *Replace* over one; *Remove* what is there. Never on an unmanaged file. */
-export function storeFileOffer(store: Pick<StoreView, "may" | "state">, file: Pick<StoreFileView, "state">): StoreFileOffer {
-  const write = store.may.write && store.state !== "unmanaged" && file.state !== "unmanaged"
-  return { upload: write, remove: write && file.state === "set" }
+/**
+ * A file the steward lists `missing` may still be on the server, empty: its
+ * reason says `empty`. It reads as missing, since a service finds nothing in
+ * it, and it can be removed like any file there.
+ */
+export function isEmptyFile(file: Pick<StoreFileView, "state" | "reason">): boolean {
+  return file.state === "missing" && file.reason === "empty"
 }
 
-export function storeFileState(file: Pick<StoreFileView, "state">): SourceBadge {
+/** *Upload* where there is none, *Replace* over one; *Remove* what is there, an empty file too. Never on an unmanaged file. */
+export function storeFileOffer(store: Pick<StoreView, "may" | "state">, file: Pick<StoreFileView, "state" | "reason">): StoreFileOffer {
+  const write = store.may.write && store.state !== "unmanaged" && file.state !== "unmanaged"
+  return { upload: write, remove: write && (file.state === "set" || isEmptyFile(file)) }
+}
+
+export function storeFileState(file: Pick<StoreFileView, "state" | "reason" | "declared">): SourceBadge {
   switch (file.state) {
     case "set":
       return { text: "Set", tone: "neutral" }
     case "missing":
-      return { text: "Missing", tone: "error" }
+      // An undeclared file nobody reads is no error, even empty.
+      return { text: isEmptyFile(file) ? "Empty" : "Missing", tone: file.declared ? "error" : "attention" }
     case "unmanaged":
       return { text: "Unmanaged", tone: "attention" }
   }

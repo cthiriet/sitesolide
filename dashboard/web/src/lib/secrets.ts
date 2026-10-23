@@ -15,7 +15,6 @@ import { serviceWord } from "./sites"
 import { missingLabel, storeMissing, storePending, withStore } from "./store"
 import type { Tone } from "./tones"
 import type {
-  ArrivingProjectView,
   ErrorCode,
   LogEntry,
   FileView,
@@ -151,7 +150,7 @@ export function refusalOf(status: number, body: unknown): Refusal {
  * By slug, in alphabetical order, like the sites table, each with its store
  * made sure of (`withStore`). A copy: the original does not move.
  */
-export function sortProjects(projects: readonly ArrivingProjectView[]): ProjectView[] {
+export function sortProjects(projects: readonly ProjectView[]): ProjectView[] {
   return projects.map(withStore).sort((a, b) => a.slug.localeCompare(b.slug, "en"))
 }
 
