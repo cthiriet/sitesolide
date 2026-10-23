@@ -10,6 +10,7 @@ import {
   restartPending,
   serviceView,
   verdict,
+  withCredentials,
   type ServiceReading,
 } from "../src/secrets/restart";
 
@@ -27,6 +28,7 @@ describe("reading systemctl show", () => {
       restarts: 0,
       startedUs: MEASURE_US,
       startedAt: Math.floor(MEASURE_US / 1000),
+      exitStatus: null,
     });
     expect(readShow(output).startedAt).toBe(Date.UTC(2026, 8, 16, 21, 14, 12, 162));
   });
@@ -76,12 +78,15 @@ describe("reading systemctl show", () => {
       restarts: null,
       startedUs: null,
       startedAt: null,
+      exitStatus: null,
     });
     expect(readShow("NRestarts=[not set]\n").restarts).toBeNull();
+    expect(readShow("ExecMainStatus=243\n").exitStatus).toBe(243);
+    for (const raw of ["", "-1", "2430", "x"]) expect(readShow(`ExecMainStatus=${raw}\n`).exitStatus).toBeNull();
     expect(readShow("NRestarts=\n").restarts).toBeNull();
   });
 
-  test("the arguments ask for the timestamp to the microsecond and the five properties", () => {
+  test("the arguments ask for the timestamp to the microsecond and the six properties", () => {
     expect(showArguments("cms")).toEqual([
       "show",
       "cms",
@@ -96,6 +101,8 @@ describe("reading systemctl show", () => {
       "NRestarts",
       "-p",
       "ActiveEnterTimestamp",
+      "-p",
+      "ExecMainStatus",
     ]);
   });
 
@@ -123,6 +130,7 @@ function ordered(describe: (ms: number) => Partial<ServiceReading>): ServiceRead
       restarts: 0,
       startedUs: 1_000_000_000,
       startedAt: 1_000_000,
+      exitStatus: null,
       ...describe(ms),
     });
   }
@@ -248,6 +256,7 @@ function measured(changements: [number, string, string, number][]): ServiceReadi
       restarts: current[3],
       startedUs: 1_000_000_000,
       startedAt: 1_000_000,
+      exitStatus: null,
     });
   }
   return readings;
@@ -333,5 +342,30 @@ describe("restart pending", () => {
     expect(restartPending(Number.NaN, STARTED_US)).toBe(false);
     // An unreadable form from systemd gives null, so nothing is announced.
     expect(restartPending(STARTED_MS + 70, readUsTimestamp("@1789593252"))).toBe(false);
+  });
+});
+
+describe("a service that cannot load its secret files", () => {
+  const looping = (status: number | null) => measured([[0, "activating", "auto-restart", 1]]).map((reading) => ({ ...reading, exitStatus: status }));
+
+  test("a verdict that is not active, with an exit status of 243 seen, is worded as deploy and the monitor word it", () => {
+    const readings = looping(243);
+    const result = verdict(readings);
+    expect(result.kind).toBe("looping");
+    expect(withCredentials(result, readings, "shop", "shop")).toEqual({
+      ...result,
+      reason: "shop.service could not load its secret files (243/CREDENTIALS): the store's files folder is missing, or its files are too large; sitesolide refresh shop lays the folder again",
+    });
+    const failed = measured([[0, "failed", "failed", 0]]).map((reading) => ({ ...reading, exitStatus: 243 }));
+    expect(withCredentials(verdict(failed), failed, "shop.worker", "shop").reason).toStartWith("shop.worker.service could not load its secret files");
+  });
+
+  test("any other exit, or an active verdict, is left as it is", () => {
+    for (const status of [null, 1, 203]) {
+      const readings = looping(status);
+      expect(withCredentials(verdict(readings), readings, "shop", "shop")).toEqual(verdict(readings));
+    }
+    const healthy = measured([[0, "active", "running", 0]]).map((reading) => ({ ...reading, exitStatus: 243 }));
+    expect(withCredentials(verdict(healthy), healthy, "shop", "shop").reason).toBeUndefined();
   });
 });

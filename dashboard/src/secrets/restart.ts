@@ -6,10 +6,15 @@
  * reading every half-second; what must be concluded from it is decided here, on
  * sequences written by hand in the tests.
  */
+import { CREDENTIALS_EXIT_STATUS, credentialsFailure } from "../../borrowed/store";
 import type { ServiceView, Verdict } from "./protocol";
 
-/** What `systemctl show` must return for a verdict. */
-export const SHOW_PROPERTIES = ["LoadState", "ActiveState", "SubState", "NRestarts", "ActiveEnterTimestamp"];
+/**
+ * What `systemctl show` must return for a verdict. `ExecMainStatus`: the
+ * exit status of the main process's last run, 243 when its secret files
+ * could not be loaded (see withCredentials).
+ */
+export const SHOW_PROPERTIES = ["LoadState", "ActiveState", "SubState", "NRestarts", "ActiveEnterTimestamp", "ExecMainStatus"];
 
 /**
  * `--timestamp=us+utc` returns `Wed 2026-09-16 21:14:12.162297 UTC`, to the
@@ -34,6 +39,8 @@ export type Show = {
   startedUs: number | null;
   /** The same date in whole milliseconds, for the page. */
   startedAt: number | null;
+  /** `ExecMainStatus`, the last exit status of the main process; null when systemd does not say it. */
+  exitStatus: number | null;
 };
 
 export type ServiceReading = Show & { a: number };
@@ -84,6 +91,8 @@ export function readShow(output: string): Show {
 
   const counter = properties.get("NRestarts");
   const restarts = counter !== undefined && /^[0-9]+$/.test(counter) ? Number(counter) : null;
+  const status = properties.get("ExecMainStatus");
+  const exitStatus = status !== undefined && /^[0-9]{1,3}$/.test(status) ? Number(status) : null;
   const startedUs = readUsTimestamp(properties.get("ActiveEnterTimestamp") ?? "");
 
   return {
@@ -93,6 +102,7 @@ export function readShow(output: string): Show {
     restarts,
     startedUs,
     startedAt: startedUs === null ? null : Math.floor(startedUs / 1000),
+    exitStatus,
   };
 }
 
@@ -200,6 +210,20 @@ export function verdict(readings: ServiceReading[], options: { stableWindowMs?: 
   const finish = ordered.filter((reading) => reading.a >= windowStart);
   const stable = finish.every((reading) => isUp(reading, anchor) && reading.restarts === last.restarts);
   return render(stable ? "active" : "failure");
+}
+
+/**
+ * A verdict that did not come out active, worded when the service could not
+ * load its secret files: an exit status of 243 seen during the observation.
+ * systemd logs it as "Failed to set up credentials: Protocol error", which
+ * sends one looking elsewhere; the words are those deploy, refresh, the
+ * installer and the monitor use (credentialsFailure). `unit` without
+ * `.service`, as the steward names units.
+ */
+export function withCredentials(result: Verdict, readings: readonly ServiceReading[], unit: string, slug: string): Verdict {
+  if (result.kind === "active" || result.kind === "scheduled") return result;
+  if (!readings.some((reading) => reading.exitStatus === CREDENTIALS_EXIT_STATUS)) return result;
+  return { ...result, reason: credentialsFailure(`${unit}.service`, slug) };
 }
 
 /**

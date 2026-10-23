@@ -26,14 +26,12 @@
  *
  * The routes are described in src/secrets/protocol.ts.
  */
-import { hasStore, isAnchored, isApp, isProtected, isValidFileName, legacySecretFiles, servicesOf, type Manifest } from "../../borrowed/manifest";
+import { hasStore, isAnchored, isApp, isProtected, isValidFileName, isValidSlug, legacySecretFiles, servicesOf, type Manifest } from "../../borrowed/manifest";
 import { CREDENTIAL_ID, MAX_STORE_ENV_BYTES, MAX_STORE_FILE_BYTES, storePaths } from "../../borrowed/store";
 import type {
   StoreChangeResponse,
   StoreListResponse,
-  StoreMigrateResponse,
   StoreRestoreResponse,
-  StoreRetireResponse,
   StoreRevealResponse,
   StoreView,
 } from "../../borrowed/store-protocol";
@@ -116,6 +114,7 @@ import {
   readGenerateAsk,
   removalRefusal,
   restoreRemovalRefusal,
+  retiredReason,
   storeMay,
   storeNameRefusal,
   storeSlugRefusal,
@@ -151,12 +150,15 @@ import type {
   PortalResponse,
   ProjectsResponse,
   RestartResponse,
+  StoreLeftoversResponse,
+  StoreMigrateAnswer,
+  StoreRetireAnswer,
   ValueResponse,
   ServiceView,
   Verdict,
 } from "./protocol";
 import { RESTART_TIMEOUT_MS, MAX_PORTAL_MS } from "./protocol";
-import { isAnchorUnit, showArguments, readShow, restartPending, serviceView, verdict, type ServiceReading } from "./restart";
+import { isAnchorUnit, showArguments, readShow, restartPending, serviceView, verdict, withCredentials, type ServiceReading } from "./restart";
 import type { Command, Permissions, Examination, System } from "./system";
 import { createConnectorRoutes } from "../connectors/steward";
 import type { ConnectorStore } from "../connectors/store";
@@ -1947,7 +1949,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
    * of them. `anchor`: the unit runs nothing and stays `active (exited)`, see
    * isAnchorUnit.
    */
-  async function observe(unit: string, anchor = false): Promise<Verdict> {
+  async function observe(unit: string, anchor = false, slug: string | null = null): Promise<Verdict> {
     const readings: ServiceReading[] = [];
     const start = system.now();
     for (;;) {
@@ -1956,10 +1958,11 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       if (system.now() - start >= observationMs) break;
       await system.wait(stepMs);
     }
-    return verdict(readings, { anchor });
+    const result = verdict(readings, { anchor });
+    return slug === null ? result : withCredentials(result, readings, unit, slug);
   }
 
-  const verdictDetail = (result: Verdict) => `${result.kind}, ${result.state}/${result.subState}, ${result.restarts} restarts`;
+  const verdictDetail = (result: Verdict) => `${result.kind}, ${result.state}/${result.subState}, ${result.restarts} restarts${result.reason === undefined ? "" : ", 243/CREDENTIALS"}`;
 
   /**
    * The restart of the dashboard itself. The relay that would carry the verdict
@@ -2036,7 +2039,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       // dies at once. The readings say what happened.
       await system.systemctl(["restart", unit], restartTimeoutMs);
 
-      const result = await observe(unit);
+      const result = await observe(unit, false, site.folder);
       await writeLog("restart", result.kind === "active" ? "ok" : "failure", body, verdictDetail(result));
       const response: RestartResponse = { verdict: result };
       return Response.json(response);
@@ -2107,7 +2110,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       // A project whose every service is scheduled restarts through its
       // anchor: its timers, and a run in progress, follow it by their PartOf.
       await system.systemctl(["restart", unit], restartTimeoutMs);
-      const result = await observe(unit, isAnchorUnit(text));
+      const result = await observe(unit, isAnchorUnit(text), site.folder);
       await writeLog("restart", result.kind === "active" ? "ok" : "failure", body, verdictDetail(result), null, who);
       const response: RestartResponse = { verdict: result };
       return Response.json(response);
@@ -2462,6 +2465,29 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     }));
   }
 
+  /**
+   * The legacy files retire deleted and kept a copy of, as the listing shows
+   * them: absent, where the copy is and how it is put back. One the project
+   * still names stays in its place in the list, its reason said; the others
+   * follow. Never a holder of anything for S1: nothing reads a copy.
+   */
+  async function withRetired(project: StoreProject, states: LegacyState[], units: readonly InstalledUnit[]): Promise<LegacyState[]> {
+    let retired: string[];
+    try {
+      retired = await system.listRetired(project.slug);
+    } catch (e) {
+      console.error(`store: the retired files of ${project.slug} unreadable (${errorName(e)})`);
+      return states;
+    }
+    if (retired.length === 0) return states;
+    const read = new Set(units.flatMap((unit) => unitEnvironment(unit.text).files.map((file) => file.path)));
+    const listed = states.map((state) => (state.state === "absent" && retired.includes(state.file) ? { ...state, reason: retiredReason(project.slug, state.file) } : state));
+    const others = retired
+      .filter((name) => !states.some((state) => state.file === name))
+      .map((name): LegacyState => ({ file: name, state: "absent", reason: retiredReason(project.slug, name), values: null, read: read.has(pathUnder(secretsFolder, name) ?? ""), leftover: false }));
+    return [...listed, ...others];
+  }
+
   /** The store as `actor` may see it (spec §6.11). */
   async function buildStoreView(project: StoreProject, actor: StoreActor, known?: { reading: StoreReading; units: InstalledUnit[]; legacy: LegacyFile[] }): Promise<StoreView> {
     const units = known?.units ?? (await installedUnits(project));
@@ -2472,7 +2498,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       slug: project.slug,
       manifest: project.manifest,
       store: storeState(reading),
-      legacy: legacyStates(legacy),
+      legacy: await withRetired(project, legacyStates(legacy), units),
       unitReadsStore: unitsReadStore(project, units),
       startedUs: service?.startedUs ?? null,
       may: storeMay({ kind: actor.kind, restore: actor.restores }),
@@ -2769,6 +2795,28 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
+   * The order in effect of a project's legacy files: those no installed unit
+   * reads first, in the manifest's order, then those the units read, in the
+   * order they read them, the later winning as systemd reads them.
+   * `orderAgreed` false: two units read them in different orders, and no
+   * single value is in effect for every service of a name they disagree on.
+   */
+  function inEffectOrder(files: readonly LegacyFile[], units: readonly InstalledUnit[], declared: readonly string[]): { legacy: LegacyFile[]; orderAgreed: boolean } {
+    const pathOf = (file: LegacyFile) => pathUnder(secretsFolder, file.declaration.name) ?? file.declaration.name;
+    const paths = new Set(files.map(pathOf));
+    const orders = units.map((unit) => [...new Set(unitEnvironment(unit.text).files.map((file) => file.path).filter((path) => paths.has(path)))]);
+    const first = orders[0] ?? [];
+    const orderAgreed = orders.every((order) => order.length === first.length && order.every((path, index) => path === first[index]));
+    const read = first.map((path) => files.find((file) => pathOf(file) === path)!);
+    const rank = (file: LegacyFile) => {
+      const at = declared.indexOf(file.declaration.name);
+      return at === -1 ? declared.length : at;
+    };
+    const unread = files.filter((file) => !first.includes(pathOf(file))).sort((a, b) => rank(a) - rank(b));
+    return { legacy: [...unread, ...read], orderAgreed };
+  }
+
+  /**
    * A project's legacy files merged into its store, owner only, without
    * anyone seeing a value (spec §6.8): idempotent, never restarting, the
    * legacy files untouched. A conflict, two files giving one name two
@@ -2789,11 +2837,15 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     if (state !== null) return storeRefuse("migrate", project.slug, state, actor);
 
     // The sources: the legacy files the deployed manifest declares or a unit
-    // reads, in the units' order. A leftover is read by no unit: merging it
-    // would add variables the service does not have today.
+    // reads, in the order in effect. A leftover is read by no unit: merging
+    // it would add variables the service does not have today.
     const declared = legacySecretFiles(project.manifest!);
     const attached = await legacyFilesOf(project, units);
-    const legacy = attached.filter((file) => !file.leftover && (file.read || declared.includes(file.declaration.name)));
+    const { legacy, orderAgreed } = inEffectOrder(
+      attached.filter((file) => !file.leftover && (file.read || declared.includes(file.declaration.name))),
+      units,
+      declared,
+    );
     const sources: MigrationSource[] = legacy.map((file) =>
       file.state.kind === "absent"
         ? { file: file.declaration.name, state: "absent" }
@@ -2802,22 +2854,23 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           : { file: file.declaration.name, state: "managed", assignments: [...documentValues(file.state.managed.document!)] },
     );
     const setKeys = storeSetKeys(project, units);
-    const plan = planMigration({ sources, store: storeValues(reading), keyRefusal: (name) => checkKey(name, setKeys) });
+    const plan = planMigration({ sources, store: storeValues(reading), keyRefusal: (name) => checkKey(name, setKeys), orderAgreed });
     if (plan.kind === "refused") return storeRefuse("migrate", project.slug, plan.refusal, actor);
 
-    const outcome = (written: boolean, store: StoreView): StoreMigrateResponse => ({
+    const outcome = (written: boolean, store: StoreView): StoreMigrateAnswer => ({
       store,
       sources: plan.sources,
       skipped: plan.skipped,
       merged: plan.merged,
       already: plan.already,
       overridden: plan.overridden,
+      shadowed: plan.shadowed,
       conflicts: plan.conflicts,
       written,
     });
     if (plan.conflicts.length > 0 && body.dryRun !== true) {
       await writeLog("migrate", "rejects", { slug: project.slug }, "conflicts", null, actor.who, STORE_LABEL);
-      const message = `${plan.conflicts.map((conflict) => `${conflict.name}: in ${conflict.files.join(" and ")}, with different values`).join("; ")}. Remove the duplicate from one file, then migrate again; nothing was written`;
+      const message = `${plan.conflicts.map((conflict) => `${conflict.name}: in ${conflict.files.join(" and ")}, with different values, which the units of ${project.slug} read in different orders`).join("; ")}. sitesolide refresh ${project.slug}, then migrate again; nothing was written`;
       const answer = { error: "unmanaged", message, ...outcome(false, await buildStoreView(project, actor, { reading, units, legacy: attached })) };
       return Response.json(answer, { status: 409 });
     }
@@ -2833,7 +2886,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     const laid = await ensureStoreFor(project, actor, "migrate");
     if (laid instanceof Response) return laid;
     await writeStoreEnvKeeping(project.slug, reading.env, bytes);
-    await writeLog("migrate", "ok", { slug: project.slug }, bounded(`${plan.writes.length} merged from ${plan.sources.join(", ")}`), null, actor.who, STORE_LABEL);
+    const shadowedDetail = plan.shadowed.length === 0 ? "" : `; ${plan.shadowed.length} taken from the file in effect over another value`;
+    await writeLog("migrate", "ok", { slug: project.slug }, bounded(`${plan.writes.length} merged from ${plan.sources.join(", ")}${shadowedDetail}`), null, actor.who, STORE_LABEL);
     return Response.json(outcome(true, await buildStoreView(project, actor)));
   }
 
@@ -2849,6 +2903,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   async function storeRetireTask(body: Body, actor: StoreActor): Promise<Response> {
     const project = await storeProject(body.slug, actor);
     if (!("slug" in project)) return storeRefuse("retire", body.slug, project, actor);
+    if (body.force !== undefined && typeof body.force !== "boolean") return storeRefuse("retire", project.slug, { error: "invalid", message: "force must be a boolean" }, actor);
+    const force = body.force === true;
     const asked = body.files;
     if (!Array.isArray(asked) || asked.length === 0 || asked.length > MAX_RETIRED) {
       return storeRefuse("retire", project.slug, { error: "invalid", message: `files: a list of 1 to ${MAX_RETIRED} legacy file names` }, actor);
@@ -2873,6 +2929,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     const values = reading.env.kind === "managed" ? storeValues(reading) : reading.env.kind === "absent" ? new Map<string, string>() : null;
 
     const retired: string[] = [];
+    const forced: string[] = [];
     const kept: { file: string; reason: string }[] = [];
     for (const name of asked as string[]) {
       const attached = [...site.files, ...site.leftovers].find((declaration) => declaration.name === name);
@@ -2899,6 +2956,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
               : fileState.kind === "unmanaged"
                 ? { kind: "unmanaged", reason: fileState.reason }
                 : { kind: "absent" },
+        read: file?.read ?? false,
+        force,
         store: values,
         unitsReadStore: readsStore,
         allScheduled,
@@ -2911,14 +2970,20 @@ export function createSteward(system: System, options: StewardOptions): StewardH
         continue;
       }
       const managed = (fileState as Extract<TargetState, { kind: "managed" }>).managed;
-      // Kept as the legacy previous version, its owner with it: the owner can
-      // put it back by hand, then sitesolide refresh.
-      await system.writePrevious(name, managed.bytes, checked ? managed.real : null);
+      // Kept first, under the project's own previous versions, its owner with
+      // it: `sitesolide remove` deletes that folder whole, and the owner puts
+      // the file back by hand with the command the listing gives
+      // (retiredReason). Not in precedents/<name>, which nothing deletes
+      // with a project whose manifest no longer names the file. The version
+      // the dashboard kept there of it goes too, for the same reason.
+      await system.writeStorePrevious(project.slug, `legacy/${name}`, managed.bytes, checked ? managed.real : null);
+      await system.removePrevious(name);
       await system.removeLegacy(name);
-      await writeLog("retire", "ok", { slug: project.slug }, null, null, actor.who, name);
+      await writeLog("retire", "ok", { slug: project.slug }, decision.forced ? "forced: the store's values stand" : null, null, actor.who, name);
       retired.push(name);
+      if (decision.forced) forced.push(name);
     }
-    const answer: StoreRetireResponse = { store: await buildStoreView(project, actor), retired, kept };
+    const answer: StoreRetireAnswer = { store: await buildStoreView(project, actor), retired, forced, kept };
     return Response.json(answer);
   }
 
@@ -3006,10 +3071,30 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       "/store/file": { PUT: route(["slug", "name", "content"], [], storeTasks.setFile, MAX_CONTENT_BODY_BYTES), DELETE: route(["slug", "name"], [], storeTasks.removeFile) },
       "/store/restore": { POST: route(["slug"], ["dryRun"], storeTasks.restore) },
       "/store/migrate": { POST: route(["slug"], ["dryRun"], storeTasks.migrate) },
-      "/store/retire": { POST: route(["slug"], ["files"], storeTasks.retire) },
+      "/store/retire": { POST: route(["slug"], ["files", "force"], storeTasks.retire) },
       // A value read back: the owner's unlocked dashboard alone, never over SSH.
       ...(ssh ? {} : { "/store/value": { POST: ownerStoreRoute(["slug", "name"], [], (body) => storeRevealTask(body)) } }),
     };
+  }
+
+  /**
+   * `GET /store/leftovers?slug=<slug>` on the owner's socket: the flat files a
+   * store-form project left under /etc/sitesolide, for `sitesolide remove`,
+   * which deletes them with the project once it has judged them its own
+   * (removableSecrets in bin/cli/removal.ts). Read while the project is
+   * still deployed: once its folder is gone, its leftovers are nobody's.
+   * The machine's own files never are one; a subfolder's never is either.
+   */
+  async function ownerLeftovers(req: Request): Promise<Response> {
+    const wanted = new URL(req.url).searchParams.getAll("slug");
+    if (wanted.length !== 1 || !isValidSlug(wanted[0]!)) return error("invalid", "name one project: ?slug=<slug>");
+    const slug = wanted[0]!;
+    const site = (await sites()).get(slug);
+    const leftovers = (site?.leftovers ?? [])
+      .map((declaration) => declaration.name)
+      .filter((name) => subFolderOf(name) === null && !ROOT_FILES.includes(name) && !HASH_ONLY.includes(name));
+    const answer: StoreLeftoversResponse = { slug, leftovers };
+    return Response.json(answer);
   }
 
   /** `POST /restart { slug }` on the owner's socket: the restart a person's is, with root as who and no refusal for want of a managed file. */
@@ -3276,7 +3361,13 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   const handle = serve(routes);
   return Object.assign(handle, {
     isUnlocked: (token: unknown) => isValidToken(state, token, system.now()),
-    owner: serve({ ...(access?.owner ?? {}), ...storeRoutes(true), "/general": { POST: ownerGeneral }, "/restart": { POST: ownerRestart } }),
+    owner: serve({
+      ...(access?.owner ?? {}),
+      ...storeRoutes(true),
+      "/store/leftovers": { GET: ownerLeftovers },
+      "/general": { POST: ownerGeneral },
+      "/restart": { POST: ownerRestart },
+    }),
     ensureMemberKeys: async () => (members === null ? null : members.ensureKeys()),
     startAccess: async () => accessStore?.start(),
     forgetProjectAccess: access?.forgetProject ?? null,

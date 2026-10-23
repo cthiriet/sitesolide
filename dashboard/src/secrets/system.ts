@@ -67,6 +67,7 @@ import {
   type AccessWindow,
 } from "./log";
 import {
+  nameRefusal,
   pathUnder,
   MAX_FILE_BYTES,
   SUBFOLDER_SUFFIX,
@@ -223,7 +224,15 @@ export type System = {
   /** Unlinks that file alone; never the folder (I3'). */
   removeStoreFile: (slug: string, name: string) => Promise<void>;
   readStorePrevious: (slug: string, part: StorePreviousPart) => Promise<Examination>;
-  writeStorePrevious: (slug: string, part: StorePreviousPart, bytes: Uint8Array) => Promise<void>;
+  /**
+   * A version kept, root's 0600 unless `owner` says whose: a retired legacy
+   * file keeps the account it had, so that putting it back by hand is one
+   * `cp -p`. Every part lies under the project's own folder of previous
+   * versions, which `sitesolide remove` deletes whole.
+   */
+  writeStorePrevious: (slug: string, part: StorePreviousPart, bytes: Uint8Array, owner?: Account | null) => Promise<void>;
+  /** The legacy files retire kept a copy of for this project, by name. */
+  listRetired: (slug: string) => Promise<string[]>;
   /** A legacy flat file removed, fsync of the folder included: retire. */
   removeLegacy: (name: string) => Promise<void>;
 };
@@ -231,8 +240,17 @@ export type System = {
 /** The store's three folders: `projects`, `projects/<slug>`, `projects/<slug>/files`. */
 export type StoreFolderPart = "root" | "folder" | "files";
 
-/** A version the steward keeps of a store's env or of one of its files. */
-export type StorePreviousPart = "env" | `files/${string}`;
+/**
+ * A version the steward keeps of a store's env, of one of its files, or of a
+ * legacy flat file retire deleted (`legacy/<name>`): all under
+ * `precedents/projects/<slug>/`, the project's own, which a removal deletes.
+ */
+export type StorePreviousPart = "env" | `files/${string}` | `legacy/${string}`;
+
+/** A legacy flat file's name, as retire keeps a copy under it: one component, no dot first. */
+function isLegacyCopyName(name: string): boolean {
+  return nameRefusal(name) === null && !name.includes("/");
+}
 
 /** A manifest, a unit, a hash: none of them has any reason to be bigger. */
 const MAX_TEXT_BYTES = 256 * 1024;
@@ -689,14 +707,24 @@ export function createSystem(config: SystemConfig): System {
   /** The folders of the versions kept of a slug's store, the slug validated. */
   const previousFolders = (slug: string) => {
     const { folder, env, files } = storePaths(slug, storePreviousRoot);
-    return { root: storePreviousRoot, folder, env, files };
+    return { root: storePreviousRoot, folder, env, files, legacy: join(folder, "legacy") };
   };
-  /** The path of a kept version, its part validated: `env`, or `files/<valid name>`. */
+  /** The path of a kept version, its part validated: `env`, `files/<valid name>`, or `legacy/<flat legacy name>`. */
   const previousPath = (slug: string, part: StorePreviousPart): string => {
     const folders = previousFolders(slug);
     if (part === "env") return folders.env;
+    if (part.startsWith("legacy/")) {
+      const name = part.slice("legacy/".length);
+      if (!isLegacyCopyName(name)) throw new Error("not a legacy file's name");
+      return join(folders.legacy, name);
+    }
     if (!part.startsWith("files/")) throw new Error("not a part of a store");
     return storeFilePath(slug, part.slice("files/".length), storePreviousRoot);
+  };
+  /** The kept versions' folders a part lies in, judged real before anything below them is touched. */
+  const previousChain = (slug: string, part: StorePreviousPart): string[] => {
+    const folders = previousFolders(slug);
+    return [folders.root, folders.folder, ...(part === "env" ? [] : [part.startsWith("legacy/") ? folders.legacy : folders.files])];
   };
   const logFile = join(config.stateFolder, "journal.jsonl");
   const accessLogFile = join(config.stateFolder, ACCESS_LOG_NAME);
@@ -818,21 +846,22 @@ export function createSystem(config: SystemConfig): System {
         if (!entry.isDirectory()) continue;
         const folder = join(root, entry.name);
         folders.push(folder);
-        if (read(folder).some((inner) => inner.isDirectory() && inner.name === "files")) folders.push(join(folder, "files"));
+        for (const inner of read(folder)) {
+          if (inner.isDirectory() && (inner.name === "files" || inner.name === "legacy")) folders.push(join(folder, inner.name));
+        }
       }
     }
     folders.push(config.stateFolder);
     return folders;
   }
 
-  /** The kept versions' folders of a store laid, 0700, root's, never through a link. */
-  function preparePrevious(slug: string): ReturnType<typeof previousFolders> {
-    const folders = previousFolders(slug);
+  /** The kept versions' folders a part lies in laid, 0700, root's, never through a link. */
+  function preparePrevious(slug: string, part: StorePreviousPart): void {
+    const chain = previousChain(slug, part);
     prepareState();
-    realFolders([folders.root, folders.folder, folders.files]);
-    mkdirSync(folders.files, { recursive: true, mode: 0o700 });
-    realFolders([folders.root, folders.folder, folders.files]);
-    return folders;
+    realFolders(chain);
+    mkdirSync(chain.at(-1)!, { recursive: true, mode: 0o700 });
+    realFolders(chain);
   }
 
   return {
@@ -1215,16 +1244,30 @@ export function createSystem(config: SystemConfig): System {
     },
 
     async readStorePrevious(slug, part) {
-      const folders = previousFolders(slug);
       const path = previousPath(slug, part);
-      realFolders([folders.root, folders.folder, folders.files]);
-      return readBounded(path, part === "env" ? MAX_STORE_ENV_BYTES : MAX_STORE_FILE_BYTES);
+      realFolders(previousChain(slug, part));
+      const max = part === "env" ? MAX_STORE_ENV_BYTES : part.startsWith("legacy/") ? MAX_FILE_BYTES : MAX_STORE_FILE_BYTES;
+      return readBounded(path, max);
     },
 
-    async writeStorePrevious(slug, part, bytes) {
+    async writeStorePrevious(slug, part, bytes, owner = null) {
       const path = previousPath(slug, part);
-      preparePrevious(slug);
-      writeAtomically(dirname(path), basename(path), bytes, aRoot);
+      preparePrevious(slug, part);
+      writeAtomically(dirname(path), basename(path), bytes, { owner, mode: 0o600 });
+    },
+
+    async listRetired(slug) {
+      const folders = previousFolders(slug);
+      realFolders([folders.root, folders.folder, folders.legacy]);
+      let names: string[];
+      try {
+        names = readdirSync(folders.legacy);
+      } catch (error) {
+        const code = errorCode(error);
+        if (code === "ENOENT" || code === "ENOTDIR") return [];
+        throw error;
+      }
+      return names.filter((name) => !isTemporary(name) && isLegacyCopyName(name)).sort();
     },
 
     async removeLegacy(name) {

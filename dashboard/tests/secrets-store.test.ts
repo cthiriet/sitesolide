@@ -14,6 +14,8 @@ import {
   readGenerateAsk,
   removalRefusal,
   restoreRemovalRefusal,
+  retiredCopyPath,
+  retiredReason,
   storeMay,
   storeNameRefusal,
   storeSlugRefusal,
@@ -440,6 +442,18 @@ describe("the listing (spec §6.11)", () => {
     expect(isCovered(new Map([["B", "1"]]), env)).toBe(false);
     expect(isCovered(new Map(), { kind: "absent" })).toBe(true);
     expect(isCovered(new Map([["A", "1"]]), { kind: "absent" })).toBe(false);
+  });
+});
+
+describe("a retired legacy file's copy (finding L3)", () => {
+  test("under the project's own previous versions, which removing it deletes whole; the way back said, never a value", () => {
+    expect(retiredCopyPath("shop", "shop-ses.env")).toBe("/var/lib/sitesolide-steward/precedents/projects/shop/legacy/shop-ses.env");
+    expect(retiredReason("shop", "shop-ses.env")).toBe(
+      "retired: a copy is kept at /var/lib/sitesolide-steward/precedents/projects/shop/legacy/shop-ses.env; to put it back, sudo cp -p /var/lib/sitesolide-steward/precedents/projects/shop/legacy/shop-ses.env /etc/sitesolide/shop-ses.env, then sitesolide refresh shop",
+    );
+    for (const [slug, name] of [["../shop", "a.env"], ["shop", "../a.env"], ["shop", ".a.env"], ["shop", "a/b.env"], ["shop", "a..env"]]) {
+      expect(() => retiredCopyPath(slug!, name!)).toThrow();
+    }
   });
 });
 

@@ -12,7 +12,7 @@
  * A value travels in a body, never in a URL: a URL ends up in a log, a body
  * does not.
  */
-import type { StoreView } from "../../borrowed/store-protocol";
+import type { StoreMigrateResponse, StoreRetireResponse, StoreView } from "../../borrowed/store-protocol";
 
 /** The steward's Unix socket. The directory is 0750 root:site-dashboard. */
 export const DEFAULT_SOCKET = "/run/sitesolide-steward/secretaire.sock";
@@ -250,6 +250,12 @@ export type Verdict = {
   subState: string;
   /** Restarts counted by systemd during the observation. */
   restarts: number;
+  /**
+   * Why it did not come back, when the steward can say better than systemd:
+   * a service that could not load its secret files (exit status 243) is
+   * worded as deploy and the monitor word it. Absent otherwise.
+   */
+  reason?: string;
 };
 
 // --- The errors --------------------------------------------------------------
@@ -315,7 +321,9 @@ export type Failure = { error: ErrorCode; message: string; wait?: number };
 //
 // A write answers 201 when it made the store's folder. The owner's socket,
 // root's alone, answers the same routes without a token, but `/store/value`,
-// and `POST /restart { slug }`.
+// and `POST /restart { slug }`, and
+//
+//   GET    /store/leftovers?slug=<s>          -> StoreLeftoversResponse
 //
 // Any error returns `Failure`.
 
@@ -356,6 +364,36 @@ export type PasswordResponse = { file: FileView; password: string | null };
 /** `detail`: what the gatekeeper did and checked, in English, for the page. */
 export type PortalResponse = { portal: PortalView; detail: string };
 export type RestartResponse = { verdict: Verdict };
+
+/**
+ * The flat files under /etc/sitesolide a project's store left behind: present,
+ * declared by no manifest, and whose most specific owner by prefix is this
+ * project, which names its secrets in its store (src/secrets/scope.ts,
+ * `Site.leftovers`). Names only, in the folder's order; empty for a project
+ * that is not deployed, keeps the old form, or has none. What `sitesolide
+ * remove` reads before it deletes the served folder, after which nobody can
+ * tell them apart; it judges each one again (removableSecrets) before
+ * deleting it. Root's alone, on the owner's socket.
+ */
+export type StoreLeftoversResponse = { slug: string; leftovers: string[] };
+
+/**
+ * What `POST /store/migrate` answers, beyond bin/cli/store-protocol.ts's
+ * shape: `shadowed`, each name two legacy files set to different values,
+ * the value of `kept`, the last the units read and the one the service runs
+ * with, merged, the `others` not. Names and files, never a value.
+ * `conflicts` is left for units that read the files in different orders,
+ * which still refuses the migration.
+ */
+export type StoreMigrateAnswer = StoreMigrateResponse & { shadowed: { name: string; kept: string; others: string[] }[] };
+
+/**
+ * What `POST /store/retire` answers, beyond bin/cli/store-protocol.ts's
+ * shape: `forced`, the files retired only because the request carried
+ * `force: true`, the store's values standing where theirs differed. The
+ * request takes `force`, the owner's explicit choice.
+ */
+export type StoreRetireAnswer = StoreRetireResponse & { forced: string[] };
 
 // --- The dashboard's routes, under /api/secrets ------------------------------
 //

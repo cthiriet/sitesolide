@@ -33,6 +33,8 @@ import {
   MAX_STORE_FILE_BYTES,
   MAX_STORE_FILES,
   MAX_STORE_FILES_BYTES,
+  SECRETS_FOLDER,
+  STORE_PREVIOUS_ROOT,
   type GenerateFormat,
 } from "../../borrowed/store";
 import type { LegacyFileView, StoreFileView, StoreMay, StoreVariableView, StoreView } from "../../borrowed/store-protocol";
@@ -471,6 +473,27 @@ export function storeView(input: StoreViewInput): StoreView {
     previous: store.previous && may.restore,
     may,
   };
+}
+
+/**
+ * Where retire keeps a legacy file it deletes, on the machine: under the
+ * project's own folder of previous versions, which `sitesolide remove`
+ * deletes whole with the store (storeRemovalActions in bin/cli/store.ts), its
+ * owner and mode kept. Throws on a slug or a name no path is built from.
+ */
+export function retiredCopyPath(slug: string, name: string): string {
+  if (typeof slug !== "string" || !isValidSlug(slug)) throw new Error("not a project's slug");
+  if (typeof name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name.includes("..")) throw new Error("not a legacy file's name");
+  return `${STORE_PREVIOUS_ROOT}/${slug}/legacy/${name}`;
+}
+
+/**
+ * What the listing says of a legacy file retire deleted: where its copy is,
+ * and how the owner puts it back by hand. Names and paths, never a value.
+ */
+export function retiredReason(slug: string, name: string): string {
+  const copy = retiredCopyPath(slug, name);
+  return `retired: a copy is kept at ${copy}; to put it back, sudo cp -p ${copy} ${SECRETS_FOLDER}/${name}, then sitesolide refresh ${slug}`;
 }
 
 /** Every assignment of a legacy file is in the store with the very same value. An empty file is covered. */

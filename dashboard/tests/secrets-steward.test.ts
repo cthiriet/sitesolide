@@ -49,6 +49,8 @@ import {
 } from "../src/secrets/steward";
 import { createSystem, isTemporary, readAccount, readGroup, type Command, type SystemConfig, type System } from "../src/secrets/system";
 import type { StoreChangeResponse, StoreListResponse, StoreMigrateResponse, StoreRetireResponse, StoreRevealResponse, StoreView } from "../borrowed/store-protocol";
+import { STORE_PREVIOUS_ROOT, storeRemovalActions } from "../borrowed/store";
+import { retiredCopyPath } from "../src/secrets/store";
 import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_RETENTION_MS, createHistory, encodeEntry, inWindow, latest, MAX_ENTRY_BYTES, mergeLogs, page, reread, type AccessWindow } from "../src/secrets/log";
 
 /**
@@ -3103,6 +3105,36 @@ describe("the real system", () => {
       expect(readdirSync(files)).toEqual([]);
     });
 
+    test("a retired legacy file's copy lies under the project's own previous versions, its owner kept, and nowhere else", async () => {
+      const root = throwawayRoot();
+      mkdirSync(join(root, "secrets"));
+      const system = systemOn(root);
+      const owner = { uid: UID, gid: TEST_GID };
+      await system.writeStorePrevious("shop", "legacy/shop-ses.env", new TextEncoder().encode("A=1\n"), owner);
+      const copy = join(root, "state", "precedents", "projects", "shop", "legacy", "shop-ses.env");
+      expect(readFileSync(copy, "utf8")).toBe("A=1\n");
+      expect([statSync(copy).uid, statSync(copy).mode & 0o777]).toEqual([UID, 0o600]);
+      expect(statSync(join(root, "state", "precedents", "projects", "shop", "legacy")).mode & 0o777).toBe(0o700);
+      expect(await system.listRetired("shop")).toEqual(["shop-ses.env"]);
+      expect(await system.listRetired("other")).toEqual([]);
+      expect((await system.readStorePrevious("shop", "legacy/shop-ses.env")).kind).toBe("present");
+      for (const part of ["legacy/../env", "legacy/.x", "legacy/a/b", "legacy/", "legacy/x\\y"] as const) {
+        await expect(system.writeStorePrevious("shop", part as "env", new Uint8Array([1]))).rejects.toThrow();
+        await expect(system.readStorePrevious("shop", part as "env")).rejects.toThrow();
+      }
+      // A temporary left there by an abrupt stop goes at the next start; the copy stays.
+      writeFileSync(join(root, "state", "precedents", "projects", "shop", "legacy", ".shop-ses.env.0123456789abcdef.tmp"), "A=");
+      expect(await system.cleanTemporaries()).toBe(1);
+      expect(await system.listRetired("shop")).toEqual(["shop-ses.env"]);
+      // A link in the place of its folder: nothing is read or written through it.
+      rmSync(join(root, "state", "precedents", "projects", "shop", "legacy"), { recursive: true });
+      mkdirSync(join(root, "elsewhere"));
+      symlinkSync(join(root, "elsewhere"), join(root, "state", "precedents", "projects", "shop", "legacy"));
+      await expect(system.writeStorePrevious("shop", "legacy/shop-ses.env", new Uint8Array([1]))).rejects.toThrow();
+      await expect(system.listRetired("shop")).rejects.toThrow();
+      expect(readdirSync(join(root, "elsewhere"))).toEqual([]);
+    });
+
     test("removeLegacy unlinks a flat file alone", async () => {
       const root = throwawayRoot();
       mkdirSync(join(root, "secrets", "cms-secrets"), { recursive: true });
@@ -4302,27 +4334,50 @@ describe("migrate and retire (spec §6.8, §6.9, §8.1)", () => {
     expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe(`TOKEN=the-store-s-own\nSID=${SECRET_SID}\n`);
   });
 
-  test("two legacy files that disagree on a name: refused whole, the name and the files said, never a value", async () => {
+  test("two legacy files that disagree on a name: the value in effect, the later file's, is merged; the other said by name and file, never a value (I-3)", async () => {
     const bench = await mount();
     cmsReadsStore(bench);
+    // The unit reads cms.env, then cms-webhook.env: the latter's TOKEN is the one the service runs with.
     writeFileSync(join(bench.secrets, "cms-webhook.env"), `TOKEN=${STORE_CANARY}\nHOOK=1\n`, { mode: 0o600 });
     const token = await unlock(bench);
+    const dry = await bench.call("POST", "/store/migrate", { token, slug: "cms", dryRun: true });
+    expect(await dry.json()).toMatchObject({ shadowed: [{ name: "TOKEN", kept: "cms-webhook.env", others: ["cms.env"] }], conflicts: [], written: false });
     const response = await bench.call("POST", "/store/migrate", { token, slug: "cms" });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(JSON.parse(text)).toMatchObject({
+      sources: ["cms.env", "cms-webhook.env"],
+      merged: ["SID", "TOKEN", "HOOK"],
+      shadowed: [{ name: "TOKEN", kept: "cms-webhook.env", others: ["cms.env"] }],
+      conflicts: [],
+      written: true,
+    });
+    for (const value of [SECRET_TOKEN, STORE_CANARY]) expect(text).not.toContain(value);
+    // What the service ran with, exactly.
+    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe(`SID=${SECRET_SID}\nTOKEN=${STORE_CANARY}\nHOOK=1\n`);
+    expect(log(bench).at(-1)).toMatchObject({ operation: "migrate", result: "ok", detail: "3 merged from cms.env, cms-webhook.env; 1 taken from the file in effect over another value" });
+    expect(readFileSync(join(bench.state, "journal.jsonl"), "utf8")).not.toContain(STORE_CANARY);
+  });
+
+  test("the units of a project reading its legacy files in different orders: a differing name is a conflict, and nothing is written", async () => {
+    const bench = await mount();
+    const lab = { slug: "lab", services: { web: { start: "/usr/local/bin/bun run server.ts", port: 3053 }, worker: { start: "/bin/true", kind: "worker" } }, secrets: ["lab-a.env", "lab-b.env"] };
+    mkdirSync(join(bench.sites, "lab"), { recursive: true });
+    writeFileSync(join(bench.sites, "lab", "sitesolide.json"), JSON.stringify(lab));
+    writeFileSync(join(bench.units, "lab.service"), storeUnit(bench, "lab", ["lab-a.env", "lab-b.env"]));
+    // Edited by hand: the worker reads them the other way round.
+    writeFileSync(join(bench.units, "lab.worker.service"), storeUnit(bench, "lab", ["lab-b.env", "lab-a.env"]));
+    writeFileSync(join(bench.secrets, "lab-a.env"), `KEY=${STORE_CANARY}-a\nSAME=1\n`, { mode: 0o600 });
+    writeFileSync(join(bench.secrets, "lab-b.env"), `KEY=${STORE_CANARY}-b\nSAME=1\n`, { mode: 0o600 });
+    const token = await unlock(bench);
+    const response = await bench.call("POST", "/store/migrate", { token, slug: "lab" });
     expect(response.status).toBe(409);
     const text = await response.text();
     const answer = JSON.parse(text) as StoreMigrateResponse & { error: string; message: string };
-    expect(answer).toMatchObject({
-      error: "unmanaged",
-      conflicts: [{ name: "TOKEN", files: ["cms.env", "cms-webhook.env"] }],
-      merged: ["SID", "HOOK"],
-      written: false,
-    });
-    expect(answer.message).toStartWith("TOKEN: in cms.env and cms-webhook.env, with different values");
-    for (const value of [SECRET_TOKEN, STORE_CANARY]) expect(text).not.toContain(value);
-    expect(existsSync(storeOf(bench, "cms").env)).toBe(false);
-    expect(log(bench).at(-1)).toMatchObject({ operation: "migrate", result: "rejects", detail: "conflicts" });
-    // The dry run lists the conflict too, and writes nothing.
-    expect(await (await bench.call("POST", "/store/migrate", { token, slug: "cms", dryRun: true })).json()).toMatchObject({ conflicts: [{ name: "TOKEN" }], written: false });
+    expect(answer).toMatchObject({ error: "unmanaged", conflicts: [{ name: "KEY", files: ["lab-a.env", "lab-b.env"] }], written: false });
+    expect(answer.message).toStartWith("KEY: in lab-a.env and lab-b.env, with different values, which the units of lab read in different orders");
+    expect(text).not.toContain(STORE_CANARY);
+    expect(existsSync(storeOf(bench, "lab").env)).toBe(false);
   });
 
   test("a legacy file carrying PASSWORD_HASH, or not managed, refuses the whole migration", async () => {
@@ -4339,10 +4394,13 @@ describe("migrate and retire (spec §6.8, §6.9, §8.1)", () => {
     expect(existsSync(storeOf(bench, "cms").env)).toBe(false);
   });
 
-  test("retire deletes a covered file once a restart has loaded the store, keeping it as its previous version", async () => {
+  test("retire deletes a covered file once a restart has loaded the store, keeping its copy under the project's own previous versions", async () => {
     const bench = await mount();
     cmsReadsStore(bench);
     const token = await unlock(bench);
+    // A version the dashboard kept of it while it was a legacy file.
+    await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "SID", value: SECRET_SID });
+    expect(existsSync(join(bench.state, "precedents", "cms.env"))).toBe(true);
     // Not covered yet: kept.
     const early = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env"] })).json()) as StoreRetireResponse;
     expect(early).toMatchObject({ retired: [], kept: [{ file: "cms.env", reason: "not covered: SID is not in the store; sitesolide secrets migrate first" }] });
@@ -4355,27 +4413,44 @@ describe("migrate and retire (spec §6.8, §6.9, §8.1)", () => {
     // A restart that loaded the store.
     bench.scenario.current = () => showA("active", "running", 0, Date.now() + 1_000);
     freshReadings(bench);
-    const done = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env", "cms-webhook.env", "library.env", "dashboard.env"] })).json()) as StoreRetireResponse;
+    const done = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env", "cms-webhook.env", "library.env", "dashboard.env"] })).json()) as StoreRetireResponse & { forced: string[] };
     expect(done.retired).toEqual(["cms.env"]);
+    expect(done.forced).toEqual([]);
     expect(done.kept).toEqual([
       { file: "cms-webhook.env", reason: "absent: nothing to retire" },
       { file: "library.env", reason: "not a legacy file of this project" },
       { file: "dashboard.env", reason: "not a legacy file of this project" },
     ]);
     expect(existsSync(join(bench.secrets, "cms.env"))).toBe(false);
-    expect(readFileSync(join(bench.state, "precedents", "cms.env"), "utf8")).toBe(CMS_ENV);
-    expect(log(bench).at(-1)).toMatchObject({ operation: "retire", result: "ok", slug: "cms", file: "cms.env" });
+    // Its copy lies where sitesolide remove deletes the project's: never in precedents/<name>, which nothing deletes with it.
+    const copy = join(bench.state, "precedents", "projects", "cms", "legacy", "cms.env");
+    expect(readFileSync(copy, "utf8")).toBe(CMS_ENV);
+    expect(statSync(copy).mode & 0o777).toBe(0o600);
+    expect(existsSync(join(bench.state, "precedents", "cms.env"))).toBe(false);
+    expect(storeRemovalActions("cms").map((action) => action.command)).toContain(`sudo rm -rf ${STORE_PREVIOUS_ROOT}/cms`);
+    expect(retiredCopyPath("cms", "cms.env").startsWith(`${STORE_PREVIOUS_ROOT}/cms/`)).toBe(true);
+    expect(log(bench).at(-1)).toMatchObject({ operation: "retire", result: "ok", slug: "cms", file: "cms.env", detail: null });
     // The store still holds every value: nothing the service had was lost.
     expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe(`SID=${SECRET_SID}\nTOKEN=${SECRET_TOKEN}\n`);
+    // The listing says where the copy is and how it is put back, the file still being named by the manifest.
+    expect((await storeList(bench, "cms")).legacy.find((file) => file.name === "cms.env")).toEqual({
+      name: "cms.env",
+      state: "absent",
+      reason: `retired: a copy is kept at ${STORE_PREVIOUS_ROOT}/cms/legacy/cms.env; to put it back, sudo cp -p ${STORE_PREVIOUS_ROOT}/cms/legacy/cms.env /etc/sitesolide/cms.env, then sitesolide refresh cms`,
+      variables: [],
+      read: true,
+      leftover: false,
+      covered: null,
+    });
     expect((await errorOf(await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["../cms.env"] }))).message).toBe("files: entry 1 is not a legacy file's name");
   });
 
-  test("a leftover, once its project names its secrets, is retired the same; a file another value holds is kept", async () => {
+  test("a leftover, once its project names its secrets, is retired the same; one the store does not match only by the owner's explicit force (I-5)", async () => {
     const bench = await mount();
     // cms moved to names (M5 before M4): its files are leftovers now.
     writeFileSync(join(bench.sites, "cms", "sitesolide.json"), JSON.stringify({ slug: "cms", start: "/usr/local/bin/bun run server.ts", port: 3048, publicDir: "public", secrets: ["SID", "TOKEN"] }));
     writeFileSync(join(bench.units, "cms.service"), storeUnit(bench, "cms"));
-    writeFileSync(join(bench.secrets, "cms-old.env"), "SID=another\n", { mode: 0o600 });
+    writeFileSync(join(bench.secrets, "cms-old.env"), `SID=${STORE_CANARY}\nOLD_ONLY=1\n`, { mode: 0o600 });
     const token = await unlock(bench);
     await bench.call("PATCH", "/store", { token, slug: "cms", set: { SID: SECRET_SID, TOKEN: SECRET_TOKEN }, remove: [] });
     const listed = await storeList(bench, "cms");
@@ -4387,9 +4462,52 @@ describe("migrate and retire (spec §6.8, §6.9, §8.1)", () => {
     expect((await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "X", value: "1" })).status).toBe(403);
     bench.scenario.current = () => showA("active", "running", 0, Date.now() + 1_000);
     freshReadings(bench);
-    const done = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env", "cms-old.env"] })).json()) as StoreRetireResponse;
-    expect(done.retired).toEqual(["cms.env"]);
-    expect(done.kept).toEqual([{ file: "cms-old.env", reason: "not covered: the value of SID differs from the store's" }]);
+    const done = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env", "cms-old.env"] })).json()) as StoreRetireResponse & { forced: string[] };
+    expect(done).toMatchObject({ retired: ["cms.env"], forced: [] });
+    expect(done.kept).toEqual([
+      { file: "cms-old.env", reason: "not covered: the value of SID differs from the store's, which is the one in effect; retire it with force to let the store's value stand alone" },
+    ]);
+    expect(existsSync(join(bench.secrets, "cms-old.env"))).toBe(true);
+    // The owner's explicit choice: the store's value stands, the file goes, its copy kept.
+    const forced = await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms-old.env"], force: true });
+    const text = await forced.text();
+    expect(JSON.parse(text)).toMatchObject({ retired: ["cms-old.env"], forced: ["cms-old.env"], kept: [] });
+    expect(text).not.toContain(STORE_CANARY);
+    expect(existsSync(join(bench.secrets, "cms-old.env"))).toBe(false);
+    expect(readFileSync(join(bench.state, "precedents", "projects", "cms", "legacy", "cms-old.env"), "utf8")).toBe(`SID=${STORE_CANARY}\nOLD_ONLY=1\n`);
+    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe(`SID=${SECRET_SID}\nTOKEN=${SECRET_TOKEN}\n`);
+    expect(log(bench).at(-1)).toMatchObject({ operation: "retire", result: "ok", file: "cms-old.env", detail: "forced: the store's values stand" });
+    // The retired copies are listed, absent, with their way back; no longer leftovers.
+    expect((await storeList(bench, "cms")).legacy.map((file) => [file.name, file.state, file.leftover, file.reason?.startsWith("retired: a copy is kept at")])).toEqual([
+      ["cms-old.env", "absent", false, true],
+      ["cms.env", "absent", false, true],
+    ]);
+    expect((await errorOf(await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env"], force: "yes" }))).message).toBe("force must be a boolean");
+  });
+
+  test("a forced retire never takes a value a unit still reads and the store lacks", async () => {
+    const bench = await mount();
+    cmsReadsStore(bench);
+    const token = await unlock(bench);
+    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "TOKEN", value: "the-store-s-own" });
+    bench.scenario.current = () => showA("active", "running", 0, Date.now() + 1_000);
+    freshReadings(bench);
+    const kept = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env"], force: true })).json()) as StoreRetireResponse;
+    expect(kept).toMatchObject({ retired: [], kept: [{ file: "cms.env", reason: "not covered: SID is not in the store; sitesolide secrets migrate first" }] });
+    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+  });
+
+  test("the owner's socket says which flat files a store-form project left, for sitesolide remove", async () => {
+    const bench = await mount();
+    writeFileSync(join(bench.sites, "cms", "sitesolide.json"), JSON.stringify({ slug: "cms", start: "/usr/local/bin/bun run server.ts", port: 3048, publicDir: "public", secrets: ["SID", "TOKEN"] }));
+    writeFileSync(join(bench.secrets, "cms-old.env"), "A=1\n", { mode: 0o600 });
+    const leftovers = async (query: string) => bench.owner("GET", `/store/leftovers${query}`);
+    expect(await (await leftovers("?slug=cms")).json()).toEqual({ slug: "cms", leftovers: ["cms-old.env", "cms.env"] });
+    // A project in the old form, a static site, one not deployed, a storeless one: none.
+    for (const slug of ["calendar", "showcase", "not-yet", "dashboard"]) expect(await (await leftovers(`?slug=${slug}`)).json()).toEqual({ slug, leftovers: [] });
+    for (const query of ["", "?slug=cms&slug=calendar", "?slug=../cms", "?slug=test-zone.invalid"]) expect((await leftovers(query)).status).toBe(400);
+    // Root's alone: not on the dashboard's socket.
+    expect((await bench.call("GET", "/store/leftovers?slug=cms")).status).toBe(404);
   });
 
   test("migrate and retire are the owner's: refused for a project not deployed, nowhere for a person or a token", async () => {
@@ -4474,6 +4592,29 @@ describe("the units this release generates read the store as the steward expects
     expect(await (await bench.call("POST", "/store/migrate", { token, slug: "lab" })).json()).toMatchObject({ merged: ["LAB_KEY"], written: true });
     expect((await storeList(bench, "lab")).variables[0]).toMatchObject({ name: "LAB_KEY", source: "store", shadows: ["lab.env"] });
     expect((await bench.call("POST", "/restart", { token, slug: "lab" })).status).toBe(200);
+  });
+});
+
+describe("a restart that cannot load the store's files (I-6)", () => {
+  test("a service looping on exit 243 is worded as deploy and the monitor word it, the journal saying 243/CREDENTIALS", async () => {
+    const bench = await mount();
+    addStoreProject(bench);
+    const token = await unlock(bench);
+    bench.scenario.current = (_unit, since) => `LoadState=loaded\nActiveState=activating\nSubState=auto-restart\nNRestarts=${Math.floor(since / 2000) + 1}\nActiveEnterTimestamp=\nExecMainStatus=243\n`;
+    const restarted = (await (await bench.call("POST", "/restart", { token, slug: "shop" })).json()) as RestartResponse;
+    expect(restarted.verdict).toMatchObject({
+      kind: "looping",
+      reason: "shop.service could not load its secret files (243/CREDENTIALS): the store's files folder is missing, or its files are too large; sitesolide refresh shop lays the folder again",
+    });
+    expect(log(bench).at(-1)).toMatchObject({ operation: "restart", result: "failure", detail: expect.stringMatching(/^looping, .*, 243\/CREDENTIALS$/) });
+    // The same through the owner's socket and a token.
+    expect(((await (await bench.owner("POST", "/restart", { slug: "shop" })).json()) as RestartResponse).verdict.reason).toStartWith("shop.service could not load its secret files");
+    const ops = bench.current().secretsForToken!;
+    const byToken = await ops.restart(new Request("http://steward/control/restart", { method: "POST" }), "shop", { actor: "token:0123456789ab", member: null, token: "0123456789ab" }, async () => null);
+    expect(((await byToken.json()) as RestartResponse).verdict.reason).toStartWith("shop.service could not load its secret files");
+    // Another exit status is not worded so.
+    bench.scenario.current = () => "LoadState=loaded\nActiveState=failed\nSubState=failed\nNRestarts=0\nActiveEnterTimestamp=\nExecMainStatus=1\n";
+    expect(((await (await bench.call("POST", "/restart", { token, slug: "shop" })).json()) as RestartResponse).verdict.reason).toBeUndefined();
   });
 });
 
