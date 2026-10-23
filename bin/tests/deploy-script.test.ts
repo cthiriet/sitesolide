@@ -266,6 +266,30 @@ describe("the archive, beside the CLI's", () => {
     expect(result.code).toBe(0);
     expect(read(new Uint8Array(readFileSync(out))).files["public/token.txt"]?.content).toBe("absent");
   }, 30_000);
+
+  // As the CLI withholds them, over SSH as with a token (buildEnv in bin/cli/kit.ts).
+  for (const shell of ["bash", "sh"]) {
+    test(`no SITESOLIDE_ variable reaches the build, an odd name included, and the rest does, started with ${shell}`, async () => {
+      const folder = project({ slug: "built", publicDir: "dist", build: "mkdir -p dist && env > dist/env.txt" }, {});
+      const out = join(WORK, `built-${counter++}.tar.gz`);
+      const result = await run(folder, ["--archive", out], {
+        shell,
+        env: {
+          SITESOLIDE_TOKEN: TOKEN,
+          SITESOLIDE_API: "https://dashboard.test-zone.invalid",
+          SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
+          "SITESOLIDE_ODD-NAME": "set through env, never through export",
+          BUILD_PROBE: "kept",
+        },
+      });
+      expect(result.code).toBe(0);
+      const lines = read(new Uint8Array(readFileSync(out))).files["public/env.txt"]!.content.split("\n");
+      // SITESOLIDE_DEPLOY_BASH too, which the script sets when sh started it.
+      expect(lines.filter((line) => line.startsWith("SITESOLIDE_"))).toEqual([]);
+      expect(lines.some((line) => line.includes(TOKEN) || line.includes("a DNS provider's secret"))).toBe(false);
+      for (const line of ["BUILD_PROBE=kept", `HOME=${WORK}`, `PATH=${toolboxes.get(READERS[0]!)}`]) expect(lines).toContain(line);
+    }, 30_000);
+  }
 });
 
 describe("what it refuses before anything leaves", () => {

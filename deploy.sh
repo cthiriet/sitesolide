@@ -25,10 +25,11 @@
 # The token is a password. It never goes into an argument, which `ps` shows
 # to every user of the machine: curl reads its header from a file descriptor.
 # The build, which is the project's own code and its dependencies', runs
-# without it in its environment, but as you all the same, with what you may
-# read: a process of yours that holds the token in its own environment is
-# one of them on Linux. Deploy, and run `--archive`, which builds too, only a
-# project whose build you would run yourself.
+# without it in its environment, nor any other SITESOLIDE_ variable, but as
+# you all the same, with what you may read: a process of yours that holds
+# the token in its own environment is one of them on Linux. Deploy, and run
+# `--archive`, which builds too, only a project whose build you would run
+# yourself.
 #
 # The archive's rules are bin/cli/remote.ts and bin/cli/bundle.ts, and
 # bin/tests/deploy-script.test.ts holds this script to them: change one, and
@@ -363,9 +364,19 @@ if [ -z "$archive_to" ]; then
   fi
 fi
 
+# The build gets this environment less every variable named SITESOLIDE_:
+# the token, and SITESOLIDE_API or a DNS provider's SITESOLIDE_DNS_<...> with
+# it, as the CLI withholds them (buildEnv in bin/cli/kit.ts). The names come
+# from `env`, which lists what a child would receive, a name bash holds no
+# variable for included; a line inside a value that looks like one only
+# withholds a name nothing carries.
 if [ -n "$build" ]; then
   echo "-> build ($build)"
-  (cd "$code" && env -u SITESOLIDE_TOKEN sh -c "$build") || fail "build failed: $build"
+  withheld=()
+  while IFS= read -r line; do
+    case "$line" in SITESOLIDE_*=*) withheld+=(-u "${line%%=*}") ;; esac
+  done < <(env)
+  (cd "$code" && env ${withheld[@]+"${withheld[@]}"} sh -c "$build") || fail "build failed: $build"
 fi
 
 if [ -n "$public_dir" ]; then

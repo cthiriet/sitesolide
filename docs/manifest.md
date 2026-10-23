@@ -132,6 +132,10 @@ A command run on your workstation before anything is sent. Typically
 It runs locally on purpose: the machine has no toolchain, no `node_modules` and
 no compiler, and does not need any.
 
+It runs with your environment, less every variable whose name starts with
+`SITESOLIDE_`: a token exported as `SITESOLIDE_TOKEN` or a DNS provider's
+credentials never reach the folder's code, over SSH as with a token.
+
 `deploy --dry-run` shows it and does not run it: it is the folder's own code, and
 a dry run is what an agent tries first on a folder it may have just cloned.
 `--dry-run --build` runs it too, to check what it produces.

@@ -480,6 +480,30 @@ export function projectEnv(): Record<string, string> {
 }
 
 /**
+ * The environment of a project's own build: `inherited`, the workstation's,
+ * less every variable named SITESOLIDE_, then `lent`, what projectEnv adds.
+ *
+ * The build is the project's code and its dependencies', often a clone
+ * nobody has read, run as the person deploying: a token exported as
+ * SITESOLIDE_TOKEN, a DNS provider's SITESOLIDE_DNS_<...> or any other of
+ * sitesolide's own variables would be its to read and send on. No build
+ * needs one. The only one it gets is SITESOLIDE_BINARY when projectEnv lends
+ * it, a path and no secret, which the `bun` shim runs. deploy.sh withholds
+ * the same names from its own build.
+ *
+ * Always an object, even with nothing to withhold: Bun.spawn given no `env`
+ * hands down the environment the process started with, all of them included.
+ */
+export function buildEnv(inherited: Record<string, string | undefined>, lent: Record<string, string>): Record<string, string> {
+  const environment: Record<string, string> = {};
+  for (const [name, value] of Object.entries(inherited)) {
+    if (value === undefined || name.startsWith("SITESOLIDE_")) continue;
+    environment[name] = value;
+  }
+  return { ...environment, ...lent };
+}
+
+/**
  * The two shims the kit carries in `.bin/`, packed by bin/build.ts. Each runs
  * the binary SITESOLIDE_BINARY names as Bun, or the `sitesolide` of the PATH
  * for a script started by hand, outside the CLI.

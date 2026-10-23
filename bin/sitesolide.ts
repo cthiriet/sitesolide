@@ -242,7 +242,7 @@ import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState
 import { machine, sshLogin } from "./cli/machine";
 import { DNS_PROVIDERS, dnsEntry, MANUAL } from "./cli/dns/registry";
 import { eventOutput, humanOutput, login, remoteMode, REMOTE_USAGE, runRemote } from "./cli/remote";
-import { KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
+import { buildEnv, KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
 import { ownerGeneralCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshGeneral, sshPeople } from "./cli/access";
 import {
   foreignUnit,
@@ -470,10 +470,11 @@ function script(name: string): string {
 }
 
 /**
- * The environment of the project's own build, and of the command `run`
- * starts: undefined, which leaves Bun.spawn as it was, unless a compiled
- * binary on a workstation without Bun lends its own, last on the PATH. See
- * projectEnv in bin/cli/kit.ts.
+ * The environment of the command `run` starts: undefined, which leaves
+ * Bun.spawn as it was, unless a compiled binary on a workstation without Bun
+ * lends its own, last on the PATH. See projectEnv in bin/cli/kit.ts. The
+ * project's build gets buildEnv instead, which withholds every SITESOLIDE_
+ * variable.
  */
 function projectEnvironment(): Record<string, string | undefined> | undefined {
   const extra = fromKit(projectEnv);
@@ -939,7 +940,8 @@ async function runBuild(project: Project, executor: Executor): Promise<void> {
   step(`build (${build})`);
   const proc = Bun.spawn(["sh", "-c", build], {
     cwd: project.code,
-    env: projectEnvironment(),
+    // Over SSH as with a token: never a SITESOLIDE_ variable, see buildEnv.
+    env: buildEnv(process.env, fromKit(projectEnv)),
     stdout: childOutput(),
     stderr: childOutput(),
   });

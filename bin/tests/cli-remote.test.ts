@@ -243,6 +243,27 @@ describe("deploy through the API", () => {
     expect(vm.logs().filter((line) => line.startsWith("CONNECT") || line.includes("rsync"))).toEqual([]);
   });
 
+  test("the build gets no SITESOLIDE_ variable, the token above all, and the rest of the environment as it is", async () => {
+    scenario = "succeeds";
+    const probe = join(folder("remote-probe-"), "build-env.txt");
+    const root = project({ ...APP, build: 'env > "$ENV_PROBE"' }, APP_FILES);
+    const home = folder("remote-home-");
+    const result = await cli(root, ["deploy"], {
+      HOME: home,
+      SITESOLIDE_API: api,
+      SITESOLIDE_TOKEN: TOKEN,
+      SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
+      SITESOLIDE_ANYTHING_ELSE: "sitesolide's own",
+      ENV_PROBE: probe,
+      BUILD_PROBE: "kept",
+    });
+    expect(result.code).toBe(0);
+    const lines = readFileSync(probe, "utf8").split("\n");
+    expect(lines.filter((line) => line.startsWith("SITESOLIDE_"))).toEqual([]);
+    expect(lines.some((line) => line.includes(TOKEN) || line.includes("a DNS provider's secret"))).toBe(false);
+    for (const line of ["BUILD_PROBE=kept", `HOME=${home}`, `PATH=${vm.env.PATH}`]) expect(lines).toContain(line);
+  });
+
   test("a deployment that fails: its reason, and a non-zero exit", async () => {
     scenario = "fails";
     const root = project(APP, APP_FILES);

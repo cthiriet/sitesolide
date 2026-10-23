@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment, HEADLESS_ANSWER } from "../../cli/fragment";
 import { readManifest } from "../../cli/manifest";
@@ -63,6 +64,40 @@ describe("built documentation", () => {
     // that skips it checks nothing.
     expect(existsSync(join(dist, "index.html"))).toBe(true);
     expect(r.output).toContain("projects/static-docs/dist/");
+  });
+
+  test("the build gets no SITESOLIDE_ variable, a token exported by hand included, and the rest of the environment as it is", async () => {
+    // The build is the folder's own code: a token or a DNS provider's
+    // credentials in the workstation's environment would be its to read.
+    const token = `sst_${"T".repeat(43)}`;
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), "build-env-")));
+    const vm = createFakeVm();
+    try {
+      const folder = join(parent, "site");
+      mkdirSync(folder);
+      const build = 'mkdir -p public && echo ok > public/index.html && env > "$ENV_PROBE"';
+      writeFileSync(join(folder, "sitesolide.json"), JSON.stringify({ slug: "build-env", publicDir: "public", build }));
+      const probe = join(parent, "build-env.txt");
+      const r = await run(folder, ["deploy", "--dry-run", "--build"], {
+        vm,
+        env: {
+          SITESOLIDE_TOKEN: token,
+          SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
+          ENV_PROBE: probe,
+          BUILD_PROBE: "kept",
+        },
+      });
+      expect(r.code).toBe(0);
+      expect(r.output).toContain(`-> build (${build})`);
+      const lines = readFileSync(probe, "utf8").split("\n");
+      // SITESOLIDE_SERVER and SITESOLIDE_ZONE, which the CLI itself reads, withheld with the rest.
+      expect(lines.filter((line) => line.startsWith("SITESOLIDE_"))).toEqual([]);
+      expect(lines.some((line) => line.includes(token) || line.includes("a DNS provider's secret"))).toBe(false);
+      for (const line of ["BUILD_PROBE=kept", `PATH=${vm.env.PATH}`]) expect(lines).toContain(line);
+    } finally {
+      vm.cleanup();
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 });
 

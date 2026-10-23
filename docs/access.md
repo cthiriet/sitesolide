@@ -700,8 +700,9 @@ would be sent, an empty `publicDir`), the manifest first, the build on the
 workstation, the archive with the CLI's exclusions, then the machine's log
 to the end. It exits 0 only once the machine says `succeeded`. curl reads the
 token's header from a file descriptor, never from its arguments, and the
-build runs without `SITESOLIDE_TOKEN` in its environment, but as you all the
-same, with what you may read: deploy, and run `--archive`, which builds too,
+build runs without `SITESOLIDE_TOKEN`, or any other `SITESOLIDE_` variable,
+in its environment, but as you all the same, with what you may read: deploy,
+and run `--archive`, which builds too,
 only a project whose build you would run yourself. `bin/tests/deploy-script.test.ts` holds
 its archive to the CLI's on the same folder, read back by the installer's own
 reader, with each of the four JSON readers.

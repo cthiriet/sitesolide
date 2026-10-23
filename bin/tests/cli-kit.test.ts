@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { KIT_FOLDERS, kitEntries, kitFiles, NEVER_PACKED, isValidVersion, binaryName, releaseKit, TARGETS } from "../build";
 import { DEFAULT_HINT, hintFor } from "../cli/hints";
 import {
+  buildEnv,
   isCompiled,
   isWholeKit,
   KIT_MARKER,
@@ -260,6 +261,40 @@ describe("where the kit lives", () => {
     ]) {
       expect({ message, hint: hintFor(message) === DEFAULT_HINT }).toEqual({ message, hint: false });
     }
+  });
+});
+
+describe("the environment of a project's build", () => {
+  const WORKSTATION = {
+    PATH: "/opt/tools/bin:/usr/bin:/bin",
+    HOME: "/home/someone",
+    NODE_ENV: "production",
+    SITESOLIDE_TOKEN: `sst_${"T".repeat(43)}`,
+    SITESOLIDE_API: "https://dashboard.test-zone.invalid",
+    SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
+    SITESOLIDE_SERVER: "root@machine.test-zone.invalid",
+    SITESOLIDE_ZONE: "test-zone.invalid",
+    SITESOLIDE_CONFIG_DIR: "/home/someone/.config/sitesolide",
+    "SITESOLIDE_ODD-NAME": "set through env, never through export",
+  };
+
+  test("no variable named SITESOLIDE_ reaches it, and the rest is left as it is", () => {
+    expect(buildEnv(WORKSTATION, {})).toEqual({ PATH: "/opt/tools/bin:/usr/bin:/bin", HOME: "/home/someone", NODE_ENV: "production" });
+  });
+
+  test("an object even with nothing to withhold: Bun.spawn given none hands down the whole starting environment", () => {
+    expect(buildEnv({ PATH: "/usr/bin:/bin", HOME: "/home/someone", UNSET: undefined }, {})).toEqual({ PATH: "/usr/bin:/bin", HOME: "/home/someone" });
+    expect(buildEnv({}, {})).toEqual({});
+  });
+
+  test("what the binary lends comes last: its PATH, and the path of itself the bun shim runs", () => {
+    const lent = { PATH: "/opt/tools/bin:/usr/bin:/bin:/kit/.bin", SITESOLIDE_BINARY: "/usr/local/bin/sitesolide" };
+    expect(buildEnv({ ...WORKSTATION, SITESOLIDE_BINARY: "/elsewhere/sitesolide" }, lent)).toEqual({
+      PATH: "/opt/tools/bin:/usr/bin:/bin:/kit/.bin",
+      HOME: "/home/someone",
+      NODE_ENV: "production",
+      SITESOLIDE_BINARY: "/usr/local/bin/sitesolide",
+    });
   });
 });
 
