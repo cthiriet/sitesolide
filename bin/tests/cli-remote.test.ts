@@ -791,7 +791,8 @@ describe("deploy through the API: the secrets", () => {
         details: expect.arrayContaining(["SMTP_URL: in shop.env", "nothing was sent"]),
         hint: expect.stringContaining("sitesolide secrets migrate --restart"),
       });
-      expect(received.map((entry) => `${entry.method} ${entry.path}`)).toEqual(["GET /api/v1/projects/shop/store"]);
+      // The deploy's own listing, which a token without Manage secrets is refused quietly.
+      expect(received.map((entry) => `${entry.method} ${entry.path}`)).toEqual(["GET /api/v1/projects/shop/store?for=deploy"]);
       // Migrated, the store holds it: the deployment goes.
       storeScenario = "answers";
       expect((await cli(project(manifest, APP_FILES), ["deploy"], env())).code).toBe(0);

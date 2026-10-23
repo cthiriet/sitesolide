@@ -144,8 +144,10 @@ still under way is waited for first, with `--adopt` too. Then a name a token
 holds stops it, naming the token by its label, id and address, and whether
 the store it holds is the token's: deploying there would set your values in
 a store, and put your project under a name, that token may deploy code to.
-`--adopt` takes the name back, dropping the token's hold, then deploys; in a
-dry run it only says it would. A steward from before claims holds none, and
+`--adopt` takes the name back, dropping the token's hold, and moves what the
+project's store holds aside, kept as its previous versions, naming it; the
+prompts that follow ask for what the manifest declares, then it deploys. In
+a dry run it only says it would. A steward from before claims holds none, and
 one without an owner's socket is warned of. Claims that do not read stop
 it, unless `--adopt`: restore the file the message names from the steward's
 backups, never delete it, since a claim dropped hands the name to whoever

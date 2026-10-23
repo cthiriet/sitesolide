@@ -105,8 +105,8 @@ import { credentialsFailure, CREDENTIALS_EXIT_STATUS } from "../../borrowed/stor
 import type { StoreMissing } from "../../borrowed/store-protocol";
 import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "../../borrowed/portal-vm";
 import { domainConflicts, foreignUnit, portConflicts, staleUnits, unstableUnits, type UnitStanding } from "../../borrowed/services";
-import { decideUnit, earlierGenerations, generateUnits, runningUnits, unitArgument, unitFileName, watchedUnits } from "../../borrowed/unit";
-import { compareDirectives, sameDirectives, summariseDivergence, usefulDirectives } from "../../borrowed/comparison";
+import { decideUnit, earlierGenerations, generatedAs, generateUnits, runningUnits, unitArgument, unitFileName, watchedUnits } from "../../borrowed/unit";
+import { compareDirectives, summariseDivergence } from "../../borrowed/comparison";
 import { FIRST_CERTIFICATE_MS, readZoneNamesAnswer, ZONE_NAMES_PATH } from "../../borrowed/zone-names";
 import { isPortalReady, portalHost, fromPortal, answers, describe } from "../gatekeeper/probe";
 import { TIMEOUTS } from "../gatekeeper/transaction";
@@ -278,36 +278,13 @@ export function finalManifest(
  * Is the file in service one the deployment may replace? Absent, identical, or
  * exactly what the previous deposited manifest generates; anything else was
  * edited by hand on the machine. Exactly: its `EnvironmentFile=` lines too in
- * the same order and number, see generatedAs.
+ * the same order and number, see generatedAs in bin/cli/unit.ts, the rule
+ * `deploy` applies.
  */
 export function replaceable(inService: string | null, generated: string, previous: string | null): boolean {
   if (inService === null || inService.trim() === "") return true;
   if (generatedAs(inService, generated)) return true;
   return previous !== null && generatedAs(inService, previous);
-}
-
-/**
- * Whether a file in service is what the generator wrote as `earlier`, to be
- * replaced without --force: the same directives, and its `EnvironmentFile=`
- * lines in the same order and number. sameDirectives compares sets, which
- * suits a file kept as it is; one about to be replaced is held to more, since
- * a hand edit that names a file again last, or swaps two, adds no line and
- * still decides which value wins, systemd reading them in order. A Caddy
- * block has no such line, and is judged on its directives alone.
- *
- * The rule of generatedAs in bin/cli/unit.ts, which `deploy` applies; kept
- * here until that function is on main, then borrowed in its place.
- */
-export function generatedAs(inService: string, earlier: string): boolean {
-  if (!sameDirectives(inService, earlier)) return false;
-  const read = environmentFiles(inService);
-  const written = environmentFiles(earlier);
-  return read.length === written.length && read.every((line, i) => line === written[i]);
-}
-
-/** A unit's `EnvironmentFile=` lines in the order systemd reads them, a repeat kept. */
-function environmentFiles(text: string): string[] {
-  return usefulDirectives(text).filter((line) => line.startsWith("EnvironmentFile="));
 }
 
 function handEdited(path: string, inService: string, generated: string): Stop {

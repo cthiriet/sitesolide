@@ -295,7 +295,8 @@ export type StoreTransport = {
   via: string;
   /** The owner over SSH: migrate and retire are theirs. */
   owner: boolean;
-  list: (slug: string) => Promise<Answer<StoreView>>;
+  /** `forDeploy`: the listing a token's deployment makes, which a token without Manage secrets is refused quietly. */
+  list: (slug: string, forDeploy?: boolean) => Promise<Answer<StoreView>>;
   change: (slug: string, change: { set: [string, string][]; remove: string[] }) => Promise<Answer<StoreChangeResponse>>;
   generate: (slug: string, request: Omit<StoreGenerateRequest, "slug">) => Promise<Answer<StoreChangeResponse>>;
   setFile: (slug: string, name: string, content: Uint8Array) => Promise<Answer<StoreChangeResponse>>;
@@ -338,7 +339,35 @@ export function readChange(value: unknown): StoreChangeResponse | null {
   const filesSet = files.set === undefined ? [] : isStrings(files.set) ? files.set : null;
   const filesRemoved = files.removed === undefined ? [] : isStrings(files.removed) ? files.removed : null;
   if (set === null || generated === null || removed === null || absent === null || filesSet === null || filesRemoved === null) return null;
-  return { store: value.store, created: value.created === true, set, generated, removed, absent, files: { set: filesSet, removed: filesRemoved } };
+  const given = value.takenBack;
+  const taken = isRecord(given) && typeof given.slug === "string" && isStrings(given.variables) && isStrings(given.files) ? { slug: given.slug, variables: given.variables, files: given.files } : undefined;
+  if (given !== undefined && taken === undefined) return null;
+  return {
+    store: value.store,
+    created: value.created === true,
+    set,
+    generated,
+    removed,
+    absent,
+    files: { set: filesSet, removed: filesRemoved },
+    ...(taken === undefined ? {} : { takenBack: taken }),
+  };
+}
+
+/**
+ * What a token's store held, moved aside when the owner took its name back:
+ * names only, kept as its previous versions, for the owner to set what the
+ * project needs. `holder` says whose it was.
+ */
+export function takenBackWarning(slug: string, holder: string, dropped: { variables: string[]; files: string[] }): { message: string; details: string[] } {
+  const parts = [...dropped.variables, ...dropped.files.map((name) => `the file ${name}`)];
+  return {
+    message: parts.length === 0 ? `${slug}'s store was made by ${holder}: taken back, it held no value` : `${slug}'s store held what ${holder} set there: moved aside, no longer set: ${parts.join(", ")}`,
+    details: [
+      "kept as the store's previous versions, never read by the service again unless restored",
+      "set what the project needs yourself: sitesolide secrets set NAME, or set-file NAME < path for a file",
+    ],
+  };
 }
 
 const isVerdict = (value: unknown): value is RestartVerdict =>
@@ -518,8 +547,9 @@ export function apiStore(remote: Remote, fetcher: Fetch = fetch): StoreTransport
   return {
     via: `through ${remote.api}`,
     owner: false,
-    async list(slug) {
-      const answer: ApiAnswer<{ store?: unknown }> = await call(remote, `${base(slug)}/store`, {}, fetcher);
+    async list(slug, forDeploy = false) {
+      // A dashboard from before `for` reads no query: it answers the listing as it always did.
+      const answer: ApiAnswer<{ store?: unknown }> = await call(remote, `${base(slug)}/store${forDeploy ? "?for=deploy" : ""}`, {}, fetcher);
       if (predatesRoute(answer)) return { ok: false, failure: outdated };
       if (!answer.ok) return { ok: false, failure: answer.failure };
       return isRecord(answer.body) && isStoreView(answer.body.store) ? { ok: true, value: answer.body.store } : unreadable(remote.api, "the control API's store");
@@ -768,6 +798,13 @@ function choice(answer: string | null): "set" | "generate" | "leave" | null {
   return null;
 }
 
+/** A write that moved a token's store aside first, said as a warning: what it held is no longer set. */
+function tookBack(change: StoreChangeResponse, io: Pick<MissingIo, "warn">): void {
+  if (change.takenBack === undefined) return;
+  const { message, details } = takenBackWarning(change.takenBack.slug, "a token", change.takenBack);
+  io.warn(message, details);
+}
+
 /**
  * The missing-names step of deploy, before the build and before the Caddy
  * lock: a person thinking at a prompt never holds the lock every other
@@ -803,7 +840,10 @@ export async function handleMissing(view: StoreView, transport: StoreTransport, 
       if (!generated.ok) {
         io.say(`   !! ${name} not generated: ${generated.failure.message}`);
         left.push(name);
-      } else io.say(`   ${name} generated on the server, never shown`);
+      } else {
+        io.say(`   ${name} generated on the server, never shown`);
+        tookBack(generated.value, io);
+      }
       continue;
     }
     const typed = await io.secret(`${name} (no echo): `);
@@ -827,7 +867,10 @@ export async function handleMissing(view: StoreView, transport: StoreTransport, 
     if (!set.ok) {
       io.say(`   !! ${name} not set: ${withheld(set.failure, [typed]).message}`);
       left.push(name);
-    } else io.say(`   ${name} set`);
+    } else {
+      io.say(`   ${name} set`);
+      tookBack(set.value, io);
+    }
   }
   for (const name of missing.files) io.say(`   the file ${name} is not set on the server: sitesolide secrets set-file ${name} < path`);
   return { runtime: left, files: missing.files };
@@ -947,6 +990,11 @@ async function concludeChange(
   transport: StoreTransport,
   output: Output,
 ): Promise<number> {
+  if (change.takenBack !== undefined) {
+    const { message, details } = takenBackWarning(change.takenBack.slug, "a token", change.takenBack);
+    output.say(`   !! ${message}`);
+    for (const line of details) output.say(`      ${line}`);
+  }
   if (change.created) output.say(`   the store of ${slug} was created`);
   if (change.set.length > 0) output.say(`   set: ${change.set.join(", ")}`);
   if (change.generated.length > 0) output.say(`   generated on the server, never shown: ${change.generated.join(", ")}`);
@@ -971,6 +1019,7 @@ async function concludeChange(
     removed: change.removed,
     absent: change.absent,
     files: change.files,
+    ...(change.takenBack === undefined ? {} : { takenBack: change.takenBack }),
   };
   if (!restart) {
     if (change.store.restartPending) output.say(`   ${restartAdvice(transport)}`);

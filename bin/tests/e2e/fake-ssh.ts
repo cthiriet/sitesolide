@@ -157,7 +157,15 @@ export const CLAIMS_UNREADABLE = "the tokens' claims on names cannot be read on 
 
 export type ClaimsState = {
   state: "current" | "old" | "down" | "unreadable";
-  claims: Record<string, { token: { id: string; label: string; email: string }; store: boolean; deploying: boolean }>;
+  /**
+   * Per name: the token that holds it, null for none; whether its write
+   * made the store; whether a deployment of it, that token's or any, is
+   * under way. `claimed` false: a deployment under way, nobody holding it.
+   * `older`: answered as the steward of 0.8's first claims did, without
+   * `onMachine` nor `dropped`.
+   */
+  claims: Record<string, { token: { id: string; label: string; email: string } | null; store: boolean; deploying: boolean; claimed?: boolean }>;
+  older?: boolean;
 };
 
 /**
@@ -792,7 +800,13 @@ if (import.meta.main) {
     if (current.state === "unreadable") refusal(500, "failure", CLAIMS_UNREADABLE);
     else answerOwner(current.state);
     const held = current.claims[claimOf];
-    answer(200, held === undefined ? { slug: claimOf, claimed: false, token: null, store: false, deploying: false } : { slug: claimOf, claimed: true, ...held });
+    const onMachine = existsSync(join(vm, "srv", "sites", claimOf, "sitesolide.json"));
+    const view = { slug: claimOf, claimed: held === undefined ? false : (held.claimed ?? true), onMachine, token: held?.token ?? null, store: held?.store ?? false, deploying: held?.deploying ?? false };
+    if (current.older === true) {
+      const { onMachine: _, ...before } = view;
+      answer(200, before);
+    }
+    answer(200, view);
   }
   if (command === ownerWriteCommand("DELETE", "/tokens/claim")) {
     if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
@@ -802,10 +816,21 @@ if (import.meta.main) {
     if (current.state === "unreadable") refusal(500, "failure", CLAIMS_UNREADABLE);
     else answerOwner(current.state);
     const held = current.claims[slug];
-    if (held?.deploying === true) refusal(409, "busy", `${held.token.id}'s deployment of ${slug} is under way: wait for it to end`);
+    if (held?.deploying === true) refusal(409, "busy", `a deployment of ${slug} is under way: wait for it to end, then take the name back`);
+    // As the steward: the store moved aside whenever a token held the name, on the machine or not.
+    const dropped = { variables: [] as string[], files: [] as string[] };
+    if (held?.token != null) {
+      const store = stores();
+      dropped.variables = store.variables[slug] ?? [];
+      dropped.files = store.files[slug] ?? [];
+      if (Object.hasOwn(store.variables, slug)) store.variables[slug] = [];
+      if (Object.hasOwn(store.files, slug)) store.files[slug] = [];
+      writeFileSync(storeFile, JSON.stringify(store));
+    }
     delete current.claims[slug];
     writeFileSync(claimsFile, JSON.stringify(current));
-    answer(200, { slug, released: held?.token.id ?? null });
+    if (current.older === true) answer(200, { slug, released: held?.token?.id ?? null });
+    answer(200, { slug, released: held?.token?.id ?? null, dropped });
   }
 
   const storeWrites = [
@@ -828,6 +853,19 @@ if (import.meta.main) {
     if (path === "/restart") {
       record(`STORE POST /restart ${slug}`);
       answer(200, { verdict: { kind: "active", state: "active", subState: "running", restarts: 0 } });
+    }
+    // A store a token's write made ahead, on a name the machine does not
+    // carry: moved aside before the owner's write, the claim dropped, the
+    // answer naming what it held.
+    let takenBack: { slug: string; variables: string[]; files: string[] } | null = null;
+    const claimed = existsSync(claimsFile) ? (JSON.parse(readFileSync(claimsFile, "utf8")) as ClaimsState) : null;
+    const tokenStore = claimed?.claims[slug];
+    if (claimed !== null && tokenStore?.store === true && !existsSync(join(vm, "srv", "sites", slug, "sitesolide.json"))) {
+      takenBack = { slug, variables: current.variables[slug] ?? [], files: current.files[slug] ?? [] };
+      current.variables[slug] = [];
+      current.files[slug] = [];
+      delete claimed.claims[slug];
+      writeFileSync(claimsFile, JSON.stringify(claimed));
     }
     const set = path === "/store" ? Object.keys(asked.set ?? {}) : path === "/store/variable" && method === "PUT" ? [asked.name!] : [];
     const removed = path === "/store" ? (asked.remove ?? []) : path === "/store/variable" && method === "DELETE" ? (asked.names ?? []) : [];
@@ -852,6 +890,7 @@ if (import.meta.main) {
       removed,
       absent: [],
       files: { set: file !== null && method === "PUT" ? [file] : [], removed: file !== null && method === "DELETE" ? [file] : [] },
+      ...(takenBack === null ? {} : { takenBack }),
     });
   }
   // The store's folders, laid before a project's units, as root: a write,

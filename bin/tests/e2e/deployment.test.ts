@@ -1208,14 +1208,16 @@ describe("deploy and a name a token holds", () => {
     }
   });
 
-  test("--adopt takes the name back before anything is written, then deploys; a dry run only says it would", async () => {
+  test("--adopt takes the name back before anything is written, what the token's store held moved aside and named, then deploys; a dry run only says it would", async () => {
     const vm = createFakeVm();
     try {
       vm.acceptWrites();
-      vm.setClaims({ state: "current", claims: { "sample-store": { ...HELD, store: false } } });
+      // The token's write made the store ahead: SESSION_SECRET and signing.pem, its values.
+      vm.setClaims({ state: "current", claims: { "sample-store": HELD } });
+      vm.setStore({ variables: { "sample-store": ["SESSION_SECRET"] }, files: { "sample-store": ["signing.pem"] } });
       const dry = await run("projects/store-app", ["deploy", "--dry-run", "--adopt"], { vm });
       expect(dry.code).toBe(0);
-      expect(dry.output).toContain("[dry-run] take sample-store back from token ci (tok_ci, dev@acme.test)");
+      expect(dry.output).toContain("[dry-run] take sample-store back from token ci (tok_ci, dev@acme.test), what its store holds moved aside");
       expect(written(vm.logs())).toEqual([]);
 
       const r = await run("projects/store-app", ["deploy", "--adopt", "--json"], { vm });
@@ -1226,15 +1228,22 @@ describe("deploy and a name a token holds", () => {
       expect(taken).toBeLessThan(logs.lastIndexOf("STORE GET sample-store"));
       expect(taken).toBeLessThan(logs.indexOf("STORE-PREPARE sample-store"));
       expect(taken).toBeLessThan(logs.findIndex((line) => line.startsWith("ACCEPTED")));
-      expect(jsonEvents(r.output)).toContainEqual(expect.objectContaining({ type: "step", message: "take sample-store back from token ci (tok_ci, dev@acme.test)" }));
+      const list = jsonEvents(r.output);
+      expect(list).toContainEqual(expect.objectContaining({ type: "step", message: "take sample-store back from token ci (tok_ci, dev@acme.test)" }));
+      // What it held, names only, no longer set: the store's listing that follows finds them missing.
+      expect(list).toContainEqual(
+        expect.objectContaining({ type: "warning", message: "sample-store's store held what token ci (tok_ci, dev@acme.test) set there: moved aside, no longer set: SESSION_SECRET, the file signing.pem" }),
+      );
+      expect(list).toContainEqual(expect.objectContaining({ type: "warning", message: "runtime secrets not set on the server: SESSION_SECRET, MAIL_API_KEY; files not set on the server: signing.pem" }));
       expect(vm.claims()?.claims).toEqual({});
+      expect(vm.store().variables["sample-store"]).toEqual([]);
       expect(logs.some((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart sample-store"))).toBe(true);
     } finally {
       vm.cleanup();
     }
   }, 30_000);
 
-  test("a deployment of the token's under way is waited for, --adopt or not", async () => {
+  test("a deployment under way is waited for, --adopt or not, a token's or one nobody holds", async () => {
     const vm = createFakeVm();
     try {
       vm.acceptWrites();
@@ -1248,6 +1257,11 @@ describe("deploy and a name a token holds", () => {
           hint: expect.stringContaining("wait for it to end"),
         });
       }
+      // The steward says a deployment runs, though nothing holds the name: waited for all the same.
+      vm.setClaims({ state: "current", claims: { "sample-store": { token: null, store: false, deploying: true, claimed: false } } });
+      const unheld = await run("projects/store-app", ["deploy", "--json"], { vm });
+      expect(unheld.code).toBe(1);
+      expect(jsonEvents(unheld.output).at(-1)).toMatchObject({ type: "error", message: "sample-store is being deployed: wait for its deployment to end, then deploy again", hint: expect.stringContaining("wait for it to end") });
       expect(written(vm.logs())).toEqual([]);
     } finally {
       vm.cleanup();
@@ -1307,11 +1321,31 @@ describe("deploy and a name a token holds", () => {
       expect(jsonEvents(held.output).at(-1)).toMatchObject({
         type: "error",
         message: "sample-store is held by token ci (tok_ci, dev@acme.test): sitesolide deploy --adopt takes the name back",
-        details: expect.arrayContaining([expect.stringContaining("the server carries the project, and that token may still deploy it")]),
+        details: expect.arrayContaining([expect.stringContaining("the server carries the project, and that token holds it")]),
       });
       vm.setClaims({ state: "current", claims: { "sample-store": { ...HELD, deploying: true } } });
       const deploying = await run("projects/store-app", ["deploy", "--dry-run", "--adopt", "--json"], { vm });
       expect(jsonEvents(deploying.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("is being deployed by token ci") });
+      // --adopt forgets the hold, the project's store moved aside and named, the prompts asking for what the manifest declares.
+      vm.acceptWrites();
+      vm.setClaims({ state: "current", claims: { "sample-store": { ...HELD, store: false } } });
+      vm.setStore({ variables: { "sample-store": ["SESSION_SECRET", "MAIL_API_KEY"] } });
+      const adopted = await run("projects/store-app", ["deploy", "--adopt", "--json"], { vm });
+      const list = jsonEvents(adopted.output);
+      expect(vm.logs()).toContain("CLAIM DELETE sample-store");
+      expect(list).toContainEqual(expect.objectContaining({ type: "warning", message: expect.stringContaining("moved aside, no longer set: SESSION_SECRET, MAIL_API_KEY") }));
+      expect(vm.claims()?.claims).toEqual({});
+    } finally {
+      vm.cleanup();
+    }
+  }, 30_000);
+
+  test("a steward of 0.8's first claims, which does not say where the project is: the CLI's own reading of the server decides the words", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.setClaims({ state: "current", claims: { "sample-store": HELD }, older: true });
+      const r = await run("projects/store-app", ["deploy", "--dry-run", "--json"], { vm });
+      expect(jsonEvents(r.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("and the server does not carry it yet") });
     } finally {
       vm.cleanup();
     }
@@ -1399,6 +1433,31 @@ describe("sitesolide secrets, over SSH", () => {
       expect(vm.logs()).toEqual(["STORE PUT /store/variable sample-store MAIL_API_KEY"]);
       expect(vm.store().variables["sample-store"]).toEqual(["MAIL_API_KEY"]);
       expect(readFileSync(join(vm.root, "logs"), "utf8")).not.toContain(VALUE);
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("set over a store a token's write made ahead: the steward moves it aside first, and set names what it held, never a value", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      vm.setClaims({ state: "current", claims: { "sample-store": { token: { id: "tok_ci", label: "ci", email: "dev@acme.test" }, store: true, deploying: false } } });
+      vm.setStore({ variables: { "sample-store": ["DATABASE_URL"] } });
+      const proc = Bun.spawn(["bun", join(REPO, "bin", "sitesolide.ts"), "secrets", "set", "MAIL_API_KEY", "--stdin"], {
+        cwd: join(TESTS_ROOT, "projects", "store-app"),
+        env: { ...process.env, SITESOLIDE_ZONE: "test-zone.invalid", SITESOLIDE_EMAIL: "sample@test-zone.invalid", ...vm.env },
+        stdin: new TextEncoder().encode(`${VALUE}\n`),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [output, error, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+      expect(code).toBe(0);
+      expect(output).toContain("!! sample-store's store held what a token set there: moved aside, no longer set: DATABASE_URL");
+      expect(output).toContain("set what the project needs yourself");
+      expect(`${output}${error}`).not.toContain(VALUE);
+      expect(vm.store().variables["sample-store"]).toEqual(["MAIL_API_KEY"]);
+      expect(vm.claims()?.claims).toEqual({});
     } finally {
       vm.cleanup();
     }

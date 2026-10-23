@@ -656,7 +656,7 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
   // dropped not being told.
   if (hasStore(manifest) && declaration.form !== "legacy") {
     if (declares) output.say("-> runtime secrets");
-    const listed = await transport.list(slug);
+    const listed = await transport.list(slug, true);
     if (listed.ok) {
       const loss = store.legacyLossRefusal(listed.value, "nothing was sent", declaration);
       if (loss !== null) return report(output, { error: "migrate-first", ...loss });
@@ -794,7 +794,7 @@ async function askAfterCreation(
   output: Output,
 ): Promise<StoreMissing | null> {
   output.say("-> runtime secrets, now that the project exists");
-  const listed = await transport.list(slug);
+  const listed = await transport.list(slug, true);
   if (!listed.ok) {
     warnOn(output, `cannot tell which runtime secrets are set: ${listed.failure.message}`, []);
     return null;

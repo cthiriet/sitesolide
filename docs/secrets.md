@@ -273,8 +273,13 @@ folder deleted by hand is laid again by the next deploy or
 `sitesolide refresh <slug>`. The first write also makes the store, which is
 how the owner fills one with `sitesolide secrets` before the project's first
 deployment, and a token with *Manage secrets* one for a project it may
-create. Static sites and the storeless projects, the dashboard and
-the portal, have none.
+create. The owner's first write into a store a token's write made, the
+machine not carrying the project yet, takes the name back: what the token set
+is moved aside first, kept as the previous versions, and the answer names
+it, `takenBack`, so that none of the token's values stays in effect under
+the owner's project. `sitesolide deploy --adopt` does the same for a name a
+token holds. Static sites and the storeless projects, the dashboard and the
+portal, have none.
 
 **One previous version** of `env` and of each file is kept before every
 write. *Restore previous version*, for the owner and an Admin, swaps the

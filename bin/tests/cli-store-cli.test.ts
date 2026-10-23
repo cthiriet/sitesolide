@@ -18,6 +18,7 @@ import {
   sshStore,
   storeLines,
   storelessRefusal,
+  takenBackWarning,
   withDeclared,
   withheld,
   type MissingIo,
@@ -662,6 +663,16 @@ describe("the commands", () => {
     expect(r.results).toEqual([{ command: "secrets", action: "set", slug: "shop", created: false, set: ["API_KEY"], generated: [], removed: [], absent: [], files: { set: [], removed: [] }, restart: null }]);
   });
 
+  test("set over a store a token's write made: what the steward moved aside first is said and handed on, names only", async () => {
+    const takenBack = { slug: "shop", variables: ["DATABASE_URL"], files: ["signing.pem"] };
+    const { transport } = recordingTransport({ change: async () => ({ ok: true, value: change({ set: ["API_KEY"], takenBack }) }) });
+    const r = await run({ action: "set", name: "API_KEY", stdin: true, restart: false }, transport);
+    expect(r.code).toBe(0);
+    expect(r.lines).toContain("   !! shop's store held what a token set there: moved aside, no longer set: DATABASE_URL, the file signing.pem");
+    expect(r.lines.join("\n")).toContain("set what the project needs yourself");
+    expect(r.results).toEqual([expect.objectContaining({ action: "set", set: ["API_KEY"], takenBack })]);
+  });
+
   test("set at a terminal prompts without echo; --stdin there, no terminal without --stdin, an empty value or one the steward refuses: nothing sent", async () => {
     const prompted = recordingTransport();
     const asked: string[] = [];
@@ -885,5 +896,38 @@ describe("what the steward added for removal, migration, retirement and restarts
     expect(lines).toContain("   legacy: shop.env, read by the service, holds SMTP_URL, which the store lacks: sitesolide secrets migrate first, never --retire --force, which would drop it");
     // Never pointed to --force while a name is missing from the store.
     for (const line of lines.filter((one) => one.includes("shop-keys.env") || one.includes("shop.env,"))) expect(line).not.toContain("lets the store's stand alone");
+  });
+});
+
+describe("a token's store taken back by the owner's write", () => {
+  test("a change's takenBack is read, names only; one of another shape makes the answer unreadable; none is none", async () => {
+    const answered = (body: object) => machine(() => ({ code: 0, output: `${JSON.stringify(body)}\n200\n` })).transport.change("shop", { set: [["API_KEY", VALUE]], remove: [] });
+    const base = { store: view(), created: false, set: ["API_KEY"], generated: [], removed: [], absent: [], files: { set: [], removed: [] } };
+    const takenBack = { slug: "shop", variables: ["DATABASE_URL"], files: [] };
+    expect(await answered({ ...base, takenBack })).toMatchObject({ ok: true, value: { takenBack } });
+    expect(await answered(base)).toMatchObject({ ok: true, value: { set: ["API_KEY"] } });
+    expect(((await answered(base)) as { value: object }).value).not.toHaveProperty("takenBack");
+    expect((await answered({ ...base, takenBack: { slug: "shop", variables: "DATABASE_URL" } })).ok).toBe(false);
+  });
+
+  test("the warning names what was moved aside, and says when it held nothing", () => {
+    expect(takenBackWarning("shop", "token ci (tok_1)", { variables: ["A", "B"], files: ["key.pem"] })).toEqual({
+      message: "shop's store held what token ci (tok_1) set there: moved aside, no longer set: A, B, the file key.pem",
+      details: [
+        "kept as the store's previous versions, never read by the service again unless restored",
+        "set what the project needs yourself: sitesolide secrets set NAME, or set-file NAME < path for a file",
+      ],
+    });
+    expect(takenBackWarning("shop", "a token", { variables: [], files: [] }).message).toBe("shop's store was made by a token: taken back, it held no value");
+  });
+
+  test("deploy's prompts: a write that took a token's store back is warned of, then the next name asked", async () => {
+    const takenBack = { slug: "shop", variables: ["DATABASE_URL"], files: [] };
+    const { transport } = recordingTransport({ generate: async (_slug, request) => ({ ok: true, value: change({ generated: [request.name], takenBack }) }) });
+    const { io, warned, said } = terminal(["g", "l"]);
+    const left = await handleMissing(view({ missing: ["SESSION_SECRET", "LATER"] }), transport, io);
+    expect(left.runtime).toEqual(["LATER"]);
+    expect(said).toContain("   SESSION_SECRET generated on the server, never shown");
+    expect(warned).toEqual([expect.objectContaining({ message: "shop's store held what a token set there: moved aside, no longer set: DATABASE_URL" })]);
   });
 });

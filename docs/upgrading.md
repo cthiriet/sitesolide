@@ -212,7 +212,9 @@ legacy file without a dot, and that nothing is already named `projects`.
   and so does a creation that made the token Admin of a project the machine
   carries: `sitesolide deploy` over SSH stops on such a name, naming the
   token, before it asks for any value, and `sitesolide deploy --adopt` takes
-  the name back, then deploys. A deployment of the token's under way is
+  the name back, what the project's store held moved aside and named, then
+  deploys. Your first `sitesolide secrets set` into a store a token's write
+  made ahead takes it back the same way. A deployment of the token's under way is
   waited for. A steward from before claims holds none; claims that do not
   read stop it unless `--adopt`, and are restored from the steward's
   backups, never deleted.

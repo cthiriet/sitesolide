@@ -5,9 +5,9 @@ import { bundle, entryBlocks, header } from "../borrowed/bundle";
 import { generateFragment, HEADLESS_ANSWER } from "../borrowed/fragment";
 import { readManifest, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected } from "../borrowed/portal";
-import { earlierGenerations, generateUnits } from "../borrowed/unit";
+import { earlierGenerations, generatedAs, generateUnits } from "../borrowed/unit";
 import type { InstallRequest, Scope } from "../src/control/protocol";
-import { finalManifest, generatedAs, replaceable, runPipeline, STABILITY_WINDOW_MS, type Outcome } from "../src/installer/pipeline";
+import { finalManifest, replaceable, runPipeline, STABILITY_WINDOW_MS, type Outcome } from "../src/installer/pipeline";
 import { FIRST_CERTIFICATE_MS, parseZoneNames, ZONE_NAMES_PATH } from "../borrowed/zone-names";
 import { createBench as newBench, file, hostOf, OWN_UID, stageBundle as stage, storeMadeBy, zoneNames, ZONE, type Bench, type BenchOptions } from "./installer-bench";
 

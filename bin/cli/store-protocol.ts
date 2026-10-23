@@ -94,6 +94,12 @@ export type StoreMigrateRequest = StoreTarget & { dryRun?: boolean };
 export type StoreRetireRequest = StoreTarget & { files: string[]; force?: boolean };
 
 export type StoreListResponse = { store: StoreView };
+/**
+ * What an owner's write moved aside before it was made: the store a token's
+ * write made ahead, on a name the machine does not carry, taken back with
+ * the name and kept as its previous versions. Names only.
+ */
+export type StoreTakenBack = { slug: string; variables: string[]; files: string[] };
 export type StoreChangeResponse = {
   store: StoreView;
   /** The store's folder was made by this request. */
@@ -104,6 +110,8 @@ export type StoreChangeResponse = {
   /** Names asked to be removed that the store did not hold. */
   absent: string[];
   files: { set: string[]; removed: string[] };
+  /** The owner's writes alone, when a token's store was moved aside first. */
+  takenBack?: StoreTakenBack;
 };
 export type StoreRevealResponse = { value: string };
 export type StoreRestoreResponse = StoreChangeResponse & { appeared: string[]; disappeared: string[]; restored: boolean };

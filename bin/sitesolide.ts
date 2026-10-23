@@ -201,7 +201,7 @@ import {
 import { CREDENTIALS_EXIT_STATUS, credentialsFailure, readStorePrepareAnswer, slugHasStore, storePaths, storePrepareCommand, workstationSecretsPath } from "./cli/store";
 import { envValue, keys, parseEnv } from "./cli/envfile";
 import { gatherBuildSecrets, missingBuildSecrets, readWorkstationSecrets, sourceLine, unreadableWorkstation, type BuildSecretsResolution } from "./cli/build-secrets";
-import { handleMissing, legacyLossRefusal, ownerLeftovers, readStoreArguments, runStore, sshStore, STORE_USAGE, storelessRefusal, withDeclared, type StoreTransport } from "./cli/store-cli";
+import { handleMissing, legacyLossRefusal, ownerLeftovers, readStoreArguments, runStore, sshStore, STORE_USAGE, storelessRefusal, takenBackWarning, withDeclared, type StoreTransport } from "./cli/store-cli";
 import {
   secretPath,
   projectPaths,
@@ -1064,6 +1064,10 @@ async function runtimeSecrets(manifest: Manifest, config: Config, executor: Exec
   note({ missingSecrets: missing });
 }
 
+/** What --adopt does, said where a held name stops the deployment. */
+const ADOPT_MOVES =
+  "--adopt forgets the token's hold and moves what the project's store holds aside, kept as its previous versions, then deploys, asking for what the manifest declares; nothing was sent";
+
 /**
  * A name a token holds, asked of the steward on every deployment over SSH,
  * before the prompts: a token's deployment of it accepted, or its write that
@@ -1075,8 +1079,10 @@ async function runtimeSecrets(manifest: Manifest, config: Config, executor: Exec
  * A deployment of it under way is waited for first, --adopt or not: what it
  * lays would land over the owner's. Then a name a token holds stops, naming
  * the token, unless the owner takes it back with `--adopt`, which drops the
- * token's hold before anything is written. A read, hence in a dry run too;
- * the taking back is not done there.
+ * token's hold before anything is written, and moves what the project's
+ * store holds aside, kept as its previous versions: its names said, the
+ * prompts that follow ask for what the manifest declares. A read, hence in
+ * a dry run too; the taking back is not done there.
  *
  * A steward from before claims holds none, and one without an owner's
  * socket is warned of. Claims that do not read stop it, unless --adopt:
@@ -1102,38 +1108,50 @@ async function settleClaim(slug: string, carried: boolean, config: Config, execu
     return;
   }
   const claim = read.value;
+  // A steward of 0.8's first claims answered for names it did not carry alone.
+  const onMachine = claim.onMachine ?? carried;
   const holder = claim.token === null ? "a token" : `token ${claim.token.label === "" ? claim.token.id : `${claim.token.label} (${claim.token.id}${claim.token.email === "" ? "" : `, ${claim.token.email}`})`}`;
   // First, whether it is claimed or not: what that deployment lays would land over this one's.
   if (claim.deploying) {
-    die(`${slug} is being deployed by ${holder}: wait for its deployment to end, then deploy again`, [
-      "its name is the token's until then, and nothing was sent",
-      "once it ended, sitesolide deploy --adopt takes the name back from that token",
+    const by = claim.token === null ? "" : ` by ${holder}`;
+    die(`${slug} is being deployed${by}: wait for its deployment to end, then deploy again`, [
+      "nothing was sent",
+      "once it ended, deploy again; if a token holds the name then, sitesolide deploy --adopt takes it back",
     ]);
   }
   if (!claim.claimed) return;
   if (!adopt) {
-    const why = carried
-      ? "the server carries the project, and that token may still deploy it: your values in its store would reach the code it deploys"
-      : "deployed as it is, your project and the values you set in its store would sit under a name that token may deploy code to";
     die(
-      carried
+      onMachine
         ? `${slug} is held by ${holder}: sitesolide deploy --adopt takes the name back`
         : `${slug} is held by ${holder}, and the server does not carry it yet: sitesolide deploy --adopt takes the name back`,
-      [
-        claim.store ? "the token's write made the project's store, which holds what it set there" : "the token's deployment of it was accepted",
-        why,
-        "--adopt drops the token's hold on the name, then deploys; nothing was sent",
-      ],
+      onMachine
+        ? [
+            "the server carries the project, and that token holds it: it may deploy it again, and your values in its store would reach the code it deploys",
+            ADOPT_MOVES,
+          ]
+        : [
+            claim.store ? "the token's write made the project's store, which holds what it set there" : "the token's deployment of it was accepted",
+            "deployed as it is, your project and the values you set in its store would sit under a name that token may deploy code to",
+            ADOPT_MOVES,
+          ],
     );
   }
   if (executor.simulated) {
-    say(`   [dry-run] take ${slug} back from ${holder}`);
+    say(`   [dry-run] take ${slug} back from ${holder}, what its store holds moved aside`);
     return;
   }
   step(`take ${slug} back from ${holder}`);
-  const released = await sshTakeBack(run, slug);
-  if (!released.ok) die(`${slug} could not be taken back from ${holder}: ${released.failure.message}`, ["nothing was sent"]);
-  say(`   ${released.value === null ? "no token held it any more" : `taken back from token ${released.value}`}`);
+  const taken = await sshTakeBack(run, slug);
+  if (!taken.ok) die(`${slug} could not be taken back from ${holder}: ${taken.failure.message}`, ["nothing was sent"]);
+  const { released, dropped } = taken.value;
+  say(`   ${released === null ? "no token held it any more" : `taken back from token ${released}`}`);
+  // What the token set there, names only: the owner sets what the project needs, the prompts next.
+  if (dropped.variables.length > 0 || dropped.files.length > 0) {
+    const moved = takenBackWarning(slug, holder, dropped);
+    warn(moved.message, moved.details);
+  }
+  note({ takenBack: { from: released, variables: dropped.variables, files: dropped.files } });
 }
 
 /** The store over the owner's SSH: root on the machine asks the steward's owner socket, every body on standard input. */
