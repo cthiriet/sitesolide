@@ -38,6 +38,11 @@ const BORROWINGS = [
   // with this one copy. dashboard/src/secrets/envfile.ts re-exports it.
   "bin/cli/variables.ts",
   "bin/cli/envfile.ts",
+  // A project's store of secrets: its paths, bounds and unit lines, the
+  // command that lays its folders, and the shapes the steward answers in,
+  // which the CLI and the dashboard's page read too.
+  "bin/cli/store.ts",
+  "bin/cli/store-protocol.ts",
   "bin/cli/portal.ts",
   "api/src/locks.ts",
   "api/src/config.ts",
