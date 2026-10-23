@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment, HEADLESS_ANSWER } from "../../cli/fragment";
@@ -1054,6 +1054,84 @@ describe("deploy and the store of secrets", () => {
       rmSync(parent, { recursive: true, force: true });
     }
   });
+});
+
+/**
+ * A unit the generator made from the manifest the previous deployment left on
+ * the machine is its own: a changed manifest replaces it without --force. The
+ * case met migrating sitemedic: the old form's files turned into names (M5).
+ */
+describe("a changed manifest replaces the unit its previous version made", () => {
+  const UNIT = "/etc/systemd/system/sample-store.service";
+  const installs = (lines: string[]) => lines.filter((line) => line.startsWith("ACCEPTED sudo install") && line.endsWith(UNIT));
+
+  /** The project's folder as it was deployed before: store-app's code, `change` applied to its manifest. */
+  function before(parent: string, change: (manifest: Record<string, unknown>) => Record<string, unknown>): string {
+    const folder = join(parent, "before");
+    cpSync(join(TESTS_ROOT, "projects", "store-app"), folder, { recursive: true });
+    const manifest = change(JSON.parse(readFileSync(join(folder, "sitesolide.json"), "utf8")) as Record<string, unknown>);
+    writeFileSync(join(folder, "sitesolide.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+    return folder;
+  }
+
+  test("M5: the old form's unit, laid by the previous deployment, is replaced by the names manifest's; a hand edit is kept; no previous manifest, as before", async () => {
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), "previous-unit-")));
+    try {
+      for (const [label, edit, deposit, expected] of [
+        ["generated from the previous manifest", (text: string) => text, true, "install"],
+        ["edited by hand since", (text: string) => `${text}LimitNOFILE=4096\n`, true, "kept"],
+        ["no previous manifest on the machine", (text: string) => text, false, "kept"],
+      ] as const) {
+        const vm = createFakeVm();
+        try {
+          vm.acceptWrites();
+          vm.keepUnits();
+          const legacy = before(parent, (manifest) => ({ ...manifest, secrets: ["sample-store.env"] }));
+          // The previous deployment, the old form: its unit laid as the machine keeps it.
+          await run(legacy, ["deploy"], { vm });
+          const laid = readFileSync(join(vm.root, UNIT.slice(1)), "utf8");
+          expect(laid).toContain("EnvironmentFile=-/etc/sitesolide/sample-store.env");
+          vm.writeFile(UNIT, edit(laid));
+          if (deposit) vm.writeManifest("sample-store", readFileSync(join(legacy, "sitesolide.json"), "utf8"));
+          else rmSync(join(vm.root, "srv", "sites", "sample-store", "sitesolide.json"), { force: true });
+          // Migrated: the store holds every name the legacy file does.
+          vm.setStore({
+            variables: { "sample-store": ["SESSION_SECRET", "MAIL_API_KEY"] },
+            legacy: { "sample-store": [{ name: "sample-store.env", variables: ["SESSION_SECRET", "MAIL_API_KEY"], read: true }] },
+          });
+          const already = installs(vm.logs()).length;
+          const r = await run("projects/store-app", ["deploy"], { vm });
+          const installed = installs(vm.logs()).length - already;
+          expect({ label, installed: installed > 0 ? "install" : "kept" }).toEqual({ label, installed: expected });
+          if (expected === "kept") expect(r.output).toContain(`differs    ${UNIT}, left as it is`);
+          else expect(readFileSync(join(vm.root, UNIT.slice(1)), "utf8")).not.toContain("EnvironmentFile=-/etc/sitesolide/sample-store.env");
+        } finally {
+          vm.cleanup();
+        }
+      }
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("a changed port replaces the unit the previous manifest made", async () => {
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), "previous-port-")));
+    const vm = createFakeVm();
+    try {
+      vm.acceptWrites();
+      vm.keepUnits();
+      const earlier = before(parent, (manifest) => ({ ...manifest, port: 3037 }));
+      await run(earlier, ["deploy"], { vm });
+      vm.writeManifest("sample-store", readFileSync(join(earlier, "sitesolide.json"), "utf8"));
+      const already = installs(vm.logs()).length;
+      await run("projects/store-app", ["deploy"], { vm });
+      expect(installs(vm.logs()).length).toBeGreaterThan(already);
+      expect(readFileSync(join(vm.root, UNIT.slice(1)), "utf8")).toContain("Environment=PORT=3036");
+    } finally {
+      vm.cleanup();
+      rmSync(parent, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
 
 describe("sitesolide remove and the secret files a project left behind", () => {

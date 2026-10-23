@@ -151,8 +151,10 @@ on a shared name; `LoadCredential=` for its `files/` folder;
 `InaccessiblePaths=-/etc/sitesolide`, which hides the folder from the service
 whether or not it reads legacy files; and `ProtectProc=invisible`, which hides
 the processes of other accounts. A unit 0.7 or an earlier release wrote is
-the generator's own and is replaced without `--force`; one edited by hand
-stays as it is, and says so. The store being empty, the service starts with
+the generator's own and is replaced without `--force`, and so is one the
+generator made from the manifest the previous deployment left on the
+machine: a changed manifest, the old form of `secrets` turned into names
+included, replaces it. One edited by hand stays as it is, and says so. The store being empty, the service starts with
 the environment it had. The dashboard's and the portal's units do not change:
 their password hashes stay in their own files, and they have no store.
 

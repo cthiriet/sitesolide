@@ -988,6 +988,13 @@ export type UnitState = {
   generated: string;
   /** --force, the deliberate act of switching to the generated one. */
   replace: boolean;
+  /**
+   * What the generator makes of this unit from the manifest the previous
+   * deployment deposited on the machine, null when there is none or it does
+   * not read: a unit that matches it, or one of its earlier generations, is
+   * the generator's own, and a changed manifest replaces it.
+   */
+  previous?: string | null;
 };
 
 export type UnitAction = "install" | "present" | "diverged";
@@ -1012,10 +1019,18 @@ export type UnitAction = "install" | "present" | "diverged";
  * lines or the system-call filter, is the generator's own, not one edited by
  * hand: installed, so that every project takes them at its next deployment.
  * See earlierGenerations.
+ *
+ * So is a unit generated from the manifest the previous deployment left on
+ * the machine, by this release or an earlier one: a changed manifest, a port,
+ * an `env`, or the old form of `secrets` turned into names, replaces it,
+ * rather than every manifest change asking for --force. Only what neither
+ * manifest generates was edited by hand.
  */
 export function decideUnit(state: UnitState): UnitAction {
   if (state.installed.trim() === "") return "install";
   if (sameDirectives(state.installed, state.generated)) return "present";
   if (earlierGenerations(state.generated).some((earlier) => sameDirectives(state.installed, earlier))) return "install";
+  const previous = state.previous ?? null;
+  if (previous !== null && [previous, ...earlierGenerations(previous)].some((earlier) => sameDirectives(state.installed, earlier))) return "install";
   return state.replace ? "install" : "diverged";
 }

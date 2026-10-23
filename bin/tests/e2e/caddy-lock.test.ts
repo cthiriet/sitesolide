@@ -358,7 +358,8 @@ describe("sitesolide deploy takes the lock before its first deposit", () => {
     // Read once before the build, then again under the lock, where it decides.
     expect(logs.filter((line) => line === "READ *")).toHaveLength(2);
     expect(logs.indexOf("LOCK take deploy")).toBeLessThan(logs.lastIndexOf("READ *"));
-    expect(logs.some((line) => line.includes("/srv/sites/sample-race/sitesolide.json"))).toBe(false);
+    // Never deposited; read once, for the units its previous version made.
+    expect(logs.some((line) => line.includes("/srv/sites/sample-race/sitesolide.json") && !line.startsWith("FILE "))).toBe(false);
     expect(logs.at(-1)).toBe("LOCK release deploy");
     expect(vm.lock()).toBeNull();
   });

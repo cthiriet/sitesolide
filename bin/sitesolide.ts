@@ -1407,13 +1407,15 @@ async function compareWithServer(project: Project, config: Config, executor: Exe
   }
 
   if (isApp(manifest)) {
+    // As deploy decides: the previous manifest's units are the generator's own.
+    const before = await previousUnits(slug, config, executor);
     for (const { unit, text } of generateUnits(manifest)) {
       const path = unitPath(unit);
       const reading = await readRemoteFile(config, executor, path);
       if (reading.kind === "unreadable") {
         die(`cannot tell whether ${path} is there`, ["the server answered neither an absence nor a unit file", "nothing was changed"]);
       }
-      const action = decideUnit({ installed: reading.kind === "present" ? reading.content : "", generated: text, replace: false });
+      const action = decideUnit({ installed: reading.kind === "present" ? reading.content : "", generated: text, replace: false, previous: before.get(unit) ?? null });
       if (action === "install") changes.push(path);
       if (action === "diverged") kept.push(path);
     }
@@ -2172,6 +2174,9 @@ async function prepareService(
   // Every unit is read and decided before any is laid: a refusal must not fall
   // half way through. Each is decided on its own, one edited by hand on the
   // machine stays as it is, and the others of the project still get theirs.
+  // A unit the generator made from the manifest the previous deployment left
+  // is its own too: a changed manifest replaces it without --force.
+  const previous = await previousUnits(slug, config, executor);
   const decisions = [];
   for (const { unit, text } of units) {
     const path = unitPath(unit);
@@ -2183,7 +2188,7 @@ async function prepareService(
       ]);
     }
     const installed = reading.kind === "present" ? reading.content : "";
-    decisions.push({ unit, text, path, installed, action: decideUnit({ installed, generated: text, replace }) });
+    decisions.push({ unit, text, path, installed, action: decideUnit({ installed, generated: text, replace, previous: previous.get(unit) ?? null }) });
   }
 
   // The main unit is what starts the others, at boot as after a deployment. A
@@ -2265,6 +2270,22 @@ async function prepareStore(slug: string, config: Config, executor: Executor): P
   }
   say(`   ${folder}: ${answer.created ? "created" : "present"}`);
   return null;
+}
+
+/**
+ * The units the generator makes from the manifest the previous deployment
+ * deposited on the machine, by name: what decideUnit recognises as its own
+ * when the manifest changed. Empty when there is none, it does not read, or
+ * it generates nothing.
+ */
+async function previousUnits(slug: string, config: Config, executor: Executor): Promise<Map<string, string>> {
+  const deposited = await depositedManifest(slug, config, executor);
+  if (deposited === null || deposited.slug !== slug || !isApp(deposited)) return new Map();
+  try {
+    return new Map(generateUnits(deposited).map(({ unit, text }) => [unit, text]));
+  } catch {
+    return new Map();
+  }
 }
 
 /**

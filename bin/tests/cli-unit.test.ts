@@ -1247,3 +1247,37 @@ describe("the system calls a service may make", () => {
     expect(decideUnit({ installed: generated, generated, replace: false })).toBe("present");
   });
 });
+
+describe("a unit the previous manifest generated is the generator's own", () => {
+  const PLACES = { slug: "sitemedic", zone: "test-zone.invalid", contact: "" };
+  const LEGACY: Manifest = { slug: "sitemedic", start: "/usr/local/bin/bun run server.ts", port: 3040, secrets: ["sitemedic-ses.env", "sitemedic-stripe.env"] };
+  const NAMES: Manifest = { ...LEGACY, secrets: ["AWS_ACCESS_KEY_ID", "STRIPE_SECRET_KEY"] };
+  const unitOf = (manifest: Manifest) => generateUnits(manifest, PLACES)[0]!.text;
+
+  test("M5: the unit of the old form's manifest, by this release or 0.7, is replaced by the names manifest's without --force", () => {
+    const previous = unitOf(LEGACY);
+    const generated = unitOf(NAMES);
+    // What the platform laid at the previous deployment: this release's unit, or 0.7's.
+    for (const installed of [previous, ...earlierGenerations(previous)]) {
+      expect(decideUnit({ installed, generated, replace: false })).toBe("diverged");
+      expect(decideUnit({ installed, generated, replace: false, previous })).toBe("install");
+    }
+  });
+
+  test("a changed port, memory or env replaces the unit the previous manifest made", () => {
+    for (const changed of [{ ...NAMES, port: 3041 }, { ...NAMES, memory: "512M" }, { ...NAMES, env: { REGION: "eu-west-3" } }] as Manifest[]) {
+      expect(decideUnit({ installed: unitOf(NAMES), generated: unitOf(changed), replace: false, previous: unitOf(NAMES) })).toBe("install");
+    }
+  });
+
+  test("a unit edited by hand is kept still, the previous manifest's or not; none on the machine decides as before", () => {
+    const previous = unitOf(LEGACY);
+    const generated = unitOf(NAMES);
+    expect(decideUnit({ installed: `${previous}LimitNOFILE=4096\n`, generated, replace: false, previous })).toBe("diverged");
+    expect(decideUnit({ installed: previous.replace("PrivateDevices=true\n", ""), generated, replace: false, previous })).toBe("diverged");
+    expect(decideUnit({ installed: previous, generated, replace: false, previous: null })).toBe("diverged");
+    expect(decideUnit({ installed: previous, generated, replace: true, previous: null })).toBe("install");
+    // A unit equal to what the new manifest makes stays present, whatever came before.
+    expect(decideUnit({ installed: generated, generated, replace: false, previous })).toBe("present");
+  });
+});
