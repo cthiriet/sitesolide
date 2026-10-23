@@ -13,6 +13,7 @@
  * not turn into "every service recovered", nor a Caddy that is down into
  * "every site failed" on top of the one alert that matters.
  */
+import { CREDENTIALS_EXIT_STATUS, credentialsFailure, slugHasStore } from "../../bin/cli/store";
 
 export type Severity = "critical" | "warning";
 
@@ -71,8 +72,13 @@ export function readProperties(output: string): Properties {
   return properties;
 }
 
-/** One line of `systemctl list-units --plain --no-legend`. */
-export type ListedUnit = { name: string; load: string; active: string; sub: string };
+/**
+ * One line of `systemctl list-units --plain --no-legend`, and, for a service
+ * that fails, the exit status of its main process when the machine read it
+ * (see failingServices): what tells a unit that could not load its secret
+ * files from one whose program failed.
+ */
+export type ListedUnit = { name: string; load: string; active: string; sub: string; status?: number | null };
 
 const SERVICE = ".service";
 const TIMER = ".timer";
@@ -95,6 +101,37 @@ export function readUnitList(output: string): ListedUnit[] {
     units.push({ name, load, active, sub });
   }
   return units;
+}
+
+/**
+ * The services worth asking `systemctl show -p Id -p ExecMainStatus` about:
+ * the loaded ones failed or crashing in a loop, the only ones whose exit
+ * status explains anything. A healthy machine asks nothing more.
+ */
+export function failingServices(units: readonly ListedUnit[]): string[] {
+  return units.filter((unit) => unit.load === "loaded" && unit.name.endsWith(SERVICE) && (unit.active === "failed" || crashLooping(unit))).map((unit) => unit.name);
+}
+
+/**
+ * What `systemctl show -p Id -p ExecMainStatus <unit>...` prints, one block
+ * per unit, blank lines between them: each unit's last exit status, by its
+ * name. A block without both, or with a status that is no number, is left
+ * out, and its unit judged by its state alone, as before.
+ */
+export function readExitStatuses(output: string): Map<string, number> {
+  const statuses = new Map<string, number>();
+  for (const block of output.split(/\n\s*\n/)) {
+    const properties = readProperties(block);
+    const status = properties.ExecMainStatus;
+    if (properties.Id === undefined || status === undefined || !/^[0-9]{1,3}$/.test(status)) continue;
+    statuses.set(properties.Id, Number(status));
+  }
+  return statuses;
+}
+
+/** The listing, each unit with the exit status read for it, if one was. */
+export function withExitStatuses(units: readonly ListedUnit[], statuses: ReadonlyMap<string, number>): ListedUnit[] {
+  return units.map((unit) => (statuses.has(unit.name) ? { ...unit, status: statuses.get(unit.name)! } : unit));
 }
 
 // --- Caddy -------------------------------------------------------------------
@@ -223,6 +260,14 @@ function crashLooping(unit: ListedUnit): boolean {
  *     already past, leaves its timer `active (elapsed)`: nothing more will
  *     run, but that is what the schedule said, not a schedule that stopped.
  *
+ * A project's service that fails with status 243, CREDENTIALS_EXIT_STATUS,
+ * never ran its program: systemd could not hand it its secret files, the
+ * store's files folder missing or its files past what systemd loads. systemd
+ * logs it as "Failed to set up credentials: Protocol error", which sends one
+ * looking elsewhere; the summary says what it is, in credentialsFailure's
+ * words, and how to lay the folder again. The landing, dashboard and portal
+ * read no store, and keep their summary.
+ *
  * The platform's units fail only when failed or looping, since several are
  * one-shots whose rest state is `inactive`; they are warnings, a stopped
  * collector or steward degrading the dashboard rather than a site. Their
@@ -253,6 +298,8 @@ export function judgeUnits(units: readonly ListedUnit[], projectUnits: ReadonlyM
     const main = timer ? undefined : projectUnits.get(bare);
     const owner = main ?? (secondary ? bare.slice(0, dot) : undefined);
     const state = `${unit.name} is ${unit.active} (${unit.sub})`;
+    // Its secret files could not be loaded: the folder or its size, never the program.
+    const credentials = !timer && owner !== undefined && unit.status === CREDENTIALS_EXIT_STATUS && slugHasStore(owner);
 
     if (owner !== undefined) {
       const base = { id: `unit:${unit.name}`, kind: "unit", label: unit.name, slug: owner } as const;
@@ -263,14 +310,17 @@ export function judgeUnits(units: readonly ListedUnit[], projectUnits: ReadonlyM
       } else if (secondary && scheduled.has(bare)) {
         const failing = unit.active === "failed";
         const summary = failing
-          ? `${state}: its last scheduled run failed, see sitesolide logs`
+          ? credentials
+            ? credentialsFailure(unit.name, owner)
+            : `${state}: its last scheduled run failed, see sitesolide logs`
           : unit.active === "inactive"
             ? `${state}, between two scheduled runs`
             : state;
         results.push({ ...base, severity: "warning", verdict: failing ? "fail" : "ok", summary });
       } else {
         const failing = unit.active === "failed" || unit.active === "inactive" || crashLooping(unit);
-        results.push({ ...base, severity: "critical", verdict: failing ? "fail" : "ok", summary: state });
+        const summary = failing && credentials ? credentialsFailure(unit.name, owner) : state;
+        results.push({ ...base, severity: "critical", verdict: failing ? "fail" : "ok", summary });
       }
       continue;
     }

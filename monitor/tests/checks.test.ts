@@ -15,13 +15,17 @@ import {
   judgeRestarts,
   judgeSelf,
   judgeUnits,
+  failingServices,
   notProbed,
+  readExitStatuses,
   readMeminfo,
   readProperties,
   readUnitList,
   readValidTo,
+  withExitStatuses,
   type ListedUnit,
 } from "../src/checks";
+import { CREDENTIALS_EXIT_STATUS, credentialsFailure } from "../../bin/cli/store";
 
 const NOW = Date.UTC(2026, 9, 4, 12, 0, 0);
 const MINUTE = 60_000;
@@ -179,6 +183,113 @@ describe("units", () => {
       projects,
     );
     expect(results).toEqual([]);
+  });
+});
+
+/**
+ * A project's service whose secret files systemd could not load exits 243
+ * before its program runs, and systemd logs a misleading "Protocol error"
+ * (measured on systemd 257, the store's bench, Q2: ExecMainCode=1,
+ * ExecMainStatus=243, activating (auto-restart) for a server). The monitor
+ * reads that status for the failing services alone, and says what it means.
+ */
+describe("a unit that could not load its secret files", () => {
+  const projects = new Map([
+    ["cms", "cms"],
+    ["shop", "shop"],
+    ["news", "news"],
+    ["dashboard", "dashboard"],
+    ["sitesolide-landing", "test-zone.invalid"],
+  ]);
+  const unit = (name: string, active: string, sub: string, status?: number): ListedUnit => ({ name, load: "loaded", active, sub, ...(status === undefined ? {} : { status }) });
+
+  test("only the failing services are asked for their exit status", () => {
+    const units = [
+      unit("cms.service", "active", "running"),
+      unit("shop.service", "activating", "auto-restart"),
+      unit("cms.worker.service", "failed", "failed"),
+      unit("news.sync.service", "inactive", "dead"),
+      unit("news.sync.timer", "failed", "failed"),
+      { name: "gone.service", load: "not-found", active: "failed", sub: "failed" },
+    ];
+    expect(failingServices(units)).toEqual(["shop.service", "cms.worker.service"]);
+    expect(failingServices([unit("cms.service", "active", "running")])).toEqual([]);
+  });
+
+  test("show's blocks are read by name, a block without a status, or with no number, left out", () => {
+    const output = [
+      "Id=shop.service",
+      "ExecMainStatus=243",
+      "",
+      "ExecMainStatus=1",
+      "Id=cms.worker.service",
+      "",
+      "Id=odd.service",
+      "ExecMainStatus=",
+      "",
+      "Id=noise.service",
+      "ExecMainStatus=24x",
+      "",
+      "Id=bare.service",
+      "",
+    ].join("\n");
+    expect([...readExitStatuses(output)]).toEqual([
+      ["shop.service", 243],
+      ["cms.worker.service", 1],
+    ]);
+    expect(readExitStatuses("")).toEqual(new Map());
+    const listed = withExitStatuses([unit("shop.service", "activating", "auto-restart"), unit("cms.service", "active", "running")], readExitStatuses(output));
+    expect(listed).toEqual([unit("shop.service", "activating", "auto-restart", 243), unit("cms.service", "active", "running")]);
+  });
+
+  test("a project's service failing with 243 is worded by credentialsFailure, server, worker and scheduled run alike", () => {
+    const results = judgeUnits(
+      [
+        unit("shop.service", "activating", "auto-restart", CREDENTIALS_EXIT_STATUS),
+        unit("cms.worker.service", "failed", "failed", CREDENTIALS_EXIT_STATUS),
+        unit("news.sync.service", "failed", "failed", CREDENTIALS_EXIT_STATUS),
+        unit("news.sync.timer", "active", "waiting"),
+      ],
+      projects,
+    );
+    expect(results.map((r) => [r.id, r.slug, r.severity, r.verdict, r.summary])).toEqual([
+      ["unit:cms.worker.service", "cms", "critical", "fail", credentialsFailure("cms.worker.service", "cms")],
+      ["unit:news.sync.service", "news", "warning", "fail", credentialsFailure("news.sync.service", "news")],
+      ["unit:news.sync.timer", "news", "critical", "ok", "news.sync.timer is active (waiting)"],
+      ["unit:shop.service", "shop", "critical", "fail", credentialsFailure("shop.service", "shop")],
+    ]);
+    expect(results.at(-1)!.summary).toBe(
+      "shop.service could not load its secret files (243/CREDENTIALS): the store's files folder is missing, or its files are too large; sitesolide refresh shop lays the folder again",
+    );
+  });
+
+  test("any other status, or none read, keeps the summary of the state", () => {
+    const results = judgeUnits(
+      [
+        unit("shop.service", "activating", "auto-restart", 1),
+        unit("cms.service", "failed", "failed"),
+        unit("cms.worker.service", "failed", "failed", 203),
+      ],
+      projects,
+    );
+    expect(results.map((r) => r.summary)).toEqual(["cms.service is failed (failed)", "cms.worker.service is failed (failed)", "shop.service is activating (auto-restart)"]);
+  });
+
+  test("a running service keeps its summary whatever status an earlier run left", () => {
+    const [result] = judgeUnits([unit("shop.service", "active", "running", CREDENTIALS_EXIT_STATUS)], projects);
+    expect(result).toMatchObject({ verdict: "ok", summary: "shop.service is active (running)" });
+  });
+
+  test("the landing, dashboard and the platform's units read no store, and keep theirs", () => {
+    const results = judgeUnits(
+      [
+        unit("sitesolide-landing.service", "failed", "failed", CREDENTIALS_EXIT_STATUS),
+        unit("dashboard.service", "failed", "failed", CREDENTIALS_EXIT_STATUS),
+        unit("sitesolide-steward.service", "failed", "failed", CREDENTIALS_EXIT_STATUS),
+      ],
+      projects,
+    );
+    expect(results.map((r) => r.summary)).toEqual(["dashboard.service is failed (failed)", "sitesolide-landing.service is failed (failed)", "sitesolide-steward.service is failed (failed)"]);
   });
 });
 
