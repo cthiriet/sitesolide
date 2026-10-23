@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { readBounded, writeAtomically, type Command, type Examination } from "../secrets/system";
 import { DEPLOYMENT_ID_SHAPE, INSTALLER_TEMPLATE } from "./protocol";
 import { CREATIONS_NAME } from "./creations";
+import { CLAIMS_NAME } from "./claims";
 import type { Leftovers } from "./policy";
 import { isValidSlug } from "../../borrowed/manifest";
 import { storePaths, STORE_ROOT } from "../../borrowed/store";
@@ -65,6 +66,9 @@ export type ControlSystem = {
   /** The creations waiting for their installer's result (creations.ts), null when there is no file. */
   readCreations: () => Promise<string | null>;
   writeCreations: (text: string) => Promise<void>;
+  /** What tokens did to names the machine did not carry (claims.ts), null when there is no file. Throws when it is there but unreadable. */
+  readClaims: () => Promise<string | null>;
+  writeClaims: (text: string) => Promise<void>;
   /** Does the machine carry `/srv/sites/<slug>`? */
   projectExists: (slug: string) => Promise<boolean>;
   /** The deposited manifest's text, null when there is none. */
@@ -153,6 +157,18 @@ export function createControlSystem(config: ControlSystemConfig): ControlSystem 
     async writeCreations(text) {
       mkdirSync(config.stateFolder, { recursive: true, mode: 0o700 });
       writeAtomically(config.stateFolder, CREATIONS_NAME, encoder.encode(text), ROOT_ONLY);
+    },
+
+    async readClaims() {
+      const examination = readBounded(join(config.stateFolder, CLAIMS_NAME), MAX_CONTROL_FILE_BYTES);
+      if (examination.kind === "absent") return null;
+      if (examination.bytes === null) throw new Error("claims.json is not a plain file of a reasonable size");
+      return decoder.decode(examination.bytes);
+    },
+
+    async writeClaims(text) {
+      mkdirSync(config.stateFolder, { recursive: true, mode: 0o700 });
+      writeAtomically(config.stateFolder, CLAIMS_NAME, encoder.encode(text), ROOT_ONLY);
     },
 
     async writeRequest(slug, text) {

@@ -1026,3 +1026,138 @@ describe("the API: a value drawn, a file", () => {
     expect(sim.asked).toEqual([]);
   });
 });
+
+describe("a name is claimed by the store a write made, and by nothing less", () => {
+  /** The owner's project of that name, deployed over SSH: no tokens' registry is read there. */
+  function deployedOverSsh(b: Bench, slug: string, port: number): void {
+    mkdirSync(join(b.root, "sites", slug), { recursive: true });
+    writeFileSync(join(b.root, "sites", slug, "sitesolide.json"), JSON.stringify({ slug, start: "/usr/local/bin/bun run server.ts", port, publicDir: "public", secrets: ["STRIPE_SECRET_KEY"], portal: true }));
+    writeFileSync(join(b.root, "units", `${slug}.service`), `[Service]\nEnvironment=PORT=${port}\nExecStart=/usr/local/bin/bun run server.ts\n`);
+    writeFileSync(join(b.root, "caddy", `${slug}.caddy`), protectedBlock(slug));
+  }
+  const claims = (b: Bench) => (existsSync(join(b.state, "claims.json")) ? (JSON.parse(readFileSync(join(b.state, "claims.json"), "utf8")) as { claims: Record<string, unknown> }).claims : {});
+  const failedResult = (b: Bench, deployment: string, slug: string) =>
+    writeFileSync(
+      join(b.root, "installer", `${deployment}.json`),
+      JSON.stringify({ deployment, slug, state: "failed", startedAt: b.clock.t, updatedAt: b.clock.t, finishedAt: b.clock.t, log: [], error: { code: "install-failed", message: "x" }, url: null, allocated: [], missingSecrets: null }),
+      { mode: 0o600 },
+    );
+
+  test("a write that makes no store claims nothing: a removal of a name never held, a refused set; the names stay free for another token", async () => {
+    const b = await mount({ store: "real" });
+    const { secret } = await b.ownerToken({ create: true, secrets: true });
+    expect((await change(b, secret, "shop", {}, ["NOTHING"])).status).toBe(200);
+    expect((await change(b, secret, "clinic", { PATH: "x" })).status).toBe(400);
+    expect(existsSync(join(b.storeRoot, "shop"))).toBe(false);
+    expect(existsSync(join(b.storeRoot, "clinic"))).toBe(false);
+    expect(b.owners()).toEqual({});
+    expect(claims(b)).toEqual({});
+    const other = await b.ownerToken({ create: true, secrets: true });
+    expect(await body(await preflight(b, other.secret, "shop"))).toMatchObject({ status: 200, creating: true });
+    expect(await body(await preflight(b, other.secret, "clinic"))).toMatchObject({ status: 200, creating: true });
+  });
+
+  test("a store the owner fills before deploying is no token's, even one whose write named the slug first: its deployment is refused", async () => {
+    const b = await mount({ store: "real" });
+    const { secret } = await b.ownerToken({ create: true, secrets: true });
+    expect((await change(b, secret, "shop", {}, ["NOTHING"])).status).toBe(200);
+    // The owner's sitesolide deploy of their own shop asks its runtime secrets before anything is deployed.
+    const unlocked = (await (await b.call("POST", "/unlock", { password: PASSWORD })).json()) as { token: string };
+    expect((await b.call("PUT", "/store/variable", { token: unlocked.token, slug: "shop", name: "STRIPE_SECRET_KEY", value: CANARY })).status).toBe(201);
+    for (const response of [await preflight(b, secret, "shop"), await deploy(b, secret, "shop"), await list(b, secret, "shop"), await change(b, secret, "shop", { WEBHOOK_URL: "x" })]) {
+      expect(await body(response)).toMatchObject({ status: 403, error: "reserved", message: expect.stringContaining("a secrets store") });
+    }
+    expect(b.owners()).toEqual({});
+    expect(b.everywhere()).not.toContain(CANARY);
+  });
+
+  test("the owner's project of a name a token wrote a store ahead for is not the token's: it neither lists, writes nor deploys it, and lets go of the name at the next settlement", async () => {
+    const b = await mount({ store: "real" });
+    const { token, secret } = await b.ownerToken({ create: true, secrets: true });
+    expect((await change(b, secret, "shop", { API_KEY: "ahead" })).status).toBe(201);
+    expect(b.owners()).toEqual({ shop: token.id });
+    expect(claims(b)).toMatchObject({ shop: { creator: token.id, deployer: null } });
+    deployedOverSsh(b, "shop", 3061);
+    expect(await body(await list(b, secret, "shop"))).toMatchObject({ status: 404, error: "not-found" });
+    expect(await body(await change(b, secret, "shop", { WEBHOOK_URL: "https://attacker.invalid/x" }))).toMatchObject({ status: 404, error: "not-found" });
+    expect(await body(await preflight(b, secret, "shop"))).toMatchObject({ status: 403, error: "out-of-scope" });
+    expect(((await (await b.call("POST", "/control/authenticate", { bearer: secret })).json()) as { identity: Identity }).identity.owned).toEqual([]);
+    await b.control.settleCreations();
+    expect(b.owners()).toEqual({});
+    expect(claims(b)).toEqual({});
+  });
+
+  test("a token that deploys the name it wrote a store ahead for keeps it once its project is there", async () => {
+    const b = await mount({ store: "real" });
+    const { token, secret } = await b.ownerToken({ create: true, secrets: true });
+    expect((await change(b, secret, "shop", { API_KEY: "ahead" })).status).toBe(201);
+    expect(await body(await deploy(b, secret, "shop"))).toMatchObject({ status: 202, creating: true });
+    expect(claims(b)).toMatchObject({ shop: { creator: token.id, deployer: token.id, deployment: DEPLOYMENT } });
+    // What its installer lays.
+    deployedOverSsh(b, "shop", 3061);
+    expect((await list(b, secret, "shop")).status).toBe(200);
+    await b.control.settleCreations();
+    expect(b.owners()).toEqual({ shop: token.id });
+    expect(claims(b)).toEqual({});
+    expect(await body(await preflight(b, secret, "shop"))).toMatchObject({ status: 200, creating: false });
+  });
+
+  test("a store is a token's own because its write made it, not because the registry names the token", async () => {
+    const b = await mount({ store: "real" });
+    const { token, secret } = await b.ownerToken({ create: true, secrets: true });
+    expect((await change(b, secret, "shop", { API_KEY: "ahead" })).status).toBe(201);
+    // A registry naming the token, the record of who made the store gone: no longer its own.
+    writeFileSync(join(b.state, "claims.json"), JSON.stringify({ version: 1, claims: {} }));
+    expect(b.owners()).toEqual({ shop: token.id });
+    expect(await body(await preflight(b, secret, "shop"))).toMatchObject({ status: 403, error: "reserved" });
+    expect(await body(await change(b, secret, "shop", { API_KEY: "again" }))).toMatchObject({ status: 403, error: "reserved" });
+    // claims.json unreadable: nobody's own either.
+    writeFileSync(join(b.state, "claims.json"), "not json");
+    expect(await body(await preflight(b, secret, "shop"))).toMatchObject({ status: 403, error: "reserved" });
+  });
+
+  test("settled: a name with no project, no store and no deployment under way is given back; one whose deployment runs, or whose store its holder made, is kept", async () => {
+    const b = await mount();
+    const { token, secret } = await b.ownerToken({ create: true, secrets: true });
+    // Held by hand, as an older steward left names: nothing under them.
+    const team = JSON.parse(readFileSync(join(b.state, "team.json"), "utf8")) as { owners: Record<string, string> };
+    team.owners.gone = token.id;
+    writeFileSync(join(b.state, "team.json"), JSON.stringify(team));
+    expect((await change(b, secret, "made", { API_KEY: "x" })).status).toBe(201);
+    expect((await deploy(b, secret, "running")).status).toBe(202);
+    await b.control.settleCreations();
+    expect(b.owners()).toEqual({ made: token.id, running: token.id });
+    // Its installer ended with nothing laid: given back.
+    failedResult(b, DEPLOYMENT, "running");
+    await b.control.settleCreations();
+    expect(b.owners()).toEqual({ made: token.id });
+    expect(Object.keys(claims(b))).toEqual(["made"]);
+    // The store removed by hand: nothing left under the name, given back too.
+    rmSync(join(b.storeRoot, "made"), { recursive: true });
+    await b.control.settleCreations();
+    expect(b.owners()).toEqual({});
+    expect(claims(b)).toEqual({});
+  });
+
+  test("a person's creation undone keeps its name only for a store its token's write made: one the owner laid meanwhile frees it, and stays a leftover", async () => {
+    const b = await mount({ store: "real" });
+    const carl = await b.personToken(CARL, { create: true, secrets: true });
+    expect((await deploy(b, carl.secret, "shop")).status).toBe(202);
+    mkdirSync(join(b.storeRoot, "shop", "files"), { recursive: true });
+    failedResult(b, DEPLOYMENT, "shop");
+    await b.control.settleCreations();
+    expect(b.owners()).toEqual({});
+    expect(await body(await preflight(b, carl.secret, "shop"))).toMatchObject({ status: 403, error: "reserved" });
+  });
+
+  test("a project removed forgets its claims with its name", async () => {
+    const b = await mount();
+    const { secret } = await b.ownerToken({ create: true, secrets: true });
+    expect((await change(b, secret, "shop", { API_KEY: "x" })).status).toBe(201);
+    rmSync(join(b.storeRoot, "shop"), { recursive: true });
+    const forgotten = await b.control.owner(new Request("http://steward/tokens/project", { method: "DELETE", body: JSON.stringify({ slug: "shop" }) }));
+    expect(forgotten.status).toBe(200);
+    expect(b.owners()).toEqual({});
+    expect(claims(b)).toEqual({});
+  });
+});

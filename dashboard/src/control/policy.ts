@@ -34,7 +34,7 @@
  * ahead of a deployment, or left by a removal stopped half way, would hand
  * its values to whatever code a token deploys under that name. So no token
  * creates a name under which the machine still keeps any of them
- * (`leftoversReason`), but the store it laid there itself; the owner,
+ * (`leftoversReason`), but a store its own write made there; the owner,
  * deploying over SSH, still may.
  *
  * Pure.
@@ -125,9 +125,10 @@ export function decideSlug(identity: Identity, slug: unknown, machine: { exists:
  * the snapshots of that folder the backups' index holds, in the server's
  * repository or the bucket's, each counted once, the connector grants made
  * to that slug, and `store`, true when `/etc/sitesolide/projects/<slug>/`
- * exists, the slug is not deployed, and it is not the asking token's by
- * record: a store the token laid ahead of its own first deployment is its
- * own. Counts alone: nothing of what they hold.
+ * exists, the slug is not deployed, and no write of the asking token made
+ * it (src/control/claims.ts): a store the token's own write made ahead of
+ * its first deployment is its own, whoever the registry names for the slug.
+ * Counts alone: nothing of what they hold.
  */
 export type Leftovers = { snapshots: number; grants: number; store: boolean };
 

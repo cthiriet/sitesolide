@@ -383,9 +383,11 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 // **A store ahead of the first deployment.** On a slug the machine does not
 // carry, the store routes judge the token as a deployment creating it would
 // be judged, the leftovers of a removed project included, a store another
-// token or the owner laid there among them; the first write records the
-// slug as the token's, as a deployment's creation does, so that its own
-// deployment then finds the name its own and the store with it. The
+// token or the owner laid there among them; the write that makes the store's
+// folder records the slug as the token's, and the store as made by it
+// (src/control/claims.ts), so that its own deployment then finds both its
+// own. A write that makes nothing claims nothing, and a project of that name
+// deployed by anyone else releases the token's hold on it. The
 // answer's values are never a value: a value set, generated or held in a
 // file is never sent back to a token.
 //

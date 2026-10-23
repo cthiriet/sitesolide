@@ -71,13 +71,17 @@
  * machine does not carry yet, a token that may create it writes its store
  * ahead of its first deployment: judged as that deployment's creation would
  * be, the leftovers of a removed project included, a store laid there by
- * anyone else among them, and recorded at the first write as the token's
- * name, as a deployment's creation is, so that its own deployment then
- * finds the name and the store its own. Its person becomes Admin through
- * that deployment, as for any creation (`settleCreations`), never through a
- * store alone: the registry never makes anyone Admin of a name the machine
- * does not carry. No value is ever sent back: neither one set, nor one
- * drawn, nor a file's content.
+ * anyone else among them. The name becomes the token's only once the store
+ * answers that this write made its folder, and the store is the token's own
+ * because its write made it, never because the registry names the token
+ * (src/control/claims.ts): a write that wrote nothing claims nothing. A
+ * project of that name deployed by anyone but that token, the owner over
+ * SSH above all, releases the token's hold on it, and a name with no
+ * project, no store and no deployment under way is given back. Its person
+ * becomes Admin through its own deployment, as for any creation
+ * (`settleCreations`), never through a store alone: the registry never makes
+ * anyone Admin of a name the machine does not carry. No value is ever sent
+ * back: neither one set, nor one drawn, nor a file's content.
  *
  * The order of the checks is the order of the risk, as in src/secrets/steward.ts:
  * shape of the body, token, slug, state of the machine, writing.
@@ -96,6 +100,7 @@ import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, sco
 import type { StoreForToken } from "../secrets/store-api";
 import { readFileContent, readFileName, readGenerate, readSecretsChange, type TokenSecretsChange } from "./secrets";
 import { CREATION_MAX_AGE_MS, encodeCreations, MAX_PENDING, readCreations, type PendingCreation } from "./creations";
+import { encodeClaims, madeStore, MAX_CLAIMS, readClaims, released, settle, withDeployment, withStoreMade, without, type Claims } from "./claims";
 import { MAX_CONTROL_FILE_BYTES, type ControlSystem } from "./system";
 import { decideManifest, decideSlug, leftoversReason, reservedReason, type Leftovers, type SlugDecision } from "./policy";
 import {
@@ -266,6 +271,9 @@ export type ControlHandler = Handler & {
 /** Who a bearer is, narrowed to their person's rights for a person's token. */
 type Holder = { identity: Identity; rights: MemberRights | null };
 
+/** A slug as a deployment's judgement reads it. */
+type SlugState = { exists: boolean; owner: string | null; claims: Claims | null };
+
 /** The biggest body but a change of secrets: a deployment request, its manifest included. */
 export const MAX_CONTROL_BODY_BYTES = MAX_MANIFEST_BYTES + 4 * 1024;
 
@@ -397,6 +405,51 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
+   * What tokens did to names the machine did not carry (claims.ts), as the
+   * file reads now: null when it does not read, which is said in the log
+   * and counted as no claim, so that no store is anyone's own on its
+   * strength.
+   */
+  async function claimsNow(): Promise<Claims | null> {
+    let text: string | null;
+    try {
+      text = await system.readClaims();
+    } catch (e) {
+      console.error(`control: claims.json unreadable (${errorName(e)})`);
+      return null;
+    }
+    const read = readClaims(text);
+    if ("unreadable" in read) {
+      console.error(`control: ${read.unreadable}`);
+      return null;
+    }
+    return read;
+  }
+
+  /** The claims for a change, in the tokens' queue: a refusal when they do not read, and nothing is written. */
+  async function claimsToChange(): Promise<Claims | Response> {
+    return (await claimsNow()) ?? failure("failure", "the tokens' claims on names cannot be read on the machine: the owner must check /var/lib/sitesolide-steward/claims.json");
+  }
+
+  /**
+   * The names a token holds, but those it claimed ahead of a project that
+   * someone else then deployed on the machine: the owner's SSH deploy of a
+   * name a token had written a store ahead for, above all. Its hold there is
+   * released (`released`), here at once, and in the registry at the next
+   * settlement.
+   */
+  async function heldNow(identity: Identity): Promise<Identity> {
+    const claims = await claimsNow();
+    if (claims === null || identity.owned.every((slug) => !Object.hasOwn(claims, slug))) return identity;
+    const owned: string[] = [];
+    for (const slug of identity.owned) {
+      if (Object.hasOwn(claims, slug) && released(claims, slug, identity.id, await system.projectExists(slug))) continue;
+      owned.push(slug);
+    }
+    return { ...identity, owned };
+  }
+
+  /**
    * The bearer's holder, or the refusal. A person's token is narrowed to
    * their rights as the registry reads now, and refused once they no longer
    * sign in. The last use moves forward at most once an hour; `touching`
@@ -422,6 +475,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       }
       holder = { identity: narrowIdentity(result.identity, rights), rights };
     }
+    holder = { ...holder, identity: await heldNow(holder.identity) };
     const touched = touching ? touch(registry, result.identity.id, now) : null;
     if (touched !== null) {
       // Out of the request's path: a registry that cannot be written does not
@@ -478,10 +532,18 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     );
   }
 
-  async function slugState(slug: string): Promise<{ exists: boolean; owner: string | null } | Response> {
+  /**
+   * The machine carries the project or not, the token the registry names for
+   * it, but one whose hold is released (`heldNow`), and the claims, null
+   * when they do not read.
+   */
+  async function slugState(slug: string): Promise<SlugState | Response> {
     const registry = await team();
     if (registry instanceof Response) return registry;
-    return { exists: await system.projectExists(slug), owner: registry.owners[slug] ?? null };
+    const exists = await system.projectExists(slug);
+    const claims = await claimsNow();
+    const named = registry.owners[slug] ?? null;
+    return { exists, owner: named !== null && released(claims, slug, named, exists) ? null : named, claims };
   }
 
   /**
@@ -506,7 +568,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * not read refuses the creation: an index or a grants file that cannot be
    * read must never pass for one that holds nothing.
    */
-  async function judgeDeployment(holder: Holder, slug: unknown, state: { exists: boolean; owner: string | null }): Promise<SlugDecision | Response> {
+  async function judgeDeployment(holder: Holder, slug: unknown, state: SlugState): Promise<SlugDecision | Response> {
     const decision = judgeSlug(holder, slug, state);
     if (decision.kind === "refused" || !decision.creating) return decision;
     const target = slug as string;
@@ -517,9 +579,9 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       console.error(`control: what the machine keeps under ${target} does not read (${e instanceof Error ? e.message : errorName(e)}): its creation refused`);
       return failure("failure", `what a removed project may have left under ${target}, backups or connector grants, cannot be read on the machine, and no token creates it meanwhile: the owner must read the steward's log`);
     }
-    // A store this token laid ahead of its first deployment is its own; any
-    // other is a leftover, whoever laid it.
-    const reason = leftoversReason(target, { ...left, store: left.store && state.owner !== holder.identity.id });
+    // A store this token's write made ahead of its first deployment is its
+    // own; any other is a leftover, whoever the registry names for the slug.
+    const reason = leftoversReason(target, { ...left, store: left.store && !madeStore(state.claims, target, holder.identity.id) });
     return reason === null ? decision : { kind: "refused", error: "reserved", message: reason };
   }
 
@@ -690,6 +752,14 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
           const noted = await notePending({ deployment, slug: target, email: identity.member, token: identity.id, at: system.now() });
           if (noted !== null) return noted;
         }
+        // Which token deployed it, so that a hold this one claimed ahead is
+        // kept once the project is there, and the name settled otherwise.
+        const claims = await claimsToChange();
+        if (claims instanceof Response) return claims;
+        if (!Object.hasOwn(claims, target) && Object.keys(claims).length >= MAX_CLAIMS) {
+          return failure("too-many-attempts", "the machine holds as many names for tokens as it keeps: the owner frees the names nobody deploys with sitesolide remove --confirm <name>");
+        }
+        await system.writeClaims(encodeClaims(withDeployment(claims, target, identity.id, deployment, system.now())));
         const registry = await team();
         if (registry instanceof Response) return registry;
         const owned = recordOwnership(registry, target, identity.id);
@@ -1099,10 +1169,11 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * (`judgeSlug`): a name the token may not create, another token's, of a
    * platform's prefix, reads as unknown and is never journaled, a guess
    * learning nothing; then the flag, journaled; then what a removed
-   * project left under the name (`leftoversReason`), a store laid there by
-   * anyone but this token included, which the token would otherwise adopt
-   * and then deploy code that reads it. Not `public`: the project it
-   * creates will be private (src/control/policy.ts).
+   * project left under the name (`leftoversReason`), a store there that no
+   * write of this token made included, whoever the registry names for the
+   * slug: the token would otherwise adopt it, and then deploy code that
+   * reads it. Not `public`: the project it creates will be private
+   * (src/control/policy.ts).
    */
   async function judgeStoreWork(holder: Holder, slug: string, work: "list" | "write", operation: WorkOperation, quiet = false): Promise<{ creating: boolean } | Response> {
     if (await system.projectExists(slug)) {
@@ -1121,48 +1192,64 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       console.error(`control: what the machine keeps under ${slug} does not read (${e instanceof Error ? e.message : errorName(e)}): its store refused to a token`);
       return failure("failure", `what a removed project may have left under ${slug} cannot be read on the machine, and no token writes its store meanwhile: the owner must read the steward's log`);
     }
-    const reason = leftoversReason(slug, { ...left, store: left.store && owner !== holder.identity.id });
+    const reason = leftoversReason(slug, { ...left, store: left.store && !madeStore(await claimsNow(), slug, holder.identity.id) });
     if (reason !== null) return failure("reserved", reason);
     return { creating: true };
   }
 
   /**
-   * The slug recorded as this token's, once, at its first write ahead of a
-   * deployment, in the tokens' queue, as a deployment's creation records it:
-   * judged again there, another token may have taken the name meanwhile, or
-   * laid its store. Bounded as a creation is (`uncarriedBound`). A refusal,
-   * or null once the name is the token's, or the project deployed since,
-   * which the judgement made again under the secrets' lock then says.
+   * Room for one more name this token holds on a slug the machine does not
+   * carry, asked before a write that may lay its store: the bound of a
+   * creation (`uncarriedBound`), and the claims' own. Read alone: the name
+   * is recorded only once the store answers that the write made its folder
+   * (`recordStoreMade`).
    */
-  function recordStoreCreation(holder: Holder, slug: string): Promise<Response | null> {
+  async function roomForStore(holder: Holder, slug: string): Promise<Response | null> {
+    const registry = await team();
+    if (registry instanceof Response) return registry;
+    if (registry.owners[slug] === holder.identity.id) return null;
+    const bounded = await uncarriedBound(registry, holder.identity.id, slug);
+    if (bounded !== null) return bounded;
+    const claims = await claimsToChange();
+    if (claims instanceof Response) return claims;
+    if (!Object.hasOwn(claims, slug) && Object.keys(claims).length >= MAX_CLAIMS) {
+      return failure("too-many-attempts", "the machine holds as many names for tokens as it keeps: the owner frees the names nobody deploys with sitesolide remove --confirm <name>");
+    }
+    return null;
+  }
+
+  /**
+   * The slug recorded as this token's, and its store as made by it, once the
+   * store answered that this write made its folder, in the tokens' queue: a
+   * write that made nothing, a removal of a name the store never held or a
+   * refused set, claims nothing. Not when the machine carries the project
+   * by then: its store is the project's, deployed by whoever deployed it.
+   * A record that fails leaves a store no token holds, which none may then
+   * adopt, its writer included: said in the log, for the owner.
+   */
+  function recordStoreMade(holder: Holder, slug: string): Promise<void> {
     const { identity } = holder;
     return serially(async () => {
+      if (await system.projectExists(slug)) return;
+      const claims = await claimsToChange();
+      if (claims instanceof Response) {
+        console.error(`control: the store of ${slug} made by token ${identity.id} is not recorded as its own: claims.json does not read`);
+        return;
+      }
+      await system.writeClaims(encodeClaims(withStoreMade(claims, slug, identity.id, system.now())));
       const registry = await team();
-      if (registry instanceof Response) return registry;
-      const owner = registry.owners[slug] ?? null;
-      if (owner === identity.id || (await system.projectExists(slug))) return null;
-      if (judgeSlug(holder, slug, { exists: false, owner }).kind === "refused") return failure("not-found", `no project ${slug} for this token`);
-      let laid: boolean;
-      try {
-        laid = await system.storeExists(slug);
-      } catch {
-        laid = true;
-      }
-      if (laid) return failure("reserved", leftoversReason(slug, { snapshots: 0, grants: 0, store: true })!);
-      const bounded = await uncarriedBound(registry, identity.id, slug);
-      if (bounded !== null) return bounded;
+      if (registry instanceof Response) return;
       const owned = recordOwnership(registry, slug, identity.id);
-      if (owned !== null) {
-        const refused = await save(owned);
-        if (refused !== null) return refused;
+      if (owned !== null && (await save(owned)) !== null) {
+        console.error(`control: ${slug} not recorded as token ${identity.id}'s: the registry is full`);
+        return;
       }
-      console.log(`control: ${slug} is now token ${identity.id}'s, its store written ahead of its first deployment`);
-      return null;
-    });
+      console.log(`control: ${slug} is now token ${identity.id}'s, its store made ahead of its first deployment`);
+    }).catch((e) => console.error(`control: the store of ${slug} made by token ${identity.id} is not recorded (${errorName(e)})`));
   }
 
   /** Did this answer make the store's folder? One journal line more, counted once known. */
-  async function madeStore(answer: Response): Promise<boolean> {
+  async function answerMadeStore(answer: Response): Promise<boolean> {
     if (answer.status !== 200 && answer.status !== 201) return false;
     try {
       return ((await answer.clone().json()) as { created?: unknown }).created === true;
@@ -1185,10 +1272,11 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
   /**
    * A write to a project's store, its body read and judged first: the
-   * token, the slug, the token's hour, then, for a slug not deployed, the
-   * name recorded as the token's; the write handed over with a `still`
-   * judged again once the secrets' lock is taken, as a change of secrets
-   * is. `cost`: what it spends of the hour, one more once the store's
+   * token, the slug, the token's hour, for a slug not deployed the room for
+   * one more name; the write handed over with a `still` judged again once
+   * the secrets' lock is taken, as a change of secrets is; then, when the
+   * store answers that this write made its folder, the name recorded as the
+   * token's. `cost`: what it spends of the hour, one more once the store's
    * folder was made. `creates`: a write that may lay the store, every one
    * but a file removed.
    */
@@ -1209,8 +1297,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     const bounded = withinHour(key, Math.max(1, cost), secretChangesPerHour, "secret names and files changed");
     if (bounded !== null) return bounded;
     if (judged.creating && creates) {
-      const recorded = await recordStoreCreation(holder, slug);
-      if (recorded !== null) return recorded;
+      const room = await roomForStore(holder, slug);
+      if (room !== null) return room;
     }
     const still = async (): Promise<Response | null> => {
       const again = await identify(body.bearer, false);
@@ -1219,7 +1307,10 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       return rejudged instanceof Response ? rejudged : null;
     };
     const answer = await hand(whoOf(holder), slug, judged.creating, still);
-    if (await madeStore(answer)) spend(key, 1);
+    if (await answerMadeStore(answer)) {
+      spend(key, 1);
+      if (judged.creating) await recordStoreMade(holder, slug);
+    }
     return answer;
   }
 
@@ -1414,6 +1505,10 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       // finds the ownership still there and finishes.
       const dropped = await dropPending(slug);
       if (dropped instanceof Response) return dropped;
+      // Its claims too: a project created again under the name starts from nobody's.
+      const claims = await claimsToChange();
+      if (claims instanceof Response) return claims;
+      if (Object.hasOwn(claims, slug)) await system.writeClaims(encodeClaims(without(claims, slug)));
       const registry = await team();
       if (registry instanceof Response) return registry;
       const forgotten = forgetOwnership(registry, slug);
@@ -1561,42 +1656,66 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       }
       if (left.length !== current.length) await system.writeCreations(encodeCreations(left));
     });
-    if (undone.length > 0) await giveNamesBack(undone);
+    if (undone.length > 0) for (const creation of undone) console.log(`control: the creation of ${creation.slug} undone, its name settled with the others`);
+    await settleNames();
   }
 
   /**
-   * The names of creations undone given back, in the tokens' queue: each one
-   * still its token's, still not on the machine and with no creation of it
-   * noted since, checked once the turn has come, so that a project laid
-   * meanwhile keeps its owner, and a new creation of it its name. Otherwise
-   * `owners` would grow by one name per attempt.
+   * Every name the tokens' registry holds, or a claim names, settled in the
+   * tokens' queue (src/control/claims.ts, `settle`), the facts read once
+   * the turn has come:
+   *
+   *   - a project on the machine that its holder claimed ahead and never
+   *     deployed, the owner's SSH deploy of it above all, is no longer the
+   *     holder's;
+   *   - a name with no project, no store its holder's write made, and no
+   *     deployment under way, its installer active, a person's creation
+   *     noted, or the claim's own deployment not ended (`ended`), is given
+   *     back.
+   *
+   * So a creation undone, or a write ahead that made nothing, holds no name
+   * for good, and `owners` never grows by one name per attempt. A file that
+   * does not read settles nothing.
    */
-  function giveNamesBack(undone: readonly PendingCreation[]): Promise<void> {
+  function settleNames(): Promise<void> {
     return serially(async () => {
       let registry = await team();
       if (registry instanceof Response) return;
+      const read = await claimsNow();
+      if (read === null) return;
+      let claims = read;
       // The tokens' queue may wait on the creations' turn, never the other way.
       const noted = await inCreationsTurn(pending);
       if (noted instanceof Response) return;
       const given: string[] = [];
-      for (const creation of undone) {
-        if (noted.some((one) => one.slug === creation.slug)) continue;
-        if (registry.owners[creation.slug] !== creation.token || (await system.projectExists(creation.slug))) continue;
-        // A store the token wrote ahead keeps the name its own: given back,
-        // the store would be a leftover nobody may create again, its writer
-        // included. A folder that cannot be told keeps it too.
-        if (await storeKept(creation.slug)) continue;
-        const forgotten = forgetOwnership(registry, creation.slug);
-        if (forgotten === null) continue;
-        registry = forgotten.team;
-        given.push(creation.slug);
+      for (const slug of new Set([...Object.keys(registry.owners), ...Object.keys(claims)])) {
+        const holder = Object.hasOwn(registry.owners, slug) ? registry.owners[slug]! : null;
+        const claim = Object.hasOwn(claims, slug) ? claims[slug]! : null;
+        const onMachine = await system.projectExists(slug);
+        const noting =
+          !onMachine &&
+          (noted.some((one) => one.slug === slug) ||
+            (claim !== null && claim.deployment !== null && !(await ended({ deployment: claim.deployment, slug, email: "", token: claim.deployer ?? "", at: claim.at }))));
+        const store = onMachine || noting ? false : await storeKept(slug);
+        let settled = settle(claim, holder, { onMachine, store, pending: noting });
+        // Asked last, of what would otherwise be let go: an installer still at work.
+        if ((settled.forget || settled.drop) && !onMachine && !noting && isValidSlug(slug) && (await isActive(installerUnit(slug)))) settled = { forget: false, drop: false };
+        if (settled.forget) {
+          const forgotten = forgetOwnership(registry, slug);
+          if (forgotten !== null) {
+            registry = forgotten.team;
+            given.push(`${slug} (token ${forgotten.id}${onMachine ? ", deployed by someone else" : ""})`);
+          }
+        }
+        if (settled.drop) claims = without(claims, slug);
       }
-      if (given.length === 0) return;
-      if ((await save(registry)) !== null) return;
-      console.log(`control: name${given.length === 1 ? "" : "s"} given back, creation undone: ${given.join(", ")}`);
+      if (claims !== read) await system.writeClaims(encodeClaims(claims));
+      if (given.length === 0 || (await save(registry)) !== null) return;
+      console.log(`control: name${given.length === 1 ? "" : "s"} given back: ${given.join(", ")}`);
     });
   }
 
+  /** Is the store's folder there? One that cannot be told counts as there. */
   async function storeKept(slug: string): Promise<boolean> {
     try {
       return await system.storeExists(slug);
