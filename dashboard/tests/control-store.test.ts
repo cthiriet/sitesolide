@@ -1284,6 +1284,10 @@ describe("a token never holds what the owner deployed or filled", () => {
     }
     await b.control.settleCreations();
     expect((await list(b, secret, "shop")).status).toBe(500);
+    // The owner's deploy, asking the claim, is told to restore the file, never to delete it.
+    for (const response of [await owner(b, "GET", "/tokens/claim?slug=shop"), await owner(b, "DELETE", "/tokens/claim", { slug: "shop" })]) {
+      expect(await body(response)).toMatchObject({ status: 500, error: "failure", message: expect.stringContaining("from the steward's backups, never delete it") });
+    }
   });
 
   test("the owner's socket says which token holds a name, on the machine or not, and takes it back for the owner's own deploy (--adopt), its store moved aside", async () => {

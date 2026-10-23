@@ -455,7 +455,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
   /** The claims for a change, in the tokens' queue: a refusal when they do not read, and nothing is written. */
   async function claimsToChange(): Promise<Claims | Response> {
-    return (await claimsNow()) ?? failure("failure", "the tokens' claims on names cannot be read on the machine: the owner must check /var/lib/sitesolide-steward/claims.json");
+    return (await claimsNow()) ?? failure("failure", "the tokens' claims on names cannot be read on the machine: the owner must restore /var/lib/sitesolide-steward/claims.json from the steward's backups, never delete it, since a claim dropped hands its name to whoever deploys next");
   }
 
   /**
