@@ -29,6 +29,8 @@ import {
   checkContent,
   checkFile,
   checkSite,
+  isStoreForm,
+  tokenFileRefusal,
   type Expected,
   type Declaration,
   type FolderInfo,
@@ -49,7 +51,7 @@ const SECRETS = "/etc/sitesolide";
 const charOf = (code: number) => String.fromCharCode(code);
 
 function manifest(slug: string, secrets: unknown, others: Record<string, unknown> = {}): string {
-  return JSON.stringify({ slug, start: "bun server.ts", port: 3048, publicDir: "public", secrets, ...others });
+  return JSON.stringify({ slug, start: "bun server.ts", port: 3048, publicDir: "public", ...(secrets === undefined ? {} : { secrets }), ...others });
 }
 
 /** The sites, with the names present in the secrets directory, as the steward lists them. */
@@ -194,22 +196,115 @@ describe("attaching a name to a site", () => {
   test("present but declared by no manifest, between two prefixes: to the most specific site", () => {
     const both = sitesFrom(
       [
-        { folder: "cms", manifest: manifest("cms", []) },
-        { folder: "cms-tool", manifest: manifest("cms-tool", []) },
+        { folder: "cms", manifest: manifest("cms", ["cms.env"]) },
+        { folder: "cms-tool", manifest: manifest("cms-tool", ["cms-tool-main.env"]) },
       ],
       ["cms-tool.env"],
     );
-    expect(filesOf(both, "cms-tool")).toEqual(["cms-tool.env"]);
-    expect(filesOf(both, "cms")).toEqual([]);
+    expect(filesOf(both, "cms-tool")).toEqual(["cms-tool-main.env", "cms-tool.env"]);
+    expect(filesOf(both, "cms")).toEqual(["cms.env"]);
 
     // Without the more specific site, the name goes to the one it still carries.
-    const alone = sitesFrom([{ folder: "cms", manifest: manifest("cms", []) }], ["cms-tool.env"]);
-    expect(filesOf(alone, "cms")).toEqual(["cms-tool.env"]);
+    const alone = sitesFrom([{ folder: "cms", manifest: manifest("cms", ["cms.env"]) }], ["cms-tool.env"]);
+    expect(filesOf(alone, "cms")).toEqual(["cms.env", "cms-tool.env"]);
   });
 
   test("a site that does not exist under /srv/sites receives nothing", () => {
     const sites = sitesFrom([{ folder: "cms", manifest: manifest("cms", ["cms.env"]) }], ["builder-ssh"]);
     expect([...sites.values()].flatMap((site) => site.files.map((file) => file.name))).toEqual(["cms.env"]);
+  });
+});
+
+describe("a store-form site claims no flat file (spec §6.13)", () => {
+  const leftoversOf = (sites: Map<string, Site>, folder: string) => sites.get(folder)?.leftovers.map((file) => file.name) ?? [];
+
+  test("the form of each site: legacy, names, none, and none without a conforming manifest", () => {
+    const sites = sitesFrom([
+      { folder: "nis2", manifest: manifest("nis2", ["nis2-ses.env"]) },
+      { folder: "shop", manifest: manifest("shop", ["API_KEY"]) },
+      { folder: "engine", manifest: manifest("engine", { runtime: ["A"], files: ["gcp.json"] }) },
+      { folder: "courses", manifest: manifest("courses", undefined) },
+      { folder: "other", manifest: manifest("someone", ["other.env"]) },
+      { folder: "test-zone.invalid", manifest: null },
+    ]);
+    expect([...sites.values()].map((site) => [site.folder, site.form, isStoreForm(site)])).toEqual([
+      ["courses", "none", true],
+      ["engine", "names", true],
+      ["nis2", "legacy", false],
+      ["other", "none", false],
+      ["shop", "names", true],
+      ["test-zone.invalid", "none", false],
+    ]);
+  });
+
+  test("a names-form manifest declares no flat file named after its variables, and its prefix's files are leftovers, never its files", () => {
+    for (const secrets of [["SHOP_TOKEN", "API_KEY"], { runtime: ["SHOP_TOKEN"], files: ["shop.env"] }, [], undefined]) {
+      const sites = sitesFrom([{ folder: "shop", manifest: manifest("shop", secrets) }], ["shop.env", "shop-mail.env", "SHOP_TOKEN"]);
+      expect({ secrets, files: filesOf(sites, "shop"), leftovers: leftoversOf(sites, "shop") }).toEqual({ secrets, files: [], leftovers: ["shop.env", "shop-mail.env"] });
+      // Never writable: checkFile finds nothing to write.
+      expect("refusal" in checkFile(sites.get("shop")!, "shop.env", SECRETS)).toBe(true);
+    }
+  });
+
+  test("nis2-ses, a new store-form project, beside nis2 that still declares nis2-ses.env: the file stays nis2's", () => {
+    const present = ["nis2-ses.env", "nis2-stripe.env"];
+    const before = sitesFrom(
+      [
+        { folder: "nis2", manifest: manifest("nis2", ["nis2-ses.env", "nis2-stripe.env"]) },
+        { folder: "nis2-ses", manifest: manifest("nis2-ses", ["API_KEY"]) },
+      ],
+      present,
+    );
+    expect(filesOf(before, "nis2")).toEqual(["nis2-ses.env", "nis2-stripe.env"]);
+    expect(filesOf(before, "nis2-ses")).toEqual([]);
+    expect(leftoversOf(before, "nis2-ses")).toEqual([]);
+    // Still writable by nis2, never by nis2-ses.
+    expect("declaration" in checkFile(before.get("nis2")!, "nis2-ses.env", SECRETS)).toBe(true);
+    expect("refusal" in checkFile(before.get("nis2-ses")!, "nis2-ses.env", SECRETS)).toBe(true);
+
+    // nis2 moves to names: nis2-ses.env is now nis2-ses's leftover, by the
+    // longest prefix, and nis2-stripe.env nis2's; neither is anybody's file.
+    const after = sitesFrom(
+      [
+        { folder: "nis2", manifest: manifest("nis2", ["STRIPE_SECRET_KEY"]) },
+        { folder: "nis2-ses", manifest: manifest("nis2-ses", ["API_KEY"]) },
+      ],
+      present,
+    );
+    expect([filesOf(after, "nis2"), filesOf(after, "nis2-ses")]).toEqual([[], []]);
+    expect(leftoversOf(after, "nis2-ses")).toEqual(["nis2-ses.env"]);
+    expect(leftoversOf(after, "nis2")).toEqual(["nis2-stripe.env"]);
+    // A leftover is expected under its new owner's account: the old one's file does not pass as managed.
+    expect(after.get("nis2-ses")!.leftovers[0]!.expected.owner).toBe("site-nis2-ses");
+    expect("refusal" in checkFile(after.get("nis2-ses")!, "nis2-ses.env", SECRETS)).toBe(true);
+  });
+
+  test("legacy-form, storeless, static and manifest-less sites keep today's attachment exactly", () => {
+    const sites = sitesFrom(
+      [
+        { folder: "cms", manifest: manifest("cms", ["cms.env"]) },
+        { folder: "dashboard", manifest: manifest("dashboard", undefined) },
+        { folder: "showcase", manifest: JSON.stringify({ slug: "showcase", publicDir: "public" }) },
+        { folder: "test-zone.invalid", manifest: null },
+      ],
+      ["cms.env", "cms-old.env", "dashboard.env", "dashboard-backup.env", "showcase-key", "landing-mail.env"],
+    );
+    expect(filesOf(sites, "cms")).toEqual(["cms.env", "cms-old.env"]);
+    // The dashboard has no store, whatever its manifest says: its hash and the machine's files stay its files.
+    expect(filesOf(sites, "dashboard").sort()).toEqual(["dashboard-backup.env", "dashboard.env"]);
+    expect(filesOf(sites, "showcase")).toEqual(["showcase-key"]);
+    expect(filesOf(sites, "test-zone.invalid")).toEqual(["landing-mail.env"]);
+    for (const site of sites.values()) expect([site.folder, site.leftovers]).toEqual([site.folder, []]);
+  });
+
+  test("an old token route on a store-form project points to the CLI that replaced it", () => {
+    const sites = sitesFrom([{ folder: "shop", manifest: manifest("shop", ["API_KEY"]) }], ["shop.env"]);
+    expect(tokenFileRefusal(sites.get("shop")!, "shop.env")).toEqual({
+      error: "out-of-scope",
+      message: "this project keeps its variables in its store: update your sitesolide CLI, then sitesolide secrets set NAME",
+    });
+    const legacy = sitesFrom([{ folder: "shop", manifest: manifest("shop", ["shop.env"]) }], ["shop.env"]);
+    expect(tokenFileRefusal(legacy.get("shop")!, "shop.env")).toBeNull();
   });
 });
 
@@ -299,7 +394,8 @@ describe("kind, readability and passwords", () => {
         { folder: "dashboard", manifest: manifest("dashboard", ["dashboard.env"]) },
         { folder: "portal", manifest: manifest("portal", ["portal.env"]) },
         { folder: "calendar", manifest: manifest("calendar", ["calendar.env"]) },
-        { folder: "builder", manifest: manifest("builder", []) },
+        // A service made by hand, with no manifest: its files attach by their prefix.
+        { folder: "builder", manifest: null },
       ],
       ["dashboard.env", "builder-ssh"],
     );
@@ -441,7 +537,7 @@ describe("file name", () => {
 
   test("a well formed but undeclared name is refused", () => {
     const verdict = checkFile(cms, "cms-other.env", SECRETS);
-    expect("refusal" in verdict && verdict.refusal.message).toContain("declared neither");
+    expect("refusal" in verdict && verdict.refusal.message).toBe("cms-other.env is not declared in the sitesolide.json of cms");
   });
 
   test("what is not a string is invalid, not out of scope", () => {

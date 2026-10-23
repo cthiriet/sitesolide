@@ -41,7 +41,8 @@
  */
 import { relative, resolve } from "node:path";
 import { MACHINE_FOLDER } from "../../borrowed/backups";
-import { isApp, legacySecretFiles, readManifest, isValidSlug, type Manifest } from "../../borrowed/manifest";
+import { hasStore, isApp, legacySecretFiles, readManifest, isValidSlug, secretsOf, type Manifest, type SecretsForm } from "../../borrowed/manifest";
+import { PASSWORD_VARIABLE } from "../../borrowed/variables";
 import { IDENTITY_VARIABLES } from "../../borrowed/sharing";
 import { PASSWORD_MAX } from "../auth";
 import { LANDING_FOLDER } from "../state";
@@ -82,7 +83,8 @@ export const ROOT_FILES = ["dashboard.env", "dashboard-monitor.env", "dashboard-
 
 /**
  * The variable that changes only through `/password`, in every managed
- * environment file, the dashboard's, the portal's or a site's.
+ * environment file, the dashboard's, the portal's or a site's, and that a
+ * project's store never holds.
  *
  * An argon2id hash does not give the password, but it is cracked offline, with
  * neither rate limiting nor log: showing it on the screen would amount to
@@ -91,8 +93,11 @@ export const ROOT_FILES = ["dashboard.env", "dashboard-monitor.env", "dashboard-
  * again the password that has just been changed because it had leaked: a file
  * that carries one is never restored, and `/password` does not keep the old one
  * as a previous version.
+ *
+ * Defined in bin/cli/variables.ts, borrowed: the manifest's validation refuses
+ * it as a declared name by the same constant.
  */
-export const PASSWORD_VARIABLE = "PASSWORD_HASH";
+export { PASSWORD_VARIABLE };
 
 /**
  * **Hash only**: the files that carry nothing other than `PASSWORD_HASH`, the
@@ -165,6 +170,13 @@ export type Site = {
   isStatic: boolean;
   /** In the manifest's order, then the secrets directory's. */
   files: Declaration[];
+  /**
+   * Present flat files this store-form site is the most specific owner of, by
+   * prefix: listed, retired, never written, never created, never migrated.
+   */
+  leftovers: Declaration[];
+  /** The deposited manifest's secrets form; "none" without a conforming manifest. */
+  form: SecretsForm;
 };
 
 const outOfScope = (message: string): Refusal => ({ error: "out-of-scope", message });
@@ -322,6 +334,17 @@ export function manifestName(name: unknown): name is string {
  *   specific site whose name it carries, `cms-tool.env` going to `cms-tool`
  *   when that site exists and to `cms` otherwise;
  * - neither: out of the scope, like any name no site carries.
+ *
+ * **A store-form site claims no flat file.** An app whose deposited manifest
+ * names its secrets as variables, or declares none, reads them from its
+ * project's store, `/etc/sitesolide/projects/<slug>/`, and its units read no
+ * flat file: it declares none, and none is attached to it as a file it may
+ * write. Without this, a new project `nis2-ses` would be handed
+ * `nis2-ses.env`, `nis2`'s file, the day `nis2` stopped declaring it. A file
+ * whose most specific owner by prefix is such a site goes to its
+ * `leftovers`, which only the store's listing and retire read. Legacy-form
+ * sites, storeless ones, and sites without a manifest (the landing, a
+ * hand-made service) keep the rules above exactly.
  */
 export function readSites(entries: ProjectEntry[], present: readonly string[]): Map<string, Site> {
   const sites = new Map<string, Site>();
@@ -340,11 +363,16 @@ export function readSites(entries: ProjectEntry[], present: readonly string[]): 
       manifest,
       isStatic: conforms && !isApp(manifest),
       files: [],
+      leftovers: [],
+      form: conforms ? secretsOf(manifest).form : "none",
     });
 
-    // Only an app site has a unit that reads its `secrets`.
-    if (!conforms || !isApp(manifest) || !Array.isArray(manifest.secrets)) continue;
-    for (const name of manifest.secrets as unknown[]) {
+    // Only an app site has a unit that reads its `secrets`, and only the old
+    // form names files: a list of variable names is no list of files, and a
+    // names-form manifest would otherwise declare flat files named after its
+    // variables.
+    if (!conforms || !isApp(manifest)) continue;
+    for (const name of legacySecretFiles(manifest) as unknown[]) {
       if (!manifestName(name)) continue;
       const enumerate = declaring.get(name) ?? [];
       if (!enumerate.includes(entry.folder)) enumerate.push(entry.folder);
@@ -379,10 +407,23 @@ export function readSites(entries: ProjectEntry[], present: readonly string[]): 
     }
     const site = folder === undefined ? undefined : sites.get(folder);
     if (site === undefined) continue;
-    site.files.push(declaration(name, site.folder));
+    // Only a name present and declared by no manifest reaches a store-form
+    // site, which declares none: a leftover, never a file of its own.
+    if (isStoreForm(site)) site.leftovers.push(declaration(name, site.folder));
+    else site.files.push(declaration(name, site.folder));
   }
 
   return sites;
+}
+
+/**
+ * An app whose deposited manifest names this folder, that has a store, and
+ * whose secrets are names or nothing: its units read the project's store and
+ * no flat file it declares (readSites).
+ */
+export function isStoreForm(site: Pick<Site, "folder" | "manifest" | "form">): boolean {
+  const { manifest } = site;
+  return manifest !== null && manifest.slug === site.folder && hasStore(manifest) && site.form !== "legacy";
 }
 
 /** The site with the longest label, the most specific of those a name could belong to. */
@@ -442,7 +483,7 @@ export function checkFile(
 
   const found = site.files.find((file) => file.name === valid);
   if (found === undefined) {
-    return { refusal: outOfScope(`${valid} is declared neither in the sitesolide.json of ${site.folder} nor in secrets/destinations.conf`) };
+    return { refusal: outOfScope(`${valid} is not declared in the sitesolide.json of ${site.folder}`) };
   }
 
   const path = pathUnder(secretsFolder, valid);
@@ -462,6 +503,11 @@ export function checkFile(
  * sent back.
  */
 export function tokenFileRefusal(site: Site, file: unknown): Refusal | null {
+  // A project that keeps its variables in its store has no flat file a token
+  // would manage: an older CLI is told what replaced it.
+  if (isStoreForm(site)) {
+    return outOfScope("this project keeps its variables in its store: update your sitesolide CLI, then sitesolide secrets set NAME");
+  }
   const own = `${site.folder}.env`;
   if (file !== own) return outOfScope(`a token manages ${own} alone`);
   const { manifest } = site;

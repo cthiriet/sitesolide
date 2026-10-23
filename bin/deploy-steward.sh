@@ -12,10 +12,12 @@
 # /usr/local/lib/sitesolide/, sets the unit and restarts the steward alone. It
 # touches neither Caddy, nor the dashboard, nor any site.
 #
-# THE REGISTER OF SECRETS IS EMBEDDED HERE. secrets/destinations.conf is copied
-# by `bun run borrow` then inlined into steward.js by `bun build`: a new path
-# outside the manifest (a key, a sub-folder of secrets) is only handled after
-# this script, never by a mere deposit of a file on the machine.
+# THE STEWARD'S RULES ARE EMBEDDED HERE. What it may write, the deployed
+# manifests' secrets and each project's store under /etc/sitesolide/projects,
+# is decided by its own code and the modules `bun run borrow` copies from
+# bin/cli, all inlined into steward.js by `bun build`: a change of those rules
+# reaches the machine through this script alone, never by a mere deposit of a
+# file there.
 #
 # To be run AFTER the dashboard's first `sitesolide deploy`: the socket is
 # opened to the site-dashboard group, which only exists from then on.
