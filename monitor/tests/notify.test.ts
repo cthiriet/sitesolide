@@ -8,7 +8,6 @@ import {
   deliver,
   heartbeatFails,
   heartbeatRequest,
-  message,
   noticeLine,
   webhookFormat,
   webhookRequest,
@@ -17,6 +16,9 @@ import {
 const ZONE = "test-zone.invalid";
 const T0 = Date.UTC(2026, 9, 4, 12, 0, 0);
 const MINUTE = 60_000;
+
+/** The text of a message, which is what most of these tests read. */
+const message = (notices: readonly Notice[], zone: string): string => compose(notices, zone).text;
 
 function notice(event: Notice["event"], id: string, severity: Notice["severity"] = "critical", summary = `${id} answered 502`): Notice {
   return { event, id, kind: "site", label: id, severity, slug: null, summary, at: T0 + 5 * MINUTE, since: T0 };

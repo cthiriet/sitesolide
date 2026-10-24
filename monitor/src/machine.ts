@@ -90,19 +90,32 @@ export async function spawn(command: string[], timeoutMs: number): Promise<Execu
   }
 }
 
-/** The first line of what a failed command said, short enough for a summary. */
+/** A text short enough for a summary. */
+function clip(text: string): string {
+  return text.length > 120 ? `${text.slice(0, 120)}...` : text;
+}
+
+/** The first line of what a failed command said. */
 function firstLine(execution: Execution): string {
   const line = (execution.stderr.trim().split("\n")[0] ?? "").trim();
-  const text = line === "" ? `exit code ${execution.code}` : line;
-  return text.length > 120 ? `${text.slice(0, 120)}...` : text;
+  return clip(line === "" ? `exit code ${execution.code}` : line);
 }
 
 function errorCode(error: unknown): string {
   const { code, name, message } = error as { code?: unknown; name?: unknown; message?: unknown };
   if (typeof code === "string" && code !== "") return code;
   if (typeof name === "string" && name !== "" && name !== "Error") return name;
-  const text = typeof message === "string" ? message : String(error);
-  return text.length > 120 ? `${text.slice(0, 120)}...` : text;
+  return clip(typeof message === "string" ? message : String(error));
+}
+
+/** A file's text, null when it does not exist, or why it could not be read. */
+function readOptional(path: string): Reading<string | null> {
+  try {
+    return { value: readFileSync(path, "utf8") };
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return { value: null };
+    return { error: `${path}: ${errorCode(error)}` };
+  }
 }
 
 /**
@@ -164,21 +177,11 @@ export function createMachine(config: Config, options: MachineOptions = { system
     },
 
     domains() {
-      try {
-        return { value: readFileSync(config.domainsFile, "utf8") };
-      } catch (error) {
-        if (errorCode(error) === "ENOENT") return { value: null };
-        return { error: `${config.domainsFile}: ${errorCode(error)}` };
-      }
+      return readOptional(config.domainsFile);
     },
 
     tlsPolicy() {
-      try {
-        return { value: readFileSync(config.tlsZoneFile, "utf8") };
-      } catch (error) {
-        if (errorCode(error) === "ENOENT") return { value: null };
-        return { error: `${config.tlsZoneFile}: ${errorCode(error)}` };
-      }
+      return readOptional(config.tlsZoneFile);
     },
 
     meminfo() {

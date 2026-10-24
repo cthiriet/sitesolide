@@ -178,11 +178,6 @@ export function compose(notices: readonly Notice[], zone: string): { text: strin
   return { text: lines.join("\n"), sent: sorted.slice(0, shown), kept: sorted.slice(shown) };
 }
 
-/** The text of `compose`, for what reads only that. */
-export function message(notices: readonly Notice[], zone: string): string {
-  return compose(notices, zone).text;
-}
-
 /**
  * Slack reads `<...>` as a link or a mention, `<!channel>` pinging everyone in
  * it, and `&` as the start of an escape: the three are escaped, as its
@@ -269,9 +264,6 @@ export function heartbeatFails(checks: Readonly<Record<string, Tracked>>, zone: 
  */
 export function heartbeatRequest(url: string, checks: Readonly<Record<string, Tracked>>, zone: string): { url: string; init: RequestInit } {
   const failing = heartbeatFails(checks, zone);
-  const target = new URL(url);
-  if (failing) target.pathname = `${target.pathname.replace(/\/+$/, "")}/fail`;
-
   const rank = (tracked: Tracked): number => (platformWide(tracked, zone) ? 0 : 2) + (tracked.severity === "critical" ? 0 : 1);
   const down = Object.values(checks)
     .filter(isDown)
@@ -289,7 +281,7 @@ export function heartbeatRequest(url: string, checks: Readonly<Record<string, Tr
     if (body.length + line.length > MAX_HEARTBEAT_BODY) break;
     body += line;
   }
-  return { url: target.toString(), init: { method: "POST", headers: { "Content-Type": "text/plain; charset=utf-8" }, body } };
+  return ping(url, failing, body);
 }
 
 /**
@@ -298,9 +290,13 @@ export function heartbeatRequest(url: string, checks: Readonly<Record<string, Tr
  * only once the outside service's grace period runs out, and without a reason.
  */
 export function crashRequest(url: string, reason: string): { url: string; init: RequestInit } {
+  return ping(url, true, `the monitor failed: ${reason}`.slice(0, MAX_HEARTBEAT_BODY));
+}
+
+/** A ping of the heartbeat, `/fail` on its path when it fails, before any query string. */
+function ping(url: string, failing: boolean, body: string): { url: string; init: RequestInit } {
   const target = new URL(url);
-  target.pathname = `${target.pathname.replace(/\/+$/, "")}/fail`;
-  const body = `the monitor failed: ${reason}`.slice(0, MAX_HEARTBEAT_BODY);
+  if (failing) target.pathname = `${target.pathname.replace(/\/+$/, "")}/fail`;
   return { url: target.toString(), init: { method: "POST", headers: { "Content-Type": "text/plain; charset=utf-8" }, body } };
 }
 
