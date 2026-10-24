@@ -29,6 +29,7 @@ import type { SessionReader } from "../routes";
 import { isAcceptableOrigin } from "../sessions";
 import type { Tokens } from "../secrets/tokens";
 import type { MembersSteward } from "../people/client";
+import { roleOn } from "../people/powers";
 import type { IdentityResolver } from "../people/identity";
 import type { AccessSteward } from "./client";
 import type { AccessPageResponse, AccessResponse, AccessViewer, PeoplePageResponse } from "./protocol";
@@ -175,7 +176,7 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies, clock
           : await reach(() => dependencies.members.act("POST", "/access/person/list", { session: who.token, slug }), [who.token]);
       if (reached.kind !== "received" || reached.status !== 200) return who.kind === "owner" ? ownerAnswer(who, reached, null) : personAnswer(who, reached, null);
       const access = reached.body as unknown as AccessResponse;
-      const you: AccessViewer = who.kind === "owner" ? { kind: "owner" } : { kind: "person", email: who.email, role: Object.hasOwn(who.roles, slug) ? who.roles[slug]! : null };
+      const you: AccessViewer = who.kind === "owner" ? { kind: "owner" } : { kind: "person", email: who.email, role: roleOn(who.roles, slug) };
       const until = (who.kind === "owner" ? dependencies.tokens : dependencies.unlocks).read(who.hash)?.expiresAt ?? null;
       const page: AccessPageResponse = {
         ...access,

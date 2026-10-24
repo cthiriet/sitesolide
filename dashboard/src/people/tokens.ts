@@ -36,18 +36,14 @@
  * narrower reading, and another is minted for what they still administer.
  */
 import type { Identity, Scope } from "../control/protocol";
-import { may, powerRefusal, type Power } from "./powers";
-import type { Role, Roles } from "./protocol";
+import { may, powerRefusal, roleOn, type Power } from "./powers";
+import type { Roles } from "./protocol";
 
 /** What a person holds now: their roles above Can open, and whether they may create projects. */
 export type MemberRights = { email: string; roles: Roles; create: boolean };
 
 /** Live tokens one person holds at most: a laptop, a desktop, a few agents. The registry is everyone's, not one person's. */
 export const MAX_TOKENS_PER_MEMBER = 10;
-
-function roleOn(rights: MemberRights, slug: string): Role | null {
-  return Object.hasOwn(rights.roles, slug) ? rights.roles[slug]! : null;
-}
 
 /** The scope's options, and the power each one takes on a project. */
 const OPTIONS: readonly (readonly ["public" | "domain" | "outbound", Power])[] = [
@@ -72,14 +68,14 @@ export function mintRefusals(scope: Scope, rights: MemberRights): string[] {
   const refusals: string[] = [];
   if (scope.slugs.length === 0 && !scope.create) refusals.push("scope.slugs: choose at least one project, or creating projects");
   for (const slug of scope.slugs) {
-    const role = roleOn(rights, slug);
+    const role = roleOn(rights.roles, slug);
     if (!may(role, "deploy")) refusals.push(`scope.slugs: ${powerRefusal(email, role, slug, "deploy")}`);
   }
   if (scope.create && !rights.create) refusals.push(`scope.create: ${email} may not create projects: ${NO_CREATE}`);
   for (const [option, power] of OPTIONS) {
     if (!scope[option]) continue;
     for (const slug of scope.slugs) {
-      const role = roleOn(rights, slug);
+      const role = roleOn(rights.roles, slug);
       // A project they may not deploy at all is said once, above.
       if (may(role, "deploy") && !may(role, power)) refusals.push(`scope.${option}: ${powerRefusal(email, role, slug, power)}`);
     }
@@ -88,7 +84,7 @@ export function mintRefusals(scope: Scope, rights: MemberRights): string[] {
   // the role does not change secrets, said once per project.
   if (scope.secrets) {
     for (const slug of scope.slugs) {
-      const role = roleOn(rights, slug);
+      const role = roleOn(rights.roles, slug);
       if (may(role, "deploy") && !may(role, "secrets.write")) refusals.push(`scope.secrets: ${powerRefusal(email, role, slug, "secrets.write")}`);
     }
   }
@@ -105,12 +101,12 @@ export function mintRefusals(scope: Scope, rights: MemberRights): string[] {
  * them, so that every reader of the identity knows whose rights bound it.
  */
 export function narrowIdentity(identity: Identity, rights: MemberRights): Identity {
-  const deploys = (slug: string) => may(roleOn(rights, slug), "deploy");
+  const deploys = (slug: string) => may(roleOn(rights.roles, slug), "deploy");
   const slugs = identity.scope.slugs.filter(deploys);
   const owned = identity.owned.filter(deploys);
   const create = identity.scope.create && rights.create;
   const reached = [...new Set([...slugs, ...owned])];
-  const holds = (power: Power) => (reached.length > 0 || create) && reached.every((slug) => may(roleOn(rights, slug), power));
+  const holds = (power: Power) => (reached.length > 0 || create) && reached.every((slug) => may(roleOn(rights.roles, slug), power));
   return {
     ...identity,
     member: rights.email,
@@ -135,7 +131,7 @@ export function narrowIdentity(identity: Identity, rights: MemberRights): Identi
  */
 export function deployRefusal(rights: MemberRights, slug: string, exists: boolean): string | null {
   if (exists) {
-    const role = roleOn(rights, slug);
+    const role = roleOn(rights.roles, slug);
     return may(role, "deploy") ? null : powerRefusal(rights.email, role, slug, "deploy");
   }
   return rights.create ? null : `${rights.email} may not create projects: ${NO_CREATE}`;
@@ -154,7 +150,7 @@ export function installScope(scope: Scope, rights: MemberRights | null, slug: st
   if (creating) {
     return rights.create ? { scope } : { refusal: `${rights.email} may no longer create projects: nothing was changed` };
   }
-  const role = roleOn(rights, slug);
+  const role = roleOn(rights.roles, slug);
   if (!may(role, "deploy")) return { refusal: `${powerRefusal(rights.email, role, slug, "deploy")}: nothing was changed` };
   return {
     scope: {

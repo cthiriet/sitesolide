@@ -45,8 +45,8 @@ import type { TeamPageResponse, TokenView } from "../control/protocol";
 import { readJournal, tokenWork } from "../control/team";
 import type { MembersSteward } from "./client";
 import type { Identity, IdentityResolver, Resolved } from "./identity";
-import { may, type Power } from "./powers";
-import type { Role, Roles } from "./protocol";
+import { may, roleOn, type Power } from "./powers";
+import type { Roles } from "./protocol";
 
 type Handler = (req: Request) => Promise<Response>;
 
@@ -127,10 +127,6 @@ async function readBody(req: Request, max = MAX_BODY_BYTES): Promise<Record<stri
 function oneSlug(req: Request): string | null {
   const wanted = new URL(req.url).searchParams.getAll("slug");
   return wanted.length === 1 && wanted[0] !== "" && wanted[0]!.length <= MAX_SLUG ? wanted[0]! : null;
-}
-
-function roleOn(roles: Roles, slug: string): Role | null {
-  return Object.hasOwn(roles, slug) ? roles[slug]! : null;
 }
 
 const extractPortal: Extraction<{ slug: string; confirmation: string; active: boolean }> = (body) => {

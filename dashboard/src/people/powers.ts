@@ -70,6 +70,11 @@ export function may(role: Role | null, power: Power): boolean {
   return role !== null && POWERS[role].includes(power);
 }
 
+/** The role held on a project, null for none: through `Object.hasOwn`, so that a slug never finds the prototype's. */
+export function roleOn(roles: Readonly<Record<string, Role>>, slug: string): Role | null {
+  return Object.hasOwn(roles, slug) ? roles[slug]! : null;
+}
+
 /** Developer and Admin restart their projects' services; a Viewer only looks. */
 export function mayRestart(role: Role | null): boolean {
   return may(role, "restart");

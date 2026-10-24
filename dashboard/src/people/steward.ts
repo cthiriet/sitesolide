@@ -65,7 +65,7 @@ import {
   type SignInResponse,
   type WhoamiResponse,
 } from "./protocol";
-import { may, mayRestart, powerRefusal } from "./powers";
+import { may, mayRestart, powerRefusal, roleOn } from "./powers";
 import type { AccessStore } from "../access/steward";
 import { isDashboardPerson, opensASite, recordCreation as creationRecorded, rightsOf, rolesText, type Registry } from "../access/registry";
 import type { AccessEvent } from "../access/steward";
@@ -424,7 +424,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
     const email = found.identity.email;
     if (typeof body.slug !== "string") return fail("invalid", "slug must be a string");
     const slug = body.slug;
-    const role = Object.hasOwn(found.identity.roles, slug) ? found.identity.roles[slug]! : null;
+    const role = roleOn(found.identity.roles, slug);
     if (!mayRestart(role)) {
       const message = powerRefusal(email, role, slug, "restart");
       // A slug of the right shape only enters the journal.
@@ -437,7 +437,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
     const allowed = async () => {
       const again = await member(body.session);
       if (again instanceof Response) return false;
-      return mayRestart(Object.hasOwn(again.identity.roles, slug) ? again.identity.roles[slug]! : null);
+      return mayRestart(roleOn(again.identity.roles, slug));
     };
     return dependencies.restart(req, slug, { actor: email, member: email }, allowed);
   }

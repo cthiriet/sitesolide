@@ -91,8 +91,7 @@ import { portalFromManifest } from "../../borrowed/portal-vm";
 import { unitArgument } from "../../borrowed/unit";
 import type { MemberEvent, MemberPrincipal, TokenRefusal } from "../people/steward";
 import type { Who } from "../people/actions";
-import { may, powerRefusal, roleDetail, type Power } from "../people/powers";
-import type { Role } from "../people/protocol";
+import { may, powerRefusal, roleDetail, roleOn, type Power } from "../people/powers";
 import type { AccessRoutes } from "../access/steward";
 import type { LeavingToken } from "../access/protocol";
 import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../people/tokens";
@@ -891,10 +890,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   /** The requester the secrets routes act for: the token, and the person it belongs to. */
   const whoOf = (holder: Holder): Who => ({ actor: `token:${holder.identity.id}`, member: holder.identity.member, token: holder.identity.id });
 
-  function roleOn(rights: MemberRights, slug: string): Role | null {
-    return Object.hasOwn(rights.roles, slug) ? rights.roles[slug]! : null;
-  }
-
   /** The slug a token names, or the refusal: a platform project reads as unknown, as any other it does not reach. */
   function tokenSlug(slug: unknown): string | Response {
     if (typeof slug !== "string" || !isValidSlug(slug)) return failure("invalid", "slug: lowercase letters, digits and dashes");
@@ -958,7 +953,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   async function judgeWork(holder: Holder, slug: string, work: Work, operation: WorkOperation, quiet = false): Promise<Response | null> {
     const { identity, rights } = holder;
     if (rights !== null) {
-      const role = roleOn(rights, slug);
+      const role = roleOn(rights.roles, slug);
       if (!may(role, POWERS[work])) return refusal(holder, slug, operation, roleDetail(role), failure("out-of-scope", powerRefusal(rights.email, role, slug, POWERS[work])), quiet);
     }
     if (!identity.owned.includes(slug) && !identity.scope.slugs.includes(slug)) return failure("not-found", `no project ${slug} for this token`);

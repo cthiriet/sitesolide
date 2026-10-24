@@ -37,8 +37,8 @@
  * No route here reads a store's value: the owner's alone (powers.ts).
  */
 import type { ProjectView } from "../secrets/protocol";
-import { generalNeedsUnlock, machineRefusal, may, needsUnlock, powerRefusal, roleDetail, type Power } from "./powers";
-import type { Role, Roles } from "./protocol";
+import { generalNeedsUnlock, machineRefusal, may, needsUnlock, powerRefusal, roleDetail, roleOn, type Power } from "./powers";
+import type { Roles } from "./protocol";
 import type { MemberPrincipal, MemberRoutes, RestartRefusal } from "./steward";
 import type { Body, Handler, Routes } from "../secrets/requests";
 
@@ -101,10 +101,6 @@ const SLUG_SHAPE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 export function createMemberActions(dependencies: MemberActionsDependencies): Routes {
   const { members, readBody, underLock, ops } = dependencies;
 
-  function roleOn(principal: MemberPrincipal, slug: string): Role | null {
-    return Object.hasOwn(principal.roles, slug) ? principal.roles[slug]! : null;
-  }
-
   /**
    * The member may use this power on this project, or the refusal: the
    * machine's projects first, then the role, journaled with the role alone.
@@ -113,7 +109,7 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
     if (typeof slug !== "string" || !SLUG_SHAPE.test(slug)) return fail("invalid", "slug: a project's slug");
     const machine = machineRefusal(slug, null, dependencies.zone);
     if (machine !== null) return fail("out-of-scope", machine);
-    const role = roleOn(principal, slug);
+    const role = roleOn(principal.roles, slug);
     if (may(role, power)) return null;
     await members.journalRefusal({ operation, result: "rejects", actor: principal.email, member: principal.email, slug, detail: roleDetail(role) });
     return fail("out-of-scope", powerRefusal(principal.email, role, slug, power));
@@ -156,7 +152,7 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
       const refusal = await judge(principal, body.slug, spec.power, spec.operation);
       if (refusal !== null) return refusal;
       const slug = body.slug as string;
-      const role = roleOn(principal, slug);
+      const role = roleOn(principal.roles, slug);
       const who: Who = { actor: principal.email, member: principal.email, restores: may(role, "secrets.restore") };
       // Asked again once the turn has come: removed, locked or demoted while
       // the request waited behind a restart, nothing is done.
@@ -164,7 +160,7 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
         const again = await members.authorize(body.session, unlock ? body.token : null);
         if (again instanceof Response) return again;
         if (again.email !== principal.email) return fail("out-of-scope", "this session is someone else's now");
-        return may(roleOn(again, slug), spec.power) ? null : fail("out-of-scope", powerRefusal(again.email, roleOn(again, slug), slug, spec.power));
+        return may(roleOn(again.roles, slug), spec.power) ? null : fail("out-of-scope", powerRefusal(again.email, roleOn(again.roles, slug), slug, spec.power));
       };
       return underLock(req, still, () => spec.run(req, only(body, fields), who));
     };
