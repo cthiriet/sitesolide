@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { canonicalAddress, forbiddenReason, parseIPv4, parseIPv6, urlHost } from "../src/addresses";
+import { canonicalAddress, forbiddenReason, parseIPv4, parseIPv6 } from "../src/addresses";
 
 describe("reading an address", () => {
   test("IPv4: four decimal parts, no leading zero, nothing above 255", () => {
@@ -32,11 +32,6 @@ describe("reading an address", () => {
     expect(canonicalAddress("0:0:0:0:0:0:0:1")).toBe("0:0:0:0:0:0:0:1");
     expect(canonicalAddress("[2001:DB8::1]")).toBe("2001:db8:0:0:0:0:0:1");
     expect(canonicalAddress("nope")).toBeNull();
-  });
-
-  test("an IPv6 address goes into a URL between brackets", () => {
-    expect(urlHost("2606:4700::1")).toBe("[2606:4700::1]");
-    expect(urlHost("93.184.215.14")).toBe("93.184.215.14");
   });
 });
 

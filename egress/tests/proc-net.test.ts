@@ -8,7 +8,6 @@ import {
   parseProcNet,
   slugOfAccount,
   socketOwner,
-  uidOf,
   type Peer,
   type Readings,
 } from "../src/proc-net";
@@ -106,12 +105,10 @@ describe("the owner of a connection", () => {
 });
 
 describe("from a uid to a project", () => {
-  test("the account of a uid, and the uid of an account", () => {
+  test("the account of a uid", () => {
     expect(accountOf(PASSWD, 1031)).toBe("site-shop");
     expect(accountOf(PASSWD, 0)).toBe("root");
     expect(accountOf(PASSWD, 4242)).toBeNull();
-    expect(uidOf(PASSWD, "site-dashboard")).toBe(1022);
-    expect(uidOf(PASSWD, "nobody-here")).toBeNull();
   });
 
   test("two accounts on one uid are not trusted", () => {

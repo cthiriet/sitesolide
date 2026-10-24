@@ -241,8 +241,3 @@ export function interfaceAddresses(interfaces: Record<string, readonly Interface
   }
   return own;
 }
-
-/** The address as a URL writes it: brackets around IPv6. */
-export function urlHost(address: string): string {
-  return address.includes(":") ? `[${address}]` : address;
-}

@@ -142,16 +142,6 @@ export function accountOf(passwd: string, uid: number): string | null {
   return names.size === 1 ? [...names][0]! : null;
 }
 
-/** The uid of an account, null if absent. */
-export function uidOf(passwd: string, name: string): number | null {
-  for (const line of passwd.split("\n")) {
-    const fields = line.split(":");
-    if (fields[0] !== name || fields.length < 4 || !/^[0-9]+$/.test(fields[2] ?? "")) continue;
-    return Number(fields[2]);
-  }
-  return null;
-}
-
 /** The project of a system account: `site-<slug>`, the account deploy creates. */
 export function slugOfAccount(name: string): string | null {
   if (!name.startsWith("site-")) return null;
