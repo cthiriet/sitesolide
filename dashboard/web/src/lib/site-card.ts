@@ -230,25 +230,28 @@ export function serviceCard(
   if (service === null && site.type === "static") return { kind: "static" }
   if (service === null && site.type === "no-manifest") return { kind: "no-manifest" }
 
-  const state = serviceState(site)
-  const facts: Fact[] = []
   const active = service?.active === "active"
-  const anchored = isAnchoredSite(site)
+  const facts: Fact[] = []
+  // What the anchor and any other main unit both show.
+  const card = {
+    kind: "app" as const,
+    title: serviceTitle(site),
+    state: serviceState(site),
+    unit: service === null ? null : `${service.unit}.service`,
+    systemd: service === null ? null : `${service.active} (${service.subState})`,
+    facts,
+  }
+  if (service !== null && active) {
+    facts.push(
+      service.since === null
+        ? fact("Up", ABSENT)
+        : fact("Up", duration(now - service.since), `since ${dateTime(service.since, timeZone)}`),
+    )
+  }
 
-  if (anchored) {
-    if (service !== null && active) {
-      facts.push(
-        service.since === null
-          ? fact("Up", ABSENT)
-          : fact("Up", duration(now - service.since), `since ${dateTime(service.since, timeZone)}`),
-      )
-    }
+  if (isAnchoredSite(site)) {
     return {
-      kind: "app",
-      title: serviceTitle(site),
-      state,
-      unit: service === null ? null : `${service.unit}.service`,
-      systemd: service === null ? null : `${service.active} (${service.subState})`,
+      ...card,
       gauge: null,
       note:
         service === null
@@ -256,16 +259,10 @@ export function serviceCard(
           : active
             ? "Every service of this project runs on a schedule, listed below. This unit runs nothing: it keeps their timers armed, at boot and after each deployment."
             : "This unit isn't active, so the timers of the project's services are stopped and none of them runs.",
-      facts,
     }
   }
 
   if (service !== null && active) {
-    facts.push(
-      service.since === null
-        ? fact("Up", ABSENT)
-        : fact("Up", duration(now - service.since), `since ${dateTime(service.since, timeZone)}`),
-    )
     facts.push(
       service.cpuShare === null
         ? fact("CPU", ABSENT, "Measured from the next collection")
@@ -302,11 +299,7 @@ export function serviceCard(
 
   const gauge = service === null || !active ? null : serviceGaugeOf(service.memory, service.peak, service.limit)
   return {
-    kind: "app",
-    title: serviceTitle(site),
-    state,
-    unit: service === null ? null : `${service.unit}.service`,
-    systemd: service === null ? null : `${service.active} (${service.subState})`,
+    ...card,
     gauge,
     note:
       gauge !== null
@@ -318,7 +311,6 @@ export function serviceCard(
           : active
             ? "systemd reports no memory for it."
             : "The service isn't running, so it has no memory in use.",
-    facts,
   }
 }
 
