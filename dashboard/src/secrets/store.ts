@@ -150,8 +150,6 @@ export function storeValueRefusal(name: string, value: unknown): Refusal | null 
 
 // --- Sizes -------------------------------------------------------------------
 
-const encoder = new TextEncoder();
-
 /**
  * Rule 9: the env file after a write, 256 KiB at most, every line under what
  * systemd starts with (bench Q7: a line of 131,072 bytes fails with 203/EXEC).

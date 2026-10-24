@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { join } from "node:path";
 import {
   HASH_ONLY,
   HASH_FILE_SETTINGS,

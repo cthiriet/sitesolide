@@ -70,7 +70,6 @@ import {
 } from "./scope";
 import { BACKUPS_NAME } from "../gatekeeper/instance";
 import { MAX_RESULT_BYTES } from "./portal";
-import { isValidFileName } from "../../borrowed/manifest";
 import { MAX_STORE_ENV_BYTES, MAX_STORE_FILE_BYTES, storeFilePath, storePaths } from "../../borrowed/store";
 
 export type SystemConfig = {

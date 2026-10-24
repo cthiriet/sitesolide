@@ -48,7 +48,6 @@ import {
 } from "../src/secrets/steward";
 import { createSystem, isTemporary, readAccount, readGroup, type Command, type SystemConfig, type System } from "../src/secrets/system";
 import type { StoreChangeResponse, StoreListResponse, StoreRevealResponse, StoreView } from "../borrowed/store-protocol";
-import { STORE_PREVIOUS_ROOT, storeRemovalActions } from "../borrowed/store";
 import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_RETENTION_MS, createHistory, encodeEntry, inWindow, latest, MAX_ENTRY_BYTES, mergeLogs, page, reread, type AccessWindow } from "../src/secrets/log";
 
 /**
@@ -70,7 +69,6 @@ const SECRET_SID = "ID_VALUE-SECRET-2";
 const SECRET_SET = "sk_live 'VALUE' \"SECRET\" $3 #";
 /** A token made only of the characters of a variable name: it would pass for a name. */
 const SECRET_ALNUM = "fake_live_Q9x7Zk2Lm4Np8Rt6Vw3Yb5";
-const BACKSLASH = String.fromCharCode(92);
 const charOf = (code: number) => String.fromCharCode(code);
 
 const MONITOR_ENV = `# the alerting, to renew at the slightest doubt\nSID=${SECRET_SID}\n\n# the token\nTOKEN=${SECRET_TOKEN}\n`;

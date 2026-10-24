@@ -47,8 +47,7 @@ const DASHBOARD_PROJECT = {
 
 const PROJECTS: ProjectView[] = [DASHBOARD_PROJECT];
 
-/** The dashboard's password retyped, and a brand new one: neither comes back out. */
-const NEW_PASSWORD = "a-brand-new-password-for-the-portal";
+/** The password the steward draws on Change password, which the answer carries once. */
 const DRAWN_PASSWORD = "Ab3d-Ef4g-Hj5k-Mn6p-Qr7s-Tu8v";
 
 const VERDICT = { kind: "active", state: "active", subState: "running", restarts: 0 };

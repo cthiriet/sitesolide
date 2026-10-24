@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readProjection } from "../borrowed/access";
 import { MAX_SET_ASIDE, migrate, readMembersFile, slugOfHost, WITHOUT_PORTAL, type InviteRow, type SharingRow } from "../src/access/migrate";
-import { encodeRegistry, readRegistry, readsBack, projectionOf, type Registry } from "../src/access/registry";
+import { readRegistry, readsBack, projectionOf, type Registry } from "../src/access/registry";
 import { createAccessStore, MIGRATING, MIGRATION_RETRY_MS, type AccessEvent } from "../src/access/steward";
 import { createAccessSystem, EXPECTED_TABLES, MAX_SHARING_ROWS, MAX_TABLE_BYTES, normalizedSql, readCopy } from "../src/access/system";
 

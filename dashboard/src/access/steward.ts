@@ -768,7 +768,8 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
     return afterwards(answer, leaving);
   }
 
-  async function remove(channel: Channel, slugValue: unknown, whoValue: unknown, granterNow: (registry: Registry) => Promise<Granter | Response>): Promise<Response> {
+  /** An entry taken away, whoever asks: a narrowing change, never counted nor refused for the log's room. */
+  async function remove(slugValue: unknown, whoValue: unknown, granterNow: (registry: Registry) => Promise<Granter | Response>): Promise<Response> {
     if (typeof slugValue !== "string" || !isValidSlug(slugValue)) return fail("invalid", "slug: a project's slug, lowercase letters, digits and dashes");
     const slug = slugValue;
     let leaving: { email: string; actor: string } | null = null;
@@ -815,12 +816,10 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
     };
   }
 
-  function ownerRemove(asRoot: boolean): Handler {
-    return async (req) => {
-      const body = await readBody(req, ["slug", "who"]);
-      if (body instanceof Response) return body;
-      return remove(asRoot ? "ssh" : "dashboard", body.slug, body.who, asOwner);
-    };
+  async function ownerRemove(req: Request): Promise<Response> {
+    const body = await readBody(req, ["slug", "who"]);
+    if (body instanceof Response) return body;
+    return remove(body.slug, body.who, asOwner);
   }
 
   async function people(): Promise<Response> {
@@ -938,7 +937,7 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
   async function personRemove(req: Request): Promise<Response> {
     const body = await readBody(req, ["session", "slug", "who"]);
     if (body instanceof Response) return body;
-    return remove("dashboard", body.slug, body.who, asPerson(body.session, body.slug));
+    return remove(body.slug, body.who, asPerson(body.session, body.slug));
   }
 
   // --- a project removed ---------------------------------------------------------------
@@ -976,14 +975,14 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
   return {
     owner: {
       "/access": { GET: ownerList },
-      "/access/entry": { PUT: ownerGrant(true), DELETE: ownerRemove(true) },
+      "/access/entry": { PUT: ownerGrant(true), DELETE: ownerRemove },
       "/access/migrate": { POST: migrateWithoutPortal },
       "/people": { GET: people },
       "/people/person": { PUT: putPerson(true), DELETE: removePersonRoute() },
     },
     dashboard: {
       "/access": { GET: ownerList },
-      "/access/entry": { PUT: ownerGrant(false), DELETE: ownerRemove(false) },
+      "/access/entry": { PUT: ownerGrant(false), DELETE: ownerRemove },
       "/people": { GET: people },
       "/people/person": { PUT: putPerson(false), DELETE: removePersonRoute() },
       "/access/person/list": { POST: personList },
@@ -1001,7 +1000,7 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
         return listResponse(slug, "token");
       },
       grant: (slug, who, role, granter) => grant("token", slug, who, role, undefined, asToken(granter, slug), async () => false),
-      remove: (slug, who, granter) => remove("token", slug, who, asToken(granter, slug)),
+      remove: (slug, who, granter) => remove(slug, who, asToken(granter, slug)),
       widen: (actor) => widen("token", actor),
     },
     widen,

@@ -97,7 +97,6 @@ import type { AccessRoutes } from "../access/steward";
 import type { LeavingToken } from "../access/protocol";
 import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../people/tokens";
 import type { StoreForToken } from "../secrets/store-api";
-import type { StoreView } from "../../borrowed/store-protocol";
 import { readFileContent, readFileName, readGenerate, readSecretsChange } from "./secrets";
 import { CREATION_MAX_AGE_MS, encodeCreations, MAX_PENDING, readCreations, type PendingCreation } from "./creations";
 import {
@@ -1706,23 +1705,14 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
-   * Has this creation's own installer ended: a result of its own deployment,
-   * started once the creation was noted, final, succeeded or failed, or left
-   * `running` by an installer stopped half way (`stopped`)? No result at all,
-   * the creation noted past the grace and its installer not active, is an
-   * end too: results live on tmpfs, and a reboot takes them. An earlier
-   * result, of a project of that name removed since, is another deployment's.
-   */
-  async function ended(creation: PendingCreation): Promise<boolean> {
-    return (await outcomeOf(creation.deployment, creation.slug, creation.at)) !== "under-way";
-  }
-
-  /**
    * How a deployment of this slug, accepted at `at`, went (claims.ts): under
    * way while its result says so or none is there yet within the grace, its
    * installer active; succeeded only by its own final result; ended
-   * otherwise. A result that does not read, or an earlier one of the same
-   * id, says nothing yet.
+   * otherwise, an installer stopped half way (`stopped`) included. No result
+   * past the grace, its installer not active, is an end too: results live on
+   * tmpfs, and a reboot takes them. A result that does not read, or an
+   * earlier one of the same id, of a project of that name removed since,
+   * says nothing yet.
    */
   async function outcomeOf(deployment: string, slug: string, at: number): Promise<DeploymentOutcome> {
     const judgement = judgeResult(await system.readResult(deployment), deployment, options.uidRoot);
@@ -1814,7 +1804,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    *     holder's;
    *   - a name with no project, no store its holder's write made, and no
    *     deployment under way, its installer active, a person's creation
-   *     noted, or the claim's own deployment not ended (`ended`), is given
+   *     noted, or the claim's own deployment not ended (`outcomeOf`), is given
    *     back.
    *
    * So a creation undone, or a write ahead that made nothing, holds no name

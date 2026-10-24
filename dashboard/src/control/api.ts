@@ -42,7 +42,7 @@ import { read } from "../read";
 import type { Schedule, Site } from "../state";
 import { readManifest } from "../../borrowed/manifest";
 import { DEFAULT_TIMEOUTS } from "../secrets/client";
-import type { ServiceView, Verdict } from "../secrets/protocol";
+import type { Verdict } from "../secrets/protocol";
 import { reach, type ControlSteward, type Reached } from "./client";
 import { clientAddress, type Limiter } from "./limiter";
 import { allocatePorts, decideManifest } from "./policy";
@@ -182,12 +182,6 @@ function relayedWork(reached: Reached, values: readonly string[] = []): Response
 }
 
 const strings = (value: unknown): string[] | null => (Array.isArray(value) && value.every((one) => typeof one === "string") ? [...(value as string[])] : null);
-
-/** A service as a token reads it, from the fields known alone. */
-function serviceOf(value: unknown): ServiceView | null {
-  if (!isObject(value) || typeof value.unit !== "string" || typeof value.state !== "string" || typeof value.subState !== "string") return null;
-  return { unit: value.unit, state: value.state, subState: value.subState, startedAt: typeof value.startedAt === "number" ? value.startedAt : null };
-}
 
 const VERDICTS: readonly string[] = ["active", "looping", "failure", "scheduled"];
 
