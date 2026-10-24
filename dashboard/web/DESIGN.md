@@ -77,8 +77,9 @@ the accent and turns the tint into a deep petrol surface.
 header: the block laid twice, a hard shadow offset down and to the right, then
 a petrol face ringed with a line. Its three tokens are the landing page's own
 values rather than the dashboard's greys, so the mark is the same on both
-sites; in light, its face is the accent itself. The favicon, the portal's page
-and `docs/assets` keep the older gradient, `#138896` to `#0a5560` in light and
+sites; in light, its face is the accent itself. The portal's page and
+`docs/assets` repeat the hex values, which cannot read a token, and change with
+them. The favicon keeps a petrol gradient, `#138896` to `#0a5560` in light and
 `#5cc8d3` to `#2c98a4` in dark, as the landing page's favicon does.
 
 Measured contrasts (WCAG), to check again after any change. Light:

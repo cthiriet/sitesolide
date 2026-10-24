@@ -125,11 +125,13 @@ describe("a single template for both", () => {
     }
   });
 
-  test("the brand is the one of test-zone.invalid: the slotted block, then the name", () => {
+  test("the brand is the landing page's: the slotted block over its shadow, then the name", () => {
     for (const page of [doorPage(""), signInPage("/")]) {
       const brand = between(page, '<p class="brand">', "</p>");
-      expect(brand).toInclude('fill="url(#mark-fill)"');
-      expect(brand).toInclude('<svg viewBox="0 0 32 32" aria-hidden="true">');
+      expect(brand).toInclude('<svg viewBox="0 0 32 32" overflow="visible" aria-hidden="true">');
+      expect(brand).toInclude('transform="translate(1.6 1.6)" fill="#12211f"');
+      expect(brand).toInclude('fill="#0b6e79" stroke="#12211f" stroke-width="1.5"');
+      expect(brand).not.toInclude("gradient");
       expect(brand).toInclude('<span><span class="site">site</span>solide</span>');
     }
   });

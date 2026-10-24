@@ -10,8 +10,8 @@ const BLOCK =
  * `mark-shadow` in styles/global.css, rather than the dashboard's greys: the
  * logo is the brand's, the same on every surface that carries it.
  *
- * The favicon in layouts/main.astro, the portal's page and docs/assets keep
- * the older gradient, as the landing page's favicon does.
+ * The portal's page and docs/assets draw it the same way. The favicon, in
+ * layouts/main.astro, keeps a petrol gradient, as the landing page's does.
  */
 export function Logo({ className }: { className?: string }) {
   return (
