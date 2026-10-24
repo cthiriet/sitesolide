@@ -61,8 +61,6 @@
  *   redirect from `/site` to `/site/`. It keeps production's order, where the
  *   service sees only `/api/*`, and stays useful beside the fallback of `bun
  *   run dev` (src/public.ts), which nevertheless serves the page the same way.
- *   For a route of the contract that `server.ts` would not carry yet, it
- *   relays it itself, after having the session checked by the service.
  *
  * Restarting `dashboard` from its secrets returns the verdict `scheduled`, then
  * really cuts the service for three seconds: the page must reconnect to it.
@@ -2017,47 +2015,6 @@ function serveFile(url: URL): Response {
   return new Response(Bun.file(target), { headers: { "Cache-Control": "no-cache" } });
 }
 
-/** The routes of the contract that the relay might not carry yet, and the fields they relay. */
-const NEW_ROUTES: Record<string, { methods: string[]; fields: string[] }> = {
-  "/api/secrets/password": { methods: ["POST"], fields: ["slug", "file", "variable", "dashboardPassword", "newPassword"] },
-  "/api/secrets/portal": { methods: ["POST"], fields: ["slug", "active", "confirmation"] },
-};
-
-/**
- * A fallback relay, for a `server.ts` that would not carry a route of the
- * contract yet: the front end checks the origin and the session with the real
- * service, then reaches the fake steward with its live token. It only serves if
- * the service answered 404 or 405: an up-to-date relay keeps the upper hand.
- */
-async function fallbackRelay(req: Request, url: URL, body: ArrayBuffer | undefined): Promise<Response> {
-  if (steward === null) return Response.json({ error: "failure", message: "Can't reach the steward." }, { status: 502 });
-  if (req.method !== "GET" && req.headers.get("origin") !== publicAddress) {
-    return Response.json({ error: "origin-refused" }, { status: 403 });
-  }
-  const state = await fetch(`http://127.0.0.1:${SERVICE_PORT}/api/secrets`, { headers: { cookie: req.headers.get("cookie") ?? "" } });
-  if (state.status === 401) return Response.json({ error: "no-session" }, { status: 401 });
-  const dashboard = (await state.json().catch(() => null)) as { to?: number | null } | null;
-  if (dashboard?.to == null || token === null) {
-    return Response.json({ error: "locked", message: "Unlock secrets first." }, { status: 423 });
-  }
-  const route = NEW_ROUTES[url.pathname];
-  const received = body === undefined ? {} : (JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>);
-  const requested: Record<string, unknown> = { token: token.value };
-  for (const field of route?.fields ?? []) if (field in received) requested[field] = received[field];
-  const response = await fetch(`http://localhost${url.pathname.replace("/api/secrets", "")}`, {
-    unix: socket,
-    method: req.method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(requested),
-  });
-  if (response.status === 401) {
-    const refuse = (await response.json()) as { error?: string };
-    if (refuse.error === "locked") return Response.json({ error: "locked", message: "Unlock secrets first." }, { status: 423 });
-    return Response.json(refuse, { status: 401 });
-  }
-  return new Response(response.body, { status: response.status, headers: { "Content-Type": "application/json" } });
-}
-
 const front = Bun.serve({
   hostname: "127.0.0.1",
   port: PORT,
@@ -2068,17 +2025,11 @@ const front = Bun.serve({
     if (!url.pathname.startsWith("/api/")) return serveFile(url);
     const upstream = new URL(url.pathname + url.search, `http://127.0.0.1:${SERVICE_PORT}`);
     const body = req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer();
-    let response: Response;
     try {
-      response = await fetch(upstream, { method: req.method, headers: req.headers, body: body, redirect: "manual" });
+      return await fetch(upstream, { method: req.method, headers: req.headers, body: body, redirect: "manual" });
     } catch {
       return new Response("502: service unreachable", { status: 502 });
     }
-    const fresh = NEW_ROUTES[url.pathname];
-    if (fresh?.methods.includes(req.method) && (response.status === 404 || response.status === 405)) {
-      return fallbackRelay(req, url, body);
-    }
-    return response;
   },
 });
 
