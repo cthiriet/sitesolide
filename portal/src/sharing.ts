@@ -1,7 +1,9 @@
 /**
- * Who may open a site with their work account: the site's sharing policy, the
- * shape of an email and of a domain, and the sign-in settings the portal reads
- * from its environment.
+ * Who may open a site with their work account: the shape of an email and of
+ * a domain, the sign-in settings the portal reads from its environment, and
+ * the site's sharing policy as the portal kept it before the steward's
+ * registry, read now only until a first projection (src/projection.ts) and
+ * by the steward, which carries it over once.
  *
  * Pure and with no import at all: the dashboard borrows this
  * file, its page included, so that the page refuses an address with the exact
