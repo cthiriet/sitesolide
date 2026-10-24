@@ -129,7 +129,7 @@ export async function verifyToken(api: Api): Promise<void> {
   }
 }
 
-/** The names a zone may be held under: itself, then each parent down to two labels. */
+/** The names a zone may be held or delegated under: itself, then each parent down to two labels. */
 export function zoneCandidates(zone: string): string[] {
   const labels = zone.split(".");
   const names: string[] = [];
@@ -270,24 +270,6 @@ export function describePlan(actions: readonly RecordAction[]): string[] {
   });
 }
 
-async function apply(api: Api, zoneId: string, actions: readonly RecordAction[]): Promise<void> {
-  const base = `/zones/${encodeURIComponent(zoneId)}/dns_records`;
-  // Deletions first: a CNAME has to go before an address record can take its name.
-  for (const action of actions) {
-    if (action.kind === "delete") await call(api, "DELETE", `${base}/${encodeURIComponent(action.record.id)}`);
-  }
-  for (const action of actions) {
-    if (action.kind === "update") {
-      await call(api, "PATCH", `${base}/${encodeURIComponent(action.record.id)}`, {}, { content: action.content, proxied: false, ttl: 1 });
-    }
-  }
-  for (const action of actions) {
-    if (action.kind === "create") {
-      await call(api, "POST", base, {}, { type: action.type, name: action.name, content: action.content, proxied: false, ttl: 1 });
-    }
-  }
-}
-
 /** One record created, DNS only, TTL auto. */
 export async function createRecord(api: Api, zoneId: string, record: { type: string; name: string; content: string }): Promise<void> {
   await call(api, "POST", `/zones/${encodeURIComponent(zoneId)}/dns_records`, {}, { type: record.type, name: record.name, content: record.content, proxied: false, ttl: 1 });
@@ -300,51 +282,6 @@ export async function updateRecord(api: Api, zoneId: string, id: string, content
 
 export async function deleteRecord(api: Api, zoneId: string, id: string): Promise<void> {
   await call(api, "DELETE", `/zones/${encodeURIComponent(zoneId)}/dns_records/${encodeURIComponent(id)}`);
-}
-
-/**
- * The four records, or two without IPv6, made to point at the machine. The
- * token is verified first; a token Cloudflare cannot verify as a user token,
- * an account-owned one, is still used if it reads the zone.
- */
-export async function ensureRecords(
-  api: Api,
-  zone: string,
-  addresses: { ipv4: string; ipv6: string | null },
-  replace: boolean,
-): Promise<{ zone: string; actions: RecordAction[] }> {
-  let verification: CloudflareError | null = null;
-  try {
-    await verifyToken(api);
-  } catch (error) {
-    if (!(error instanceof CloudflareError) || error.kind !== "token") throw error;
-    verification = error;
-  }
-
-  let found: { id: string; name: string };
-  try {
-    found = await findZone(api, zone);
-  } catch (error) {
-    if (verification !== null && error instanceof CloudflareError && (error.kind === "token" || error.kind === "zone")) {
-      throw new CloudflareError("the Cloudflare token is not valid", "token", [
-        verification.message,
-        "create one at dash.cloudflare.com/profile/api-tokens with Zone / Zone / Read and Zone / DNS / Edit on the zone",
-      ]);
-    }
-    throw error;
-  }
-
-  const existing = [...(await listRecords(api, found.id, zone)), ...(await listRecords(api, found.id, `*.${zone}`))];
-  const actions = planRecords(existing, desiredRecords(zone, addresses.ipv4, addresses.ipv6), replace);
-  const conflicts = actions.filter((action): action is Extract<RecordAction, { kind: "conflict" }> => action.kind === "conflict");
-  if (conflicts.length > 0) {
-    throw new CloudflareError("records that point elsewhere", "conflict", [
-      ...conflicts.map((conflict) => `${recordLine(conflict.record)}: ${conflict.reason}`),
-      "nothing was written: the zone may be serving something with them",
-    ]);
-  }
-  await apply(api, found.id, actions);
-  return { zone: found.name, actions };
 }
 
 /** The records to create by hand, `--skip-dns`'s list. */

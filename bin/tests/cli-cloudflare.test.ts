@@ -1,23 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  canonicalAddress,
-  cloudflareBase,
-  CloudflareError,
-  DEFAULT_CLOUDFLARE_API,
-  desiredRecords,
-  ensureRecords,
-  manualRecords,
-  planRecords,
-  scrub,
-  zoneCandidates,
-  type DnsRecord,
-} from "../cli/cloudflare";
+import { canonicalAddress, cloudflareBase, DEFAULT_CLOUDFLARE_API, desiredRecords, manualRecords, planRecords, scrub, zoneCandidates, type DnsRecord } from "../cli/cloudflare";
+import { CLOUDFLARE } from "../cli/dns/cloudflare";
+import { DnsError, ensureZoneRecords } from "../cli/dns/dns";
+import { realClock } from "../cli/providers/provider";
 import { startCloudflareMock, type CloudflareMock } from "./cloudflare-mock";
 
 /**
  * The DNS records setup makes, against a mock of Cloudflare's API on the
- * loopback. Nothing here reaches api.cloudflare.com: the module is pointed at
- * the mock by its base URL, as SITESOLIDE_CLOUDFLARE_API does for the CLI.
+ * loopback, through the Cloudflare entry and the plan every provider shares,
+ * as setup runs them. Nothing here reaches api.cloudflare.com: the module is
+ * pointed at the mock by SITESOLIDE_CLOUDFLARE_API, as for the CLI.
  *
  * What must hold above all: nobody's record is overwritten without
  * --dns-replace, and the token travels in the Authorization header and
@@ -58,11 +50,17 @@ function tokenOnlyInHeaders(m: CloudflareMock, also: string[] = []): void {
   for (const text of also) expect(text).not.toContain(TOKEN);
 }
 
-async function failure(promise: Promise<unknown>): Promise<CloudflareError> {
+/** Setup's dns step on the mock: the entry opened with these credentials, then the shared plan. */
+function ensureRecords(api: { base: string; token: string }, zone: string, addresses: { ipv4: string; ipv6: string | null }, replace: boolean) {
+  const opened = CLOUDFLARE.open({ credentials: { CLOUDFLARE_API_TOKEN: api.token }, environment: { SITESOLIDE_CLOUDFLARE_API: api.base }, fetcher: fetch, clock: realClock, secret: () => {} });
+  return ensureZoneRecords(opened, zone, addresses, replace);
+}
+
+async function failure(promise: Promise<unknown>): Promise<DnsError> {
   try {
     await promise;
   } catch (error) {
-    if (error instanceof CloudflareError) return error;
+    if (error instanceof DnsError) return error;
     throw error;
   }
   throw new Error("expected a refusal");

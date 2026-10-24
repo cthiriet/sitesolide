@@ -33,11 +33,11 @@
  * message or an error: providers scrub what comes back from outside.
  */
 import { resolveNs } from "node:dns/promises";
-import { describePlan, desiredRecords, planRecords, recordLine, type DnsRecord, type RecordAction } from "../cloudflare";
+import { describePlan, desiredRecords, planRecords, recordLine, zoneCandidates, type DnsRecord, type RecordAction } from "../cloudflare";
 import type { Clock, CredentialField, Credentials, Fetch } from "../providers/provider";
 
 export type { DnsRecord, RecordAction };
-export { describePlan, desiredRecords, planRecords, recordLine };
+export { describePlan, desiredRecords, planRecords, recordLine, zoneCandidates };
 
 export type DnsFailure = "token" | "zone" | "refused" | "unreachable" | "conflict";
 
@@ -128,9 +128,9 @@ export type DnsEntry = {
 // --- what every provider shares --------------------------------------------------------------------
 
 /**
- * The records of the zone and its wildcard pointed at the machine, as
- * cloudflare.ts has always done for Cloudflare: the whole plan drawn before
- * the first write, nothing written while a record points elsewhere unless
+ * The records of the zone and its wildcard pointed at the machine, whoever
+ * holds the zone: the whole plan drawn before the first write (planRecords in
+ * ../cloudflare), nothing written while a record points elsewhere unless
  * `replace`, the owner's decision, says so. Deletions first, since a CNAME
  * has to go before an address record can take its name.
  */
@@ -162,14 +162,6 @@ export async function zoneRecords(api: ZoneApi, zone: string): Promise<{ zone: Z
   await api.verify();
   const found = await api.findZone(zone);
   return { zone: found, records: [...(await api.listRecords(found, zone)), ...(await api.listRecords(found, `*.${zone}`))] };
-}
-
-/** The names a zone may be delegated under: itself, then each parent down to two labels. */
-export function zoneCandidates(zone: string): string[] {
-  const labels = zone.split(".");
-  const names: string[] = [];
-  for (let i = 0; i <= labels.length - 2; i++) names.push(labels.slice(i).join("."));
-  return names;
 }
 
 /**
