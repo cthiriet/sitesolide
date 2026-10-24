@@ -5,6 +5,8 @@
  * it means is judged in routes.ts, which the tests drive with simulated
  * correspondents.
  */
+import { callSteward } from "../secrets/client";
+
 export type MembersSteward = {
   key: () => Promise<Response>;
   signIn: (assertion: string) => Promise<Response>;
@@ -28,17 +30,8 @@ export type MembersSteward = {
 export const MEMBERS_TIMEOUT_MS = 10_000;
 export const RESTART_TIMEOUT_MS = 100_000;
 
-/** `redirect: "error"`: a redirect would carry a session to the address it names. */
 export function localMembersSteward(socket: string): MembersSteward {
-  function call(method: string, path: string, requested?: object, timeoutMs = MEMBERS_TIMEOUT_MS): Promise<Response> {
-    return fetch(`http://steward${path}`, {
-      method,
-      unix: socket,
-      redirect: "error",
-      signal: AbortSignal.timeout(timeoutMs),
-      ...(requested === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(requested) }),
-    });
-  }
+  const call = (method: string, path: string, requested?: object, timeoutMs = MEMBERS_TIMEOUT_MS) => callSteward(socket, method, path, requested, timeoutMs);
   return {
     key: () => call("GET", "/people/key"),
     signIn: (assertion) => call("POST", "/people/signin", { assertion }),

@@ -8,7 +8,7 @@
  * route. That answer, and that one only, reads as `unavailable`: the API says
  * the machine does not carry it yet, the Tokens page says which script to run.
  */
-import { DEFAULT_TIMEOUTS } from "../secrets/client";
+import { callSteward, DEFAULT_TIMEOUTS } from "../secrets/client";
 import type { StoreChangeRequest, StoreFileRemoveRequest, StoreFileRequest, StoreGenerateRequest } from "../../borrowed/store-protocol";
 import type { CreateTokenRequest, DeployRequest, LogsRequest } from "./protocol";
 
@@ -54,17 +54,8 @@ export type ControlSteward = {
  */
 export const CONTROL_TIMEOUT_MS = 20_000;
 
-/** `redirect: "error"`: a redirect would send the bearer to the address it names. */
 export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_MS, longMs = DEFAULT_TIMEOUTS.longMs): ControlSteward {
-  function call(method: string, path: string, requested?: object, limitMs = timeoutMs): Promise<Response> {
-    return fetch(`http://steward${path}`, {
-      method,
-      unix: socket,
-      redirect: "error",
-      signal: AbortSignal.timeout(limitMs),
-      ...(requested === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(requested) }),
-    });
-  }
+  const call = (method: string, path: string, requested?: object, limitMs = timeoutMs) => callSteward(socket, method, path, requested, limitMs);
   return {
     listTokens: () => call("GET", "/tokens/list"),
     createToken: (requested) => call("POST", "/tokens/create", requested),

@@ -82,24 +82,28 @@ export const DEFAULT_TIMEOUTS: Timeouts = {
 };
 
 /**
- * `socket` is the path of the socket's file. The URL's host serves no purpose
- * on a Unix socket, it only names the correspondent in a trace.
+ * One call on the steward's socket, the request as JSON when there is one,
+ * for every client of the dashboard's: this one, the control routes', the
+ * people's and access's. `socket` is the path of the socket's file; the
+ * URL's host serves no purpose on a Unix socket, it only names the
+ * correspondent in a trace.
  *
  * `redirect: "error"`: a redirect is not in the protocol, and a 307 would send
- * the same body, token included, to the address the response chooses.
+ * the same body, a token, a bearer or a session included, to the address the
+ * response chooses.
  */
+export function callSteward(socket: string, method: string, path: string, requested: object | undefined, timeoutMs: number): Promise<Response> {
+  return fetch(`http://steward${path}`, {
+    method,
+    unix: socket,
+    redirect: "error",
+    signal: AbortSignal.timeout(timeoutMs),
+    ...(requested === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(requested) }),
+  });
+}
+
 export function localSteward(socket: string, timeouts: Timeouts = DEFAULT_TIMEOUTS): Steward {
-  function call(method: string, path: string, requested?: object, timeoutMs = timeouts.shortMs): Promise<Response> {
-    return fetch(`http://steward${path}`, {
-      method: method,
-      unix: socket,
-      redirect: "error",
-      signal: AbortSignal.timeout(timeoutMs),
-      ...(requested === undefined
-        ? {}
-        : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(requested) }),
-    });
-  }
+  const call = (method: string, path: string, requested?: object, timeoutMs = timeouts.shortMs) => callSteward(socket, method, path, requested, timeoutMs);
 
   return {
     readProjects: () => call("GET", "/projects"),
