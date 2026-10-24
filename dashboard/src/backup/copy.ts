@@ -448,6 +448,12 @@ export async function copyData(dataDir: string, stagingDir: string, sink: Sink, 
   };
 
   await tar.directory(DATA_ROOT, metaOf(top));
+  /** A folder of the archive, counted against its entries and in the summary. */
+  const folderEntry = async (archived: string, stat: Stats) => {
+    count();
+    await tar.directory(archived, metaOf(stat));
+    summary.directories++;
+  };
 
   /**
    * The folder a backup command filled, archived as `data/<folder>`: its own
@@ -462,9 +468,7 @@ export async function copyData(dataDir: string, stagingDir: string, sink: Sink, 
       throw new CopyError(`the copy a backup command left cannot be read (${describeError(error)})`, folder);
     }
     if (!stat.isDirectory()) throw new CopyError("the copy a backup command left is not a folder", folder);
-    count();
-    await tar.directory(`${DATA_ROOT}/${folder}`, metaOf(stat));
-    summary.directories++;
+    await folderEntry(`${DATA_ROOT}/${folder}`, stat);
     archivedLive.add(folder);
     list("fromBackupCommand", folder);
     await walk(source, folder, false);
@@ -530,9 +534,7 @@ export async function copyData(dataDir: string, stagingDir: string, sink: Sink, 
         }
         if (!stopped) throw new CopyError("a service's backup command did not run before the copy", rel);
         if (stat.isDirectory()) {
-          count();
-          await tar.directory(archived, metaOf(stat));
-          summary.directories++;
+          await folderEntry(archived, stat);
           archivedLive.add(rel);
           list("liveAsFiles", rel);
           await walk(path, rel, false);
@@ -540,9 +542,7 @@ export async function copyData(dataDir: string, stagingDir: string, sink: Sink, 
         }
       }
       if (stat.isDirectory()) {
-        count();
-        await tar.directory(archived, metaOf(stat));
-        summary.directories++;
+        await folderEntry(archived, stat);
         await walk(path, rel, below);
         continue;
       }
