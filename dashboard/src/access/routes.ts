@@ -30,6 +30,7 @@ import { isAcceptableOrigin } from "../sessions";
 import type { Tokens } from "../secrets/tokens";
 import type { MembersSteward } from "../people/client";
 import { roleOn } from "../people/powers";
+import { readBody as readJsonObject } from "../people/relay";
 import type { IdentityResolver } from "../people/identity";
 import type { AccessSteward } from "./client";
 import type { AccessPageResponse, AccessResponse, AccessViewer, PeoplePageResponse } from "./protocol";
@@ -78,23 +79,9 @@ export const ACCESS_NOT_AVAILABLE = "The steward on this machine does not keep p
 /** What the page reads when a change needs the unlock. */
 export const ACCESS_LOCKED = "Unlock first: giving someone a role above Can open, password access, a whole domain, the right to create projects, making a site public, or a code needs it.";
 
+/** Any bigger, it is no change of access. */
 const MAX_BODY_BYTES = 16 * 1024;
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function readBody(req: Request): Promise<Record<string, unknown> | null> {
-  if (Number(req.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) return null;
-  try {
-    const text = await req.text();
-    if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) return null;
-    const body: unknown = JSON.parse(text);
-    return isObject(body) ? body : null;
-  } catch {
-    return null;
-  }
-}
+const readBody = (req: Request) => readJsonObject(req, MAX_BODY_BYTES);
 
 function relayed(reached: Reached): Response {
   if (reached.kind === "unreachable") return error(502, "failure", "Can't reach the access service on the server.");

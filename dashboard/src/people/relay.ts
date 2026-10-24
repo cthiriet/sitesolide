@@ -108,7 +108,8 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function readBody(req: Request, max = MAX_BODY_BYTES): Promise<Record<string, unknown> | null> {
+/** The request's JSON object, or null when it is missing, past `max` bytes or not an object: the access routes read theirs the same way. */
+export async function readBody(req: Request, max = MAX_BODY_BYTES): Promise<Record<string, unknown> | null> {
   if (Number(req.headers.get("content-length") ?? 0) > max) return null;
   try {
     const text = await req.text();
