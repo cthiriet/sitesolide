@@ -252,6 +252,8 @@ import {
 } from "./cli/refresh";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts, type ProjectAccount } from "./cli/loopback";
 import { FIRST_CERTIFICATE_MS, readZoneNamesAnswer, ZONE_NAMES_COMMAND, ZONE_NAMES_FILE } from "./cli/tls";
+import { askAddress, WARM_UP_MS } from "./cli/verify";
+import { realClock } from "./cli/providers/provider";
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { machine, sshLogin } from "./cli/machine";
 import { DNS_PROVIDERS, dnsEntry, MANUAL } from "./cli/dns/registry";
@@ -1889,23 +1891,6 @@ async function depositText(
 }
 
 /**
- * 200 and 401 only: the 401 is the intended behaviour of a locked preview, and
- * taking it for an error would make a perfectly healthy deployment fail.
- *
- * A 404 at the root stays a failure, on purpose: most often nothing is served
- * at all, a service answering elsewhere or a publicDir without its
- * index.html. It is the one failure an app that works can still hit, one that
- * answers only its routes, so it says so plainly, with what to do, as
- * docs/manifest.md does under `start`.
- *
- * What it learns, the address and its answer, goes to `record`: the run's
- * result for deploy, the project's own entry for refresh, which checks
- * several.
- */
-/** Between two attempts of a verification waiting for a first certificate. */
-const VERIFY_RETRY_MS = 5_000;
-
-/**
  * With manual DNS, the ask endpoint allows the zone's sites from
  * /etc/caddy/zone-names, which only its writers keep up: a site deployed
  * without it is refused its first certificate, and a site removed without it
@@ -1934,6 +1919,23 @@ async function refreshZoneNames(config: Config, executor: Executor): Promise<boo
   return answer.onDemand;
 }
 
+/**
+ * 200 and 401 only: the 401 is the intended behaviour of a locked preview, and
+ * taking it for an error would make a perfectly healthy deployment fail.
+ *
+ * A 404 at the root stays a failure, on purpose: most often nothing is served
+ * at all, a service answering elsewhere or a publicDir without its
+ * index.html. It is the one failure an app that works can still hit, one that
+ * answers only its routes, so it says so plainly, with what to do, as
+ * docs/manifest.md does under `start`.
+ *
+ * When to ask again rather than judge, a first certificate or an app still
+ * starting, is askAddress's, in cli/verify.ts.
+ *
+ * What it learns, the address and its answer, goes to `record`: the run's
+ * result for deploy, the project's own entry for refresh, which checks
+ * several.
+ */
 async function verify(
   manifest: Manifest,
   config: Config,
@@ -1951,16 +1953,8 @@ async function verify(
     return;
   }
   step("verify");
-  let code = 0;
-  let door: string | null = null;
-  // `patienceMs`, with manual DNS alone: a site that does not answer at all
-  // is asked again until then, its first certificate being obtained by the
-  // handshake itself. Any answer is judged at once, and without patience a
-  // site that does not answer fails at once, as it always did.
-  const deadline = Date.now() + patienceMs;
-  let waiting = false;
-  for (;;) {
-    try {
+  const asked = await askAddress(
+    async () => {
       const response = await fetch(address, {
         redirect: "manual",
         signal: AbortSignal.timeout(15000),
@@ -1968,22 +1962,19 @@ async function verify(
         // trusts: the probe carries no credential, and only reads a status.
         ...(acmeStaging(config) ? { tls: { rejectUnauthorized: false } } : {}),
       });
-      code = response.status;
-      door = response.headers.get("x-portal");
-      break;
-    } catch (err) {
-      if (Date.now() + VERIFY_RETRY_MS < deadline) {
-        if (!waiting) say(`   no answer yet: the zone is certified on demand, and the site's first certificate is obtained by this handshake; asking again for up to ${patienceMs / 1000} s`);
-        waiting = true;
-        await Bun.sleep(VERIFY_RETRY_MS);
-        continue;
-      }
-      die(
-        `${address} unreachable: ${(err as Error).message}`,
-        patienceMs > 0 ? [`still no answer after ${patienceMs / 1000} s: is ${ZONE_NAMES_FILE} listing ${manifest.slug}, and do the zone's records point at the machine?`] : [],
-      );
-    }
+      return { status: response.status, door: response.headers.get("x-portal") };
+    },
+    patienceMs,
+    realClock,
+    say,
+  );
+  if ("error" in asked) {
+    die(
+      `${address} unreachable: ${asked.error.message}`,
+      patienceMs > 0 ? [`still no answer after ${patienceMs / 1000} s: is ${ZONE_NAMES_FILE} listing ${manifest.slug}, and do the zone's records point at the machine?`] : [],
+    );
   }
+  const { status: code, door } = asked;
   say(`   ${address} ${code}`);
   record({ status: code });
 
@@ -2015,7 +2006,7 @@ async function verify(
       "docs/manifest.md says why, under start",
     ]);
   }
-  if (code !== 200) die(`unexpected response: ${code}`);
+  if (code !== 200) die(`unexpected response: ${code}`, asked.warmedUp ? [`still ${code} after ${WARM_UP_MS / 1000} s of asking again: the app does not answer behind Caddy`] : []);
 }
 
 /**

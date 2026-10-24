@@ -199,7 +199,10 @@ itself, even beside a `publicDir` holding an `index.html`, and must answer it;
 with `routes`, or for a static site, `/` comes from `publicDir`, which then
 needs its `index.html`. A redirect does not count either: `/` itself must
 answer. A project that serves no page answers a line of its own there, see
-[A project that serves no page](#a-project-that-serves-no-page).
+[A project that serves no page](#a-project-that-serves-no-page). An app that
+warms up before it listens is given time: a 502, 503 or 504, Caddy saying the
+app does not answer yet, is asked again for up to thirty seconds, and any
+other answer is judged at once.
 
 **And it has to keep running.** A process that starts and falls at once looks
 started to systemd for that instant. `deploy` reads every service that runs
