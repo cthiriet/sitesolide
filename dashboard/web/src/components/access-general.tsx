@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label"
 import { useAnnounce } from "@/components/copy"
 import { Banner, INPUT_DIALOG, Panel } from "@/components/page"
 import { CodeChip } from "@/components/access-word"
-import { Track, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
+import { Track, useClock, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { setGeneralAccess } from "@/lib/api"
 import {
   addressesLine,
@@ -414,12 +414,7 @@ function ChangeFlow({
 
 /** The time elapsed, on the scale of the longest answer the relay waits for. */
 function ChangeWait({ start }: { start: number }) {
-  const [clock, setClock] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = window.setInterval(() => setClock(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [])
-  const { part, elapsed, slow } = changeProgress(clock - start)
+  const { part, elapsed, slow } = changeProgress(useClock() - start)
   return (
     <div className="grid gap-2">
       <Track part={part} elapsed={elapsed} usual={null} finish="1.5 min" label={slow ? "Still working, taking longer than usual" : "Waiting for the server"} />

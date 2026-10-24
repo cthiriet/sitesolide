@@ -8,6 +8,7 @@ import {
   UnlockDialog,
   RestartDialog,
   VariableDialog,
+  returnTo,
   type EditTarget,
   type RestartState,
   type FocusReturn,
@@ -240,10 +241,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     wasOpen.current = state.open
   }, [state.open, expired, announce])
 
-  const returnFocus = (): HTMLElement | boolean => {
-    const element = origin.current
-    return element !== null && element.isConnected && element.getClientRects().length > 0 ? element : true
-  }
+  const returnFocus: FocusReturn = () => returnTo(origin.current)
   const actionFocusReturn: FocusReturn = () => (unlockShown.current || restartShown.current ? false : returnFocus())
   const restartFocusReturn: FocusReturn = () => (unlockShown.current ? false : returnFocus())
 

@@ -21,7 +21,7 @@ import { Command, CopyFallback, useAnnounce, useCopy } from "@/components/copy"
 import { Banner, EmptyState, Panel, Status } from "@/components/page"
 import { ProblemRow } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
-import { ConfirmDialog, type FocusReturn } from "@/components/secrets-dialogs"
+import { ConfirmDialog, useOrigin } from "@/components/secrets-dialogs"
 import {
   StoreFileDialog,
   StoreRestoreDialog,
@@ -424,24 +424,6 @@ function StoreFileRow({
 }
 
 // --- The section -------------------------------------------------------------------
-
-/**
- * Where focus goes when a dialog closes: the element the action started from,
- * if it is still on the page; the dialog's default otherwise.
- */
-function useOrigin(): { remember: () => void; focusReturn: FocusReturn } {
-  const origin = useRef<HTMLElement | null>(null)
-  return {
-    remember: () => {
-      const active = document.activeElement
-      origin.current = active instanceof HTMLElement && active !== document.body ? active : null
-    },
-    focusReturn: () => {
-      const element = origin.current
-      return element !== null && element.isConnected && element.getClientRects().length > 0 ? element : true
-    },
-  }
-}
 
 /**
  * A project's store and what goes with it, on its Secrets page. The rows and

@@ -9,7 +9,7 @@ import { useData } from "@/components/data"
 import { Banner, EmptyState, ErrorState, INPUT_DIALOG, Panel, PanelSkeleton, RowsSkeleton, Status } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
-import { Track } from "@/components/secrets-dialogs"
+import { Track, useClock } from "@/components/secrets-dialogs"
 import { SitePage } from "@/components/site"
 import { readBackupAudit, readBackups, restoreBackup } from "@/lib/api"
 import { confirmationValid, removalConfirmation } from "@/lib/access"
@@ -334,12 +334,7 @@ type Phase = { phase: "confirmation" } | { phase: "in-progress"; start: number }
 type Opening = { snapshot: SnapshotView; opening: number; open: boolean }
 
 function RestoreWait({ start, message }: { start: number; message: string }) {
-  const [clock, setClock] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = window.setInterval(() => setClock(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [])
-  const { part, elapsed, slow } = restoreProgress(clock - start)
+  const { part, elapsed, slow } = restoreProgress(useClock() - start)
   return (
     <div className="grid gap-2">
       <Track part={part} elapsed={elapsed} usual={null} finish="5 min" label={message} />

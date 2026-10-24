@@ -42,6 +42,23 @@ export type OnRefusal = (refusal: Refusal) => string | null
 /** Where to return focus on closing: an element, the default behaviour, or nowhere. */
 export type FocusReturn = () => HTMLElement | boolean
 
+/** The element an action started from, if it is still on the page; the dialog's default otherwise. */
+export function returnTo(element: HTMLElement | null): HTMLElement | true {
+  return element !== null && element.isConnected && element.getClientRects().length > 0 ? element : true
+}
+
+/** Where focus goes when a dialog closes: `remember` is called as the action starts. */
+export function useOrigin(): { remember: () => void; focusReturn: FocusReturn } {
+  const origin = useRef<HTMLElement | null>(null)
+  return {
+    remember: () => {
+      const active = document.activeElement
+      origin.current = active instanceof HTMLElement && active !== document.body ? active : null
+    },
+    focusReturn: () => returnTo(origin.current),
+  }
+}
+
 // --- Unlocking -----------------------------------------------------------------
 
 /** What an unlock opens, and for how long: the same sentence for the owner's password and a person's provider. */
@@ -570,7 +587,7 @@ export type RestartState = {
 }
 
 /** A wait's clock, second by second, for as long as the dialog is mounted. */
-function useClock(): number {
+export function useClock(): number {
   const [clock, setClock] = useState(() => Date.now())
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 1000)

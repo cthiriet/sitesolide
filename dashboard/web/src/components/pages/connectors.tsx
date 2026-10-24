@@ -21,6 +21,7 @@ import { InternalLink } from "@/components/navigation"
 import { Banner, EmptyState, ErrorState, INPUT_DIALOG, PageBody, PageHeader, Panel, RowsSkeleton, Status } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
+import { useOrigin, type FocusReturn } from "@/components/secrets-dialogs"
 import {
   activityLine,
   grantRows,
@@ -60,8 +61,8 @@ type ActivityState =
   | { state: "error"; message: string }
   | { state: "ready"; rows: EgressAuditRow[]; status: EgressStatus }
 
-type Editing = { open: boolean; opening: number; connector: ConnectorView | null }
-type Removal = { open: boolean; opening: number; connector: ConnectorView | null }
+/** A connector's dialog, remounted on every opening; `connector` null adds one. */
+type Opened = { open: boolean; opening: number; connector: ConnectorView | null }
 
 /** The proxy records a change within five seconds of seeing it: the activity is read again after that. */
 const ACTIVITY_AFTER_WRITE_MS = 6_000
@@ -122,11 +123,11 @@ function ConnectorDialog({
   onLocked,
   focusReturn,
 }: {
-  editing: Editing
+  editing: Opened
   onClose: () => void
   onSaved: (view: ConnectorsView, name: string, created: boolean) => void
   onLocked: () => void
-  focusReturn: () => HTMLElement | boolean
+  focusReturn: FocusReturn
 }) {
   const { sessionExpired } = useData()
   const existing = editing.connector
@@ -286,11 +287,11 @@ function RemoveDialog({
   onLocked,
   focusReturn,
 }: {
-  removal: Removal
+  removal: Opened
   onClose: () => void
   onRemoved: (view: ConnectorsView, name: string) => void
   onLocked: () => void
-  focusReturn: () => HTMLElement | boolean
+  focusReturn: FocusReturn
 }) {
   const { sessionExpired } = useData()
   const [typed, setTyped] = useState("")
@@ -680,11 +681,11 @@ export function ConnectorsPage() {
   const [list, setList] = useState<ListState>({ state: "loading" })
   const [activity, setActivity] = useState<ActivityState>({ state: "loading" })
   const [retrying, setRetrying] = useState(false)
-  const [editing, setEditing] = useState<Editing>({ open: false, opening: 0, connector: null })
-  const [removal, setRemoval] = useState<Removal>({ open: false, opening: 0, connector: null })
+  const [editing, setEditing] = useState<Opened>({ open: false, opening: 0, connector: null })
+  const [removal, setRemoval] = useState<Opened>({ open: false, opening: 0, connector: null })
   const [grantInFlight, setGrantInFlight] = useState<string | null>(null)
   const [grantError, setGrantError] = useState("")
-  const origin = useRef<HTMLElement | null>(null)
+  const { remember, focusReturn } = useOrigin()
   const later = useRef<number | null>(null)
 
   const load = useCallback(async () => {
@@ -716,14 +717,6 @@ export function ConnectorsPage() {
   useEffect(() => () => {
     if (later.current !== null) window.clearTimeout(later.current)
   }, [])
-
-  function rememberOrigin() {
-    origin.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-  }
-  const focusReturn = () => {
-    const element = origin.current
-    return element !== null && element.isConnected && element.getClientRects().length > 0 ? element : true
-  }
 
   /** After a write: the view the steward answered, and the activity once the proxy has seen it. */
   function written(view: ConnectorsView, message: string) {
@@ -822,15 +815,15 @@ export function ConnectorsPage() {
               serverNow={actions.serverNow}
               canWrite={canWrite}
               onAdd={() => {
-                rememberOrigin()
+                remember()
                 setEditing((before) => ({ open: true, opening: before.opening + 1, connector: null }))
               }}
               onEdit={(connector) => {
-                rememberOrigin()
+                remember()
                 setEditing((before) => ({ open: true, opening: before.opening + 1, connector }))
               }}
               onRemove={(connector) => {
-                rememberOrigin()
+                remember()
                 setRemoval((before) => ({ open: true, opening: before.opening + 1, connector }))
               }}
             />
