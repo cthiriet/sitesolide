@@ -3,8 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readManifest, SERVICE_PORTS, validate } from "../cli/manifest";
 import { choosePort, needsPort, setPort } from "../cli/ports";
-import { PLATFORM_PORTS } from "../cli/services";
-import { RESERVED_PORTS } from "../cli/services";
+import { PLATFORM_PORTS, RESERVED_PORTS } from "../cli/services";
 
 /**
  * The port `deploy` gives an app whose manifest declares none, decided from
