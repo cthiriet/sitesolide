@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react"
+import { useEffect, useRef, useState, type ComponentType, type CSSProperties } from "react"
 import { ShieldOff } from "lucide-react"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { AppSidebar, MobileTabs } from "@/components/sidebar"
@@ -19,22 +19,23 @@ import { AudienceSection } from "@/components/pages/site-audience"
 import { SecretsSection } from "@/components/pages/site-secrets"
 import { SecretsActionsProvider } from "@/components/secrets-actions"
 import { SIDEBAR_WIDTH, readCollapsed, storeCollapsed } from "@/lib/sidebar"
-import { PAGE_TITLE_ID, mayOpen, pendingTitle, documentTitle, pageTitle, pageUrl, type Page } from "@/lib/pages"
+import { PAGE_TITLE_ID, mayOpen, pendingTitle, documentTitle, pageTitle, pageUrl, type MachinePage, type Page, type Section } from "@/lib/pages"
 import { cn } from "@/lib/utils"
 
-function Section({ page }: { page: Extract<Page, { name: "site" }> }) {
-  switch (page.section) {
-    case "overview":
-      return <OverviewSection slug={page.slug} />
-    case "audience":
-      return <AudienceSection slug={page.slug} />
-    case "secrets":
-      return <SecretsSection slug={page.slug} />
-    case "access":
-      return <AccessSection slug={page.slug} />
-    case "backups":
-      return <BackupsSection slug={page.slug} />
-  }
+const SITE_SECTIONS: Record<Section, ComponentType<{ slug: string }>> = {
+  overview: OverviewSection,
+  audience: AudienceSection,
+  secrets: SecretsSection,
+  access: AccessSection,
+  backups: BackupsSection,
+}
+
+const MACHINE_PAGES: Record<MachinePage, ComponentType> = {
+  home: HomePage,
+  activity: ActivityPage,
+  people: PeoplePage,
+  tokens: TokensPage,
+  connectors: ConnectorsPage,
 }
 
 /**
@@ -77,25 +78,17 @@ function CurrentPage({ page }: { page: Page }) {
   const { identity } = useData()
   if (!mayOpen(page, identity)) return <NotYours page={page} />
   if (page.name === "site") {
+    const SectionPage = SITE_SECTIONS[page.section]
     return (
       <SecretsActionsProvider key={page.slug}>
-        <Section key={page.section} page={page} />
+        <SectionPage key={page.section} slug={page.slug} />
       </SecretsActionsProvider>
     )
   }
+  const Machine = MACHINE_PAGES[page.name]
   return (
     <SecretsActionsProvider key={page.name}>
-      {page.name === "home" ? (
-        <HomePage />
-      ) : page.name === "connectors" ? (
-        <ConnectorsPage />
-      ) : page.name === "tokens" ? (
-        <TokensPage />
-      ) : page.name === "people" ? (
-        <PeoplePage />
-      ) : (
-        <ActivityPage />
-      )}
+      <Machine />
     </SecretsActionsProvider>
   )
 }
