@@ -203,7 +203,7 @@ export async function main(argv: string[], env: Environment, overrides: { comman
     request = { ...request, scope: narrowed.scope };
   }
 
-  const machineConfig = { ...configFrom(env, overrides.systemctl), holder: "installer" as const, log: (line: string) => console.log(line) };
+  const machineConfig = { ...configFrom(env, overrides.systemctl), holder: "installer" as const };
   // The accounts are checked and handed over unless CHECK_ACCOUNTS is set
   // empty, which only the workstation's tests do: a machine whose environment
   // file lost DEPLOY_ACCOUNT refuses, rather than leaving the served trees to

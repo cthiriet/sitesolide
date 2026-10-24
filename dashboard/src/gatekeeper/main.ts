@@ -13,7 +13,7 @@
  */
 import { readFileSync } from "node:fs";
 import { CODES_FILE, DOOR_PAGES_DIR, LOCKS_DIR } from "../../borrowed/locks";
-import { readLaunch } from "./instance";
+import { RUN_FOLDER, readLaunch } from "./instance";
 import { createMachine, writeResult, realSystemctl, type MachineConfig, type Systemctl } from "./real";
 import { run, type Result } from "./transaction";
 
@@ -48,7 +48,7 @@ export function configFrom(env: Environment, systemctl?: Systemctl): MachineConf
     zoneEnvFile: env.ZONE_ENV_FILE ?? "/etc/caddy/sitesolide.env",
     // Absolute paths: under a minimal PATH, nothing to look for.
     caddy: env.CADDY ?? "/usr/bin/caddy",
-    runFolder: env.RUN_FOLDER ?? "/run/sitesolide-gatekeeper",
+    runFolder: env.RUN_FOLDER ?? RUN_FOLDER,
     locksFolder: env.LOCKS_FOLDER ?? LOCKS_DIR,
     codesFile: env.CODES_FILE ?? CODES_FILE,
     doorPagesDir: env.DOOR_PAGES_DIR ?? DOOR_PAGES_DIR,
