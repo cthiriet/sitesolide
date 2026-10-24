@@ -343,9 +343,9 @@ on screen.
 | `serviceWord` | the word and tone of a systemd unit, the same on the home page, the Overview and Secrets; *Scheduled* for the anchor of a project whose every service is scheduled, `active (exited)` |
 | `scheduledWord`, `runLines` | a scheduled service's word, *Waiting* between two runs and never *Down*, and its last and next runs under it |
 
-shadcn components available in `src/components/ui/`: `alert`, `alert-dialog`,
-`badge`, `button`, `card`, `dialog`, `dropdown-menu`, `input`, `label`,
-`progress`, `separator`, `sheet`, `sidebar`, `skeleton`, `table`, `tooltip`.
+shadcn components available in `src/components/ui/`: `alert-dialog`, `badge`,
+`button`, `card`, `dialog`, `dropdown-menu`, `input`, `label`, `progress`,
+`separator`, `sheet`, `sidebar`, `skeleton`, `table`, `tooltip`.
 Add with `bunx --bun shadcn@latest add <name>`; a generated component is not
 edited, it is varied through `data-slot` or wrapped.
 
