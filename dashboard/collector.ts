@@ -155,6 +155,26 @@ async function text(path: string, incomplete: string | null = null): Promise<str
 const AUDIENCE_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
+ * A file another account may have put in place, read as root: opened without
+ * following a link, and only if it is a regular file with a single name,
+ * within `max` bytes, and owned by `owner` when one is given. Null otherwise,
+ * absent included.
+ */
+function readPlainText(path: string, max: number, owner: number | null = null): string | null {
+  let examination: Examination;
+  try {
+    examination = readBounded(path, max);
+  } catch {
+    return null;
+  }
+  if (examination.kind === "absent") return null;
+  const { info } = examination;
+  if (info.link || !info.regular || info.links > 1 || (owner !== null && info.uid !== owner)) return null;
+  if (examination.bytes === null) return null;
+  return new TextDecoder().decode(examination.bytes);
+}
+
+/**
  * The audience snapshot as `analytics` left it, or null when it could not be
  * read as it should be.
  *
@@ -174,17 +194,7 @@ function readAudience(): string | null {
   } catch {
     return null;
   }
-  let examination: Examination;
-  try {
-    examination = readBounded(AUDIENCE_FILE, AUDIENCE_MAX_BYTES);
-  } catch {
-    return null;
-  }
-  if (examination.kind === "absent") return null;
-  const { info } = examination;
-  if (info.link || !info.regular || info.links > 1 || info.uid !== folder.uid) return null;
-  if (examination.bytes === null) return null;
-  return new TextDecoder().decode(examination.bytes);
+  return readPlainText(AUDIENCE_FILE, AUDIENCE_MAX_BYTES, folder.uid);
 }
 
 /**
@@ -353,29 +363,23 @@ async function readMachine(): Promise<RawMachine | null> {
   // The empty string is refused explicitly: Number("") is zero, and a zero that
   // comes from a failed reading is worse than an absence, since it is displayed
   // as a measurement.
-  const integer = (raw: string | undefined): number | null => {
-    if (raw === undefined || raw.trim() === "") return null;
-    const value = Number(raw);
-    return Number.isFinite(value) ? value : null;
-  };
-
-  const decimalOf = (raw: string | undefined): number | null => {
+  const number = (raw: string | undefined): number | null => {
     if (raw === undefined || raw.trim() === "") return null;
     const value = Number(raw);
     return Number.isFinite(value) ? value : null;
   };
 
   return {
-    load1: decimalOf(loads[0]),
-    load5: decimalOf(loads[1]),
-    load15: decimalOf(loads[2]),
-    cores: integer(cores.stdout.toString().trim()),
-    memoryTotal: integer(memoryLine[1]),
+    load1: number(loads[0]),
+    load5: number(loads[1]),
+    load15: number(loads[2]),
+    cores: number(cores.stdout.toString().trim()),
+    memoryTotal: number(memoryLine[1]),
     // free's "available" column, the only one that says what one more service
     // could take: "free" ignores the cache, reclaimable at any moment.
-    memoryAvailable: integer(memoryLine[6]),
-    diskTotal: integer(diskLine[0]),
-    diskFree: integer(diskLine[1]),
+    memoryAvailable: number(memoryLine[6]),
+    diskTotal: number(diskLine[0]),
+    diskFree: number(diskLine[1]),
   };
 }
 
@@ -384,20 +388,6 @@ async function readMachine(): Promise<RawMachine | null> {
  * at most, and the machine's reading beside it, a few hundred kilobytes.
  */
 const STATE_MAX_BYTES = 32 * 1024 * 1024;
-
-/** The previous snapshot's text, or null: absent, not a plain file, or past the cap. */
-function readPrevious(): string | null {
-  let examination: Examination;
-  try {
-    examination = readBounded(STATE_FILE, STATE_MAX_BYTES);
-  } catch {
-    return null;
-  }
-  if (examination.kind === "absent") return null;
-  const { info } = examination;
-  if (info.link || !info.regular || info.links > 1 || examination.bytes === null) return null;
-  return new TextDecoder().decode(examination.bytes);
-}
 
 /**
  * What must be kept from the previous reading to compute a CPU rate: its date
@@ -419,7 +409,7 @@ function readPrevious(): string | null {
  * within a cap past which the rates simply start again from blank.
  */
 async function previousReading(): Promise<Raw["previous"]> {
-  const content = readPrevious();
+  const content = readPlainText(STATE_FILE, STATE_MAX_BYTES);
   if (content === null) return null;
 
   try {
