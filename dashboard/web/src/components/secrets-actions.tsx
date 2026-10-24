@@ -79,7 +79,6 @@ export type SecretsActions = {
   creation: string | null
   /** Per file, the refusal of a creation. */
   errors: Readonly<Record<string, string>>
-  /** The last successful change of this site's general access, which the repository has to follow. */
   /** The header's lock button, where focus returns after a forced lock. */
   lockButtonRef: (element: HTMLButtonElement | null) => void
   /**
@@ -107,8 +106,10 @@ export type SecretsActions = {
   restore: (target: FileTarget) => void
   changePassword: (target: VariableTarget) => void
   restart: (slug: string) => void
-  /** `warning`, said in the confirmation: who still opens a site restricted with nobody on its list. */
-  /** `from`: how the site opens before the change. */
+  /**
+   * `from`: how the site opens before the change. `warning`, said in the
+   * confirmation: who still opens a site restricted with nobody on its list.
+   */
   changeAccess: (slug: string, target: ChangeTarget, from: GeneralAccess, warning?: string | null, addresses?: string[]) => void
   /** The common fate of a refusal: the session handed to the sign-in, the unlock asked again; the message to show otherwise. */
   refusal: OnRefusal

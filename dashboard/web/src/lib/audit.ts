@@ -411,11 +411,6 @@ function splitNote(note: string | null, member: string | null): { who: string; r
 }
 
 /**
- * Someone given access, changed or taken off, in a sentence that names them,
- * their role and the site: "Gave dana@example.com Developer on cms",
- * "Changed dana@example.com from Developer to Can open on cms".
- */
-/**
  * A password access's end as the journal writes it, "until 2026-10-15 05:38
  * UTC", said as the rest of the dashboard says a time: local, its zone named.
  * Anything else, "no expiry" among others, as it was written.
@@ -428,6 +423,11 @@ export function expiryNote(until: string, timeZone?: string): string | null {
   return capitalise(until)
 }
 
+/**
+ * Someone given access, changed or taken off, in a sentence that names them,
+ * their role and the site: "Gave dana@example.com Developer on cms",
+ * "Changed dana@example.com from Developer to Can open on cms".
+ */
 function accessWords(row: AuditRow, timeZone?: string): AuditWords {
   const detail = row.detail ?? {}
   const site = row.site ?? row.target ?? "a project"

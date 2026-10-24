@@ -145,7 +145,7 @@ export function Count({ children, className }: { children: ReactNode; className?
  *
  * It is also the `body` query container: a page goes to two columns according
  * to the width of its content, `@4xl/body:`, and not according to the screen's,
- * the expanded sidebar taking 256 px of it. The screen only decides the shell:
+ * the expanded sidebar taking 232 px of it. The screen only decides the shell:
  * sidebar or tabs, gutters, bottom margin.
  */
 export function PageBody({ narrow = false, className, children }: { narrow?: boolean; className?: string; children: ReactNode }) {

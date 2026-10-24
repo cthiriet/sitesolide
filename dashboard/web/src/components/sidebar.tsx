@@ -42,7 +42,6 @@ export const SECTION_ICONS: Record<Section, LucideIcon> = {
   backups: DatabaseBackup,
 }
 
-
 /** A navigation entry, whatever the level: where it leads, its name, its icon and what it reports. */
 type NavEntry = { key: string; target: Page; title: string; Icon: LucideIcon; signal: Indicator | null }
 
@@ -149,8 +148,8 @@ function SidebarEntries({ entries, label }: { entries: NavEntry[]; label: string
 }
 
 /**
- * The sidebar, on a computer, has two levels. On the home page and on Activity,
- * the machine's pages. Inside a site, the return to all sites, the current site
+ * The sidebar, on a computer, has two levels. On the machine's pages, those
+ * pages. Inside a site, the return to all sites, the current site
  * and its switcher, then its sections. Collapsed, it keeps only the icons,
  * their tooltip, and a dot on those reporting something worth a look; `Cmd+B`
  * or `Ctrl+B` collapses and expands it.

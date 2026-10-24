@@ -378,12 +378,9 @@ export function VariableRow({
 /**
  * A variable that only changes through *Change password*: no value, no reveal,
  * no edit, no removal. The steward keeps a hash, which nobody reads back or
- * pastes.
- */
-/**
- * A password hash: never shown, changed only with the dashboard's own
- * password, which is the owner's. `onChangePassword` null: a person,
- * who sees the name and nothing to do with it.
+ * pastes, changed only with the dashboard's own password, which is the
+ * owner's. `onChangePassword` null: a person, who sees the name and nothing
+ * to do with it.
  */
 export function PasswordRow({ name, onChangePassword }: { name: string; onChangePassword: (() => void) | null }) {
   return (

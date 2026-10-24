@@ -270,7 +270,7 @@ function SiteEntry({ site, severity, now }: RowProps) {
 /**
  * The inventory: a table when the panel has room for its five columns, a list
  * otherwise. The measurement is the panel's and not the screen's: at 1024 px
- * the expanded sidebar takes 256 of them, and the table would overflow. The
+ * the expanded sidebar takes 232 of them, and the table would overflow. The
  * order and the filter are already applied; the caption states them to screen
  * readers.
  */
