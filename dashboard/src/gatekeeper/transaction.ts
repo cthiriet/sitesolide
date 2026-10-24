@@ -50,7 +50,7 @@ import { DOOR_PAGE_MARKER, doorPage } from "../../borrowed/page";
 import { MESSAGE_MAX } from "../secrets/portal";
 import { MAX_PORTAL_MS, type OperationResult } from "../secrets/protocol";
 import { RUN_FOLDER, backupFolder, targetOf, type Action, type GeneralAccess } from "./instance";
-import type { Backup, GeneralMachine, ManifestRead } from "./machine";
+import type { Backup, GeneralMachine, Machine, ManifestRead } from "./machine";
 import { activeDomain, portalState, planGeneral, type Deployed, type Plan } from "./plan";
 import {
   alreadySilent,
@@ -155,7 +155,7 @@ export function caddyExtract(output: string): string {
   return line.length > 300 ? `${line.slice(0, 300)}...` : line;
 }
 
-function errorMessage(error: unknown): string {
+export function errorMessage(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
   return text.length > 200 ? `${text.slice(0, 200)}...` : text;
 }
@@ -566,7 +566,8 @@ async function write(machine: GeneralMachine, slug: string, plan: Extract<Plan, 
   if (plan.locks !== null && plan.locks.fragment !== null) await machine.writeLocksFragment(plan.locks.fragment);
 }
 
-async function probeAll(machine: GeneralMachine, hosts: string[]): Promise<Map<string, ProbeResponse>> {
+/** Every host's answer at `/`, questioned together. */
+export async function probeAll(machine: Pick<Machine, "probe">, hosts: string[]): Promise<Map<string, ProbeResponse>> {
   const responses = await Promise.all(hosts.map((host) => machine.probe(host, "/", TIMEOUTS.probeConfig)));
   return new Map(hosts.map((host, i) => [host, responses[i]!]));
 }
@@ -676,7 +677,16 @@ async function restore(machine: GeneralMachine, slug: string, backup: Backup, re
   } catch (error) {
     return `files not written back: ${errorMessage(error)}`;
   }
+  return reloadRestored(machine, reloadAttempted);
+}
 
+/**
+ * Once the files from before are back: validated, then reloaded if the way
+ * out reached the reload. Returns null if Caddy serves the previous
+ * configuration again, otherwise what failed. The installer's restore of a
+ * block ends the same way (src/installer/caddy.ts).
+ */
+export async function reloadRestored(machine: Machine, reloadAttempted: boolean): Promise<string | null> {
   const validation = await machine.validateCaddy(TIMEOUTS.validate);
   if (!validation.ok) return `the restored configuration does not validate: ${caddyExtract(validation.output)}`;
 

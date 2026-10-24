@@ -28,7 +28,7 @@ import { join } from "node:path";
 import { BACKUPS_NAME } from "../gatekeeper/instance";
 import type { Machine } from "../gatekeeper/machine";
 import { answers, describe, judgeTarget, regressions, servedHosts, type ProbeResponse } from "../gatekeeper/probe";
-import { TIMEOUTS, caddyExtract } from "../gatekeeper/transaction";
+import { TIMEOUTS, caddyExtract, errorMessage, probeAll, reloadRestored } from "../gatekeeper/transaction";
 import { FIRST_CERTIFICATE_MS } from "../../borrowed/zone-names";
 
 export type BlockOutcome = { ok: true; changed: boolean; detail: string } | { ok: false; message: string };
@@ -50,16 +50,6 @@ export type BlockStep = {
    */
   onDemand?: boolean;
 };
-
-function errorMessage(error: unknown): string {
-  const text = error instanceof Error ? error.message : String(error);
-  return text.length > 200 ? `${text.slice(0, 200)}...` : text;
-}
-
-async function probeAll(machine: Machine, hosts: string[]): Promise<Map<string, ProbeResponse>> {
-  const responses = await Promise.all(hosts.map((host) => machine.probe(host, "/", TIMEOUTS.probeConfig)));
-  return new Map(hosts.map((host, i) => [host, responses[i]!]));
-}
 
 /**
  * The target in its wanted state, and nobody lost, with retries up to the
@@ -120,14 +110,7 @@ async function restore(machine: Machine, slug: string, block: string | null, rel
   } catch (error) {
     return `block not written back: ${errorMessage(error)}`;
   }
-  const validation = await machine.validateCaddy(TIMEOUTS.validate);
-  if (!validation.ok) return `the restored configuration does not validate: ${caddyExtract(validation.output)}`;
-  if (!reloadAttempted) return null;
-  const active = await machine.isCaddyActive(TIMEOUTS.active);
-  const command = active ? await machine.reloadCaddy(TIMEOUTS.reload) : await machine.startCaddy(TIMEOUTS.reload);
-  if (!command.ok) return `${active ? "reload" : "start"} refused: ${caddyExtract(command.output)}`;
-  if (!(await machine.isCaddyActive(TIMEOUTS.active))) return "Caddy is not active";
-  return null;
+  return reloadRestored(machine, reloadAttempted);
 }
 
 /** Writes the block through the validated path. The caller holds the Caddy lock. */
