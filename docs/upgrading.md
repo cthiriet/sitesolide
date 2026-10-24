@@ -120,6 +120,28 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## The dashboard names its release
+
+**What the release brings.** The dashboard says which release it was built
+from, at the foot of its sidebar and in its menu on a phone, so that an
+upgrade can be seen to have landed without a look over SSH. The dashboard, the
+portal's sign-in page and the door page of locked previews draw the mark as
+the landing page does: a petrol face ringed with a line over a hard shadow.
+
+**What `sitesolide upgrade` brings**: the dashboard, the portal and the
+gatekeeper, which writes the door page from the portal's template. Nothing on
+the machine changes form, and Caddy is not reloaded for them.
+
+**What changes for you.**
+
+- From this release on, every new release redeploys the dashboard, since its
+  page names the version: a restart of its service, a few seconds, at each
+  upgrade.
+- The door page of a site already locked keeps the old mark until the
+  gatekeeper next acts on that site, a new code or a change of access.
+
+**Going back.** `sitesolide upgrade` with the previous binary.
+
 ## Secrets: names in the manifest, values in a store per project
 
 **What the release brings.** `sitesolide.json` names a project's secrets,
