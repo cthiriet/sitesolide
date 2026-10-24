@@ -250,6 +250,17 @@ export const HEADLESS_ANSWER = "This project runs in the background and serves n
  */
 export const ZONE_HOST = "{$SITESOLIDE_ZONE}";
 
+/** Above the block of the site's own domain, in either of its generations. */
+const OWN_DOMAIN_COMMENT = [
+  "# The project's own domain. The certificate is obtained on the first",
+  "# request, once the ask endpoint agrees: the domain must appear in",
+  "# sitesolide.json and the table must have been regenerated. No tls-zone",
+  "# here, the server's Cloudflare token only covers the served zone.",
+];
+
+/** How every block of the site's own names obtains its certificate. */
+const ON_DEMAND_TLS = ["\ttls {", "\t\ton_demand", "\t}"];
+
 /**
  * The complete fragment, or `null` when the project does not need one: a static
  * showcase site is already served by the zone's wildcard block and, if it has a
@@ -303,14 +314,9 @@ export function generateFragment(
 
   if (domain !== undefined && domains === "open") {
     lines.push(
-      "# The project's own domain. The certificate is obtained on the first",
-      "# request, once the ask endpoint agrees: the domain must appear in",
-      "# sitesolide.json and the table must have been regenerated. No tls-zone",
-      "# here, the server's Cloudflare token only covers the served zone.",
+      ...OWN_DOMAIN_COMMENT,
       `${domain.name} {`,
-      "\ttls {",
-      "\t\ton_demand",
-      "\t}",
+      ...ON_DEMAND_TLS,
       "",
       ...openStanza(generation),
       `\timport ${slug}-routes`,
@@ -324,14 +330,9 @@ export function generateFragment(
     // claimed here too, to send them to the first.
     const [name, ...others] = domainHosts(domain);
     lines.push(
-      "# The project's own domain. The certificate is obtained on the first",
-      "# request, once the ask endpoint agrees: the domain must appear in",
-      "# sitesolide.json and the table must have been regenerated. No tls-zone",
-      "# here, the server's Cloudflare token only covers the served zone.",
+      ...OWN_DOMAIN_COMMENT,
       `${name} {`,
-      "\ttls {",
-      "\t\ton_demand",
-      "\t}",
+      ...ON_DEMAND_TLS,
       "",
       "\t# The same site as the preview, closed when it is: the preview locks",
       "\t# recognise it by this variable, and a site behind the portal is",
@@ -352,9 +353,7 @@ export function generateFragment(
         "# address for the site, so one door, one cookie, and one page for",
         "# search engines. Nothing is served here, open or closed.",
         `${others.join(", ")} {`,
-        "\ttls {",
-        "\t\ton_demand",
-        "\t}",
+        ...ON_DEMAND_TLS,
         "",
         `\tredir https://${name}{uri} permanent`,
         "}",
