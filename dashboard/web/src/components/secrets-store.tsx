@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Command, CopyFallback, useAnnounce, useCopy } from "@/components/copy"
 import { Banner, EmptyState, Panel, Status } from "@/components/page"
-import { ProblemRow } from "@/components/secrets"
+import { ProblemRow, ServiceLine } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { ConfirmDialog, useOrigin } from "@/components/secrets-dialogs"
 import {
@@ -32,7 +32,7 @@ import {
 } from "@/components/secrets-store-dialogs"
 import { useValueActions, type ReadResult } from "@/components/secrets-variables"
 import { removeStoreFile, removeStoreVariables, revealStoreValue } from "@/lib/api"
-import { REVEAL_MS, hideCountdown, projectProblems, readService, refusalOf, splitReason, succeeded } from "@/lib/secrets"
+import { REVEAL_MS, hideCountdown, projectProblems, refusalOf, splitReason, succeeded } from "@/lib/secrets"
 import {
   changeSummary,
   credentialPath,
@@ -377,7 +377,6 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
   const [confirmError, setConfirmError] = useState("")
 
   const write = store.may.write && store.state !== "unmanaged"
-  const service = project.service === null ? null : readService(project.service, actions.serverNow)
   const problems = projectProblems(project, actions.serverNow).filter(
     (problem) => problem.key === "service" || problem.key === "pending" || problem.key === "store-unread",
   )
@@ -471,18 +470,7 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
         title="Variables"
         count={store.variables.length}
         full
-        description={
-          service === null || project.service === null ? (
-            <span className="text-sm">No service: nothing reads these at startup.</span>
-          ) : (
-            <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-              <span className="sr-only">Service: </span>
-              <Status tone={service.tone}>{service.text}</Status>
-              {service.detail !== null && <span className="text-muted-foreground tabular-nums">{service.detail}</span>}
-              <code className="font-mono text-xs text-muted-foreground">{project.service.unit}</code>
-            </span>
-          )
-        }
+        description={<ServiceLine project={project} serverNow={actions.serverNow} none="No service: nothing reads these at startup." />}
         actions={
           <>
             {store.previous && store.may.restore && (

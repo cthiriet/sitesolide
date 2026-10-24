@@ -256,6 +256,20 @@ export function ProblemRow({ problem, slug }: { problem: Problem; slug: string }
 
 // --- A site's files --------------------------------------------------------------
 
+/** A panel's line on the project's service: its word, how long it has run, its unit; `none` when it has no service. */
+export function ServiceLine({ project, serverNow, none }: { project: ProjectView; serverNow: number; none: string }) {
+  if (project.service === null) return <span className="text-sm">{none}</span>
+  const service = readService(project.service, serverNow)
+  return (
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <span className="sr-only">Service: </span>
+      <Status tone={service.tone}>{service.text}</Status>
+      {service.detail !== null && <span className="text-muted-foreground tabular-nums">{service.detail}</span>}
+      <code className="font-mono text-xs text-muted-foreground">{project.service.unit}</code>
+    </span>
+  )
+}
+
 /**
  * The platform's own files, on the dashboard's and the portal's sites: the
  * service and its restart, what is wrong, then each file, its actions and its
@@ -264,7 +278,6 @@ export function ProblemRow({ problem, slug }: { problem: Problem; slug: string }
  */
 export function FilesPanel({ project }: { project: ProjectView }) {
   const actions = useSecretsActions()
-  const service = project.service === null ? null : readService(project.service, actions.serverNow)
   const problems = projectProblems(project, actions.serverNow).filter(
     (problem) => problem.key === "service" || problem.key === "pending",
   )
@@ -275,18 +288,7 @@ export function FilesPanel({ project }: { project: ProjectView }) {
       title="Files"
       count={project.files.length}
       full
-      description={
-        project.service === null || service === null ? (
-          <span className="text-sm">No service: nothing reads these files at startup.</span>
-        ) : (
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-            <span className="sr-only">Service: </span>
-            <Status tone={service.tone}>{service.text}</Status>
-            {service.detail !== null && <span className="text-muted-foreground tabular-nums">{service.detail}</span>}
-            <code className="font-mono text-xs text-muted-foreground">{project.service.unit}</code>
-          </span>
-        )
-      }
+      description={<ServiceLine project={project} serverNow={actions.serverNow} none="No service: nothing reads these files at startup." />}
       actions={
         project.service === null ? undefined : (
           <Button variant={wait ? "default" : "outline"} size="sm" onClick={() => actions.restart(project.slug)} className="max-md:h-10">
