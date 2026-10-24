@@ -446,7 +446,6 @@ export type ClaimReleased = { slug: string; released: string | null; dropped: { 
  * their session's unlock, null if locked.
  */
 export type MemberTeamResponse = { tokens: TokenView[]; rights: { roles: Record<string, "viewer" | "developer" | "admin">; create: boolean }; until: number | null };
-export type CreateMemberTokenRequest = { session: string; token: string; label: string; expiresAt: number | null; scope: Scope };
 export type CreateTokenRequest = {
   /** The unlock token of src/secrets: creating a token demands the dashboard unlocked. */
   token: string;

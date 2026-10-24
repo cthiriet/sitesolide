@@ -20,9 +20,6 @@ import { isValidFileName } from "../../borrowed/manifest";
 import { GENERATE_FORMATS, GENERATE_MAX_BYTES, GENERATE_MIN_BYTES, MAX_STORE_FILE_BYTES, type GenerateFormat } from "../../borrowed/store";
 import { MAX_SECRET_NAMES } from "./protocol";
 
-/** The rule every surface shares, bin/cli/variables.ts: re-exported for the secrets routes, which import it from here. */
-export { isVariableName };
-
 /** The change, judged: every pair and every name once, set and removed never the same one. */
 export type SecretsChange = { set: [string, string][]; remove: string[] };
 

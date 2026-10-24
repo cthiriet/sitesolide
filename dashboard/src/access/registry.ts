@@ -217,11 +217,6 @@ export function findEntry(registry: Registry, slug: string, who: string): Entry 
   return entriesOf(registry, slug).find((entry) => entry.who === who) ?? null;
 }
 
-/** The role this email's own entry holds on this project, or null: a domain's does not count here. */
-export function roleOf(registry: Registry, email: string, slug: string): Role | null {
-  return findEntry(registry, slug, email)?.role ?? null;
-}
-
 export function mayCreate(registry: Registry, email: string): boolean {
   return registry.creators.some((creator) => creator.email === email);
 }

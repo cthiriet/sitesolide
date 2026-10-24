@@ -44,7 +44,12 @@
  * deployed before the steward it speaks to still calls them.
  *
  * Every refusal is `{ error, message }`, the message in English, shown as it
- * stands.
+ * stands. Beside the codes of src/secrets/protocol.ts: `signed-out` (401),
+ * the session is unknown, expired, or its person was removed; `no-role`
+ * (403), no list names the verified email and it may not create projects;
+ * `can-open-only` (403), it may open sites, Can open on a list or through a
+ * domain, and nothing more; `invalid-assertion` (401), the assertion fails
+ * its checks; `not-ready` (503), the key pair is not in place yet.
  */
 import type { Role as AccessRole } from "../access/protocol";
 
@@ -107,19 +112,6 @@ export type WhoamiResponse = { identity: MemberIdentity; expiresAt: number };
 
 /** A member's unlock token: the dashboard keeps it, attached to their session, and never hands it to the browser. */
 export type MemberUnlockResponse = { token: string; expiresAt: number };
-
-/**
- * The steward's refusals for people, beside those of src/secrets/protocol.ts:
- * `signed-out` (401), the session is unknown, expired, or its person was
- * removed; `no-role` (403), no list names the verified email and it may not
- * create projects; `can-open-only` (403), it may open sites, Can open on a
- * list or through a domain, and nothing more; `invalid-assertion` (401), the
- * assertion fails its checks; `not-ready` (503), the key pair is not in
- * place yet.
- */
-export type MemberErrorCode = "signed-out" | "no-role" | "can-open-only" | "invalid-assertion" | "not-ready";
-
-export type MemberFailure = { error: string; message: string };
 
 // --- The dashboard's routes, for the page ----------------------------------------
 
