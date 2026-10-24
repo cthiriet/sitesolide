@@ -94,7 +94,10 @@ describe("the guest access store, read-only", () => {
 
   test("an access read back carries no hash", () => {
     lay(guest("AAAAAAAAAAAAAAA4", { createdAt: 9_000 }), "4".repeat(64));
-    expect(JSON.stringify(store.byHash("4".repeat(64)))).not.toInclude("4".repeat(64));
+    // Found first: a null read back would carry no hash either.
+    const found = store.byHash("4".repeat(64));
+    expect(found?.id).toBe("AAAAAAAAAAAAAAA4");
+    expect(JSON.stringify(found)).not.toInclude("4".repeat(64));
   });
 
   test("offers nothing that writes", () => {
