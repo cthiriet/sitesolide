@@ -11,7 +11,7 @@
  */
 
 /**
- * The day of an instant, as `AAAA-MM-JJ`.
+ * The day of an instant, as `YYYY-MM-DD`.
  *
  * `en-CA` returns exactly that form, and it is the only locale to do so without
  * a detour; `fr-FR` would return `20/09/2026`, which does not sort. The parts
@@ -27,19 +27,6 @@ export function dayOf(instant: number, timeZone: string): string {
 
   const parts = new Map(format.formatToParts(new Date(instant)).map((p) => [p.type, p.value]));
   return `${parts.get("year")}-${parts.get("month")}-${parts.get("day")}`;
-}
-
-/** True for a string of the form `AAAA-MM-JJ`, and for it alone. */
-export function isValidDay(day: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
-
-  // The pattern lets through 30 February, which the reconstruction shifts to 2
-  // March, and the thirteenth month, out of which it makes no date at all. The
-  // second case is tested before reformatting: `toISOString` of an invalid date
-  // does not return a string, it throws.
-  const date = toUTC(day);
-  if (Number.isNaN(date.getTime())) return false;
-  return date.toISOString().slice(0, 10) === day;
 }
 
 /**

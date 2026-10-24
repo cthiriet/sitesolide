@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dayWindow, dayOf, isValidDay, minusDays } from "../src/day";
+import { dayWindow, dayOf, minusDays } from "../src/day";
 
 /**
  * The cutting up of days carries all the rest: a report's window, the grouping
@@ -19,26 +19,8 @@ describe("dayOf", () => {
     expect(dayOf(evening, "Europe/Paris")).toBe("2026-12-20");
   });
 
-  test("always returns AAAA-MM-JJ, which sorts like a string", () => {
+  test("always returns YYYY-MM-DD, which sorts like a string", () => {
     expect(dayOf(Date.parse("2026-01-05T12:00:00Z"), "Europe/Paris")).toBe("2026-01-05");
-  });
-});
-
-describe("isValidDay", () => {
-  test("accepts a real date", () => {
-    expect(isValidDay("2026-02-28")).toBe(true);
-  });
-
-  test("refuses a date the calendar does not have", () => {
-    // The pattern alone would let 30 February through: the reconstruction does
-    // not.
-    expect(isValidDay("2026-02-30")).toBe(false);
-    expect(isValidDay("2026-13-01")).toBe(false);
-  });
-
-  test("refuses what does not have the form", () => {
-    expect(isValidDay("20/09/2026")).toBe(false);
-    expect(isValidDay("")).toBe(false);
   });
 });
 

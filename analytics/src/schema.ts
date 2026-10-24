@@ -71,7 +71,7 @@ export const SCHEMA = [
      site      TEXT    NOT NULL CHECK (length(site) BETWEEN 1 AND ${SITE_MAX}),
      hote      TEXT    NOT NULL CHECK (length(hote) BETWEEN 1 AND ${HOST_MAX}),
 
-     -- The day of the time zone, as 'AAAA-MM-JJ'. Written rather than computed
+     -- The day of the time zone, as 'YYYY-MM-DD'. Written rather than computed
      -- at read time: SQLite's date functions know time zones only as UTC, and a
      -- GROUP BY on an expression would use no index. It compares and sorts like
      -- a string.
