@@ -45,7 +45,7 @@
  * the hook mode's exit code alone (HOOK_EXIT, child.ts), and what was printed
  * goes to the journal.
  */
-import { existsSync, lstatSync, readFileSync, statfsSync } from "node:fs";
+import { lstatSync, readFileSync, statfsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   commandErrors,

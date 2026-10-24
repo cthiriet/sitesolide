@@ -952,7 +952,7 @@ describe("Anyone with the code", () => {
       codes: `{"library":"${CODE}"}`,
       fragment: locksFor({ library: CODE }),
       draws: [NEW_CODE],
-      probeConfig: (host, _n, _g, cookie) => (cookie === `${cookieName("library")}=${CODE}` ? OK : undefined),
+      probeConfig: (_host, _n, _g, cookie) => (cookie === `${cookieName("library")}=${CODE}` ? OK : undefined),
     });
     const result = await s.spawn("renew");
     expect(result.message).toBe("probe: library.test-zone.invalid still opens with the code it replaced, got 200; previous configuration restored");

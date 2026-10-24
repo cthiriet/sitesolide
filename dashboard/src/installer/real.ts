@@ -51,14 +51,14 @@ import type { Machine } from "../gatekeeper/machine";
 import { readAccount, readBounded, writeAtomically } from "../secrets/system";
 import { LOOPBACK_TABLE, PROJECT_PORTS_SET } from "../../borrowed/loopback";
 import { isValidFileName, isValidSchedule, isValidSlug } from "../../borrowed/manifest";
-import { keys, parseEnvBytes, unitEnvironment } from "../../borrowed/envfile";
+import { keys, parseEnvBytes } from "../../borrowed/envfile";
 import { MAX_STORE_ENV_BYTES, STORE_FOLDER_MODE, STORE_PREVIOUS_ROOT, storePaths } from "../../borrowed/store";
 import { GENERATOR_MARK, MARKER_DONE, readCurrentPairs, readStability } from "../../borrowed/services";
 import { isTimerUnit, systemdRunArguments, systemUser, unitArgument, unitFileName, type ProjectRun } from "../../borrowed/unit";
 import { zoneNamesScript } from "../../borrowed/zone-names";
 import { BUNDLE_NAME, DEPLOYMENT_ID_SHAPE, MAX_BUNDLE_BYTES } from "../control/protocol";
 import type { ExtractOutcome } from "./extract";
-import type { Execution, Host, Part, Standing } from "./host";
+import type { Execution, Host, Standing } from "./host";
 
 /**
  * One program run as the project's account, and the `systemd-run` line that

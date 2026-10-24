@@ -284,7 +284,7 @@ describe("refusals, before anything served changes", () => {
   });
 
   test("the portal not ready: a site behind it would be closed to everyone", async () => {
-    const bench = createBench({ probe: (host, path) => (path === "/sante" ? { code: 502, door: false, body: "" } : null) });
+    const bench = createBench({ probe: (_host, path) => (path === "/sante" ? { code: 502, door: false, body: "" } : null) });
     stageBundle(bench, APP_FILES);
     expect(await run(bench, request(APP))).toMatchObject({ ok: false, code: "portal-not-ready" });
   });

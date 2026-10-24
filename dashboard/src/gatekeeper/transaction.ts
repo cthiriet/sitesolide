@@ -393,8 +393,6 @@ async function underLock(
     }
     return finish("ok", plan.message);
   }
-  // planGeneral only returns `change` on a manifest that was read.
-  const before: ManifestRead = first.manifest!;
   if (plan.code !== null) hidden.push(plan.code);
   const leavingCode = plan.leaving;
 

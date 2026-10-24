@@ -83,11 +83,10 @@
  *
  * The password is fixed and obvious, `demo`, since nothing here is real.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, normalize, resolve } from "node:path";
 import { Database } from "bun:sqlite";
-import { writeFileSync } from "node:fs";
 import { fixedRefusal } from "../src/gatekeeper/rules";
 import type { GeneralAccess, GeneralView } from "../src/access/protocol";
 import { generateCode } from "../borrowed/locks";
