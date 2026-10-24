@@ -185,15 +185,11 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
 
 // --- What is wrong ---------------------------------------------------------------
 
-function Mono({ children }: { children: ReactNode }) {
-  return <span className="font-mono">{children}</span>
-}
-
-/** Names in a sentence, "a, b and c", after `lead` when there is one: words, not a file name. */
-function ListState({ names, lead = null }: { names: string[]; lead?: string | null }) {
+/** Names in a sentence, "a, b and c", as typed in a terminal; after `lead` when there is one, in words. */
+export function NameList({ names, lead = null }: { names: readonly string[]; lead?: string | null }) {
   const items: { key: string; node: ReactNode }[] = [
     ...(lead === null ? [] : [{ key: " lead", node: lead }]),
-    ...names.map((name) => ({ key: name, node: <Mono>{name}</Mono> })),
+    ...names.map((name) => ({ key: name, node: <span className="font-mono">{name}</span> })),
   ]
   return (
     <>
@@ -237,7 +233,7 @@ export function ProblemRow({ problem, slug }: { problem: Problem; slug: string }
     text = (
       <>
         <strong className="font-medium">Restart pending.</strong>{" "}
-        <ListState names={problem.files} lead={problem.variables ? "The variables" : null} /> changed since {slug} started.
+        <NameList names={problem.files} lead={problem.variables ? "The variables" : null} /> changed since {slug} started.
       </>
     )
   } else if (problem.key === "store-unread") {

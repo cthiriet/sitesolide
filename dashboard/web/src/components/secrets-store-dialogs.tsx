@@ -25,6 +25,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useAnnounce } from "@/components/copy"
 import { FormError, INPUT_DIALOG, SEGMENTED, Segment } from "@/components/page"
+import { NameList } from "@/components/secrets"
 import { NO_PASSWORD_MANAGER, ShowToggle, describedBy, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { generateStoreVariable, restoreStore, setStoreFile, setStoreVariable } from "@/lib/api"
 import { size } from "@/lib/format"
@@ -584,21 +585,6 @@ function FileForm({
         )}
       </DialogFooter>
     </form>
-  )
-}
-
-// --- Names in a sentence ---------------------------------------------------------
-
-function NameList({ names }: { names: readonly string[] }) {
-  return (
-    <>
-      {names.map((name, index) => (
-        <span key={name}>
-          {index > 0 && (index === names.length - 1 ? " and " : ", ")}
-          <Mono>{name}</Mono>
-        </span>
-      ))}
-    </>
   )
 }
 

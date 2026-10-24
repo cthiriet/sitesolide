@@ -59,7 +59,8 @@ function Mono({ children }: { children: ReactNode }) {
   return <code className="font-mono text-[0.8125rem] wrap-anywhere">{children}</code>
 }
 
-function Code({ children }: { children: string }) {
+/** A name from sitesolide.json in a sentence, as it is written there. */
+export function Code({ children }: { children: string }) {
   return <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-xs whitespace-nowrap">{children}</code>
 }
 

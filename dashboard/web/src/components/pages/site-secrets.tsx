@@ -5,7 +5,7 @@ import { Banner, ErrorState, EmptyState, Panel, PanelSkeleton, useRetry } from "
 import { FilesPanel, SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { SecretsLog } from "@/components/secrets-log"
-import { StoreSection } from "@/components/secrets-store"
+import { Code, StoreSection } from "@/components/secrets-store"
 import { SitePage, useSite } from "@/components/site"
 import { UNREACHABLE } from "@/lib/secrets"
 import { isPerson, roleOn } from "@/lib/identity"
@@ -16,10 +16,6 @@ import { isPerson, roleOn } from "@/lib/identity"
  * database of its own for instance, says so in its own README, not in this
  * dashboard.
  */
-
-function Code({ children }: { children: string }) {
-  return <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-xs whitespace-nowrap">{children}</code>
-}
 
 /**
  * One line: when a change applies, and, for a Developer or an Admin, that no
