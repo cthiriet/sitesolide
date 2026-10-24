@@ -1,9 +1,10 @@
 /**
  * The steward's inputs and outputs for the members, and nothing else: the
  * sessions, the key pair, and what portal.env says of signing in; the
- * registry of who may do what is src/access/system.ts's. An interface, so that the tests run the member routes on a throwaway
- * tree. The careful primitives, the bounded read and the atomic write, are
- * the secrets routes' own.
+ * registry of who may do what is src/access/system.ts's. An interface, so
+ * that the tests run the member routes on a throwaway tree. The careful
+ * primitives, the bounded read and the atomic write, are the secrets routes'
+ * own.
  *
  * Every file is root's but one: the portal's private key, which the steward
  * writes `root:site-portal 0640` into `/etc/sitesolide-portal`, a folder root
