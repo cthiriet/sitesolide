@@ -16,8 +16,7 @@
  *
  * A refusal is a value, never an exception, as in scope.ts. A refusal quotes
  * a name only when it has a variable name's shape, and never a value. The
- * rules are numbered as dashboard/README.md, "A project's store", numbers
- * them.
+ * rules are numbered as in dashboard/README.md, "A project's store".
  */
 import { MACHINE_FOLDER } from "../../borrowed/backups";
 import { isSystemName, isValidFileName, isValidSlug, secretsOf, STORELESS_SLUGS, type Manifest } from "../../borrowed/manifest";

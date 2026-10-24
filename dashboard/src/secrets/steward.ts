@@ -1717,9 +1717,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   // `/etc/sitesolide/projects/<slug>/`: its env, read by every unit of the
   // project, and its files, loaded whole by `LoadCredential=`. Root's alone:
   // no `site-<slug>` account is needed to hold one, so a slug not yet
-  // deployed can have one. The decisions are store.ts's; here, the order of
-  // the checks, the rules numbered as dashboard/README.md, "A project's
-  // store", numbers them, the reads and the writes.
+  // deployed can have one. The decisions are store.ts's; here, the reads, the
+  // writes and the order of the checks, the rules numbered as in
+  // dashboard/README.md, "A project's store".
   //
   // **No answer of this section carries a value** but `/store/value`, the
   // owner's, unlocked. A set is always written and journaled under its name:
@@ -2030,8 +2030,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
    * Set and remove variables of a store, all or nothing (rules 1 to 6): the
    * slug, the store's state, every name and value, the shape of every name
    * removed and the size of the result judged before the store is created or
-   * written.
-   * One write, one previous version, one journal line per name.
+   * written. One write, one previous version, one journal line per name.
    */
   async function storeChangeTask(slug: unknown, setting: readonly (readonly [unknown, unknown])[], removing: readonly unknown[], actor: StoreActor): Promise<Response> {
     const operation: Operation = setting.length > 0 ? "set" : "remove";
@@ -2087,9 +2086,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
-   * A value drawn on the machine into the store. The answer
-   * names it, never the value, which no journal line nor log carries either:
-   * only the owner may read it back, in the dashboard.
+   * A value drawn on the machine into the store. The answer names it, never
+   * the value, which no journal line nor log carries either: only the owner
+   * may read it back, in the dashboard.
    */
   async function storeGenerateTask(body: Body, actor: StoreActor): Promise<Response> {
     const project = await storeProject(body.slug, actor);
@@ -2234,8 +2233,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
-   * A store value read back: the owner's, in the dashboard, under
-   * the live unlock alone. Journaled `read` with its name.
+   * A store value read back: the owner's, in the dashboard, under the live
+   * unlock alone. Journaled `read` with its name.
    */
   async function storeRevealTask(body: Body): Promise<Response> {
     const actor = OWNER_STORE;
@@ -2432,8 +2431,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   /** A person's store work, the role judged by src/people/actions.ts, under the lock it takes. */
   const personStore = (task: StoreTask) => (_req: Request, body: Body, who: Who) => task(body, { who, kind: "person", creating: false, restores: who.restores === true });
 
-  /** A token's store work, the token judged by the control routes, its turn under the lock. */
   const tokenActor = (who: Who, creating: boolean): StoreActor => ({ who, kind: "token", creating, restores: false });
+  /** A token's store work, the token judged by the control routes, its turn under the lock. */
   const storeForToken: StoreForToken = {
     list: (slug, who, creating) => storeListTask(slug, tokenActor(who, creating)),
     change: (req, change, who, creating, still) => underLockWith(req, still, () => storeChangeTask(change.slug, change.set, change.remove, tokenActor(who, creating))),
