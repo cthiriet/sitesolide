@@ -303,8 +303,9 @@ export async function runHooks(
 ): Promise<{ ok: true } | HookFailure> {
   for (const hook of hooks) {
     const what = commandOf(hook.service);
+    const outOfTime: HookFailure = { ok: false, error: `${what} did not finish in its time, see the journal of sitesolide-backup`, cause: "timeout" };
     const left = deadline - Date.now();
-    if (left <= 0) return { ok: false, error: `${what} did not finish in its time, see the journal of sitesolide-backup`, cause: "timeout" };
+    if (left <= 0) return outOfTime;
     const child = startChild(hookJob(config, project, hook, left, cacheDirectory), config);
     let finished: { value: { code: number; report: ChildReport } } | null = null;
     let stopped: string | null = null;
@@ -327,7 +328,7 @@ export async function runHooks(
         return { ok: false, error: stopped, cause: null };
       }
       log(`backup ${project.folder}: ${what} did not finish within its time, it was stopped${tail}`);
-      return { ok: false, error: `${what} did not finish in its time, see the journal of sitesolide-backup`, cause: "timeout" };
+      return outOfTime;
     }
     const { code, report } = finished.value;
     if (code === 0) {
@@ -341,7 +342,7 @@ export async function runHooks(
     );
     switch (code) {
       case HOOK_EXIT.timeout:
-        return { ok: false, error: `${what} did not finish in its time, see the journal of sitesolide-backup`, cause: "timeout" };
+        return outOfTime;
       case HOOK_EXIT.empty:
         return { ok: false, error: `${what} left nothing in BACKUP_DIR, see docs/manifest.md`, cause: null };
       case HOOK_EXIT.start:
