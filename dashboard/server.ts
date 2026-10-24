@@ -82,9 +82,9 @@ const store = {
   setAttempts,
 };
 
-// One reader for every session, the owner's and the members'; the super
-// admin's routes take the owner's alone, so that a member reads as nobody
-// there even where a route forgot to ask. See src/people/.
+// One reader for every session, the owner's and the members'; the owner's
+// routes take the owner's alone, so that a member reads as nobody there even
+// where a route forgot to ask. See src/people/.
 const sessionReader = createSessionReader(store, {
   online: ONLINE,
   sessionDurationMs: SESSION_DURATION_MS,
@@ -221,32 +221,30 @@ const audit = createAuditRoutes({
 });
 
 /**
- * The delay of the relay towards the steward, and five seconds more to answer
- * the page. It covers the longest action under its lock, `/portal`, and
- * therefore everything waiting behind, unlocking included. Bun caps this
- * setting at 255 seconds.
+ * A route that waits on the steward: the delay of the relay towards it, and
+ * five seconds more to answer the page (`STEWARD_IDLE_S`). It covers the
+ * longest action under its lock, `/portal`, and therefore everything waiting
+ * behind, unlocking included. Bun caps this setting at 255 seconds.
  */
-const LONG_IDLE_S = STEWARD_IDLE_S;
-
 function long(
   req: Request,
   server: { timeout: (req: Request, seconds: number) => void },
   handler: (req: Request) => Promise<Response>,
 ): Promise<Response> {
-  server.timeout(req, LONG_IDLE_S);
+  server.timeout(req, STEWARD_IDLE_S);
   return handler(req);
 }
 
 /**
  * The routes a member's session may reach: their session, their sign-in and
  * sign-out, the snapshot and the audit, both filtered to their projects,
- * their restart, a site's Secrets, Access, Sharing, Guests and Backups, and
- * their own tokens on the Tokens page, which `either()` sends to
- * src/people/relay.ts, where the steward judges each by role. Every other route is the owner's: `owner()` answers a
- * member 403 before its handler runs, and the handler itself reads the
- * owner's sessions alone (`ownerReader`), so that a route forgetting the
- * first still refuses a member. The control API is reached with a team
- * token, never a session.
+ * their restart, a site's Secrets, Access and Backups, and their own tokens
+ * on the Tokens page, which `either()` sends to src/people/relay.ts, where
+ * the steward judges each by role. Every other route is the owner's:
+ * `owner()` answers a member 403 before its handler runs, and the handler
+ * itself reads the owner's sessions alone (`ownerReader`), so that a route
+ * forgetting the first still refuses a member. The control API is reached
+ * with a token, never a session.
  */
 const ownerOnly = () =>
   Response.json({ error: "owner-only", message: "This part of the dashboard is the owner's." }, { status: 403, headers: { "Cache-Control": "no-store" } });

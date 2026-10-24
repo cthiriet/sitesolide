@@ -104,9 +104,9 @@ export { PASSWORD_VARIABLE };
  * variable there would change what they do rather than add a secret. In
  * `dashboard.env`, `STEWARD_SOCKET` would send the relay towards another
  * socket, which would receive the password of the next Unlock; `PORTAL_URL` or
- * `STATE_FILE` would break guest access or the snapshot. Another variable is
- * therefore refused when set, and a file that already carries one is out of
- * management.
+ * `STATE_FILE` would break the sign-in through the portal or the snapshot.
+ * Another variable is therefore refused when set, and a file that already
+ * carries one is out of management.
  */
 export const HASH_ONLY: readonly string[] = ["dashboard.env", "portal.env"];
 
