@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { DATA_DIR } from "../src/config";
 
 export interface StartedServer {
-  db: string;
+  url: string;
   port: number;
   stop: () => void;
 }
@@ -34,14 +34,14 @@ export async function startServer(dir: string): Promise<StartedServer> {
 
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
-  let lu = "";
+  let output = "";
   let port = "";
   const limit = Date.now() + 5000;
   while (Date.now() < limit) {
     const { value, done } = await reader.read();
     if (done) break;
-    lu += decoder.decode(value, { stream: true });
-    const found = /http:\/\/localhost:(\d+)/.exec(lu);
+    output += decoder.decode(value, { stream: true });
+    const found = /http:\/\/localhost:(\d+)/.exec(output);
     if (found?.[1] !== undefined) {
       port = found[1];
       break;
@@ -51,13 +51,13 @@ export async function startServer(dir: string): Promise<StartedServer> {
 
   if (port === "") {
     child.kill();
-    throw new Error(`server.ts did not announce its address: ${lu}`);
+    throw new Error(`server.ts did not announce its address: ${output}`);
   }
 
   // The address is rebuilt on the loopback: the service listens only there, and
   // `localhost` may resolve to IPv6 first on some machines.
   return {
-    db: `http://127.0.0.1:${port}`,
+    url: `http://127.0.0.1:${port}`,
     port: Number(port),
     stop: () => child.kill(),
   };

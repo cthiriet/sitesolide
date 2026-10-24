@@ -4,7 +4,7 @@
  * `server.ts` only wires these functions onto routes: everything that judges,
  * refuses or counts lives here, and receives its clock as a parameter rather
  * than reading it. That is what makes ingestion testable without waiting for
- * tomorrow, and the dashboard verifiable without a customer's database.
+ * tomorrow.
  */
 import { deviceOf, isBot, languageOf, browserOf, systemOf } from "./agent";
 import {

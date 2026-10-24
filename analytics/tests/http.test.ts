@@ -65,7 +65,7 @@ describe("cacheControl", () => {
 
 describe("isolation of the tests", () => {
   /** setup.ts has already diverged from config.ts on another tool of the repo. */
-  const preparer = readFileSync(join(import.meta.dir, "setup.ts"), "utf8");
+  const setup = readFileSync(join(import.meta.dir, "setup.ts"), "utf8");
 
   test("the tests never run on the real database", () => {
     expect(process.env.DATA_DIR ?? "").toEndWith(".test-data");
@@ -74,7 +74,7 @@ describe("isolation of the tests", () => {
   test("the time zone is set, and does not come from the machine", () => {
     // It cuts the days up, and so the visits and the salts: left to the
     // machine's, a test would pass here and fail elsewhere.
-    expect(preparer).toContain("TIME_ZONE");
+    expect(setup).toContain("TIME_ZONE");
     expect(process.env.TIME_ZONE).toBe("Europe/Paris");
   });
 
@@ -84,7 +84,7 @@ describe("isolation of the tests", () => {
     // fail, and setup.ts would have to learn to erase it, as the setup of a
     // service holding a key does for its own.
     const config = readFileSync(join(import.meta.dir, "..", "src", "config.ts"), "utf8");
-    const lues = [...config.matchAll(/process\.env\.([A-Z_]+)/g)].map((m) => m[1]!);
-    expect(lues.filter((name) => /KEY|JETON|SECRET|PASSWORD/.test(name))).toEqual([]);
+    const names = [...config.matchAll(/process\.env\.([A-Z_]+)/g)].map((m) => m[1]!);
+    expect(names.filter((name) => /KEY|TOKEN|SECRET|PASSWORD/.test(name))).toEqual([]);
   });
 });

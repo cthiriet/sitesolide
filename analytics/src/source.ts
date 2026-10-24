@@ -83,11 +83,6 @@ export function referrerHost(referrer: string): string | null {
   return url.hostname === "" ? null : url.hostname.toLowerCase();
 }
 
-/** Truncates, and never returns an empty string where the schema refuses one. */
-function truncate(value: string, maximum: number): string {
-  return value.slice(0, maximum);
-}
-
 /**
  * The source of a page view.
  *
@@ -103,7 +98,7 @@ export function sourceOf(
   siteHost: string,
 ): string {
   if (utmSource !== null && utmSource.trim() !== "") {
-    return truncate(utmSource.trim(), SOURCE_MAX);
+    return utmSource.trim().slice(0, SOURCE_MAX);
   }
 
   const host = referrerHost(referrer);
@@ -112,12 +107,12 @@ export function sourceOf(
     return DIRECT;
   }
 
-  return truncate(readableName(host), SOURCE_MAX);
+  return readableName(host).slice(0, SOURCE_MAX);
 }
 
 /** The campaign, when the URL carried one. */
 export function campaignOf(utmCampaign: string | null): string | null {
   if (utmCampaign === null) return null;
   const clean = utmCampaign.trim();
-  return clean === "" ? null : truncate(clean, CAMPAIGN_MAX);
+  return clean === "" ? null : clean.slice(0, CAMPAIGN_MAX);
 }

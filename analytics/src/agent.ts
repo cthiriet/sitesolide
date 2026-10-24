@@ -14,7 +14,7 @@
  *
  * Pure: returns labels, touches nothing.
  */
-import { DEVICES, type Device } from "./schema";
+import type { Device } from "./schema";
 
 /**
  * What gives a bot away.
@@ -140,16 +140,4 @@ export function languageOf(raw: string | null): string | null {
   if (raw === null) return null;
   const match = /^([a-z]{2,3})(?:[-_]|$)/.exec(raw.trim().toLowerCase());
   return match?.[1] ?? null;
-}
-
-/** The label of a device family, for the dashboard. */
-export const DEVICE_LABELS: Readonly<Record<Device, string>> = {
-  mobile: "Mobile",
-  tablette: "Tablet",
-  bureau: "Desktop",
-};
-
-/** Safeguard: one label per family, no more and no less. */
-export function hasEveryDeviceLabel(): boolean {
-  return DEVICES.every((device) => DEVICE_LABELS[device] !== undefined);
 }

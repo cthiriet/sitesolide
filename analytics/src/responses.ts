@@ -41,7 +41,7 @@ export function acknowledge(): Response {
   });
 }
 
-/** Plain text, for the refusals that are neither the dashboard nor ingestion. */
+/** Plain text, for the answers that are not ingestion's: a method refused, a file missing, an error. */
 export function plainText(body: string, status: number): Response {
   return new Response(body, {
     status,

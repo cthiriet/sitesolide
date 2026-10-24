@@ -4,7 +4,6 @@ import {
   isBot,
   UNKNOWN,
   languageOf,
-  hasEveryDeviceLabel,
   browserOf,
   systemOf,
 } from "../src/agent";
@@ -156,10 +155,4 @@ describe("languageOf", () => {
       expect(languageOf(raw)).toBe(null);
     }
   });
-});
-
-test("every device family has its label", () => {
-  // Otherwise the dashboard would display the raw column value for one of them,
-  // in the middle of the two others translated.
-  expect(hasEveryDeviceLabel()).toBe(true);
 });

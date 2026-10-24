@@ -7,10 +7,6 @@ import { join, normalize } from "node:path";
  * rules are those of the `(commun)` snippet of infra/caddy/Caddyfile, and
  * tests/cache-caddy.test.ts fails if the two diverge.
  *
- * The dashboard's responses never go through here: `src/responses.ts` returns
- * them as `no-store`, a page kept behind the portal not having to be read again
- * without it.
- *
  * A single file of `public/` really counts, `a.js`, which every measured site
  * loads on every page. It falls under the `no-cache` rule below, so the browser
  * keeps it and only asks whether it has changed, to which the answer is a 304

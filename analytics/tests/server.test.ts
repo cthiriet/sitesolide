@@ -44,7 +44,7 @@ describe("the service running", () => {
   afterAll(() => server.stop());
 
   const post = (body: string, headers: Record<string, string> = {}) =>
-    fetch(`${server.db}/e`, { method: "POST", body: body, headers: headers });
+    fetch(`${server.url}/e`, { method: "POST", body: body, headers: headers });
 
   test("accepts a measurement signal and answers nothing", async () => {
     const response = await post('{"h":"unknown.example","p":"/","j":"abc"}');
@@ -65,7 +65,7 @@ describe("the service running", () => {
     const response = await post('{"h":"unknown.example","p":"/","j":"abc"}');
     expect(response.headers.get("set-cookie")).toBe(null);
 
-    const dashboard = await fetch(`${server.db}/`);
+    const dashboard = await fetch(`${server.url}/`);
     expect(dashboard.headers.get("set-cookie")).toBe(null);
   });
 
@@ -79,24 +79,24 @@ describe("the service running", () => {
     // file in public/ and finds none: a 404 rather than a 405. That suits
     // ingestion, which has nothing to confirm of its existence to whoever
     // probes it, and the dashboard's form is reachable by POST only.
-    expect((await fetch(`${server.db}/e`)).status).toBe(404);
-    expect((await fetch(`${server.db}/sites`)).status).toBe(404);
+    expect((await fetch(`${server.url}/e`)).status).toBe(404);
+    expect((await fetch(`${server.url}/sites`)).status).toBe(404);
   });
 
   test("refuses a write method on the fallback", async () => {
-    const response = await fetch(`${server.db}/a.js`, { method: "DELETE" });
+    const response = await fetch(`${server.url}/a.js`, { method: "DELETE" });
     expect(response.status).toBe(405);
   });
 
   test("serves no page", async () => {
     // The numbers are read in the dashboard. This service has only one file
     // left to return, the script, and one route to receive on.
-    expect((await fetch(`${server.db}/`)).status).toBe(404);
-    expect((await fetch(`${server.db}/site/vineyard`)).status).toBe(404);
+    expect((await fetch(`${server.url}/`)).status).toBe(404);
+    expect((await fetch(`${server.url}/site/vineyard`)).status).toBe(404);
   });
 
   test("serves the measurement script from public/", async () => {
-    const response = await fetch(`${server.db}/a.js`);
+    const response = await fetch(`${server.url}/a.js`);
     expect(response.status).toBe(200);
     // It is kept in cache and revalidated: a script frozen for an hour would
     // take an hour to correct itself on every site at once.
@@ -105,7 +105,7 @@ describe("the service running", () => {
   });
 
   test("refuses a climb up out of public/", async () => {
-    const response = await fetch(`${server.db}/../src/db.ts`);
+    const response = await fetch(`${server.url}/../src/db.ts`);
     expect(response.status).toBe(404);
   });
 

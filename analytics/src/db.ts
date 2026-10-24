@@ -384,33 +384,16 @@ export async function purge(
 
 /* --- the state ------------------------------------------------------------- */
 
-export type State = {
-  views: number;
-  oldest: number | null;
-  newest: number | null;
-  salts: number;
-  /** Size of the database file, in bytes, as SQLite sees it. */
-  bytes: number;
-};
+/** How many page views and salts the database holds, which the tests read back. */
+export type State = { views: number; salts: number };
 
-const counted = db.prepare<
-  { total: number; oldest: number | null; newest: number | null },
-  []
->("SELECT count(*) AS total, min(vu_a) AS oldest, max(vu_a) AS newest FROM vues");
+const viewCountQuery = db.prepare<{ total: number }, []>("SELECT count(*) AS total FROM vues");
 
 const saltCountQuery = db.prepare<{ total: number }, []>("SELECT count(*) AS total FROM sels");
 
-const sizeQuery = db.prepare<{ bytes: number }, []>(
-  "SELECT page_count * page_size AS bytes FROM pragma_page_count(), pragma_page_size()",
-);
-
 export function state(): State {
-  const row = counted.get();
   return {
-    views: row?.total ?? 0,
-    oldest: row?.oldest ?? null,
-    newest: row?.newest ?? null,
+    views: viewCountQuery.get()?.total ?? 0,
     salts: saltCountQuery.get()?.total ?? 0,
-    bytes: sizeQuery.get()?.bytes ?? 0,
   };
 }

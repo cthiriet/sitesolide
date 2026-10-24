@@ -11,9 +11,11 @@
  * IP, the raw agent or a lasting identifier would bring it down.
  */
 
-/** The three device families, as the dashboard counts them. */
-/** The values are those stored in the `appareil` column: renaming them
- * would call for a migration of the database in service. */
+/**
+ * The three device families, as the dashboard counts them. The values are
+ * those stored in the `appareil` column: renaming them would call for a
+ * migration of the database in service.
+ */
 export const DEVICES = ["mobile", "tablette", "bureau"] as const;
 
 export type Device = (typeof DEVICES)[number];
