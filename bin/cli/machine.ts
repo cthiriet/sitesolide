@@ -67,7 +67,7 @@ import {
   type PublicKey,
   type Workstation,
 } from "./providers/provider";
-import { humanOutput, type Failure, type Output } from "./remote";
+import { humanOutput, report, type Failure, type Output } from "./remote";
 
 /** The providers `--provider` accepts, in the order the wizard offers them. */
 export const PROVIDER_LIST: readonly ProviderEntry[] = [HETZNER, DIGITALOCEAN, AWS, GCP, AZURE, SCALEWAY, VULTR, LINODE];
@@ -155,11 +155,6 @@ export type MachineDependencies = {
 
 export function isFailure(value: object): value is Failure {
   return "error" in value && "message" in value;
-}
-
-function refuse(output: Output, failure: Failure): number {
-  output.failed(failure);
-  return 1;
 }
 
 /**
@@ -923,19 +918,19 @@ function open(context: Context, say?: (line: string) => void): Promise<Provider 
 async function create(context: Context): Promise<number> {
   const { parsed, output, dependencies, entry } = context;
   const name = parsed.values["--name"];
-  if (name === undefined || !isValidMachineName(name)) return refuse(output, nameFailure(name, "--name <name>"));
+  if (name === undefined || !isValidMachineName(name)) return report(output, nameFailure(name, "--name <name>"));
   const problem = entry.nameProblem?.(name) ?? null;
-  if (problem !== null) return refuse(output, { error: "machine-name", message: `${entry.title} would not take the name ${name}: ${problem}`, details: ["pick another --name"] });
+  if (problem !== null) return report(output, { error: "machine-name", message: `${entry.title} would not take the name ${name}: ${problem}`, details: ["pick another --name"] });
   const defaults = entry.defaults(dependencies.environment);
   const choices = { type: parsed.values["--type"] ?? defaults.type, location: parsed.values["--location"] ?? defaults.location, image: parsed.values["--image"] ?? defaults.image };
   for (const [option, value] of Object.entries(choices)) {
     if (!isValidChoice(value, option) || looksLikeCredential(value)) {
-      return refuse(output, { error: "machine-option", message: `--${option}: not ${option === "image" ? "an" : "a"} ${option} name: ${shown(value)}`, details: ["letters, digits, dots, dashes and underscores, as the provider names them"] });
+      return report(output, { error: "machine-option", message: `--${option}: not ${option === "image" ? "an" : "a"} ${option} name: ${shown(value)}`, details: ["letters, digits, dots, dashes and underscores, as the provider names them"] });
     }
   }
   const backups = parsed.flags.has("--backups");
   if (backups && !entry.backups) {
-    return refuse(output, {
+    return report(output, {
       error: "machine-option",
       message: `--backups: sitesolide does not turn on ${entry.title}'s backups`,
       details: ["setup's own backups snapshot every project hourly, and copy them to a bucket once you configure one: see docs/concepts.md"],
@@ -944,17 +939,17 @@ async function create(context: Context): Promise<number> {
   const home = dependencies.home ?? homedir();
   const workstation = dependencies.workstation ?? realWorkstation(dependencies.environment, home);
   const chosen = await resolvePublicKey(parsed.values["--ssh-key"], home, () => agentKeys(workstation));
-  if (isFailure(chosen)) return refuse(output, chosen);
+  if (isFailure(chosen)) return report(output, chosen);
   const { key, path } = chosen;
   const keyProblem = entry.keyProblem?.(key) ?? null;
   if (keyProblem !== null) {
-    return refuse(output, { error: "no-ssh-key", message: `${entry.title} would not take the key ${chosen.shown}: ${keyProblem}`, details: ["create one it takes: ssh-keygen -t ed25519, then pass it with --ssh-key"] });
+    return report(output, { error: "no-ssh-key", message: `${entry.title} would not take the key ${chosen.shown}: ${keyProblem}`, details: ["create one it takes: ssh-keygen -t ed25519, then pass it with --ssh-key"] });
   }
-  if (path !== null && !(await keyUsable(workstation, path, key))) return refuse(output, unusableKey(path, home));
+  if (path !== null && !(await keyUsable(workstation, path, key))) return report(output, unusableKey(path, home));
 
   output.say(`-> machine ${name} at ${entry.title}: ${choices.type} at ${choices.location}, ${choices.image}${backups ? ", with backups" : ""}`);
   const provider = await open(context, (line) => output.say(line));
-  if (isFailure(provider)) return refuse(output, provider);
+  if (isFailure(provider)) return report(output, provider);
   output.say(`   SSH key ${chosen.shown}`);
   const outcome = await provider.create({ name, ...choices, backups, key }, (line) => output.say(line));
 
@@ -1002,7 +997,7 @@ function unusableKey(path: string, home: string): Failure {
 
 async function list(context: Context): Promise<number> {
   const provider = await open(context);
-  if (isFailure(provider)) return refuse(context.output, provider);
+  if (isFailure(provider)) return report(context.output, provider);
   const machines = await provider.list();
   if (!context.json) {
     if (machines.length === 0) context.output.say(`no machine created by sitesolide in this ${context.entry.title} account`);
@@ -1015,31 +1010,31 @@ async function list(context: Context): Promise<number> {
 async function destroy(context: Context): Promise<number> {
   const { parsed, output, dependencies, entry } = context;
   const name = parsed.positionals[0];
-  if (name === undefined || !isValidMachineName(name)) return refuse(output, nameFailure(name, "sitesolide machine destroy <name>"));
+  if (name === undefined || !isValidMachineName(name)) return report(output, nameFailure(name, "sitesolide machine destroy <name>"));
   const confirm = parsed.values["--confirm"];
   const mismatch = (said: string): Failure => ({
     error: "confirm-mismatch",
     message: `${said} does not match ${name}: nothing was destroyed`,
     details: ["the confirmation is the machine's exact name"],
   });
-  if (confirm !== undefined && confirm !== name) return refuse(output, mismatch(`--confirm ${shown(confirm)}`));
+  if (confirm !== undefined && confirm !== name) return report(output, mismatch(`--confirm ${shown(confirm)}`));
   // Under --json nothing prompts: the question would land among the events, and no answer come.
   const interactive = !context.json && (dependencies.interactive ?? process.stdin.isTTY === true);
   if (confirm === undefined && !interactive) {
-    return refuse(output, {
+    return report(output, {
       error: "needs-confirm",
       message: `destroying ${name} needs its name typed back: --confirm ${name}`,
       details: ["without a terminal to type it in, the name is passed with --confirm; nothing was destroyed"],
     });
   }
   const provider = await open(context);
-  if (isFailure(provider)) return refuse(output, provider);
+  if (isFailure(provider)) return report(output, provider);
 
   output.say(`-> machine ${name} at ${entry.title}`);
   const found = await provider.find(name);
-  if (found === null) return refuse(output, { error: "machine-not-found", message: `no machine named ${name} in this ${entry.title} account`, details: ["nothing was destroyed"] });
+  if (found === null) return report(output, { error: "machine-not-found", message: `no machine named ${name} in this ${entry.title} account`, details: ["nothing was destroyed"] });
   if (!found.managed) {
-    return refuse(output, {
+    return report(output, {
       error: "machine-not-managed",
       message: `${name} was not created by sitesolide: it is not destroyed from here`,
       details: [`${found.type} at ${found.location}, ${found.status}, ${addresses(found)}`, "it lacks the label managed-by=sitesolide; nothing was destroyed"],
@@ -1048,7 +1043,7 @@ async function destroy(context: Context): Promise<number> {
   output.say(`   ${found.type} at ${found.location}, ${found.status}, ${addresses(found)}`);
   if (confirm === undefined) {
     const answer = (dependencies.prompt ?? prompt)(`Type ${name} to destroy it, with its disk and the provider's backups of it:`);
-    if ((answer ?? "").trim() !== name) return refuse(output, mismatch("the name typed back"));
+    if ((answer ?? "").trim() !== name) return report(output, mismatch("the name typed back"));
   }
 
   const outcome = await provider.destroy(found, { deleteKey: parsed.flags.has("--delete-key") }, (line) => output.say(line));
@@ -1097,7 +1092,7 @@ export async function machine(arguments_: string[], dependencies: MachineDepende
   const output = redacting(dependencies.output ?? humanOutput, secrets);
   try {
     const parsed = parseMachineArguments(arguments_);
-    if (isFailure(parsed)) return refuse(output, parsed);
+    if (isFailure(parsed)) return report(output, parsed);
     // Every provider's secrets the environment holds are scrubbed from the
     // first line on, whether or not they are the ones used.
     for (const known of PROVIDER_LIST) secrets.push(...secretValues(known, fromEnvironment(known, dependencies.environment)));
@@ -1105,7 +1100,7 @@ export async function machine(arguments_: string[], dependencies: MachineDepende
       return await providers({ entry: HETZNER, parsed, dependencies, output, secrets, json: arguments_.includes("--json") });
     }
     const entry = chooseProvider(parsed.values["--provider"]);
-    if (isFailure(entry)) return refuse(output, entry);
+    if (isFailure(entry)) return report(output, entry);
     const context: Context = { entry, parsed, dependencies, output, secrets, json: arguments_.includes("--json") };
     switch (parsed.action) {
       case "create":
@@ -1116,7 +1111,7 @@ export async function machine(arguments_: string[], dependencies: MachineDepende
         return await destroy(context);
     }
   } catch (error) {
-    if (error instanceof ProviderError) return refuse(output, error.failure);
-    return refuse(output, { error: "machine-unexpected", message: `unexpected failure: ${(error as Error).message}` });
+    if (error instanceof ProviderError) return report(output, error.failure);
+    return report(output, { error: "machine-unexpected", message: `unexpected failure: ${(error as Error).message}` });
   }
 }
