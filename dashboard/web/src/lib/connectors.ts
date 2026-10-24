@@ -7,7 +7,7 @@
  * refusal under the field it names. A connector's value is sent once, in the
  * body of a write, and never comes back.
  */
-import { callApi, type SecretsRefusal } from "./api"
+import { callApi, send, type SecretsRefusal } from "./api"
 import { capitalise } from "./format"
 import type { Tone } from "./tones"
 import type {
@@ -19,14 +19,6 @@ import type {
 
 // --- The calls -------------------------------------------------------------------
 
-function send<T>(method: "PUT" | "DELETE", path: string, body: unknown) {
-  return callApi<T & SecretsRefusal>(`/api/connectors${path}`, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  })
-}
-
 export function readConnectors() {
   return callApi<DashboardConnectorsResponse & SecretsRefusal>("/api/connectors")
 }
@@ -37,15 +29,15 @@ export function readConnectorsActivity() {
 
 /** `value` null keeps the one in place. The body is rebuilt key by key: the steward refuses any other field. */
 export function putConnector({ name, baseUrl, header, value }: { name: string; baseUrl: string; header: string; value: string | null }) {
-  return send<ConnectorsView>("PUT", "/connector", { name, baseUrl, header, value })
+  return send<ConnectorsView & SecretsRefusal>("PUT", "/api/connectors/connector", { name, baseUrl, header, value })
 }
 
 export function removeConnector({ name, confirmation }: { name: string; confirmation: string }) {
-  return send<ConnectorsView>("DELETE", "/connector", { name, confirmation })
+  return send<ConnectorsView & SecretsRefusal>("DELETE", "/api/connectors/connector", { name, confirmation })
 }
 
 export function setGrant({ slug, connector, granted }: { slug: string; connector: string; granted: boolean }) {
-  return send<ConnectorsView>("PUT", "/grant", { slug, connector, granted })
+  return send<ConnectorsView & SecretsRefusal>("PUT", "/api/connectors/grant", { slug, connector, granted })
 }
 
 // --- The grants ------------------------------------------------------------------

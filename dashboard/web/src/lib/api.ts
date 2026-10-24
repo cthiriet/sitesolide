@@ -57,20 +57,24 @@ export async function callApi<T>(path: string, options?: RequestInit): Promise<P
   }
 }
 
+/** A write: its method, and its body sent as JSON when it has one. */
+export function send<T>(method: "POST" | "PUT" | "DELETE", path: string, body?: unknown) {
+  return callApi<T>(path, {
+    method,
+    ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  })
+}
+
 export function readSession() {
   return callApi<SessionResponse>("/api/session")
 }
 
 export function signIn(password: string) {
-  return callApi<{ error?: string; wait?: number }>("/api/signin", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
-  })
+  return send<{ error?: string; wait?: number }>("POST", "/api/signin", { password })
 }
 
 export function signOut() {
-  return callApi<unknown>("/api/signout", { method: "POST" })
+  return send<unknown>("POST", "/api/signout")
 }
 
 export function readState() {
@@ -90,33 +94,21 @@ export function readAccess(slug: string) {
 
 /** Someone given access, or their role changed; for password access, the password comes back once. */
 export function putAccess(slug: string, who: string, role: string, expiresInS?: number | null) {
-  return callApi<EntryResponse & Failure>("/api/access/entry", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ slug, who, role, ...(expiresInS === undefined ? {} : { expiresInS }) }),
-  })
+  return send<EntryResponse & Failure>("PUT", "/api/access/entry", { slug, who, role, ...(expiresInS === undefined ? {} : { expiresInS }) })
 }
 
 export function removeAccess(slug: string, who: string) {
-  return callApi<EntryResponse & Failure>("/api/access/entry", {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ slug, who }),
-  })
+  return send<EntryResponse & Failure>("DELETE", "/api/access/entry", { slug, who })
 }
 
 /**
- * Public or restricted; making a site public retypes its slug. The
+ * A site's general access, one of the three, or a new code when `renew`;
+ * making a site public or opening it with a code retypes its slug. The
  * gatekeeper validates Caddy, reloads it and checks the site, up to
  * `MAX_PORTAL_MS` in the protocol: the page adds no timeout of its own.
  */
-/** A site's general access, one of the three, or a new code when `renew`. */
 export function setGeneralAccess(slug: string, access: GeneralAccess, confirmation: string, renew = false) {
-  return callApi<GeneralResponse & SecretsRefusal>("/api/access/general", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ slug, access, ...(renew ? { renew } : {}), confirmation }),
-  })
+  return send<GeneralResponse & SecretsRefusal>("PUT", "/api/access/general", { slug, access, ...(renew ? { renew } : {}), confirmation })
 }
 
 export function readPeople() {
@@ -124,19 +116,11 @@ export function readPeople() {
 }
 
 export function setCreate(email: string, create: boolean) {
-  return callApi<PersonResponse & Failure>("/api/people/person", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, create }),
-  })
+  return send<PersonResponse & Failure>("PUT", "/api/people/person", { email, create })
 }
 
 export function removePerson(email: string) {
-  return callApi<PersonResponse & Failure>("/api/people/person", {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
-  })
+  return send<PersonResponse & Failure>("DELETE", "/api/people/person", { email })
 }
 
 // --- The secrets ---------------------------------------------------------------
@@ -154,12 +138,7 @@ export function removePerson(email: string) {
 export type SecretsRefusal = { error?: string; message?: string; wait?: number }
 
 function sendSecrets<T>(method: "POST" | "PUT" | "DELETE", path: string, body?: unknown) {
-  return callApi<T & SecretsRefusal>(`/api/secrets${path}`, {
-    method: method,
-    ...(body === undefined
-      ? {}
-      : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
-  })
+  return send<T & SecretsRefusal>(method, `/api/secrets${path}`, body)
 }
 
 export function readSecrets() {
@@ -291,19 +270,16 @@ export function readTokens() {
 
 /** `holder`: whose token the owner makes, `owner` or a person's email; a person's own carries none, it is theirs. */
 export function createToken(request: { label: string; holder?: string; expiresAt: number | null; scope: Scope }) {
-  return callApi<CreatedTokenResponse & SecretsRefusal>("/api/tokens", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label: request.label, ...(request.holder === undefined ? {} : { holder: request.holder }), expiresAt: request.expiresAt, scope: request.scope }),
+  return send<CreatedTokenResponse & SecretsRefusal>("POST", "/api/tokens", {
+    label: request.label,
+    ...(request.holder === undefined ? {} : { holder: request.holder }),
+    expiresAt: request.expiresAt,
+    scope: request.scope,
   })
 }
 
 export function revokeToken(id: string) {
-  return callApi<{ token: TokenView } & SecretsRefusal>("/api/tokens/revoke", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id }),
-  })
+  return send<{ token: TokenView } & SecretsRefusal>("POST", "/api/tokens/revoke", { id })
 }
 
 // --- The backups ---------------------------------------------------------------
@@ -322,9 +298,5 @@ export function readBackupAudit(slug: string) {
 
 /** The slug retyped, as the steward demands: the requester is the service's to name, not the page's. */
 export function restoreBackup({ slug, snapshot, confirmation }: { slug: string; snapshot: string; confirmation: string }) {
-  return callApi<RestoreResponse & SecretsRefusal>("/api/backups/restore", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ slug, snapshot, confirmation }),
-  })
+  return send<RestoreResponse & SecretsRefusal>("POST", "/api/backups/restore", { slug, snapshot, confirmation })
 }
