@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { CopyFallback, useAnnounce, useCopy } from "@/components/copy"
-import { Banner, INPUT_DIALOG } from "@/components/page"
+import { Banner, FormError, INPUT_DIALOG } from "@/components/page"
 import { NO_PASSWORD_MANAGER, ShowToggle, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { changePassword } from "@/lib/api"
 import { waitMessage } from "@/lib/signin"
@@ -415,11 +415,7 @@ function PasswordForm({
         </div>
       )}
 
-      {formError !== "" && (
-        <p role="alert" className="text-sm text-destructive">
-          {formError}
-        </p>
-      )}
+      <FormError>{formError}</FormError>
 
       <DialogFooter>
         <DialogClose render={<Button variant="outline" className="max-sm:h-11" />} disabled={inProgress}>

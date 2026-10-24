@@ -5,7 +5,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useAnnounce } from "@/components/copy"
-import { Banner, INPUT_DIALOG, Panel } from "@/components/page"
+import { Banner, FormError, INPUT_DIALOG, Panel } from "@/components/page"
 import { CodeChip } from "@/components/access-word"
 import { Track, useClock, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { setGeneralAccess } from "@/lib/api"
@@ -387,11 +387,7 @@ function ChangeFlow({
             aria-invalid={error !== "" || undefined}
             className="h-10 font-mono sm:h-9"
           />
-          {error !== "" && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
+          <FormError>{error}</FormError>
         </div>
       )}
 

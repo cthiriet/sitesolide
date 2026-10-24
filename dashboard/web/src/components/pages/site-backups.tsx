@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Command, useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
-import { Banner, EmptyState, ErrorState, INPUT_DIALOG, Panel, PanelSkeleton, RowsSkeleton, Status, useRetry } from "@/components/page"
+import { Banner, EmptyState, ErrorState, FormError, INPUT_DIALOG, Panel, PanelSkeleton, RowsSkeleton, Status, useRetry } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { Track, useClock } from "@/components/secrets-dialogs"
@@ -493,11 +493,7 @@ function RestoreFlow({
             aria-invalid={error !== "" || undefined}
             className="h-10 font-mono sm:h-9"
           />
-          {error !== "" && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
+          <FormError>{error}</FormError>
         </div>
       )}
 

@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectGroup, SelectGroupLabel, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Command, CopyFallback, useAnnounce, useCopy } from "@/components/copy"
-import { Banner, INPUT_DIALOG } from "@/components/page"
+import { Banner, FormError, INPUT_DIALOG } from "@/components/page"
 import { createToken } from "@/lib/api"
 import {
   DEFAULT_EXPIRY_DAYS,
@@ -433,11 +433,7 @@ export function CreateTokenDialog({
               </div>
             </fieldset>
 
-            {formError !== "" && (
-              <p role="alert" className="text-sm text-destructive">
-                {formError}
-              </p>
-            )}
+            <FormError>{formError}</FormError>
 
             <DialogFooter>
               <DialogClose render={<Button variant="outline" className="max-sm:h-10" />} disabled={inProgress}>
@@ -566,11 +562,7 @@ export function RevokeTokenDialog({
             are, and only a new token you grant them to can deploy them.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {error !== "" && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
+        <FormError>{error}</FormError>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={inProgress} className="max-sm:h-10">
             Cancel

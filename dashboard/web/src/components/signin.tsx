@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Logo } from "@/components/logo"
+import { FormError } from "@/components/page"
 import { ThemeToggleButton } from "@/components/theme"
 import { signIn } from "@/lib/api"
 import { signInFailure, signInUrl } from "@/lib/identity"
@@ -183,11 +184,7 @@ export function SignIn({
                   {visible ? <EyeOff /> : <Eye />}
                 </Button>
               </div>
-              {errorText !== "" && (
-                <p id={errorId} role="alert" className="text-sm text-destructive">
-                  {errorText}
-                </p>
-              )}
+              <FormError id={errorId}>{errorText}</FormError>
               {!configured && <p className="text-sm text-muted-foreground">{NO_HASH}</p>}
             </div>
 

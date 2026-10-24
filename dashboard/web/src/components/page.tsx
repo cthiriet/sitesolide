@@ -315,6 +315,16 @@ export function useRetry(read: () => Promise<unknown>): { retrying: boolean; ret
   return { retrying, retry }
 }
 
+/** A form's refusal, under its field or above its buttons, read out as it appears; nothing while it is empty. */
+export function FormError({ id, children }: { id?: string; children: string }) {
+  if (children === "") return null
+  return (
+    <p id={id} role="alert" className="text-sm text-destructive">
+      {children}
+    </p>
+  )
+}
+
 /** A problem that does not stop you reading the page: the previous data stays displayed. */
 export function Banner({
   tone,

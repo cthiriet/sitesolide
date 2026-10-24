@@ -24,7 +24,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useAnnounce } from "@/components/copy"
-import { INPUT_DIALOG, SEGMENTED, Segment } from "@/components/page"
+import { FormError, INPUT_DIALOG, SEGMENTED, Segment } from "@/components/page"
 import { NO_PASSWORD_MANAGER, ShowToggle, describedBy, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { generateStoreVariable, restoreStore, setStoreFile, setStoreVariable } from "@/lib/api"
 import { size } from "@/lib/format"
@@ -50,15 +50,6 @@ import { cn } from "@/lib/utils"
  * A value typed here leaves with the request and is forgotten: the field
  * unmounts with its dialog, and the answer carries names alone.
  */
-
-function FieldError({ id, children }: { id: string; children: string }) {
-  if (children === "") return null
-  return (
-    <p id={id} role="alert" className="text-sm text-destructive">
-      {children}
-    </p>
-  )
-}
 
 function Mono({ children }: { children: ReactNode }) {
   return <span className="font-mono">{children}</span>
@@ -341,7 +332,7 @@ function ValueForm({
         </div>
       )}
 
-      <FieldError id={errorId}>{error}</FieldError>
+      <FormError id={errorId}>{error}</FormError>
 
       <DialogFooter>
         <DialogClose render={<Button variant="outline" className="max-sm:h-11" />} disabled={busy}>
@@ -577,7 +568,7 @@ function FileForm({
         : systemd adds the <Mono>files_</Mono> prefix, and the copy it hands the service is readable by the service alone.
       </p>
 
-      <FieldError id={errorId}>{error}</FieldError>
+      <FormError id={errorId}>{error}</FormError>
 
       <DialogFooter>
         <DialogClose render={<Button variant="outline" className="max-sm:h-11" />} disabled={busy}>
@@ -730,11 +721,7 @@ function RestoreBody({
           )}
         </div>
       )}
-      {state.phase === "error" && state.message !== "" && (
-        <p role="alert" className="text-sm text-destructive">
-          {state.message}
-        </p>
-      )}
+      {state.phase === "error" && <FormError>{state.message}</FormError>}
       <AlertDialogFooter>
         <AlertDialogCancel disabled={state.phase === "working"} className="max-sm:h-11">
           Cancel

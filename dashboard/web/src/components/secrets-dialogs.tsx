@@ -24,7 +24,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
 import { useAnnounce } from "@/components/copy"
-import { INPUT_DIALOG, Status } from "@/components/page"
+import { FormError, INPUT_DIALOG, Status } from "@/components/page"
 import { unlockSecrets, setVariable } from "@/lib/api"
 import { waitMessage } from "@/lib/signin"
 import { restartProgress, generateToken, refusalOf, readVerdict, succeeded, type Refusal } from "@/lib/secrets"
@@ -275,11 +275,7 @@ function UnlockForm({
           />
           <ShowToggle visible={visible} onToggle={() => setVisible((before) => !before)} what="password" />
         </div>
-        {error !== "" && (
-          <p id={errorId} role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
+        <FormError id={errorId}>{error}</FormError>
       </div>
       <DialogFooter>
         <DialogClose render={<Button variant="outline" className="max-sm:h-11" />} disabled={inProgress}>
@@ -480,11 +476,7 @@ function VariableForm({
         <p id={helpId} className="text-xs text-pretty text-muted-foreground">
           Generate makes a random 256-bit token, for a secret the site issues itself.
         </p>
-        {error !== "" && (
-          <p id={errorId} role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
+        <FormError id={errorId}>{error}</FormError>
       </div>
 
       <DialogFooter>
@@ -542,11 +534,7 @@ export function ConfirmDialog({
           <AlertDialogTitle className="wrap-anywhere">{title}</AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
-        {error !== "" && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
+        <FormError>{error}</FormError>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={inProgress} className="max-sm:h-11">
             Cancel
@@ -832,11 +820,7 @@ export function RestartDialog({
                 hold a key you meant to retire.
               </p>
             )}
-            {state?.message ? (
-              <p role="alert" className="text-sm text-destructive">
-                {state.message}
-              </p>
-            ) : null}
+            <FormError>{state?.message ?? ""}</FormError>
             <AlertDialogFooter>
               <AlertDialogCancel ref={closeButton} disabled={busy} className="max-sm:h-11">
                 Close

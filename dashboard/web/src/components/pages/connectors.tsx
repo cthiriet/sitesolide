@@ -18,7 +18,7 @@ import { Command, useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
-import { Banner, EmptyState, ErrorState, INPUT_DIALOG, PageBody, PageHeader, Panel, RowsSkeleton, Status, When, useRetry } from "@/components/page"
+import { Banner, EmptyState, ErrorState, FormError, INPUT_DIALOG, PageBody, PageHeader, Panel, RowsSkeleton, Status, When, useRetry } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { returnTo, type FocusReturn } from "@/components/secrets-dialogs"
@@ -250,11 +250,7 @@ function ConnectorDialog({
             />
           </Field>
 
-          {formError !== "" && (
-            <p role="alert" className="text-sm text-destructive">
-              {formError}
-            </p>
-          )}
+          <FormError>{formError}</FormError>
 
           <DialogFooter>
             <DialogClose render={<Button variant="outline" className="max-sm:h-10" />} disabled={inProgress}>
@@ -339,11 +335,7 @@ function RemoveDialog({
             className="h-10 font-mono sm:h-9"
           />
         </div>
-        {error !== "" && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
+        <FormError>{error}</FormError>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={inProgress} className="max-sm:h-10">
             Cancel
