@@ -63,6 +63,9 @@ export function scopeSummary(scope: Scope): string[] {
 
 export type ScopeLine = { text: string; paused: boolean }
 
+/** What a person holds now: their role on each project, and the right to create projects. */
+export type Rights = { roles: Readonly<Record<string, Role | "visitor">>; create: boolean }
+
 /**
  * What a token may do beyond deploying, as its row says it, what is on alone:
  * a person's said paused, greyed, while they no longer hold it, as the
@@ -75,7 +78,7 @@ export type ScopeLine = { text: string; paused: boolean }
  * manage secrets (paused: no project to deploy now)". `rights` null: the
  * owner's own, or rights not known.
  */
-export function scopeLines(token: Pick<TokenView, "owned" | "scope" | "member">, rights: { roles: Readonly<Record<string, Role | "visitor">>; create: boolean } | null): ScopeLine[] {
+export function scopeLines(token: Pick<TokenView, "owned" | "scope" | "member">, rights: Rights | null): ScopeLine[] {
   const words = scopeSummary(token.scope)
   if (token.member === null || rights === null) return words.map((text) => ({ text, paused: false }))
   const roleOf = (slug: string) => (Object.hasOwn(rights.roles, slug) ? rights.roles[slug]! : null)
@@ -157,7 +160,7 @@ export function firstTokenField(errors: TokenErrors): TokenField | null {
  * a Developer or an Admin, or may create projects. A Viewer everywhere signs
  * in, but the steward mints them no token, so the dialog does not offer them.
  */
-export function tokenHolders(people: readonly { who: string; roles: Readonly<Record<string, Role | "visitor">>; create: boolean }[]): { email: string; roles: Roles; create: boolean }[] {
+export function tokenHolders(people: readonly (Rights & { who: string })[]): { email: string; roles: Roles; create: boolean }[] {
   return people
     .map((person) => ({
       email: person.who,
@@ -187,7 +190,7 @@ export type Reach = { slug: string; text: string; paused: boolean }
  * until the role comes back: "calendar (Admin)", "cms (paused: Viewer now)".
  * The owner's own token says which projects it created.
  */
-export function liveReach(token: Pick<TokenView, "owned" | "scope" | "member">, roles: Readonly<Record<string, Role | "visitor">> | null): Reach[] {
+export function liveReach(token: Pick<TokenView, "owned" | "scope" | "member">, roles: Rights["roles"] | null): Reach[] {
   const projects = reachedProjects(token)
   if (token.member === null || roles === null) {
     return projects.map(({ slug, how }) => ({ slug, text: how === "created" ? `${slug} (created)` : slug, paused: false }))

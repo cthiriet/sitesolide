@@ -25,7 +25,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useAnnounce } from "@/components/copy"
 import { INPUT_DIALOG } from "@/components/page"
-import type { FocusReturn, OnRefusal } from "@/components/secrets-dialogs"
+import { describedBy, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { generateStoreVariable, restoreStore, setStoreFile, setStoreVariable } from "@/lib/api"
 import { size } from "@/lib/format"
 import { MAX_UPLOAD_BYTES, refusalOf, succeeded } from "@/lib/secrets"
@@ -50,10 +50,6 @@ import { cn } from "@/lib/utils"
  * A value typed here leaves with the request and is forgotten: the field
  * unmounts with its dialog, and the answer carries names alone.
  */
-
-function describedBy(...ids: (string | false)[]): string | undefined {
-  return ids.filter((id): id is string => id !== false).join(" ") || undefined
-}
 
 function FieldError({ id, children }: { id: string; children: string }) {
   if (children === "") return null
@@ -635,12 +631,6 @@ function NameList({ names }: { names: readonly string[] }) {
 
 // --- Restoring the store's previous version --------------------------------------
 
-type Phase<T> =
-  | { phase: "checking" }
-  | { phase: "ready"; reading: T }
-  | { phase: "working"; reading: T }
-  | { phase: "error"; message: string; reading: T | null }
-
 export type RestoreTarget = { slug: string; opening: number }
 
 /**
@@ -682,6 +672,12 @@ export function StoreRestoreDialog({
 
 type RestoreReading = ReturnType<typeof restoreSummary>
 
+type Phase =
+  | { phase: "checking" }
+  | { phase: "ready"; reading: RestoreReading }
+  | { phase: "working"; reading: RestoreReading }
+  | { phase: "error"; message: string; reading: RestoreReading | null }
+
 function RestoreBody({
   target,
   setBusy,
@@ -693,7 +689,7 @@ function RestoreBody({
   onRestored: (answer: StoreChangeResponse) => void
   onRefusal: OnRefusal
 }) {
-  const [state, setState] = useState<Phase<RestoreReading>>({ phase: "checking" })
+  const [state, setState] = useState<Phase>({ phase: "checking" })
   const started = useRef(false)
 
   // The dry run, once per opening: the body remounts on every one.

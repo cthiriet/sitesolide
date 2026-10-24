@@ -29,6 +29,7 @@ import {
   retentionText,
   snapshotSize,
   whereLabel,
+  type Reading as ScheduleReading,
 } from "@/lib/backups"
 import { ago, capitalise, dateTime } from "@/lib/format"
 import { UNREACHABLE, refusalOf, succeeded } from "@/lib/secrets"
@@ -110,7 +111,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-function Reading({ reading }: { reading: { tone: "ok" | "attention" | "error" | "neutral"; label: string; detail: string | null } }) {
+function Reading({ reading }: { reading: ScheduleReading }) {
   return (
     <div className="grid gap-0.5">
       <Status tone={reading.tone} className={cn("whitespace-normal", reading.tone === "neutral" && "text-foreground")}>

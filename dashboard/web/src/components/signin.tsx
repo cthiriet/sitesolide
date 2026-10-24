@@ -216,7 +216,7 @@ export function SignIn({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className={cn("fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-background/70 p-6 backdrop-blur-sm")}
+        className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-background/70 p-6 backdrop-blur-sm"
       >
         {card}
         {themeToggle}

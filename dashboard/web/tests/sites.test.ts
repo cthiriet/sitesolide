@@ -12,8 +12,8 @@ import {
   computeCpuShare,
   serviceSummaryOf,
   sortSites,
-  type RowClick,
 } from "../src/lib/sites"
+import type { Click } from "../src/lib/pages"
 import type { Site } from "../src/lib/types"
 import { worstSeverities } from "../src/lib/verdict"
 import { discrepancy, scheduledService, service, site, siteService } from "./factory"
@@ -315,7 +315,7 @@ describe("order of the inventory", () => {
 })
 
 describe("click on a row", () => {
-  const click = (partial: Partial<RowClick> = {}): RowClick => ({
+  const click = (partial: Partial<Click> = {}): Click => ({
     button: 0,
     metaKey: false,
     ctrlKey: false,

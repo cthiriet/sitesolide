@@ -108,7 +108,7 @@ export function useSecrets(generation: number, onSessionExpired: () => void, ena
   const reportUnreachable = useCallback(() => setProblem(UNREACHABLE), [])
 
   return useMemo(
-    () => ({ projects, until, problem, reload, setUnlockedUntil: setUnlockedUntil, reportUnreachable }),
+    () => ({ projects, until, problem, reload, setUnlockedUntil, reportUnreachable }),
     [projects, until, problem, reload, reportUnreachable],
   )
 }
@@ -170,7 +170,7 @@ function OpenSession({
   configured: boolean
   identity: IdentityView | null
   sso: SsoOffer
-  onClosed: (configured: boolean) => void
+  onClosed: () => void
   children: ReactNode
 }) {
   const [received, setReceived] = useState<Received | null>(null)
@@ -257,8 +257,8 @@ function OpenSession({
   const sessionExpired = useCallback(() => setExpired(true), [])
 
   const signOut = useCallback(() => {
-    void postSignOut().then(() => onClosed(currentConfigured))
-  }, [onClosed, currentConfigured])
+    void postSignOut().then(() => onClosed())
+  }, [onClosed])
 
   // A person reads the secrets of the projects where they are a Developer or
   // an Admin; the steward and the service decide what comes back.

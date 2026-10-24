@@ -39,6 +39,11 @@ import { cn } from "@/lib/utils"
  */
 export type OnRefusal = (refusal: Refusal) => string | null
 
+/** A field's `aria-describedby`: the ids that apply, `false` for one that does not. */
+export function describedBy(...ids: (string | false)[]): string | undefined {
+  return ids.filter((id): id is string => id !== false).join(" ") || undefined
+}
+
 /** Where to return focus on closing: an element, the default behaviour, or nowhere. */
 export type FocusReturn = () => HTMLElement | boolean
 
@@ -408,7 +413,6 @@ function VariableForm({
     valueField.current?.focus()
   }
 
-  const describedBy = (...ids: (string | false)[]) => ids.filter((id): id is string => id !== false).join(" ") || undefined
   const busy = inProgress !== null
 
   return (

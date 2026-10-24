@@ -9,6 +9,7 @@
  */
 import { ago, duration, fromNow, size, sizeOutOf } from "./format"
 import { serviceLevel, type Level } from "./gauges"
+import type { Click } from "./pages"
 import type { Tone } from "./tones"
 import type { Site, SiteService } from "./types"
 import type { Severity } from "./verdict"
@@ -375,15 +376,6 @@ export function sortSites<T extends Pick<Site, "slug">>(sites: readonly T[], wor
 
 // --- The click on a row ----------------------------------------------------------
 
-export type RowClick = {
-  button: number
-  metaKey: boolean
-  ctrlKey: boolean
-  shiftKey: boolean
-  altKey: boolean
-  defaultPrevented: boolean
-}
-
 /**
  * What a click on a site row does, outside its link.
  *
@@ -395,7 +387,7 @@ export type RowClick = {
  * Cmd, Ctrl and the middle button open the site in a new tab, as on a link;
  * Shift and Alt do nothing.
  */
-export function rowClickOutcome(click: RowClick, interactive: boolean, selection: string): "page" | "tab" | null {
+export function rowClickOutcome(click: Click, interactive: boolean, selection: string): "page" | "tab" | null {
   if (click.defaultPrevented || interactive || selection !== "") return null
   if (click.button === 1) return "tab"
   if (click.button !== 0 || click.shiftKey || click.altKey) return null

@@ -359,33 +359,23 @@ function stewardWords(row: AuditRow, operation: StewardOperation): AuditWords {
   const outcome = operationOutcome(entry)
   const ok = entry.result === "ok"
   const tone: Tone = outcome.tone === "ok" ? "neutral" : outcome.tone
+  // A change of general access, or a new code: the outcome only says Refused or Failed.
+  const site = row.target ?? "it"
   if (operation === "portal") {
     // The journal writes the direction first: "on, ok" restricted the site,
     // "off, failure" tried to make it public, "code, ok" opened it with a code.
-    const direction = entry.detail?.split(",")[0]?.trim()
-    const site = row.target ?? "it"
-    const summary =
-      direction === "on"
-        ? ok
-          ? `Restricted ${site}`
-          : `Tried to restrict ${site}`
-        : direction === "off"
-          ? ok
-            ? `Made ${site} public`
-            : `Tried to make ${site} public`
-          : direction === "code"
-            ? ok
-              ? `Set ${site} to Anyone with the code`
-              : `Tried to set ${site} to Anyone with the code`
-            : ok
-              ? DONE.portal
-              : TRIED.portal
-    return { summary, note: ok ? null : entry.result === "rejects" ? "Refused" : "Failed", tone }
+    const direction = entry.detail?.split(",")[0]?.trim() ?? ""
+    const directions: Readonly<Record<string, [string, string]>> = {
+      on: [`Restricted ${site}`, `Tried to restrict ${site}`],
+      off: [`Made ${site} public`, `Tried to make ${site} public`],
+      code: [`Set ${site} to Anyone with the code`, `Tried to set ${site} to Anyone with the code`],
+    }
+    const [done, tried] = Object.hasOwn(directions, direction) ? directions[direction]! : [DONE.portal, TRIED.portal]
+    return { summary: ok ? done : tried, note: outcome.text, tone }
   }
   if (operation === "code") {
     // A new code, never the code itself: the journal does not hold it.
-    const site = row.target ?? "it"
-    return { summary: ok ? `Gave ${site} a new code` : `Tried to give ${site} a new code`, note: ok ? null : entry.result === "rejects" ? "Refused" : "Failed", tone }
+    return { summary: ok ? `Gave ${site} a new code` : `Tried to give ${site} a new code`, note: outcome.text, tone }
   }
   const { object, kind } = operationParts(entry)
   // A site already shows in its own column.

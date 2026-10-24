@@ -138,6 +138,9 @@ function Choice({
 
 const NO_OPTION = { public: [], domain: [] }
 
+/** Every permission off, as a token starts and as choosing another holder resets it. */
+const NO_SCOPE: Omit<Scope, "slugs"> = { create: false, outbound: false, domain: false, public: false, secrets: false }
+
 export type CreatedToken = { token: TokenView; secret: string }
 
 export function CreateTokenDialog({
@@ -173,7 +176,7 @@ export function CreateTokenDialog({
   // Whose token, for the owner: `owner`, their own, or a person's email.
   const [holder, setHolder] = useState("owner")
   const [expiry, setExpiry] = useState<number | null>(DEFAULT_EXPIRY_DAYS)
-  const [scope, setScope] = useState<Omit<Scope, "slugs">>({ create: false, outbound: false, domain: false, public: false, secrets: false })
+  const [scope, setScope] = useState(NO_SCOPE)
   const [chosen, setChosen] = useState<string[]>([])
   // The person the token will be made for: the one minting their own, or the one the owner chose.
   const target = person ?? (holder === "owner" ? null : (holders.find((one) => one.email === holder) ?? null))
@@ -303,7 +306,7 @@ export function CreateTokenDialog({
                       if (next === null) return
                       setHolder(next)
                       setChosen([])
-                      setScope({ create: false, outbound: false, domain: false, public: false, secrets: false })
+                      setScope(NO_SCOPE)
                       setErrors({})
                     }}
                   >

@@ -190,7 +190,7 @@ function RolesDisclosure({ yours }: { yours: AccessRole | null }) {
         What each role can do
       </summary>
       <dl className="mt-2 grid gap-1.5 border-l pl-3">
-        {(Object.keys(ROLE_TEXTS) as AccessRole[]).map((role) => (
+        {ROLE_KEYS.map((role) => (
           <div key={role} className="grid gap-0.5 @xl:grid-cols-[6.5rem_minmax(0,1fr)] @xl:gap-3">
             <dt className="font-medium text-foreground">
               {ROLE_TEXTS[role].label}

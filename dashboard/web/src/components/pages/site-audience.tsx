@@ -15,7 +15,6 @@ import {
 } from "@/lib/audience"
 import { ago } from "@/lib/format"
 import type { Audience, DayCount, Measure, Site } from "@/lib/types"
-import { cn } from "@/lib/utils"
 
 /**
  * The tag to paste, the same for every site: the script reads its own host.
@@ -268,7 +267,7 @@ function Content({ site, audience, zone }: { site: Site; audience: Audience; zon
       {measure.views === 0 ? (
         <NoVisits slug={site.slug} zone={zone} />
       ) : (
-        <div className={cn("grid items-start gap-4", "@4xl/body:grid-cols-2")}>
+        <div className="grid items-start gap-4 @4xl/body:grid-cols-2">
           {RANKINGS.map(({ key, title, unit }) => {
             const lines = measure.rankings[key] ?? []
             if (lines.length === 0) return null

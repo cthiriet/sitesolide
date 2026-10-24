@@ -13,8 +13,8 @@ import { CreateTokenDialog, RevokeTokenDialog } from "@/components/token-dialogs
 import { readPeople, readTokens, revokeToken } from "@/lib/api"
 import { isPerson } from "@/lib/identity"
 import { ago, dateTime } from "@/lib/format"
-import { deploymentLabel, deploymentTone, isLive, liveReach, madeByLine, scopeLines, tokenActivity, tokenHolders, tokenProjects, tokenStatus } from "@/lib/tokens"
-import type { AccessRole, Roles, TeamPageResponse, TokenView } from "@/lib/types"
+import { deploymentLabel, deploymentTone, isLive, liveReach, madeByLine, scopeLines, tokenActivity, tokenHolders, tokenProjects, tokenStatus, type Rights } from "@/lib/tokens"
+import type { Roles, TeamPageResponse, TokenView } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /**
@@ -55,7 +55,7 @@ function TokenRow({
   now: number
   mine: boolean
   /** The rights of the person the token belongs to, as they are now; null when not known. */
-  rights: { roles: Readonly<Record<string, AccessRole>>; create: boolean } | null
+  rights: Rights | null
   onRevoke: (token: TokenView) => void
 }) {
   const status = tokenStatus(token, now)
@@ -117,7 +117,7 @@ export function TokensPage() {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" })
   const [holders, setHolders] = useState<{ email: string; roles: Roles; create: boolean }[]>([])
   // Every person's rights now, for the owner: where each person's token deploys today, and what it may still do.
-  const [people, setPeople] = useState<ReadonlyMap<string, { roles: Readonly<Record<string, AccessRole>>; create: boolean }>>(new Map())
+  const [people, setPeople] = useState<ReadonlyMap<string, Rights>>(new Map())
   const [creating, setCreating] = useState<{ open: boolean; opening: number }>({ open: false, opening: 0 })
   const [revoking, setRevoking] = useState<{ token: TokenView | null; open: boolean; inProgress: boolean; error: string }>({
     token: null,
@@ -179,7 +179,7 @@ export function TokensPage() {
   const projects = tokenProjects(snapshot?.sites ?? [], snapshot?.zone ?? null)
   const list = loaded.state === "ready" ? loaded.list : null
   const person = list?.member ?? null
-  const rightsOf = (token: TokenView): { roles: Readonly<Record<string, AccessRole>>; create: boolean } | null =>
+  const rightsOf = (token: TokenView): Rights | null =>
     token.member === null ? null : person !== null ? { roles: person.roles, create: person.create } : (people.get(token.member) ?? null)
   const activity = list === null ? [] : tokenActivity(list.audit, list.work, list.tokens, person === null ? "owner" : "person")
 

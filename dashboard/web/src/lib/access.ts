@@ -720,8 +720,7 @@ export function accountWords(providerName: string | null): string {
 export function sendLine(entry: Pick<EntryView, "who" | "kind" | "role">, page: Pick<AccessPageResponse, "slug" | "url" | "dashboardUrl" | "providerName">): string | null {
   if (entry.kind === "password") return null
   const account = accountWords(page.providerName)
-  if (entry.kind === "domain") return `Open ${page.url} and sign in with ${account}.`
-  if (entry.role === "visitor") return `Open ${page.url} and sign in with ${account}.`
+  if (entry.kind === "domain" || entry.role === "visitor") return `Open ${page.url} and sign in with ${account}.`
   const line = `${page.slug} is at ${page.url}, and in the dashboard at ${page.dashboardUrl}. Sign in with ${account}.`
   // Developer and Admin deploy: how, from their workstation.
   if (entry.role === "viewer") return line

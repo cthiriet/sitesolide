@@ -86,7 +86,7 @@ export function Router({ path, children }: { path: string; children: ReactNode }
   }, [address, navigate])
 
   const value = useMemo<Navigation>(
-    () => ({ ...readAddress(address), fromHistory: fromHistory, navigate }),
+    () => ({ ...readAddress(address), fromHistory, navigate }),
     [address, navigate],
   )
 
