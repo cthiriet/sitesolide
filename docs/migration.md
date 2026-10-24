@@ -836,7 +836,7 @@ owner may learn.
 ### Check
 
 ```bash
-cd <the project> && sitesolide secrets      # every name "set", no "legacy:" line left
+cd <the project> && sitesolide secrets      # every name "set", each "legacy:" line "retired: a copy is kept at ..."
 ssh you@your-machine 'sudo find /etc/sitesolide/projects -maxdepth 3 | sort'   # names only
 ```
 
@@ -855,7 +855,8 @@ file holds never leaves the store, whatever its value, since the answer
 would tell them whether two values are equal.
 
 **After step 4**, each retired file is the legacy previous version kept by
-the steward, `/var/lib/sitesolide-steward/precedents/<name>`, and in the
+the steward, `/var/lib/sitesolide-steward/precedents/projects/<slug>/legacy/<name>`,
+which `sitesolide secrets` names on the file's line, and in the
 machine's hourly snapshots: the owner puts it back by hand, owned by
 `site-<slug>`, `0600`, then sets the manifest's `secrets` back to the file
 names and deploys, or runs `sitesolide refresh <slug>` when the deposited

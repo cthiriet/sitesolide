@@ -645,11 +645,16 @@ export function storeLines(view: StoreView): string[] {
   if (view.files.length > 0) lines.push(`   files, read at ${filePath("<name>")}: ${view.files.map(fileWords).join(", ")}`);
   const inStore = new Set(view.variables.filter((variable) => variable.source === "store").map((variable) => variable.name));
   for (const legacy of view.legacy) {
+    // Deleted by migrate --retire, which is no fault: the steward's reason
+    // says where the copy is kept and how it is put back, last, since it
+    // carries commas of its own.
+    const retired = legacy.state === "absent" && legacy.reason?.startsWith("retired:") === true ? legacy.reason : null;
     const parts = [
-      legacy.state === "absent" ? "missing" : legacy.state === "unmanaged" ? `not managed${legacy.reason === null ? "" : `, ${legacy.reason}`}` : null,
+      legacy.state === "absent" ? (retired === null ? "missing" : null) : legacy.state === "unmanaged" ? `not managed${legacy.reason === null ? "" : `, ${legacy.reason}`}` : null,
       legacy.read ? "read by the service" : null,
       legacy.leftover ? "no longer declared" : null,
       legacy.covered === true ? "covered by the store: sitesolide secrets migrate --retire" : legacy.covered === false ? uncovered(legacy, inStore) : null,
+      retired,
     ].filter((part): part is string => part !== null);
     lines.push(`   legacy: ${legacy.name}${parts.length === 0 ? "" : `, ${parts.join(", ")}`}`);
   }

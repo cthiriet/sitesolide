@@ -26,6 +26,7 @@ import {
   type StoreDependencies,
   type StoreTransport,
 } from "../cli/store-cli";
+import { STORE_PREVIOUS_ROOT } from "../cli/store";
 import type { StoreChangeResponse, StoreView } from "../cli/store-protocol";
 import { VALUE_LIKE_PREFIXES } from "../cli/variables";
 
@@ -896,6 +897,17 @@ describe("what the steward added for removal, migration, retirement and restarts
     expect(lines).toContain("   legacy: shop.env, read by the service, holds SMTP_URL, which the store lacks: sitesolide secrets migrate first, never --retire --force, which would drop it");
     // Never pointed to --force while a name is missing from the store.
     for (const line of lines.filter((one) => one.includes("shop-keys.env") || one.includes("shop.env,"))) expect(line).not.toContain("lets the store's stand alone");
+  });
+
+  test("a legacy file retired is said retired, with where its copy is kept; one absent for no such reason is still missing", () => {
+    const copy = `${STORE_PREVIOUS_ROOT}/shop/legacy/shop.env`;
+    const reason = `retired: a copy is kept at ${copy}; to put it back, sudo cp -p ${copy} /etc/sitesolide/shop.env, then sitesolide refresh shop`;
+    const absent = (name: string, over: object) => ({ name, state: "absent" as const, reason: null, variables: [], read: false, leftover: false, covered: null, ...over });
+    const lines = storeLines(view({ legacy: [absent("shop.env", { reason, read: true }), absent("shop-ses.env", { reason }), absent("shop-smtp.env", {})] }));
+    expect(lines).toContain(`   legacy: shop.env, read by the service, ${reason}`);
+    expect(lines).toContain(`   legacy: shop-ses.env, ${reason}`);
+    expect(lines).toContain("   legacy: shop-smtp.env, missing");
+    expect(lines.filter((line) => line.includes("missing"))).toEqual(["   legacy: shop-smtp.env, missing"]);
   });
 });
 

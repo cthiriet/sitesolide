@@ -95,10 +95,12 @@ The listing says where each name comes from and what is missing:
 ```
 
 A name a legacy file alone supplies reads `from shop-stripe.env` rather than
-`set`, and a file's size is listed to the owner alone, over SSH as in the
-dashboard. Not a secret all the same from whoever may write the store: the
-size refusals, 64 KiB for a file, 512 KiB for all of them, 256 KiB for the
-variables, let a writer, a Developer, an Admin or a token with *Manage
+`set`. A legacy file `migrate --retire` deleted reads `retired: a copy is
+kept at ...`, with the command that puts it back, and one absent for no such
+reason reads `missing`. A file's size is listed to the owner alone, over SSH
+as in the dashboard. Not a secret all the same from whoever may write the
+store: the size refusals, 64 KiB for a file, 512 KiB for all of them, 256 KiB
+for the variables, let a writer, a Developer, an Admin or a token with *Manage
 secrets*, narrow a size down by trying writes. That gives them nothing
 more: a writer can deploy code that reads the values themselves.
 
