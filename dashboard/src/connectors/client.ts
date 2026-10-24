@@ -4,7 +4,6 @@
  * loopback, for what it did. Each method returns the response as it stands,
  * judged by relay.ts, which the tests drive with simulated correspondents.
  */
-import { CONNECTORS_PORT, EGRESS_ADDRESS } from "../../borrowed/egress";
 import { DEFAULT_TIMEOUTS, type Timeouts } from "../secrets/client";
 import type { ConnectorRemoval, ConnectorWrite, GrantWrite } from "./protocol";
 
@@ -41,11 +40,12 @@ export type EgressReader = {
 };
 
 /**
- * The egress proxy's read-only routes. It answers them to the dashboard's
- * account alone, recognised by the uid of this very connection, like any
- * caller: nothing to send, nothing to hold.
+ * The egress proxy's read-only routes, at `base`, EGRESS_URL in
+ * src/config.ts. It answers them to the dashboard's account alone,
+ * recognised by the uid of this very connection, like any caller: nothing to
+ * send, nothing to hold.
  */
-export function localEgress(base = `http://${EGRESS_ADDRESS}:${CONNECTORS_PORT}`, timeoutMs = 5_000): EgressReader {
+export function localEgress(base: string, timeoutMs = 5_000): EgressReader {
   const call = (path: string) => fetch(`${base}${path}`, { redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
   return {
     audit: (limit, before = null) => {
