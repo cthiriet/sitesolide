@@ -77,7 +77,7 @@ import {
   type Found,
   type MachineDependencies,
 } from "./machine";
-import { formatPrice, ProviderError, type Fetch, type Choice, type Credentials, type Machine, type Provider, type ProviderEntry, type PublicKey, type Workstation } from "./providers/provider";
+import { formatPrice, ProviderError, type Fetch, type Choice, type Credentials, type Machine, type Provider, type ProviderEntry, type Workstation } from "./providers/provider";
 import type { Failure, Output } from "./remote";
 import { ACCOUNT, EMAIL, HOST, hostOf, parseSetupArguments, ZONE, type SetupExtras, type SetupOptions, type SetupOutput } from "./setup";
 
@@ -214,7 +214,7 @@ function overlaps(a: string, b: string): boolean {
 }
 
 /** A folder for a second installation: absolute or under ~, so that the printed commands mean the same from any project. */
-function folderProblem(environment: Record<string, string | undefined>, home: string, value: string): string | undefined {
+function folderProblem(home: string, value: string): string | undefined {
   const typed = value.trim();
   if (!typed.startsWith("/") && !typed.startsWith("~/")) return "an absolute path, or one under ~/";
   if (configured({}, expandHome(typed, home)) !== null) return "that folder names a machine too: pick another";
@@ -561,7 +561,7 @@ class Stop extends Error {
 
 // --- the plan, then the work ---------------------------------------------------------------------
 
-function planLines(target: Target, site: Site, home: string): string[] {
+function planLines(target: Target, site: Site): string[] {
   const reused = target.kind === "cloud" ? target.reused : null;
   // A price is said only where the provider gave one: a hint may carry
   // the size alone, and "price" next to it would read as one.
@@ -677,7 +677,7 @@ export async function runWizard(deps: WizardDependencies): Promise<number> {
         ]);
         throw new Stop(1);
       }
-      configDir = (await ui.text("Configuration folder of the new installation", { initial: "~/.config/sitesolide-2", validate: (value) => folderProblem(deps.environment, deps.home, value) })).trim();
+      configDir = (await ui.text("Configuration folder of the new installation", { initial: "~/.config/sitesolide-2", validate: (value) => folderProblem(deps.home, value) })).trim();
       limits.inService = { host: hostOf(existing.server), zone: existing.zone };
     } else if (existing !== null) {
       // A zone and no machine: setup accepts that zone alone in this folder.
@@ -700,7 +700,7 @@ export async function runWizard(deps: WizardDependencies): Promise<number> {
     const site = await chooseSite(deps, secrets, addresses, limits);
 
     // 3. The plan, once, with the price: nothing is ordered before this yes.
-    ui.note(planLines(target, site, deps.home), "The plan");
+    ui.note(planLines(target, site), "The plan");
     const go = await ui.confirm(
       target.kind === "cloud" && (target.reused === null || target.reused.status !== "running")
         ? `${target.reused === null ? "Order the machine" : `Start ${target.reused.name}`} from ${target.entry.title} and install sitesolide? ${target.entry.title} bills it from now on`

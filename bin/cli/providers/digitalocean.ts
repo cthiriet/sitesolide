@@ -74,7 +74,6 @@ import {
   machineOfTags,
   MANAGED_LABEL,
   MANAGED_VALUE,
-  MACHINE_LABEL,
   patiently,
   ProviderError,
   tagsFor,

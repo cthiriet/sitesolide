@@ -11,8 +11,6 @@
  * door: a dry run test therefore receives a simulated VM, empty by default,
  * whose ssh only answers readings and refuses all the rest. See fake-vm.ts.
  */
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { createFakeVm, type FakeVm } from "./fake-vm";
 

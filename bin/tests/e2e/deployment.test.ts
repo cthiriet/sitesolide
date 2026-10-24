@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment, HEADLESS_ANSWER } from "../../cli/fragment";
 import { readManifest } from "../../cli/manifest";
-import { generateUnit, generateUnits, unitFileName } from "../../cli/unit";
+import { generateUnits, unitFileName } from "../../cli/unit";
 import { SWITCHES } from "./fake-ssh";
 import { createFakeVm } from "./fake-vm";
 import { REPO, run, TESTS_ROOT } from "./run";

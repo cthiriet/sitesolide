@@ -15,7 +15,6 @@ import {
 import { removalActions } from "../cli/removal";
 import {
   MARKER_DONE,
-  currentPairsCommand,
   foreignUnit,
   listUnitsCommand,
   readUnitOrigins,

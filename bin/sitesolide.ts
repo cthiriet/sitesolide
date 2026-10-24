@@ -105,7 +105,7 @@ import { resolve4, resolve6 } from "node:dns/promises";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { compareDirectives, countItemized, sameDirectives, summariseDivergence } from "./cli/comparison";
+import { compareDirectives, countItemized, summariseDivergence } from "./cli/comparison";
 import {
   ACME_STAGING,
   acmeStaging,

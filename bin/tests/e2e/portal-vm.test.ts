@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  copyFileSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
