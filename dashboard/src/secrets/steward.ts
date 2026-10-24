@@ -602,6 +602,15 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return taken ?? Promise.resolve(busy());
   }
 
+  /** An owner's route on the platform's files: the body, with the live token and `texts` strings, then `task` under the lock. */
+  function lockedRoute(texts: string[], task: (body: Body) => Promise<Response>): Handler {
+    return async (req) => {
+      const body = await bodyWithToken(req, texts);
+      if (body instanceof Response) return body;
+      return underLock(req, body, () => task(body));
+    };
+  }
+
   // --- systemctl show --------------------------------------------------------
 
   /**
@@ -1155,12 +1164,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return new Response(null, { status: 204 });
   }
 
-  async function readValue(req: Request): Promise<Response> {
-    const body = await bodyWithToken(req, ["slug", "file", "variable"]);
-    if (body instanceof Response) return body;
-    return underLock(req, body, () => readValueTask(body));
-  }
-
   /** A variable's value, under the lock, for the owner. */
   async function readValueTask(body: Body): Promise<Response> {
     const found = await target("read", body);
@@ -1186,12 +1189,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   function passwordRefusal(c: Target, variable: unknown): Refusal | null {
     if (!isPassword(c.declaration, variable)) return null;
     return { error: "out-of-scope", message: `${variable as string} is a password hash, change it with Change password` };
-  }
-
-  async function setVariable(req: Request): Promise<Response> {
-    const body = await bodyWithToken(req, ["slug", "file", "variable", "value"]);
-    if (body instanceof Response) return body;
-    return underLock(req, body, () => setVariableTask(body));
   }
 
   /** Sets a variable, under the lock. The answer is the file's view, never the value written. */
@@ -1222,12 +1219,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return fileResponse(found);
   }
 
-  async function removeVariable(req: Request): Promise<Response> {
-    const body = await bodyWithToken(req, ["slug", "file", "variable"]);
-    if (body instanceof Response) return body;
-    return underLock(req, body, () => removeVariableTask(body));
-  }
-
   async function removeVariableTask(body: Body): Promise<Response> {
     const found = await target("remove", body);
     if (found instanceof Response) return found;
@@ -1244,12 +1235,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     await rewrite(found, managed, remove(managed.document, variable));
     await writeLog("remove", "ok", body, null, variable);
     return fileResponse(found);
-  }
-
-  async function createFile(req: Request): Promise<Response> {
-    const body = await bodyWithToken(req, ["slug", "file"]);
-    if (body instanceof Response) return body;
-    return underLock(req, body, () => createFileTask(body));
   }
 
   async function createFileTask(body: Body): Promise<Response> {
@@ -1284,12 +1269,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
    * previous one: after a Change password following a leak, a stolen unlock
    * token would otherwise be enough to make the old one valid again.
    */
-  async function restore(req: Request): Promise<Response> {
-    const body = await bodyWithToken(req, ["slug", "file"]);
-    if (body instanceof Response) return body;
-    return underLock(req, body, () => restoreTask(body));
-  }
-
   async function restoreTask(body: Body): Promise<Response> {
     const found = await target("restore", body);
     if (found instanceof Response) return found;
@@ -1746,13 +1725,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   // owner's, unlocked. A set is always written and journaled under its name:
   // no answer says whether a value changed.
 
-  /** The store's folder and files, as `<secrets>/projects/<slug>/...`. */
+  /** The stores' root: a slug's folder, env and files are `storePaths(slug, storeRoot)`, which throws on what is no slug. */
   const storeRoot = pathUnder(secretsFolder, "projects") ?? `${secretsFolder}/projects`;
-
-  /** The env file and the files folder of a slug's store, the slug validated (storePaths throws). */
-  function storeLocation(slug: string): { folder: string; env: string; files: string } {
-    return storePaths(slug, storeRoot);
-  }
 
   /**
    * Does this unit read the project's store, its env file last, as every
@@ -1761,14 +1735,14 @@ export function createSteward(system: System, options: StewardOptions): StewardH
    */
   function unitReadsStoreLast(text: string, slug: string): boolean {
     const files = unitEnvironment(text).files;
-    return files.length > 0 && files.at(-1)!.path === storeLocation(slug).env;
+    return files.length > 0 && files.at(-1)!.path === storePaths(slug, storeRoot).env;
   }
 
   /** Does this unit read anything of the project's store, its env or its files? A restart then applies something. Never for a folder that is no slug, the landing's. */
   function unitTouchesStore(text: string, slug: string): boolean {
     if (!isValidSlug(slug)) return false;
     const environment = unitEnvironment(text);
-    const { env, files } = storeLocation(slug);
+    const { env, files } = storePaths(slug, storeRoot);
     return environment.files.some((file) => file.path === env) || environment.credentials.some((credential) => credential.id === CREDENTIAL_ID && credential.path === files);
   }
 
@@ -1908,7 +1882,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   async function readStore(slug: string): Promise<StoreReading> {
     const empty: StoreReading = { exists: false, refusal: null, env: { kind: "absent" }, files: [], previous: false };
     try {
-      const location = storeLocation(slug);
+      const location = storePaths(slug, storeRoot);
       const parts = [
         ["root", storeRoot],
         ["folder", location.folder],
@@ -2190,7 +2164,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   async function readStoreFileBytes(slug: string, name: string): Promise<{ bytes: Uint8Array } | { refusal: Refusal }> {
     const examined = await system.readStoreFile(slug, name);
     if (examined.kind === "absent") return { refusal: { error: "not-found", message: `${name} is not in the store` } };
-    const reason = storeFileReason(examined.info, await rootAccount(), `${storeLocation(slug).files}/${name}`, MAX_STORE_FILE_BYTES) ?? (examined.bytes === null ? "could not be read" : null);
+    const reason = storeFileReason(examined.info, await rootAccount(), `${storePaths(slug, storeRoot).files}/${name}`, MAX_STORE_FILE_BYTES) ?? (examined.bytes === null ? "could not be read" : null);
     if (reason !== null) return { refusal: { error: "unmanaged", message: `${name} in the store is not managed here: ${reason}` } };
     return { bytes: examined.bytes! };
   }
@@ -2459,13 +2433,13 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   const personStore = (task: StoreTask) => (_req: Request, body: Body, who: Who) => task(body, { who, kind: "person", creating: false, restores: who.restores === true });
 
   /** A token's store work, the token judged by the control routes, its turn under the lock. */
+  const tokenActor = (who: Who, creating: boolean): StoreActor => ({ who, kind: "token", creating, restores: false });
   const storeForToken: StoreForToken = {
-    list: (slug, who, creating) => storeListTask(slug, { who, kind: "token", creating, restores: false }),
-    change: (req, change, who, creating, still) =>
-      underLockWith(req, still, () => storeChangeTask(change.slug, change.set, change.remove, { who, kind: "token", creating, restores: false })),
-    generate: (req, request, who, creating, still) => underLockWith(req, still, () => storeGenerateTask({ ...request }, { who, kind: "token", creating, restores: false })),
-    setFile: (req, request, who, creating, still) => underLockWith(req, still, () => storeFileTask({ ...request }, { who, kind: "token", creating, restores: false })),
-    removeFile: (req, request, who, still) => underLockWith(req, still, () => storeFileRemoveTask({ ...request }, { who, kind: "token", creating: false, restores: false })),
+    list: (slug, who, creating) => storeListTask(slug, tokenActor(who, creating)),
+    change: (req, change, who, creating, still) => underLockWith(req, still, () => storeChangeTask(change.slug, change.set, change.remove, tokenActor(who, creating))),
+    generate: (req, request, who, creating, still) => underLockWith(req, still, () => storeGenerateTask({ ...request }, tokenActor(who, creating))),
+    setFile: (req, request, who, creating, still) => underLockWith(req, still, () => storeFileTask({ ...request }, tokenActor(who, creating))),
+    removeFile: (req, request, who, still) => underLockWith(req, still, () => storeFileRemoveTask({ ...request }, tokenActor(who, false))),
   };
 
   // --- Access and the people who sign in -----------------------------------------
@@ -2651,10 +2625,10 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     "/log": { GET: readLog },
     "/unlock": { POST: unlock },
     "/lock": { POST: lock },
-    "/value": { POST: readValue },
-    "/variable": { PUT: setVariable, DELETE: removeVariable },
-    "/file": { POST: createFile },
-    "/restore": { POST: restore },
+    "/value": { POST: lockedRoute(["slug", "file", "variable"], readValueTask) },
+    "/variable": { PUT: lockedRoute(["slug", "file", "variable", "value"], setVariableTask), DELETE: lockedRoute(["slug", "file", "variable"], removeVariableTask) },
+    "/file": { POST: lockedRoute(["slug", "file"], createFileTask) },
+    "/restore": { POST: lockedRoute(["slug", "file"], restoreTask) },
     "/password": { POST: changePassword },
     "/portal": { POST: togglePortal },
     "/general": { POST: setGeneral },
