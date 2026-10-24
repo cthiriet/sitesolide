@@ -17,7 +17,7 @@ import type { AuditEntry, AuditRow, DeploymentState, Role, Roles, Scope, Site, T
 const DAY = 24 * 60 * 60 * 1000
 
 /** Within this, an expiry is worth a look. */
-export const EXPIRY_WARNING_MS = 7 * DAY
+const EXPIRY_WARNING_MS = 7 * DAY
 
 /** The expiry offered by the form. */
 export const EXPIRY_CHOICES: readonly { label: string; days: number | null }[] = [
@@ -291,7 +291,7 @@ export function tokenRefusal(status: number, body: { error?: string; message?: s
 export type ActivityLine = { key: string; at: number; text: string; tone: Tone; meta: string | null }
 
 /** Lines Token activity shows, as many as each of its two sources hands over. */
-export const ACTIVITY_LINES = 50
+const ACTIVITY_LINES = 50
 
 /**
  * Who a line by a token names, as the Tokens page knows its tokens: its

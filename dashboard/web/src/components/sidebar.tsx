@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils"
 import { VERSION } from "@/lib/version"
 
 /** The icon of each machine page. */
-export const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
+const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
   home: Globe,
   activity: History,
   people: UsersRound,
@@ -34,7 +34,7 @@ export const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
 }
 
 /** The icon of each section of a site, shared by the sidebar and the tabs. */
-export const SECTION_ICONS: Record<Section, LucideIcon> = {
+const SECTION_ICONS: Record<Section, LucideIcon> = {
   overview: Gauge,
   audience: ChartNoAxesColumn,
   secrets: KeyRound,

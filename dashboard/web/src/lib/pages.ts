@@ -112,10 +112,10 @@ export const SECTIONS: readonly SectionEntry[] = [
 ]
 
 /** The parameter that names the site: `/site/secrets/?s=cms`. */
-export const SITE_PARAM = "s"
+const SITE_PARAM = "s"
 
 /** The parameter of the older addresses, `/sites/?site=cms` and `/secrets/?site=cms`. */
-export const LEGACY_PARAM = "site"
+const LEGACY_PARAM = "site"
 
 /** The query parameters, read only: a page reads them, only navigation changes them. */
 export type SearchParams = Pick<URLSearchParams, "get" | "getAll" | "has">

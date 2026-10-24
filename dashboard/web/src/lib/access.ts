@@ -451,7 +451,7 @@ function domainsText(signIn: SignIn): string {
 }
 
 /** The line under an empty field. */
-export function emptyHint(signIn: SignIn): string {
+function emptyHint(signIn: SignIn): string {
   return signIn.configured
     ? "An email, or @company.com for everyone with an account there."
     : "An email. Company sign-in isn't set up here, so they get password access."
@@ -553,7 +553,7 @@ export function byText(by: string, you: Viewer): string {
 export type Expiry = { text: string; tone: Tone }
 
 /** Within this, a password access's expiry is worth a look. */
-export const EXPIRY_SOON_MS = 24 * 3600_000
+const EXPIRY_SOON_MS = 24 * 3600_000
 
 /** A password access's expiry in words: "expires in 5d", "expired 2d ago", "no expiry". */
 export function passwordExpiry(password: NonNullable<EntryView["password"]>, now: number): Expiry {

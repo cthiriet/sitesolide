@@ -61,7 +61,7 @@ export type SecretsData = {
  * asked for while another is in flight follows it instead of being lost: an
  * action that has just written must see its effect.
  */
-export function useSecrets(generation: number, onSessionExpired: () => void, enabled = true): SecretsData {
+function useSecrets(generation: number, onSessionExpired: () => void, enabled = true): SecretsData {
   const [projects, setProjects] = useState<ProjectView[] | null>(null)
   const [until, setUnlockedUntil] = useState<number | null>(null)
   const [problem, setProblem] = useState<string | null>(null)

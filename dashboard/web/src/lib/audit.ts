@@ -405,7 +405,7 @@ function splitNote(note: string | null, member: string | null): { who: string; r
  * UTC", said as the rest of the dashboard says a time: local, its zone named.
  * Anything else, "no expiry" among others, as it was written.
  */
-export function expiryNote(until: string, timeZone?: string): string | null {
+function expiryNote(until: string, timeZone?: string): string | null {
   if (until === "") return null
   const found = /^until (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) UTC$/.exec(until)
   const ms = found === null ? Number.NaN : Date.parse(`${found[1]}T${found[2]}:00Z`)
@@ -651,7 +651,7 @@ export function detailLines(detail: Record<string, unknown> | null, prefix = "")
 
 // --- The exports -----------------------------------------------------------------
 
-export const CSV_COLUMNS = ["at", "source", "actor", "action", "target", "site", "detail"] as const
+const CSV_COLUMNS = ["at", "source", "actor", "action", "target", "site", "detail"] as const
 
 /**
  * One CSV field. Quoted when it must be, and a value a spreadsheet would read

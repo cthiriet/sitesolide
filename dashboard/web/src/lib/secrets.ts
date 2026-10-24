@@ -506,7 +506,7 @@ function generalVerb(detail: string | null): string {
  * `store/<name>` for one of its files. Never a platform file's name, which is
  * flat.
  */
-export const STORE_PLACE = "store"
+const STORE_PLACE = "store"
 
 /** A file of the store, by its name alone: `store/gcp.json` is `gcp.json`; anything else is null. */
 export function storeFileOf(place: string | null): string | null {

@@ -52,7 +52,7 @@ export function queryWords(query: string): string[] {
 }
 
 /** What the Access column shows, spelled out, including what a screen reader reads. */
-export function accessTexts(site: Pick<Site, "portal" | "lock">): string[] {
+function accessTexts(site: Pick<Site, "portal" | "lock">): string[] {
   const access = siteAccess(site)
   switch (access.kind) {
     case "code":
@@ -76,7 +76,7 @@ export function accessTexts(site: Pick<Site, "portal" | "lock">): string[] {
  * of a project likewise, by name, port, Background for a worker and schedule
  * for a scheduled one, as its Overview shows them.
  */
-export function siteTexts(site: SearchableSite): string[] {
+function siteTexts(site: SearchableSite): string[] {
   const address = siteAddress(site)
   return [
     site.slug,
@@ -104,7 +104,7 @@ export function siteTexts(site: SearchableSite): string[] {
  * A site's normalised text. The fields are separated by a line break: a query
  * word never contains a space, so it cannot match across two fields.
  */
-export function siteFingerprint(site: SearchableSite): string {
+function siteFingerprint(site: SearchableSite): string {
   return normalize(siteTexts(site).join("\n"))
 }
 

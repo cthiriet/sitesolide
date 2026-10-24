@@ -49,7 +49,7 @@ export function useSite(slug: string): SiteData {
 }
 
 /** A site's state in one word and one tone, for the switcher and the sidebar: the same as under its title. */
-export function useSiteStates(): { slug: string; tone: ReturnType<typeof siteState>["tone"]; label: string }[] {
+function useSiteStates(): { slug: string; tone: ReturnType<typeof siteState>["tone"]; label: string }[] {
   const { snapshot } = useData()
   return useMemo(() => {
     if (snapshot === null) return []
