@@ -665,7 +665,7 @@ async function restore(machine: GeneralMachine, slug: string, backup: Backup, re
       // A codes file that did not exist cannot be removed from inside the
       // unit, /etc/caddy being read-only there: an empty table says the same.
       const wanted = codes ?? "{}\n";
-      if (currentCodes === undefined || (currentCodes !== codes && !(codes === null && currentCodes === null))) {
+      if (currentCodes === undefined || currentCodes !== codes) {
         await machine.writeCodes(wanted, { uid: before.permissions.uid, gid: before.permissions.gid });
       }
       const currentFragment = await readCautiously(() => machine.readLocksFragment());

@@ -164,12 +164,12 @@ export function planGeneral(slug: string, action: Action, deployed: Deployed, op
   // at stake: an unreadable codes file never stops a site that has nothing to
   // do with the locks from being restricted or made public.
   const inService = installedCode(deployed.fragment, slug);
-  const codesRead = typeof deployed.codes === "object" && deployed.codes !== null ? null : deployed.codes;
   let codes: Record<string, unknown> | null = null;
-  let codesError: string | null = typeof deployed.codes === "object" && deployed.codes !== null ? deployed.codes.error : null;
-  if (codesError === null) {
+  let codesError: string | null = null;
+  if (typeof deployed.codes === "object" && deployed.codes !== null) codesError = deployed.codes.error;
+  else {
     try {
-      codes = readCodes(codesRead);
+      codes = readCodes(deployed.codes);
     } catch (error) {
       codesError = (error as Error).message;
     }
@@ -207,11 +207,11 @@ export function planGeneral(slug: string, action: Action, deployed: Deployed, op
   // The rewritten text is re-read and judged again: it is the one that goes
   // onto the disk, and it must say exactly what `targetRefusal` judged on the
   // object. Only the fields that change are rewritten.
-  let newRaw: string | null = null;
+  const portalChanged = isProtected(manifest) !== (target === "restricted");
   let next = deployed.manifest;
-  if (isProtected(manifest) !== (target === "restricted")) next = setPortal(next, target === "restricted");
+  if (portalChanged) next = setPortal(next, target === "restricted");
   if (locked !== (target === "code")) next = setLock(next, target === "code");
-  if (next !== deployed.manifest) newRaw = next;
+  const newRaw = next === deployed.manifest ? null : next;
   const newManifest = read(next);
   if (newManifest === null) return { kind: "rejects", message: "the rewritten sitesolide.json is unreadable" };
   const errors = validate(newManifest);
@@ -226,7 +226,6 @@ export function planGeneral(slug: string, action: Action, deployed: Deployed, op
   // generation, and a code set over the earlier block would leave the domain
   // open behind a closed preview, which the probe would then refuse.
   let blockAction: BlockAction = { kind: "none" };
-  const portalChanged = isProtected(manifest) !== (target === "restricted");
   if (!portalChanged && expected !== null && deployed.block !== null && !sameDirectives(deployed.block, expected)) {
     const block = generate(newManifest);
     if (block === null || fragmentIsProtected(block) !== (target === "restricted")) {
