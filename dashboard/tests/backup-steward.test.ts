@@ -8,8 +8,8 @@ import { openDatabase, recordAudit, replaceSnapshots, writeSetting } from "../sr
 import type { BackupsResponse, RestoreResponse } from "../src/backup/protocol";
 import { createBackupReader } from "../src/backup/reader";
 import { INTERRUPTED_REASON, PREVIOUS } from "../src/backup/recovery";
-import { DASHBOARD_REASON, NOT_INSTALLED_REASON, PORTAL_REASON, RUNNING_REASON } from "../src/backup/routes";
-import { encodeRequest } from "../src/backup/request";
+import { NOT_INSTALLED_REASON, RUNNING_REASON } from "../src/backup/routes";
+import { DASHBOARD_REFUSAL, PORTAL_REFUSAL, encodeRequest } from "../src/backup/request";
 import { writeStatus } from "../src/backup/status";
 import { ROOT_FILES } from "../src/secrets/scope";
 import { createSecretsRoutes, SESSION_ACTOR } from "../src/secrets/routes";
@@ -158,12 +158,12 @@ describe("what the steward says of a site's backups", () => {
   test("a site left out says why, and the dashboard is not restored from itself", async () => {
     expect(await backups("notes")).toMatchObject({ excluded: "a static site has no data folder", restorable: false, reason: "no data folder to restore into" });
     expect(await backups("scratch")).toMatchObject({ excluded: "opted out by its sitesolide.json" });
-    expect(await backups("dashboard")).toMatchObject({ restorable: false, reason: DASHBOARD_REASON });
+    expect(await backups("dashboard")).toMatchObject({ restorable: false, reason: DASHBOARD_REFUSAL });
   });
 
   test("nor the portal, whose old copy would bring back its old audit and the tables it kept before the access registry", async () => {
-    expect(PORTAL_REASON).toContain("the tables it kept before the access registry");
-    expect(await backups("portal")).toMatchObject({ restorable: false, reason: PORTAL_REASON });
+    expect(PORTAL_REFUSAL).toContain("the tables it kept before the access registry");
+    expect(await backups("portal")).toMatchObject({ restorable: false, reason: PORTAL_REFUSAL });
   });
 
   test("a steward without the component's folders says backups are not set up", async () => {
@@ -216,7 +216,7 @@ describe("a restore asked of the steward", () => {
     expect(await refused({ snapshot: snapshotName("cms", T - 7_200_000, "scheduled") })).toMatchObject({ status: 404 });
     expect(await refused({ actor: "root\nX" })).toMatchObject({ status: 400 });
     expect(await refused({ slug: "dashboard", confirmation: "dashboard", snapshot: snapshotName("dashboard", T, "scheduled") })).toMatchObject({ status: 403 });
-    expect(await refused({ slug: "portal", confirmation: "portal", snapshot: snapshotName("portal", T, "scheduled") })).toMatchObject({ status: 403, body: { message: PORTAL_REASON } });
+    expect(await refused({ slug: "portal", confirmation: "portal", snapshot: snapshotName("portal", T, "scheduled") })).toMatchObject({ status: 403, body: { message: PORTAL_REFUSAL } });
     expect((await call("POST", "/backups/restore", { ...(await restoreBody()), extra: 1 })).status).toBe(400);
     expect(systemctlCalls.filter((args) => args[0] === "start")).toEqual([]);
   });

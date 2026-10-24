@@ -20,9 +20,9 @@ import type { Check } from "./status";
 import type { ErrorCode } from "../secrets/protocol";
 import { readPageQuery } from "../secrets/log";
 import { checkSite, isSiteFolder, type Site } from "../secrets/scope";
-import type { BackupReader } from "./reader";
+import { NO_SETTINGS, type BackupReader } from "./reader";
 import { recoveryPlan } from "./recovery";
-import { DASHBOARD_REFUSAL, PORTAL_REFUSAL, excludedFromRestore, isActor, judgeResult, restoreUnit } from "./request";
+import { excludedFromRestore, isActor, judgeResult, restoreUnit } from "./request";
 import type { BackupAuditResponse, BackupsResponse, BackupsView, CheckView, RestoreResponse, RestoreView, SnapshotView } from "./protocol";
 
 export type Command = { code: number; output: string };
@@ -54,8 +54,6 @@ export type BackupRoutes = {
 };
 
 export const NOT_INSTALLED_REASON = "backups are not set up on this server: run sitesolide setup again for this machine, without --minimal";
-export const DASHBOARD_REASON = DASHBOARD_REFUSAL;
-export const PORTAL_REASON = PORTAL_REFUSAL;
 export const RUNNING_REASON = "a restore of this site is in progress";
 /** The requester the owner's route records: the holder of the dashboard's password, as every component's audit names them. */
 export const OWNER_ACTOR = "owner";
@@ -158,7 +156,7 @@ export function createBackupRoutes(dependencies: BackupRouteDependencies): Backu
     const snapshots = snapshotsOf(folder);
     const status = reader?.status() ?? null;
     const mine = status?.projects[folder];
-    const settings = reader?.settings() ?? { retention: null, offsite: { target: null, error: null }, checks: { local: null, offsite: null }, repository: null };
+    const settings = reader?.settings() ?? NO_SETTINGS;
     const restore = await restoreView(folder);
     const reason = refusalReason(site, restore, snapshots);
     return {

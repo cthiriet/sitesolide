@@ -33,7 +33,8 @@ export type Settings = {
   repository: { bytes: number; at: string } | null;
 };
 
-const NO_SETTINGS: Settings = { retention: null, offsite: { target: null, error: null }, checks: { local: null, offsite: null }, repository: null };
+/** What is known of the settings before a run wrote them, or without the component. */
+export const NO_SETTINGS: Settings = { retention: null, offsite: { target: null, error: null }, checks: { local: null, offsite: null }, repository: null };
 
 export type BackupReader = {
   /** The restore's template is installed, and the component has a state folder. */

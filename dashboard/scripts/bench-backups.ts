@@ -20,7 +20,8 @@
 import { snapshotName } from "../borrowed/backups";
 import type { AuditEntry, BackupsView, RestoreView, SnapshotView } from "../src/backup/protocol";
 import { INTERRUPTED_REASON } from "../src/backup/recovery";
-import { DASHBOARD_REASON, NOT_INSTALLED_REASON, RUNNING_REASON } from "../src/backup/routes";
+import { DASHBOARD_REFUSAL } from "../src/backup/request";
+import { NOT_INSTALLED_REASON, RUNNING_REASON } from "../src/backup/routes";
 
 type Folder = { slug: string; manifest: Record<string, unknown> | null };
 type Routes = Record<string, Record<string, (req: Request) => Response | Promise<Response>>>;
@@ -88,7 +89,7 @@ export function benchBackupRoutes(options: { start: number; folders: Folder[]; i
     const failedRun = slug === "builder";
     let reason: string | null = null;
     if (!installed) reason = NOT_INSTALLED_REASON;
-    else if (slug === "dashboard") reason = DASHBOARD_REASON;
+    else if (slug === "dashboard") reason = DASHBOARD_REFUSAL;
     else if (restore?.state === "running") reason = RUNNING_REASON;
     else if (!isApp(folder)) reason = "no data folder to restore into";
     else if (slug === "library") reason = INTERRUPTED_REASON;
@@ -171,7 +172,7 @@ export function benchBackupRoutes(options: { start: number; folders: Folder[]; i
         if (folder === undefined) return refusal(403, "out-of-scope", "not a site deployed under /srv/sites");
         const current = view(folder);
         if (!current.installed) return refusal(404, "not-found", NOT_INSTALLED_REASON);
-        if (folder.slug === "dashboard") return refusal(403, "out-of-scope", DASHBOARD_REASON);
+        if (folder.slug === "dashboard") return refusal(403, "out-of-scope", DASHBOARD_REFUSAL);
         const snapshot = current.snapshots.find((candidate) => candidate.name === body.snapshot);
         if (snapshot === undefined) return refusal(404, "not-found", `no such snapshot of ${folder.slug} any more`);
         if (body.confirmation !== folder.slug) return refusal(400, "invalid", `type ${folder.slug} to confirm the restore`);
