@@ -73,8 +73,8 @@ All in `src/styles/global.css`, under `:root` (light) and `.dark`. A component
 palest, for a surface that says "here", and `primary`, the accent. Dark lifts
 the accent and turns the tint into a deep petrol surface.
 
-**The logo is the landing page's**, drawn as sitesolide.fr draws it in its
-header: the block laid twice, a hard shadow offset down and to the right, then
+**The logo is the landing page's**, drawn as it is in that page's header: the
+block laid twice, a hard shadow offset down and to the right, then
 a petrol face ringed with a line. Its three tokens are the landing page's own
 values rather than the dashboard's greys, so the mark is the same on both
 sites; in light, its face is the accent itself. The portal's page and

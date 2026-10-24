@@ -32,8 +32,8 @@ const ICON =
 
 /**
  * The portal's logo: a solid block with two slits cut in from opposite
- * sides, the S of sitesolide, drawn as sitesolide.fr and the dashboard draw
- * it, its hard shadow offset down and to the right, then its petrol face
+ * sides, the S of sitesolide, drawn as the landing page and the dashboard
+ * draw it, its hard shadow offset down and to the right, then its petrol face
  * ringed with the line, in the landing page's light colours. Inline rather
  * than as a file, for the same reason as the rest of the page; presentation
  * attributes rather than a class, so that it needs nothing of the stylesheet.

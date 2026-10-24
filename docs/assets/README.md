@@ -5,14 +5,14 @@
 | `logo-light.svg` | The logo on a light background: the README, documentation. |
 | `logo-dark.svg` | The same on a dark background, where the mark's line turns pale and its shadow lifts, as on the landing page in dark. |
 | `mark.svg` | The mark alone, square, for an avatar or an icon. |
-| `social-preview.png` | The repository's social card, 1280 × 640, set under *Settings → Social preview*. |
-| `screenshots/` | Screenshots, `dashboard.png` in the README: the real dashboard, run by its page bench in showcase mode (`BENCH_SHOWCASE=1 bun scripts/page-bench.ts` in `dashboard/`), with fictitious sites, framed on near black graphite lit by the brand's petrol. |
+| `social-preview.png` | The repository's social card, 1280 × 640: the landing page's share card, its title and its command, with the repository's address. GitHub does not read it from here: a new one is uploaded by hand under *Settings → Social preview*. |
+| `screenshots/` | Screenshots, `dashboard.png` in the README: the real dashboard, run by its page bench in showcase mode (`BENCH_SHOWCASE=1 bun scripts/page-bench.ts` in `dashboard/`), with fictitious sites, framed on near black graphite lit by the brand's petrol. The dashboard is taken at 1440 × 900 and the door page at 1200 × 720, both at twice the density, then set in a window 1200 and 1000 wide. |
 
 **The mark** is a solid block with two slits cut in from opposite sides: the S
 of sitesolide, left standing in the material. The slits are holes rather than
 bars painted over the block, so any background shows through them.
 
-It is drawn as sitesolide.fr's header draws it: the block laid twice, a hard
+It is drawn as the landing page's header draws it: the block laid twice, a hard
 shadow offset by 1.6 down and to the right, then a petrol face ringed with a
 line 1.5 wide. These files, the dashboard (`dashboard/web/src/components/logo.tsx`)
 and the portal's page (`portal/src/page.ts`) carry that drawing; a change goes
