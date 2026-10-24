@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writ
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { INSTALLER_TEMPLATE, type InstallRequest, type InstallerResult, type TokenView } from "../src/control/protocol";
-import { createControlSteward } from "../src/control/steward";
+import { createControlSteward, MAX_CONTROL_BODY_BYTES, type ControlStewardOptions } from "../src/control/steward";
 import { createControlSystem, type ControlSystem } from "../src/control/system";
 
 /**
@@ -28,10 +28,12 @@ type Setup = {
   active: Set<string>;
   journal: string;
   handler: (req: Request) => Promise<Response>;
+  /** The owner's socket's routes, behind the same bound on requests in flight. */
+  owner: (req: Request) => Promise<Response>;
   now: { value: number };
 };
 
-function setup(options: { template?: boolean } = {}): Setup {
+function setup(options: { template?: boolean; steward?: Partial<ControlStewardOptions> } = {}): Setup {
   const root = mkdtempSync(join(tmpdir(), "control-steward-"));
   toClean.push(root);
   for (const folder of ["state", "sites", "units", "installer"]) mkdirSync(join(root, folder));
@@ -39,7 +41,7 @@ function setup(options: { template?: boolean } = {}): Setup {
   const calls: string[] = [];
   const active = new Set<string>();
   const now = { value: 1_800_000_000_000 };
-  const state: Setup = { root, calls, active, journal: "", handler: async () => new Response(), now };
+  const state: Setup = { root, calls, active, journal: "", handler: async () => new Response(), owner: async () => new Response(), now };
   const real = createControlSystem({
     stateFolder: join(root, "state"),
     sitesDir: join(root, "sites"),
@@ -63,7 +65,9 @@ function setup(options: { template?: boolean } = {}): Setup {
       return { code: 0, output: state.journal };
     },
   };
-  state.handler = createControlSteward(system, { zone: ZONE, isUnlocked: async (token) => token === UNLOCK, uidRoot: null, graceMs: 1000 });
+  const handler = createControlSteward(system, { zone: ZONE, isUnlocked: async (token) => token === UNLOCK, uidRoot: null, graceMs: 1000, ...options.steward });
+  state.handler = handler;
+  state.owner = handler.owner;
   return state;
 }
 
@@ -303,6 +307,88 @@ describe("routing", () => {
     const s = setup();
     expect(await (await call(s, "GET", "/control/nothing")).json()).toEqual({ error: "not-found", message: "no such route" });
     expect((await call(s, "DELETE", "/team/tokens")).status).toBe(405);
+    const refused = await call(s, "DELETE", "/tokens/list");
+    expect(refused.status).toBe(405);
+    expect(refused.headers.get("Allow")).toBe("GET");
+    expect(await refused.json()).toEqual({ error: "invalid", message: "method not allowed" });
+    expect((await call(s, "GET", "/__proto__")).status).toBe(404);
+    expect((await s.owner(new Request("http://steward/tokens/list"))).status).toBe(404);
+  });
+});
+
+/** A body that never arrives in full, as long as it is not closed. */
+function endlessBody(): { stream: ReadableStream<Uint8Array>; close: () => void } {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+      c.enqueue(new TextEncoder().encode("{"));
+    },
+  });
+  return { stream, close: () => controller.close() };
+}
+
+describe("what a request may carry", () => {
+  const post = (handler: (req: Request) => Promise<Response>, path: string, init: RequestInit = {}) => handler(new Request(`http://steward${path}`, { method: "POST", ...init }));
+  const answer = async (response: Response) => ({ status: response.status, body: await response.json() });
+  const NOT_AN_OBJECT = { status: 400, body: { error: "invalid", message: "the request body must be a JSON object" } };
+
+  test("no body, or one that is no JSON object, is refused; so is a field the route does not take", async () => {
+    const s = setup();
+    expect(await answer(await post(s.handler, "/tokens/revoke"))).toEqual(NOT_AN_OBJECT);
+    for (const body of ["", "[]", "null", '"id"', "{torn", new Uint8Array([0x7b, 0xff, 0x7d])]) {
+      expect(await answer(await post(s.handler, "/tokens/revoke", { body }))).toEqual(NOT_AN_OBJECT);
+    }
+    expect(await answer(await post(s.handler, "/tokens/revoke", { body: JSON.stringify({ id: "000000000000", admin: true }) }))).toEqual({
+      status: 400,
+      body: { error: "invalid", message: "unexpected field in the request body" },
+    });
+    expect(await answer(await post(s.handler, "/tokens/revoke", { body: JSON.stringify({ id: "000000000000" }) }))).toMatchObject({ status: 404 });
+  });
+
+  test("a body past its bound, announced or not, and one that never arrives, are refused", async () => {
+    const s = setup({ steward: { bodyTimeoutMs: 50 } });
+    const tooLarge = { status: 400, body: { error: "invalid", message: "request body too large" } };
+    const announced = { headers: { "Content-Length": String(MAX_CONTROL_BODY_BYTES + 1) }, body: JSON.stringify({ id: "000000000000" }) };
+    expect(await answer(await post(s.handler, "/tokens/revoke", announced))).toEqual(tooLarge);
+    expect(await answer(await post(s.handler, "/tokens/revoke", { body: JSON.stringify({ id: "x".repeat(MAX_CONTROL_BODY_BYTES) }) }))).toEqual(tooLarge);
+    const start = Date.now();
+    expect(await answer(await post(s.handler, "/tokens/revoke", { body: endlessBody().stream }))).toEqual({ status: 400, body: { error: "invalid", message: "request body too slow" } });
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  test("beyond the requests in flight, both sockets answer 503, and the place frees up afterwards", async () => {
+    const s = setup({ steward: { maxInFlight: 1, bodyTimeoutMs: 10_000 } });
+    const slow = endlessBody();
+    const waiting = post(s.handler, "/tokens/revoke", { body: slow.stream });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const busy = { status: 503, body: { error: "failure", message: "the server is busy, try again in a moment" } };
+    expect(await answer(await s.handler(new Request("http://steward/tokens/list")))).toEqual(busy);
+    expect(await answer(await s.owner(new Request("http://steward/tokens/claim?slug=shop")))).toEqual(busy);
+    slow.close();
+    expect((await waiting).status).toBe(400);
+    expect((await s.handler(new Request("http://steward/tokens/list"))).status).toBe(200);
+  });
+
+  test("an unexpected error answers a generic 500, and the log names the error alone", async () => {
+    const leak = "/etc/sitesolide/a-path-the-error-quotes";
+    const s = setup({
+      steward: {
+        isUnlocked: async () => {
+          throw Object.assign(new Error(leak), { code: "EACCES" });
+        },
+      },
+    });
+    const logged: string[] = [];
+    const original = console.error;
+    console.error = (...parts: unknown[]) => void logged.push(parts.join(" "));
+    try {
+      const response = await post(s.handler, "/tokens/create", { body: JSON.stringify({ token: UNLOCK, label: "Ada", holder: "owner", expiresAt: null, scope: SCOPE }) });
+      expect(await answer(response)).toEqual({ status: 500, body: { error: "failure", message: "unexpected error, see the steward's log on the server" } });
+    } finally {
+      console.error = original;
+    }
+    expect(logged).toEqual(["control: unexpected error (EACCES)"]);
   });
 });
 
