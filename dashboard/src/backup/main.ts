@@ -24,6 +24,7 @@
 import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { isBackupFolder, SERVICE_COMMANDS_FEATURE, type Listing, type ListedSnapshot } from "../../borrowed/backups";
+import { readSecret } from "../prompt";
 import { copyMain, discardMain, downloadMain, extractMain, hookMain, measureMain } from "./child";
 import { configFrom, pathsFrom, STATE_FOLDER, type Environment } from "./config";
 import { decryptStream } from "./crypto";
@@ -87,43 +88,6 @@ export function listing(env: Environment, folder: string): Listing {
   const mine = status?.projects[folder];
   const lastRun = status === null || mine === undefined ? null : { startedAt: status.startedAt, finishedAt: status.finishedAt, ...mine };
   return { folder, snapshots: [...byName.values()].sort((a, b) => b.takenAt - a.takenAt), lastRun };
-}
-
-/** A secret typed without echo, or read from a pipe. Same as scripts/fingerprint.ts. */
-async function readSecret(prompt: string): Promise<string> {
-  process.stderr.write(prompt);
-  const entry = process.stdin;
-  if (!entry.isTTY) {
-    const chunks: Uint8Array[] = [];
-    for await (const chunk of entry) chunks.push(chunk as Uint8Array);
-    process.stderr.write("\n");
-    return Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
-  }
-  entry.setRawMode(true);
-  entry.resume();
-  let value = "";
-  for await (const chunk of entry) {
-    for (const character of (chunk as Uint8Array).toString()) {
-      if (character === "\u0003" || character === "\u0004") {
-        entry.setRawMode(false);
-        process.stderr.write("\n");
-        process.exit(1);
-      }
-      if (character === "\r" || character === "\n") {
-        entry.setRawMode(false);
-        entry.pause();
-        process.stderr.write("\n");
-        return value;
-      }
-      if (character === "\u007f" || character === "\b") {
-        value = value.slice(0, -1);
-        continue;
-      }
-      value += character;
-    }
-  }
-  entry.setRawMode(false);
-  return value;
 }
 
 /**
