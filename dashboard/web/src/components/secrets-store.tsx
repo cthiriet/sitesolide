@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useRef, useState, type ReactNode } from "react"
 import {
   Check,
   Copy,
@@ -30,9 +30,8 @@ import {
   type RestoreTarget,
   type ValueTarget,
 } from "@/components/secrets-store-dialogs"
-import { writeClipboard, writeClipboardLater, useRevealedValue, type ReadResult } from "@/components/secrets-variables"
+import { useValueActions, type ReadResult } from "@/components/secrets-variables"
 import { removeStoreFile, removeStoreVariables, revealStoreValue } from "@/lib/api"
-import { copyShortcut } from "@/lib/signin"
 import { REVEAL_MS, hideCountdown, projectProblems, readService, refusalOf, splitReason, succeeded } from "@/lib/secrets"
 import {
   changeSummary,
@@ -96,77 +95,9 @@ function StoreVariableRow({
   onUnlock: () => void
   read: () => Promise<ReadResult>
 }) {
-  const announce = useAnnounce()
   const offer = storeVariableOffer(store, variable)
-  const { value, fallback, remainingMs, hide, show, canShow, closeFallback } = useRevealedValue(unlocked)
-  const [reading, setReading] = useState<"reveal" | "copy" | null>(null)
-  const [copied, setCopied] = useState(false)
-  const [error, setError] = useState("")
-  const copyTimer = useRef<number | undefined>(undefined)
   const name = variable.name
-
-  useEffect(() => () => window.clearTimeout(copyTimer.current), [])
-
-  function fail(message: string | null) {
-    if (message === null) return
-    setError(message)
-    announce(message)
-  }
-
-  async function toggle() {
-    if (!unlocked) return onUnlock()
-    if (value !== null) {
-      hide()
-      return announce(`${name} hidden`)
-    }
-    if (reading !== null) return
-    setError("")
-    setReading("reveal")
-    try {
-      const result = await read()
-      if (!("value" in result)) return fail(result.message)
-      if (!canShow()) return
-      show(result.value, false)
-      announce(`${name} shown for ${REVEAL_MS / 1000} seconds`)
-    } finally {
-      setReading(null)
-    }
-  }
-
-  function copySucceeded() {
-    setCopied(true)
-    announce(`${name} copied`)
-    window.clearTimeout(copyTimer.current)
-    copyTimer.current = window.setTimeout(() => setCopied(false), 2000)
-  }
-
-  function copyRefused(text: string) {
-    if (!canShow()) return
-    show(text, true)
-    announce(`Couldn't copy automatically. Press ${copyShortcut(navigator.userAgent)} to copy the selected text.`)
-  }
-
-  async function copy() {
-    if (!unlocked) return onUnlock()
-    if (reading !== null) return
-    setError("")
-    if (value !== null) {
-      if (await writeClipboard(value)) return copySucceeded()
-      return copyRefused(value)
-    }
-    setReading("copy")
-    try {
-      const pending = read()
-      if (await writeClipboardLater(pending)) return copySucceeded()
-      const result = await pending
-      if (!("value" in result)) return fail(result.message)
-      if (await writeClipboard(result.value)) return copySucceeded()
-      copyRefused(result.value)
-    } finally {
-      setReading(null)
-    }
-  }
-
+  const { value, fallback, remainingMs, closeFallback, reading, copied, error, toggle, copy } = useValueActions(name, unlocked, read, onUnlock)
   const busy = reading !== null
   const writes = offer.set || offer.generate || offer.remove
   const seconds = REVEAL_MS / 1000

@@ -18,7 +18,7 @@ export type ReadResult = { value: string } | { message: string | null }
 /** The visual feedback of a successful copy lasts two seconds, as elsewhere in the page. */
 const FEEDBACK_MS = 2000
 
-export async function writeClipboard(text: string): Promise<boolean> {
+async function writeClipboard(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text)
     return true
@@ -34,7 +34,7 @@ export async function writeClipboard(text: string): Promise<boolean> {
  * fills in when the value arrives. False if the browser does not allow it: the
  * caller then falls back on `writeText`.
  */
-export async function writeClipboardLater(reading: Promise<ReadResult>): Promise<boolean> {
+async function writeClipboardLater(reading: Promise<ReadResult>): Promise<boolean> {
   if (typeof ClipboardItem === "undefined" || typeof navigator.clipboard?.write !== "function") return false
   const content = reading.then((result) => {
     if (!("value" in result)) throw new Error("read refused")
@@ -79,7 +79,7 @@ const ICON_BUTTON = "text-muted-foreground hover:text-foreground max-md:size-11"
  * `fallback`: the value is shown selected because a copy was refused, for the
  * length of one reveal.
  */
-export function useRevealedValue(unlocked: boolean) {
+function useRevealedValue(unlocked: boolean) {
   const [value, setValue] = useState<string | null>(null)
   const [revealedAt, setRevealedAt] = useState<number | null>(null)
   const [clock, setClock] = useState(() => Date.now())
@@ -136,36 +136,16 @@ export function useRevealedValue(unlocked: boolean) {
 }
 
 /**
- * A variable: its name, its masked value, and its actions.
- *
- * Unlocked, the value is revealed for thirty seconds then masked again. It is
- * also masked again on locking, when the tab goes to the background or the page
- * is left, and when the row unmounts, on changing project or page. It only
- * lives in the state for as long as it is on screen. The copy reads it without
- * displaying it.
- *
- * Locked, the buttons stay in place: touching them asks for the password, then
- * the gesture has to be made again, which the page never replays.
+ * What a row that holds a value does with it, a platform file's variable or
+ * a store's: reveal it for thirty seconds, or copy it without displaying it,
+ * a refused copy showing it selected instead. Locked, both ask for the
+ * unlock, and the gesture has to be made again, which the page never replays.
  */
-export function VariableRow({
-  name,
-  unlocked,
-  read,
-  onUnlock,
-  onEdit,
-  onRemove,
-}: {
-  name: string
-  unlocked: boolean
-  read: () => Promise<ReadResult>
-  onUnlock: () => void
-  onEdit: () => void
-  onRemove: () => void
-}) {
+export function useValueActions(name: string, unlocked: boolean, read: () => Promise<ReadResult>, onUnlock: () => void) {
   const announce = useAnnounce()
   const { value, fallback, remainingMs, hide, show, canShow, closeFallback } = useRevealedValue(unlocked)
-  const [reading, setReading] = useState<"reveal" | "copied" | null>(null)
-  const [copied, setCopiedFlag] = useState(false)
+  const [reading, setReading] = useState<"reveal" | "copy" | null>(null)
+  const [copied, setCopied] = useState(false)
   const [error, setError] = useState("")
   const copyTimer = useRef<number | undefined>(undefined)
 
@@ -198,10 +178,10 @@ export function VariableRow({
   }
 
   function copySucceeded() {
-    setCopiedFlag(true)
+    setCopied(true)
     announce(`${name} copied`)
     window.clearTimeout(copyTimer.current)
-    copyTimer.current = window.setTimeout(() => setCopiedFlag(false), FEEDBACK_MS)
+    copyTimer.current = window.setTimeout(() => setCopied(false), FEEDBACK_MS)
   }
 
   /** The fallback for a refused copy: the value selected, for the length of one reveal. */
@@ -219,7 +199,7 @@ export function VariableRow({
       if (await writeClipboard(value)) return copySucceeded()
       return copyRefused(value)
     }
-    setReading("copied")
+    setReading("copy")
     try {
       const pending = read()
       if (await writeClipboardLater(pending)) return copySucceeded()
@@ -232,6 +212,37 @@ export function VariableRow({
     }
   }
 
+  return { value, fallback, remainingMs, closeFallback, reading, copied, error, toggle, copy }
+}
+
+/**
+ * A variable: its name, its masked value, and its actions.
+ *
+ * Unlocked, the value is revealed for thirty seconds then masked again. It is
+ * also masked again on locking, when the tab goes to the background or the page
+ * is left, and when the row unmounts, on changing project or page. It only
+ * lives in the state for as long as it is on screen. The copy reads it without
+ * displaying it.
+ *
+ * Locked, the buttons stay in place: touching them asks for the password, then
+ * the gesture has to be made again, which the page never replays.
+ */
+export function VariableRow({
+  name,
+  unlocked,
+  read,
+  onUnlock,
+  onEdit,
+  onRemove,
+}: {
+  name: string
+  unlocked: boolean
+  read: () => Promise<ReadResult>
+  onUnlock: () => void
+  onEdit: () => void
+  onRemove: () => void
+}) {
+  const { value, fallback, remainingMs, closeFallback, reading, copied, error, toggle, copy } = useValueActions(name, unlocked, read, onUnlock)
   const busy = reading !== null
   const seconds = REVEAL_MS / 1000
   const lockedTitle = "Unlock to use"
@@ -274,7 +285,7 @@ export function VariableRow({
             !unlocked ? `Show ${name}, unlock first` : value !== null ? `Hide ${name}` : `Show ${name} for ${seconds} seconds`
           }
           aria-busy={reading === "reveal" || undefined}
-          disabled={reading === "copied"}
+          disabled={reading === "copy"}
           onClick={() => void toggle()}
           className={ICON_BUTTON}
         >
@@ -291,12 +302,12 @@ export function VariableRow({
           size="icon-sm"
           title={!unlocked ? lockedTitle : "Copy value"}
           aria-label={unlocked ? `Copy ${name}` : `Copy ${name}, unlock first`}
-          aria-busy={reading === "copied" || undefined}
+          aria-busy={reading === "copy" || undefined}
           disabled={reading === "reveal"}
           onClick={() => void copy()}
           className={ICON_BUTTON}
         >
-          {reading === "copied" ? (
+          {reading === "copy" ? (
             <LoaderCircle className="motion-safe:animate-spin" />
           ) : copied ? (
             <Check className="text-ok-text" />
