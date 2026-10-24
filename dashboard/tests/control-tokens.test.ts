@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { tokenHash } from "../src/sessions";
 import {
   forgetOwnership,
-  EMPTY_TEAM,
   LAST_USE_STEP_MS,
   authenticate,
   bearerOf,
@@ -32,6 +31,8 @@ import { MAX_TOKENS } from "../src/control/protocol";
 const ZONE = "test-zone.invalid";
 const NOW = 1_800_000_000_000;
 const SCOPE = { slugs: ["cms"], create: true, outbound: false, domain: false, public: false, secrets: false };
+/** The registry of a machine with no team.json yet. */
+const EMPTY_TEAM = readTeam(null) as Team;
 
 /** A random source that counts up: every draw differs, and the test is repeatable. */
 function counter(): (bytes: number) => Uint8Array {

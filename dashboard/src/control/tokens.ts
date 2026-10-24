@@ -65,8 +65,6 @@ export type Team = {
   owners: Record<string, string>;
 };
 
-export const EMPTY_TEAM: Team = { version: 2, tokens: [], owners: {} };
-
 /** Slugs one token may be granted. A longer list is a team sharing one token. */
 export const MAX_GRANTED = 100;
 
