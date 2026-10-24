@@ -96,6 +96,9 @@ export type ControlSystem = {
 export const MAX_CONTROL_FILE_BYTES = 1024 * 1024;
 const MAX_MANIFEST = 256 * 1024;
 
+/** The token registry's file: it keeps the name it has on the machine. */
+const TEAM_NAME = "team.json";
+
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const encoder = new TextEncoder();
 const ROOT_ONLY = { owner: null, mode: 0o600 };
@@ -115,9 +118,21 @@ async function run(command: string[], timeoutMs: number): Promise<Command> {
 }
 
 export function createControlSystem(config: ControlSystemConfig): ControlSystem {
-  const teamFile = join(config.stateFolder, "team.json");
   const requests = join(config.stateFolder, "installs");
   const storeRoot = config.storeRoot ?? STORE_ROOT;
+
+  /** A file of the steward's state folder, null when there is none; throws when it is there but cannot be read whole. */
+  function readState(name: string): string | null {
+    const examination = readBounded(join(config.stateFolder, name), MAX_CONTROL_FILE_BYTES);
+    if (examination.kind === "absent") return null;
+    if (examination.bytes === null) throw new Error(`${name} is not a plain file of a reasonable size`);
+    return decoder.decode(examination.bytes);
+  }
+
+  function writeState(name: string, text: string): void {
+    mkdirSync(config.stateFolder, { recursive: true, mode: 0o700 });
+    writeAtomically(config.stateFolder, name, encoder.encode(text), ROOT_ONLY);
+  }
 
   /** Throws on anything but a folder that is there or one that is not: what cannot be read is never taken for nothing. */
   function storeExists(slug: string): boolean {
@@ -135,41 +150,12 @@ export function createControlSystem(config: ControlSystemConfig): ControlSystem 
   return {
     now: () => Date.now(),
 
-    async readTeam() {
-      const examination = readBounded(teamFile, MAX_CONTROL_FILE_BYTES);
-      if (examination.kind === "absent") return null;
-      if (examination.bytes === null) throw new Error("team.json is not a plain file of a reasonable size");
-      return decoder.decode(examination.bytes);
-    },
-
-    async writeTeam(text) {
-      mkdirSync(config.stateFolder, { recursive: true, mode: 0o700 });
-      writeAtomically(config.stateFolder, "team.json", encoder.encode(text), ROOT_ONLY);
-    },
-
-    async readCreations() {
-      const examination = readBounded(join(config.stateFolder, CREATIONS_NAME), MAX_CONTROL_FILE_BYTES);
-      if (examination.kind === "absent") return null;
-      if (examination.bytes === null) throw new Error("creations.json is not a plain file of a reasonable size");
-      return decoder.decode(examination.bytes);
-    },
-
-    async writeCreations(text) {
-      mkdirSync(config.stateFolder, { recursive: true, mode: 0o700 });
-      writeAtomically(config.stateFolder, CREATIONS_NAME, encoder.encode(text), ROOT_ONLY);
-    },
-
-    async readClaims() {
-      const examination = readBounded(join(config.stateFolder, CLAIMS_NAME), MAX_CONTROL_FILE_BYTES);
-      if (examination.kind === "absent") return null;
-      if (examination.bytes === null) throw new Error("claims.json is not a plain file of a reasonable size");
-      return decoder.decode(examination.bytes);
-    },
-
-    async writeClaims(text) {
-      mkdirSync(config.stateFolder, { recursive: true, mode: 0o700 });
-      writeAtomically(config.stateFolder, CLAIMS_NAME, encoder.encode(text), ROOT_ONLY);
-    },
+    readTeam: async () => readState(TEAM_NAME),
+    writeTeam: async (text) => writeState(TEAM_NAME, text),
+    readCreations: async () => readState(CREATIONS_NAME),
+    writeCreations: async (text) => writeState(CREATIONS_NAME, text),
+    readClaims: async () => readState(CLAIMS_NAME),
+    writeClaims: async (text) => writeState(CLAIMS_NAME, text),
 
     async writeRequest(slug, text) {
       if (!isValidSlug(slug)) throw new Error("not a slug");
