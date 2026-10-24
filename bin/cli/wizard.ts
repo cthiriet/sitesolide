@@ -233,7 +233,7 @@ async function connect(deps: WizardDependencies, entry: ProviderEntry, secrets: 
     if (typed === undefined && !status.found) typed = await askCredentials(ui, entry, secrets);
     const found = await resolveCredentials(entry, { stdin: false, ...(typed === undefined ? {} : { given: typed }) }, deps);
     if (isFailure(found)) {
-      ui.error(scrubSecrets(found.message, secrets), (found.details ?? []).map((line) => scrubSecrets(line, secrets)));
+      scrubbedError(ui, found, secrets);
       if (attempt >= TRIES) throw new Stop(1);
       typed = await askCredentials(ui, entry, secrets);
       continue;
@@ -246,7 +246,7 @@ async function connect(deps: WizardDependencies, entry: ProviderEntry, secrets: 
       },
     );
     if (isFailure(opened)) {
-      ui.error(scrubSecrets(opened.message, secrets), (opened.details ?? []).map((line) => scrubSecrets(line, secrets)));
+      scrubbedError(ui, opened, secrets);
       throw new Stop(1);
     }
     try {
@@ -254,13 +254,18 @@ async function connect(deps: WizardDependencies, entry: ProviderEntry, secrets: 
       return { provider: opened, found, locations };
     } catch (error) {
       if (!(error instanceof ProviderError)) throw error;
-      ui.error(scrubSecrets(error.failure.message, secrets), (error.failure.details ?? []).map((line) => scrubSecrets(line, secrets)));
+      scrubbedError(ui, error.failure, secrets);
       const refused = error.failure.error === "provider-unauthenticated" || error.failure.error === "provider-forbidden";
       if (!refused || attempt >= TRIES) throw new Stop(1);
       if (!(await ui.confirm(`Type other ${entry.title} credentials?`, true))) throw new Stop(1);
       typed = await askCredentials(ui, entry, secrets);
     }
   }
+}
+
+/** A failure said at the wizard, every secret typed or found so far scrubbed from it. */
+function scrubbedError(ui: Prompter, failure: { message: string; details?: readonly string[] }, secrets: readonly string[]): void {
+  ui.error(scrubSecrets(failure.message, secrets), (failure.details ?? []).map((line) => scrubSecrets(line, secrets)));
 }
 
 async function askCredentials(ui: Prompter, entry: CredentialSource, secrets: string[]): Promise<Credentials> {
@@ -298,7 +303,7 @@ async function chooseCloud(deps: WizardDependencies, secrets: string[]): Promise
     const location = await pick(ui, "Where?", locations, defaults.location);
     const types = await ui.wait(`Reading what ${entry.title} sells in ${location.label}`, () => provider.types(location.value), (list) => `${list.length} sizes in ${location.label}`).catch((error: unknown) => {
       if (!(error instanceof ProviderError)) throw error;
-      ui.error(scrubSecrets(error.failure.message, secrets), (error.failure.details ?? []).map((line) => scrubSecrets(line, secrets)));
+      scrubbedError(ui, error.failure, secrets);
       return [] as Choice[];
     });
     if (types.length === 0) {
@@ -322,7 +327,7 @@ async function chooseCloud(deps: WizardDependencies, secrets: string[]): Promise
         existing = await ui.wait(`Looking for a machine named ${name}`, () => provider.find(name), (found) => (found === null ? `${name} is free` : `${name} exists`));
       } catch (error) {
         if (!(error instanceof ProviderError)) throw error;
-        ui.error(scrubSecrets(error.failure.message, secrets), (error.failure.details ?? []).map((line) => scrubSecrets(line, secrets)));
+        scrubbedError(ui, error.failure, secrets);
         throw new Stop(1);
       }
       if (existing === null) break;
@@ -532,8 +537,7 @@ async function chooseSite(deps: WizardDependencies, secrets: string[], machine: 
       return { zone, email, dns, credentials: typed, replace };
     } catch (error) {
       if (!(error instanceof DnsError) && !(error instanceof ProviderError)) throw error;
-      const failure = error instanceof DnsError ? { message: error.message, details: error.details } : { message: error.failure.message, details: error.failure.details ?? [] };
-      ui.error(scrubSecrets(failure.message, secrets), failure.details.map((line) => scrubSecrets(line, secrets)));
+      scrubbedError(ui, error instanceof DnsError ? error : error.failure, secrets);
       if (attempt >= TRIES || !(await ui.confirm(`Type other ${dns.title} credentials?`, true))) throw new Stop(1);
       typed = await askCredentials(ui, dns, secrets);
     }
@@ -797,7 +801,7 @@ export async function runWizard(deps: WizardDependencies): Promise<number> {
     // Anything else is said scrubbed, never handed to the runtime, which
     // would print it whole, a provider's own words and a stack included.
     const failure = error instanceof ProviderError ? error.failure : { message: error instanceof Error ? error.message : String(error), details: [] };
-    ui.error(scrubSecrets(failure.message, secrets), (failure.details ?? []).map((line) => scrubSecrets(line, secrets)));
+    scrubbedError(ui, failure, secrets);
     ui.outro("Stopped on an unexpected failure: run sitesolide setup again, it picks up what was made.");
     return 1;
   }
