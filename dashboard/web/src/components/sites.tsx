@@ -1,6 +1,6 @@
 import { useMemo, type MouseEvent } from "react"
-import { Progress } from "@/components/ui/progress"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { MemoryBar } from "@/components/gauge"
 import { ExternalLink } from "@/components/link"
 import { InternalLink, useNavigation } from "@/components/navigation"
 import { SeverityIcon, Panel, Status } from "@/components/page"
@@ -9,7 +9,6 @@ import { useData } from "@/components/data"
 import { roleLabel } from "@/lib/access"
 import { roleOn } from "@/lib/identity"
 import { ago, size } from "@/lib/format"
-import { BAR_CLASSES } from "@/lib/gauges"
 import { siteUrl } from "@/lib/pages"
 import { PENDING_LABEL, type SiteSecretsPanel } from "@/lib/secrets"
 import {
@@ -20,7 +19,6 @@ import {
   rowClickOutcome,
   serviceSummaryOf,
   type Address,
-  type ServiceSummary,
 } from "@/lib/sites"
 import type { Site } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -106,18 +104,6 @@ function AddressCell({ address }: { address: Address }) {
   )
 }
 
-/** Memory over its ceiling, as a short bar: neutral, then in the colours of the service's thresholds. */
-function MemoryBar({ summary, className }: { summary: Extract<ServiceSummary, { kind: "active" }>; className?: string }) {
-  if (summary.percent === null) return null
-  return (
-    <Progress
-      value={summary.percent}
-      aria-hidden="true"
-      className={cn("w-12 shrink-0 [&_[data-slot=progress-track]]:h-1", BAR_CLASSES[summary.level], className)}
-    />
-  )
-}
-
 /** The service's word; neutral, it fades back, a static site having nothing to watch. */
 function ServiceWord({ site, className }: { site: Site; className?: string }) {
   const state = serviceState(site)
@@ -141,7 +127,7 @@ function ServiceCell({ site, now }: { site: Site; now: number }) {
       </span>
       {summary.kind === "active" && summary.memory !== null && (
         <span className="flex items-center gap-2 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
-          <MemoryBar summary={summary} />
+          <MemoryBar percent={summary.percent} level={summary.level} />
           {summary.memory}
         </span>
       )}
@@ -249,7 +235,7 @@ function SiteEntry({ site, severity, now }: RowProps) {
           </span>
           {summary.kind === "active" && summary.memory !== null && (
             <span className="flex items-center gap-1.5 whitespace-nowrap">
-              <MemoryBar summary={summary} className="w-8" />
+              <MemoryBar percent={summary.percent} level={summary.level} className="w-8" />
               {summary.memory}
             </span>
           )}

@@ -68,6 +68,22 @@ export function Track({
   )
 }
 
+/**
+ * A service's memory over its ceiling, as a short bar beside its figure:
+ * neutral, then in the colours of the service's thresholds. Nothing without a
+ * known ceiling.
+ */
+export function MemoryBar({ percent, level, className }: { percent: number | null; level: Level; className?: string }) {
+  if (percent === null) return null
+  return (
+    <Progress
+      value={percent}
+      aria-hidden="true"
+      className={cn("w-12 shrink-0 [&_[data-slot=progress-track]]:h-1", BAR_CLASSES[level], className)}
+    />
+  )
+}
+
 function Gauge({ tile }: { tile: Tile }) {
   return (
     <div className="grid content-start gap-2.5 px-5 py-4 @2xl:py-5">

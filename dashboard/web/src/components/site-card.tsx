@@ -1,13 +1,11 @@
 import { useId, type ReactNode } from "react"
 import { CalendarClock, Cog, FileCode2, Globe, KeyRound, Lock, ShieldCheck, ShieldOff, ShieldX, type LucideIcon } from "lucide-react"
-import { LEVEL_TEXT, Track } from "@/components/gauge"
+import { LEVEL_TEXT, MemoryBar, Track } from "@/components/gauge"
 import { ExternalLink } from "@/components/link"
 import { Banner, Panel, Status } from "@/components/page"
 import { Badge } from "@/components/ui/badge"
-import { Progress } from "@/components/ui/progress"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ABSENT } from "@/lib/format"
-import { BAR_CLASSES } from "@/lib/gauges"
 import { CodeChip } from "@/components/access-word"
 import {
   SERVICE_THRESHOLD_POSITIONS,
@@ -240,13 +238,7 @@ function MemoryLine({ row }: { row: ServiceRow }) {
   if (row.memory === null) return <span className="text-muted-foreground">{ABSENT}</span>
   return (
     <span className="flex items-center gap-2 whitespace-nowrap tabular-nums">
-      {row.memoryPercent !== null && (
-        <Progress
-          value={row.memoryPercent}
-          aria-hidden="true"
-          className={cn("w-12 shrink-0 [&_[data-slot=progress-track]]:h-1", BAR_CLASSES[row.memoryLevel])}
-        />
-      )}
+      <MemoryBar percent={row.memoryPercent} level={row.memoryLevel} />
       {row.memory}
     </span>
   )
