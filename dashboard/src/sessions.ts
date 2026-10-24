@@ -1,7 +1,7 @@
 /**
  * The session, decided and computed. This module opens no database: reading
- * and writing belong to `base.ts`, which makes every rule checkable without a
- * file.
+ * and writing belong to `database.ts`, which makes every rule checkable
+ * without a file.
  *
  * ## No anti-CSRF token, and that is a decision
  *
@@ -16,9 +16,7 @@
  *
  * A token drawn at random and kept in the session row would add nothing that
  * these two checks do not cover: it is exactly the protection the portal gives
- * the apps behind it, which write far more. The
- * question comes up again the day a button from here would touch Caddy or a
- * service, which guest access does not.
+ * the apps behind it, which write far more.
  */
 
 const encoder = new TextEncoder();

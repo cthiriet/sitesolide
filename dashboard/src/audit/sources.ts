@@ -10,9 +10,9 @@
  * | `backups`   | the steward's socket                         | GET /backups/audit     |
  * | `steward`   | the steward's socket                         | GET /log               |
  *
- * No new privilege and no new path: these are the routes the Sharing,
- * Connectors, Backups and Secrets pages already read, with the clients they
- * already use. What is new is only that they are read together.
+ * No new privilege and no new path: each is a route the dashboard already
+ * reads, with the client it already uses. What is new is only that they are
+ * read together.
  *
  * Each reader turns what it gets into one of four states. An answer that does
  * not come, a refusal, or a body that does not read: `unavailable`. A route

@@ -65,17 +65,16 @@ export const ONLINE = PUBLIC_URL.startsWith("https://");
 export const PASSWORD_HASH = process.env.PASSWORD_HASH ?? "";
 
 /**
- * The portal, on the loopback: the dashboard creates and revokes guest access
- * there. The loopback rule opens that port only to site-dashboard, among all
- * the services, see bin/cli/loopback.ts.
+ * The portal, on the loopback: the dashboard signs people in through it and
+ * reads its audit there. The loopback rule opens that port only to
+ * site-dashboard, among all the services, see bin/cli/loopback.ts.
  */
 export const PORTAL_URL = (process.env.PORTAL_URL ?? `http://127.0.0.1:${PORTAL_PORT}`).replace(/\/+$/, "");
 
 /**
  * The steward's Unix socket, which holds the sites' secrets under root's
  * identity. A socket rather than a port: it is guarded by the permissions of
- * its directory, without a second exception to the loopback rule. See
- * PLAN-SECRETS.md.
+ * its directory, without a second exception to the loopback rule.
  */
 export const STEWARD_SOCKET = process.env.STEWARD_SOCKET ?? DEFAULT_SOCKET;
 

@@ -31,7 +31,7 @@
  * With `BACKUP_ISOLATION=none`, the workstation's tests run the same modes as
  * plain children of this process: the code that reads and writes the data is
  * the same, only the identity and the walls differ. The walls are checked by
- * tests/backup-runner.test.ts against bin/cli/unit.ts, and on the machine by
+ * tests/backup-rules.test.ts against bin/cli/unit.ts, and on the machine by
  * the commands of src/backup/README.md.
  *
  * **A child is given its time, and root does not wait past it.** A copy runs

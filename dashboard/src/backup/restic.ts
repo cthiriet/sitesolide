@@ -372,7 +372,6 @@ export function readListing(json: string): Stored[] {
 
 export type Listed = { snapshots: Stored[] } | { failure: ResticResult };
 
-/** A repository's snapshots, ours alone. */
 /**
  * A repository's snapshots, ours alone. With `log`, a listing that finds the
  * repository locked removes the stale locks and is tried once more: a stale

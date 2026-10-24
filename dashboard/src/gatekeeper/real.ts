@@ -25,8 +25,7 @@
  *     /etc/caddy/locks-codes.json, the deployment account's in 0600, which
  *     the unit opens for writing alone and which is rewritten in place;
  *   - nothing for `systemctl`: PID 1 judges the caller's uid 0 by the socket,
- *     not its capabilities (measurement for the steward, RESULTS.md,
- *     measurement 3);
+ *     not its capabilities (the steward's bench, measurement 3);
  *   - nothing for `caddy validate`: /usr/bin/caddy carries no file capability
  *     on the VM (`security.capability` incomplete, reading of 17 September 2026),
  *     and therefore asks none of the bounding set.

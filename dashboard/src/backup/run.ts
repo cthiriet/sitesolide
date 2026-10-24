@@ -467,7 +467,7 @@ async function listLegacyObjects(dependencies: RunDependencies, startedAt: numbe
   }
 }
 
-/** The names a folder's snapshots carry, for retention. */
+/** A folder's snapshots, for retention. */
 const byFolder = (stored: readonly Stored[], folder: string) => stored.filter((snapshot) => snapshot.folder === folder);
 
 /**

@@ -181,9 +181,8 @@ export function createRoutes(store: Store, options: Options, clock: () => number
    * through in its entirety before the first failure is counted, and each
    * attempt would launch its argon2id at the same time as the others: the
    * steward's bench measured that two simultaneous verifications are enough to
-   * get a service killed under MemoryMax=128M, this one's limit
-   * (the bench results). The body is read before the queue: a
-   * slow client makes nobody wait there.
+   * get a service killed under MemoryMax=128M, this one's limit. The body
+   * is read before the queue: a slow client makes nobody wait there.
    */
   let queue: Promise<unknown> = Promise.resolve();
   function oneAtATime<T>(work: () => Promise<T>): Promise<T> {

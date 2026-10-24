@@ -11,7 +11,7 @@
  * on 30 August 2026: the service looped on Restart=always with a
  * "Cannot find module '../../bin/cli/manifest'", and the collector with it.
  *
- * Copying rather than rewriting: `codeValide` decides what Caddy accepts,
+ * Copying rather than rewriting: `isValidCode` decides what Caddy accepts,
  * `isApp` what the CLI generates. A second writing of those rules would
  * sooner or later display a state the machine denies, and that is precisely
  * what this repository spends its time preventing.
@@ -27,7 +27,7 @@ const ROOT = join(import.meta.dir, "..", "..");
 const DESTINATION = join(import.meta.dir, "..", "borrowed");
 
 /**
- * Flat, and that is necessary: `verrous.ts` imports `./config` and `./table`,
+ * Flat, and that is necessary: `locks.ts` imports `./config` and `./table`,
  * which must therefore land beside it.
  */
 const BORROWINGS = [
