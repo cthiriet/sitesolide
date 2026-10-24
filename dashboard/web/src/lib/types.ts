@@ -43,8 +43,6 @@ export type {
   SetRequest,
   ProjectRequest,
   VariableRequest,
-  Failure as SecretsError,
-  FileState,
   FileView,
   LogEntry,
   Operation,
@@ -54,11 +52,9 @@ export type {
   FileResponse,
   LogResponse,
   PasswordResponse,
-  PortalResponse,
   RestartResponse,
   DashboardResponse,
   ValueResponse,
-  OperationResult,
   WithoutToken,
   ServiceView,
   VerdictKind,
@@ -76,12 +72,10 @@ export type {
   StoreChangeResponse,
   StoreFileView,
   StoreMay,
-  StoreMissing,
   StoreRestoreResponse,
   StoreRevealResponse,
   StoreVariableView,
   StoreView,
-  VariableSource,
 } from "../../../borrowed/store-protocol"
 export type { GenerateFormat } from "../../../borrowed/store"
 
@@ -93,8 +87,6 @@ export type { GenerateFormat } from "../../../borrowed/store"
 export type {
   ConnectorView,
   ConnectorsView,
-  ConnectorRequest,
-  GrantRecord,
   DashboardConnectorsResponse,
   ConnectorsActivityResponse,
   EgressAuditRow,
@@ -106,7 +98,7 @@ export type {
  * them, and what they may do. `import type` as above: the rules of who may
  * deploy what stay with the steward and the installer.
  */
-export type { Scope, TokenView, DeploymentState, AuditEntry, TeamDeployment, TeamPageResponse, CreatedTokenResponse } from "../../../src/control/protocol"
+export type { Scope, TokenView, DeploymentState, AuditEntry, TeamPageResponse, CreatedTokenResponse } from "../../../src/control/protocol"
 
 /**
  * Who is signed in, from the contract of the people who sign in
@@ -136,7 +128,7 @@ export type {
  * The machine's audit, every component's in one shape (src/audit/protocol.ts).
  * Types only: which rows exist and what they hold is the components' to say.
  */
-export type { AuditResponse, AuditRow, AuditSource, SourceState, SourceStatus } from "../../../src/audit/protocol"
+export type { AuditResponse, AuditRow, AuditSource, SourceStatus } from "../../../src/audit/protocol"
 
 /**
  * The backups, from the contract the steward and the service share
@@ -149,9 +141,7 @@ export type {
   BackupsResponse,
   BackupsView,
   CheckView,
-  LastRunView,
   RestoreResponse,
-  RestoreState,
   RestoreView,
   RetentionPolicy,
   SnapshotKind,
