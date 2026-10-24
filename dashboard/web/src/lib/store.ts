@@ -248,10 +248,19 @@ export function encodeBase64(bytes: Uint8Array): string {
 
 // --- Legacy files -----------------------------------------------------------------
 
-/** How a legacy file stands, in words, without its variables: read, a leftover, and, to the owner, covered. */
-export function legacyLabels(legacy: Pick<LegacyFileView, "read" | "leftover" | "covered" | "state">): string[] {
+/**
+ * A legacy file *Retire* deleted, which is no fault: the steward's reason,
+ * `retired: a copy is kept at ...`, says where the copy is and how it is put
+ * back. Null for any other file.
+ */
+export function retiredReason(legacy: Pick<LegacyFileView, "state" | "reason">): string | null {
+  return legacy.state === "absent" && legacy.reason !== null && legacy.reason.startsWith("retired:") ? legacy.reason : null
+}
+
+/** How a legacy file stands, in words, without its variables: retired, read, a leftover, and, to the owner, covered. */
+export function legacyLabels(legacy: Pick<LegacyFileView, "read" | "leftover" | "covered" | "state" | "reason">): string[] {
   const labels: string[] = []
-  if (legacy.state === "absent") labels.push("not on the server")
+  if (legacy.state === "absent") labels.push(retiredReason(legacy) === null ? "not on the server" : "retired")
   if (legacy.leftover) labels.push("no longer declared")
   else labels.push(legacy.read ? "read by the service" : "not read by the service")
   if (legacy.covered === true) labels.push("covered by the store")
@@ -260,7 +269,7 @@ export function legacyLabels(legacy: Pick<LegacyFileView, "read" | "leftover" | 
 }
 
 /** The same in one sentence: "Read by the service, covered by the store". */
-export function legacyLine(legacy: Pick<LegacyFileView, "read" | "leftover" | "covered" | "state">): string {
+export function legacyLine(legacy: Pick<LegacyFileView, "read" | "leftover" | "covered" | "state" | "reason">): string {
   const line = legacyLabels(legacy).join(", ")
   return line.charAt(0).toUpperCase() + line.slice(1)
 }
@@ -274,6 +283,8 @@ export type LegacyOffer = { retire: boolean; reason: string | null }
 
 export function legacyOffer(store: Pick<StoreView, "may" | "unitReadsStore">, legacy: Pick<LegacyFileView, "state" | "covered" | "reason">): LegacyOffer | null {
   if (!store.may.migrate) return null
+  const retired = retiredReason(legacy)
+  if (retired !== null) return { retire: false, reason: `${retired.charAt(0).toUpperCase()}${retired.slice(1)}.` }
   if (legacy.state === "absent") return { retire: false, reason: "Not on the server: nothing to retire." }
   if (legacy.state === "unmanaged") return { retire: false, reason: legacy.reason ?? "The server does not manage this file." }
   if (store.unitReadsStore === false) return { retire: false, reason: "Its service does not read the store yet: deploy or refresh it first." }

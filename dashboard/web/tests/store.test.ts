@@ -29,6 +29,7 @@ import {
   readMigration,
   readRetire,
   restoreSummary,
+  retiredReason,
   sourceBadge,
   storeFileOffer,
   storeFileState,
@@ -221,6 +222,25 @@ describe("the legacy files", () => {
     expect(legacyOffer(storeView({ may: OWNER, unitReadsStore: false }), legacyFile())?.reason).toContain("deploy or refresh")
     expect(legacyOffer(storeView({ may: OWNER }), legacyFile({ state: "absent" }))?.retire).toBe(false)
     expect(legacyOffer(storeView({ may: OWNER }), legacyFile({ state: "unmanaged", reason: "owned by uid 0" }))).toEqual({ retire: false, reason: "owned by uid 0" })
+  })
+
+  test("a file Retire deleted is said retired, with where its copy is kept; one absent for no such reason is not on the server", () => {
+    const copy = "/var/lib/sitesolide-steward/precedents/projects/cms/legacy/cms.env"
+    const reason = `retired: a copy is kept at ${copy}; to put it back, sudo cp -p ${copy} /etc/sitesolide/cms.env, then sitesolide refresh cms`
+    const retired = legacyFile({ state: "absent", reason, variables: [], covered: null })
+    expect(retiredReason(retired)).toBe(reason)
+    expect(legacyLine(retired)).toBe("Retired, read by the service")
+    expect(legacyOffer(storeView({ may: OWNER }), retired)).toEqual({
+      retire: false,
+      reason: `Retired: a copy is kept at ${copy}; to put it back, sudo cp -p ${copy} /etc/sitesolide/cms.env, then sitesolide refresh cms.`,
+    })
+    // Only to the owner, as every reason beside Retire.
+    expect(legacyOffer(storeView({ may: ADMIN }), retired)).toBeNull()
+    const absent = legacyFile({ state: "absent", reason: null, covered: null })
+    expect(retiredReason(absent)).toBeNull()
+    expect(legacyLine(absent)).toBe("Not on the server, read by the service")
+    expect(legacyOffer(storeView({ may: OWNER }), absent)?.reason).toBe("Not on the server: nothing to retire.")
+    expect(retiredReason(legacyFile({ state: "unmanaged", reason: "retired: not ours" }))).toBeNull()
   })
 
   test("Merge into the store: the owner's, while a declared or read legacy file is left", () => {
