@@ -241,11 +241,15 @@ function day(ms: number): string {
   return `${new Date(ms).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
+/** `password access until 2026-10-14 10:00 UTC`, `expired ...`, or `with no expiry`. */
+function passwordWords(password: { expiresAt: number | null; expired: boolean }): string {
+  return `password access ${password.expiresAt === null ? "with no expiry" : `${password.expired ? "expired" : "until"} ${day(password.expiresAt)}`}`;
+}
+
 /** `Can open, password access until 2026-10-14 10:00 UTC`. */
 export function entryText(entry: EntryView): string {
   if (entry.password === null) return ROLE_WORDS[entry.role];
-  const until = entry.password.expiresAt === null ? "with no expiry" : `${entry.password.expired ? "expired" : "until"} ${day(entry.password.expiresAt)}`;
-  return `${ROLE_WORDS[entry.role]}, password access ${until}`;
+  return `${ROLE_WORDS[entry.role]}, ${passwordWords(entry.password)}`;
 }
 
 const GENERAL: Readonly<Record<"public" | "restricted" | "code", string>> = {
@@ -423,7 +427,7 @@ export function personText(person: PersonView): string {
   const roles = Object.entries(person.roles).sort(([a], [b]) => a.localeCompare(b));
   const parts = roles.map(([slug, role]) => {
     const password = person.passwords.find((one) => one.slug === slug);
-    return password === undefined ? `${slug}: ${ROLE_WORDS[role]}` : `${slug}: ${ROLE_WORDS[role]}, password access ${password.expiresAt === null ? "with no expiry" : `${password.expired ? "expired" : "until"} ${day(password.expiresAt)}`}`;
+    return password === undefined ? `${slug}: ${ROLE_WORDS[role]}` : `${slug}: ${ROLE_WORDS[role]}, ${passwordWords(password)}`;
   });
   const text = parts.length === 0 ? "no project" : parts.join(", ");
   const extra = [person.create ? "may create projects" : null, person.admin ? "every site, as admin: set on the server in OIDC_ADMIN_EMAILS" : null].filter((one): one is string => one !== null);
@@ -634,6 +638,13 @@ function readEntry(body: Record<string, unknown>): EntryAnswer | null {
 
 const unreadable = (what: string): { ok: false; failure: Failure } => ({ ok: false, failure: { error: "failure", message: `the steward's ${what} does not read: nothing was changed` } });
 
+/** A change of an entry, as the steward answered it. */
+function entryRead(read: Reading<Record<string, unknown>>): Reading<EntryAnswer> {
+  if (!read.ok) return read;
+  const entry = readEntry(read.value);
+  return entry === null ? unreadable("answer") : { ok: true, value: entry };
+}
+
 /** The owner's transport for `share`: root on the machine asks the steward's owner socket. */
 export function sshAccess(run: RunOnMachine, dashboard: string | null = null): AccessTransport {
   return {
@@ -647,18 +658,9 @@ export function sshAccess(run: RunOnMachine, dashboard: string | null = null): A
       const state = readAccess(read.value);
       return state === null ? unreadable("access list") : { ok: true, value: state };
     },
-    async give(slug, who, role, expiresInS) {
-      const read = await askSteward(run, ownerWriteCommand("PUT", "/access/entry"), JSON.stringify({ slug, who, role, ...(expiresInS === undefined ? {} : { expiresInS }) }));
-      if (!read.ok) return read;
-      const entry = readEntry(read.value);
-      return entry === null ? unreadable("answer") : { ok: true, value: entry };
-    },
-    async remove(slug, who) {
-      const read = await askSteward(run, ownerWriteCommand("DELETE", "/access/entry"), JSON.stringify({ slug, who }));
-      if (!read.ok) return read;
-      const entry = readEntry(read.value);
-      return entry === null ? unreadable("answer") : { ok: true, value: entry };
-    },
+    give: async (slug, who, role, expiresInS) =>
+      entryRead(await askSteward(run, ownerWriteCommand("PUT", "/access/entry"), JSON.stringify({ slug, who, role, ...(expiresInS === undefined ? {} : { expiresInS }) }))),
+    remove: async (slug, who) => entryRead(await askSteward(run, ownerWriteCommand("DELETE", "/access/entry"), JSON.stringify({ slug, who }))),
   };
 }
 
