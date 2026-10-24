@@ -113,12 +113,8 @@ export function compose(now: number): Snapshot {
  * would show as an empty dashboard without anything saying why; a rename is
  * atomic, and the reader sees the old file or the new one, never half a file.
  */
-export async function write(path: string, now: number): Promise<number> {
-  const content = `${JSON.stringify(compose(now))}\n`;
+export async function write(path: string, now: number): Promise<void> {
   const temp = `${path}.tmp`;
-
-  await Bun.write(temp, content);
+  await Bun.write(temp, `${JSON.stringify(compose(now))}\n`);
   renameSync(temp, path);
-
-  return content.length;
 }
