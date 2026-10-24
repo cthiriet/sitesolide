@@ -33,7 +33,7 @@
  */
 import { askSteward, ownerReadCommand, ownerWriteCommand, type RunOnMachine } from "./access";
 import { isApp, isValidFileName, isValidSlug, STORELESS_SLUGS, type Manifest, type SecretsDeclaration } from "./manifest";
-import { call, type Answer as ApiAnswer, type Failure, type Fetch, type Output, type Remote, type Typed } from "./remote";
+import { call, predatesRoute, report, type Answer as ApiAnswer, type Failure, type Fetch, type Output, type Remote, type Typed } from "./remote";
 import { credentialName, GENERATE_DEFAULT_BYTES, GENERATE_FORMATS, GENERATE_MAX_BYTES, GENERATE_MIN_BYTES, MAX_STORE_FILE_BYTES, type GenerateFormat } from "./store";
 import type { RestartVerdict, StoreChangeResponse, StoreFileView, StoreGenerateRequest, StoreMissing, StoreView } from "./store-protocol";
 import { checkValue, isVariableName, VALUE_LIKE_PREFIXES } from "./variables";
@@ -397,14 +397,6 @@ export function sshStore(run: RunOnMachine): StoreTransport {
 }
 
 /**
- * A dashboard from before a route answers it from its catch-all, `not-found`
- * "no such route": said as what it is, a machine that does not carry it yet.
- */
-function predatesRoute(answer: ApiAnswer<unknown>): boolean {
-  return !answer.ok && answer.failure.error === "not-found" && answer.failure.message.startsWith("no such route");
-}
-
-/**
  * Whether a change may have reached the machine though no answer came back.
  * A connection refused sent nothing. A connection dropped once the request
  * had left, or an answer cut or replaced by a proxy's page, may follow a
@@ -695,11 +687,6 @@ export type StoreDependencies = {
   /** A value typed without echo: promptWithoutEcho in ./remote. */
   secretPrompt: (question: string) => Promise<Typed>;
 };
-
-function report(output: Output, failure: Failure): number {
-  output.failed(failure);
-  return 1;
-}
 
 /** A value refused here, before it travels: never quoted. */
 function refusedValue(reason: string): Failure {

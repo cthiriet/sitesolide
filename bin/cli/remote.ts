@@ -326,7 +326,8 @@ export function eventOutput(write: (line: string) => void = (line) => console.lo
   };
 }
 
-function report(output: Output, failure: Failure): number {
+/** A failure said, and the exit code it ends the command with. */
+export function report(output: Output, failure: Failure): number {
   output.failed(failure);
   return 1;
 }
@@ -854,10 +855,8 @@ async function status(remote: Remote, dependencies: RemoteDependencies): Promise
 
 async function logs(remote: Remote, dependencies: RemoteDependencies, follow: boolean, lines: number): Promise<number> {
   const output = dependencies.output ?? humanOutput;
-  const path = join(dependencies.folder, "sitesolide.json");
-  if (!existsSync(path)) return report(output, { error: "invalid", message: `sitesolide.json not found in ${dependencies.folder}: run this from the project's folder` });
-  const { manifest } = checkManifest(readFileSync(path, "utf8"));
-  if (manifest === undefined) return report(output, { error: "invalid", message: "sitesolide.json rejected" });
+  const manifest = folderManifest(dependencies.folder);
+  if ("error" in manifest) return report(output, manifest);
   let cursor: string | null = null;
   let entries = 0;
   const pause = dependencies.pause ?? (() => Bun.sleep(2000));
@@ -882,7 +881,7 @@ async function logs(remote: Remote, dependencies: RemoteDependencies, follow: bo
  * "no such route": said as what it is, a machine that does not carry it yet,
  * rather than a project the token cannot see.
  */
-function predatesRoute(answer: Answer<unknown>): boolean {
+export function predatesRoute(answer: Answer<unknown>): boolean {
   return !answer.ok && answer.failure.error === "not-found" && answer.failure.message.startsWith("no such route");
 }
 
