@@ -152,8 +152,12 @@ Only `dashboard.service` and `portal.service` may answer.
 **What `sitesolide upgrade` brings**, in its usual order: the steward, which
 no longer lists nor writes a project's flat files; the dashboard and the
 portal, whose manifests declare nothing and whose units stay as they are;
-the installer, which no longer reads a project's flat files. Nothing on the
-machine changes form.
+the installer, which no longer reads a project's flat files. The release
+also simplifies the code of every component without changing what it does,
+so each one is laid again, and the Caddyfile, whose comments changed, is
+laid again and Caddy reloaded once. The units and Caddy blocks generated for
+the projects are the same, byte for byte: no project is refreshed or
+restarted. Nothing on the machine changes form.
 
 **What changes for you.**
 
@@ -162,6 +166,9 @@ machine changes form.
   held with them: migrate before upgrading.
 - **`sitesolide remove`** deletes the project's store and its previous
   versions, and no flat file.
+- **A token may create `dashboard-notes`**, a project whose slug starts like
+  a platform project's: that refusal only kept the platform's flat files
+  from being attached to it by name.
 - **A site no manifest describes**, the landing or a service made by hand,
   no longer has files listed in the dashboard; they stay on the machine,
   untouched, read by whatever unit names them.
