@@ -412,6 +412,47 @@ describe("after the files are in place", () => {
     expect(outcome.ok === false && outcome.message).toContain("index.html in publicDir");
   });
 
+  /** The site's answers once the verification starts, each attempt's from the script, its last entry for every attempt after. */
+  function warmingBench(...script: number[]): { bench: Bench; attempts: () => number; waits: () => string[] } {
+    let attempts = 0;
+    const bench = createBench({
+      probe: (host, path, current) =>
+        host === `shop.${ZONE}` && path === "/" && current.events.includes("log -> verify") ? { code: script[Math.min(++attempts, script.length) - 1]!, door: false, body: "" } : null,
+    });
+    return { bench, attempts: () => attempts, waits: () => bench.events.slice(bench.events.indexOf("log -> verify")).filter((event) => event === "wait 5000") };
+  }
+
+  for (const code of [502, 503, 504]) {
+    test(`an app still starting, answering ${code} through Caddy, is asked again, said once, and passes once it answers`, async () => {
+      const { bench, attempts, waits } = warmingBench(code, code, 200);
+      stageBundle(bench, APP_FILES);
+      const outcome = await run(bench, request(APP, PUBLIC));
+      expect(outcome).toMatchObject({ ok: true, url: `https://shop.${ZONE}/` });
+      expect(attempts()).toBe(3);
+      expect(waits()).toHaveLength(2);
+      expect(bench.events.filter((event) => event.includes("asking again"))).toEqual([`log    ${code}: the app does not answer Caddy yet, as one still starting does; asking again for up to 30 s`]);
+    });
+  }
+
+  test("an app that keeps answering 502 fails within the bound, saying it was asked again", async () => {
+    const { bench, attempts, waits } = warmingBench(502);
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request(APP, PUBLIC));
+    expect(outcome).toMatchObject({ ok: false, code: "verify-failed" });
+    expect(outcome.ok === false && outcome.message).toBe(`https://shop.${ZONE}/ answered 502, expected 200; still after 30 s of asking again: the app does not answer behind Caddy`);
+    expect(waits()).toHaveLength(5);
+    expect(attempts()).toBe(6);
+  });
+
+  test("any other error is judged at once: a 500 is not asked again", async () => {
+    const { bench, attempts, waits } = warmingBench(500);
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request(APP, PUBLIC));
+    expect(outcome).toMatchObject({ ok: false, code: "verify-failed", message: `https://shop.${ZONE}/ answered 500, expected 200` });
+    expect(attempts()).toBe(1);
+    expect(waits()).toEqual([]);
+  });
+
   test("a service that does not come back is a failure that says where to look", async () => {
     const bench = createBench({ restartFails: true });
     stageBundle(bench, APP_FILES);

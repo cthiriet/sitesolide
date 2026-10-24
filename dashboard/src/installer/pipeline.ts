@@ -40,7 +40,8 @@
  *   9. the declared secret files, checked the project's own, a missing one
  *      said; the store's declared names, those missing said and returned,
  *      none of them stopping anything; then every service restarted;
- *  10. for an app in the open, its block; then the verification;
+ *  10. for an app in the open, its block; then the verification, which asks
+ *      again, bounded, for a first certificate or an app still starting;
  *  11. the services that run for good read again once STABILITY_WINDOW_MS has
  *      passed since their restart: one that fell meanwhile fails the
  *      deployment, as over SSH.
@@ -108,7 +109,7 @@ import { domainConflicts, foreignUnit, portConflicts, staleUnits, unstableUnits,
 import { decideUnit, earlierGenerations, generatedAs, generateUnits, runningUnits, unitArgument, unitFileName, watchedUnits } from "../../borrowed/unit";
 import { compareDirectives, summariseDivergence } from "../../borrowed/comparison";
 import { FIRST_CERTIFICATE_MS, readZoneNamesAnswer, ZONE_NAMES_PATH } from "../../borrowed/zone-names";
-import { isPortalReady, portalHost, fromPortal, answers, describe } from "../gatekeeper/probe";
+import { isPortalReady, portalHost, fromPortal, answers, describe, type ProbeResponse } from "../gatekeeper/probe";
 import { TIMEOUTS } from "../gatekeeper/transaction";
 import { allocatePorts, decideDoor, legacyLoss, legacyLossRefusal, scopeRefusals, takenPorts } from "../control/policy";
 import { madeStore, readClaims } from "../control/claims";
@@ -149,6 +150,18 @@ export type Outcome =
 /** Between two probes of a verification waiting for a first certificate, and how long each may take. */
 const VERIFY_PAUSE_MS = 5_000;
 const VERIFY_PROBE_MS = 15_000;
+
+/**
+ * How long, from the first 502, 503 or 504, the verification asks again: an
+ * app that warms up before it listens, as `deploy` waits for it over SSH
+ * (WARM_UP_MS in bin/cli/verify.ts).
+ */
+const VERIFY_WARM_UP_MS = 30_000;
+
+/** Caddy's answers while the app behind it does not listen yet, or not in time. */
+function warmingUp(response: ProbeResponse): response is Extract<ProbeResponse, { code: number }> {
+  return "code" in response && (response.code === 502 || response.code === 503 || response.code === 504);
+}
 
 /**
  * The zone's sites written again for the ask endpoint, see
@@ -617,6 +630,19 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
         answer = await host.machine.probe(`${slug}.${zone}`, "/", VERIFY_PROBE_MS);
       }
     }
+    // An app that warms up before it listens: Caddy answers 502, 503 or 504
+    // until it does, the app healthy all along. Asked again, bounded; any
+    // other answer is judged at once.
+    let warmedUp = false;
+    if (warmingUp(answer)) {
+      host.log(`   ${answer.code}: the app does not answer Caddy yet, as one still starting does; asking again for up to ${VERIFY_WARM_UP_MS / 1000} s`);
+      const until = host.machine.now() + VERIFY_WARM_UP_MS;
+      while (warmingUp(answer) && host.machine.now() + VERIFY_PAUSE_MS < until) {
+        await host.machine.wait(VERIFY_PAUSE_MS);
+        answer = await host.machine.probe(`${slug}.${zone}`, "/", VERIFY_PROBE_MS);
+      }
+      warmedUp = warmingUp(answer);
+    }
     if (behindPortal) {
       if (!fromPortal(answer)) throw new Stop("verify-failed", `${url} should answer the portal's 401, got ${describe(answer)}: sitesolide.json says Restricted, and the site answers anyone; tell the owner of the machine now`);
       host.log(`   ${url} 401, restricted: visitors are asked to sign in`);
@@ -628,7 +654,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
           "verify-failed",
           nothing
             ? `${url} answered 404: nothing is served at the site's root; make it answer 200, from the app, which receives / unless the manifest has routes, or from an index.html in publicDir (docs/manifest.md, under start)`
-            : `${url} answered ${describe(answer)}, expected 200`,
+            : `${url} answered ${describe(answer)}, expected 200${warmedUp ? `; still after ${VERIFY_WARM_UP_MS / 1000} s of asking again: the app does not answer behind Caddy` : ""}`,
         );
       }
       host.log(`   ${url} ${"code" in answer ? answer.code : ""}`);
