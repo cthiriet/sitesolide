@@ -107,10 +107,6 @@ export function vaultFolder(environment: Environment, home: string): string {
   return expandHome(environment.SITESOLIDE_VAULT ?? file.vault ?? defaultPaths(home, environment).vault, home);
 }
 
-export function tokenPath(environment: Environment, home: string): string {
-  return join(vaultFolder(environment, home), TOKEN_FILE);
-}
-
 /**
  * The dashboard's address, as an origin: https, or http on the loopback for a
  * local bench. null when it is not one.
