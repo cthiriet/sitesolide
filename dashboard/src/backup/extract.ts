@@ -71,6 +71,18 @@ export function descriptionMismatch(description: Record<string, unknown>, expect
   return null;
 }
 
+/** An archive's description, read whole from its entry: an object, or null when it does not read. */
+export async function readDescription(data: AsyncIterable<Uint8Array>): Promise<Record<string, unknown> | null> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of data) chunks.push(chunk);
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(Bun.concatArrayBuffers(chunks))) as unknown;
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Where an entry goes, by the rules this extraction holds every archive to,
  * each judged on the entry alone: the description, of a bounded size; `data/`
@@ -117,14 +129,8 @@ export async function extractData(source: ReadableStream<Uint8Array>, destinatio
   await readTar(source, limits, async (entry, data) => {
     const place = entryPlace(entry);
     if (place.kind === "description") {
-      const chunks: Uint8Array[] = [];
-      for await (const chunk of data) chunks.push(chunk);
-      try {
-        const parsed = JSON.parse(new TextDecoder().decode(Bun.concatArrayBuffers(chunks))) as unknown;
-        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) summary.description = parsed as Record<string, unknown>;
-      } catch {
-        // A description that does not read is not a reason to refuse the data.
-      }
+      // A description that does not read is not a reason to refuse the data.
+      summary.description = (await readDescription(data)) ?? summary.description;
       const mismatch = summary.description === null || expected === null ? null : descriptionMismatch(summary.description, expected);
       if (mismatch !== null) throw new ArchiveError(mismatch);
       return;

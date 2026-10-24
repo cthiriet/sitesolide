@@ -52,7 +52,7 @@ import { snapshotName, type SnapshotKind } from "../../borrowed/backups";
 import type { BackupConfig } from "./config";
 import { liveArgument } from "./child";
 import { MAX_ENTRIES, type CopySummary } from "./copy";
-import { entryPlace } from "./extract";
+import { entryPlace, readDescription } from "./extract";
 import { discardHooks, hooksFolder, liveFolders, projectHooks, runHooks, type Hook } from "./hooks";
 import { machineBinds } from "./machine";
 import { freeBytes, type Project } from "./projects";
@@ -166,14 +166,8 @@ export async function verifyArchive(
   );
   const read = await readTar(clocked, limits, async (entry, data) => {
     if (entryPlace(entry).kind !== "description") return;
-    const chunks: Uint8Array[] = [];
-    for await (const chunk of data) chunks.push(chunk);
-    try {
-      const parsed = JSON.parse(new TextDecoder().decode(Bun.concatArrayBuffers(chunks))) as unknown;
-      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) description = parsed as Record<string, unknown>;
-    } catch {
-      // A description that does not read leaves the summary empty, nothing else.
-    }
+    // A description that does not read leaves the summary empty, nothing else.
+    description = (await readDescription(data)) ?? description;
   });
   return { ...read, description };
 }
