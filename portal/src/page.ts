@@ -346,8 +346,8 @@ export function signedOutPage(next: string): string {
 export const DOOR_PAGE_MARKER = "Guard page of locked previews";
 
 /**
- * The door page of the previews. The word "preversion" does not appear in it,
- * and that is deliberate: nobody outside the trade knows it. Whoever lands
+ * The door page of the previews. The word "preview" does not appear in it,
+ * and that is deliberate: nobody outside the trade reads it that way. Whoever lands
  * here is most often a craftsman coming to look at their site.
  *
  * Caddy compares the key character for character: a code typed in lowercase

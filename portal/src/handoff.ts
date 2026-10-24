@@ -102,7 +102,8 @@ export const SPENT_FLOWS_MAX = 100_000;
  * next site skips the provider. Also the longest life of a site's identity
  * cookie, which never outlives that session: an account closed at the
  * provider loses every site within a day of signing in there, and removing
- * someone from a site's sharing closes that site at their next request.
+ * someone from a site's people with access closes that site at their next
+ * request.
  */
 export const IDENTITY_DURATION_S = 24 * 3600;
 
