@@ -848,6 +848,17 @@ async function readRemoteFile(config: Config, executor: Executor, path: string):
 }
 
 /**
+ * A file on the machine, null when it is absent. A reading that fails stops
+ * everything, `what` saying what the file was to be, a block or a unit file,
+ * and `untouched` what was therefore left as it was.
+ */
+async function readOrStop(config: Config, executor: Executor, path: string, what: string, untouched: string): Promise<string | null> {
+  const reading = await readRemoteFile(config, executor, path);
+  if (reading.kind === "unreadable") die(`cannot tell whether ${path} is there`, [`the server answered neither an absence nor ${what}`, untouched]);
+  return reading.kind === "present" ? reading.content : null;
+}
+
+/**
  * The manifest deposited on the machine, which generated the block in
  * service unless it was edited by hand: null when there is none, or it does
  * not read, and the block is then judged without it.
@@ -896,14 +907,7 @@ async function checkRemoteBlock(
   const generated = generateFragment(manifest);
   if (generated === null || executor.simulated) return;
   const path = blockPath(manifest.slug);
-  const reading = await readRemoteFile(config, executor, path);
-  if (reading.kind === "unreadable") {
-    die(`cannot tell whether ${path} is there`, [
-      "the server answered neither an absence nor a block",
-      "nothing was pushed: a block is never replaced on a reading that failed",
-    ]);
-  }
-  const inService = reading.kind === "present" ? reading.content : null;
+  const inService = await readOrStop(config, executor, path, "a block", "nothing was pushed: a block is never replaced on a reading that failed");
   const previous = inService === null ? null : await depositedManifest(manifest.slug, config, executor);
   switch (decideBlock({ manifest, inService, replace, doorConfirmed, previous })) {
     case "deposit":
@@ -1465,13 +1469,10 @@ async function compareWithServer(project: Project, config: Config, executor: Exe
   const kept: string[] = [];
 
   const manifestPath = `${paths.root}/${MANIFEST_NAME}`;
-  const deposited = await readRemoteFile(config, executor, manifestPath);
-  if (deposited.kind === "unreadable") {
-    die(`cannot tell whether ${manifestPath} is there`, ["the server answered neither an absence nor a manifest", "nothing was changed"]);
-  }
+  const deposited = await readOrStop(config, executor, manifestPath, "a manifest", "nothing was changed");
   // A project the server does not carry yet has no tree to compare with:
   // everything would be sent, and rsync would only fail on the missing folders.
-  if (deposited.kind === "absent") {
+  if (deposited === null) {
     changes.push(`${paths.root}: not on the server yet, everything would be sent`);
   } else {
     if (isApp(manifest)) {
@@ -1483,7 +1484,7 @@ async function compareWithServer(project: Project, config: Config, executor: Exe
       const count = await itemizedChanges(publicSync(publicDir, project, config), paths.publicDir);
       if (count > 0) changes.push(`${paths.publicDir}: ${count} entr${count === 1 ? "y" : "ies"} to send or delete`);
     }
-    if (deposited.content !== project.raw) changes.push(manifestPath);
+    if (deposited !== project.raw) changes.push(manifestPath);
   }
 
   if (isApp(manifest)) {
@@ -1505,12 +1506,8 @@ async function compareWithServer(project: Project, config: Config, executor: Exe
     const generated = generateFragment(manifest);
     if (generated !== null) {
       const path = blockPath(slug);
-      const reading = await readRemoteFile(config, executor, path);
-      if (reading.kind === "unreadable") {
-        die(`cannot tell whether ${path} is there`, ["the server answered neither an absence nor a block", "nothing was changed"]);
-      }
-      const inService = reading.kind === "present" ? reading.content : null;
-      const previous = deposited.kind === "present" ? textManifest(deposited.content) : null;
+      const inService = await readOrStop(config, executor, path, "a block", "nothing was changed");
+      const previous = deposited === null ? null : textManifest(deposited);
       if (decideBlock({ manifest, inService, replace: false, doorConfirmed, previous }) === "diverged") refuseDivergence(path, inService ?? "", generated);
       if (inService !== generated) changes.push(path);
     }
@@ -3445,14 +3442,7 @@ async function readInstalledUnits(
   untouched = "nothing was written: a unit is never replaced on a reading that failed",
 ): Promise<string[]> {
   const installed: string[] = [];
-  for (const { unit } of units) {
-    const path = unitPath(unit);
-    const reading = await readRemoteFile(config, executor, path);
-    if (reading.kind === "unreadable") {
-      die(`cannot tell whether ${path} is there`, ["the server answered neither an absence nor a unit file", untouched]);
-    }
-    installed.push(reading.kind === "present" ? reading.content : "");
-  }
+  for (const { unit } of units) installed.push((await readOrStop(config, executor, unitPath(unit), "a unit file", untouched)) ?? "");
   return installed;
 }
 
