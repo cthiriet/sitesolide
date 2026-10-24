@@ -18,8 +18,17 @@ import { storeRemovalActions } from "./store";
 import { projectPaths, systemUser } from "./unit";
 
 /**
- * The order is the deployment's in reverse, and it is no more negotiable than
- * that one.
+ * What a removal costs, said before it starts. It touches no backup: the
+ * snapshots the machine took, when it takes any, stay in both repositories
+ * (dashboard/src/backup/README.md, a name a removed project left behind), and
+ * what the project wrote since the last of them is gone for good.
+ */
+export const REMOVAL_WARNING =
+  "this deletes the served directory and its data. Backup snapshots, if the machine takes any, stay; what changed since the last one is lost.";
+
+/**
+ * One gesture of a removal. The order is the deployment's in reverse, and it
+ * is no more negotiable than that one.
  *
  * **The Caddy block goes first, except in front of the portal.** `deploy` puts
  * it in place last for an open site, once the service is up, precisely because
@@ -35,15 +44,6 @@ import { projectPaths, systemUser } from "./unit";
  * `userdel` otherwise leaves files with no owner, which the next system user
  * would inherit on the same UID.
  */
-/**
- * What a removal costs, said before it starts. It touches no backup: the
- * snapshots the machine took, when it takes any, stay in both repositories
- * (dashboard/src/backup/README.md, a name a removed project left behind), and
- * what the project wrote since the last of them is gone for good.
- */
-export const REMOVAL_WARNING =
-  "this deletes the served directory and its data. Backup snapshots, if the machine takes any, stay; what changed since the last one is lost.";
-
 export type Action = {
   /** What is shown, in the CLI's language. */
   title: string;

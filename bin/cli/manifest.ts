@@ -895,10 +895,6 @@ export function buildEnvOf(manifest: Manifest): [string, string][] {
 }
 
 /**
- * Parses the manifest's JSON. Returning the errors rather than throwing allows
- * showing them all at once, rather than having them fixed one by one.
- */
-/**
  * The served zone, for the one rule that depends on it: a customer domain
  * declared under it would get nothing, the wildcard and the apex already
  * covering it.
@@ -932,6 +928,10 @@ export function parserComplaint(error: unknown): string {
   return message.replace(/(["'])[^"']{2,}\1/g, "$1...$1").slice(0, 120);
 }
 
+/**
+ * Parses the manifest's JSON. Returning the errors rather than throwing allows
+ * showing them all at once, rather than having them fixed one by one.
+ */
 export function readManifest(raw: string): { manifest?: Manifest; errors: string[] } {
   let parsed: unknown;
   try {

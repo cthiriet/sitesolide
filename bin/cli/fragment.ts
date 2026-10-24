@@ -80,7 +80,6 @@ function writableHeader(name: string, value: unknown): string {
   return `\theader ${name} "${value}"`;
 }
 
-/** The routes snippet, shared by the preview and the customer domain. */
 /** Does the manifest carry its own `X-Robots-Tag`? */
 export function declaresRobots(manifest: Manifest): boolean {
   return Object.keys(manifest.headers ?? {}).some((name) => name.toLowerCase() === "x-robots-tag");
@@ -126,6 +125,7 @@ function fileServer(files: FileGeneration): string[] {
   return files === "hidden" ? ["\tfile_server {", `\t\thide ${NEVER_SENT.join(" ")}`, "\t}"] : ["\tfile_server"];
 }
 
+/** The routes snippet, shared by the preview and the customer domain. */
 export function generateRoutes(manifest: Manifest, files: FileGeneration = "hidden"): string {
   const paths = projectPaths(manifest.slug);
   const lines = [`(${manifest.slug}-routes) {`, "\timport commun", ""];

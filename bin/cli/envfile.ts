@@ -98,11 +98,7 @@ export type EnvParse =
   | { ok: true; document: EnvDocument }
   | { ok: false; line: number; reason: string };
 
-// --- The bounds --------------------------------------------------------------
-
-// MAX_KEY, MAX_VALUE_BYTES and the variable name's shape are in ./variables,
-// with the reserved names: the manifest's validation judges a declared name
-// by them too.
+// --- Quoting -----------------------------------------------------------------
 
 /** What is written without quotes and re-read identically, with no exception. */
 const SAFE_RAW = /^[A-Za-z0-9_@%+=:,./-]*$/;
@@ -246,12 +242,6 @@ export function envValue(document: EnvDocument, key: string): string | null {
   }
   return null;
 }
-
-// --- Writing rules -----------------------------------------------------------
-
-// reservedReason, checkKey and checkValue are in ./variables, re-exported
-// above, with hasNoncharacter: the CLI checks a value before it travels by
-// the very rule the steward applies when it writes it.
 
 // --- Writing -----------------------------------------------------------------
 
