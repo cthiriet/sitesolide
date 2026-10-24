@@ -127,12 +127,13 @@ export async function maintain(
   const { config, now, log } = dependencies;
   const previous = readMaintenance(db);
   const offsiteSince = repositories.offsite.configured ? (previous?.offsiteSince ?? now()) : null;
+  const first = (): Maintenance => ({ at: now(), since: now(), offsiteSince, local: null, offsite: null, parts: { local: 0, offsite: 0 } });
   if (previous === null && !force) {
-    const record: Maintenance = { at: now(), since: now(), offsiteSince, local: null, offsite: null, parts: { local: 0, offsite: 0 } };
+    const record = first();
     writeSetting(db, MAINTENANCE_SETTING, record);
     return { ran: false, record };
   }
-  const base: Maintenance = previous ?? { at: now(), since: now(), offsiteSince, local: null, offsite: null, parts: { local: 0, offsite: 0 } };
+  const base: Maintenance = previous ?? first();
   const current: Maintenance = { ...base, offsiteSince, offsite: repositories.offsite.configured ? base.offsite : null };
   const due = force || (now() - base.at >= MAINTENANCE_EVERY_MS && now() - startedAt <= MAINTENANCE_START_MS);
   if (!due) {

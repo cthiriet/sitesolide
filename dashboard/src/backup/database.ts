@@ -182,22 +182,19 @@ function fromRow(row: SnapshotRow): IndexedSnapshot | null {
   return { folder: row.folder, name: row.name, id: row.id, takenAt: row.taken_at, kind: row.kind, bytes: row.bytes, added: row.added };
 }
 
-/** A repository's contents, every folder at once, as one listing saw them. */
-export function replaceSnapshots(db: Database, store: Store, rows: readonly IndexedSnapshot[]): void {
-  db.transaction(() => {
-    db.query("DELETE FROM snapshots WHERE store = $store").run({ store });
-    const insert = db.query(
-      "INSERT OR REPLACE INTO snapshots (store, folder, name, id, taken_at, kind, bytes, added) VALUES ($store, $folder, $name, $id, $takenAt, $kind, $bytes, $added)",
-    );
-    for (const row of rows) insert.run({ store, folder: row.folder, name: row.name, id: row.id, takenAt: row.takenAt, kind: row.kind, bytes: row.bytes, added: row.added });
-  })();
-}
-
 /** One snapshot added, a restore's own, without listing the repository again. */
 export function addSnapshot(db: Database, store: Store, row: IndexedSnapshot): void {
   db.query(
     "INSERT OR REPLACE INTO snapshots (store, folder, name, id, taken_at, kind, bytes, added) VALUES ($store, $folder, $name, $id, $takenAt, $kind, $bytes, $added)",
   ).run({ store, folder: row.folder, name: row.name, id: row.id, takenAt: row.takenAt, kind: row.kind, bytes: row.bytes, added: row.added });
+}
+
+/** A repository's contents, every folder at once, as one listing saw them. */
+export function replaceSnapshots(db: Database, store: Store, rows: readonly IndexedSnapshot[]): void {
+  db.transaction(() => {
+    db.query("DELETE FROM snapshots WHERE store = $store").run({ store });
+    for (const row of rows) addSnapshot(db, store, row);
+  })();
 }
 
 /** A folder's snapshots in one repository, newest first. */
