@@ -166,10 +166,9 @@ export function readSecrets() {
   return callApi<DashboardResponse & SecretsRefusal>("/api/secrets")
 }
 
-/** The log of the whole machine, or of one site: the slug is a name, never a value, and may go in the address. */
-export function readSecretsLog(slug: string | null = null) {
-  const query = slug === null ? "" : `?slug=${encodeURIComponent(slug)}`
-  return callApi<LogResponse & SecretsRefusal>(`/api/secrets/log${query}`)
+/** A site's log: the slug is a name, never a value, and may go in the address. */
+export function readSecretsLog(slug: string) {
+  return callApi<LogResponse & SecretsRefusal>(`/api/secrets/log?slug=${encodeURIComponent(slug)}`)
 }
 
 export function unlockSecrets(password: string) {

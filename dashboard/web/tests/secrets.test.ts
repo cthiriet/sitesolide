@@ -20,7 +20,7 @@ import {
   generateToken,
   operationOutcome,
   refusalOf,
-  operationPlace,
+  operationFile,
   readService,
   readVerdict,
   fileOffer,
@@ -471,23 +471,20 @@ describe("log", () => {
 
   test("every operation names its object, and the location does not repeat it", () => {
     expect(operationParts(logEntry({ operation: "set" }))).toEqual({ verb: "Set", object: "CMS_TOKEN", kind: "variable" })
-    expect(operationPlace(logEntry({ operation: "set" }))).toEqual({ project: "cms", file: "store" })
-    expect(operationPlace(logEntry({ operation: "set", slug: "portal", file: "portal.env" }))).toEqual({ project: "portal", file: "portal.env" })
+    expect(operationFile(logEntry({ operation: "set" }))).toBe("store")
+    expect(operationFile(logEntry({ operation: "set", slug: "portal", file: "portal.env" }))).toBe("portal.env")
     expect(operationParts(logEntry({ operation: "read" }))).toMatchObject({ verb: "Read", object: "CMS_TOKEN" })
     expect(operationParts(logEntry({ operation: "remove" }))).toMatchObject({ verb: "Remove", object: "CMS_TOKEN" })
     const platform = { slug: "portal", file: "portal.env", variable: null }
     expect(operationParts(logEntry({ operation: "create", ...platform }))).toMatchObject({ verb: "Create", object: "portal.env" })
-    expect(operationPlace(logEntry({ operation: "create", ...platform }))).toEqual({ project: "portal", file: null })
+    expect(operationFile(logEntry({ operation: "create", ...platform }))).toBeNull()
     expect(operationParts(logEntry({ operation: "restore", ...platform }))).toMatchObject({ verb: "Restore", object: "portal.env" })
     expect(operationParts(logEntry({ operation: "restart", file: null, variable: null }))).toMatchObject({
       verb: "Restart",
       object: "cms",
     })
-    expect(operationPlace(logEntry({ operation: "restart", file: null, variable: null }))).toEqual({
-      project: null,
-      file: null,
-    })
-    expect(operationPlace(logEntry({ operation: "set", slug: "", file: "" }))).toEqual({ project: null, file: null })
+    expect(operationFile(logEntry({ operation: "restart", file: null, variable: null }))).toBeNull()
+    expect(operationFile(logEntry({ operation: "set", slug: "", file: "" }))).toBeNull()
   })
 
   test("the access registry's operations and the dashboard's sign-ins are named, with no object of their own", () => {
@@ -502,32 +499,32 @@ describe("log", () => {
       ["dashboard.signout", "Sign out"],
     ] as const) {
       expect(operationParts(logEntry({ operation }))).toEqual({ verb, object: null, kind: null })
-      expect(operationPlace(logEntry({ operation }))).toEqual({ project: null, file: null })
+      expect(operationFile(logEntry({ operation }))).toBeNull()
     }
   })
 
   test("replacing a file, changing a password, changing general access", () => {
     const replacement = logEntry({ operation: "replace", file: "builder-ssh", variable: null, slug: "builder" })
     expect(operationParts(replacement)).toEqual({ verb: "Replace", object: "builder-ssh", kind: "file" })
-    expect(operationPlace(replacement)).toEqual({ project: "builder", file: null })
+    expect(operationFile(replacement)).toBeNull()
 
     const password = logEntry({ operation: "password", slug: "portal", file: "portal.env", variable: "PASSWORD_HASH" })
     expect(operationParts(password)).toEqual({ verb: "Change password", object: "PASSWORD_HASH", kind: "variable" })
-    expect(operationPlace(password)).toEqual({ project: "portal", file: "portal.env" })
+    expect(operationFile(password)).toBe("portal.env")
 
     const portal = logEntry({ operation: "portal", slug: "wheels", file: null, variable: null })
     expect(operationParts(portal)).toEqual({ verb: "Change general access", object: "wheels", kind: "project" })
     expect(operationParts({ ...portal, detail: "on, ok" }).verb).toBe("Restrict")
     expect(operationParts({ ...portal, detail: "off, failure" }).verb).toBe("Make public")
     expect(operationParts({ ...portal, detail: "code, ok" }).verb).toBe("Use a code")
-    expect(operationPlace(portal)).toEqual({ project: null, file: null })
+    expect(operationFile(portal)).toBeNull()
     // A new code: the site is its object, the code never part of it.
     expect(operationParts(logEntry({ operation: "code", slug: "wheels", file: null, variable: null, detail: "renew, ok" }))).toEqual({ verb: "New code", object: "wheels", kind: "project" })
   })
 
   test("an unlock has no object", () => {
     const entry = logEntry({ operation: "unlock", slug: null, file: null, variable: null })
-    expect(operationPlace(entry)).toEqual({ project: null, file: null })
+    expect(operationFile(entry)).toBeNull()
     expect(operationParts(entry)).toEqual({ verb: "Unlock changes", object: null, kind: null })
     expect(operationParts({ ...entry, operation: "lock" })).toEqual({ verb: "Lock changes", object: null, kind: null })
   })

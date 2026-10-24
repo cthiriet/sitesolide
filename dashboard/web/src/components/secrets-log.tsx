@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useState } from "react"
 import { History } from "lucide-react"
 import { useData } from "@/components/data"
-import { InternalLink } from "@/components/navigation"
 import { ErrorState, EmptyState, Panel, RowsSkeleton, Status } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { readSecretsLog } from "@/lib/api"
 import { ABSENT, dateTime, ago } from "@/lib/format"
-import { siteUrl } from "@/lib/pages"
 import {
   latestOperations,
   operationOutcome,
   refusalOf,
-  operationPlace,
+  operationFile,
   siteOperations,
   operationParts,
 } from "@/lib/secrets"
@@ -54,30 +52,14 @@ function When({ a, serverNow }: { a: number; serverNow: number }) {
   )
 }
 
-function ProjectLink({ slug, known }: { slug: string | null; known: ReadonlySet<string> }) {
-  if (slug === null) return null
-  if (!known.has(slug)) return <span>{slug}</span>
-  return (
-    <InternalLink
-      href={siteUrl(slug, "secrets")}
-      className="rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      {slug}
-    </InternalLink>
-  )
-}
-
 /**
- * The steward's latest operations, the most recent at the top: a table when the
- * panel has room for its columns, a list otherwise. Read on opening, on every
- * snapshot and after every action. The log never contains a value, nor the hash
- * of a value.
- *
- * With `slug`, those of a single site, without the site column; without it,
- * those of the whole machine.
+ * A site's latest operations through the steward, the most recent at the top:
+ * a table when the panel has room for its columns, a list otherwise. Read on
+ * opening, on every snapshot and after every action. The log never contains a
+ * value, nor the hash of a value.
  */
-export function SecretsLog({ slug = null }: { slug?: string | null }) {
-  const { generation, snapshot, sessionExpired } = useData()
+export function SecretsLog({ slug }: { slug: string }) {
+  const { generation, sessionExpired } = useData()
   const { revision, serverNow } = useSecretsActions()
   const [list, setList] = useState<ListState>({ state: "loading" })
   const [rereading, setRereading] = useState(false)
@@ -85,8 +67,7 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
   const load = useCallback(async () => {
     const { status, body } = await readSecretsLog(slug)
     if (status === 200 && body !== null && Array.isArray(body.entries)) {
-      const entries = slug === null ? body.entries : siteOperations(body.entries, slug)
-      return setList({ state: "ready", entries: latestOperations(entries) })
+      return setList({ state: "ready", entries: latestOperations(siteOperations(body.entries, slug)) })
     }
     const outcome = refusalOf(status, body)
     if (outcome.kind === "session") return sessionExpired()
@@ -108,9 +89,7 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
     }
   }
 
-  const known = new Set(snapshot?.sites.map((site) => site.slug) ?? [])
-  const withSite = slug === null
-  const caption = withSite ? "Recent operations, most recent first" : `Recent operations on ${slug}, most recent first`
+  const caption = `Recent operations on ${slug}, most recent first`
 
   return (
     <Panel title="Activity" full>
@@ -126,7 +105,7 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
 
       {list.state === "ready" && list.entries.length === 0 && (
         <EmptyState icon={History} title="No activity yet" compact>
-          {withSite ? "Unlocks, reads, changes, restarts and access changes show up here." : `Reads, changes, restarts and access changes on ${slug} show up here.`}
+          Reads, changes, restarts and access changes on {slug} show up here.
         </EmptyState>
       )}
 
@@ -142,11 +121,6 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
                 <th scope="col" className="px-3 font-medium">
                   Result
                 </th>
-                {withSite && (
-                  <th scope="col" className="px-3 font-medium">
-                    Site
-                  </th>
-                )}
                 <th scope="col" className="px-3 font-medium">
                   File
                 </th>
@@ -157,7 +131,7 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
             </thead>
             <tbody className="divide-y divide-divider">
               {list.entries.map((entry, index) => {
-                const place = operationPlace(entry)
+                const file = operationFile(entry)
                 return (
                   <tr key={`${entry.a}-${index}`}>
                     <td className="px-3 py-3 pl-4">
@@ -166,13 +140,8 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
                     <td className="px-3 py-3">
                       <Outcome entry={entry} />
                     </td>
-                    {withSite && (
-                      <td className="px-3 py-3">
-                        <ProjectLink slug={place.project} known={known} />
-                      </td>
-                    )}
                     <td className="px-3 py-3">
-                      {place.file !== null && <code className="font-mono text-xs">{place.file}</code>}
+                      {file !== null && <code className="font-mono text-xs">{file}</code>}
                     </td>
                     <td className="px-3 py-3 pr-4 text-right">
                       <When a={entry.a} serverNow={serverNow} />
@@ -185,7 +154,7 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
 
           <ol aria-label={caption} className="divide-y divide-divider @2xl:hidden">
             {list.entries.map((entry, index) => {
-              const place = operationPlace(entry)
+              const file = operationFile(entry)
               const outcome = operationOutcome(entry)
               return (
                 <li key={`${entry.a}-${index}`} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 px-4 py-3">
@@ -195,11 +164,10 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
                   <span className="text-xs">
                     <When a={entry.a} serverNow={serverNow} />
                   </span>
-                  {((withSite && place.project !== null) || place.file !== null || outcome.text !== null) && (
+                  {(file !== null || outcome.text !== null) && (
                     <span className="col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       {outcome.text !== null && <Outcome entry={entry} />}
-                      {withSite && place.project !== null && <ProjectLink slug={place.project} known={known} />}
-                      {place.file !== null && <code className="font-mono">{place.file}</code>}
+                      {file !== null && <code className="font-mono">{file}</code>}
                     </span>
                   )}
                 </li>

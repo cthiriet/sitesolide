@@ -553,9 +553,8 @@ export function operationParts(entry: LogEntry): OperationParts {
   }
 }
 
-/** Where the operation applied, without repeating what the label already names. */
-export function operationPlace(entry: LogEntry): { project: string | null; file: string | null } {
-  const clean = (value: string | null) => (value === null || value === "" ? null : value)
+/** The file the operation applied to, when the label does not name it already. */
+export function operationFile(entry: LogEntry): string | null {
   switch (entry.operation) {
     case "read":
     case "set":
@@ -564,17 +563,11 @@ export function operationPlace(entry: LogEntry): { project: string | null; file:
     case "generate":
       // `store`, or `store/<name>` for a file of it removed: the place, the
       // label naming the file already.
-      return { project: clean(entry.slug), file: storeFileOf(entry.file) !== null ? STORE_PLACE : clean(entry.file) }
-    case "list":
-    case "create":
-    case "restore":
-    case "replace":
-    case "retire":
-      return { project: clean(entry.slug), file: null }
+      return storeFileOf(entry.file) !== null ? STORE_PLACE : entry.file === "" ? null : entry.file
     case "migrate":
-      return { project: clean(entry.slug), file: STORE_PLACE }
+      return STORE_PLACE
     default:
-      return { project: null, file: null }
+      return null
   }
 }
 

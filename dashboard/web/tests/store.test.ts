@@ -35,7 +35,7 @@ import {
   fileProblems,
   operationOutcome,
   operationParts,
-  operationPlace,
+  operationFile,
   pendingFiles,
   pendingPhrase,
   pendingVariables,
@@ -334,14 +334,14 @@ describe("the log of a store", () => {
   test("a value generated names its variable in the store; never a value", () => {
     const entry = logEntry({ operation: "generate", file: "store", variable: "SESSION_SECRET" })
     expect(operationParts(entry)).toEqual({ verb: "Generate", object: "SESSION_SECRET", kind: "variable" })
-    expect(operationPlace(entry)).toEqual({ project: "cms", file: "store" })
+    expect(operationFile(entry)).toBe("store")
   })
 
   test("a file of the store set, removed, and the store made", () => {
     expect(operationParts(logEntry({ operation: "replace", file: "store/gcp.json", variable: null }))).toEqual({ verb: "Replace", object: "gcp.json", kind: "file" })
     const removed = logEntry({ operation: "remove", file: "store/gcp.json", variable: null })
     expect(operationParts(removed)).toEqual({ verb: "Remove", object: "gcp.json", kind: "file" })
-    expect(operationPlace(removed)).toEqual({ project: "cms", file: "store" })
+    expect(operationFile(removed)).toBe("store")
     expect(operationParts(logEntry({ operation: "create", file: "store", variable: null }))).toEqual({ verb: "Create", object: "store", kind: "file" })
     // A variable removed from the store stays a variable.
     expect(operationParts(logEntry({ operation: "remove", file: "store", variable: "A" }))).toEqual({ verb: "Remove", object: "A", kind: "variable" })
@@ -354,7 +354,7 @@ describe("the log of a store", () => {
     expect(operationOutcome({ ...merged, result: "rejects", detail: "invalid" })).toEqual({ tone: "attention", text: "Refused: invalid" })
     const retired = logEntry({ operation: "retire", file: "nis2-ses.env", variable: null })
     expect(operationParts(retired)).toEqual({ verb: "Retire", object: "nis2-ses.env", kind: "file" })
-    expect(operationPlace(retired)).toEqual({ project: "cms", file: null })
+    expect(operationFile(retired)).toBeNull()
   })
 
   test("an operation the page does not know is shown by its own word, not dropped", () => {
