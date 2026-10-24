@@ -1,7 +1,7 @@
 /**
  * The steward's inputs and outputs for the members, and nothing else: the
- * registry, the sessions, the key pair, and what portal.env says of signing
- * in. An interface, so that the tests run the member routes on a throwaway
+ * sessions, the key pair, and what portal.env says of signing in; the
+ * registry of who may do what is src/access/system.ts's. An interface, so that the tests run the member routes on a throwaway
  * tree. The careful primitives, the bounded read and the atomic write, are
  * the secrets routes' own.
  *
@@ -44,9 +44,6 @@ export type KeyWrite = "written" | "no-folder" | "no-group";
 
 export type MembersSystem = {
   now: () => number;
-  /** The registry's text, null when there is none. Throws when it is there but unreadable. */
-  readRegistry: () => Promise<string | null>;
-  writeRegistry: (text: string) => Promise<void>;
   /** The sessions' text, null when missing or unreadable: the book starts empty either way. */
   readBook: () => Promise<string | null>;
   writeBook: (text: string) => Promise<void>;
@@ -60,7 +57,7 @@ export type MembersSystem = {
   projectExists: (slug: string) => boolean;
 };
 
-/** A registry, a book, a key: none of them has a reason to be bigger. */
+/** A book, a key: neither has a reason to be bigger. */
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_ENV_BYTES = 256 * 1024;
 
@@ -68,18 +65,11 @@ const decoder = new TextDecoder("utf-8", { fatal: true });
 const encoder = new TextEncoder();
 const ROOT_ONLY = { owner: null, mode: 0o600 };
 
-/** The text of a root file, null when absent; throws when it is there and cannot be read whole. */
-function readRootFile(path: string): string | null {
-  const examination = readBounded(path, MAX_FILE_BYTES);
-  if (examination.kind === "absent") return null;
-  if (examination.bytes === null) throw new Error(`${path} is not a plain file of a reasonable size`);
-  return decoder.decode(examination.bytes);
-}
-
-/** The same, null when unreadable too. */
+/** The text of a root file, null when absent or when it cannot be read whole. */
 function readQuietly(path: string): string | null {
   try {
-    return readRootFile(path);
+    const examination = readBounded(path, MAX_FILE_BYTES);
+    return examination.kind === "absent" || examination.bytes === null ? null : decoder.decode(examination.bytes);
   } catch {
     return null;
   }
@@ -103,7 +93,6 @@ export function portalSettings(bytes: Uint8Array | null): PortalSettings {
 }
 
 export function createMembersSystem(config: MembersSystemConfig): MembersSystem {
-  const registryFile = join(config.stateFolder, "members.json");
   const bookFile = join(config.stateFolder, "member-sessions.json");
   const publicFile = join(config.stateFolder, PUBLIC_KEY_NAME);
   const portalKeyFile = join(config.portalKeyFolder, PORTAL_KEY_NAME);
@@ -111,12 +100,6 @@ export function createMembersSystem(config: MembersSystemConfig): MembersSystem 
 
   return {
     now: () => Date.now(),
-
-    readRegistry: async () => readRootFile(registryFile),
-    async writeRegistry(text) {
-      prepare();
-      writeAtomically(config.stateFolder, "members.json", encoder.encode(text), ROOT_ONLY);
-    },
 
     readBook: async () => readQuietly(bookFile),
     async writeBook(text) {
